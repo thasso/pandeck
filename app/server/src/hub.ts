@@ -1014,6 +1014,40 @@ class SessionHub {
   }
 
   /**
+   * Test seam: end every pending broadcast window now, as its timer would.
+   * Writes made before the call still coalesce into one flush per domain; the
+   * test only stops sleeping through the debounce. Resolves once a pending
+   * session-list flush has sent.
+   */
+  async flushPendingBroadcastsForTests(): Promise<void> {
+    if (this.tasksBroadcastTimer) {
+      clearTimeout(this.tasksBroadcastTimer);
+      this.tasksBroadcastTimer = undefined;
+      this.flushTaskBroadcast();
+    }
+    if (this.projectsBroadcastTimer) {
+      clearTimeout(this.projectsBroadcastTimer);
+      this.projectsBroadcastTimer = undefined;
+      this.flushProjectBroadcast();
+    }
+    if (this.subagentBroadcastTimer) {
+      clearTimeout(this.subagentBroadcastTimer);
+      this.subagentBroadcastTimer = undefined;
+      this.flushSubagentBroadcast();
+    }
+    if (this.backgroundBroadcastTimer) {
+      clearTimeout(this.backgroundBroadcastTimer);
+      this.backgroundBroadcastTimer = undefined;
+      this.flushBackgroundWorkBroadcast();
+    }
+    if (this.sessionsBroadcastTimer) {
+      clearTimeout(this.sessionsBroadcastTimer);
+      this.sessionsBroadcastTimer = undefined;
+      await this.flushSessionsBroadcast();
+    }
+  }
+
+  /**
    * A Task write happened. The authoritative rows reach subscribers as a
    * `stateEvents` batch, never as a list: a status toggle used to push the whole
    * active list (~140 KB) to every connected browser.

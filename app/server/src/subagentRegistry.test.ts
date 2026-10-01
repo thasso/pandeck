@@ -96,7 +96,7 @@ test("run detail snapshots and item reads carry bounded summaries with sidecars"
       run: { id: runId, initiatedBy: "human", actualThinking: "off" },
       parentLimit: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     assert.ok(
       messages.some(
         (message) =>
@@ -119,7 +119,7 @@ test("run detail snapshots and item reads carry bounded summaries with sidecars"
       status: "running",
       phase: "provider-admitted",
     });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     assert.ok(
       messages.filter(
         (message) =>
@@ -144,9 +144,9 @@ test("run detail snapshots and item reads carry bounded summaries with sidecars"
     subagentStore.requestStop(runId, "test");
     subagentStore.recordQuiescence(runId, "test-completion");
     subagentStore.finalizeRun({ runId, status: "stopped" });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     subagentStore.tombstoneParentTree(parentSessionId);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     const threadBatches = messages.filter(
       (message) =>
         message.type === "stateEvents" && message.topic === "subagents",

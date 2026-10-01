@@ -15,7 +15,7 @@ import {
   upsertProject,
 } from "./projectRegistry.ts";
 
-const settled = () => new Promise((resolve) => setTimeout(resolve, 60));
+const settled = () => hub.flushPendingBroadcastsForTests();
 
 function lastProjectBatch(messages: ServerMessage[]): {
   seq: number;

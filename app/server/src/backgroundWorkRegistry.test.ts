@@ -277,7 +277,7 @@ test("mutations reach subscribers as state events only, ending in a delete", asy
   hub.register(viewer);
   try {
     const item = reserve(owner, { label: "npm run watch" });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     const batches = messages.filter(
       (message) =>
         message.type === "stateEvents" && message.topic === "background",
@@ -294,9 +294,9 @@ test("mutations reach subscribers as state events only, ending in a delete", asy
 
     backgroundWorkStore.markRunning({ itemId: item.id });
     backgroundWorkStore.terminalize({ itemId: item.id, state: "completed" });
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     backgroundWorkStore.deleteOwnerSession(owner);
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     const last = messages
       .filter(
         (message) =>
@@ -319,7 +319,7 @@ test("a flush carries exactly the rows writes reported, never untouched history"
   // later broadcast, because nothing about it changed.
   const history = reserve(owner, { label: "old build" });
   backgroundWorkStore.terminalize({ itemId: history.id, state: "completed" });
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await hub.flushPendingBroadcastsForTests();
 
   const events: Array<{
     id: string;
@@ -336,7 +336,7 @@ test("a flush carries exactly the rows writes reported, never untouched history"
   };
   hub.register(viewer);
   const flushed = async () => {
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await hub.flushPendingBroadcastsForTests();
     const mine = events.filter((event) =>
       [history.id, item.id, host.id, fleeting.id].includes(event.id),
     );

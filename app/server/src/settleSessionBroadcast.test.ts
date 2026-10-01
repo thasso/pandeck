@@ -27,7 +27,7 @@ function fakeSocket(sent: ServerMessage[]) {
 }
 
 /** The session broadcast is debounced (`hub.flushSessionsBroadcast`). */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 80));
+const settled = () => hub.flushPendingBroadcastsForTests();
 
 /** The newest row this listener saw for the session, from a list or a delta. */
 function rowFor(

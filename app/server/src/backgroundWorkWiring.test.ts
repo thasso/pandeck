@@ -186,7 +186,7 @@ test("a validated Stop terminalizes the row and answers control feedback only", 
   assert.equal(stored?.terminalReason, "stopped-by-owner");
 
   // And the browser learns it ONLY as a `background` state event.
-  await new Promise((resolve) => setTimeout(resolve, 80));
+  await hub.flushPendingBroadcastsForTests();
   const upserts = sent
     .filter(
       (message) =>
@@ -224,7 +224,7 @@ test("an unknown id answers `unknown`, touches no row and emits no event", async
   // No row was touched, so nothing about this id can have been broadcast.
   // (Another test's rows may still be flushing on the shared hub, so the
   // assertion names THIS id rather than claiming silence.)
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await hub.flushPendingBroadcastsForTests();
   const events = sent
     .filter(
       (message) =>

@@ -9,8 +9,8 @@ import type { ServerMessage, StateEvent, TaskSummary } from "@assistant/shared";
 import { hub } from "./hub.ts";
 import { archiveTask, createTask, deleteTask, unarchiveTask } from "./tasks.ts";
 
-/** The task broadcast is coalesced (see `hub.flushTaskBroadcast`), so a test waits for its window. */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 60));
+/** The task broadcast is coalesced (see `hub.flushTaskBroadcast`), so a test ends its window. */
+const settled = () => hub.flushPendingBroadcastsForTests();
 
 function lastBatch(messages: ServerMessage[]): {
   seq: number;
