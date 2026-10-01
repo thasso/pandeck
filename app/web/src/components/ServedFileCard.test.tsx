@@ -422,7 +422,7 @@ it("never treats foreign lookalike links, embeds, or cards as local", () => {
 });
 
 it("keeps an authored link instead of nesting an embed's controls in it", () => {
-  // `Markdown.linkedEmbed.test.tsx` owns this rule; here it only has to hold
+  // `Markdown.test.tsx`'s linked images own this rule; here it only has to hold
   // for a host file. The link the author wrote stays, and the embed's own Play
   // control is not smuggled inside it.
   render(

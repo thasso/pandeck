@@ -224,8 +224,8 @@ tasks/projects, calendar, and browser-side helpers.
   draft effect included — inside the `onClientSlashCommand` call. A client slash
   command therefore returns with the composer already showing its prompt: the
   composer clears the command text BEFORE handing over and never after
-  (`components/Composer.clientSlash.test.tsx` pins it), and any future client
-  command may rely on that. Like every fresh staging entry point it stages
+  (`components/Composer.test.tsx` pins it), and any future client command may
+  rely on that. Like every fresh staging entry point it stages
   `newSessionRuntimeDefaults` — Build, never the mode of whatever was staged
   before: `startStagedSession` takes `mode` as a REQUIRED (possibly undefined)
   option so each call site states it, only a restage for one axis (model,

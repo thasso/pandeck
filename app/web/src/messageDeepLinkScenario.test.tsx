@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import type { ServerMessage } from "@assistant/shared";
+import { FakeSocket } from "./test/fakeSocket.ts";
 
 /**
  * `/sessions/:id#m-<entryId>` — one message, addressed in the URL — measured on
@@ -20,35 +21,6 @@ import type { ClientMessage, ServerMessage } from "@assistant/shared";
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
-
-class ScenarioSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static instances: ScenarioSocket[] = [];
-  readyState = ScenarioSocket.CONNECTING;
-  sent: ClientMessage[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(readonly url: string) {
-    ScenarioSocket.instances.push(this);
-  }
-  open(): void {
-    this.readyState = ScenarioSocket.OPEN;
-    this.onopen?.();
-  }
-  receive(message: ServerMessage): void {
-    this.onmessage?.({ data: JSON.stringify(message) });
-  }
-  send(source: string): void {
-    this.sent.push(JSON.parse(source) as ClientMessage);
-  }
-  close(): void {
-    this.readyState = 3;
-    this.onclose?.();
-  }
-}
 
 class NoopObserver {
   observe(): void {}
@@ -136,7 +108,7 @@ function snapshotMessage(): ServerMessage {
 }
 
 /** The addresses the app asked the server to resolve, in order. */
-function asked(socket: ScenarioSocket): string[] {
+function asked(socket: FakeSocket): string[] {
   return socket.sent
     .filter((msg) => msg.type === "resolveTimelineAnchor")
     .map((msg) => {
@@ -155,7 +127,7 @@ async function goTo(path: string): Promise<void> {
   await settle(1);
 }
 
-async function boot(path: string): Promise<ScenarioSocket> {
+async function boot(path: string): Promise<FakeSocket> {
   window.history.replaceState(null, "", path);
   await act(async () => {
     root!.render(
@@ -165,7 +137,7 @@ async function boot(path: string): Promise<ScenarioSocket> {
     );
   });
   await settle();
-  const socket = ScenarioSocket.instances[0]!;
+  const socket = FakeSocket.instances[0]!;
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
@@ -177,8 +149,8 @@ async function boot(path: string): Promise<ScenarioSocket> {
 
 beforeEach(() => {
   window.localStorage.clear();
-  ScenarioSocket.instances = [];
-  vi.stubGlobal("WebSocket", ScenarioSocket);
+  FakeSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("ResizeObserver", NoopObserver);
   vi.stubGlobal("IntersectionObserver", NoopObserver);
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -274,7 +246,7 @@ describe("pending approval cards", () => {
       },
     }) as unknown as ServerMessage;
 
-  const approvalAsks = (socket: ScenarioSocket) =>
+  const approvalAsks = (socket: FakeSocket) =>
     socket.sent.filter(
       (msg) =>
         msg.type === "resolveTimelineAnchor" && msg.target.kind === "approval",

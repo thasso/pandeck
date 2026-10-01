@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import type { ServerMessage } from "@assistant/shared";
+import { FakeSocket } from "./test/fakeSocket.ts";
 
 /**
  * What an open transcript is allowed to REDRAW, measured on the whole app.
@@ -39,35 +40,6 @@ vi.setConfig({ testTimeout: 20_000 });
 vi.mock("./hooks/useSessionReadDwell.ts", () => ({
   useSessionReadDwell: () => undefined,
 }));
-
-class ScenarioSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static instances: ScenarioSocket[] = [];
-  readyState = ScenarioSocket.CONNECTING;
-  sent: ClientMessage[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(readonly url: string) {
-    ScenarioSocket.instances.push(this);
-  }
-  open(): void {
-    this.readyState = ScenarioSocket.OPEN;
-    this.onopen?.();
-  }
-  receive(message: ServerMessage): void {
-    this.onmessage?.({ data: JSON.stringify(message) });
-  }
-  send(source: string): void {
-    this.sent.push(JSON.parse(source) as ClientMessage);
-  }
-  close(): void {
-    this.readyState = 3;
-    this.onclose?.();
-  }
-}
 
 class NoopObserver {
   observe(): void {}
@@ -106,8 +78,8 @@ async function settle(frames = 4): Promise<void> {
 
 beforeEach(() => {
   window.localStorage.clear();
-  ScenarioSocket.instances = [];
-  vi.stubGlobal("WebSocket", ScenarioSocket);
+  FakeSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("ResizeObserver", NoopObserver);
   vi.stubGlobal("IntersectionObserver", NoopObserver);
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -217,7 +189,7 @@ function snapshotMessage(id = sessionId(0)): ServerMessage {
 }
 
 /** Boot the app on the viewed chat, with the session list already sorted. */
-async function openChat(): Promise<ScenarioSocket> {
+async function openChat(): Promise<FakeSocket> {
   window.history.replaceState(null, "", `/sessions/${sessionId(0)}`);
   await act(async () => {
     root!.render(
@@ -227,7 +199,7 @@ async function openChat(): Promise<ScenarioSocket> {
     );
   });
   await settle();
-  const socket = ScenarioSocket.instances[0]!;
+  const socket = FakeSocket.instances[0]!;
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
