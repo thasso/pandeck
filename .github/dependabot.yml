@@ -1,7 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # "/" covers only .github/workflows; local composite actions pin too.
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     cooldown:
