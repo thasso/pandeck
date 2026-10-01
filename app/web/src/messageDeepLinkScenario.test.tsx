@@ -248,3 +248,115 @@ describe("a message addressed in the URL", () => {
     expect(asked(socket)).toEqual([]);
   });
 });
+
+/**
+ * A card waiting on the user is anchored at the tool call that proposed it, so
+ * an agent that keeps talking buries it. The composer names it until it is
+ * answered, and the agent can link it; both are the SAME jump, asked of the
+ * server because the proposing turn may be behind the transcript's window.
+ * What a re-emitted card may re-render is counted in
+ * `transcriptRedrawScenario.test.tsx`.
+ */
+describe("pending approval cards", () => {
+  const approvalUpdate = (status = "pending"): ServerMessage =>
+    ({
+      type: "approvalUpdate",
+      sessionId: SESSION_ID,
+      approval: {
+        renderKind: "approval",
+        id: "appr_1",
+        sessionId: SESSION_ID,
+        kind: "commit",
+        status,
+        title: "Merge #4 into main",
+        createdAt: 1_700_000_000_500,
+        body: { kind: "commit", message: "wip", files: ["a.ts"] },
+      },
+    }) as unknown as ServerMessage;
+
+  const approvalAsks = (socket: ScenarioSocket) =>
+    socket.sent.filter(
+      (msg) =>
+        msg.type === "resolveTimelineAnchor" && msg.target.kind === "approval",
+    );
+
+  it("names the card on the composer, jumps to it, and leaves once it is answered", async () => {
+    const socket = await boot(`/sessions/${SESSION_ID}`);
+    expect(
+      container!.querySelector("[data-pending-approvals-ledge]"),
+    ).toBeNull();
+
+    await act(async () => socket.receive(approvalUpdate()));
+    await settle();
+    const strip = container!.querySelector("[data-pending-approvals-ledge]");
+    expect(strip?.textContent).toContain("Merge #4 into main");
+
+    await act(async () => strip!.querySelector("button")!.click());
+    expect(approvalAsks(socket)).toMatchObject([
+      { target: { kind: "approval", approvalId: "appr_1" } },
+    ]);
+
+    await act(async () => socket.receive(approvalUpdate("executing")));
+    await settle();
+    expect(
+      container!.querySelector("[data-pending-approvals-ledge]"),
+    ).toBeNull();
+  });
+
+  it("renders an agent's card link with the card's live status, and jumps on click", async () => {
+    const socket = await boot(`/sessions/${SESSION_ID}`);
+    await act(async () =>
+      socket.receive({
+        type: "snapshot",
+        state: {
+          sessionId: SESSION_ID,
+          harness: "pi",
+          agentType: "assistant",
+          thinkingLevel: "off",
+        },
+        contextInfo: null,
+        snapshot: {
+          sessionId: SESSION_ID,
+          runState: "idle",
+          timelineStart: 0,
+          streaming: [],
+          timeline: [
+            {
+              id: "ask",
+              seq: 1,
+              createdAt: new Date(1_700_000_001_000).toISOString(),
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Please approve [the merge](pa://approval/appr_1).",
+                },
+              ],
+            },
+          ],
+          pendingApprovals: [],
+          activity: [],
+        },
+      } as unknown as ServerMessage),
+    );
+    await act(async () => socket.receive(approvalUpdate()));
+    await settle();
+    const link = container!.querySelector<HTMLAnchorElement>(
+      '[data-message-id="ask"] a',
+    );
+    expect(link?.textContent).toBe("the merge · pending approval");
+    expect(link?.getAttribute("href")).toBe(
+      `/sessions/${SESSION_ID}#m-approval-appr_1`,
+    );
+
+    await act(async () => link!.click());
+    expect(approvalAsks(socket)).toHaveLength(1);
+
+    await act(async () => socket.receive(approvalUpdate("executed")));
+    await settle();
+    expect(
+      container!.querySelector('[data-message-id="ask"] a')?.textContent,
+    ).toBe("the merge · done");
+  });
+});

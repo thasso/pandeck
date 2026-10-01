@@ -409,10 +409,24 @@ describe("what a broadcast re-renders", () => {
     }
   });
 
-  it("re-renders no composer for a rebroadcast the spawned ledge does not draw", async () => {
+  it("re-renders no composer for a rebroadcast its ledges do not draw", async () => {
     const socket = await openChat();
     const peers = (message: ServerMessage) =>
       act(async () => socket.receive(message));
+    const pendingApproval = {
+      type: "approvalUpdate",
+      sessionId: sessionId(0),
+      approval: {
+        renderKind: "approval",
+        id: "appr_1",
+        sessionId: sessionId(0),
+        kind: "commit",
+        status: "pending",
+        title: "Merge #4 into main",
+        createdAt: 1_700_000_000_500,
+        body: { kind: "commit", message: "wip", files: ["a.ts"] },
+      },
+    } as unknown as ServerMessage;
     await peers({
       type: "sessions",
       sessions: peerSessionRows((i) => 1_700_000_000_000 + i),
@@ -454,6 +468,20 @@ describe("what a broadcast re-renders", () => {
       setPerfStatsEnabled(true);
       await streamingPeer(Date.now() - 1_500);
       await streamingPeer(Date.now() - 1_000);
+      await settle();
+      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
+
+      // The same shelf's pending-approval strip. The server re-emits every
+      // card on each re-attach: the same card again is nothing the strip
+      // draws, so the composer does not re-render for it.
+      await peers(pendingApproval);
+      await settle();
+      expect(
+        container!.querySelector("[data-pending-approvals-ledge]")?.textContent,
+      ).toContain("Merge #4 into main");
+      setPerfStatsEnabled(false);
+      setPerfStatsEnabled(true);
+      await peers(pendingApproval);
       await settle();
       expect(countOf(perfSnapshot(), "Composer")).toBe(0);
     } finally {
@@ -667,126 +695,5 @@ describe("live cards", () => {
     await act(async () => socket.receive(snapshotMessage(sessionId(1))));
     await settle();
     expect(cardElement()).toBeNull();
-  });
-});
-
-/**
- * A card waiting on the user is anchored at the tool call that proposed it, so
- * an agent that keeps talking buries it. The composer names it until it is
- * answered, and the agent can link it; both are the SAME jump, asked of the
- * server because the proposing turn may be behind the transcript's window.
- */
-describe("pending approval cards", () => {
-  const approvalUpdate = (status = "pending"): ServerMessage =>
-    ({
-      type: "approvalUpdate",
-      sessionId: sessionId(0),
-      approval: {
-        renderKind: "approval",
-        id: "appr_1",
-        sessionId: sessionId(0),
-        kind: "commit",
-        status,
-        title: "Merge #4 into main",
-        createdAt: 1_700_000_000_500,
-        body: { kind: "commit", message: "wip", files: ["a.ts"] },
-      },
-    }) as unknown as ServerMessage;
-
-  const approvalAsks = (socket: ScenarioSocket) =>
-    socket.sent.filter(
-      (msg) =>
-        msg.type === "resolveTimelineAnchor" && msg.target.kind === "approval",
-    );
-
-  it("names the card on the composer, jumps to it, and leaves once it is answered", async () => {
-    const socket = await openChat();
-    expect(
-      container!.querySelector("[data-pending-approvals-ledge]"),
-    ).toBeNull();
-
-    await act(async () => socket.receive(approvalUpdate()));
-    await settle();
-    const strip = container!.querySelector("[data-pending-approvals-ledge]");
-    expect(strip?.textContent).toContain("Merge #4 into main");
-
-    await act(async () => strip!.querySelector("button")!.click());
-    expect(approvalAsks(socket)).toMatchObject([
-      { target: { kind: "approval", approvalId: "appr_1" } },
-    ]);
-
-    // The server re-emits every card on each re-attach: the same card again
-    // is nothing the strip draws, so the composer does not re-render for it.
-    setPerfStatsEnabled(true);
-    try {
-      await act(async () => socket.receive(approvalUpdate()));
-      await settle();
-      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
-    } finally {
-      setPerfStatsEnabled(false);
-    }
-
-    await act(async () => socket.receive(approvalUpdate("executing")));
-    await settle();
-    expect(
-      container!.querySelector("[data-pending-approvals-ledge]"),
-    ).toBeNull();
-  });
-
-  it("renders an agent's card link with the card's live status, and jumps on click", async () => {
-    const socket = await openChat();
-    await act(async () =>
-      socket.receive({
-        type: "snapshot",
-        state: {
-          sessionId: sessionId(0),
-          harness: "pi",
-          agentType: "assistant",
-          thinkingLevel: "off",
-        },
-        contextInfo: null,
-        snapshot: {
-          sessionId: sessionId(0),
-          runState: "idle",
-          timelineStart: 0,
-          streaming: [],
-          timeline: [
-            {
-              id: "ask",
-              seq: 1,
-              createdAt: new Date(1_700_000_001_000).toISOString(),
-              type: "message",
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "Please approve [the merge](pa://approval/appr_1).",
-                },
-              ],
-            },
-          ],
-          pendingApprovals: [],
-          activity: [],
-        },
-      } as unknown as ServerMessage),
-    );
-    await act(async () => socket.receive(approvalUpdate()));
-    await settle();
-    const link = container!.querySelector<HTMLAnchorElement>(
-      '[data-message-id="ask"] a',
-    );
-    expect(link?.textContent).toBe("the merge · pending approval");
-    expect(link?.getAttribute("href")).toBe(
-      `/sessions/${sessionId(0)}#m-approval-appr_1`,
-    );
-
-    await act(async () => link!.click());
-    expect(approvalAsks(socket)).toHaveLength(1);
-
-    await act(async () => socket.receive(approvalUpdate("executed")));
-    await settle();
-    expect(
-      container!.querySelector('[data-message-id="ask"] a')?.textContent,
-    ).toBe("the merge · done");
   });
 });
