@@ -2578,8 +2578,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `liveSession` `setHumanPromptHook` seam. The engine talks to the hub through
   one `getHub()`/`setHubForTests` seam (not scattered `await import("./hub.ts")`
   call sites), so tests substitute a deterministic fake hub rather than
-  module-mocking a process-wide singleton. `peerPromptLegacyImport.ts` runs the
-  one-time `agent-relays.json` import at boot.
+  module-mocking a process-wide singleton.
 - `slackAssistantChat.ts` adapts authorized private `message.im` events into the
   permanent Assistant queue and adapts delivery events back into one updated
   private Slack placeholder; it must reject bot echoes/subtypes/other users,

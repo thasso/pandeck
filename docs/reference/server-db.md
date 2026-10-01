@@ -296,9 +296,9 @@ facade.
   durable cross-channel FIFO queue; interrupted `working` items recover to
   `queued` at boot.
 - `peerPromptStore.ts` owns transactional peer-prompt persistence
-  (`peer_prompts` + `peer_prompt_chains`/`peer_prompt_chain_participants` +
-  one-time `peer_prompt_migrations`). Every state change is a SQLite transaction
-  with a compare-and-set guard; legal status transitions
+  (`peer_prompts` + `peer_prompt_chains`/`peer_prompt_chain_participants`).
+  Every state change is a SQLite transaction with a compare-and-set guard; legal
+  status transitions
   (queued→dispatching→admitted→acknowledged→completed/awaiting_response→replied,
   plus retryable_failed/interrupted/failed/expired) live in the store, not tool
   code, via the shared `transitionInTxn` primitive (also used by
@@ -364,9 +364,7 @@ facade.
   clears it (`failureReason: null`) the moment admission succeeds — the one
   column any `transitionInTxn` patch omits by default is left unchanged, so
   every OTHER transition must pass it explicitly whenever a prior transient
-  failure should stop being shown. The legacy `agent-relays.json` is imported
-  once by `../peerPromptLegacyImport.ts` (idempotent, corrupt files quarantined,
-  backup retained).
+  failure should stop being shown.
 - `projectStore.ts` owns the projects row + `project_paths` child table and the
   project graph edges (`parent`, `jira`, and the standalone
   `session —in_project→ project` mapping). It is pure persistence;

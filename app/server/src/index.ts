@@ -179,7 +179,6 @@ import {
 } from "./sessionActivity.ts";
 import { registerPdfClaudeFallback } from "./pdfClaudeFallback.ts";
 import { startPackageProxyIfEnabled } from "./packageProxy/packageProxy.ts";
-import { importLegacyAgentRelays } from "./peerPromptLegacyImport.ts";
 import { bootStep } from "./bootStep.ts";
 import {
   reconcileBackgroundWorkOnBoot,
@@ -2080,17 +2079,6 @@ server.listen(PORT, HOST, () => {
   });
   // Each boot recovery is its own step: one that throws (a corrupt row) must
   // not skip every recovery after it.
-  bootStep("legacy agent-relay import", () => {
-    const legacy = importLegacyAgentRelays();
-    if (legacy.imported > 0)
-      console.log(
-        `[assistant] imported ${legacy.imported} legacy agent relay(s) into the peer-prompt store`,
-      );
-    if (legacy.quarantined)
-      console.warn(
-        `[assistant] legacy agent-relays.json quarantined to ${legacy.quarantined}`,
-      );
-  });
   bootStep("interrupted-run marking", () => {
     // Which sessions hold a turn the process died inside. Every harness flushes a
     // turn's assistant entry and tool results together at completion, so a killed
