@@ -92,7 +92,7 @@ function assertSingleLine(
   const trimmed = value.trim();
   // A forged trailer line is made of exactly these characters, so the pattern
   // has to contain them.
-  // eslint-disable-next-line no-control-regex
+  // oxlint-disable-next-line no-control-regex -- see above: a forged trailer is made of these characters.
   if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
     throw new SkillValidationError(
       `${field} must be a single line without control characters.`,

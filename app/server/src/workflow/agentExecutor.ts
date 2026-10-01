@@ -12,8 +12,8 @@ import {
   type WorkflowActor,
   type WorkflowJsonValue,
   type WorkflowRoleConfig,
+  WORKTREE_MISSING_BLOCKED_REASON,
 } from "@assistant/shared";
-import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
 import { CWD } from "../config.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {

@@ -3,46 +3,58 @@
 The repo's static gates are four, in order of authority:
 
 1. **`tsc --noEmit`** (`pnpm run typecheck`) — the authority on what typechecks.
-2. **ESLint** (`pnpm run lint`) — type-aware rules for mistakes the compiler
+2. **oxlint** (`pnpm run lint`) — type-aware rules for mistakes the compiler
    permits.
 3. **knip** (`pnpm run lint:deadcode`) — the module boundary the compiler cannot
    see: an export nothing imports.
 4. **Prettier** (`pnpm run format`) — formatting, and formatting only.
 
-`pnpm run lint` is blocking: `--max-warnings 0`, and
+`pnpm run lint` is blocking: `--deny-warnings`, and
 `reportUnusedDisableDirectives: "error"` so a suppression that no longer
-suppresses anything fails too. It runs in its own CI job and inside
-`pnpm run test`. On the 24-core runner a cold lint measured 110s serial, 60s
-with two ESLint workers, 43s with four, 50s with eight, and 64s with `auto`; CI
-therefore uses four workers for a cold cache. A restored run stays serial: it is
-about 2s, while starting four workers raises it to about 3s and triggers
-ESLint's poor-concurrency warning. The React-compiler rules dominate the cold
-path; the cache carries their results too.
+suppresses anything fails too. It runs in CI's check job and inside
+`pnpm run test`. A full run takes about 5s on four cores at about 1.7 GB peak,
+so it has no cache and no worker tuning. `.oxlintrc.json` is the configuration.
 
-The cache uses `--cache-strategy content`: the default keys on mtime, which a
-fresh checkout invalidates wholesale, and content hashing is what lets CI
-restore it at all (`docs/ci-cd.md` — CI restores it on pull requests only,
-because ESLint's cache cannot see cross-file type dependencies). CI chooses the
-worker count by whether that restore produced a cache file, so a cache miss gets
-the four-worker path rather than paying the 110s serial fallback.
+## Why oxlint, not ESLint
 
-## The two TypeScripts, and why
+The gate was type-aware ESLint until
+[#3](https://github.com/thasso/pandeck/issues/3). Measured at e5f76be on a
+24-core machine, a cold serial run took 113s and peaked at 9.5 GB RSS. With
+Node's default heap it died of OOM after 66s, and the first CI run on a 4 vCPU /
+16 GB GitHub runner was cancelled after 25 minutes. Where the cost came from:
 
-The workspace compiles with `typescript@7`, the native port. It ships **no
-JavaScript compiler API**: `ts.createProgram`, `ts.SyntaxKind` and the project
-service are all absent, and typescript-eslint's peer range excludes it. So the
-linter runs on `typescript@6` — the last release of the JS-based compiler, whose
-API is exactly what type-aware linting needs.
+- typescript-eslint needs the JS compiler API, which only TypeScript 6 still
+  ships. TS 6 needed 13s and 1.5 GB to check `app/server` and 16.5s and 1.1 GB
+  for `app/web`; TS 7 checks each in about 3s.
+- `eslint --concurrency` built those programs again in every worker, so N
+  workers held N copies.
+- The React Compiler rules ran a Babel compile per web file: about 33s.
+- `import-x/no-cycle` walked the module graph from every file: about 16s and 1.5
+  GB.
 
-- `pnpm-workspace.yaml` `catalog.typescript` (7.x) is what each package's `tsc`
-  uses. It decides what compiles.
-- `pnpm-workspace.yaml` `catalogs.lint.typescript` (6.x) is a **root**
-  devDependency only, consumed by typescript-eslint.
+oxlint runs the same ruleset natively. Its type-aware rules go through
+`oxlint-tsgolint`, which is built on typescript-go 7, the compiler `tsc` uses,
+so a lint rule and `tsc` can no longer disagree about a type. At the switch a
+full run took 3.7s and 1.6 GB on 24 cores, about 5s on four, and 14s on one
+thread. Every rule below was checked with a positive control under both tools
+before ESLint was removed.
 
-They can disagree. When they do, **tsc wins** — it is the compiler that actually
-builds the app. One rule has already been staged off for exactly this reason
-(see `no-unnecessary-type-assertion` below), and any autofix from a type-aware
-rule must be re-checked with `pnpm run typecheck` before it is trusted.
+The switch dropped seven rules oxlint does not implement, all at zero findings:
+`import-x/no-useless-path-segments`, `react-hooks/config`, `react-hooks/gating`
+(both report React Compiler configuration problems, and the repo passes none),
+`react-hooks/memoized-effect-dependencies`, `vitest/prefer-vi-mocked`, and
+`no-dupe-args`/`no-octal` (parse errors in a TypeScript module anyway).
+Re-adding one through oxlint's `jsPlugins` would bring an ESLint plugin runtime
+back into the gate; measure the cost before doing it.
+
+It also found 17 sites ESLint had missed, fixed in the same change: four
+duplicate imports, twelve `(x?.y as T).z` chains (ESLint's
+`no-unsafe-optional-chaining` stops at the `as`), and a render-time `new Date()`
+in `TimeGrid.tsx` that `react-hooks/purity` should have caught.
+
+TypeScript 6 is still installed at the root, as `catalogs.codemods`, for
+`scripts/codemods/` alone: they drive `ts.createProgram`, which TypeScript 7
+does not ship. Nothing in a gate runs on it.
 
 ## Compiler options
 
@@ -50,12 +62,8 @@ rule must be re-checked with `pnpm run typecheck` before it is trusted.
 share, so they cannot drift; each package's `tsconfig.json` extends it and adds
 only what is genuinely local (module resolution, `lib`, `jsx`, `types`). The
 solution-style root `tsconfig.json` has no files of its own and references those
-three package configs. `eslint-import-resolver-typescript` consumes that
-reference graph instead of globbing three separate projects. The resolver was
-the source of the misleading “Multiple projects found” lint warning — not the
-typescript-eslint project service — and this removes the warning without
-silencing it. It did not materially change the cold timing; ESLint worker
-concurrency is the speedup.
+three package configs. oxlint and `oxlint-tsgolint` find each file's owning
+package config themselves.
 
 On everywhere: `strict`, `exactOptionalPropertyTypes`,
 `noUncheckedIndexedAccess`, `noImplicitOverride`, `noImplicitReturns`,
@@ -172,32 +180,35 @@ notes on what each one refuses to decide; a rebase re-runs them.
 
 ## The ruleset
 
-ESLint carries no stylistic rules. `typescript-eslint`'s `stylisticTypeChecked`
-preset is deliberately not extended — Prettier owns formatting, and the rest of
-that preset (`array-type`, `consistent-type-definitions`,
-`prefer-nullish-coalescing`, …) is taste, not correctness.
+The gate carries no stylistic rules, and no oxlint category is enabled: every
+rule is named in `.oxlintrc.json`, so an oxlint upgrade cannot switch one on.
+typescript-eslint's `stylisticTypeChecked` preset was deliberately never
+mirrored. Prettier owns formatting, and the rest of that preset (`array-type`,
+`consistent-type-definitions`, `prefer-nullish-coalescing`, …) is taste, not
+correctness.
 
-What is on: `recommendedTypeChecked`, plus `await-thenable`,
+What is on: the rules of ESLint's `js/recommended` and typescript-eslint's
+`recommendedTypeChecked`, listed out by name, plus `await-thenable`,
 `switch-exhaustiveness-check`, `no-import-type-side-effects`, `no-unused-vars`
-with `^_`, `import-x`'s `no-duplicates`/`no-self-import`, `eqeqeq`,
+with `^_`, `import/no-duplicates`/`no-self-import`/`export`, `eqeqeq`,
 `no-constant-binary-expression`, `prefer-const`, `no-fallthrough`,
 `only-throw-error`, `prefer-promise-reject-errors`,
 `restrict-template-expressions`, `no-floating-promises`, `no-misused-promises`,
-`react-hooks/rules-of-hooks`, `react-hooks/exhaustive-deps`,
-`react-hooks/purity`, `react-hooks/immutability`, and `@vitest/eslint-plugin`'s
-`no-focused-tests`/`no-disabled-tests`/`no-identical-title` — a stray `.only`
-silently disabling a test file is invisible to CI otherwise.
+`react/rules-of-hooks`, `react/exhaustive-deps`, `react/purity`,
+`react/immutability`, and Vitest's `no-focused-tests`/`no-disabled-tests`/
+`no-identical-title`. A stray `.only` silently disabling a test file is
+invisible to CI otherwise.
 
-`import-x`'s resolution rules (`no-unresolved`, `default`, `namespace`,
-`no-named-as-default*`) are off: tsc already resolves every import and is
-stricter about it, and import-x only produces false positives for NodeNext
-exports maps, `?worker` queries and CJS default interop.
+Module RESOLUTION is not linted: `tsc` already resolves every import and is
+stricter about it (NodeNext exports maps, `?worker` queries, CJS default
+interop).
 
-`react-hooks/purity` blocks render-time clocks and randomness from changing the
-component tree for identical inputs — including unstable list keys that remount
-rows and lose their DOM and component state. `react-hooks/immutability` also
-catches a closure read before its declaration, which prevents the compiler from
-tracking its later value.
+`react/purity` blocks render-time clocks and randomness from changing the
+component tree for identical inputs, including unstable list keys that remount
+rows and lose their DOM and component state. Read the time through
+`hooks/useNow.ts` instead. `react/immutability` also catches a closure read
+before its declaration, which prevents the compiler from tracking its later
+value.
 
 ### The free tier: rules adopted at zero
 
@@ -220,44 +231,39 @@ belong in the staged table below — that table is for rules with work attached.
   load-bearing. Returning a promise from inside a `try` without awaiting it
   escapes the `catch` and `finally` entirely — that is the correctness case, and
   it is at zero. The other modes are style calls the repo does not make and are
-  NOT clean here: the default `in-try-catch` reports 12 sites in 6 files and
-  `always` reports 175 in 51. Do not "simplify" the option away.
-- **Module graph.** `import-x`'s `no-useless-path-segments`,
-  `no-empty-named-blocks` and `no-mutable-exports` — an exported `let` is shared
-  mutable state whose writer is invisible from the call site.
-- **The React compiler's rules.** `eslint-plugin-react-hooks` v7 ships far more
-  than `rules-of-hooks` and `exhaustive-deps`; eleven of the thirteen additional
-  rules that are on were adopted at zero: `set-state-in-render`,
-  `static-components`, `error-boundaries`, `use-memo`, `void-use-memo`,
-  `memoized-effect-dependencies`, `exhaustive-effect-dependencies`,
-  `incompatible-library`, `unsupported-syntax`, `config` and `gating`. The last
-  four fire when the compiler cannot reason about a file, which would silently
-  weaken the other seven, so they are errors rather than the preset's warnings.
-  This block is the whole cold-lint cost (see the timings above): it is the one
-  part of this group that is not free, and the trade is 30s of CI for the
-  remount-on-every-render and stale-memo classes.
-- **Assertions that never assert.** `@vitest/eslint-plugin`'s `valid-expect`,
+  NOT clean here: `in-try-catch` reports 19 sites in 10 files and `always`
+  reports 339 in 99. Do not "simplify" the option away.
+- **Module graph.** `import/no-empty-named-blocks` and
+  `import/no-mutable-exports` — an exported `let` is shared mutable state whose
+  writer is invisible from the call site.
+- **The React Compiler's rules.** oxlint ports them natively; eleven are on
+  beyond `rules-of-hooks` and `exhaustive-deps`, all adopted at zero:
+  `set-state-in-render`, `static-components`, `error-boundaries`, `purity`,
+  `immutability`, `use-memo`, `void-use-memo`, `incompatible-library` and
+  `unsupported-syntax`. The last two fire when the compiler cannot reason about
+  a file, which would silently weaken the others, so they are errors.
+  `static-components` also covers a component built by a factory called during
+  render.
+- **Assertions that never assert.** Vitest's `valid-expect`,
   `valid-expect-in-promise`, `no-standalone-expect`,
   `require-awaited-expect-poll`, `no-unneeded-async-expect-function`,
-  `no-commented-out-tests`, `no-alias-methods`, `prefer-vi-mocked` and
-  `no-duplicate-hooks`. `valid-expect` runs with `maxArgs: 2`, also
-  load-bearing: Vitest's `expect(value, message)` is real API that this repo
-  uses, and the default of 1 flags 11 legitimate call sites across 6 test files.
+  `no-commented-out-tests`, `no-alias-methods` and `no-duplicate-hooks`.
+  `valid-expect` runs with `maxArgs: 2`, also load-bearing: Vitest's
+  `expect(value, message)` is real API that this repo uses, and the default of 1
+  flags 32 legitimate call sites across 12 test files.
 
 The bar for adding to this group is the same one it was built on: measure with
-`eslint --no-cache -f json` first, and adopt only at zero. A rule that reports
-even one finding is a staged rule with a backlog, not a free one — and the
-answer is never a suppression or a code change bent to fit the rule.
+`pnpm exec oxlint --type-aware -f json` and a throwaway config that `extends`
+`.oxlintrc.json` and turns the rule on, and adopt only at zero. A rule that
+reports even one finding is a staged rule with a backlog, not a free one — and
+the answer is never a suppression or a code change bent to fit the rule.
 
 Zero has a second reading here, and it is the trap this group is most exposed
-to: a rule that is **inert** measures zero too. A removed rule name can survive
-as a deprecated tombstone whose `create()` returns `{}`, so it configures
-cleanly, lints nothing, and reports nothing —
-`react-hooks/component-hook-factories` is exactly this in v7 and is deliberately
-NOT in the config; `static-components` covers the factory case at the use site.
-So a zero measurement is only half the evidence. The other half is a **positive
-control**: write a file that violates the rule, confirm the rule reports it,
-then delete the file. Adopt no rule here on a zero alone.
+to: a rule that is **inert** measures zero too. A rule that fails to load its
+type information, or an option the implementation ignores, configures cleanly
+and reports nothing. So a zero measurement is only half the evidence. The other
+half is a **positive control**: write a file that violates the rule, confirm the
+rule reports it, then delete the file. Adopt no rule here on a zero alone.
 
 ### What `switch-exhaustiveness-check` actually guarantees
 
@@ -280,7 +286,7 @@ exhaustiveness checking for every future variant; an early return does not.
 `decideNextStep` in `workflow/codeDeliveryRecipe.ts` is written this way.
 Several older switches (`apns.ts`, `claudeSdk/ClaudeSdkSession.ts`,
 `tools/github/githubTools.ts`) still use the `default:` form; they are part of
-the staged 18 and convert when the option flips.
+the staged 23 and convert when the option flips.
 
 ### `exhaustive-deps` is a behaviour gate, not hygiene
 
@@ -306,71 +312,78 @@ value's content so its identity changes only when the content does
 (`lib/worktreeDirty.ts`, `lib/workflowIndicator.ts`, `lib/sessionRows.ts`,
 `lib/transcriptKeys.ts`). The key IS the dependency contract, the array it
 replaces is rebuilt on every broadcast, and the memo it feeds is decorative
-without it. Those sites carry an `eslint-disable-next-line` **on the dependency
-array line** with a reason naming the key and what depending on the array would
-re-render. There are five in the tree; a sixth has to make the same argument.
+without it. Those sites carry an
+`oxlint-disable-next-line react/exhaustive-deps` **on the dependency array
+line** with a reason naming the key and what depending on the array would
+re-render. There are seven in the tree; an eighth has to make the same argument.
 
-Coverage is not limited to TypeScript: `scripts/**/*.mjs`, `eslint.config.js`
-and the production service worker `app/web/public/sw.js` are linted with
-`js.configs.recommended` and their own globals. Generated `assistant-data/` is
-ignored at any directory depth, including a package-local runtime directory
-created when the server runs from a worktree. `app/web/src/lib/pcm16Worklet.js`
-is deliberately ignored — it runs on the audio render thread, whose globals are
-its own.
+`react/exhaustive-effect-dependencies`, the React Compiler's version of this
+check, is staged off rather than adopted. oxlint's port also reports EXTRA
+dependencies, which is exactly the trigger-token idiom above (`refreshToken` in
+`WorktreeChangesetList.tsx`), and it demands functions that capture only state
+setters, which `exhaustive-deps` correctly lets through: listing one re-runs the
+effect on every render. Most of its 39 findings point at intended code.
+
+Coverage is not limited to TypeScript: `scripts/**/*.mjs` and the production
+service worker `app/web/public/sw.js` get the rest of ESLint's `js/recommended`
+and their own globals. Generated `assistant-data/` is ignored at any directory
+depth, including a package-local runtime directory created when the server runs
+from a worktree. `app/web/src/lib/pcm16Worklet.js` is deliberately ignored — it
+runs on the audio render thread, whose globals are its own.
 
 ## Staged rules
 
-The TypeScript, React, and Vitest config blocks list rules that are **off with a
-measured backlog**. They are not rejected — each is a real signal, and each was
-measured before it was staged (the last option rows are on rules that are
-already on, measured when those rules were adopted).
+The TypeScript, React, and Vitest blocks of `.oxlintrc.json` list rules that are
+**off with a measured backlog**. They are not rejected — each is a real signal,
+and each was measured before it was staged (the option rows are on rules that
+are already on).
 
-Every number below was re-measured at **b887a1f2**. A count is a measurement
-anchored to a commit, not a standing fact: nine of the rows below had drifted
-upward from their original figures by the time they were refreshed, because the
-codebase grew and the backlogs grew with it. Re-measure with
-`eslint --no-cache -f json` before adopting one, and never adjust a number to
-match a guess.
+Every number below was measured with oxlint 1.86 at the switch from ESLint (#3).
+A count is a measurement anchored to a commit, not a standing fact, and oxlint's
+counts are not ESLint's: most rows rose, some sharply (`require-await` 1091 →
+1886, `no-deprecated` 12 → 39), because the implementations differ as well as
+the code. Re-measure before adopting one, and never adjust a number to match a
+guess.
 
 | rule                                                                           | sites | files |
 | ------------------------------------------------------------------------------ | ----- | ----- |
-| `require-await`                                                                | 1091  | 158   |
-| `no-unsafe-member-access`                                                      | 892   | 52    |
-| `no-unsafe-assignment`                                                         | 646   | 68    |
-| `no-unnecessary-type-assertion`                                                | 556   | 175   |
-| `no-explicit-any`                                                              | 268   | 38    |
-| `no-base-to-string`                                                            | 160   | 40    |
-| `consistent-type-imports`                                                      | 134   | 65    |
-| `no-unsafe-argument`                                                           | 107   | 30    |
-| `no-unsafe-call`                                                               | 60    | 19    |
-| `no-unsafe-return`                                                             | 49    | 25    |
-| `unbound-method`                                                               | 43    | 26    |
-| `vitest/expect-expect`                                                         | 38    | 24    |
-| `preserve-caught-error` (TS)                                                   | 34    | 29    |
-| `no-useless-assignment`                                                        | 19    | 17    |
-| `switch-exhaustiveness-check` with `considerDefaultExhaustiveForUnions: false` | 18    | 15    |
-| `@typescript-eslint/no-deprecated`                                             | 12    | 6     |
-| `react-hooks/no-deriving-state-in-effects`                                     | 3     | 3     |
-| `import-x/no-cycle` with `allowUnsafeDynamicCyclicDependency: false`           | 49    | 46    |
+| `typescript/require-await`                                                     | 1886  | 261   |
+| `typescript/no-unsafe-member-access`                                           | 1021  | 64    |
+| `typescript/no-unnecessary-type-assertion`                                     | 871   | 238   |
+| `typescript/no-unsafe-assignment`                                              | 719   | 79    |
+| `typescript/no-explicit-any`                                                   | 273   | 41    |
+| `typescript/no-base-to-string`                                                 | 212   | 58    |
+| `typescript/consistent-type-imports`                                           | 194   | 94    |
+| `typescript/no-unsafe-argument`                                                | 109   | 31    |
+| `typescript/no-unsafe-call`                                                    | 76    | 24    |
+| `typescript/unbound-method`                                                    | 73    | 38    |
+| `typescript/no-unsafe-return`                                                  | 56    | 31    |
+| `vitest/expect-expect`                                                         | 47    | 29    |
+| `preserve-caught-error` (TS)                                                   | 47    | 40    |
+| `typescript/no-deprecated`                                                     | 39    | 20    |
+| `react/exhaustive-effect-dependencies`                                         | 39    | 27    |
+| `switch-exhaustiveness-check` with `considerDefaultExhaustiveForUnions: false` | 23    | 19    |
+| `no-useless-assignment`                                                        | 20    | 16    |
+| `react/no-deriving-state-in-effects`                                           | 4     | 4     |
 
 Adopt them **one rule per change, smallest job first** — which is not the same
 as smallest count, see below: clear the rule's list, delete its line, and the
 gate tightens permanently.
 
-Two entries will never reach zero that way. `no-deprecated`'s three MCP SDK
-sites can be migrated, but its nine browser-compatibility sites keep the rule
-off until those fallbacks are no longer required; repo policy does not trade
-them for scattered suppressions. And `no-unnecessary-condition` is off for a
-reason that is not its size at all.
+Two entries will not reach zero that way. `no-deprecated` holds eight
+browser-compatibility sites that keep the rule off until those fallbacks are no
+longer required; repo policy does not trade them for scattered suppressions. And
+`exhaustive-effect-dependencies` is closer to rejected than staged, for the
+reason given under `exhaustive-deps` above. `no-unnecessary-condition` is off
+for a reason that is not its size at all.
 
 Several entries cost far more than their number suggests, which is why the order
 is by job and not by count. The clearest case: the smallest entry in the table
-is `no-deriving-state-in-effects` at 3, and it is among the largest jobs on it.
-Several of the small counts are not small jobs — read the note on an entry
-before planning against its number.
+is `no-deriving-state-in-effects` at 4, and it is among the largest jobs on it.
+Read the note on an entry before planning against its number.
 
-`react-hooks/no-deriving-state-in-effects` owns three different synchronization
-contracts: expandable navigator state seeded from a changing file tree,
+`react/no-deriving-state-in-effects` owns several synchronization contracts,
+among them expandable navigator state seeded from a changing file tree,
 browser-persisted viewed paths keyed by worktree and scope, and an optimistic
 Task order reset by authoritative server replies. Removing those effects means
 redesigning state ownership in each hook, not deleting redundant state.
@@ -380,43 +393,38 @@ an awaited standalone `main()`. The remaining shape is older test modules whose
 assertions deliberately run during module evaluation and whose `test()` body is
 empty. Moving both shapes into test callbacks is a test-architecture change.
 
-`@typescript-eslint/no-deprecated` has 12 residual sites. Nine are deliberate
-browser compatibility: eight `caretRangeFromPoint` uses preserve Safari support
-where `caretPositionFromPoint` is absent, and `execCommand` is the clipboard
-fallback. Three `Server` uses require the MCP SDK's `Server` → `McpServer` API
-migration, including construction and session wiring, rather than a type rename.
+`typescript/no-deprecated`'s 39: eight deliberate browser-compatibility sites
+(seven `caretRangeFromPoint` uses preserve Safari support where
+`caretPositionFromPoint` is absent, and `execCommand` is the clipboard
+fallback), three MCP SDK `Server` uses that need the `Server` → `McpServer` API
+migration rather than a type rename, 24 `matchMedia` test stubs that still
+implement `addListener`/`removeListener`, and one each of `MutableRefObject` and
+`FormEvent`. The last 26 are cheap.
 
-`switch-exhaustiveness-check`'s 18 is not the smallest job: `connection.ts`
-would need dozens of no-op cases, while `peerPrompt.ts` (missing `"failed"`) and
-`KnowledgeBrowser.tsx` (missing `"file"`) are one-liners.
-`preserve-caught-error` is staged for TypeScript only — it is already **on and
-blocking** for `scripts/**/*.mjs`, which inherit `js.configs.recommended` rather
-than the staged block.
+`switch-exhaustiveness-check`'s 23 is not the smallest job: `connection.ts`
+would need dozens of no-op cases, while a missing `"failed"` or `"file"` case
+elsewhere is a one-liner. `preserve-caught-error` is staged for TypeScript only
+— it is already **on and blocking** for `scripts/**/*.mjs`.
 
-`no-unnecessary-type-assertion` is staged for a second reason: its autofix, run
-on TypeScript 6, removed assertions TypeScript 7 still requires and broke the
-build. Adopt it only with `pnpm run typecheck` after every fix.
-
-The last row is not a rule but an OPTION on a rule that is already blocking —
-the same shape as the `switch-exhaustiveness-check` row above it. Its 49 are not
-49 unfixed cycles: they are import sites on chains that pass through one of the
-four deliberate lazy `hub.ts` seams. Nothing is waiting on it for correctness —
-knip's `cycles` gate already proves the static graph acyclic. See "What
-`import-x/no-cycle` actually guarantees".
+`no-unnecessary-type-assertion` was staged under ESLint partly because its
+autofix, run on TypeScript 6, removed assertions TypeScript 7 still required.
+oxlint checks on TypeScript 7, so that reason is gone; still run
+`pnpm run typecheck` after every fix.
 
 ### Why `no-unnecessary-condition` is not on the staged list
 
 It is not staged pending a cleanup. It is rejected, and the reason is worth
 recording because its headline number invites someone to schedule it.
 
-At b887a1f2 it reports 877 sites across 290 files: 592 `neverOptionalChain` (an
-optional chain on a value that is never nullish), 116 `neverNullish` (an `??`
-whose left side is never nullish), 61 `comparisonBetweenLiteralTypes`, 53
-`alwaysFalsy`, 41 `alwaysTruthy`, 12 `noOverlapBooleanExpression`, 2
-`alwaysNullish`. The first two are mostly cosmetic, and largely the
-conditional-spread idiom `exactOptionalPropertyTypes` deliberately introduced.
-Reading the 12 strongest findings, the ones where the types have no overlap,
-shows what the rule would do here:
+oxlint reports 1265 sites across 412 files at the switch. The breakdown below is
+ESLint's at b887a1f2, where it reported 877 sites across 290 files: 592
+`neverOptionalChain` (an optional chain on a value that is never nullish), 116
+`neverNullish` (an `??` whose left side is never nullish), 61
+`comparisonBetweenLiteralTypes`, 53 `alwaysFalsy`, 41 `alwaysTruthy`, 12
+`noOverlapBooleanExpression`, 2 `alwaysNullish`. The first two are mostly
+cosmetic, and largely the conditional-spread idiom `exactOptionalPropertyTypes`
+deliberately introduced. Reading the 12 strongest findings, the ones where the
+types have no overlap, shows what the rule would do here:
 
 ```ts
 // promptBudgets.ts — validating a persona parsed out of a config key
@@ -442,47 +450,34 @@ If the `as` casts at those boundaries are ever replaced by real parsing that
 narrows honestly, this decision is worth revisiting; until then the rule stays
 off and off the list.
 
-### What `import-x/no-cycle` actually guarantees
+### What `import/no-cycle` actually guarantees
 
-**Two gates cover circular dependencies, and neither is redundant.**
-`import-x/no-cycle` is on and blocking, and gives the per-import-site diagnostic
-— which import, on which line, closes which chain. **knip's `cycles` category is
-what proves the static value graph acyclic**, gated at zero in
-`config/deadcode-budgets.json`. The ESLint rule alone cannot make that claim
-here, and the reason is worth stating exactly:
+**Two gates cover circular dependencies.** `import/no-cycle` is on and blocking
+and gives the per-import-site diagnostic: which import, on which line, closes a
+chain. knip's `cycles` category, gated at zero in
+`config/deadcode-budgets.json`, checks the same static graph from the whole-repo
+side.
 
 - **A type-only import is never a cycle.** `verbatimModuleSyntax` erases it, so
-  it cannot be a load-order hazard, and the rule skips `import type` (and an
-  import whose every specifier is `type`) at both ends of the traversal. So it
-  is about the RUNTIME graph, not the type graph: `tools/catalog.ts` and
-  `promptConditions.ts` still refer to each other's types, deliberately.
-- **`allowUnsafeDynamicCyclicDependency: true` is coarser than "permits a chain
-  containing a lazy edge".** In the rule's traversal the dynamic-edge check is a
-  `return`, not a `continue`, and it sits BEFORE the cycle check:
+  it cannot be a load-order hazard, and the rule ignores it (`ignoreTypes`
+  defaults to on). So the rule is about the RUNTIME graph, not the type graph:
+  `tools/catalog.ts` and `promptConditions.ts` still refer to each other's
+  types, deliberately.
+- **A dynamic `import()` is never an edge.** Measured with positive controls: a
+  cycle closed only by an `await import()` is not reported, even with
+  `allowUnsafeDynamicCyclicDependency: false`, and a static cycle between two
+  modules that ALSO hold a dynamic import is reported. That second case is the
+  one ESLint's `import-x/no-cycle` missed: its traversal abandoned a module at
+  its first dynamic edge, so a static cycle could hide behind one. oxlint has no
+  such hole, so the option is not set and its old staged row (49 import-x sites)
+  is gone.
 
-  ```js
-  if (
-    options.allowUnsafeDynamicCyclicDependency &&
-    toTraverse.some((d) => d.dynamic)
-  )
-    return; // abandons this module entirely
-  if (path === filename && toTraverse.length > 0) return true; // the cycle check, not reached
-  ```
-
-  So the FIRST dynamic edge met while iterating a module's imports ends
-  detection for that module — it does not merely skip that edge. Measured, not
-  inferred: a purely static two-module cycle between `sessionActivity.ts` and
-  `pendingApprovals.ts` (both hold lazy `hub.ts` imports) passes `pnpm run lint`
-  and fails `pnpm run lint:deadcode`.
-
-The option is set anyway, because the four modules that reach `hub.ts` back
-lazily — `sessionActivity.ts`, `pendingApprovals.ts`, `pullRequestCards.ts`,
-`peerPrompt.ts` — do it precisely so the static graph stays acyclic, each with a
-comment saying so. Rejecting that would push them onto a startup-ordered
-injection seam: a self-healing lazy read traded for one that silently does
-nothing if a setter never ran, and two of the four already swallow failure in a
-`catch {}`. Tightening the option to `false` is staged at 49 sites / 46 files;
-until then knip is what holds the line, which is why the category is declared.
+The four modules that reach `hub.ts` back lazily — `sessionActivity.ts`,
+`pendingApprovals.ts`, `pullRequestCards.ts`, `peerPrompt.ts` — do it precisely
+so the static graph stays acyclic, each with a comment saying so. Rejecting that
+would push them onto a startup-ordered injection seam: a self-healing lazy read
+traded for one that silently does nothing if a setter never ran, and two of the
+four already swallow failure in a `catch {}`.
 
 Breaking a cycle is a design decision, so the shapes used here are worth naming.
 In order of preference:
@@ -545,15 +540,16 @@ wanted type would fix that and defeat the undeclared-category guard, so
 `scripts/check-deadcode.mjs` runs a second `--cycles` pass — about 2.5s — and
 merges it into the same tally.
 
-It is declared because **the ESLint rule does not subsume it.** With
-`allowUnsafeDynamicCyclicDependency: true`, detection stops at a module's first
-dynamic edge, so a purely static cycle between two modules that also hold lazy
-`hub.ts` imports is invisible to `pnpm run lint` (above, with the measurement).
-knip has no such option and reports the static value graph directly. The two
-count different units — on the commit that adopted the rule, knip found 12
-distinct cycles where ESLint reported 77 offending import sites — so neither
-number is a correction of the other. Both are zero now: knip is what proves it,
-and ESLint is what names the offending import when someone reintroduces one.
+It was declared because ESLint's `import-x/no-cycle` did not subsume it: that
+rule stopped at a module's first dynamic edge, so a purely static cycle between
+two modules that also held lazy `hub.ts` imports was invisible to lint. oxlint's
+rule does not have that hole (above, with the measurement), and the category
+stays declared anyway: it costs about 2.5s and checks the graph from knip's own
+module resolution. The two count different units — on the commit that adopted
+the rule, knip found 12 distinct cycles where ESLint reported 77 offending
+import sites — so neither number is a correction of the other. Both are zero
+now, and the lint rule is what names the offending import when someone
+reintroduces one.
 
 **Never set `ignoreExportsUsedInFile`.** It is unset, and it must stay that way:
 it suppresses exactly "exported, but only read inside its own file", which is
@@ -645,7 +641,7 @@ of their exports have no importer, and they are ordinary over-exports rather
 than false positives — the codemods import each other, so the module's _other_
 exports are consumed and only those six are not. What argues against covering
 them is not that the findings are wrong, it is that `scripts/**/*.mjs` is in no
-`tsconfig`: un-exporting there hands the symbol to ESLint's `no-unused-vars`,
+`tsconfig`: un-exporting there hands the symbol to oxlint's `no-unused-vars`,
 not to `noUnusedLocals`, so the compiler-holds-the-line argument above does not
 apply.
 
@@ -681,11 +677,14 @@ gives knip's own report with file and line.
 
 ## Escape hatches
 
-An `eslint-disable` is a last resort and must carry a reason on the same line:
+An `oxlint-disable` is a last resort and must carry a reason on the same line:
 
 ```ts
-// eslint-disable-next-line no-control-regex -- git refs genuinely forbid control characters
+// oxlint-disable-next-line no-control-regex -- git refs genuinely forbid control characters
 ```
+
+oxlint also honours `eslint-disable` comments; write the `oxlint-` form, with
+oxlint's rule names (`react/exhaustive-deps`, not `react-hooks/…`).
 
 Getting green by disabling a rule per file, or by scattering suppressions, is a
 failed outcome; fix the code or stage the rule with its count. The same goes for
@@ -697,11 +696,13 @@ dead code otherwise.
 
 - **A new violation of an enabled rule** — fix the code. It is a blocking gate
   on purpose.
-- **A rule is wrong for this repo** — turn it off in `eslint.config.js` with a
-  comment saying why, as the `import-x` resolution rules are.
+- **A rule is wrong for this repo** — turn it off in `.oxlintrc.json` with a
+  comment saying why, as `no-unnecessary-condition` is.
 - **A rule is right but the backlog is large** — stage it with its measured
   count in the block above and in this document, and say so in the change.
-- **ESLint and `tsc` disagree** — `tsc` wins; see the two-TypeScripts section.
+- **oxlint and `tsc` disagree** — `tsc` wins. Both run TypeScript 7, so a
+  disagreement is an oxlint bug or a stale `oxlint-tsgolint`; check its version
+  against the catalog's `typescript`.
 - **A dead-code category reports a finding** — the export you added has no
   importer. Give it one, or un-export it and let `noUnusedLocals` take over.
   Adding a budget to `config/deadcode-budgets.json` is not the fix: every

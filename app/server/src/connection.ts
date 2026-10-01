@@ -1,5 +1,9 @@
 import type { WebSocket } from "ws";
 import {
+  SESSION_READ_DWELL_MS,
+  WORKTREE_MISSING_BLOCKED_REASON,
+  backgroundWorkBlockedReason,
+  slashCommandApplies,
   kindFromHarnessAgentType,
   isOrdinarilyCreatableAgentType,
   CLAUDE_SDK_PROVIDER,
@@ -210,12 +214,6 @@ import {
   sendQueuedPromptNow,
   updateQueuedPrompt,
 } from "./promptQueue.ts";
-import {
-  SESSION_READ_DWELL_MS,
-  WORKTREE_MISSING_BLOCKED_REASON,
-  backgroundWorkBlockedReason,
-  slashCommandApplies,
-} from "@assistant/shared";
 import { settleSessionWithPeers } from "./sessionActivity.ts";
 import {
   CONTEXT_ONLY_SLASH_COMMANDS,

@@ -16,66 +16,56 @@ and the runner still never holds general root.
 ## GitHub Actions
 
 `.github/workflows/ci.yml` is CI for the public `pandeck` repository. It runs
-`lint`, `check` and `nix-build` on GitHub-hosted `ubuntu-latest` runners for
-pushes to `main` and all pull requests, including forks. It preserves the
-Forgejo gate order, the migration lock check, and the weekly pnpm, Prettier and
-PR-only ESLint cache restores described below. Only pushes to `main` save
-caches. Node 24 runs the workspace gates; Nix builds and tests the Bun package,
-checks the closure and NixOS module policies, then verifies reproducibility.
+`check` and `nix-build` on GitHub-hosted `ubuntu-latest` runners for pushes to
+`main` and all pull requests, including forks. It preserves the Forgejo gate
+order, the migration lock check, and the weekly pnpm and Prettier cache restores
+described below. Only pushes to `main` save caches. Node 24 runs the workspace
+gates; Nix builds and tests the Bun package, checks the closure and NixOS module
+policies, then verifies reproducibility.
 
-Hosted cold lint uses two workers with `NODE_OPTIONS=--max-old-space-size=5120`
-on the Lint step only; restored PR lint stays serial. Measured with GNU
-`time -v`, `taskset -c 0-3` and a fresh cache, two workers at the default heap
-failed with `ERR_WORKER_OUT_OF_MEMORY` after 71.60s at 8.24 GiB peak RSS. The
-selected 5 GiB worker heap passed in 87.65s at 9.41 GiB peak RSS, with no
-swapping. Low worker counts hit a per-worker V8 heap limit, not host OOM. Four
-workers measured about 16 GB RSS on four CPUs, too close to a hosted runner's 16
-GB RAM. The selected run is below the 12 GiB acceptance ceiling, leaving room
-for the OS, runner and page cache. Forgejo keeps four workers and the 24-core
-timing measurements below.
+`pnpm run lint` (oxlint, `docs/linting.md`) is a step of the `check` job. It
+takes about 5s on four CPUs at about 1.7 GB peak, so it needs no cache, no
+worker tuning and no heap flag. Under type-aware ESLint it had its own job with
+an ESLint cache and a 5 GiB worker heap, and the first hosted cold run was
+cancelled after 25 minutes (#3).
 
 The workflow has read-only repository permissions, uses no secrets, pins actions
 to commit SHAs, and cancels superseded PR runs per ref. Active main runs are not
-cancelled, preserving their verdict and cache saves. Job timeouts are 20 minutes
-for lint, 30 for check and 60 for nix-build. Before the public cut, the
-repository must require workflow approval for all external contributors in its
-Actions settings. Dependabot checks only GitHub Actions weekly, groups updates
-into one PR and applies a seven-day cooldown; the pnpm catalog remains manually
-managed. There are no GitHub deployment, preview or release workflows. The
-Forgejo pipeline remains for the current deployment until the switch.
+cancelled, preserving their verdict and cache saves. Job timeouts are 30 minutes
+for check and 60 for nix-build. Before the public cut, the repository must
+require workflow approval for all external contributors in its Actions settings.
+Dependabot checks only GitHub Actions weekly, groups updates into one PR and
+applies a seven-day cooldown; the pnpm catalog remains manually managed. There
+are no GitHub deployment, preview or release workflows. The Forgejo pipeline
+remains for the current deployment until the switch.
 
 ## Gates
 
 CI (`.forgejo/workflows/ci.yml`) enforces the repository quality gates on push
-to `main` and on pull requests. Two `node:24` container jobs share the work on
-the Docker-based runner (`runs-on: ubuntu-latest`). `lint` installs dependencies
-and runs `pnpm run lint`; in parallel, `check` runs `corepack enable` → restore
+to `main` and on pull requests, in a `node:24` container job on the Docker-based
+runner (`runs-on: ubuntu-latest`). `check` runs `corepack enable` → restore
 caches → `pnpm install --frozen-lockfile` →
 `pnpm run check:package-config-secrets` → `pnpm run format:check` →
-`pnpm run lint:deadcode` → `pnpm run check:instructions` →
+`pnpm run lint` → `pnpm run lint:deadcode` → `pnpm run check:instructions` →
 `pnpm run check:prompts` → `pnpm run typecheck` → `pnpm run test:suites` →
 `pnpm run build`. The umbrella `pnpm run test` remains the local gate and also
 runs lint and the fast repository checks. CI names those gates separately and
 uses `test:suites` to avoid running them a second time.
 
-Four layers are parallel, and each was measured rather than assumed. The whole
-ESLint gate is a separate job, so it overlaps the check job instead of extending
-its critical path. A cold lint also uses four ESLint workers: 110s serial became
-43s, while two workers took 60s, eight took 50s, and `auto` took 64s. A restored
-PR cache stays serial because the same run is ~2s serial and ~3s with four
-workers. `format` and `format:check` pass `--experimental-cli`, Prettier's
-parallel CLI: the default one is single-threaded (~21s cold on a 24-core box)
-where this fans out (~8s cold, ~1s warm). It was verified against the default
-CLI on this repository — same matched file set, same `.prettierignore` handling,
-same exit codes, same `--write` output. `typecheck` runs the three packages
-concurrently, which halves it (~6.4s → ~3.0s) because TypeScript 7's native
-compiler uses ~2.7 cores for all three together. `pnpm run test:suites` runs the
-three workspace suites concurrently after the release suite (45.5s → 37.5s);
-that gain is smaller than the arithmetic promises because the server and web
-suites each already occupy ~14.5 of 24 cores, so the win is only their ramp-up
-and ramp-down overlapping. The package fan-outs use `--no-bail`, so every
-failing package reports its errors instead of only the first. The cost is
-interleaved output, prefixed by package name.
+Three layers are parallel, and each was measured rather than assumed. `format`
+and `format:check` pass `--experimental-cli`, Prettier's parallel CLI: the
+default one is single-threaded (~21s cold on a 24-core box) where this fans out
+(~8s cold, ~1s warm). It was verified against the default CLI on this repository
+— same matched file set, same `.prettierignore` handling, same exit codes, same
+`--write` output. `typecheck` runs the three packages concurrently, which halves
+it (~6.4s → ~3.0s) because TypeScript 7's native compiler uses ~2.7 cores for
+all three together. `pnpm run test:suites` runs the three workspace suites
+concurrently after the release suite (45.5s → 37.5s); that gain is smaller than
+the arithmetic promises because the server and web suites each already occupy
+~14.5 of 24 cores, so the win is only their ramp-up and ramp-down overlapping.
+The package fan-outs use `--no-bail`, so every failing package reports its
+errors instead of only the first. The cost is interleaved output, prefixed by
+package name.
 
 `pnpm run test` is recursive over the workspace. While iterating locally, narrow
 it to the package you are changing — `pnpm --filter @assistant/server test` (or
@@ -83,12 +73,10 @@ it to the package you are changing — `pnpm --filter @assistant/server test` (o
 `pnpm --filter @assistant/server test <path>` for one file — then run the full
 gate before handing the change over.
 
-Three caches are restored: the pnpm content-addressed store (~194 MB packed,
-before install), Prettier's content-hash cache in `node_modules/.cache/prettier`
-(~80 KB), and ESLint's in `node_modules/.cache/eslint` (~490 KB). The lint job
-only restores the pnpm store; the check job owns its weekly save so the two jobs
-cannot race to publish the same immutable key. All three caches follow the same
-three rules, and a new cache should follow them too.
+Two caches are restored: the pnpm content-addressed store (~194 MB packed,
+before install) and Prettier's content-hash cache in
+`node_modules/.cache/prettier` (~80 KB). Both follow the same three rules, and a
+new cache should follow them too.
 
 **Restore and save are separate steps.** `actions/cache/restore@v4` on every
 run, `actions/cache/save@v4` only on a push to `main` — so a PR run never pays a
@@ -105,38 +93,26 @@ extreme and forces a save on every run. The week bucket means the first `main`
 build of a week misses the exact key, restores the previous week's entry through
 `restore-keys`, and saves the refreshed one.
 
-**They are optimizations, never correctness — with one asterisk.** Prettier and
-pnpm validate restored entries by content hash, so a stale or missing cache is
-slower and never wrong. ESLint is the exception, and it is why its cache is
-restored on pull requests ONLY: the cache keys each file on its own content plus
-the config, and cannot see that a type-aware rule's verdict depends on other
-files, so changing a function's return type leaves its callers' cached results
-stale but trusted. `main` therefore lints cold — that run is authoritative, and
-it is what produces the entry PRs restore. A PR gets a fast, slightly optimistic
-lint; the merge commit gets a complete one; `tsc` runs uncached on both.
-
-The lint script passes `--cache-strategy content` for the same reason the keys
-carry a week: the default `metadata` strategy keys on mtime, and every file in a
-fresh CI checkout has a new one, so a restored cache would match nothing. With
-content hashing, a warm lint is ~2s. A cold run is ~110s serial; the lint job's
-four-worker path reduces it to ~43s. The cache key covers the lockfile, ESLint
-config and every tsconfig because the import resolver reads the root reference
-graph.
+**They are optimizations, never correctness.** Prettier and pnpm validate
+restored entries by content hash, so a stale or missing cache is slower and
+never wrong. A cache whose verdict depends on files outside its key does not
+meet that bar: ESLint's did not, because a type-aware result depends on other
+files, which is why it was restored on pull requests only while it existed.
 
 Restoring anything here depends on the runner's cache proxy being reachable from
 the job container — see the caveat under `ci.yml` below before adding a cache
 step.
 
-The runner is shared and the four gate layers are parallel, so a test that
-asserts on how long something took is asserting on the runner's spare capacity.
-The memory selector's 3,000-card guard measured 16ms of wall clock on an idle
-machine and 17ms, 113ms and 188ms across three runs on a loaded one — against a
-250ms bound. Assert CPU time instead (`app/server/src/test/cpuBudget.ts`): the
-same three loaded runs cost 26.5ms, 28.6ms and 31.0ms of it, because
-`process.cpuUsage()` does not count the time the process spent off a core. It
-also does not count time in a child process, on disk or on a timer, so where the
-work is not CPU-bound, assert an ordering instead — that the cancelled read
-settled before the uncancelled one did, rather than that it settled inside 2s.
+The runner is shared and the gate layers are parallel, so a test that asserts on
+how long something took is asserting on the runner's spare capacity. The memory
+selector's 3,000-card guard measured 16ms of wall clock on an idle machine and
+17ms, 113ms and 188ms across three runs on a loaded one — against a 250ms bound.
+Assert CPU time instead (`app/server/src/test/cpuBudget.ts`): the same three
+loaded runs cost 26.5ms, 28.6ms and 31.0ms of it, because `process.cpuUsage()`
+does not count the time the process spent off a core. It also does not count
+time in a child process, on disk or on a timer, so where the work is not
+CPU-bound, assert an ordering instead — that the cancelled read settled before
+the uncancelled one did, rather than that it settled inside 2s.
 
 That container is `node:24-bookworm`, whose Debian git is **2.39** — older than
 any current dev machine's. The worktree and merge suites shell out to git, so a
@@ -155,8 +131,8 @@ default root, or the run leaves files in your checkout that only root can delete
 Four workflows live in `.forgejo/workflows/`: automatic `ci.yml`, `release.yml`
 (dispatch or a published release), plus the `workflow_dispatch` workflows
 `preview.yml` and `ops.yml`. The `pull_request` trigger listens for
-`opened/synchronize/reopened/closed`; `lint`/`check`/`nix-build` skip the
-`closed` action.
+`opened/synchronize/reopened/closed`; `check`/`nix-build` skip the `closed`
+action.
 
 The `pull_request` trigger carries no `branches:` filter: a PR is gated whatever
 it targets, so stacked work whose base is an intermediate branch is built like
@@ -190,10 +166,8 @@ it retries, times out after ~20s, reports a miss, and silently saves nothing, so
 the only symptom is a job that is slower than its steps can explain. Check the
 runner's cache directory for entries before trusting a cache step here.
 
-- `lint` — the type-aware ESLint gate in its own `node:24` Docker container;
-  authoritative cold runs use four workers, restored PR runs stay serial.
-- `check` — format-check/dead-code/instruction/prompt/typecheck/test/build gates
-  in a second `node:24` Docker container, parallel with `lint`.
+- `check` — format-check/lint/dead-code/instruction/prompt/typecheck/test/build
+  gates in a `node:24` Docker container.
 - `nix-build` — builds the production package `.#personal-assistant` (the Bun
   bundle, whose install check boots it under the packaged Bun), its closure
   check, and the NixOS preview-isolation and OOM-policy checks on the `native`

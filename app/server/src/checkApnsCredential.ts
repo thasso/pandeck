@@ -14,8 +14,11 @@
 import { createPrivateKey } from "node:crypto";
 import { APNS_CREDENTIAL_PATH } from "./config.ts";
 import { probeApnsCredential, providerToken } from "./apns.ts";
-import { getApnsCredential, type ApnsCredential } from "./apnsStore.ts";
-import { listApnsDevices } from "./apnsStore.ts";
+import {
+  getApnsCredential,
+  listApnsDevices,
+  type ApnsCredential,
+} from "./apnsStore.ts";
 
 function fail(message: string): never {
   console.error(`\nerror: ${message}\n`);

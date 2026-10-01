@@ -99,7 +99,7 @@ test("context7_resolve_library sends the bearer token and returns compact candid
   assert.equal(url.searchParams.get("libraryName"), "next.js");
   assert.equal(url.searchParams.get("query"), "routing");
   assert.equal(
-    (calls[0]!.init?.headers as Record<string, string>).Authorization,
+    (calls[0]!.init!.headers as Record<string, string>).Authorization,
     "Bearer ctx7sk-test-key",
   );
 });

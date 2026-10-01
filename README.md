@@ -264,7 +264,7 @@ and `docs/README.md` indexes the rest.
 
 ```bash
 pnpm run format      # format the repo with Prettier (check: format:check)
-pnpm run lint        # type-aware ESLint (blocking)
+pnpm run lint        # type-aware oxlint (blocking)
 pnpm run typecheck   # shared + server + web TypeScript checks
 pnpm run test        # the full test gate (instructions, migrations, lint, dead code, suites)
 pnpm run build       # build the production web bundle

@@ -27,10 +27,10 @@ import { BackgroundWorkLedge } from "./BackgroundWorkLedge.tsx";
 import {
   classifySessionStatus,
   buildSessionInbox,
+  tierForStatus,
   type SessionInboxCard,
   type SessionInboxItem,
 } from "../lib/sessionInbox.ts";
-import { tierForStatus } from "../lib/sessionInbox.ts";
 
 const NOW = 1_800_000_000_000;
 

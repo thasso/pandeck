@@ -3,8 +3,8 @@
  *
  * WHY this exists: the workspace compiles with typescript@7, which ships no
  * JavaScript compiler API, so a codemod cannot ask it which sites are wrong.
- * The root typescript@6 (the linter's copy) HAS the API but is a different
- * compiler and may disagree — see docs/linting.md, "The two TypeScripts".
+ * The root typescript@6 (catalogs.codemods) HAS the API but is a different
+ * compiler and may disagree — see scripts/codemods/README.md.
  *
  * So the split is deliberate and load-bearing:
  *   - v7 `tsc` decides WHICH sites are errors (it is the authority),

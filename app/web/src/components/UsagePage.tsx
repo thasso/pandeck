@@ -42,6 +42,7 @@ import {
   Spinner,
 } from "./ui/load.tsx";
 import { useFetchState } from "../hooks/useFetchState.ts";
+import { useNow } from "../hooks/useNow.ts";
 import {
   beginLoad,
   dataOf,
@@ -90,7 +91,8 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
   // through for every other open surface — see `docs/usage.md`.
   const claude = useProfileUsage(claudeProfiles, fetchClaudeUsage);
   const openai = useProfileUsage(openAiProfiles, fetchOpenAiUsage);
-  const now = useNow();
+  // Ticks every 30s so reset countdowns stay live without re-fetching.
+  const now = useNow(30_000);
   const refreshing =
     claude.pending || openai.pending || isPending(profileState);
 
@@ -548,16 +550,6 @@ function UsageAccountSection<T>({
 function subscriptionLabel(type: string | null): string | undefined {
   if (!type) return undefined;
   return `${type.charAt(0).toUpperCase()}${type.slice(1)} plan`;
-}
-
-/** Ticks every 30s so reset countdowns stay live without re-fetching. */
-function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
 }
 
 /** "Resets in 1d 5h" / "Resets in 5h 12m" / "Resets in 8m" / "Resetting now". */

@@ -1472,7 +1472,7 @@ function trailerValue(
   maxChars = MAX_COMMIT_ACTOR_CHARS,
 ): string {
   const single = value
-    // eslint-disable-next-line no-control-regex
+    // oxlint-disable-next-line no-control-regex -- stripping control characters IS the sanitising step.
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();

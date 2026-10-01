@@ -131,11 +131,11 @@ test("reads bounded Huddle history with isolated browser auth and personal-OAuth
     call.url.includes("/api/huddles.history"),
   );
   assert.equal(
-    (browserCall?.init?.headers as Record<string, string>).Authorization,
+    (browserCall!.init!.headers as Record<string, string>).Authorization,
     "Bearer xoxc-browser-secret",
   );
   assert.equal(
-    (browserCall?.init?.headers as Record<string, string>).Cookie,
+    (browserCall!.init!.headers as Record<string, string>).Cookie,
     "d=cookie-secret",
   );
   const oauthCalls = calls.filter((call) =>
@@ -145,7 +145,7 @@ test("reads bounded Huddle history with isolated browser auth and personal-OAuth
   assert.ok(
     oauthCalls.every(
       (call) =>
-        (call.init?.headers as Record<string, string>).Authorization ===
+        (call.init!.headers as Record<string, string>).Authorization ===
         "Bearer xoxp-personal-secret",
     ),
   );
