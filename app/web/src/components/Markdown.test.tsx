@@ -629,9 +629,16 @@ describe("Markdown math rendering", { timeout: 30_000 }, () => {
   let container: HTMLDivElement;
   let reactRoot: Root;
 
+  // `vi.resetModules()` keeps the mock registry, so a case's `vi.doMock` of
+  // `rehype-katex` would reach every later case: each one starts unmocked.
   beforeEach(() => {
+    vi.doUnmock("rehype-katex");
     vi.resetModules();
     ({ container, root: reactRoot } = mount());
+  });
+
+  afterEach(() => {
+    vi.doUnmock("rehype-katex");
   });
 
   async function loadMarkdown() {
