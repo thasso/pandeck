@@ -611,6 +611,44 @@ test("revise reuses the implementer while review gets an independent session", a
   assert.match(prompts[2]!.text, /reviewed commit head/);
 });
 
+// A pass is a pair of eyes, not a range: a stale pass that commit/sync
+// reissues for the head that actually landed goes back to the reviewer who
+// read the old one.
+test("a discovery review reissued for a new range returns to the same reviewer session", async () => {
+  const { run } = createRun();
+  const executor = agentExecutor.createWorkflowAgentExecutor(deps());
+  const first = appendAgent(run.id, {
+    role: "reviewer",
+    objective: "review",
+    reviewPass: 2,
+    commitRange: { baseCommit: "base", headCommit: "head" },
+    resultContract: contracts.ASSESSMENT_CONTRACT_ID,
+  });
+  await executor.dispatch({ run, step: first, actor: ACTOR });
+  complete(first, contracts.ASSESSMENT_CONTRACT_ID, {
+    verdict: "pass",
+    headCommit: "moved",
+    findings: [],
+  });
+
+  const reissued = appendAgent(run.id, {
+    role: "reviewer",
+    objective: "review",
+    reviewPass: 2,
+    commitRange: { baseCommit: "base", headCommit: "moved" },
+    resultContract: contracts.ASSESSMENT_CONTRACT_ID,
+  });
+  await executor.dispatch({ run, step: reissued, actor: ACTOR });
+
+  assert.ok(store.getStep(first.id)!.executor?.id, "the first review ran");
+  assert.equal(
+    store.getStep(reissued.id)!.executor?.id,
+    store.getStep(first.id)!.executor?.id,
+  );
+  assert.equal(createdTitles.length, 1, "no second reviewer session opens");
+  assert.match(prompts[1]!.text, /base\.\.moved/);
+});
+
 test("a persisted non-empty fixer choice gets its own runtime after executor restart", async () => {
   const { run } = createRun({ useFixer: true });
   const implement = appendAgent(run.id, {
