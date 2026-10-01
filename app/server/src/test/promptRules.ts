@@ -32,39 +32,96 @@ const DETERMINER = /(?:a|an|the|any)\s+/iy;
 /**
  * A prohibition: every act sits in a list directly governed by a negation —
  * "Do not commit, push, or open a pull request" — in any order, and across
- * several such lists. A list holds only the declared acts (each a literal
- * phrase, optionally after a/an/the/any), so "Commit and push; do not open a
- * pull request" forbids only the last, and "Never skip checks before you
- * commit" forbids none of them.
+ * several such lists. A list holds only the declared acts (a literal phrase,
+ * optionally after a/an/the/any, or a pattern for a phrase with optional
+ * words), so "Commit and push; do not open a pull request" forbids only the
+ * last, and "Never skip checks before you commit" forbids none of them.
  */
-export function forbidden(...acts: string[]): PromptRule {
-  const longestFirst = [...acts].sort((a, b) => b.length - a.length);
-  /** The declared act starting exactly at `at`, ending on a word boundary. */
-  const actAt = (text: string, at: number): string | undefined =>
-    longestFirst.find(
-      (act) =>
-        text.slice(at, at + act.length).toLowerCase() === act.toLowerCase() &&
-        !/[\w-]/.test(text.charAt(at + act.length)),
-    );
+export function forbidden(...acts: (string | RegExp)[]): PromptRule {
+  const patterns = acts.map((act) =>
+    typeof act === "string"
+      ? new RegExp(act.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "iy")
+      : new RegExp(act.source, `${act.flags.replace(/[gy]/g, "")}y`),
+  );
+  /** The index of the declared act ending at a word boundary, and its end. */
+  const actAt = (text: string, at: number): [number, number] | undefined => {
+    let best: [number, number] | undefined;
+    patterns.forEach((pattern, index) => {
+      pattern.lastIndex = at;
+      const end = pattern.exec(text) ? pattern.lastIndex : -1;
+      if (
+        end > at &&
+        !/[\w-]/.test(text.charAt(end)) &&
+        end > (best?.[1] ?? -1)
+      )
+        best = [index, end];
+    });
+    return best;
+  };
   const sticky = (pattern: RegExp, text: string, at: number): number => {
     pattern.lastIndex = at;
     return pattern.exec(text) ? pattern.lastIndex : at;
   };
   return (text) => {
-    const negated = new Set<string>();
+    const negated = new Set<number>();
     for (const negation of text.matchAll(NEGATION)) {
       let at = negation.index + negation[0].length;
       for (;;) {
         at = sticky(DETERMINER, text, at);
         const act = actAt(text, at);
         if (!act) break;
-        negated.add(act);
-        const next = sticky(LIST_SEPARATOR, text, at + act.length);
-        if (next === at + act.length) break;
+        negated.add(act[0]);
+        const next = sticky(LIST_SEPARATOR, text, act[1]);
+        if (next === act[1]) break;
         at = next;
       }
     }
-    return acts.every((act) => negated.has(act));
+    return negated.size === acts.length;
+  };
+}
+
+const CLAUSE_BOUNDARY = /[.;:!?\n]|\s—\s|,\s+but\b/g;
+const NEGATED =
+  /\b(?:not|never|no longer|no|cannot|without|neither|nor)\b|n't\b/i;
+
+/** Where the clause holding `at` starts. */
+function clauseStart(text: string, at: number): number {
+  let start = 0;
+  for (const boundary of text.slice(0, at).matchAll(CLAUSE_BOUNDARY))
+    start = boundary.index + boundary[0].length;
+  return start;
+}
+
+/**
+ * A rule stated affirmatively: `pattern` must match where no negation governs
+ * it. Each named group is a word whose polarity carries the rule, and the
+ * clause text leading up to it (from the clause start, or from the previous
+ * group) may hold no negation — so "never optional", "is no longer your ONLY
+ * channel" and "is never recorded as accepted" fail. Text INSIDE a named group
+ * is not checked: a premise such as `(?<premise>NOT restate)` may negate. With
+ * no named group, the whole match is the key word.
+ */
+export function affirmed(pattern: RegExp): PromptRule {
+  const flags = `${pattern.flags.replace(/[gyd]/g, "")}gd`;
+  return (text) => {
+    for (const match of text.matchAll(new RegExp(pattern.source, flags))) {
+      const spans = Object.values(match.indices?.groups ?? {})
+        .filter((span): span is [number, number] => span !== undefined)
+        .sort((a, b) => a[0] - b[0]);
+      if (spans.length === 0)
+        spans.push([match.index, match.index + match[0].length]);
+      let previousEnd = 0;
+      const negated = spans.some(([start, end]) => {
+        const lead = text.slice(
+          Math.max(previousEnd, clauseStart(text, start)),
+          start,
+        );
+        previousEnd = end;
+        return NEGATED.test(lead);
+      });
+      if (!negated) return true;
+    }
+    return false;
   };
 }
 

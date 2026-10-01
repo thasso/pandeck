@@ -24,7 +24,7 @@ import type { AgentTool, ToolCallContext } from "../mcp/tool.ts";
 import { createTask, deleteTask } from "../tasks.ts";
 import { memoryTools } from "./knowledge/memoryTools.ts";
 import { taskToolsForKind } from "./tasks/taskTools.ts";
-import { assertPromptRules } from "../test/promptRules.ts";
+import { affirmed, assertPromptRules } from "../test/promptRules.ts";
 
 const ctx: ToolCallContext = {
   toolCallId: "eager-guidance-test",
@@ -90,7 +90,9 @@ test("the eager tools keep the guidance that no other surface carries", () => {
     "task_manage.operations.userRequestedStatus": {
       ...surface("task_manage.operations.userRequestedStatus"),
       rules: {
-        "only-on-user-request": /only when the user (asked|requested|asks)/i,
+        "only-on-user-request": affirmed(
+          /only when the user (asked|requested|asks)/i,
+        ),
       },
     },
     // The trace stays readable only if narration never reaches it.
@@ -134,8 +136,9 @@ test("the eager tools keep the guidance that no other surface carries", () => {
       ...surface("memory_manage.operations.expectedRevision"),
       rules: {
         "carries-revision": /revision/i,
-        "stale-does-nothing":
-          /stale[^.\n]*(changes nothing|is refused|is rejected|has no effect|does nothing)/i,
+        "stale-does-nothing": affirmed(
+          /stale( one)?[^.\n]*?(?<key>changes nothing|is refused|is rejected|has no effect|does nothing)/i,
+        ),
       },
     },
     // reinforce/archive/pin IGNORE text and kind instead of refusing them, so
@@ -152,8 +155,9 @@ test("the eager tools keep the guidance that no other surface carries", () => {
     "memory_manage.operations.pin": {
       ...surface("memory_manage.operations.pin"),
       rules: {
-        "create-only":
+        "create-only": affirmed(
           /(on|at|with) create\b(?![^.\n]*\b(or|and|any|later)\b)|create only/i,
+        ),
       },
     },
     // A semantic paraphrase silently returns nothing.

@@ -16,7 +16,12 @@ import type { WorkflowRunRow, WorkflowStepRow } from "../db/workflowStore.ts";
 import type { RuntimePromptDriver } from "../session/runtimePrompt.ts";
 import type { WorkflowAgentExecutorDeps } from "./agentExecutor.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
-import { absent, assertPromptRules, forbidden } from "../test/promptRules.ts";
+import {
+  absent,
+  affirmed,
+  assertPromptRules,
+  forbidden,
+} from "../test/promptRules.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "workflow-agent-executor-"));
 const workflowWorktreePath = join(tmp, "workflow-worktree");
@@ -2046,10 +2051,12 @@ test("each assignment kind states the rules its role works by", () => {
           /responses\?: \[\{ finding: string, response: string \}\]/,
         "response-leads-with-disposition":
           /(start|begin|lead|open)[^.\n]*\bresponse[^.\n]*disposition/i,
-        "observations-are-optional-work":
-          /observations[^.\n]*(only if|need not|at your discretion|(?<!not )optional)/i,
-        "focus-still-owes-every-finding":
-          /every finding (still )?(has to|must)( still)? be (fixed|answered)/i,
+        "observations-are-optional-work": affirmed(
+          /observations[^.\n]*?(?<key>only if|need not|at your discretion|optional)/i,
+        ),
+        "focus-still-owes-every-finding": affirmed(
+          /every finding (still )?(?<key>has to|must)( still)? be (fixed|answered)/i,
+        ),
         // The review wording would read as permission to answer only part.
         "focus-is-not-review-narrowing": absent(
           /narrows where you look first/i,
@@ -2077,16 +2084,20 @@ test("each assignment kind states the rules its role works by", () => {
         "verification-report-is-a-claim":
           /implementer's own verification[^.\n]*claim/i,
         // Both directions, so minor remarks are neither dropped nor hidden.
-        "verdict-and-findings-agree":
+        "verdict-and-findings-agree": affirmed(
           /(verdict and findings|findings and verdict) must (agree|match|be consistent)/i,
+        ),
         "pass-empty-revise-nonempty":
           /\bpass\b[^.\n]*no findings[^.\n]*\brevise\b[^.\n]*at least one/i,
         "minor-remark-is-an-observation":
           /(record|note|put)[^.\n]*as an observation/i,
-        "severity-in-its-field": /severity in (its|the) severity field/i,
+        "severity-in-its-field": affirmed(
+          /severity in (its|the) severity field/i,
+        ),
         // Every rework assignment renders observations to the fix round.
-        "observations-reach-the-fix-round":
+        "observations-reach-the-fix-round": affirmed(
           /observations (also )?travel|observations (also )?reach the fix round|fix round is shown them/i,
+        ),
         "finding-means-must-address":
           /must be addressed[^.\n]*not (who|whom|the audience)/i,
         "no-stale-observation-claim": absent(
@@ -2119,14 +2130,19 @@ test("each assignment kind states the rules its role works by", () => {
       }),
       rules: {
         "findings-are-yours": /\byour (own )?findings\b/i,
-        "restate-verbatim":
-          /restate[^.\n]*(?<!not )(exactly|verbatim|word for word)/i,
+        "restate-verbatim": affirmed(
+          /(?<verb>restate)[^.\n]*?(?<how>exactly|verbatim|word for word)/i,
+        ),
         "silence-is-acceptance":
-          /((not|never) restate|unrestated)[^.\n]*(?<!not )(recorded|counted|treated) as accepted/i,
+          // The premise legitimately negates (NOT restate); the consequence may not.
+          affirmed(
+            /(?<premise>(not|never) restate|unrestated)[^.\n]*?(?<key>(recorded|counted|treated) as accepted)/i,
+          ),
         "carries-report-convention": (text) =>
           text.includes(REVIEW_REPORT_CONVENTION),
-        "convention-is-for-the-report":
-          /convention[^.\n]*(governs|is for|applies to)[^.\n]*report you write[^.\n]*not[^.\n]*fields/i,
+        "convention-is-for-the-report": affirmed(
+          /convention[^.\n]*?(?<key>governs|is for|applies to)[^.\n]*report you write[^.\n]*not[^.\n]*fields/i,
+        ),
       },
     },
     verdict: {
@@ -2172,10 +2188,12 @@ test("each assignment kind states the rules its role works by", () => {
         implementerReport: { summary: "did the work" },
       }),
       rules: {
-        "fixer-is-the-default":
+        "fixer-is-the-default": affirmed(
           /fixer is the default|default (answer )?is a fixer/i,
-        "exception-needs-a-named-reason":
-          /"implementer"[^.\n]*(needs a (named )?reason|reason you can name)/i,
+        ),
+        "exception-needs-a-named-reason": affirmed(
+          /"implementer"[^.\n]*?(?<key>needs a (named )?reason|reason you can name)/i,
+        ),
         // The reason routing actually gave when it went the expensive way.
         "finding-count-is-no-reason":
           /not a reason[^.\n]*number of findings|number of findings[^.\n]*(is not|isn't) a reason/i,
@@ -2186,7 +2204,7 @@ test("each assignment kind states the rules its role works by", () => {
         // The one place the coordinator can say anything TO the fix round; the
         // rationale is the user's record and reaches no agent.
         "offers-the-class-level-correction": /class-level correction/i,
-        "focus-is-the-only-channel": /(?<!not (your|the|an?) )only channel/i,
+        "focus-is-the-only-channel": affirmed(/only channel/i),
         "rationale-reaches-nobody":
           /rationale[^.\n]*reaches no(body| agent| one)/i,
         "focus-shape": /focus\?: string\[\]/,
@@ -2245,7 +2263,7 @@ test("each assignment kind states the rules its role works by", () => {
       rules: {
         "continues-the-rebase": /git rebase --continue/,
         "no-extra-commits-or-push": forbidden(
-          "create any extra commits",
+          /create (any )?extra commits/i,
           "push",
           "open a pull request",
         ),
@@ -2268,7 +2286,9 @@ test("each assignment kind states the rules its role works by", () => {
         resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
       }),
       rules: {
-        "failure-is-data": /\bdata\b[^.\n]*\b(never|not)\b[^.\n]*instructions/i,
+        "failure-is-data": affirmed(
+          /(?<key>as data),? (never|not) (as )?instructions/i,
+        ),
         "no-git-mutation": forbidden(
           "commit",
           "amend",
@@ -2277,8 +2297,9 @@ test("each assignment kind states the rules its role works by", () => {
           "stash",
           "force-push",
         ),
-        "moved-result-is-refused":
-          /(refuse|reject)[^.\n]*result[^.\n]*(moved|changed)/i,
+        "moved-result-is-refused": affirmed(
+          /(?<key>refuse|reject)s?[^.\n]*result[^.\n]*(moved|changed)/i,
+        ),
         "blocks-with-diagnosis": /blocked[^.\n]*diagnosis/i,
       },
     },
@@ -2287,7 +2308,7 @@ test("each assignment kind states the rules its role works by", () => {
       text: contracts.getResultContract(contracts.ASSESSMENT_CONTRACT_ID)!
         .describe,
       rules: {
-        "says-to-consolidate": /(?<!not )consolidate/i,
+        "says-to-consolidate": affirmed(/consolidate/i),
         "states-the-count-bound": new RegExp(
           `at most ${ASSESSMENT_FINDINGS_MAX_COUNT} findings`,
           "i",

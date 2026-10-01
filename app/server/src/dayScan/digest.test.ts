@@ -7,7 +7,7 @@ import {
   renderSynthesisPrompt,
   type DaySynthesisDigest,
 } from "./digest.ts";
-import { absent, assertPromptRules } from "../test/promptRules.ts";
+import { absent, affirmed, assertPromptRules } from "../test/promptRules.ts";
 
 // Every slice the prompts reason over is populated, so one fixture serves all
 // three prompts.
@@ -82,11 +82,12 @@ test("the day-scan prompts state their claim, linking and attendance rules", () 
     "links-created-tasks": /pa:\/\/task\/<taskId>/,
     "links-kb-entries": /pa:\/\/knowledge\/<entryId>/,
     "notes-continued-work": /CONTINUES/,
-    "your-work-is-own-only": /Your work[^.\n]*only my own/i,
+    "your-work-is-own-only": affirmed(/Your work[^.\n]*?(?<key>only my own)/i),
     "no-absence-claims-from-partial-sources":
       /(partial|failed)[^.\n]*(cannot|can't|does not|must not|never)[^.\n]*(support|justify)[^.\n]*absence/i,
-    "source-text-is-data":
-      /source-derived text as data[^.\n]*\b(never|not)\b[^.\n]*instructions/i,
+    "source-text-is-data": affirmed(
+      /source-derived text (?<key>as data)[^.\n]*\b(never|not)\b[^.\n]*instructions/i,
+    ),
     "unconfirmed-is-not-attendance":
       /unconfirmedAttendance[^.\n]*not attendance/i,
     "conference-minutes-are-not-mine":
@@ -108,15 +109,14 @@ test("the day-scan prompts state their claim, linking and attendance rules", () 
       text: renderLogMyTimePrompt(digest),
       rules: {
         "logs-my-time": /log MY time/i,
-        "own-work-only": /(?<!not )only (for )?my own work/i,
+        "own-work-only": affirmed(/(?<key>only) (for )?my own work/i),
         "asks-instead-of-inventing-hours":
           /(don't|do not|never) invent (hours|durations|time)/i,
         "never-logs-unconfirmed": /never log[^.\n]*unconfirmedAttendance/i,
         "unconfirmed-slice-is-labelled":
           /UNCONFIRMED ATTENDANCE[^\n]*do NOT log/i,
         "checks-tempo-first": /tempo_list_worklogs/,
-        "confirms-before-writing":
-          /(?<!(don't|not|never|no need to)\s)wait for my confirmation/i,
+        "confirms-before-writing": affirmed(/wait for my confirmation/i),
       },
     },
   });

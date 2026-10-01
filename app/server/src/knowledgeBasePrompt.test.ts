@@ -9,7 +9,7 @@ import {
 } from "./tools/knowledge/knowledgeBaseTools.ts";
 import { projectRegistryReadTool } from "./tools/core/projectRegistryTools.ts";
 import { eagerToolNamesFor } from "./tools/catalog.ts";
-import { absent, assertPromptRules } from "./test/promptRules.ts";
+import { absent, affirmed, assertPromptRules } from "./test/promptRules.ts";
 
 /**
  * KB 284/286: KB guidance lives on the deferred kb_* tool descriptions; the
@@ -45,15 +45,17 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "for-durable-long-form": /durable long-form/i,
         "scopes-in-separate-entries":
           /separate[^.\n]*entries|entries[^.\n]*separate/i,
-        "tags-avoid-cross-contamination":
-          /(avoid|prevent)[^.\n]*cross-contaminat/i,
+        "tags-avoid-cross-contamination": affirmed(
+          /(?<key>avoid|prevent)[^.\n]*cross-contaminat/i,
+        ),
         "never-invent-entry-ids": /never invent[^.\n]*\bids?\b/i,
         "links-via-pa-uris": /pa:\/\//,
         "no-secrets": noSecrets,
         "records-provenance": /provenance/i,
         "marks-uncertain-facts": /mark[^.\n]*uncertain/i,
-        "atomic-facts-go-to-memory":
+        "atomic-facts-go-to-memory": affirmed(
           /belongs? in Memory|Memory[^.\n]*not the KB/i,
+        ),
         "asks-on-ambiguity-or-conflict":
           /ask (first|before)[^.\n]*(ambiguous|conflict)/i,
       },
@@ -75,8 +77,9 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
     kb_read_asset: {
       text: kbReadAssetTool.description,
       rules: {
-        "extracts-are-kb_read_extract":
-          /kb_read_extract[^.\n]*(?<!not )only[^.\n]*GENERATED/,
+        "extracts-are-kb_read_extract": affirmed(
+          /kb_read_extract[^.\n]*?(?<key>only)[^.\n]*GENERATED/,
+        ),
       },
     },
     project_registry_read: {
@@ -84,8 +87,9 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
       rules: {
         "read-before-assuming": /before assuming/i,
         "weighs-match-evidence": /matchedBy.*confidence.*warnings/i,
-        "no-match-is-said-not-invented":
-          /no registry match[^.\n]*(instead of|rather than|never|not|don't) invent/i,
+        "no-match-is-said-not-invented": affirmed(
+          /(?<premise>no registry match)[^.\n]*?(?<key>say)[^.\n]*?((instead of|rather than) invent|(never|not|don't) invent)/i,
+        ),
       },
     },
   });

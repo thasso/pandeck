@@ -3,7 +3,7 @@ import { test } from "vitest";
 import { createTask, deleteTask, readTask } from "../../tasks.ts";
 import { addTaskComment } from "../../taskComments.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
-import { assertPromptRules } from "../../test/promptRules.ts";
+import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { taskToolsForKind } from "./taskTools.ts";
 
 const ctx: ToolCallContext = {
@@ -866,8 +866,9 @@ test("Task descriptions carry the rules no schema field states", () => {
       text: readTool().description,
       rules: {
         "results-are-byte-bounded": /byte-bounded|bounded by bytes/i,
-        "narrow-not-assume-complete":
-          /narrow[^.\n]*(instead of|rather than) assum/i,
+        "narrow-not-assume-complete": affirmed(
+          /(?<key>narrow)[^.\n]*(instead of|rather than) assum/i,
+        ),
       },
     },
     task_manage: {
@@ -876,14 +877,17 @@ test("Task descriptions carry the rules no schema field states", () => {
         "create-only-for-later-work": /not (happen|be done) in this session/i,
         "created-lands-in-inbox":
           /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
-        "status-is-a-suggestion":
-          /status writes? (are|is) (only )?(a )?suggestions?[^.\n]*\buser\b[^.\n]*(answer|decide|accept|confirm)/i,
-        "one-comment-per-session":
+        "status-is-a-suggestion": affirmed(
+          /(?<subject>status writes? (are|is))(?<what> (only )?(a )?suggestions?)[^.\n]*?\buser\b[^.\n]*?(?<verb>answer|decide|accept|confirm)/i,
+        ),
+        "one-comment-per-session": affirmed(
           /(at most|no more than|only) (one|a single) comment (per|a|each) session/i,
+        ),
         "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.
-        "delete-only-on-request":
-          /delete only (when|if|on)[^.;\n]*(user|request)/i,
+        "delete-only-on-request": affirmed(
+          /delete only (when|if) the user (explicitly )?(asks|requests)|delete only on (explicit )?(user )?request/i,
+        ),
         "empty-string-clears": /empty string[^.\n]*clears?/i,
       },
     },
