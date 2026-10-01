@@ -1,0 +1,18 @@
+-- Which sessions hold a turn that never finished.
+--
+-- Both harnesses hand the durable log a turn's assistant entry and its tool
+-- results in ONE flush when the turn completes, so a turn killed mid-flight
+-- leaves no trace in the log at all: the session reads as idle and healthy while
+-- hours of work are missing from its transcript. The run markers in the session
+-- log are the evidence; this column is where boot records the verdict so the
+-- session list can show it without every client re-reading every log.
+--
+-- Deliberately NOT `last_error_*`. That column means the last run FAILED, and a
+-- restart is not a failure — it is work waiting to be continued, which is a
+-- different thing for the user to do about it. Folding the two together is the
+-- same conflation the peer-prompt `interruption_kind` split exists to avoid.
+--
+-- Cleared when the session's next run STARTS, not when one succeeds: by then the
+-- user is looking at the session, and a continuation that itself fails has
+-- `last_error_*` to say so.
+ALTER TABLE session_index ADD COLUMN interrupted_run_at_ms INTEGER;

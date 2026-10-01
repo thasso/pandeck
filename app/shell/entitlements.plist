@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Applied only when the build is code signed (`APPLE_SIGNING_IDENTITY`); an
+  unsigned local build ignores it. It matters the moment the app IS signed,
+  because Tauri signs with the hardened runtime, and a hardened process is
+  denied the microphone regardless of its Info.plist purpose string unless it
+  also carries this entitlement — dictation would break only in the distributed
+  build, which is the worst place to find out.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

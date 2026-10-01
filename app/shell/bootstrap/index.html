@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Pandeck</title>
+    <style>
+      /*
+        The connecting screen, and the only UI the shell itself owns. It is on
+        screen for a few hundred milliseconds on a good day, so it says as little
+        as possible: no logo, no product name, nothing that would flash and then
+        be replaced by the real app saying the same thing. It earns its place only
+        when the server does NOT answer.
+      */
+      :root {
+        color-scheme: dark;
+        --bg: #0b0c10;
+        --fg: #e6e8ee;
+        --muted: #8b90a0;
+        --line: #23262f;
+        --accent: #6c8cff;
+        --danger: #ff6b6b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        /* The whole surface drags: there is no content here to click past. */
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      main {
+        width: 100%;
+        max-width: 24rem;
+        text-align: center;
+      }
+      .spinner {
+        width: 1.25rem;
+        height: 1.25rem;
+        margin: 0 auto 1rem;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.7s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation-duration: 2.4s;
+        }
+      }
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1rem;
+        font-weight: 600;
+      }
+      p {
+        margin: 0 0 1.25rem;
+        color: var(--muted);
+      }
+      p.error {
+        color: var(--danger);
+      }
+      form {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        padding: 0.5rem 0.625rem;
+        background: #14161c;
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 0.5rem;
+        font: inherit;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      input:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      button {
+        padding: 0.5rem 0.875rem;
+        border-radius: 0.5rem;
+        border: 1px solid var(--line);
+        background: #14161c;
+        color: var(--fg);
+        font: inherit;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #0b0c10;
+        font-weight: 600;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body data-tauri-drag-region>
+    <main>
+      <div id="connecting">
+        <div class="spinner" role="status" aria-label="Connecting"></div>
+        <p id="connecting-text">Connecting…</p>
+      </div>
+
+      <div id="failed" hidden>
+        <h1>Can't reach the assistant</h1>
+        <p class="error" id="reason"></p>
+        <form id="server-form">
+          <input
+            id="server-url"
+            type="url"
+            inputmode="url"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            aria-label="Server URL"
+          />
+          <button type="submit" class="primary">Connect</button>
+        </form>
+        <p id="hint">
+          If the server cannot be reached, check your network or VPN.
+        </p>
+      </div>
+    </main>
+
+    <script>
+      const invoke = window.__TAURI__?.core?.invoke;
+      const el = (id) => document.getElementById(id);
+
+      /** Show the failure state with a reason, seeding the field for a retry. */
+      function fail(url, reason) {
+        el("connecting").hidden = true;
+        el("failed").hidden = false;
+        el("reason").textContent = reason;
+        el("server-url").value = url;
+      }
+
+      /**
+       * Probe, then hand the window over. The probe is what keeps a dead server
+       * from becoming a WebKit error page: navigation is one-way, and there is no
+       * back button in a shell window to return here from.
+       */
+      async function connect(url, chooseServer = false) {
+        el("connecting").hidden = false;
+        el("failed").hidden = true;
+        el("connecting-text").textContent =
+          `Connecting to ${new URL(url).host}…`;
+        try {
+          if (await invoke("probe_server", { url })) {
+            // Only a successfully probed explicit choice gains native trust.
+            // The command grants trust before persisting or loading the URL.
+            const target = chooseServer
+              ? await invoke("set_server_url", { url })
+              : url;
+            location.replace(target);
+            return;
+          }
+          fail(url, "The server answered, but not as the assistant.");
+        } catch (err) {
+          fail(url, String(err));
+        }
+      }
+
+      el("server-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const candidate = el("server-url").value.trim();
+        try {
+          await connect(candidate, true);
+        } catch (err) {
+          fail(candidate, String(err));
+        }
+      });
+
+      if (!invoke) {
+        fail("", "This page only runs inside the assistant shell.");
+      } else {
+        invoke("get_server_url").then(connect);
+      }
+    </script>
+  </body>
+</html>

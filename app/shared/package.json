@@ -1,0 +1,33 @@
+{
+  "name": "@assistant/shared",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "version": "0.51.0",
+  "exports": {
+    ".": "./protocol.ts",
+    "./buildInfo": "./buildInfo.ts",
+    "./session": "./session/index.ts",
+    "./runtime": "./runtimeEvents.ts",
+    "./display": "./displayMapping.ts",
+    "./turnStats": "./turnStats.ts",
+    "./objectLinks": "./objectLinks.ts",
+    "./comments": "./comments.ts",
+    "./knowledgeBase": "./knowledgeBase.ts",
+    "./usage": "./usage.ts",
+    "./servedFiles": "./servedFiles.ts",
+    "./documentTargets": "./documentTargets.ts",
+    "./toolCards": "./toolCards.ts",
+    "./portForwarding": "./portForwarding.ts",
+    "./zonedTime": "./zonedTime.ts"
+  },
+  "types": "./protocol.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

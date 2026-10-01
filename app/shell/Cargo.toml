@@ -1,0 +1,118 @@
+[package]
+name = "personal-assistant-shell"
+version = "0.51.0"
+description = "Native shell for the Pandeck web app"
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.77.2"
+
+# The mobile targets link the app as a library; `main.rs` is only the desktop
+# entrypoint. Both call into `run()` in `lib.rs`, so there is one startup path.
+[lib]
+name = "personal_assistant_shell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+url = "2"
+serde_json = "1"
+tauri-utils = "2"
+# For the iOS entitlements file. Tauri exposes its own plist helpers only to
+# PLUGIN build scripts (`tauri-plugin`), which this is not.
+plist = "1"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+reqwest = { version = "0.12", features = ["json"] }
+tauri-plugin-deep-link = "2.4.9"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+# `panic = "abort"` is NOT missing from this list — it was removed, and putting
+# it back would be a behaviour change dressed as a size saving. wry answers the
+# ObjC exceptions WebKit raises with `objc2::exception::catch`, and catching one
+# needs Rust to be able to unwind; under `abort` every `extern "C"` frame is
+# nounwind instead, so a caught-by-design exception kills the process. That is
+# invisible in development, where `cargo run` unwinds and survives — it took a
+# shipped build aborting on every `_blank` link to find it. `src/panics.rs`
+# depends on the same thing. Measured cost of unwinding, macOS arm64, this
+# profile: 5,443,680 B -> 7,014,112 B, +1.5 MB (+29%).
+
+# Notifications are raised by hand on Apple platforms, because the plugin cannot
+# report the one thing that matters — where a tap should go. See `src/notify.rs`.
+# Keeping the plugin off iOS also keeps its Swift package out of the Xcode
+# project, so the iOS app has no SPM dependency at all.
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+tauri-plugin-notification = "2"
+
+# Both Apple platforms raise their alerts through `UserNotifications` directly:
+# one delegate reports where a click or a tap should go, which is the whole reason
+# the plugin is not used. macOS used to take the deprecated `NSUserNotification`
+# via `mac-notification-sys` instead; that crate had to poll the delivered list
+# from a per-notification main-run-loop timer, which leaked one thread and one
+# timer per ignored alert. See `src/usernotify.rs`. Same generation of objc2 as
+# tao/wry already pull in, so this adds no second binding tree.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "NSArray",
+  "NSBundle",
+  "NSData",
+  "NSDictionary",
+  "NSEnumerator",
+  "NSError",
+  "NSObject",
+  "NSString",
+  "NSValue",
+] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "UNError",
+  "UNNotification",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationResponse",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
+] }
+block2 = "0.6"
+
+# UIKit is the iOS-only half: registering for APNs, and letting the page draw
+# under the safe area.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2-ui-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "UIApplication",
+  "UIResponder",
+  "UIScrollView",
+  "UIView",
+] }
+
+# macOS only: a `window.open` child is built from the OPENER's
+# `WKWebViewConfiguration`, and the one thing it must NOT inherit is that
+# configuration's user-content controller. See `open_child_window`. Same
+# generation as tao/wry already pull in, so the `Retained<…>` types line up.
+[target.'cfg(target_os = "macos")'.dependencies]
+futures-util = "0.3"
+rfd = "0.15"
+tokio = { version = "1", features = ["io-util", "macros", "net", "sync", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "WKUserContentController",
+  "WKWebViewConfiguration",
+] }

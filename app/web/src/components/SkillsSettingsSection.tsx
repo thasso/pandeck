@@ -1,0 +1,741 @@
+/**
+ * The skills library ([Task-531](pa://task/531), `docs/skills.md`): what the
+ * server's fresh scan found, and which of those skills the user has turned on.
+ *
+ * The user authors `DATA_DIR/skills` by hand and owns its Git repository, so
+ * the library itself is only reported here. Two lists, and the second one is
+ * the point: a folder that cannot be injected is shown WITH its reason rather
+ * than dropped, because a silently missing skill is the failure a
+ * hand-authored library actually produces. A broken folder has no toggle —
+ * there is no valid name to turn on.
+ *
+ * Opening the section is what asks for the scan (`skills` topic), so the states
+ * here are the ordinary five: a first load, a refresh that keeps the rows on
+ * screen, an authoritative empty library, and a failed read that adds a note
+ * beside whatever was already there.
+ *
+ * A toggle holds NO state of its own ([Task-613](pa://task/613)): it renders
+ * `settings.skills` and asks `useAssistant` to turn one name on or off, so what
+ * it shows is only ever what the settings say. A local "on" flipped by the
+ * click would claim a skill is enabled before anything was written, and a save
+ * that failed would leave that claim standing over settings that never changed.
+ *
+ * It also does not BUILD the replacement map. The section is replaced whole, so
+ * the next write has to start from the one last sent while a save is still in
+ * flight — state this surface deliberately cannot see — and that map belongs to
+ * `useAssistant` with the rest of the protocol state.
+ *
+ * Opening a row reads that skill's `SKILL.md` ([Task-614](pa://task/614)). The
+ * body is NOT in the list — it is fetched per selection over
+ * `/api/skills/detail` and keyed by the selected NAME through `useFetchState`,
+ * which is what makes the important guarantee structural rather than
+ * remembered: switching rows drops the previous answer during render, so one
+ * skill's instructions can never be read under another skill's name. The
+ * library is hand-authored, so a fresh scan can also disagree with what is on
+ * screen; a rescan therefore re-reads the open skill in place rather than
+ * leaving a body that no longer matches the file an agent would be given.
+ */
+import {
+  Download,
+  ExternalLink,
+  File,
+  FileText,
+  Folder,
+  RefreshCw,
+  TriangleAlert,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  isSkillEnabled,
+  MAX_SKILL_BODY_BYTES,
+  MAX_SKILL_FILE_PREVIEW_BYTES,
+  MAX_SKILL_TREE_DEPTH,
+  MAX_SKILL_TREE_ENTRIES,
+  MAX_SKILL_TREE_METADATA_BYTES,
+  type AppSettings,
+  type SkillDetail,
+  type SkillDetailResponse,
+  type SkillDiagnostic,
+  type SkillFilePreviewResponse,
+  type SkillFileTreeEntry,
+  type SkillLibraryList,
+  type SkillSummary,
+  type SkillToggles,
+} from "@assistant/shared";
+import { useFetchState } from "../hooks/useFetchState.ts";
+import type { LoadState } from "../lib/loadState.ts";
+import { dataOf, errorOf, isInitialLoad, isPending } from "../lib/loadState.ts";
+import {
+  fetchSkillDetail,
+  fetchSkillFilePreview,
+  skillFileUrl,
+} from "../lib/skillsApi.ts";
+import { Markdown } from "./Markdown.tsx";
+import { PageHeader } from "./PageHeader.tsx";
+import { Button } from "./ui/Button.tsx";
+import { CodeBlock } from "./ui/CodeBlock.tsx";
+import { Tree, type TreeNode } from "./ui/Tree.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  PaneLoading,
+  RefreshIndicator,
+} from "./ui/load.tsx";
+
+export function SkillsSettingsSection({
+  library,
+  settings,
+  onToggleSkill,
+}: {
+  library: LoadState<SkillLibraryList>;
+  settings: AppSettings;
+  onToggleSkill: (name: string, on: boolean) => void;
+}) {
+  const list = dataOf(library);
+  const error = errorOf(library);
+  const refreshing = isPending(library) && list !== undefined;
+  const toggles = settings.skills;
+
+  const [selected, setSelected] = useState<string | null>(null);
+  const detail = useFetchState<SkillDetailResponse>(selected, fetchSkillDetail);
+  const { reload } = detail;
+
+  // A rescan is authoritative over the open body too. Reloading the SAME key
+  // keeps it on screen while it refetches (R2); a selection made in the same
+  // pass is already loading its own answer, so only a NEW list reloads.
+  const lastList = useRef(list);
+  useEffect(() => {
+    if (lastList.current === list) return;
+    lastList.current = list;
+    reload();
+  }, [list, reload]);
+
+  const select = useCallback((name: string) => {
+    setSelected((current) => (current === name ? null : name));
+  }, []);
+  const close = useCallback(() => setSelected(null), []);
+
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-6">
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="text-body font-semibold">Skills</h2>
+        {refreshing ? <RefreshIndicator label="Rescanning skills" /> : null}
+      </div>
+      <p className="mt-1 text-caption text-muted">
+        Reusable agent skills you write yourself. Each skill is a folder with a{" "}
+        <code>SKILL.md</code> whose frontmatter declares a name and a
+        description. The library is read here and never written: you own the
+        files and their Git history.
+      </p>
+      {list ? (
+        <p className="mt-2 text-caption text-faint">
+          Library folder: <code>{list.libraryPath}</code>
+        </p>
+      ) : null}
+
+      {error ? <ErrorNote className="mt-4" message={error} /> : null}
+
+      {isInitialLoad(library) ? (
+        <PaneLoading className="mt-6" label="Scanning the skills library…" />
+      ) : null}
+
+      {list ? (
+        <SkillList
+          list={list}
+          toggles={toggles}
+          onToggle={onToggleSkill}
+          selected={selected}
+          onSelect={select}
+        />
+      ) : null}
+
+      {selected !== null ? (
+        <SkillDetailPane
+          key={selected}
+          name={selected}
+          state={detail.state}
+          onReload={reload}
+          onClose={close}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SkillList({
+  list,
+  toggles,
+  onToggle,
+  selected,
+  onSelect,
+}: {
+  list: SkillLibraryList;
+  toggles: SkillToggles;
+  onToggle: (name: string, on: boolean) => void;
+  selected: string | null;
+  onSelect: (name: string) => void;
+}) {
+  const empty = list.skills.length === 0 && list.diagnostics.length === 0;
+  return (
+    <>
+      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
+        <div className="text-caption font-medium">Available skills</div>
+        <div className="mt-0.5 text-caption text-muted">
+          A skill you turn on here is on everywhere; a new skill starts off
+          until you say otherwise. Per-project and per-session choices come
+          later, as does handing the enabled skills to a running agent. Select a
+          skill to read its <code>SKILL.md</code>.
+        </div>
+        <div className="mt-3">
+          {empty ? (
+            <EmptyBox>
+              No skills yet. Add a folder with a <code>SKILL.md</code> inside
+              the library folder above.
+            </EmptyBox>
+          ) : list.skills.length === 0 ? (
+            <EmptyBox>
+              No usable skills. Every folder in the library has a problem listed
+              below.
+            </EmptyBox>
+          ) : (
+            <ul className="space-y-2">
+              {list.skills.map((skill) => (
+                <SkillRow
+                  key={skill.path}
+                  skill={skill}
+                  on={isSkillEnabled(toggles, skill.name)}
+                  onToggle={onToggle}
+                  open={selected === skill.name}
+                  onSelect={onSelect}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {list.diagnostics.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-line bg-panel p-4">
+          <div className="text-caption font-medium">
+            Folders that need a fix
+          </div>
+          <div className="mt-0.5 text-caption text-muted">
+            These folders cannot be used as skills. They stay listed here so a
+            typo does not simply make a skill disappear.
+          </div>
+          <ul className="mt-3 space-y-2">
+            {list.diagnostics.map((diagnostic) => (
+              <DiagnosticRow
+                key={`${diagnostic.path}:${diagnostic.code}`}
+                diagnostic={diagnostic}
+              />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * One available skill. The metadata is a BUTTON that opens the body: a whole
+ * clickable row would nest the toggle's checkbox inside a control, and the
+ * toggle is a different decision from reading the instructions.
+ */
+function SkillRow({
+  skill,
+  on,
+  onToggle,
+  open,
+  onSelect,
+}: {
+  skill: SkillSummary;
+  on: boolean;
+  onToggle: (name: string, on: boolean) => void;
+  open: boolean;
+  onSelect: (name: string) => void;
+}) {
+  return (
+    <li
+      className={`flex items-start justify-between gap-3 rounded-lg border bg-surface px-3 py-2.5 ${
+        open ? "border-accent" : "border-line"
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => onSelect(skill.name)}
+        aria-expanded={open}
+        aria-controls="skill-detail"
+        className="min-w-0 flex-1 text-left"
+      >
+        <div className="text-caption font-medium">{skill.name}</div>
+        <div className="mt-0.5 text-caption text-muted">
+          {skill.description}
+        </div>
+        <div className="mt-1 text-caption text-faint">
+          <code>{skill.path}</code>
+        </div>
+      </button>
+      <label className="flex shrink-0 items-center gap-2 text-caption text-muted">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(event) => onToggle(skill.name, event.target.checked)}
+          className="size-4 accent-accent"
+          aria-label={`Enable skill ${skill.name}`}
+        />
+        On
+      </label>
+    </li>
+  );
+}
+
+/**
+ * The open skill's `SKILL.md`.
+ *
+ * The heading is the name that was ASKED for, and the body may only ever be the
+ * answer to that ask: `useFetchState` drops the previous skill's document when
+ * the key changes, so a slow read shows this skill's placeholder rather than the
+ * last one's instructions. A read that failed keeps nothing under the new name
+ * either — the error stands alone, because the last good body belonged to
+ * another skill.
+ *
+ * An `invalid` answer is not an error state: the library moved (the folder was
+ * renamed, broken, or its name became ambiguous) and the reason is the content.
+ */
+function SkillDetailPane({
+  name,
+  state,
+  onReload,
+  onClose,
+}: {
+  name: string;
+  state: LoadState<SkillDetailResponse>;
+  onReload: () => void;
+  onClose: () => void;
+}) {
+  const detail = dataOf(state);
+  const error = errorOf(state);
+  const rereading = isPending(state) && detail !== undefined;
+  const [selectedPath, setSelectedPath] = useState("SKILL.md");
+
+  return (
+    <div
+      id="skill-detail"
+      className="mt-4 rounded-xl border border-line bg-panel p-4"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-caption font-medium">{name}</div>
+          {/* The source path comes from the answer: a skill's folder need not
+              be named after it, so there is nothing honest to show before. */}
+          {detail?.path ? (
+            <div className="mt-0.5 text-caption text-faint">
+              <code>{detail.path}</code>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {rereading ? <RefreshIndicator label="Rereading SKILL.md" /> : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
+            aria-label={`Reread ${name}`}
+            onClick={onReload}
+          >
+            <RefreshCw size={14} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            iconOnly
+            aria-label={`Close ${name}`}
+            onClick={onClose}
+          >
+            <X size={14} />
+          </Button>
+        </div>
+      </div>
+
+      {error ? <ErrorNote className="mt-3" message={error} /> : null}
+
+      {isInitialLoad(state) ? (
+        <PaneLoading className="mt-3" label={`Reading ${name}/SKILL.md…`} />
+      ) : null}
+
+      {detail?.kind === "invalid" ? (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
+          <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
+          <div className="min-w-0 text-caption text-muted">{detail.error}</div>
+        </div>
+      ) : null}
+
+      {detail?.kind === "skill" ? (
+        <div className="mt-3">
+          <div className="text-caption text-muted">{detail.description}</div>
+          <SkillFileBrowser
+            detail={detail}
+            selectedPath={selectedPath}
+            onSelectPath={setSelectedPath}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface SkillBrowserNode {
+  entry: SkillFileTreeEntry;
+}
+
+function SkillFileBrowser({
+  detail,
+  selectedPath,
+  onSelectPath,
+}: {
+  detail: SkillDetail;
+  selectedPath: string;
+  onSelectPath: (path: string) => void;
+}) {
+  const nodes = useMemo(() => skillTreeNodes(detail.files.entries), [detail]);
+  const selectedEntry = findSkillFile(detail.files.entries, selectedPath);
+  const expanded = useMemo(
+    () =>
+      detail.files.entries
+        .filter((entry) => entry.type === "directory")
+        .map((entry) => entry.path),
+    [detail],
+  );
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="border-b border-line p-3">
+        <div className="text-caption font-medium">Files</div>
+        <div className="mt-0.5 text-caption text-muted">
+          {detail.files.entryCount}{" "}
+          {detail.files.entryCount === 1 ? "entry" : "entries"}
+          {detail.files.truncated ? ", bounded listing" : ""}
+        </div>
+        {detail.files.truncated ? (
+          <div className="mt-2 flex items-start gap-2 text-caption text-warning">
+            <TriangleAlert className="mt-0.5 shrink-0" size={13} />
+            <span>{skillTreeLimitDiagnostic(detail.files.limits)}</span>
+          </div>
+        ) : null}
+        {detail.files.diagnostics.map((diagnostic) => (
+          <div key={diagnostic} className="mt-2 text-caption text-warning">
+            {diagnostic}
+          </div>
+        ))}
+      </div>
+      {nodes.length === 0 ? (
+        <EmptyBox className="m-3">No files could be listed.</EmptyBox>
+      ) : (
+        <Tree
+          items={nodes}
+          defaultExpandedIds={expanded}
+          selectedIds={[selectedPath]}
+          onSelectionChange={(ids) => {
+            const path = ids.at(-1);
+            if (!path) return;
+            const entry = findSkillFile(detail.files.entries, path);
+            if (entry?.type === "file") onSelectPath(path);
+          }}
+          compact
+          showGuides
+          aria-label={`${detail.name} files`}
+          className="max-h-64 overflow-y-auto p-1"
+          getRowClassName={(node) =>
+            node.data.entry.type === "symlink" ? "text-faint" : ""
+          }
+          renderNode={(node) => <SkillFileTreeRow entry={node.data.entry} />}
+        />
+      )}
+      <SkillFileViewer
+        detail={detail}
+        entry={selectedEntry}
+        path={selectedPath}
+      />
+    </div>
+  );
+}
+
+function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
+  const Icon =
+    entry.type === "directory"
+      ? Folder
+      : entry.type === "symlink"
+        ? ExternalLink
+        : File;
+  return (
+    <div className="flex min-w-0 items-center gap-2 py-1 text-caption">
+      <Icon size={13} className="shrink-0 text-muted" />
+      <span className="truncate">{entry.name}</span>
+      {entry.type === "file" && entry.bytes !== undefined ? (
+        <span className="ml-auto shrink-0 text-faint">
+          {formatBytes(entry.bytes)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function SkillFileViewer({
+  detail,
+  entry,
+  path,
+}: {
+  detail: SkillDetail;
+  entry: SkillFileTreeEntry | undefined;
+  path: string;
+}) {
+  if (!entry || entry.type !== "file") {
+    return (
+      <div className="border-t border-line p-3">
+        <EmptyBox>
+          This file is no longer present in the bounded listing.
+        </EmptyBox>
+      </div>
+    );
+  }
+  const rawUrl = skillFileUrl(detail.name, path);
+  const image = entry.mimeType?.startsWith("image/") === true;
+  const textLike = isTextMimeType(entry.mimeType);
+
+  return (
+    <div className="border-t border-line">
+      <PageHeader
+        density="compact"
+        icon={<FileText size={15} />}
+        title={entry.name}
+        subtitle={path}
+        objectOverflow={false}
+        actions={
+          <div className="flex items-center gap-1">
+            <a
+              href={rawUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`Open raw ${path}`}
+              title="Open raw file"
+              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+            >
+              <ExternalLink size={14} />
+            </a>
+            <a
+              href={rawUrl}
+              download={entry.name}
+              aria-label={`Download ${path}`}
+              title="Download file"
+              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+            >
+              <Download size={14} />
+            </a>
+          </div>
+        }
+      />
+      {path === "SKILL.md" ? (
+        <SkillMarkdown detail={detail} />
+      ) : image ? (
+        <div className="flex min-h-48 items-center justify-center p-4">
+          <img
+            src={rawUrl}
+            alt={entry.name}
+            className="max-h-96 max-w-full rounded-lg border border-line bg-panel object-contain"
+          />
+        </div>
+      ) : textLike ? (
+        <SkillTextFile name={detail.name} entry={entry} />
+      ) : (
+        <UnsupportedSkillFile entry={entry} rawUrl={rawUrl} />
+      )}
+    </div>
+  );
+}
+
+function SkillMarkdown({ detail }: { detail: SkillDetail }) {
+  return (
+    <div className="p-3">
+      {detail.truncated ? (
+        <div className="mb-3 text-caption text-faint">
+          Showing the first {formatBytes(MAX_SKILL_BODY_BYTES)} of this{" "}
+          {formatBytes(detail.bytes)} file. Open it raw to read the rest.
+        </div>
+      ) : null}
+      {detail.markdown ? (
+        <Markdown text={detail.markdown} />
+      ) : (
+        <EmptyBox>
+          This <code>SKILL.md</code> has nothing below its frontmatter.
+        </EmptyBox>
+      )}
+    </div>
+  );
+}
+
+function SkillTextFile({
+  name,
+  entry,
+}: {
+  name: string;
+  entry: SkillFileTreeEntry;
+}) {
+  const key = `${name}\0${entry.path}`;
+  const { state, reload } = useFetchState<SkillFilePreviewResponse>(
+    key,
+    fetchSkillFilePreview,
+  );
+  const lastEntry = useRef(entry);
+  useEffect(() => {
+    const previous = lastEntry.current;
+    lastEntry.current = entry;
+    // A different path already changes the fetch key and starts its first
+    // request. Only reload when the same path was rebuilt by a rescan.
+    if (previous.path !== entry.path || previous === entry) return;
+    reload();
+  }, [entry, reload]);
+  const preview = dataOf(state);
+  const error = errorOf(state);
+
+  if (isInitialLoad(state)) {
+    return <PaneLoading className="m-3" label={`Loading ${entry.path}…`} />;
+  }
+  if (!preview) {
+    return (
+      <ErrorNote
+        className="m-3"
+        message={error ?? "File not loaded."}
+        onRetry={reload}
+      />
+    );
+  }
+  if (preview.kind === "binary") {
+    return (
+      <UnsupportedSkillFile
+        entry={entry}
+        rawUrl={skillFileUrl(name, entry.path)}
+      />
+    );
+  }
+  const markdown = preview.mimeType.startsWith("text/markdown");
+  return (
+    <div className="space-y-3 p-3">
+      {error ? <ErrorNote message={error} onRetry={reload} /> : null}
+      {preview.truncated ? (
+        <div className="text-caption text-faint">
+          Showing the first {formatBytes(MAX_SKILL_FILE_PREVIEW_BYTES)} of this{" "}
+          {formatBytes(preview.bytes)} file.
+        </div>
+      ) : null}
+      {markdown ? (
+        preview.text ? (
+          <Markdown text={preview.text} />
+        ) : (
+          <EmptyBox>This file is empty.</EmptyBox>
+        )
+      ) : (
+        <CodeBlock
+          code={preview.text}
+          filename={entry.name}
+          showLineNumbers
+          collapsedLines={Number.MAX_SAFE_INTEGER}
+        />
+      )}
+    </div>
+  );
+}
+
+function UnsupportedSkillFile({
+  entry,
+  rawUrl,
+}: {
+  entry: SkillFileTreeEntry;
+  rawUrl: string;
+}) {
+  return (
+    <EmptyBox
+      className="m-3"
+      action={
+        <a
+          href={rawUrl}
+          download={entry.name}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg"
+        >
+          <Download size={13} /> Download
+        </a>
+      }
+    >
+      This file type cannot be previewed safely. Open it raw or download it.
+    </EmptyBox>
+  );
+}
+
+function skillTreeNodes(
+  entries: SkillFileTreeEntry[],
+): TreeNode<SkillBrowserNode>[] {
+  return entries.map((entry) => ({
+    id: entry.path,
+    data: { entry },
+    ...(entry.children ? { children: skillTreeNodes(entry.children) } : {}),
+  }));
+}
+
+function findSkillFile(
+  entries: SkillFileTreeEntry[],
+  path: string,
+): SkillFileTreeEntry | undefined {
+  for (const entry of entries) {
+    if (entry.path === path) return entry;
+    const nested = entry.children && findSkillFile(entry.children, path);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+function skillTreeLimitDiagnostic(
+  limits: SkillDetail["files"]["limits"],
+): string {
+  const labels = limits.map((limit) => {
+    switch (limit) {
+      case "entries":
+        return `${MAX_SKILL_TREE_ENTRIES.toLocaleString()} entries`;
+      case "depth":
+        return `${MAX_SKILL_TREE_DEPTH} levels`;
+      case "metadata-bytes":
+        return `${formatBytes(MAX_SKILL_TREE_METADATA_BYTES)} of path metadata`;
+    }
+    return limit;
+  });
+  return `The file tree was truncated at ${labels.join(", ")}.`;
+}
+
+function isTextMimeType(mimeType: string | undefined): boolean {
+  return Boolean(
+    mimeType?.startsWith("text/") ||
+    mimeType?.startsWith("application/json") ||
+    mimeType?.startsWith("application/x-ndjson"),
+  );
+}
+
+function formatBytes(value: number): string {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
+  return (
+    <li className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
+      <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
+      <div className="min-w-0">
+        <div className="text-caption font-medium">{diagnostic.folder}</div>
+        <div className="mt-0.5 text-caption text-muted">{diagnostic.error}</div>
+        <div className="mt-1 text-caption text-faint">
+          <code>{diagnostic.path}</code>
+        </div>
+      </div>
+    </li>
+  );
+}

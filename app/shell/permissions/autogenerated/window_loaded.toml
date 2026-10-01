@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-window-loaded"
+description = "Enables the window_loaded command without any pre-configured scope."
+commands.allow = ["window_loaded"]
+
+[[permission]]
+identifier = "deny-window-loaded"
+description = "Denies the window_loaded command without any pre-configured scope."
+commands.deny = ["window_loaded"]

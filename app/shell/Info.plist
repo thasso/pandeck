@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the generated bundle Info.plist by the Tauri bundler (it picks up
+  an `Info.plist` sitting next to `tauri.conf.json`).
+
+  NSMicrophoneUsageDescription is not paperwork here: WebKit refuses to expose
+  `navigator.mediaDevices` to a WKWebView at all when the host app declares no
+  microphone purpose string, so without this key the web app's own capability
+  check reports "this browser does not expose microphone capture" and the mic
+  button is disabled before any permission is ever asked for. The string is what
+  macOS shows in the one-time system prompt.
+
+  CFBundleURLTypes is what registers `pa://` with LaunchServices, and on macOS it
+  is the ONLY way: the deep-link plugin cannot register a scheme at runtime here,
+  and its own build step writes this key for the iOS project rather than for the
+  desktop bundle. So the scheme exists in an installed build and not under
+  `cargo tauri dev`.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Dictation records what you say and sends it to your Pandeck server to be transcribed.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleTypeRole</key>
+        <string>Viewer</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>pa</string>
+        </array>
+      </dict>
+    </array>
+  </dict>
+</plist>

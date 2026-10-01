@@ -1,0 +1,10 @@
+# TypeScript sources are text by contract, so a review can always read them.
+#
+# Not hypothetical: until this change escaped them, app/web/src/lib/sessionRows.ts
+# carried LITERAL U+0000 and U+001F bytes as its memo-key separators, and git's
+# binary heuristic (a NUL byte in the first 8000) rendered every diff of that
+# file as "Binary files differ" — which no commit review can inspect. The source
+# now spells those separators as JS escape sequences, so the cause is fixed
+# where it belongs; this file only keeps a future one from hiding a diff again.
+*.ts diff
+*.tsx diff

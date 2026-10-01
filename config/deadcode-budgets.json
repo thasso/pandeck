@@ -1,0 +1,134 @@
+{
+  "$comment": "Enforced high-water marks for knip's dead-code findings, per category. Policy, rationale and how to change a number live in docs/linting.md. This file is the source of truth for the numbers: scripts/check-deadcode.mjs owns the rules and never hard-codes one. A budget here is a tripwire, not a target — it is the ratchet that stops the pool growing while the cleanup slices drain it. Every category in `categories` is gated; one with no entry in `budgets` is gated at zero, which is where a category lands for good once a slice empties it.",
+  "unit": "findings",
+  "measurement": {
+    "command": "node scripts/check-deadcode.mjs --list",
+    "config": "knip.json"
+  },
+  "slackWarnAtPercentOfBudget": 95,
+  "categories": [
+    {
+      "id": "exports",
+      "label": "unused exports",
+      "covers": "an exported value with no importer outside its own file. The category the policy is about."
+    },
+    {
+      "id": "types",
+      "label": "unused exported types",
+      "covers": "the same, for a type, interface or enum declaration."
+    },
+    {
+      "id": "files",
+      "label": "unused files",
+      "covers": "a project file no entry point reaches, transitively."
+    },
+    {
+      "id": "duplicates",
+      "label": "duplicate exports",
+      "covers": "one symbol exported twice from a file, so a rename can leave half the call sites behind."
+    },
+    {
+      "id": "dependencies",
+      "label": "unused dependencies",
+      "covers": "a manifest `dependencies` entry nothing imports."
+    },
+    {
+      "id": "devDependencies",
+      "label": "unused devDependencies",
+      "covers": "the same, for `devDependencies`."
+    },
+    {
+      "id": "optionalPeerDependencies",
+      "label": "unused optional peer dependencies",
+      "covers": "an optional peer nothing imports."
+    },
+    {
+      "id": "unlisted",
+      "label": "unlisted dependencies",
+      "covers": "an import that resolves only because a transitive install hoisted it into the tree."
+    },
+    {
+      "id": "unresolved",
+      "label": "unresolved imports",
+      "covers": "an import specifier that resolves to nothing at all."
+    },
+    {
+      "id": "binaries",
+      "label": "unlisted binaries",
+      "covers": "a command a script shells out to that no manifest provides. Host tools belong in `knip.json`'s `ignoreBinaries` and in `config/host-tools.json`, not here."
+    },
+    {
+      "id": "catalog",
+      "label": "unused catalog entries",
+      "covers": "a `pnpm-workspace.yaml` catalog version no manifest references."
+    },
+    {
+      "id": "catalogReferences",
+      "label": "unresolved catalog references",
+      "covers": "a manifest `catalog:` reference the catalog does not define."
+    },
+    {
+      "id": "enumMembers",
+      "label": "unused enum members",
+      "covers": "a member of an exported enum nothing reads."
+    },
+    {
+      "id": "namespaceMembers",
+      "label": "unused namespace members",
+      "covers": "a member reachable only through a namespace import nothing reads."
+    },
+    {
+      "id": "cycles",
+      "label": "circular dependencies",
+      "covers": "a cycle in the static value-import graph. knip does not report this one by default, so check-deadcode.mjs runs a second `--cycles` pass for it; `import-x/no-cycle` gives the per-import-site diagnostic but, configured to permit the lazy hub chains, cannot prove static acyclicity on its own. See docs/linting.md."
+    }
+  ],
+  "budgets": {},
+  "changes": [
+    {
+      "budget": "files",
+      "to": 0,
+      "why": "Deleted the four files nothing reached: the session adapters, session transport and web diff barrels, whose members every importer takes by direct path, and the unreferenced web EmptyState component."
+    },
+    {
+      "budget": "duplicates",
+      "to": 0,
+      "why": "serverOrigin.ts exported one function as both serverHttpOrigin and serverApiOrigin; dropped the alias and moved its six call sites in knowledgeBaseApi.ts and GoogleWorkspaceToolCard.tsx."
+    },
+    {
+      "budget": "exports",
+      "to": 276,
+      "why": "Pruned the 20 dead re-exports from the three barrels that are alive (session/log, session/runtime, piSdk); each declaration keeps its own separate finding where it is declared."
+    },
+    {
+      "budget": "types",
+      "to": 184,
+      "why": "The same prune removed 22 dead type re-exports from session/log/index.ts, session/runtime/index.ts and piSdk/index.ts."
+    },
+    {
+      "budget": "exports",
+      "to": 0,
+      "why": "Drained to zero, so the category is gated for good: 225 of the 276 were merely over-exported and un-exporting them is the whole fix (noUnusedLocals owns them now), 7 were dead pass-through re-exports of a symbol that lives and is used elsewhere, and 44 were dead values the compiler named with TS6133 once unexported."
+    },
+    {
+      "budget": "types",
+      "to": 0,
+      "why": "The same pass on the 184 type findings: 171 un-exported in place, 4 dead pass-through re-export specifiers, and 9 deleted on a TS6196 — eight of them the codeDeliveryRecipe *StepPayload family that literal payload construction plus agentExecutor's field-by-field reads superseded."
+    },
+    {
+      "budget": "exports",
+      "to": 0,
+      "why": "Widened the MEASUREMENT rather than the budget: knip.json now sets includeEntryExports on app/shared, whose files are all entry points, so protocol.ts's `export *` no longer counts as an importer for a wire symbol nothing else reads. 12 exports surfaced and were drained to keep the category at zero (3 un-exported, 9 deleted on a TS6133)."
+    },
+    {
+      "budget": "types",
+      "to": 0,
+      "why": "The same widening surfaced 21 type findings in app/shared: 14 un-exported in place, 7 deleted on a TS6196 — WorkflowRunDetail and the WorkflowStep/WorkflowEvent/WorkflowStepResult/WorkflowStepExecutor chain under it, the wire model for a per-run read that the run CARD projection replaced before it was ever plumbed to a client."
+    },
+    {
+      "budget": "cycles",
+      "to": 0,
+      "why": "Declared at zero with no backlog: adopting `import-x/no-cycle` broke the 12 static cycles first, so the category opened empty. It is declared because the ESLint rule alone does NOT prove static acyclicity — with `allowUnsafeDynamicCyclicDependency: true` the first dynamic edge in a module aborts that module\u0027s traversal entirely (`return`, before the cycle check), so a purely static cycle between two modules that also hold lazy hub imports goes unreported. knip is what closes that."
+    }
+  ]
+}

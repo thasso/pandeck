@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pandeck",
+  "version": "0.51.0",
+  "identifier": "com.example.personal-assistant",
+  "build": {
+    "frontendDist": "./bootstrap"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null,
+      "capabilities": ["default"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "signingIdentity": "-"
+    },
+    "iOS": {
+      "minimumSystemVersion": "17.0"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["pa"]
+      },
+      "mobile": [
+        {
+          "scheme": ["pa"]
+        }
+      ]
+    }
+  }
+}

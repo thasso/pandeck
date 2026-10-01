@@ -1,0 +1,13 @@
+-- Workflow runs keep two ceilings, and only two: discovery passes and fix
+-- iterations. The session cap is dropped because it was DERIVABLE from them —
+-- coordinator, implementer, one session per pass, one per fixer lineage, the
+-- verdict — and an independently chosen number could contradict the passes it
+-- was meant to allow, permitting three opinions while denying the sessions to
+-- hear them. Existing runs lose that recorded number; nothing reads it once
+-- sessions follow from the two ceilings rather than sitting beside them.
+--
+-- The remaining two stop being write-once: an exhausted ceiling asks the user
+-- to raise it (docs/agent-workflows.md, "Limits, and who raises them"), so
+-- these columns hold the run's CURRENT ceiling and every raise is an
+-- append-only event with the user as its actor.
+ALTER TABLE workflow_runs DROP COLUMN max_sessions;

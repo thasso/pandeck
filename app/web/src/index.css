@@ -1,0 +1,897 @@
+@import "tailwindcss";
+
+/* Semantic color tokens, themed via :root / .dark on <html>. */
+@theme {
+  --color-surface: var(--surface);
+  --color-panel: var(--panel);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-user: var(--user);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+
+  /* Two intentional system stacks. The app ships no font files, so the
+     primary family is always an honest platform stack (reliable + offline).
+     Keep these centrally replaceable if bundled fonts are evaluated later. */
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+
+  /* Six semantic font-size roles — the ONLY sizes the web client may use.
+     Each is a fixed rem base multiplied by the unitless `--text-scale` browser
+     preference so typography (and only typography) scales 100/110/120/130
+     without touching the browser root, spacing, or persisted geometry. Paired
+     unitless line heights let line boxes grow with the glyphs. Tailwind v4
+     turns each `--text-<role>` / `--text-<role>--line-height` pair into a
+     `text-<role>` utility that sets both font-size and line-height. */
+  --text-micro: calc(0.75rem * var(--text-scale));
+  --text-micro--line-height: 1.35;
+  --text-caption: calc(0.8125rem * var(--text-scale));
+  --text-caption--line-height: 1.5;
+  --text-body: calc(0.875rem * var(--text-scale));
+  --text-body--line-height: 1.5;
+  --text-prose: calc(1rem * var(--text-scale));
+  --text-prose--line-height: 1.6;
+  --text-heading: calc(1.125rem * var(--text-scale));
+  --text-heading--line-height: 1.35;
+  --text-title: calc(1.25rem * var(--text-scale));
+  --text-title--line-height: 1.25;
+}
+
+/* Browser-local text scale. The base (and the persisted `100` value, which has
+   no override rule) resolves to 1; larger settings multiply every role token.
+   Applied via a root `data-text-scale` attribute written before first paint in
+   index.html and by usePrefs at runtime, so the size is correct as soon as the
+   stylesheet applies — no React round-trip, no size flash. */
+:root {
+  --text-scale: 1;
+}
+:root[data-text-scale="110"] {
+  --text-scale: 1.1;
+}
+:root[data-text-scale="120"] {
+  --text-scale: 1.2;
+}
+:root[data-text-scale="130"] {
+  --text-scale: 1.3;
+}
+
+/* Viewer-local zoom. Text roles are recomputed so Markdown, source and prose
+   reflow inside their existing width; visual documents alone use CSS zoom,
+   which participates in the document scroller without scaling app chrome. */
+[data-document-zoom-mode="text"] {
+  --text-micro: calc(0.75rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-caption: calc(0.8125rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-body: calc(0.875rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-prose: calc(1rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-heading: calc(1.125rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-title: calc(1.25rem * var(--text-scale) * var(--document-zoom, 1));
+}
+[data-document-zoom-mode="visual"] .document-visual-content {
+  zoom: var(--document-zoom, 1);
+}
+
+/* Light base. `.dark` overrides below win at equal specificity via source order. */
+:root {
+  --surface: #f7f8fa;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --line: #e8eaef;
+  --line-strong: #d6dae2;
+  --fg: #1a1d26;
+  --muted: #5b6472;
+  --faint: #8b93a3;
+  --accent: #5b62e6;
+  --accent-fg: #ffffff;
+  --accent-soft: color-mix(in oklab, #5b62e6 12%, transparent);
+  --user: #eef1f7;
+  --danger: #d20f39;
+  --danger-soft: color-mix(in oklab, var(--danger) 12%, transparent);
+  --warning: #df8e1d;
+  --warning-soft: color-mix(in oklab, var(--warning) 14%, transparent);
+  --success: #40a02b;
+  --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  /* ANSI terminal palette (Catppuccin Latte) for colored tool output. */
+  --ansi-black: #5c5f77;
+  --ansi-red: #d20f39;
+  --ansi-green: #40a02b;
+  --ansi-yellow: #df8e1d;
+  --ansi-blue: #1e66f5;
+  --ansi-magenta: #ea76cb;
+  --ansi-cyan: #179299;
+  --ansi-white: #acb0be;
+  --ansi-bright-black: #6c6f85;
+  --ansi-bright-red: #d20f39;
+  --ansi-bright-green: #40a02b;
+  --ansi-bright-yellow: #df8e1d;
+  --ansi-bright-blue: #1e66f5;
+  --ansi-bright-magenta: #ea76cb;
+  --ansi-bright-cyan: #179299;
+  --ansi-bright-white: #bcc0cc;
+  /* Use the real iOS safe-area inset. In normal Safari this is 0 (the
+     address bar covers the notch). In an installed standalone PWA with
+     viewport-fit=cover + apple-mobile-web-app-capable=yes, this reports
+     the real notch/Dynamic-Island height. A non-zero fallback is applied
+     below only in standalone mode, where missing insets would actually
+     cause overflow. */
+  --app-safe-area-top: env(safe-area-inset-top, 0px);
+  --app-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --app-safe-area-left: env(safe-area-inset-left, 0px);
+  --app-safe-area-right: env(safe-area-inset-right, 0px);
+  --app-viewport-height: 100vh;
+  --app-keyboard-inset-bottom: 0px;
+  --app-composer-bottom-padding: max(0.25rem, var(--app-safe-area-bottom));
+}
+
+/* Dark theme (applied via <html class="dark">) */
+.dark {
+  --surface: #0b0c10;
+  --panel: #1b1f2d;
+  --raised: #2c3246;
+  --line: #3c4458;
+  --line-strong: #566078;
+  --fg: #e7e9ee;
+  --muted: #99a0ae;
+  --faint: #646b7a;
+  --accent: #7c83ff;
+  --accent-fg: #ffffff;
+  --accent-soft: color-mix(in oklab, #7c83ff 16%, transparent);
+  --user: #1c2030;
+  --danger: #f38ba8;
+  --danger-soft: color-mix(in oklab, var(--danger) 16%, transparent);
+  --warning: #f9e2af;
+  --warning-soft: color-mix(in oklab, var(--warning) 18%, transparent);
+  --success: #a6e3a1;
+  --success-soft: color-mix(in oklab, var(--success) 16%, transparent);
+  /* ANSI terminal palette (Catppuccin Mocha) for colored tool output. */
+  --ansi-black: #45475a;
+  --ansi-red: #f38ba8;
+  --ansi-green: #a6e3a1;
+  --ansi-yellow: #f9e2af;
+  --ansi-blue: #89b4fa;
+  --ansi-magenta: #f5c2e7;
+  --ansi-cyan: #94e2d5;
+  --ansi-white: #bac2de;
+  --ansi-bright-black: #585b70;
+  --ansi-bright-red: #f38ba8;
+  --ansi-bright-green: #a6e3a1;
+  --ansi-bright-yellow: #f9e2af;
+  --ansi-bright-blue: #89b4fa;
+  --ansi-bright-magenta: #f5c2e7;
+  --ansi-bright-cyan: #94e2d5;
+  --ansi-bright-white: #a6adc8;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  max-width: 100%;
+  height: var(--app-viewport-height);
+  min-height: var(--app-viewport-height);
+  overflow: hidden;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+}
+
+@supports (height: 100dvh) {
+  :root {
+    --app-viewport-height: 100dvh;
+  }
+}
+
+@media (max-width: 767px) and (display-mode: standalone) {
+  :root {
+    /* In an installed iOS standalone PWA the page extends under the status
+       bar / notch / Dynamic Island, so a missing inset would overflow. Keep
+       a conservative 44px floor only in that mode. In regular Safari the
+       browser chrome handles this already, so we leave the inset at 0 and
+       avoid a phantom empty band below the address bar. */
+    --app-safe-area-top: max(env(safe-area-inset-top, 0px), 44px);
+    /* iOS Home Screen can report 100dvh as the safe visual viewport rather
+       than the full standalone window, leaving an undrawn band at the bottom.
+       Standalone has no browser chrome, so prefer the largest viewport unit
+       there while keeping dynamic viewport sizing for regular Safari. */
+    --app-viewport-height: 100vh;
+  }
+}
+
+@media (max-width: 767px) and (display-mode: standalone) {
+  @supports (height: 100lvh) {
+    :root {
+      --app-viewport-height: 100lvh;
+    }
+  }
+}
+
+/* Editable controls read the `prose` role (1rem at 100%) on every device, so
+   typing surfaces stay comfortably larger than dense metadata and scale with
+   the preference. */
+input,
+textarea,
+select {
+  font-size: var(--text-prose);
+  line-height: var(--text-prose--line-height);
+}
+
+/* iOS auto-zooms when focusing a form control whose computed font-size is
+   below 16px, and frequently does not zoom back out. Keep an explicit 1rem
+   (16px) floor on phone-width devices so focusing the composer (or any
+   settings field) never triggers that zoom dance; a larger selected scale
+   still wins via max(). */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: max(1rem, var(--text-prose));
+  }
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  /* The scaled `body` role is the app-wide inherited default; unclassed and
+     inheriting content follows the text-scale preference from here down. */
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  background: var(--surface);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* New-session quick rows retain swipe/wheel scrolling without visual chrome. */
+.new-session-quick-start [role="listbox"] {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.new-session-quick-start [role="listbox"]::-webkit-scrollbar {
+  display: none;
+}
+
+/* Right-panel tabs still support horizontal wheel/trackpad scrolling, without
+   claiming their scarce header height for a scrollbar. */
+.right-panel-tab-list {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.right-panel-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* The card's status signals own their own width. At rail sizes every badge
+   keeps its state glyph and moves its label to the existing accessible name,
+   so the signals and the row's controls share one line. Phone-width cards have
+   enough room and retain the labels. */
+.session-card-status-line {
+  container-type: inline-size;
+}
+@container (max-width: 240px) {
+  .session-card-status-line [data-session-status-badge="responsive"],
+  .session-card-status-line .session-status-responsive-badge {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: 0 0 1.25rem;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+  .session-card-status-line .session-status-badge-label {
+    display: none;
+  }
+}
+
+/* Slim, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+  background-clip: content-box;
+}
+
+/* Markdown ("prose") styling. Body copy uses the `prose` role; headings map
+   onto the shared `title`/`heading` roles (h3+ stay prose/body, differentiated
+   by weight/color); inline code inherits the surrounding size; fenced code and
+   tables use `caption`. All sizes are role tokens so Markdown tracks the
+   text-scale preference. */
+.prose {
+  font-size: var(--text-prose);
+  line-height: var(--text-prose--line-height);
+  word-break: break-word;
+}
+.prose > :first-child {
+  margin-top: 0;
+}
+.prose > :last-child {
+  margin-bottom: 0;
+}
+.prose p {
+  margin: 0.55em 0;
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  font-weight: 650;
+  margin: 1.1em 0 0.5em;
+}
+.prose h1 {
+  font-size: var(--text-title);
+  line-height: var(--text-title--line-height);
+}
+.prose h2 {
+  font-size: var(--text-heading);
+  line-height: var(--text-heading--line-height);
+}
+/* h3–h6 reuse the prose/body sizes; hierarchy comes from weight and color. */
+.prose h3 {
+  font-size: var(--text-prose);
+  line-height: var(--text-prose--line-height);
+}
+.prose h4 {
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+.prose ul,
+.prose ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose li {
+  margin: 0.2em 0;
+}
+.prose li::marker {
+  color: var(--faint);
+}
+.prose a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.prose a:hover {
+  text-decoration: underline;
+}
+.prose code {
+  font-family: var(--font-mono);
+  /* Inline code inherits the surrounding size (no explicit font-size). */
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.08em 0.34em;
+}
+.prose pre {
+  max-width: 100%;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.85em 1em;
+  overflow-x: auto;
+  margin: 0.7em 0;
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+}
+/*
+ * A fenced block routes through `ui/CodeBlock`, which puts a row UNDER the
+ * `pre` inside the same container (the copy button, the reveal controls). That
+ * row is the gap to what follows, so the `pre`'s own bottom margin would double
+ * it. Scoped to `pre.shiki` — the class both of `CodeBlock`'s paths carry — so a
+ * bare `<pre>` from inline HTML keeps its symmetric margin.
+ */
+.prose pre.shiki {
+  margin-bottom: 0;
+}
+.prose pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  white-space: pre;
+}
+.prose blockquote {
+  border-left: 2px solid var(--line-strong);
+  margin: 0.7em 0;
+  padding-left: 0.9em;
+  color: var(--muted);
+}
+.prose .markdown-table-scroll {
+  max-width: 100%;
+  margin: 0.7em 0;
+  overflow-x: auto;
+}
+.prose .markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Assistant prose opts into a wider viewport for top-level tables alone. The
+   matching transcript row grows with it below, so content-visibility's paint
+   containment never clips the table. A table nested in a list or blockquote
+   stays contained by that block and scrolls there instead. */
+.prose > .markdown-table-scroll.markdown-table-breakout {
+  position: relative;
+  left: 50%;
+  width: max-content;
+  max-width: min(70rem, calc(var(--shell-main-width, 100vw) - 2rem));
+  transform: translateX(-50%);
+}
+.prose > .markdown-table-scroll.markdown-table-breakout:focus-visible {
+  outline-offset: -2px;
+}
+.prose table {
+  border-collapse: collapse;
+  margin: 0;
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  word-break: normal;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+.prose th {
+  background: var(--raised);
+  font-weight: 600;
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+
+/*
+ * Prose that sits INSIDE something else rather than owning the column: a
+ * comment under a diff line, in a thread card, in a sheet. Same rules, one size
+ * down — the body size the comment was TYPED at, so writing and reading it
+ * match, and 16px prose does not tower over 13px diff code beside it. Only the
+ * sizes move; every other prose rule is inherited, which is the point of it
+ * being a modifier rather than a second stylesheet.
+ */
+.prose-compact {
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+}
+.prose-compact h1,
+.prose-compact h2,
+.prose-compact h3,
+.prose-compact h4 {
+  font-size: var(--text-body);
+  line-height: var(--text-body--line-height);
+  margin: 0.8em 0 0.4em;
+}
+.prose-compact p {
+  margin: 0.45em 0;
+}
+.prose-compact pre {
+  font-size: var(--text-micro);
+  line-height: var(--text-micro--line-height);
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+.caret::after {
+  content: "▋";
+  margin-left: 1px;
+  color: var(--accent);
+  animation: blink 1s steps(1) infinite;
+}
+/* The caret and the progress label are the transcript's two "still working"
+   animations, so R6 stills them like every `motion-safe:` one — the caret stays
+   drawn and the label stays legible, they just stop moving. */
+@media (prefers-reduced-motion: reduce) {
+  .caret::after {
+    animation: none;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes chat-dock-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.chat-dock-panel {
+  /* Narrower than the composer, but still attached directly behind it. */
+  margin-inline: 2.3rem;
+  animation: chat-dock-panel-in 120ms ease-out;
+}
+
+/* Not a loading state — an entrance — but the same promise: a reader who asked
+   for less motion gets the panel, not the way it arrived (Task-391). */
+@media (prefers-reduced-motion: reduce) {
+  .chat-dock-panel {
+    animation: none;
+  }
+}
+
+/* A tree row's indentation is its PLACE in the hierarchy, so a row that changes
+   depth moves there instead of appearing at the new one: a drag reparents a
+   subtree, and a parent that leaves a list without its children (an agent
+   archiving one row) promotes them to the root — rows that jump an indent while
+   the gap above them closes read as a different list rather than the same one
+   settling.
+   Never applied to a row being dragged — that depth tracks the finger. It is on
+   EVERY tree (tasks, sessions, projects, worktrees) on purpose: a depth change
+   means the same thing in all of them, and only reparenting produces one.
+   It carries the row's colours too: this rule is unlayered and would otherwise
+   override Tailwind's `transition-colors` on the same element rather than join
+   it. Colour, background and border are the three that matter on a row; the
+   rest of what `transition-colors` sets (text-decoration-color, fill, stroke)
+   is deliberately dropped, since on these rows those live on children. */
+.tree-row-indent {
+  transition-property: color, background-color, border-color, padding-left;
+  transition-duration: 180ms;
+  transition-timing-function: ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tree-row-indent {
+    transition-property: color, background-color, border-color;
+  }
+}
+
+@keyframes app-sidebar-slide-left-in {
+  0% {
+    opacity: 0.88;
+    transform: translateX(-100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes app-sidebar-slide-left-out {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0.88;
+    transform: translateX(-100%);
+  }
+}
+@keyframes app-sidebar-slide-right-in {
+  0% {
+    opacity: 0.88;
+    transform: translateX(100%);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes app-sidebar-slide-right-out {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0.88;
+    transform: translateX(100%);
+  }
+}
+.app-sidebar-slide-left-in {
+  animation: app-sidebar-slide-left-in 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+.app-sidebar-slide-left-out {
+  animation: app-sidebar-slide-left-out 120ms cubic-bezier(0.7, 0, 0.84, 0) both;
+  will-change: transform;
+}
+.app-sidebar-slide-right-in {
+  animation: app-sidebar-slide-right-in 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform;
+}
+.app-sidebar-slide-right-out {
+  animation: app-sidebar-slide-right-out 120ms cubic-bezier(0.7, 0, 0.84, 0)
+    both;
+  will-change: transform;
+}
+/* The object dock's sheet is animated in JS, not here: it slides up from exactly
+   the peek card's height, which only the component can measure. */
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar-slide-left-in,
+  .app-sidebar-slide-left-out,
+  .app-sidebar-slide-right-in,
+  .app-sidebar-slide-right-out {
+    animation: none;
+    will-change: auto;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--fg) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    background: none;
+    color: var(--muted);
+    animation: none;
+  }
+}
+
+/* Editable settings field: no explicit size here so the global input/textarea/
+   select `prose` rule owns the type size (1rem at 100%). */
+.settings-input {
+  @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-fg outline-none transition-colors placeholder:text-faint focus:border-accent;
+}
+.settings-button {
+  @apply rounded-lg border border-line bg-raised px-3 py-2 text-body font-medium text-fg transition-colors hover:border-line-strong;
+}
+.settings-button-primary {
+  @apply rounded-lg bg-accent px-3 py-2 text-body font-medium text-accent-fg transition-opacity hover:opacity-90;
+}
+
+/* Transcript rows start bounded by MessageList's render window, but skipping
+   their layout still matters on desktop as the reader loads earlier rows. The
+   scroll controller refines the intrinsic estimate after measuring real rows. */
+.transcript-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--transcript-row-estimate, 240px);
+}
+/* Paint containment clips descendants to the row's border box. Give a row that
+   contains a top-level breakout table its own bounded wide box, then restore
+   the ordinary prose measure inside it. The shell inset also keeps classic
+   desktop scrollbars from turning the transcript into a horizontal scroller. */
+.transcript-row:has(.prose > .markdown-table-breakout) {
+  position: relative;
+  left: 50%;
+  width: min(71rem, calc(var(--shell-main-width, 100vw) - 2rem));
+  max-width: none;
+  transform: translateX(-50%);
+}
+.transcript-row:has(.prose > .markdown-table-breakout)
+  .assistant-message-content {
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+}
+
+/* Every iOS browser is WebKit, which has no native scroll anchoring. A skipped
+   row can replace its estimate while a touch scroll brings it into view; WebKit
+   may paint that correction before ResizeObserver lets the controller restore
+   the visible row. Render the on-demand window truthfully there instead. The
+   `-webkit-touch-callout` feature is iOS-only (including installed PWAs), so
+   desktop Safari retains the optimization. */
+@supports (-webkit-touch-callout: none) {
+  .transcript-row {
+    content-visibility: visible;
+    contain-intrinsic-size: none;
+  }
+}
+
+/* Shiki output (CodeBlock + Markdown fences) is themed with
+   Catppuccin Latte/Mocha as dual light/dark CSS variables (`defaultColor:
+   false`); pick the right one off the `html.dark` class. The `.cb-numbered`
+   wrapper turns on a line-number gutter via CSS counters on Shiki's per-line
+   `.line` spans. Ported from the v2 tailwind.config.js `codeBlocks` rules. */
+.shiki {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+  border-radius: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  /* Block code shares the central mono stack and the `caption` size/line
+     height with Markdown fences, JSON, ANSI, and Pierre diff code. */
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  overflow-x: auto;
+}
+.shiki span {
+  color: var(--shiki-light);
+}
+html.dark .shiki {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+html.dark .shiki span {
+  color: var(--shiki-dark);
+}
+.cb-numbered .shiki code {
+  /* `--cb-line-start` offsets the gutter so a file excerpt keeps the file's own
+     line numbers instead of restarting at 1. */
+  counter-reset: shiki-line var(--cb-line-start, 0);
+}
+/* Opt-in wrapping for code/tool output; the default is horizontal scrolling. */
+.cb-wrap .shiki {
+  overflow-x: hidden;
+}
+.cb-wrap .shiki code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The lines a `#L12-L20` document anchor addresses (`CodeBlock`'s `lineAnchor`).
+   The mark is declarative, so an idle syntax highlight landing or a "Show more"
+   cannot drop it; a Shiki row is inline by default, so widen it to read as a
+   band rather than a box around the text. */
+.cb-anchored {
+  background-color: var(--accent-soft);
+}
+/* An addressed RANGE is one region, not a stack of boxes: the rows are aligned
+   to the top of their line box, so the half-leading a baseline-aligned row
+   leaves below itself cannot show through as a gap between two marked lines. */
+.shiki .line.cb-anchored {
+  display: inline-block;
+  min-width: 100%;
+  vertical-align: top;
+}
+/* Only the ends of that region are rounded. A single addressed line carries
+   both classes, so it keeps the rounded box it always had. */
+.cb-anchored-start {
+  border-top-left-radius: 0.125rem;
+  border-top-right-radius: 0.125rem;
+}
+.cb-anchored-end {
+  border-bottom-left-radius: 0.125rem;
+  border-bottom-right-radius: 0.125rem;
+}
+.cb-numbered .shiki .line::before {
+  counter-increment: shiki-line;
+  content: counter(shiki-line);
+  display: inline-block;
+  width: 2rem;
+  margin-right: 1rem;
+  text-align: right;
+  color: var(--faint);
+}
+
+/* Shared block shell for native tool bodies (`components/tools/NativeToolBodies.tsx`):
+   the diff rows and the bash shell view. It mirrors `.shiki`'s look (same
+   background, padding, central mono stack and `caption` role) WITHOUT living
+   under `.shiki`, whose blanket `span` colour rule would override the per-row
+   add/remove colouring. Rows are block-level inside a max-content code element,
+   so a row's background spans the widest line rather than the viewport. */
+.tool-code {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+  border-radius: 0.375rem;
+  padding: 0.625rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: var(--text-caption--line-height);
+  white-space: pre;
+}
+html.dark .tool-code {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+.tool-code code {
+  display: block;
+  min-width: max-content;
+}
+.tool-code-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-code-wrap code {
+  min-width: 0;
+}
+.tool-code-row {
+  display: block;
+}
+.tool-code-num {
+  display: inline-block;
+  margin-right: 0.75rem;
+  color: var(--faint);
+}
+.tool-code-sign {
+  display: inline-block;
+  width: 1ch;
+  margin-right: 0.5rem;
+}
+.tool-code-prompt {
+  color: var(--accent);
+}
+.tool-code .tool-code-row.tool-diff-add {
+  background-color: var(--success-soft);
+  color: var(--success);
+}
+.tool-code .tool-code-row.tool-diff-del {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+}
+.tool-code .tool-code-row.tool-diff-gap {
+  color: var(--faint);
+}
+/* Word-level marks inside a replaced line: a stronger wash of the row's own
+   colour, so WHAT changed reads at a glance (the @pierre/diffs `word-alt`
+   behaviour the worktree surfaces use). Adjacent marks are merged upstream, so
+   these are spans rather than per-token boxes. */
+.tool-code .tool-diff-add .tool-diff-word {
+  background-color: color-mix(in oklab, var(--success) 30%, transparent);
+  border-radius: 3px;
+}
+.tool-code .tool-diff-del .tool-diff-word {
+  background-color: color-mix(in oklab, var(--danger) 30%, transparent);
+  border-radius: 3px;
+}
+
+/* @pierre/diffs host typography (Task-184/187). Pierre renders in shadow DOM
+   and reads these four host custom properties (verified against 1.2.12); this
+   is the ONLY supported typography integration path — never fork its internal
+   selectors. Diff code shares the central mono stack and the scaled `caption`
+   size + unitless line height with Shiki, so the app's diff/file code matches
+   block code exactly across every text scale; headers use the sans stack. This
+   class is applied to every File/FileDiff/MultiFileDiff host. */
+.app-diff-host {
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-sans);
+  --diffs-font-size: var(--text-caption);
+  --diffs-line-height: var(--text-caption--line-height);
+}
+
+/* Inline word-level change marks in the Knowledge history "Rendered" diff. */
+.kb-md-diff ins {
+  text-decoration: none;
+  background-color: var(--success-soft);
+  color: var(--success);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.kb-md-diff del {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklab, var(--danger) 60%, transparent);
+  background-color: var(--danger-soft);
+  color: var(--danger);
+  border-radius: 3px;
+  padding: 0 1px;
+}

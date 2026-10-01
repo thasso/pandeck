@@ -1,0 +1,36 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.mjs",
+        "scripts/bun-shims/*.mjs",
+        "scripts/codemods/*.mjs"
+      ],
+      "project": ["scripts/**/*.mjs"],
+      "ignoreBinaries": ["nix", "vitest"]
+    },
+    "app/shared": {
+      "project": "**/*.ts",
+      "includeEntryExports": true
+    },
+    "app/server": {
+      "entry": ["src/check*.ts", "src/measure*.ts"],
+      "project": "src/**/*.ts"
+    },
+    "app/web": {
+      "entry": [
+        "component-preview/main.tsx",
+        "component-preview/build-story.ts",
+        "component-preview/storybook-config/preview.tsx"
+      ],
+      "storybook": {
+        "config": ["component-preview/storybook-config/main.ts"]
+      },
+      "project": [
+        "src/**/*.{ts,tsx,css}",
+        "component-preview/**/*.{ts,tsx,css}"
+      ]
+    }
+  }
+}

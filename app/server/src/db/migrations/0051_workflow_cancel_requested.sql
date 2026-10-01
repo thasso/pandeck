@@ -1,0 +1,11 @@
+-- A cancellation the user asked for is durable from the moment they ask it.
+--
+-- Settling one can wait: a host operation holds its run's chain until its own
+-- deadline, and CI observation polls for up to half an hour. What must NOT wait
+-- is the record of the request — an in-memory intent disappears with the
+-- process, and the run then comes back as an ordinary paused run offering
+-- Resume, silently abandoning a cancellation the user already made. This column
+-- carries the request across that gap: boot settles a run that holds one, the
+-- card projects it as cancelling rather than paused, and Resume refuses while
+-- it stands.
+ALTER TABLE workflow_runs ADD COLUMN cancel_requested_at_ms INTEGER;

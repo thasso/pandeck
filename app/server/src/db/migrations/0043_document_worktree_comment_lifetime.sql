@@ -1,0 +1,6 @@
+-- Amendment to the historical rationale in 0007_worktree_comments_main.sql:
+-- the worktree_id FK remains absent because synthetic main checkouts have no
+-- worktrees row. Spawned-worktree comment lifetime is now enforced explicitly
+-- by the successful worktree-removal path; comments are no longer retained for
+-- soft-removed rows. This forward note preserves the checksum of the already
+-- shipped migration while documenting the current ownership rule.
