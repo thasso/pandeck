@@ -87,49 +87,91 @@ test("an edit to a shipped migration still reports as an edit", () => {
 // applied before two comment examples changed for publication.
 const SUPERSEDED_0005 =
   "edeadbf7cfded7d01ca03af36c3a39d6b02935dd40ed5afd7b3d328601b68e4f";
+const NAME_0005 = "0005_projects.sql";
 
-function versionOf(name: string): number {
+function readRow(name: string): {
+  version: number;
+  name: string;
+  checksum: string;
+  applied_at_ms: number;
+} {
   const raw = new DatabaseSync(DB_PATH);
   const row = raw
-    .prepare("SELECT version FROM schema_migrations WHERE name = ?")
-    .get(name) as { version: number };
+    .prepare(
+      "SELECT version, name, checksum, applied_at_ms FROM schema_migrations WHERE name = ?",
+    )
+    .get(name) as {
+    version: number;
+    name: string;
+    checksum: string;
+    applied_at_ms: number;
+  };
   raw.close();
-  return row.version;
+  return row;
+}
+
+const intact0005 = (() => {
+  const row = readRow(NAME_0005);
+  const current = createHash("sha256")
+    .update(
+      readFileSync(join(import.meta.dirname, "migrations", NAME_0005), "utf8"),
+    )
+    .digest("hex");
+  return { version: row.version, checksum: current };
+})();
+
+/** Put both rows the cases below rewrite back to what this build ships. */
+function restoreRows(): void {
+  closeDb();
+  setRow(intact0005.version, NAME_0005, intact0005.checksum);
+  setRow(shipped.version, shipped.name, shipped.checksum);
 }
 
 test("a database that applied 0005 before publication still opens", () => {
-  // Undo the earlier cases' damage to the highest row; only 0005 differs here.
-  setRow(shipped.version, shipped.name, shipped.checksum);
-  const version = versionOf("0005_projects.sql");
-  setRow(version, "0005_projects.sql", SUPERSEDED_0005);
-  assert.doesNotThrow(() => getDb());
-  closeDb();
+  restoreRows();
+  try {
+    setRow(intact0005.version, NAME_0005, SUPERSEDED_0005);
+    const before = readRow(NAME_0005);
+    assert.doesNotThrow(() => getDb());
+    closeDb();
+    // Accepted, not repaired: an older build still deployed on this data must
+    // keep finding the checksum it recorded.
+    assert.deepEqual(readRow(NAME_0005), before);
+  } finally {
+    restoreRows();
+  }
 });
 
-test("a superseded checksum is accepted only under its own name", () => {
-  const version = versionOf("0005_projects.sql");
-  setRow(version, "0005_projects.sql", "2".repeat(64));
-  assert.throws(() => getDb(), /checksum changed after it was applied/);
-  closeDb();
+test("a superseded checksum is accepted only for its own row and name", () => {
+  restoreRows();
+  try {
+    // Another checksum under 0005's own name is still an edit.
+    setRow(intact0005.version, NAME_0005, "2".repeat(64));
+    assert.throws(
+      () => getDb(),
+      new RegExp(`${NAME_0005} checksum changed after it was applied`),
+    );
+    restoreRows();
 
-  setRow(shipped.version, shipped.name, SUPERSEDED_0005);
-  assert.throws(() => getDb(), /checksum changed after it was applied/);
-  closeDb();
+    // The superseded checksum on another migration's row is still an edit.
+    setRow(shipped.version, shipped.name, SUPERSEDED_0005);
+    assert.throws(
+      () => getDb(),
+      new RegExp(`${shipped.name} checksum changed after it was applied`),
+    );
+    restoreRows();
+
+    // The superseded checksum recorded under another name for version 5 is a
+    // renumber, not the published 0005.
+    setRow(intact0005.version, "0005_something_else.sql", SUPERSEDED_0005);
+    assert.throws(() => getDb(), /was applied as 0005_something_else\.sql/);
+  } finally {
+    restoreRows();
+  }
 });
 
 test("an intact database opens cleanly", () => {
-  const version = versionOf("0005_projects.sql");
-  const current = createHash("sha256")
-    .update(
-      readFileSync(
-        join(import.meta.dirname, "migrations", "0005_projects.sql"),
-        "utf8",
-      ),
-    )
-    .digest("hex");
-  setRow(version, "0005_projects.sql", current);
-  setRow(shipped.version, shipped.name, shipped.checksum);
-
+  restoreRows();
   assert.doesNotThrow(() => getDb());
   closeDb();
 });
