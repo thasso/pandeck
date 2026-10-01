@@ -591,9 +591,10 @@ describe("store persistence", () => {
     writeFileSync(metaFile(dir, id), `${JSON.stringify(legacy, null, 2)}\n`);
 
     assert.equal(claudeSdkStore.exists(id), true);
-    expect(
-      claudeSdkStore.listItems(() => 0).find((item) => item.id === id),
-    ).toMatchObject({ title: "Legacy", messageCount: 2 });
+    expect(readClaudeSdkRecordMeta(dir, id)).toMatchObject({
+      meta: { title: "Legacy" },
+      figures: { messages: 2 },
+    });
 
     const session = claudeSdkStore.acquire(id);
     assert.deepEqual(session.timelineEntries(), entries);
@@ -610,9 +611,10 @@ describe("store persistence", () => {
     assert.deepEqual(reread?.record.entries, entries);
     assert.equal(reread?.record.title, "Migrated");
     assert.deepEqual(reread?.record.usage, legacy.usage);
-    expect(
-      claudeSdkStore.listItems(() => 0).find((item) => item.id === id),
-    ).toMatchObject({ title: "Migrated", messageCount: 2 });
+    expect(readClaudeSdkRecordMeta(dir, id)).toMatchObject({
+      meta: { title: "Migrated" },
+      figures: { messages: 2 },
+    });
 
     claudeSdkStore.remove(id);
   });
