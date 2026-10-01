@@ -127,7 +127,7 @@ interface AnsiToken {
 // numeric/`;` params and the final byte `m`; every other CSI — cursor moves,
 // erase, private modes like `?25l` — is matched here so it is stripped rather
 // than leaking as raw text.
-// eslint-disable-next-line no-control-regex -- ANSI escape sequences ARE control characters; matching them is the point.
+// oxlint-disable-next-line no-control-regex -- ANSI escape sequences ARE control characters; matching them is the point.
 const CSI = /\x1b\[([0-?]*)([ -/]*)([@-~])/g;
 const SGR_PARAMS = /^[0-9;]*$/;
 

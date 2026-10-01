@@ -26,6 +26,7 @@ import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./ui/shortcuts.tsx";
 import { EmptyBox } from "./ui/load.tsx";
 import { SwipeRow, type SwipeAction } from "./ui/SwipeRow.tsx";
+import { useNow } from "../hooks/useNow.ts";
 import { dismissToastKey, showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import {
@@ -1118,15 +1119,4 @@ function layoutTop(node: HTMLElement): number {
     current = current.offsetParent;
   }
   return top;
-}
-
-/** One shared clock for every visible elapsed label in the browser. */
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
 }

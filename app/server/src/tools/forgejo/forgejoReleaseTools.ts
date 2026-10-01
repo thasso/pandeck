@@ -171,7 +171,7 @@ function repoBase(owner: string, repo: string): string {
 function assertTagName(tag: string): void {
   if (!tag) throw new Error("tag must be a non-empty tag name.");
   if (
-    // eslint-disable-next-line no-control-regex -- git forbids control characters in a ref name, so naming them IS the check.
+    // oxlint-disable-next-line no-control-regex -- git forbids control characters in a ref name, so naming them IS the check.
     /[\u0000-\u001f\u007f]/.test(tag) ||
     /[\s~^:?*[\\]/.test(tag) ||
     tag.includes("..") ||

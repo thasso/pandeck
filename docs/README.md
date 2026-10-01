@@ -172,10 +172,10 @@ only binding rules; everything else lives here.
   independent `BuildInfo` answers behind Settings → About and the desktop About
   panel), the runner→root deploy path, and rollback.
 - `linting.md` — the static-analysis contract: the shared `tsconfig.base.json`
-  and which strictness flags are on where, the two TypeScript versions (7 for
-  `tsc`, 6 for type-aware ESLint) and which one wins, the ESLint ruleset and why
-  it carries no stylistic rules, the staged rules with their measured backlogs,
-  and the escape-hatch policy. It also holds the dead-code contract — why
+  and which strictness flags are on where, why the gate is oxlint rather than
+  type-aware ESLint (with the measurements), the oxlint ruleset and why it
+  carries no stylistic rules, the staged rules with their measured backlogs, and
+  the escape-hatch policy. It also holds the dead-code contract — why
   `noUnusedLocals` cannot see an export with no importer, the knip config, and
   the staged per-category counts whose enforced numbers live in
   `config/deadcode-budgets.json` — and the `exactOptionalPropertyTypes`

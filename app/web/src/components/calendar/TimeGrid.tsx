@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock, Video } from "lucide-react";
 import type { CalendarEventDto, CalendarWorklogDto } from "@assistant/shared";
+import { useNow } from "../../hooks/useNow.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
 import {
   dayOfMonth,
@@ -159,7 +160,8 @@ export function TimeGrid({
     return () => node.removeEventListener("wheel", onWheel);
   }, []);
 
-  const nowMinutes = minutesOfDay(new Date().toISOString(), timeZone);
+  const now = useNow(60_000);
+  const nowMinutes = minutesOfDay(new Date(now).toISOString(), timeZone);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

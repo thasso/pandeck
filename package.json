@@ -19,7 +19,7 @@
     "check:prompts": "pnpm --filter @assistant/server check:prompts",
     "format": "prettier --experimental-cli --write --cache .",
     "format:check": "prettier --experimental-cli --check --cache .",
-    "lint": "eslint --max-warnings 0 --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content",
+    "lint": "oxlint --type-aware --deny-warnings",
     "lint:deadcode": "node scripts/check-deadcode.mjs",
     "measure:prompts": "pnpm --filter @assistant/server measure:prompts",
     "measure:session": "pnpm --filter @assistant/server measure:session",
@@ -41,18 +41,13 @@
     "version:set": "node scripts/set-version.mjs"
   },
   "devDependencies": {
-    "@eslint/js": "catalog:",
-    "@vitest/eslint-plugin": "catalog:",
     "concurrently": "catalog:",
-    "eslint": "catalog:",
-    "eslint-import-resolver-typescript": "catalog:",
-    "eslint-plugin-import-x": "catalog:",
-    "eslint-plugin-react-hooks": "catalog:",
     "esbuild": "catalog:",
     "knip": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
     "prettier": "catalog:",
-    "typescript": "catalog:lint",
-    "typescript-eslint": "catalog:"
+    "typescript": "catalog:codemods"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0",

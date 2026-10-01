@@ -308,7 +308,7 @@ test("a restart restores Git and fails the interrupted triage with its evidence"
   assert.equal(failed.status, "failed");
   assert.match(failed.result?.summary ?? "", /restored to the state/);
   assert.equal(
-    (failed.result?.payload as Record<string, Record<string, unknown>>)
+    (failed.result!.payload as Record<string, Record<string, unknown>>)
       .operationTriageSafety?.restored,
     true,
   );

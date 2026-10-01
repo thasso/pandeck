@@ -1,0 +1,409 @@
+// The repo's blocking lint gate. Prettier owns formatting, so NOTHING here is
+// stylistic: every rule below either needs type information or catches a
+// class of mistake a reviewer would raise. `docs/linting.md` is the contract —
+// the ruleset, the escape-hatch policy, and what to do about a breach.
+//
+// Every rule is listed by name; no oxlint category is enabled, so a new oxlint
+// release cannot turn a rule on behind the gate's back. Type-aware rules run
+// through `oxlint-tsgolint` on typescript-go 7, the same compiler `tsc` uses.
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import", "react", "vitest"],
+  "categories": { "correctness": "off" },
+  "options": {
+    "typeAware": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  // Generated or vendored output, plus the Rust/Tauri shell (outside the pnpm
+  // workspace) and the user's live data directory.
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "app/web/dist/**",
+    "app/web/component-preview/dist/**",
+    "app/web/component-preview/storybook-static/**",
+    "app/shell/**",
+    "**/assistant-data/**",
+    "**/*.d.ts",
+    // Runs on the audio render thread, whose globals are its own.
+    "app/web/src/lib/pcm16Worklet.js"
+  ],
+
+  // ----------------------------------------- every file: JS and TypeScript
+  // ESLint's `js/recommended` minus what tsc already proves for TypeScript;
+  // the JS blocks below add those back.
+  "rules": {
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-case-declarations": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-constant-condition": "error",
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-delete-var": "error",
+    "no-dupe-else-if": "error",
+    "no-duplicate-case": "error",
+    "no-empty": "error",
+    "no-empty-character-class": "error",
+    "no-empty-pattern": "error",
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-fallthrough": "error",
+    "no-global-assign": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-self-assign": "error",
+    "no-shadow-restricted-names": "error",
+    "no-sparse-arrays": "error",
+    "no-unassigned-vars": "error",
+    "no-unexpected-multiline": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-labels": "error",
+    "no-unused-private-class-members": "error",
+    "no-useless-backreference": "error",
+    "no-useless-catch": "error",
+    "no-useless-escape": "error",
+    "require-yield": "error",
+    "use-isnan": "error",
+    "valid-typeof": "error"
+  },
+
+  "overrides": [
+    // ------------------------------------------------------------ TypeScript
+    {
+      "files": ["**/*.ts", "**/*.tsx", "**/*.mts"],
+      "rules": {
+        // --- typescript-eslint's `recommendedTypeChecked` ---------------------
+        "typescript/ban-ts-comment": "error",
+        "no-array-constructor": "error",
+        "typescript/no-array-delete": "error",
+        "typescript/no-duplicate-enum-values": "error",
+        "typescript/no-duplicate-type-constituents": "error",
+        "typescript/no-empty-object-type": "error",
+        "typescript/no-extra-non-null-assertion": "error",
+        "typescript/no-for-in-array": "error",
+        "typescript/no-implied-eval": "error",
+        "typescript/no-misused-new": "error",
+        "typescript/no-namespace": "error",
+        "typescript/no-non-null-asserted-optional-chain": "error",
+        "typescript/no-redundant-type-constituents": "error",
+        "typescript/no-require-imports": "error",
+        "typescript/no-this-alias": "error",
+        "typescript/no-unnecessary-type-constraint": "error",
+        "typescript/no-unsafe-declaration-merging": "error",
+        "typescript/no-unsafe-enum-comparison": "error",
+        "typescript/no-unsafe-function-type": "error",
+        "typescript/no-unsafe-unary-minus": "error",
+        "no-unused-expressions": "error",
+        "typescript/no-wrapper-object-types": "error",
+        "typescript/only-throw-error": "error",
+        "typescript/prefer-as-const": "error",
+        "typescript/prefer-namespace-keyword": "error",
+        "typescript/restrict-plus-operands": "error",
+        "typescript/triple-slash-reference": "error",
+        "no-var": "error",
+        "prefer-rest-params": "error",
+        "prefer-spread": "error",
+
+        // --- forgotten `await`: the most common agent bug in this repo -------
+        "typescript/await-thenable": "error",
+
+        // --- the wire protocol is large discriminated unions -----------------
+        // Adding a variant and missing a handler is a hard failure ONLY in a
+        // switch with no `default:`. `considerDefaultExhaustiveForUnions` lets
+        // a default stand in for the missing cases, which exempts precisely
+        // the protocol dispatchers this rule is most wanted for — they are
+        // intentionally partial and route the rest through a default.
+        // Tightening it to `false` is STAGED (see `docs/linting.md`);
+        // `connection.ts` alone would need dozens of no-op cases, so the count
+        // understates the work unevenly.
+        "typescript/switch-exhaustiveness-check": [
+          "error",
+          { "considerDefaultExhaustiveForUnions": true }
+        ],
+
+        // --- `verbatimModuleSyntax` is on, so the import kind is load-bearing
+        "typescript/no-import-type-side-effects": "error",
+
+        // --- unused code, matching the tsconfig's noUnused* ------------------
+        "no-unused-vars": [
+          "error",
+          {
+            "args": "all",
+            "argsIgnorePattern": "^_",
+            "varsIgnorePattern": "^_",
+            "caughtErrors": "all",
+            "caughtErrorsIgnorePattern": "^_",
+            "destructuredArrayIgnorePattern": "^_",
+            "ignoreRestSiblings": true
+          }
+        ],
+
+        // --- module graph -----------------------------------------------------
+        // Module RESOLUTION is tsc's job; nothing here re-checks it.
+        "import/export": "error",
+        "import/no-duplicates": "error",
+        "import/no-self-import": "error",
+        // `import {} from "./x"` reads as a named import and is a bare
+        // side-effect import; with `verbatimModuleSyntax` the difference is
+        // real.
+        "import/no-empty-named-blocks": "error",
+        // An exported `let` is shared mutable state across modules: importers
+        // see a live binding they cannot write, and the writer is invisible
+        // from the call site. Module-level state belongs behind a function.
+        "import/no-mutable-exports": "error",
+        // A cycle is a load-order hazard (a half-initialized module read during
+        // evaluation) and an unstated module boundary. This rule is the
+        // per-import-site diagnostic; knip's `cycles` category (gated at zero
+        // in `config/deadcode-budgets.json`) checks the same static graph.
+        // Type-only imports are erased by `verbatimModuleSyntax` and ignored.
+        // A dynamic `import()` is never an edge here, which is what lets the
+        // four lazy `hub.ts` seams keep the static graph acyclic.
+        "import/no-cycle": "error",
+
+        // --- correctness the type checker does not cover ---------------------
+        "eqeqeq": ["error", "always", { "null": "ignore" }],
+        // A `let` read by a closure BEFORE its single assignment cannot be
+        // const.
+        "prefer-const": ["error", { "ignoreReadBeforeAssign": true }],
+        // A `case` carrying only comments is not a fallthrough; real ones are
+        // caught by tsc's `noFallthroughCasesInSwitch` as well.
+        "no-fallthrough": ["error", { "allowEmptyCase": true }],
+        // `x === x` is either dead weight or a botched NaN check.
+        "no-self-compare": "error",
+        // "${id}" in a plain-quoted string: a template that never interpolated.
+        "no-template-curly-in-string": "error",
+        // `.map`/`.filter`/`.reduce` with a callback that falls off the end
+        // yields `undefined` for every element — a silent all-`undefined`
+        // array or an all-pass filter.
+        "array-callback-return": "error",
+        // A loop body that always exits on the first iteration is a `for` that
+        // meant to be an `if`, or a misplaced `return`.
+        "no-unreachable-loop": "error",
+        // `return` in a constructor silently replaces the instance `new` hands
+        // back, so the class's own initialization is discarded.
+        "no-constructor-return": "error",
+        // A `default:` before the last `case` still runs last, so the cases
+        // after it read as unreachable when they are not.
+        "default-case-last": "error",
+        // `return (a = b)` is an assignment typo'd into a return value.
+        "no-return-assign": "error",
+        "typescript/no-meaningless-void-operator": "error",
+        "typescript/no-mixed-enums": "error",
+        // A getter and setter of the same name with different types make
+        // `obj.x = obj.x` a type error waiting to happen.
+        "typescript/related-getter-setter-pairs": "error",
+        // A parameter with a default before a required one can never be
+        // omitted, so the default is unreachable and the signature lies.
+        "default-param-last": "error",
+        // `a! ?? b` and `a?.b!` each assert non-null right where the code just
+        // said the value may be missing: the fallback and the guard are dead.
+        "typescript/no-non-null-asserted-nullish-coalescing": "error",
+        // `this` is the only return type that survives subclassing.
+        "typescript/prefer-return-this-type": "error",
+        // `export {}` forces a file to be a module; with ESM everywhere it is
+        // left-over scaffolding.
+        "typescript/no-useless-empty-export": "error",
+        // A type argument spelled out as its own default drifts when the
+        // default changes and hides that it did.
+        "typescript/no-unnecessary-type-arguments": "error",
+        // Only the cases where the `await` CHANGES behaviour: inside `try`
+        // (and under `using`), returning a promise without awaiting it escapes
+        // the `catch`/`finally` entirely. Elsewhere the `await` is a style call
+        // this repo does not make — the default and `always` are NOT clean.
+        "typescript/return-await": ["error", "error-handling-correctness-only"],
+        // `catch (err) { reject(err) }` is correct propagation and wrapping it
+        // would bury the original, so `unknown` is allowed through. Note this
+        // is broader than that case: it permits ANY `unknown`/`any`-typed
+        // value, and with the `no-unsafe-*` family staged off, `any` reaches
+        // here freely. Rejecting with a freshly-made non-Error is still an
+        // error.
+        "typescript/prefer-promise-reject-errors": [
+          "error",
+          { "allowThrowingUnknown": true }
+        ],
+        "typescript/restrict-template-expressions": [
+          "error",
+          { "allowNumber": true }
+        ],
+
+        // --- a promise nobody waits for ---------------------------------------
+        // A floating rejection is an unhandled one; an `async` function passed
+        // where a void-returning one is expected rejects into nothing at all.
+        "typescript/no-floating-promises": "error",
+        "typescript/no-misused-promises": "error",
+
+        // ------------------------- STAGED, NOT YET ON -------------------------
+        // Each is a real signal, and turning one on means clearing its list,
+        // not silencing it. Adopt them one rule per change — smallest JOB
+        // first, which is not the same as smallest count — and delete the line
+        // when it reaches zero. A count is a measurement ANCHORED TO A COMMIT
+        // (`docs/linting.md` names it); re-measure the one you are about to
+        // adopt.
+        //
+        // The `no-unnecessary-condition` line is NOT one of these: it is
+        // rejected, not queued, and sits here only so the rule has one home.
+        // Its sharpest findings are runtime guards at trust boundaries that
+        // the type system only believes because of an `as` cast.
+        "typescript/require-await": "off", // 1886
+        "typescript/no-unsafe-member-access": "off", // 1021
+        "typescript/no-unsafe-assignment": "off", // 719
+        // Its autofix removed assertions tsc still requires; re-run
+        // `pnpm run typecheck` after every fix.
+        "typescript/no-unnecessary-type-assertion": "off", // 871
+        "typescript/no-explicit-any": "off", // 273
+        "typescript/no-base-to-string": "off", // 212
+        "typescript/consistent-type-imports": "off", // 194
+        "typescript/no-unsafe-argument": "off", // 109
+        "typescript/no-unsafe-call": "off", // 76
+        "typescript/no-unsafe-return": "off", // 56
+        "typescript/unbound-method": "off", // 73
+        "preserve-caught-error": "off", // 47
+        "typescript/no-unnecessary-condition": "off", // 1265, not adoptable
+        // Eight intentional browser-compat fallbacks, three deferred MCP SDK
+        // migration sites, and 28 cheap ones (see `docs/linting.md`).
+        "typescript/no-deprecated": "off", // 39
+        "no-useless-assignment": "off" // 20
+      }
+    },
+
+    // ----------------------------------------------------------------- React
+    {
+      "files": ["app/web/**/*.ts", "app/web/**/*.tsx"],
+      "rules": {
+        "react/rules-of-hooks": "error",
+        // The behaviour gate for dependency arrays: `docs/linting.md` says
+        // which fixes hold and which only move the bug.
+        "react/exhaustive-deps": "error",
+
+        // --- render must be a pure function of props and state ---------------
+        // Setting state during render is an infinite loop or a wasted pass;
+        // the React compiler's analysis finds the indirect cases a reviewer
+        // misses.
+        "react/set-state-in-render": "error",
+        // A component defined inside another component is a NEW type on every
+        // render, so React unmounts and remounts it and its state is lost.
+        // This also covers a component built by a factory called during
+        // render.
+        "react/static-components": "error",
+        // An error boundary must be a class with `componentDidCatch`/
+        // `getDerivedStateFromError`; a hook cannot catch a render error.
+        "react/error-boundaries": "error",
+        // Calling time/random/browser mutation APIs during render makes the
+        // same inputs produce a different tree and can remount keyed rows.
+        "react/purity": "error",
+        // Reading a closure before its declaration freezes the earlier value
+        // for the compiler instead of letting later renders update it.
+        "react/immutability": "error",
+
+        // --- memoization that actually holds ---------------------------------
+        "react/use-memo": "error",
+        // `useMemo(() => { ... })` with a body that returns nothing memoizes
+        // `undefined` — the work runs every render and the value is gone.
+        "react/void-use-memo": "error",
+
+        // --- the compiler's own preconditions --------------------------------
+        // These fire when a file uses a library or syntax the React compiler
+        // cannot reason about: silent unsoundness in every rule above.
+        "react/incompatible-library": "error",
+        "react/unsupported-syntax": "error",
+
+        // ------------------------- STAGED, NOT YET ON -------------------------
+        // Mirrored props, cache-key changes, and authoritative server echoes
+        // each need a state-ownership decision rather than an effect deletion.
+        "react/no-deriving-state-in-effects": "off", // 4
+        // Unlike upstream's, oxlint's port also reports EXTRA dependencies,
+        // which is this repo's deliberate trigger-token idiom, and requires
+        // functions that capture only state setters. `exhaustive-deps` above
+        // keeps missing dependencies blocking.
+        "react/exhaustive-effect-dependencies": "off" // 39
+      }
+    },
+
+    // ---------------------------------------------------------------- Vitest
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/test/**/*.ts"],
+      "rules": {
+        // A stray `.only` silently disables the rest of the file, and nothing
+        // in CI notices; `.skip` is the same failure, chosen on purpose.
+        "vitest/no-focused-tests": "error",
+        "vitest/no-disabled-tests": "error",
+        "vitest/no-identical-title": "error",
+
+        // --- assertions that never assert ------------------------------------
+        // `expect(value, message)` is real Vitest API this repo uses; the
+        // default of one argument flags legitimate call sites.
+        "vitest/valid-expect": ["error", { "maxArgs": 2 }],
+        "vitest/valid-expect-in-promise": "error",
+        "vitest/no-standalone-expect": "error",
+        "vitest/require-awaited-expect-poll": "error",
+        "vitest/no-unneeded-async-expect-function": "error",
+        "vitest/no-commented-out-tests": "error",
+        "vitest/no-alias-methods": "error",
+        "vitest/no-duplicate-hooks": "error",
+
+        // ------------------------- STAGED, NOT YET ON -------------------------
+        // Cannot follow assertions behind a helper or a module-level `main()`.
+        "vitest/expect-expect": "off" // 47
+      }
+    },
+
+    // ---------------------------------------------------- plain JavaScript
+    // Scripts and the production service worker: the rest of ESLint's
+    // `js/recommended`, which tsc covers for TypeScript.
+    {
+      "files": ["scripts/**/*.mjs", "app/web/public/sw.js"],
+      "rules": {
+        "constructor-super": "error",
+        "getter-return": "error",
+        "no-class-assign": "error",
+        "no-const-assign": "error",
+        "no-dupe-class-members": "error",
+        "no-dupe-keys": "error",
+        "no-func-assign": "error",
+        "no-import-assign": "error",
+        "no-new-native-nonconstructor": "error",
+        "no-obj-calls": "error",
+        "no-redeclare": "error",
+        "no-setter-return": "error",
+        "no-this-before-super": "error",
+        "no-undef": "error",
+        "no-unreachable": "error",
+        "no-unsafe-negation": "error",
+        "no-unused-vars": "error",
+        "no-useless-assignment": "error",
+        "no-with": "error",
+        "preserve-caught-error": "error"
+      }
+    },
+    {
+      "files": ["scripts/**/*.mjs"],
+      "globals": {
+        "Buffer": "readonly",
+        "console": "readonly",
+        "process": "readonly",
+        "URL": "readonly"
+      }
+    },
+    {
+      "files": ["app/web/public/sw.js"],
+      "globals": {
+        "caches": "readonly",
+        "clients": "readonly",
+        "fetch": "readonly",
+        "Response": "readonly",
+        "self": "readonly",
+        "skipWaiting": "readonly",
+        "URL": "readonly"
+      }
+    }
+  ]
+}

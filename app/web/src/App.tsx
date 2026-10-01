@@ -2604,7 +2604,7 @@ function AppContent() {
   // called. The list itself is rebroadcast up to ~4x/second and almost never
   // changes any of them.
   const backlogSessionKey = backlogSessionsKey(state.sessions);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `backlogSessionKey` IS the Backlog-visible content of `state.sessions` (`lib/sessionRows.ts` enumerates it); depending on the array would re-render the memoized Sidebar (~220 rows) on every rebroadcast, which is the whole point of the gate
+  // oxlint-disable-next-line react/exhaustive-deps -- `backlogSessionKey` IS the Backlog-visible content of `state.sessions` (`lib/sessionRows.ts` enumerates it); depending on the array would re-render the memoized Sidebar (~220 rows) on every rebroadcast, which is the whole point of the gate
   const backlogSessions = useMemo(() => state.sessions, [backlogSessionKey]);
   // Archiving from the inspector answers to the same rules (and produces the
   // same Undo receipt) as archiving from the list; `useBacklog` builds the
@@ -2792,7 +2792,7 @@ function AppContent() {
   );
   const paObjectReferences = useMemo(
     () => mentionedPaObjectReferences,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `referenceKey` IS the content of `mentionedPaObjectReferences`; depending on the array would hand the transcript new link props on every broadcast that touched a mentioned object
+    // oxlint-disable-next-line react/exhaustive-deps -- `referenceKey` IS the content of `mentionedPaObjectReferences`; depending on the array would hand the transcript new link props on every broadcast that touched a mentioned object
     [referenceKey],
   );
 
@@ -5003,7 +5003,7 @@ function AppContent() {
   const spawnedLedgeKey = spawnedSessions
     ? spawnedSessionsKey(spawnedSessions, spawnedLedgeOpen)
     : "";
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `spawnedLedgeKey` IS the strip's visible content of `spawnedSessions` (`lib/sessionInbox.ts` enumerates it); depending on the projection would rebuild the ledge on every rebroadcast, which is the whole point of the gate
+  // oxlint-disable-next-line react/exhaustive-deps -- `spawnedLedgeKey` IS the strip's visible content of `spawnedSessions` (`lib/sessionInbox.ts` enumerates it); depending on the projection would rebuild the ledge on every rebroadcast, which is the whole point of the gate
   const spawnedLedgeView = useMemo(() => spawnedSessions, [spawnedLedgeKey]);
   const spawnedLedge = useMemo(
     () =>
@@ -5049,7 +5049,7 @@ function AppContent() {
           onRevealApproval={actions.revealApproval}
         />
       ) : undefined,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
+    // oxlint-disable-next-line react/exhaustive-deps -- `pendingApprovalsLedgeKey` IS the strip's visible content of `pendingApprovals` (`lib/approvalCards.ts`); depending on the array would rebuild the strip on every snapshot
     [pendingApprovalsLedgeKey, actions.revealApproval],
   );
   // The user's own queue (`promptQueue.ts`) belongs to an ordinary session on

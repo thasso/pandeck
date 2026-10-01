@@ -127,7 +127,7 @@
               dontFixup = true;
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "sha256-MxMrL+uvAAxJwEeR5oEHFuzKOFU2rYbMPPi9en1alpc=";
+              outputHash = "sha256-V5HBsED/i/LgUTKqgwU50TrMLc5w+td9epc1ij9pQwA=";
             };
 
             # The source itself already entered the store. Refuse to build a

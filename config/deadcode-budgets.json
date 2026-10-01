@@ -80,7 +80,7 @@
     {
       "id": "cycles",
       "label": "circular dependencies",
-      "covers": "a cycle in the static value-import graph. knip does not report this one by default, so check-deadcode.mjs runs a second `--cycles` pass for it; `import-x/no-cycle` gives the per-import-site diagnostic but, configured to permit the lazy hub chains, cannot prove static acyclicity on its own. See docs/linting.md."
+      "covers": "a cycle in the static value-import graph. knip does not report this one by default, so check-deadcode.mjs runs a second `--cycles` pass for it; oxlint's `import/no-cycle` gives the per-import-site diagnostic for the same static graph. See docs/linting.md."
     }
   ],
   "budgets": {},

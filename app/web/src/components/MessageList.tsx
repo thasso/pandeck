@@ -1650,7 +1650,7 @@ export function MessageList({
     // or nothing but the ORDER — the list is sorted by `updatedAt`, so any agent
     // turn anywhere in the app re-sorts it. Keep Markdown link props stable
     // unless the linkable id/title data changed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `referenceKey` IS the id/title content of `mentionedSessions`; depending on the array would rebuild every Markdown link prop on each re-sort
+    // oxlint-disable-next-line react/exhaustive-deps -- `referenceKey` IS the id/title content of `mentionedSessions`; depending on the array would rebuild every Markdown link prop on each re-sort
     [referenceKey],
   );
   // What the `/pr` card's cleanup would take away with the checkout: the viewed

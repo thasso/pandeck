@@ -82,7 +82,7 @@ async function main(): Promise<void> {
       `a session switched to Plan cannot call ${t} on the next turn`,
     );
     assert.ok(
-      (planOptions?.disallowedTools as string[]).includes(t),
+      (planOptions!.disallowedTools as string[]).includes(t),
       `Plan disallows ${t} outright`,
     );
     const verdict = await planOptions!.canUseTool!(t, {}, {} as never);
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
   session.setMode("build");
   await adapter.prompt("back to build");
   assert.ok(
-    (captured[2]?.tools as string[]).includes("Edit"),
+    (captured[2]!.tools as string[]).includes("Edit"),
     "switching back to Build restores the mutating tools",
   );
 

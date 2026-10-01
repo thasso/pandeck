@@ -58,7 +58,7 @@ export function setClaudeSdkUsageSeam(
 }
 
 /** Never yields — keeps the query's stdin open with no turn to run. */
-// eslint-disable-next-line require-yield -- parking forever IS the contract: the SDK needs an AsyncGenerator that never produces a turn.
+// oxlint-disable-next-line require-yield -- parking forever IS the contract: the SDK needs an AsyncGenerator that never produces a turn.
 async function* neverEndingPrompt(): AsyncGenerator<ClaudeSdkUserMessage> {
   await new Promise<never>(() => {});
 }

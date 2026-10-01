@@ -13,13 +13,14 @@ about the tools.
 
 The workspace compiles with `typescript@7`, which ships **no JavaScript compiler
 API** — so a codemod cannot ask the real compiler which sites are wrong. The
-root `typescript@6` (the linter's copy) has the API but is a different compiler
-and may disagree; on this repo it reported 452 web errors where v7 reported 455.
+root `typescript@6` (`catalogs.codemods`, installed for these scripts) has the
+API but is a different compiler and may disagree; on this repo it reported 452
+web errors where v7 reported 455.
 
 So the split is deliberate:
 
 - **v7 `tsc` decides WHICH sites are wrong.** It is the authority
-  (`docs/linting.md`, "The two TypeScripts").
+  (`docs/linting.md`).
 - **ts6 is used only for SYNTAX** — parsing, and resolving a JSX attribute to
   its declaration. No type inference is ever taken from it.
 - **v7 `tsc` re-checks the result.** Every codemod is verified by the authority,

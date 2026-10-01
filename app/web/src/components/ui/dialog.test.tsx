@@ -150,7 +150,7 @@ it("answers false for cancel, Escape and the backdrop alike", async () => {
         ),
     () =>
       (
-        document.querySelector('[role="dialog"]')?.parentElement as HTMLElement
+        document.querySelector('[role="dialog"]')!.parentElement as HTMLElement
       ).click(),
   ]) {
     const asked = askOnce((dialogs) => dialogs.confirm({ title: "Sure?" }));

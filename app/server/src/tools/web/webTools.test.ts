@@ -105,7 +105,7 @@ test("web_search sends the subscription token, bounds count, and strips snippet 
   assert.equal(url.searchParams.get("q"), "test query");
   assert.equal(url.searchParams.get("count"), "10"); // clamped to SEARCH_MAX_COUNT
   assert.equal(
-    (calls[0]!.init?.headers as Record<string, string>)["X-Subscription-Token"],
+    (calls[0]!.init!.headers as Record<string, string>)["X-Subscription-Token"],
     "test-brave-key",
   );
 });

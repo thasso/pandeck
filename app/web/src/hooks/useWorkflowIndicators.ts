@@ -16,7 +16,7 @@ export function useWorkflowIndicators(
   // The key, not the freshly derived array, is the identity contract.
   return useMemo(
     () => (entries.length ? new Map(entries) : NO_WORKFLOW_INDICATORS),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` IS the content of `entries`; depending on the array would hand memoized Backlog rows a new Map on every run broadcast
+    // oxlint-disable-next-line react/exhaustive-deps -- `key` IS the content of `entries`; depending on the array would hand memoized Backlog rows a new Map on every run broadcast
     [key],
   );
 }

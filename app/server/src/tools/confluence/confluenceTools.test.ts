@@ -968,7 +968,7 @@ describe("confluence_mutate_page attachments", () => {
   /** The multipart file part of the one upload the transport saw. */
   async function uploadedFile() {
     const [upload] = writes("POST");
-    const file = (upload?.body as FormData).get("file") as File;
+    const file = (upload!.body as FormData).get("file") as File;
     return { path: upload?.path, name: file.name, text: await file.text() };
   }
 
@@ -1012,7 +1012,7 @@ describe("confluence_mutate_page attachments", () => {
     const form = writes("POST")[0]?.body as FormData;
     expect(form.get("comment")).toBe("first cut");
     expect(form.get("minorEdit")).toBe("true");
-    const item = (resolved?.card.body as { items: Array<Record<string, any>> })
+    const item = (resolved!.card.body as { items: Array<Record<string, any>> })
       .items[0];
     expect(item?.["attachment"]).toMatchObject({
       resultId: "att9",
@@ -1028,7 +1028,7 @@ describe("confluence_mutate_page attachments", () => {
         sourcePath: hostFile("notes.txt", "proposed"),
       },
     ]);
-    const stagedId = (items[0]?.["attachment"] as Record<string, string>)[
+    const stagedId = (items[0]!["attachment"] as Record<string, string>)[
       "stagedAttachmentId"
     ]!;
     writeFileSync(

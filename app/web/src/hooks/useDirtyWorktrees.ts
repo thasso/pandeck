@@ -35,6 +35,6 @@ export function useDirtyWorktrees(
   const key = dirtyWorktreeKey(ids);
   // The KEY is the memo's real dependency: `ids` is a fresh array whenever any
   // status moved, and the same ids in it must not make a new Set.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` IS the content of `ids`; depending on the array instead would rebuild the set on every watcher push, which is the memo this hook exists to make hold (`lib/worktreeDirty.ts`)
+  // oxlint-disable-next-line react/exhaustive-deps -- `key` IS the content of `ids`; depending on the array instead would rebuild the set on every watcher push, which is the memo this hook exists to make hold (`lib/worktreeDirty.ts`)
   return useMemo(() => (ids.length ? new Set(ids) : NO_DIRTY_WORKTREES), [key]);
 }
