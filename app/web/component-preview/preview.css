@@ -1,0 +1,7 @@
+@import "../src/index.css";
+
+/* Tailwind's automatic scan is rooted at this preview entry, while the classes
+   under review live in the production source tree. Include that tree explicitly
+   so a story cannot look approximately right while silently missing utilities. */
+@source "../src";
+@source "./";

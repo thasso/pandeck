@@ -1,0 +1,541 @@
+{
+  "$comment": "Enforced budgets for what every session's FIRST request carries, in characters, per persona and harness. Policy, rationale and how to raise a budget live in docs/prompt-budgets.md. This file is the source of truth for the numbers: app/server/src/promptBudgets.ts never hard-codes one. A budget is a tripwire, not a target \u2014 raising one with a recorded reason is a normal move.",
+  "unit": "characters",
+  "measurement": {
+    "cwdLabel": "/repo",
+    "snapshot": "app/server/src/__snapshots__/prompt-sizes.md"
+  },
+  "warnAtPercentOfBudget": 95,
+  "limits": [
+    {
+      "id": "prompt",
+      "label": "system prompt",
+      "sections": ["prompt"],
+      "covers": "every counted prompt layer: the harness base we keep, the persona file with its conditional sections, registry/KB/memory guidance, the profile suffix, project context and assembly framing."
+    },
+    {
+      "id": "eagerTools",
+      "label": "eager tool block",
+      "sections": ["tools"],
+      "covers": "name + description + JSON schema of every tool loaded up front, plus the harness builtins we construct. Deferred tools are reported but not counted."
+    },
+    {
+      "id": "firstRequest",
+      "label": "first request",
+      "sections": ["prompt", "tools"],
+      "covers": "the two above \u2014 what this persona costs before the user's first word."
+    }
+  ],
+  "budgets": {
+    "assistant": {
+      "pi": {
+        "prompt": 6300,
+        "eagerTools": 12000,
+        "firstRequest": 17800
+      },
+      "claude": {
+        "prompt": 6300,
+        "eagerTools": 11500,
+        "firstRequest": 17300
+      }
+    },
+    "personal-assistant": {
+      "pi": {
+        "prompt": 5600,
+        "eagerTools": 12000,
+        "firstRequest": 16800
+      },
+      "claude": {
+        "prompt": 5600,
+        "eagerTools": 11500,
+        "firstRequest": 16300
+      }
+    },
+    "workshop": {
+      "pi": {
+        "prompt": 13300,
+        "eagerTools": 21000,
+        "firstRequest": 33700
+      },
+      "claude": {
+        "prompt": 7100,
+        "eagerTools": 13000,
+        "firstRequest": 19400
+      }
+    },
+    "developer": {
+      "pi": {
+        "prompt": 13500,
+        "eagerTools": 20500,
+        "firstRequest": 33900
+      },
+      "claude": {
+        "prompt": 7400,
+        "eagerTools": 12500,
+        "firstRequest": 18900
+      }
+    },
+    "workflow-coordinator": {
+      "pi": {
+        "prompt": 4500,
+        "eagerTools": 2700,
+        "firstRequest": 6700
+      },
+      "claude": {
+        "prompt": 4500,
+        "eagerTools": 1900,
+        "firstRequest": 5900
+      }
+    }
+  },
+  "raises": [
+    {
+      "budget": "developer.claude.prompt",
+      "from": 4500,
+      "to": 5200,
+      "task": 588,
+      "date": "2026-08-23",
+      "why": "the delivery loop gains its merge/close step: the persona must state that only a repository-supported method may be chosen, that non-default merge and close-with-reason are pre-authorized, and that a default-branch merge always pauses for human approval"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 16500,
+      "to": 17200,
+      "task": 588,
+      "date": "2026-08-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 11500,
+      "to": 11800,
+      "task": 588,
+      "date": "2026-08-23",
+      "why": "the same finish-pull-request rules on the pi harness, whose persona layer already sat at 98% of its budget"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 29000,
+      "to": 29300,
+      "task": 588,
+      "date": "2026-08-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "workflow-coordinator.pi.prompt",
+      "from": 1000,
+      "to": 1500,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "standing advisory-operator rules make unassigned run-status conversations safe and evidence-bound"
+    },
+    {
+      "budget": "workflow-coordinator.pi.eagerTools",
+      "from": 2000,
+      "to": 2700,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "the coordinator gains the eager run-scoped workflow_status read tool"
+    },
+    {
+      "budget": "workflow-coordinator.pi.firstRequest",
+      "from": 2500,
+      "to": 3700,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "the advisory-operator prompt and run-status schema must both be present before an unassigned user message"
+    },
+    {
+      "budget": "workflow-coordinator.claude.prompt",
+      "from": 1000,
+      "to": 1500,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "standing advisory-operator rules make unassigned run-status conversations safe and evidence-bound"
+    },
+    {
+      "budget": "workflow-coordinator.claude.eagerTools",
+      "from": 1500,
+      "to": 1900,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "the coordinator gains the eager run-scoped workflow_status read tool"
+    },
+    {
+      "budget": "workflow-coordinator.claude.firstRequest",
+      "from": 2500,
+      "to": 2900,
+      "task": 445,
+      "date": "2026-08-14",
+      "why": "the advisory-operator prompt and run-status schema must both be present before an unassigned user message"
+    },
+    {
+      "budget": "workflow-coordinator.pi.prompt",
+      "from": 1500,
+      "to": 4500,
+      "task": 403,
+      "date": "2026-08-19",
+      "why": "the coordinator persona was written as telegraphese to fit 1500 and had grown to 96% of it. v1.4 makes this role the run's standing judgement \u2014 asked after every assessment, routing fixers, reviewers and the verdict \u2014 so its rules are restated as prose that gives each one its reason, which is what an agent needs to apply a rule to a case the text did not anticipate. It also now says what the role cannot see and that being asked implies nothing about how the work fared."
+    },
+    {
+      "budget": "workflow-coordinator.claude.prompt",
+      "from": 1500,
+      "to": 4500,
+      "task": 403,
+      "date": "2026-08-19",
+      "why": "the same persona file, shared by both harnesses: telegraphese replaced by rules that carry their reasons, plus what the coordinator cannot see and the v1.4 fact that it is asked after every assessment rather than only a passing one."
+    },
+    {
+      "budget": "workflow-coordinator.pi.firstRequest",
+      "from": 3700,
+      "to": 6700,
+      "task": 403,
+      "date": "2026-08-19",
+      "why": "follows the prompt raise at the same eager tool block; the standing rules and the run-status schema must both be present before the user's first word, and this keeps firstRequest the usual 500 below prompt + eagerTools."
+    },
+    {
+      "budget": "workflow-coordinator.claude.firstRequest",
+      "from": 2900,
+      "to": 5900,
+      "task": 403,
+      "date": "2026-08-19",
+      "why": "follows the prompt raise at the same eager tool block, keeping firstRequest 500 below prompt + eagerTools so the persona may spend one limit's headroom but not both."
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 11800,
+      "to": 12200,
+      "task": 595,
+      "date": "2026-08-23",
+      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure \u2014 chase a quiet child, route findings back, re-review until the exact target passes, never poll"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 29300,
+      "to": 29700,
+      "task": 595,
+      "date": "2026-08-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 5200,
+      "to": 5700,
+      "task": 595,
+      "date": "2026-08-23",
+      "why": "the persona gains the peer-session loop: which runtimes an agent may start helpers on, that a spawned peer is an ordinary session with no watchdog or automatic report, and that the coordinator owns closure \u2014 chase a quiet child, route findings back, re-review until the exact target passes, never poll"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 17200,
+      "to": 17700,
+      "task": 595,
+      "date": "2026-08-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "workshop.claude.prompt",
+      "from": 6000,
+      "to": 6300,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "the shared chat-images layer: a session artifact may be SHOWN in the reply as a Markdown image rather than named as a path, which needs the URL form, where it comes from, and that no other image source renders"
+    },
+    {
+      "budget": "workshop.claude.firstRequest",
+      "from": 18500,
+      "to": 18800,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 12200,
+      "to": 12700,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "the same chat-images layer on the persona that produces most screenshots: browser-testing sessions were reporting an artifact DIRECTORY for the user to open by hand"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 29700,
+      "to": 30200,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 5700,
+      "to": 6300,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "the same chat-images layer on the Claude harness, whose persona layer had no headroom left"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 17700,
+      "to": 18300,
+      "task": 636,
+      "date": "2026-08-26",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 6300,
+      "to": 6500,
+      "task": 673,
+      "date": "2026-09-05",
+      "why": "the persona now tells the agent to stop background work it no longer needs; work left running is the signal that it is parked on it, so the rule and its reason both have to be in the prompt"
+    },
+    {
+      "budget": "workshop.pi.eagerTools",
+      "from": 18500,
+      "to": 21000,
+      "task": 673,
+      "date": "2026-09-07",
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+    },
+    {
+      "budget": "workshop.pi.firstRequest",
+      "from": 31000,
+      "to": 33400,
+      "task": 673,
+      "date": "2026-09-07",
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+    },
+    {
+      "budget": "developer.pi.eagerTools",
+      "from": 18000,
+      "to": 20500,
+      "task": 673,
+      "date": "2026-09-07",
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 30200,
+      "to": 33400,
+      "task": 673,
+      "date": "2026-09-07",
+      "why": "the monitor tool now teaches the filter convention it has no parameter for: stdout is the event stream, never pipe raw logs, cover the failure signatures too. Without it an agent points monitor at a dev server and pays one turn per batch \u2014 31 turns in the session that prompted this \u2014 and background bash says plainly that it notifies once, at exit"
+    },
+    {
+      "budget": "personal-assistant.pi.prompt",
+      "from": 5000,
+      "to": 5300,
+      "task": "latex-math",
+      "date": "2026-09-09",
+      "why": "every persona learns the chat renderer accepts LaTeX: without it an agent writes formulas the reader sees as raw source, and the `$$` delimiters have to be stated because a single `$` is deliberately not math"
+    },
+    {
+      "budget": "personal-assistant.claude.prompt",
+      "from": 5000,
+      "to": 5300,
+      "task": "latex-math",
+      "date": "2026-09-09",
+      "why": "every persona learns the chat renderer accepts LaTeX: without it an agent writes formulas the reader sees as raw source, and the `$$` delimiters have to be stated because a single `$` is deliberately not math"
+    },
+    {
+      "budget": "workshop.claude.prompt",
+      "from": 6300,
+      "to": 6500,
+      "task": "latex-math",
+      "date": "2026-09-09",
+      "why": "every persona learns the chat renderer accepts LaTeX: without it an agent writes formulas the reader sees as raw source, and the `$$` delimiters have to be stated because a single `$` is deliberately not math"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 12700,
+      "to": 13000,
+      "task": "latex-math",
+      "date": "2026-09-09",
+      "why": "every persona learns the chat renderer accepts LaTeX: without it an agent writes formulas the reader sees as raw source, and the `$$` delimiters have to be stated because a single `$` is deliberately not math"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 6500,
+      "to": 6800,
+      "task": "latex-math",
+      "date": "2026-09-09",
+      "why": "every persona learns the chat renderer accepts LaTeX: without it an agent writes formulas the reader sees as raw source, and the `$$` delimiters have to be stated because a single `$` is deliberately not math"
+    },
+    {
+      "budget": "assistant.pi.prompt",
+      "from": 6000,
+      "to": 6300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "assistant.pi.firstRequest",
+      "from": 17500,
+      "to": 17800,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "assistant.claude.prompt",
+      "from": 6000,
+      "to": 6300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "assistant.claude.firstRequest",
+      "from": 17000,
+      "to": 17300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "personal-assistant.pi.prompt",
+      "from": 5300,
+      "to": 5600,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "personal-assistant.pi.firstRequest",
+      "from": 16500,
+      "to": 16800,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "personal-assistant.claude.prompt",
+      "from": 5300,
+      "to": 5600,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "personal-assistant.claude.firstRequest",
+      "from": 16000,
+      "to": 16300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "workshop.pi.prompt",
+      "from": 13000,
+      "to": 13300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "workshop.pi.firstRequest",
+      "from": 33400,
+      "to": 33700,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "workshop.claude.prompt",
+      "from": 6500,
+      "to": 6800,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "workshop.claude.firstRequest",
+      "from": 18800,
+      "to": 19100,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 13000,
+      "to": 13300,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 33400,
+      "to": 33700,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 6800,
+      "to": 7100,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "the chat-files layer replacing chat-images: a file anywhere on the host is now SHOWN by linking where it sits (image inline, Markdown/HTML/text with a viewer, anything else a download), which needs the URL form plus what each kind renders as \u2014 the copy-to-session-artifacts step it replaces cost every such reply a tool call and a duplicated file"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 18300,
+      "to": 18600,
+      "task": "direct-file-viewers",
+      "date": "2026-09-10",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 13300,
+      "to": 13500,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "a container that bind-mounts a checkout and runs as root leaves files the server can never delete, which makes the worktree unremovable; the persona has to state the host-uid rule because this is the only layer that reaches every project the agent works in"
+    },
+    {
+      "budget": "developer.pi.firstRequest",
+      "from": 33700,
+      "to": 33900,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.claude.prompt",
+      "from": 7100,
+      "to": 7400,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "a container that bind-mounts a checkout and runs as root leaves files the server can never delete, which makes the worktree unremovable; the persona has to state the host-uid rule because this is the only layer that reaches every project the agent works in"
+    },
+    {
+      "budget": "developer.claude.firstRequest",
+      "from": 18600,
+      "to": 18900,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "workshop.claude.prompt",
+      "from": 6800,
+      "to": 7100,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "a container that bind-mounts a checkout and runs as root leaves files the server can never delete, which makes the worktree unremovable; the persona has to state the host-uid rule because the prompt is the only layer that reaches every project the agent works in"
+    },
+    {
+      "budget": "workshop.claude.firstRequest",
+      "from": 19100,
+      "to": 19400,
+      "task": 659,
+      "date": "2026-09-23",
+      "why": "carries the prompt raise above"
+    }
+  ]
+}

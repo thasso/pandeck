@@ -1,0 +1,397 @@
+// @vitest-environment jsdom
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import type {
+  DisplayBlock,
+  PeerPromptCard as PeerPromptCardType,
+  PeerPromptThreadsProjection,
+} from "@assistant/shared";
+import { PeerPromptCardView } from "./PeerPromptCard.tsx";
+import { PeerPromptsSection } from "./SessionContextSections.tsx";
+import { renderToolBlock, toolBlockIsVisible } from "./tools/registry.tsx";
+
+describe("PeerPromptCardView", () => {
+  it("renders a sent card with recipient, task, and state", () => {
+    const card: PeerPromptCardType = {
+      direction: "sent",
+      messageKey: "k1",
+      senderTitle: "Impl",
+      recipientTitle: "Reviewer",
+      message: "please review",
+      responseRequested: true,
+      taskTitle: "Fix bug",
+      state: "awaiting_response",
+    };
+    const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
+    expect(html).toContain("Peer prompt to");
+    expect(html).toContain("Reviewer");
+    expect(html).toContain("please review");
+    expect(html).toContain("Awaiting response");
+    expect(html).toContain("Fix bug");
+  });
+
+  it("renders a received card with sender and no ids", () => {
+    const card: PeerPromptCardType = {
+      direction: "received",
+      messageKey: "k2",
+      senderTitle: "Planner",
+      message: "status?",
+      responseRequested: false,
+      state: "delivered",
+    };
+    const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
+    expect(html).toContain("Peer prompt from");
+    expect(html).toContain("Planner");
+    expect(html).toContain("Delivered");
+    // No peerSessionId on this (older) card: the party is plain text, not a link.
+    expect(html).not.toContain("/sessions/");
+  });
+
+  it("renders the message as Markdown", () => {
+    const card: PeerPromptCardType = {
+      direction: "received",
+      messageKey: "k4",
+      senderTitle: "Planner",
+      message: "**P1** is fixed\n\n- one\n- two",
+      responseRequested: false,
+      state: "delivered",
+    };
+    const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
+    expect(html).toContain("<strong>P1</strong>");
+    expect(html).toContain("<li>one</li>");
+  });
+
+  it("links each direction's other party to its session", () => {
+    const base = {
+      messageKey: "k5",
+      senderTitle: "Planner",
+      recipientTitle: "Reviewer",
+      message: "hi",
+      responseRequested: false,
+      state: "delivered",
+      peerSessionId: "11111111-2222-3333-4444-555555555555",
+    } as const;
+    const sent = renderToStaticMarkup(
+      <PeerPromptCardView card={{ ...base, direction: "sent" }} />,
+    );
+    expect(sent).toContain(
+      'href="/sessions/11111111-2222-3333-4444-555555555555"',
+    );
+    expect(sent).toContain(">Reviewer</a>");
+    const received = renderToStaticMarkup(
+      <PeerPromptCardView card={{ ...base, direction: "received" }} />,
+    );
+    expect(received).toContain(
+      'href="/sessions/11111111-2222-3333-4444-555555555555"',
+    );
+    expect(received).toContain(">Planner</a>");
+  });
+
+  it("renders a failure reason behind a details disclosure, and distinct non-Failed states", () => {
+    const retrying: PeerPromptCardType = {
+      direction: "sent",
+      messageKey: "k3",
+      senderTitle: "Me",
+      message: "hi",
+      responseRequested: false,
+      state: "retrying",
+      failureReason: "boom",
+    };
+    const html = renderToStaticMarkup(<PeerPromptCardView card={retrying} />);
+    expect(html).toContain("Retrying");
+    expect(html).not.toContain(">Failed<");
+    expect(html).toContain("boom");
+    expect(html).toContain("<details");
+  });
+});
+
+describe("the sent side, as a session_send_prompt tool block", () => {
+  const sentBlock: Extract<DisplayBlock, { kind: "tool" }> = {
+    kind: "tool",
+    toolId: "call_1",
+    name: "session_send_prompt",
+    args: { targetSessionId: "s2", prompt: "please review" },
+    output: JSON.stringify({
+      renderKind: "sessionPeerPrompt",
+      version: 1,
+      card: {
+        direction: "sent",
+        messageKey: "k1",
+        senderTitle: "Impl",
+        recipientTitle: "Reviewer",
+        peerSessionId: "11111111-2222-3333-4444-555555555555",
+        message: "please review",
+        responseRequested: true,
+        state: "queued",
+      },
+    }),
+    isError: false,
+    done: true,
+  };
+
+  it("renders with tools hidden, so both halves of the exchange stay in the transcript", () => {
+    expect(toolBlockIsVisible(sentBlock, false)).toBe(true);
+    expect(
+      renderToolBlock(sentBlock, { showTools: false, expandTools: false }),
+    ).not.toBeNull();
+  });
+
+  // A payload clipped by the timeline's inline budget no longer parses; the
+  // server keeps this tool's output whole for exactly that reason.
+  it("degrades to nothing rather than crashing on a clipped payload", () => {
+    const clipped = { ...sentBlock, output: sentBlock.output.slice(0, 80) };
+    expect(toolBlockIsVisible(clipped, false)).toBe(false);
+    expect(
+      renderToolBlock(clipped, { showTools: false, expandTools: false }),
+    ).toBeNull();
+  });
+
+  // The payload is model-authored: it may be partial, streaming, or simply
+  // wrong. None of those may reach the renderer as a "card".
+  it("refuses a payload whose card is malformed, and renders it as an ordinary tool block", () => {
+    const malformed = [
+      { message: {}, direction: "sent", state: "queued" },
+      { message: "hi", direction: "sideways", state: "queued" },
+      { message: "hi", direction: "sent", state: "made_up" },
+      { message: "hi", direction: "sent" },
+      "not an object",
+      ["also not an object"],
+      null,
+    ];
+    for (const card of malformed) {
+      const block = {
+        ...sentBlock,
+        output: JSON.stringify({
+          renderKind: "sessionPeerPrompt",
+          version: 1,
+          card,
+        }),
+      };
+      expect(toolBlockIsVisible(block, false)).toBe(false);
+      expect(
+        renderToolBlock(block, { showTools: false, expandTools: false }),
+      ).toBeNull();
+      // With tools shown it is still readable, just as a plain tool body.
+      expect(
+        renderToolBlock(block, { showTools: true, expandTools: false }),
+      ).not.toBeNull();
+    }
+  });
+
+  it("fills a card that is merely incomplete rather than dropping it", () => {
+    const sparse = {
+      ...sentBlock,
+      output: JSON.stringify({
+        renderKind: "sessionPeerPrompt",
+        version: 1,
+        card: { direction: "received", message: "hi", state: "delivered" },
+      }),
+    };
+    expect(toolBlockIsVisible(sparse, false)).toBe(true);
+    const html = renderToStaticMarkup(
+      <>{renderToolBlock(sparse, { showTools: false, expandTools: false })}</>,
+    );
+    expect(html).toContain("another session");
+    expect(html).toContain("Delivered");
+  });
+});
+
+// The transcript-block path takes the server's own card, but a card written by
+// an older build is still data: the view may not throw the row.
+describe("PeerPromptCardView on a card from another build", () => {
+  it("renders without a usable state, message, title or reason", () => {
+    const broken = {
+      direction: "received",
+      messageKey: "k6",
+      state: "from_the_future",
+      message: undefined,
+      senderTitle: undefined,
+      failureReason: { why: "an object" },
+      taskTitle: 7,
+      peerSessionId: {},
+      responseRequested: true,
+    } as unknown as PeerPromptCardType;
+    const html = renderToStaticMarkup(<PeerPromptCardView card={broken} />);
+    expect(html).toContain("Peer prompt from");
+    expect(html).toContain("another session");
+    expect(html).toContain("Response requested");
+    expect(html).not.toContain("from_the_future");
+    expect(html).not.toContain("Task:");
+    expect(html).not.toContain("<details");
+    // A non-string id is not a link: no href, and nothing to hand onOpenSession.
+    expect(html).not.toContain("<a ");
+    expect(html).not.toContain("object%20Object");
+  });
+
+  it("does not link a numeric or empty peer session id", () => {
+    for (const peerSessionId of [42, "", null]) {
+      const card = {
+        direction: "sent",
+        messageKey: "k7",
+        senderTitle: "Impl",
+        recipientTitle: "Reviewer",
+        peerSessionId,
+        message: "hi",
+        responseRequested: false,
+        state: "delivered",
+      } as unknown as PeerPromptCardType;
+      const html = renderToStaticMarkup(
+        <PeerPromptCardView card={card} onOpenSession={() => {}} />,
+      );
+      expect(html).toContain("Reviewer");
+      expect(html).not.toContain("<a ");
+      expect(html).not.toContain("/sessions/");
+    }
+  });
+});
+
+describe("PeerPromptsSection", () => {
+  const projection: PeerPromptThreadsProjection = {
+    truncated: true,
+    threads: [
+      {
+        conversationId: "kabc",
+        otherPartyTitle: "Reviewer",
+        peerSessionId: "peer-1",
+        messages: [
+          {
+            id: "k1",
+            direction: "sent",
+            // Already flattened and bounded when it arrives (`peerPromptExcerpt`).
+            message: "please review the lease sweep",
+            state: "replied",
+            responseRequested: true,
+            taskTitle: "Fix bug",
+            createdAt: 1,
+          },
+          {
+            id: "k2",
+            direction: "received",
+            message: "approved",
+            state: "completed",
+            responseRequested: false,
+            createdAt: 2,
+          },
+        ],
+      },
+    ],
+  };
+
+  /**
+   * The section is collapsed by default, so every body assertion has to open it
+   * first — through the same persisted preference the reader's own toggle
+   * writes, since static markup cannot click.
+   */
+  function renderOpen(
+    node: Parameters<typeof renderToStaticMarkup>[0],
+  ): string {
+    window.localStorage.setItem(
+      "inspector-section:session:s1:peer-prompts",
+      "open",
+    );
+    try {
+      return renderToStaticMarkup(node);
+    } finally {
+      window.localStorage.clear();
+    }
+  }
+
+  it("starts collapsed: the summary is there, the thread is not", () => {
+    const html = renderToStaticMarkup(
+      <PeerPromptsSection sessionId="s1" projection={projection} />,
+    );
+    expect(html).toContain("Peer prompts");
+    expect(html).toContain("1 thread · 2 messages");
+    expect(html).not.toContain("Reviewer");
+  });
+
+  it("renders each message as a bubble linking to the peer's copy", () => {
+    const html = renderOpen(
+      <PeerPromptsSection sessionId="s1" projection={projection} />,
+    );
+    expect(html).toContain("Reviewer");
+    expect(html).toContain("Replied");
+    expect(html).toContain("Completed");
+    // Both the thread name and every bubble address the peer session, so a
+    // middle-click still opens the conversation the message lives in.
+    expect(html.match(/href="\/sessions\/peer-1"/g)?.length).toBe(3);
+    expect(html).toContain("Older peer prompts are not shown.");
+  });
+
+  it("renders the excerpt it is given, and none of the record detail", () => {
+    const html = renderOpen(
+      <PeerPromptsSection sessionId="s1" projection={projection} />,
+    );
+    // Verbatim: the server already excerpted it, and truncating again here
+    // would only add a second ellipsis.
+    expect(html).toContain("please review the lease sweep");
+    expect(html).not.toContain("Response requested");
+    expect(html).not.toContain("Task: Fix bug");
+    expect(html).not.toContain("<details");
+  });
+
+  it("keeps a failure reason, which lives nowhere else", () => {
+    const failed: PeerPromptThreadsProjection = {
+      truncated: false,
+      threads: [
+        {
+          conversationId: "kfail",
+          otherPartyTitle: "Reviewer",
+          peerSessionId: "peer-1",
+          messages: [
+            {
+              id: "k9",
+              direction: "sent",
+              message: "hi",
+              state: "failed",
+              responseRequested: false,
+              failureReason: "recipient session is gone",
+              createdAt: 1,
+            },
+          ],
+        },
+      ],
+    };
+    const html = renderOpen(
+      <PeerPromptsSection sessionId="s1" projection={failed} />,
+    );
+    expect(html).toContain("Failed");
+    expect(html).toContain("recipient session is gone");
+    // …and no disclosure: the transition audit trail this used to be filed
+    // under is not on the wire at all any more.
+    expect(html).not.toContain("<details");
+  });
+
+  it("degrades gracefully with a malformed/empty thread", () => {
+    const empty: PeerPromptThreadsProjection = {
+      truncated: false,
+      threads: [
+        {
+          conversationId: "kx",
+          otherPartyTitle: "Someone",
+          peerSessionId: "peer-1",
+          messages: [],
+        },
+      ],
+    };
+    const html = renderOpen(
+      <PeerPromptsSection sessionId="s1" projection={empty} />,
+    );
+    expect(html).toContain("Someone");
+  });
+
+  it("renders a Load more button when truncated and an expand handler is provided", () => {
+    const withExpand = renderOpen(
+      <PeerPromptsSection
+        sessionId="s1"
+        projection={projection}
+        onExpand={() => {}}
+      />,
+    );
+    expect(withExpand).toContain("Load more history");
+    const withoutExpand = renderOpen(
+      <PeerPromptsSection sessionId="s1" projection={projection} />,
+    );
+    expect(withoutExpand).toContain("Older peer prompts are not shown.");
+  });
+});

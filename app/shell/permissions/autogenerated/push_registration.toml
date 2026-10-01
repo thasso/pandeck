@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-push-registration"
+description = "Enables the push_registration command without any pre-configured scope."
+commands.allow = ["push_registration"]
+
+[[permission]]
+identifier = "deny-push-registration"
+description = "Denies the push_registration command without any pre-configured scope."
+commands.deny = ["push_registration"]

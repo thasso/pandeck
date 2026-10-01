@@ -1,0 +1,27 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-app",
+  "description": "Runtime template for the hosted app. config::trust_server supplies remote URLPatterns from the user's explicit server choices. Only main and window* receive these grants; popups do not. The bootstrap-only server picker is never granted here.",
+  "local": false,
+  "windows": ["main", "window*"],
+  "remote": {
+    "urls": []
+  },
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-shell-info",
+    "allow-window-loaded",
+    "allow-window-ready",
+    "allow-open-window",
+    "allow-open-served-file",
+    "allow-start-port-forward",
+    "allow-list-port-forwards",
+    "allow-stop-port-forward",
+    "allow-open-port-forward-url",
+    "allow-notify",
+    "allow-push-registration",
+    "allow-take-pending-open-url"
+  ]
+}

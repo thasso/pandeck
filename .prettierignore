@@ -1,0 +1,16 @@
+# Generated or local runtime output. pnpm keeps its content-addressed store in
+# the workspace when the home dir is on another filesystem, as in CI.
+node_modules/
+.pnpm-store/
+app/web/dist/
+app/server/dist/
+app/shell/target/
+app/shell/gen/
+assistant-data/
+result
+result-*
+
+# Machine-written manifests: owned by the tool that emits them.
+pnpm-lock.yaml
+app/server/src/db/migrations.lock.json
+app/server/src/__snapshots__/

@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Bundled bootstrap page and recovery surface: pick a server, probe it, hand off to the hosted app. `window_loaded` is granted only because the shell's init script runs on this page too and would otherwise log a refused invoke on every load.",
+  "windows": ["main", "window*"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "allow-shell-info",
+    "allow-window-loaded",
+    "allow-get-server-url",
+    "allow-set-server-url",
+    "allow-probe-server"
+  ]
+}

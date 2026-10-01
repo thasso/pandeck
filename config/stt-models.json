@@ -1,0 +1,17 @@
+{
+  "$comment": "Speech-to-text model catalog. Single source of truth for id/url/hash, read by flake.nix (builtins.fromJSON) for the Nix fetch derivation, by `pnpm run stt:model` for local dev, and by the server for labels and model-directory validation. Bumping a model is a one-file edit; `nix build` fails loudly on a wrong hash. Get the hash with: nix hash file --sri --type sha256 <tarball>",
+  "models": [
+    {
+      "id": "parakeet-tdt-600m-v2-int8",
+      "label": "Parakeet TDT 0.6B v2 (int8)",
+      "language": "en",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+      "sha256": "sha256-FXwVe8URVeA+N9JGZSKjpzfdnHK7JfNusYkSlkFh4a0=",
+      "stripPrefix": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+      "encoder": "encoder.int8.onnx",
+      "decoder": "decoder.int8.onnx",
+      "joiner": "joiner.int8.onnx",
+      "tokens": "tokens.txt"
+    }
+  ]
+}

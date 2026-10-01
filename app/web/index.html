@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <!-- iOS PWA / standalone-mode hints. Without apple-mobile-web-app-capable=yes,
+         "Add to Home Screen" opens the page in Safari instead of full-screen
+         standalone mode, and env(safe-area-inset-*) does not behave as expected. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="Pandeck" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta
+      name="theme-color"
+      content="#f7f8fa"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#0b0c10"
+      media="(prefers-color-scheme: dark)"
+    />
+    <!-- PWA manifest declares display=standalone, scope=/, and start_url=/ so
+         iOS keeps every in-app navigation inside the standalone window instead
+         of bouncing through Safari chrome. iOS 16.4+ uses scope/display from
+         the manifest; older iOS still relies on the apple-mobile-web-app-*
+         meta tags above. Keep both. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS Home Screen icon. iOS does NOT accept SVG here, so a real PNG is
+         shipped at /apple-touch-icon.png (180x180). The SVG icons below are
+         used by modern browsers and by the manifest. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="180x180"
+      href="/apple-touch-icon.png"
+    />
+    <script>
+      // Apply theme + text scale before first paint so neither the color theme
+      // nor the typography size flashes. The scale is normalized to one of the
+      // supported values (100/110/120/130); anything else falls back to 100.
+      try {
+        const prefs = JSON.parse(
+          localStorage.getItem("assistant.prefs") || "{}",
+        );
+        document.documentElement.classList.toggle(
+          "dark",
+          (prefs.theme || "dark") === "dark",
+        );
+        const scale = [100, 110, 120, 130].includes(prefs.textScale)
+          ? prefs.textScale
+          : 100;
+        document.documentElement.setAttribute("data-text-scale", String(scale));
+      } catch {
+        document.documentElement.classList.add("dark");
+        document.documentElement.setAttribute("data-text-scale", "100");
+      }
+    </script>
+    <!-- The shared auth token is injected here at serve time (Node server in
+         prod, Vite dev plugin in dev) so it is never baked into the built JS
+         bundle. The quoted placeholder below stays literal in the built
+         index.html; whoever serves it replaces that quoted string with a
+         JSON-encoded token. Keep the placeholder text out of prose above so the
+         serve-time replace only matches the real assignment. See
+         app/web/src/lib/serverOrigin.ts. -->
+    <script>
+      window.__ASSISTANT_TOKEN__ = "%ASSISTANT_TOKEN%";
+    </script>
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        background: #f7f8fa;
+      }
+      html.dark,
+      html.dark body,
+      html.dark #root {
+        background: #0b0c10;
+      }
+      /* Avoid the iOS rubber-band background flash exposing white/black under
+         the safe-area insets in standalone mode. */
+      html {
+        background-color: inherit;
+      }
+    </style>
+    <title>Pandeck</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

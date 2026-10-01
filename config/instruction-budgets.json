@@ -1,0 +1,48 @@
+{
+  "$comment": "Enforced budgets for agent instruction files (CLAUDE.md). Policy, rationale and the exception rules live in docs/instruction-docs.md. This file is the source of truth for the numbers.",
+  "include": ["**/CLAUDE.md"],
+  "exclude": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "assistant-data/**",
+    "result/**"
+  ],
+  "budgets": {
+    "rootBytes": 4096,
+    "childBytes": 2048,
+    "chainBytes": 12288,
+    "warnAtPercentOfBudget": 90
+  },
+  "lines": {
+    "maxLength": 120,
+    "exemptTableRows": true,
+    "exemptFencedCode": true,
+    "exemptExceptionMarker": true
+  },
+  "formatter": {
+    "tool": "prettier",
+    "printWidth": 80,
+    "proseWrap": "always",
+    "globs": ["**/CLAUDE.md"]
+  },
+  "exceptions": {
+    "marker": "instruction-budget",
+    "requiredFields": ["bytes", "reason", "task", "date"],
+    "minReasonChars": 20,
+    "maxMultipleOfBudget": 2,
+    "failWhenUnused": true,
+    "allowedForChainBudget": false
+  },
+  "duplication": {
+    "severity": "warn",
+    "minChars": 120
+  },
+  "docsMirror": {
+    "path": "docs/instruction-docs.md",
+    "rows": {
+      "Root `CLAUDE.md`": "rootBytes",
+      "Child `CLAUDE.md`": "childBytes",
+      "Path chain": "chainBytes"
+    }
+  }
+}

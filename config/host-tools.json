@@ -1,0 +1,17 @@
+{
+  "$comment": "Host tools this server requires on PATH, with minimum versions. The service runs agents on a real machine and deliberately does NOT vendor their toolchain (see the nixosModule's servicePath), so this file is the contract with the operator instead. Read by app/server/src/hostTools.ts and verified ONCE at startup: in production a missing or too-old required tool fails the boot with an actionable message rather than surfacing later as an opaque agent error; outside production it only warns, because the probes are GNU-shaped and the deploy target is x86_64-linux. Version drift while the server runs is accepted and not re-checked. git and ssh are deliberately ABSENT: the package wrapper prefixes its own pinned pair onto PATH, so checking them here would only measure the vendored copy. Optional capabilities are also absent — they are discovered by the subsystem that needs them and reported as a status carrying a reason (dictation in speech/sttConfig.ts is the reference implementation).",
+  "required": [
+    {
+      "binary": "bash",
+      "minVersion": "5.0",
+      "versionArgs": ["--version"],
+      "reason": "The agent Bash tool runs every shell command through the host bash."
+    },
+    {
+      "binary": "env",
+      "minVersion": "9.0",
+      "versionArgs": ["--version"],
+      "reason": "Stands in for coreutils, which agent shell commands and the unit's drain script assume."
+    }
+  ]
+}
