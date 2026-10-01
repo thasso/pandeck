@@ -166,7 +166,7 @@ const ACTIONABLE_ROLE =
 const ACTION_ONLY_SECTIONS = ["Ran Playwright code", "Result", "Events"];
 
 /** Settle budget for one action; `PA_BROWSER_SETTLE_MS=0` disables settling. */
-function settleDeadlineMs(): number {
+export function settleDeadlineMs(): number {
   const raw = process.env.PA_BROWSER_SETTLE_MS?.trim();
   if (!raw) return SETTLE_DEFAULT_MS;
   const configured = Number(raw);
