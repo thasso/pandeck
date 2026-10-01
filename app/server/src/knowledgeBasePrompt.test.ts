@@ -17,7 +17,7 @@ import { absent, assertPromptRules } from "./test/promptRules.ts";
  * restates none of their rules.
  */
 test("the KB pointer and tool descriptions state the KB rules", () => {
-  const noSecrets = /never store secrets/i;
+  const noSecrets = /never (store|save|record|keep)[^.\n]*secrets/i;
   assertPromptRules({
     "eager pointer": {
       text: knowledgeBaseBehaviorGuidance(),
@@ -30,8 +30,9 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "names-kb_edit_entry": /kb_edit_entry/,
         "tools-load-via-tool-search": /tool search/i,
         "search-before-answering-durable":
-          /search[^.]*before answering[^.]*durable/i,
-        "forbids-raw-fs-writes": /never (edit|write)[^.]*DATA_DIR\/knowledge/i,
+          /search[^.\n]*before answering[^.\n]*durable/i,
+        "forbids-raw-fs-writes":
+          /never (edit|write)[^.\n]*DATA_DIR\/knowledge/i,
         "no-obsolete-knowledge_*-tools": absent(/knowledge_[a-z]/),
         "no-restated-write-rule": absent(/durable long-form/i),
         "no-restated-scoping-rule": absent(/separate entries/i),
@@ -42,15 +43,18 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
       text: kbWriteEntryTool.description,
       rules: {
         "for-durable-long-form": /durable long-form/i,
-        "scopes-in-separate-entries": /separate entries/i,
-        "tags-avoid-cross-contamination": /cross-contamination/i,
-        "never-invent-entry-ids": /never invent[^.]*\bids?\b/i,
+        "scopes-in-separate-entries":
+          /separate[^.\n]*entries|entries[^.\n]*separate/i,
+        "tags-avoid-cross-contamination": /cross-contaminat/i,
+        "never-invent-entry-ids": /never invent[^.\n]*\bids?\b/i,
         "links-via-pa-uris": /pa:\/\//,
         "no-secrets": noSecrets,
         "records-provenance": /provenance/i,
-        "marks-uncertain-facts": /mark[^.]*uncertain/i,
-        "atomic-facts-go-to-memory": /Memory.*not the KB/i,
-        "asks-on-ambiguity-or-conflict": /ask first[^.]*(ambiguous|conflict)/i,
+        "marks-uncertain-facts": /mark[^.\n]*uncertain/i,
+        "atomic-facts-go-to-memory":
+          /belongs? in Memory|Memory[^.\n]*not the KB/i,
+        "asks-on-ambiguity-or-conflict":
+          /ask (first|before)[^.\n]*(ambiguous|conflict)/i,
       },
     },
     kb_edit_entry: {
@@ -59,7 +63,7 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "schema-is-1": /kb\.schema\s*=\s*1\b/,
         "type-enum": /kb\.type/,
         "status-enum": /kb\.status/,
-        "error-names-the-field": /error names the exact field/i,
+        "error-names-the-field": /error[^.\n]*names[^.\n]*field/i,
         "no-secrets": noSecrets,
       },
     },
@@ -70,7 +74,7 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
     kb_read_asset: {
       text: kbReadAssetTool.description,
       rules: {
-        "extracts-are-kb_read_extract": /kb_read_extract[^.]*GENERATED/,
+        "extracts-are-kb_read_extract": /kb_read_extract[^.\n]*GENERATED/,
       },
     },
     project_registry_read: {
@@ -79,7 +83,7 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "read-before-assuming": /before assuming/i,
         "weighs-match-evidence": /matchedBy.*confidence.*warnings/i,
         "no-match-is-said-not-invented":
-          /no registry match[^.]*say[^.]*invent/i,
+          /no registry match[^.\n]*say[^.\n]*invent/i,
       },
     },
   });

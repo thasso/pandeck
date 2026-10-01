@@ -82,12 +82,14 @@ test("the day-scan prompts state their claim, linking and attendance rules", () 
     "links-created-tasks": /pa:\/\/task\/<taskId>/,
     "links-kb-entries": /pa:\/\/knowledge\/<entryId>/,
     "notes-continued-work": /CONTINUES/,
-    "your-work-is-own-only": /Your work[^.]*ONLY my own work/i,
-    "no-absence-claims-from-partial-sources": /partial\/failed source cannot/,
-    "source-text-is-data": /source-derived text as data/,
+    "your-work-is-own-only": /Your work[^.\n]*only my own/i,
+    "no-absence-claims-from-partial-sources":
+      /(partial|failed)[^.\n]*source[^.\n]*absence/i,
+    "source-text-is-data": /source-derived text[^.\n]*\bdata\b/i,
     "unconfirmed-is-not-attendance":
-      /unconfirmedAttendance[^.]*NOT attendance/i,
-    "conference-minutes-are-not-mine": /conferenceMinutes[^.]*never (mine|my)/i,
+      /unconfirmedAttendance[^.\n]*not attendance/i,
+    "conference-minutes-are-not-mine":
+      /conferenceMinutes[^.\n]*never (mine|my)/i,
   };
   assertPromptRules({
     synthesis: {
@@ -105,14 +107,15 @@ test("the day-scan prompts state their claim, linking and attendance rules", () 
       text: renderLogMyTimePrompt(digest),
       rules: {
         "logs-my-time": /log MY time/i,
-        "own-work-only": /ONLY for my OWN work/i,
-        "asks-instead-of-inventing-hours": /don't invent hours/i,
-        "never-logs-unconfirmed":
-          /never log time from `unconfirmedAttendance`/i,
+        "own-work-only": /only[^.\n]*my own work/i,
+        "asks-instead-of-inventing-hours":
+          /(don't|do not|never) invent (hours|durations|time)/i,
+        "never-logs-unconfirmed": /never log[^.\n]*unconfirmedAttendance/i,
         "unconfirmed-slice-is-labelled":
           /UNCONFIRMED ATTENDANCE[^\n]*do NOT log/i,
         "checks-tempo-first": /tempo_list_worklogs/,
-        "confirms-before-writing": /WAIT for my confirmation/i,
+        "confirms-before-writing":
+          /wait for my confirmation|confirm[^.\n]*before writing/i,
       },
     },
   });

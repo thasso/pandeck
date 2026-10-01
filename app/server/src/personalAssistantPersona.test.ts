@@ -141,6 +141,7 @@ test("the personal-assistant prompt states its persona rules", () => {
         "is-the-permanent-assistant": /permanent Personal Assistant/i,
         "differs-from-assistant": (text) =>
           text !== AGENT_TYPES.assistant.systemPrompt(),
+        // The persona file wraps its lines, so a sentence may span several.
         "continuous-across-days-and-channels": /across[^.]*days[^.]*channels/i,
         "records-people-via-contacts": /contacts_manage/,
         "enrichment-is-expected": /not optional/i,

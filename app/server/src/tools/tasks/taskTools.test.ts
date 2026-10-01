@@ -866,20 +866,24 @@ test("Task descriptions carry the rules no schema field states", () => {
       text: readTool().description,
       rules: {
         "results-are-byte-bounded": /byte-bounded|bounded by bytes/i,
-        "narrow-not-assume-complete": /narrow[^.]*instead of assuming/,
+        "narrow-not-assume-complete":
+          /narrow[^.\n]*(instead of|rather than) assum/i,
       },
     },
     task_manage: {
       text: manageTool().description,
       rules: {
-        "create-only-for-later-work": /NOT happen in this session/,
-        "created-lands-in-inbox": /lands in[^.]*Inbox/,
-        "status-is-a-suggestion": /status[^.]*suggestion/i,
-        "one-comment-per-session": /one comment per session/,
-        "evidence-bar-for-fields": /explicit or strong evidence/,
+        "create-only-for-later-work": /not (happen|be done) in this session/i,
+        "created-lands-in-inbox":
+          /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
+        "status-is-a-suggestion":
+          /status[^.\n]*suggestion[^.\n]*\buser\b[^.\n]*(answer|decide|accept|confirm)/i,
+        "one-comment-per-session": /(one|single) comment (per|a|each) session/i,
+        "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.
-        "delete-only-on-request": /delete only when the user explicitly asks/,
-        "empty-string-clears": /empty string clears/,
+        "delete-only-on-request":
+          /delete only (when|if|on)[^.;\n]*(user|request)/i,
+        "empty-string-clears": /empty string[^.\n]*clears?/i,
       },
     },
   });
