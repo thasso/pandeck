@@ -10,22 +10,32 @@
  * adapter, accumulates the streamed assistant text, races a timeout, and
  * disposes the session.
  */
-import {
-  DefaultResourceLoader,
-  createAgentSession,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
 import { DEFAULT_HELPER_MODEL, type ThinkingLevel } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
 import { CWD } from "../config.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import type { AgentTool } from "../mcp/tool.ts";
-import { toPiToolDefinitions } from "./agentToolAdapter.ts";
-import {
-  findModel,
-  modelRegistryForProfile,
-  modelRuntimeForProfile,
-} from "./models.ts";
+import type { findModel } from "./models.ts";
+
+// pi's SDK, the model registry and the tool adapter load on the first run:
+// importing them costs ~0.75s, and the helper agents that import this module
+// (commit messages, naming, memory, minutes) are reached from most of the
+// server long before any of them runs.
+async function loadPi() {
+  const { DefaultResourceLoader, SessionManager, createAgentSession } =
+    await import("@earendil-works/pi-coding-agent");
+  const { modelRegistryForProfile, modelRuntimeForProfile } =
+    await import("./models.ts");
+  const { toPiToolDefinitions } = await import("./agentToolAdapter.ts");
+  return {
+    DefaultResourceLoader,
+    SessionManager,
+    createAgentSession,
+    modelRegistryForProfile,
+    modelRuntimeForProfile,
+    toPiToolDefinitions,
+  };
+}
 
 /** Model handle as returned by pi's model registry (`findModel`/`getAvailable`). */
 export type PiRegistryModel = NonNullable<ReturnType<typeof findModel>>;
@@ -46,6 +56,7 @@ export async function selectPiModelWithFallback(
   settings: { provider: string; modelId: string },
   credentialProfileId: string,
 ): Promise<PiRegistryModel | undefined> {
+  const { modelRegistryForProfile } = await loadPi();
   const registry = await modelRegistryForProfile(credentialProfileId);
   const configured = registry.find(settings.provider, settings.modelId);
   if (configured) return configured;
@@ -98,6 +109,13 @@ export interface PiOneShotResult {
 export async function runPiOneShot(
   opts: PiOneShotOptions,
 ): Promise<PiOneShotResult> {
+  const {
+    DefaultResourceLoader,
+    SessionManager,
+    createAgentSession,
+    modelRuntimeForProfile,
+    toPiToolDefinitions,
+  } = await loadPi();
   const loader = new DefaultResourceLoader({
     cwd: CWD,
     // PA-owned, profile-private agent directory — never a global `~/.pi`.

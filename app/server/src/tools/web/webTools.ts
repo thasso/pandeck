@@ -11,7 +11,6 @@
  * subresources, so parsing an untrusted page performs no further network I/O.
  */
 import { Readability } from "@mozilla/readability";
-import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
 
 import { getBraveToolConfig } from "../../braveSettings.ts";
@@ -195,7 +194,7 @@ export const webFetchTool = defineAgentTool<WebFetchParams>({
     let title: string | undefined;
     let content: string;
     if (isHtml(contentType) || (!contentType && looksLikeHtml(rawText))) {
-      const extracted = htmlToMarkdown(rawText, finalUrl.toString());
+      const extracted = await htmlToMarkdown(rawText, finalUrl.toString());
       title = extracted.title;
       content = extracted.markdown;
     } else if (isTextLike(contentType)) {
@@ -268,10 +267,13 @@ function isTextLike(contentType: string): boolean {
   );
 }
 
-function htmlToMarkdown(
+async function htmlToMarkdown(
   html: string,
   url: string,
-): { title?: string; markdown: string } {
+): Promise<{ title?: string; markdown: string }> {
+  // Loaded on first use: jsdom costs ~0.5s to import, and everything that
+  // reaches the tool catalog would otherwise pay it at startup.
+  const { JSDOM } = await import("jsdom");
   const dom = new JSDOM(html, { url });
   const doc = dom.window.document;
   const turndown = new TurndownService({

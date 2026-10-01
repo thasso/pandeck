@@ -56,6 +56,10 @@ function acquire(): { id: string; session: ClaudeSdkSession } {
   const id = freshId();
   ids.push(id);
   const session = claudeSdkStore.acquire(id, { modelId: "sonnet" });
+  // These tests are about idle release, not naming. A titled session never
+  // starts the naming agent, which keeps a session busy (`isQuiescent`) until
+  // its model lookup settles, on a clock these fake timers do not drive.
+  session.setTitle("eviction fixture");
   ensureRuntimeSessionWithRuntime(sessionRuntime, session);
   return { id, session };
 }
