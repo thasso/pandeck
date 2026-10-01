@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { PortForwardTunnelStatus } from "@assistant/shared/portForwarding";
 
