@@ -8,6 +8,10 @@ process.env.NODE_COMPILE_CACHE ??= join(
   "node_modules/.cache/node-compile-cache",
 );
 
+// Deliberately no `deps.optimizer`: pre-bundling pi saved ~23 worker-seconds
+// but made the bundled pi-ai a second instance, which misses the OAuth flows
+// `piSdk/models.ts` registers natively, and moved pi's package files away from
+// where it reads them. The other heavy packages gained nothing measurable.
 export default defineConfig({
   test: {
     environment: "node",
@@ -18,22 +22,5 @@ export default defineConfig({
     pool: "forks",
     isolate: true,
     silent: "passed-only",
-    deps: {
-      optimizer: {
-        ssr: {
-          // Each test file loads its imports again, and these packages are
-          // hundreds of files each; one pre-bundled file per package loads in a
-          // fraction of the time. jsdom stays out: its bundle reads
-          // `__dirname`, which an ES module does not have.
-          enabled: true,
-          include: [
-            "@earendil-works/pi-coding-agent",
-            "@earendil-works/pi-ai",
-            "@modelcontextprotocol/sdk",
-            "typebox",
-          ],
-        },
-      },
-    },
   },
 });
