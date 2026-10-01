@@ -173,6 +173,9 @@ describe("the committed table", () => {
       failures.map((check) => `${check.requirement.binary}: ${check.problem}`),
       [],
     );
+    // A satisfied table reports nothing, so even the fatal check passes.
+    assert.equal(hostToolFailureReport(), undefined);
+    verifyRequiredHostTools({ fatal: true });
   });
 });
 
@@ -213,12 +216,4 @@ describe("failure reporting", () => {
     assert.throws(() => verifyRequiredHostTools({ fatal: true }), /absent-one/);
     verifyRequiredHostTools({ fatal: false });
   });
-
-  it.skipIf(!onLinux)(
-    "reports nothing when the real host satisfies the real table",
-    () => {
-      assert.equal(hostToolFailureReport(), undefined);
-      verifyRequiredHostTools({ fatal: true });
-    },
-  );
 });

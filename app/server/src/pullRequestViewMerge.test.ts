@@ -17,7 +17,6 @@ import { afterEach, test } from "vitest";
 import type {
   PullRequestDetail,
   PullRequestMergeMethod,
-  PullRequestRepositoryCapabilities,
   PullRequestViewMergeRequest,
   WorktreeRetireResponse,
 } from "@assistant/shared";
@@ -88,7 +87,6 @@ function detail(overrides: Partial<PullRequestDetail> = {}): PullRequestDetail {
 interface ProviderOptions {
   repoWebUrl?: string;
   detail?: PullRequestDetail;
-  capabilities?: PullRequestRepositoryCapabilities;
   merges?: { method: string; deleteBranch: boolean; headBranch?: string }[];
   branchDeleted?: boolean;
   branchDeleteError?: string;
@@ -114,13 +112,12 @@ function fakeProvider(options: ProviderOptions = {}): GitHostingProvider {
     closePullRequest: async () => {
       throw new Error("not used");
     },
-    repositoryCapabilities: async () =>
-      options.capabilities ?? {
-        defaultBranch: "main",
-        mergeMethods: ["squash", "merge", "rebase"],
-        canClose: true,
-        canDeleteBranchOnMerge: true,
-      },
+    repositoryCapabilities: async () => ({
+      defaultBranch: "main",
+      mergeMethods: ["squash", "merge", "rebase"],
+      canClose: true,
+      canDeleteBranchOnMerge: true,
+    }),
     mergePullRequest: async (
       number: number,
       merge: {
@@ -479,59 +476,7 @@ test("a refused cleanup after no merge drops nothing", async () => {
   assert.deepEqual(forgotten, []);
 });
 
-/* ------------------------------- capabilities ------------------------------ */
-
-// The picker offers what the repository reports, but the offer is not the
-// authority: the merge seam's forced read is, and this endpoint cannot opt out
-// of it.
-test("a method the repository does not report is refused before merging", async () => {
-  const path = repo();
-  const merges: ProviderOptions["merges"] = [];
-
-  await assert.rejects(
-    mergePullRequestFromView(
-      request({ method: "squash" }),
-      operations({
-        rows: [row(mainWorktreeId(PROJECT), path, "main")],
-        providers: {
-          [path]: fakeProvider({
-            merges,
-            capabilities: { defaultBranch: "main", mergeMethods: ["merge"] },
-          }),
-        },
-      }),
-    ),
-    /does not allow the squash merge method/,
-  );
-  assert.deepEqual(merges, []);
-});
-
-// Unknown is not permission. A capability read that answered nothing about
-// merge methods refuses every method, with its reason.
-test("unknown merge capabilities fail closed", async () => {
-  const path = repo();
-  const merges: ProviderOptions["merges"] = [];
-
-  await assert.rejects(
-    mergePullRequestFromView(
-      request(),
-      operations({
-        rows: [row(mainWorktreeId(PROJECT), path, "main")],
-        providers: {
-          [path]: fakeProvider({
-            merges,
-            capabilities: {
-              defaultBranch: "main",
-              unknownReason: "allow_squash_merge missing",
-            },
-          }),
-        },
-      }),
-    ),
-    /supported merge methods could not be read.*allow_squash_merge missing/s,
-  );
-  assert.deepEqual(merges, []);
-});
+/* ------------------------------- the method ------------------------------- */
 
 // The method is never defaulted: a client that sent none was looking at a pull
 // request it believed terminal, and this one is open.

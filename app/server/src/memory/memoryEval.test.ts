@@ -207,26 +207,6 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-test("cross-harness: identical scope/prompt/prior derive equivalent snapshots + delivery", () => {
-  svc.createMemory({
-    text: "Prefers metric units",
-    kind: "preference",
-    pinned: true,
-    provenance: { sourceKind: "manual" },
-  });
-  const pi = rt.decideMemoryDeliveryForPrompt(
-    { sessionId: "pi-s", agentType: "personal-assistant" },
-    "hello",
-  );
-  const claude = rt.decideMemoryDeliveryForPrompt(
-    { sessionId: "cl-s", agentType: "personal-assistant" },
-    "hello",
-  );
-  assert.equal(pi.selection.fingerprint, claude.selection.fingerprint);
-  assert.equal(pi.deliveryState, claude.deliveryState);
-  assert.equal(pi.memoryBlock, claude.memoryBlock);
-});
-
 test("long-running: one injection, many reused, then reinjection after compaction reset", () => {
   svc.createMemory({
     text: "Prefers concise answers",

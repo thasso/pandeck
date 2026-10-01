@@ -22,7 +22,6 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
@@ -345,56 +344,12 @@ describe("a removal racing a writer that already holds the inode open", () => {
 describe("pinning", () => {
   /**
    * The property every mutation-owned undo rests on. An inode NUMBER is not an
-   * identity: the kernel hands a freed one straight back to the next entry
-   * created, so a recorded number matches an entry somebody else put at the
-   * same name just as well as the one it was taken from. A held descriptor is
-   * what makes the number mean something, and these pin exactly that
-   * difference — measured, not assumed.
+   * identity: a filesystem may hand a freed one to the next entry created (ext4
+   * does; btrfs and tmpfs do not), so a recorded number can match an entry
+   * somebody else put at the same name just as well as the one it was taken
+   * from. A held descriptor is what makes the number mean something, and these
+   * pin that a pinned number never comes back.
    */
-  test("an unpinned inode number is handed to the entry that replaces it", async () => {
-    // Reuse is the ALLOCATOR's behaviour, not a filesystem contract, so this
-    // does not demand it on the first try: it repeats the cycle and asserts
-    // that a number this process let go of comes back at least once. That is
-    // all the premise needs — an unpinned number can be somebody else's entry.
-    // The contract itself, that a PINNED number never comes back, is asserted
-    // on every single round and by the tests below.
-    const path = join(root, "folder", "gone.txt");
-    const held: FileHandle[] = [];
-    let reused = 0;
-    try {
-      for (let round = 0; round < 50 && reused === 0; round += 1) {
-        await writeFile(path, "ours\n", "utf8");
-        const unpinned = (await stat(path)).ino;
-        // The same cycle, one file along, with the inode held open throughout.
-        await writeFile(`${path}.pinned`, "ours\n", "utf8");
-        const pin = await open(`${path}.pinned`, "r");
-        held.push(pin);
-        const pinned = (await pin.stat()).ino;
-
-        await rm(path);
-        await rm(`${path}.pinned`);
-        await writeFile(path, "theirs\n", "utf8");
-        await writeFile(`${path}.pinned`, "theirs\n", "utf8");
-
-        if ((await stat(path)).ino === unpinned) reused += 1;
-        assert.notEqual(
-          (await stat(`${path}.pinned`)).ino,
-          pinned,
-          "a held inode may never be handed to the entry that replaces it",
-        );
-        await rm(path);
-        await rm(`${path}.pinned`);
-      }
-    } finally {
-      for (const pin of held) await pin.close();
-    }
-
-    assert.ok(
-      reused > 0,
-      "no unpinned number was reused in 50 rounds, so the premise that a recorded number can name somebody else's entry was never exercised",
-    );
-  });
-
   test("a pinned file keeps its number away from its replacement", async () => {
     const pin = await withLibraryRoot(root, (rootHandle) =>
       withSkillChild(rootHandle, "folder", (child) =>

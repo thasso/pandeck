@@ -41,10 +41,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test, vi } from "vitest";
 
-// Every test here commits a real git repository, and one writes six hundred
-// files first: seconds locally, but a starved CI runner has stretched the file
-// past the 30 s default while every assertion is about bytes and counts,
-// never about time.
+// Every test here commits a real git repository: seconds locally, but a
+// starved CI runner has stretched the file past the 30 s default while every
+// assertion is about bytes and counts, never about time.
 vi.setConfig({ testTimeout: 120_000 });
 import { git } from "../gitExec.ts";
 import {
@@ -52,6 +51,7 @@ import {
   deleteSkill,
   manageSkillFiles,
   renameSkill,
+  setMaxPlacedEntriesForTests,
 } from "./skillAuthoring.ts";
 import { setSkillLibraryBroadcaster } from "./skillLibraryEvents.ts";
 import { SkillLibraryStore } from "./skillLibraryStore.ts";
@@ -897,13 +897,19 @@ describe("a hand edit racing the Git handoff", () => {
 });
 
 describe("what a rename reads", () => {
+  afterEach(() => setMaxPlacedEntriesForTests(null));
+
   test("stops reading the source folder at the entry it refuses on", async () => {
-    // The 512-entry ceiling is a bound on the READ as much as on the
-    // descriptors it protects. Listing a folder eagerly would build every one
-    // of a hand-authored million siblings into an array before the refusal —
-    // so the ceiling would bound nothing that matters for a folder big enough
-    // to be the problem.
-    for (let index = 0; index < 600; index += 1) {
+    // The placed-entry ceiling (512 in production) is a bound on the READ as
+    // much as on the descriptors it protects. Listing a folder eagerly would
+    // build every one of a hand-authored million siblings into an array before
+    // the refusal — so the ceiling would bound nothing that matters for a
+    // folder big enough to be the problem. The claim does not depend on the
+    // number, so a small ceiling keeps the fixture small.
+    const ceiling = 8;
+    const files = 40;
+    setMaxPlacedEntriesForTests(ceiling);
+    for (let index = 0; index < files; index += 1) {
       writeFileSync(join(root, "release-notes", `file-${index}.txt`), "x");
     }
     await git(["add", "-A"], root);
@@ -918,12 +924,20 @@ describe("what a rename reads", () => {
       ),
     );
 
-    assert.match(error.message, /more than 512 files and directories/);
+    assert.match(
+      error.message,
+      new RegExp(`more than ${ceiling} files and directories`),
+    );
     assert.ok(
-      entriesRead > 512 && entriesRead < 600,
-      `the refusal must come from a bounded read, not after all 601 entries (read ${entriesRead})`,
+      entriesRead > ceiling && entriesRead < files,
+      `the refusal must come from a bounded read, not after all ${files + 1} entries (read ${entriesRead})`,
     );
     assert.ok(!existsSync(join(root, "changelog-notes")));
+    assert.ok(existsSync(join(root, "release-notes", `file-${files - 1}.txt`)));
+    assert.equal(
+      (await git(["status", "--porcelain"], root)).stdout.trim(),
+      "",
+    );
   });
 });
 

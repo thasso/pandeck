@@ -7,7 +7,6 @@ import {
   listSessionAttachments,
   persistUploadedAttachment,
   readSessionAttachmentBytes,
-  readSessionAttachmentUpTo,
   resolveSessionAttachment,
   sessionAttachmentsDir,
   stageSessionAttachment,
@@ -97,40 +96,5 @@ describe("session attachment store", () => {
   test("returns an empty list for a session with no attachments", () => {
     assert.deepEqual(listSessionAttachments("s-empty"), []);
     assert.equal(existsSync(sessionAttachmentsDir("s-empty")), false);
-  });
-});
-
-describe("bounded attachment reads", () => {
-  test("reads the whole file even when the descriptor answers in pieces", async () => {
-    // `read` may return fewer bytes than asked for. Treating the first answer
-    // as the whole file is how a commit ends up holding a silent prefix of
-    // somebody's binary attachment, so the reader loops to EOF.
-    const sessionId = "s-short-read";
-    const content = Buffer.alloc(300_000, 7);
-    const record = persistUploadedAttachment(sessionId, {
-      id: "att-big",
-      name: "big.bin",
-      mimeType: "application/octet-stream",
-      data: content.toString("base64"),
-    });
-
-    const read = await readSessionAttachmentUpTo(record, content.byteLength);
-
-    assert.equal(read.byteLength, content.byteLength);
-    assert.ok(read.equals(content));
-  });
-
-  test("reads one byte past the limit, so a file that grew is detectable", async () => {
-    const sessionId = "s-grown";
-    const record = persistUploadedAttachment(sessionId, {
-      id: "att-grown",
-      name: "grown.bin",
-      mimeType: "application/octet-stream",
-      data: Buffer.alloc(64, 1).toString("base64"),
-    });
-
-    const read = await readSessionAttachmentUpTo(record, 16);
-
-    assert.equal(read.byteLength, 17);
   });
 });

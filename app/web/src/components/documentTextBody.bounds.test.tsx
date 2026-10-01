@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DirectFileMeta, DirectFileText } from "../lib/directFiles.ts";
+import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { FileViewerPage } from "./FileViewerPage.tsx";
 import { SessionArtifactViewer } from "./SessionArtifactViewer.tsx";
 import { initHistoryNav, resetHistoryNavForTests } from "../lib/historyNav.ts";
@@ -44,6 +45,8 @@ vi.mock("../lib/directFiles.ts", () => ({
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let scrollIntoView =
+  vi.fn<(options?: boolean | ScrollIntoViewOptions) => void>();
 let idleTasks: Array<() => void> = [];
 
 beforeEach(() => {
@@ -52,8 +55,8 @@ beforeEach(() => {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }));
-  HTMLElement.prototype.scrollIntoView =
-    vi.fn<(options?: boolean | ScrollIntoViewOptions) => void>();
+  scrollIntoView = vi.fn<(options?: boolean | ScrollIntoViewOptions) => void>();
+  HTMLElement.prototype.scrollIntoView = scrollIntoView;
   idleTasks = [];
   vi.stubGlobal("requestIdleCallback", (task: () => void) => {
     idleTasks.push(task);
@@ -112,6 +115,13 @@ function markedLines(): number[] {
       const end = Number(node.getAttribute("data-source-line-end") ?? start);
       return Array.from({ length: end - start + 1 }, (_, i) => start + i);
     },
+  );
+}
+
+/** The file lines carrying one of the anchor region's classes. */
+function linesWithClass(name: string): number[] {
+  return [...container!.querySelectorAll(`.${name}`)].map((node) =>
+    Number(node.getAttribute("data-source-line-start")),
   );
 }
 
@@ -259,4 +269,88 @@ it("bounds what a huge range marks in rendered Markdown, and says so", async () 
   expect(Math.max(...marked)).toBeLessThanOrEqual(500);
   // The document itself still renders whole — blocks, not a line window.
   expect(container!.textContent).toContain("paragraph 600");
+});
+
+/*
+ * Window semantics at the edges, against the body itself: the viewers above
+ * only fetch and frame it.
+ */
+async function showBody(
+  text: string,
+  anchor: { start: number; end?: number },
+): Promise<void> {
+  act(() =>
+    root!.render(
+      <DocumentTextBody text={text} name="data.json" anchor={anchor} />,
+    ),
+  );
+  await settle();
+}
+
+it("keeps the head of the file for a near anchor", async () => {
+  // The window does not slide off the top to centre line 3.
+  await showBody(json(2_000), { start: 3 });
+  expect(renderedWindow()).toEqual({ first: 1, rows: 500 });
+  expect(markedLines()).toEqual([3]);
+});
+
+it("bounds the window even for an anchor far past any reasonable file", async () => {
+  // 100k lines stands in for the 50 MB case: the cost must follow the window,
+  // not the anchor's distance from the top of the file.
+  await showBody(json(100_000), { start: 90_000 });
+  const { first, rows } = renderedWindow();
+  expect(rows).toBe(500);
+  expect(first).toBeGreaterThan(89_000);
+  expect(markedLines()).toEqual([90_000]);
+  expect(container!.querySelectorAll("[data-source-line-start]")).toHaveLength(
+    1,
+  );
+});
+
+it("opens a huge range at its first line when that line is deep in the file", async () => {
+  await showBody(json(100_000), { start: 90_000, end: 900_000 });
+  expect(renderedWindow()).toEqual({ first: 90_000, rows: 500 });
+  expect(markedLines()).toHaveLength(500);
+  expect(markedLines().at(0)).toBe(90_000);
+  expect(container!.textContent).toContain(
+    "only lines 90000–90499 of the requested L90000–L900000 are shown",
+  );
+  expect(scrollIntoView).toHaveBeenCalled();
+});
+
+it("reveals more of the file, not more of the mark, past a capped range", async () => {
+  await showBody(json(2_000), { start: 1, end: 500_000 });
+  // The drawn part is a CLOSED region: the cap is where it ends, not an open
+  // bottom edge that suggests the mark continues below the fold.
+  expect(linesWithClass("cb-anchored-start")).toEqual([1]);
+  expect(linesWithClass("cb-anchored-end")).toEqual([500]);
+
+  const more = [...container!.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("500 more lines"),
+  );
+  act(() => more!.click());
+  await settle();
+
+  // The rehighlighted window keeps the address bounded to its 500 lines.
+  expect(renderedWindow().rows).toBe(1_000);
+  expect(markedLines()).toHaveLength(500);
+  expect(markedLines().at(-1)).toBe(500);
+  expect(linesWithClass("cb-anchored-end")).toEqual([500]);
+});
+
+it("closes the region on the last line of a range that runs past the file", async () => {
+  await showBody(json(20), { start: 15, end: 500_000 });
+  expect(markedLines()).toEqual([15, 16, 17, 18, 19, 20]);
+  expect(linesWithClass("cb-anchored-start")).toEqual([15]);
+  expect(linesWithClass("cb-anchored-end")).toEqual([20]);
+});
+
+it("says nothing about truncation when the range is longer than the file", async () => {
+  // A range longer than the FILE is not a truncated range: everything the
+  // address names that exists is shown.
+  await showBody(json(20), { start: 1, end: 500_000 });
+  expect(container!.textContent).not.toContain("are shown");
+  expect(markedLines()).toEqual(
+    Array.from({ length: 20 }, (_, index) => index + 1),
+  );
 });
