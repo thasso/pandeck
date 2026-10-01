@@ -21,7 +21,6 @@
  * checkout, {@link settleCompletedWorkflowRunSessions} for a Workflow Run that
  * reached its end.
  */
-import { attentionUnknownReason } from "./attentionAvailability.ts";
 import {
   settleBlockedReason,
   spawnClusterDescendantIds,
@@ -341,10 +340,6 @@ export async function settleSessionWithPeers(
   const rows = await hub.listSessions({ includeArchived: true });
   if (!rows.some((row) => row.id === sessionId))
     return { blocked: "it could not be resolved." };
-  // Attention that cannot be read is not absent: refuse rather than settle a
-  // cluster that may hold an unanswered approval or Task pick.
-  const unknown = attentionUnknownReason();
-  if (unknown) return { blocked: unknown };
   const runs = listRuns();
   const cards: Record<string, WorkflowRunCard> = {};
   for (const run of runs) {
@@ -481,8 +476,7 @@ function untouchedSinceRunEnded(
  * `connection.onSettleSession` evaluates it: "still running" is not the only
  * thing that is not done enough to leave — a queued prompt and a pending
  * approval/question are not either. A session that projects to no row at all is
- * not blocked — it is not running and has nothing queued — unless a card store
- * is unavailable, which blocks every session alike.
+ * not blocked — it is not running and has nothing queued.
  */
 export async function sessionSettleBlockedReason(
   sessionId: string,
@@ -494,11 +488,7 @@ export async function sessionSettleBlockedReason(
       onlyIds: new Set([sessionId]),
     })
   ).find((item) => item.id === sessionId);
-  // No projected row is not proof of nothing pending: a persisted session
-  // outside the default list scope (a run's internal role) projects none, yet
-  // an unavailable card store may still hold its approval.
-  if (!row) return attentionUnknownReason();
-  return settleBlockedReason(row) ?? attentionUnknownReason();
+  return row ? settleBlockedReason(row) : undefined;
 }
 
 /**
@@ -516,9 +506,6 @@ export async function worktreeSettleBlockedReason(
 ): Promise<string | undefined> {
   const live = liveSessionIdsForWorktree(worktreeId);
   if (live.length === 0) return undefined;
-  // Removal settles these sessions; unreadable attention blocks that.
-  const unknown = attentionUnknownReason();
-  if (unknown) return unknown;
   const { hub } = await import("./hub.ts");
   const rows = await hub.listSessions({
     includeArchived: true,

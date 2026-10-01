@@ -1,7 +1,7 @@
 /**
  * Durable live PR cards for `/pr`, managed delivery, and workflows. Modeled on
  * {@link import("./pendingApprovals.ts")}: one SQLite row per card
- * (`db/pullRequestCardStore.ts`; `pull-request-cards.json` before it), cards
+ * (`db/pullRequestCardStore.ts`), cards
  * injected into session snapshots on attach (mirrors `withApprovalBlocks`),
  * updates broadcast as `pullRequestCardUpdate` so a viewer upserts by id, and
  * `sourceToolCallId` anchors a card at the `/pr` synthetic tool call that issued
@@ -18,7 +18,6 @@
  * bookkeeping (`notifiedHeadSha`, the CI-conclusion push dedupe key). Never sent
  * to the client.
  */
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { applyPatch } from "@assistant/shared";
 import type {
@@ -28,23 +27,13 @@ import type {
   PullRequestCardStatus,
   SessionPullRequestSummary,
 } from "@assistant/shared";
-import { DATA_DIR } from "./config.ts";
 import { inDbTransaction } from "./db/index.ts";
 import {
   pullRequestCardStore,
   type PullRequestCardSummaryRow,
   type StoredPullRequestCard,
 } from "./db/pullRequestCardStore.ts";
-import {
-  firstByKey,
-  importLegacyJsonStore,
-  legacyImportGate,
-  type LegacyImportOutcome,
-} from "./legacyJsonStoreImport.ts";
 import { pullRequestKey } from "./pullRequestIdentity.ts";
-
-/** The whole-file store these cards lived in before SQLite; imported once. */
-const LEGACY_STORE_PATH = join(DATA_DIR, "pull-request-cards.json");
 
 /** Context needed to (re)draft and create the pull request; never sent to the client. */
 export interface PullRequestCardContext {
@@ -94,85 +83,6 @@ interface PullRequestCardRecord {
 
 /* ------------------------------ store access ------------------------------ */
 
-/**
- * Whether `pull-request-cards.json` has been moved into SQLite — see
- * `legacyJsonStoreImport.ts` for the crash, backup and failure rules. Records
- * keep the file's order, and the first of two records sharing an id wins, as
- * the file's `find` did; the repeat stays in the backup. A record with no card
- * id or session could not be read by the file store either; it stays there
- * too.
- */
-const legacy = legacyImportGate("pull-request card", () => {
-  const outcome = importLegacyJsonStore(LEGACY_STORE_PATH, (parsed) => {
-    if (!isObject(parsed)) return undefined;
-    const raw: unknown[] = Array.isArray(parsed.cards) ? parsed.cards : [];
-    const { records, invalid, duplicates } = firstByKey(
-      raw,
-      isCardRecord,
-      (record) => record.card.id,
-    );
-    return {
-      records: records.length,
-      invalid,
-      duplicates,
-      write: () =>
-        records.filter((record) =>
-          pullRequestCardStore.insert({
-            card: record.card,
-            context: record.context ?? {},
-          }),
-        ).length,
-    };
-  });
-  summaryIndex = undefined;
-  return outcome;
-});
-
-/**
- * The card table, once the legacy import has completed. Every read and write
- * goes through here, so no caller can see the table before the cards it is
- * about to receive; while the legacy file is still unimported this THROWS
- * rather than reading as empty.
- */
-function cards(): typeof pullRequestCardStore {
-  legacy.ensure();
-  return pullRequestCardStore;
-}
-
-/** Run the legacy import now: boot's logged, early run of what {@link cards} ensures. */
-export function importLegacyPullRequestCards(): LegacyImportOutcome {
-  return legacy.run();
-}
-
-/**
- * Why the card store cannot be read right now, or `undefined`. The READ-ONLY
- * projections below — a session's cards, its list-row summary, the Task-pick
- * attention set — answer empty while this is set, so a session list or view
- * never fails over this one store; whoever shows them says it is unavailable
- * (`connection.ts`). Lookups and mutations still refuse.
- */
-export function pullRequestCardStoreUnavailable(): string | undefined {
-  return legacy.unavailable();
-}
-
-const EMPTY_SUMMARIES: ReadonlyMap<string, SessionPullRequestSummary> =
-  new Map();
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isCardRecord(
-  value: unknown,
-): value is { card: PullRequestCard; context?: unknown } {
-  return (
-    isObject(value) &&
-    isObject(value.card) &&
-    typeof value.card.id === "string" &&
-    typeof value.card.sessionId === "string"
-  );
-}
-
 const asRecord = (stored: StoredPullRequestCard): PullRequestCardRecord => ({
   card: stored.card,
   context: stored.context as PullRequestCardContext,
@@ -199,7 +109,7 @@ function persist(
     card: touch ? { ...card, updatedAt: Date.now() } : card,
     context,
   };
-  cards().update(next);
+  pullRequestCardStore.update(next);
   staleSessions.add(before.card.sessionId);
   staleSessions.add(next.card.sessionId);
   return next;
@@ -209,7 +119,7 @@ function persist(
 export function pullRequestCardRecord(
   id: string,
 ): PullRequestCardRecord | undefined {
-  const stored = cards().get(id);
+  const stored = pullRequestCardStore.get(id);
   return stored ? asRecord(stored) : undefined;
 }
 
@@ -219,8 +129,7 @@ export function pullRequestCardById(id: string): PullRequestCard | undefined {
 
 /** All cards for a session, oldest first (re-emitted to a viewer on attach). */
 export function cardsForSession(sessionId: string): PullRequestCard[] {
-  if (legacy.unavailable()) return [];
-  return cards()
+  return pullRequestCardStore
     .forSession(sessionId)
     .map((stored) => stored.card);
 }
@@ -229,16 +138,14 @@ export function cardsForSession(sessionId: string): PullRequestCard[] {
 export function pullRequestCardsForWorktree(
   worktreeId: string,
 ): PullRequestCard[] {
-  return cards()
+  return pullRequestCardStore
     .forWorktree(worktreeId)
     .map((stored) => stored.card);
 }
 
 /** Cards still claiming an action in flight — boot reconciliation reads this. */
 export function pullRequestCardsWithBusyAction(): PullRequestCard[] {
-  return cards()
-    .withBusyAction()
-    .map((stored) => stored.card);
+  return pullRequestCardStore.withBusyAction().map((stored) => stored.card);
 }
 
 /** Sessions and linked Tasks one provider pull request is reachable from. */
@@ -264,7 +171,7 @@ export function pullRequestCardLinksByPullRequest(): Map<
   PullRequestCardLinks
 > {
   const out = new Map<string, PullRequestCardLinks>();
-  for (const card of cards().links()) {
+  for (const card of pullRequestCardStore.links()) {
     if (!card.provider || card.number === undefined || !card.url) continue;
     const key = pullRequestKey(card.provider, card.url, card.number);
     if (!key) continue;
@@ -280,9 +187,7 @@ export function pullRequestCardLinksByPullRequest(): Map<
 
 /** Every card the watcher must keep polling (adaptive cadence lives in the watcher). */
 export function openPullRequestCards(): PullRequestCard[] {
-  return cards()
-    .withStatus("open")
-    .map((stored) => stored.card);
+  return pullRequestCardStore.withStatus("open").map((stored) => stored.card);
 }
 
 /* ---------------------------- session indexes ----------------------------- */
@@ -315,15 +220,17 @@ export function pullRequestSummariesBySession(): ReadonlyMap<
   string,
   SessionPullRequestSummary
 > {
-  if (legacy.unavailable()) return EMPTY_SUMMARIES;
-  const stamp = cards().foreignWriteStamp();
+  const stamp = pullRequestCardStore.foreignWriteStamp();
   if (
     !summaryIndex ||
     summaryIndex.db !== stamp.db ||
     summaryIndex.dataVersion !== stamp.dataVersion
   ) {
     staleSessions.clear();
-    summaryIndex = { ...stamp, summaries: summariesOf(cards().allSummaries()) };
+    summaryIndex = {
+      ...stamp,
+      summaries: summariesOf(pullRequestCardStore.allSummaries()),
+    };
     return summaryIndex.summaries;
   }
   for (const sessionId of staleSessions) {
@@ -347,26 +254,12 @@ export function pullRequestSummariesBySession(): ReadonlyMap<
  * asking whether or not a newer `/pr` run has taken over the row.
  */
 export function choosingTaskSessionIds(): Set<string> {
-  if (legacy.unavailable()) return new Set();
-  return cards().sessionsWithStatus("choosing-task");
+  return pullRequestCardStore.sessionsWithStatus("choosing-task");
 }
 
 /** True while the session has a `choosing-task` card awaiting the user's Task pick. */
 export function hasChoosingTaskCard(sessionId: string): boolean {
-  if (legacy.unavailable()) return false;
-  return cards().sessionHasStatus(sessionId, "choosing-task");
-}
-
-/**
- * A card for a read-only PROJECTION (a Workflow run's delivery controls), or
- * `undefined` while the store is unavailable: the run still lists, without
- * the controls this card would have offered — acting on them refuses anyway.
- */
-export function pullRequestCardForProjection(
-  id: string,
-): PullRequestCard | undefined {
-  if (legacy.unavailable()) return undefined;
-  return pullRequestCardById(id);
+  return pullRequestCardStore.sessionHasStatus(sessionId, "choosing-task");
 }
 
 interface SummaryIndex {
@@ -398,7 +291,9 @@ function summariesOf(
 function sessionSummary(
   sessionId: string,
 ): SessionPullRequestSummary | undefined {
-  return summariesOf(cards().summariesForSession(sessionId)).get(sessionId);
+  return summariesOf(pullRequestCardStore.summariesForSession(sessionId)).get(
+    sessionId,
+  );
 }
 
 /* ----------------------------- attention seam ----------------------------- */
@@ -613,7 +508,7 @@ export function createPullRequestCard(
   };
   const rowBefore = sessionRowState(input.sessionId);
   const choosingBefore = hasChoosingTaskCard(input.sessionId);
-  cards().insert({ card, context });
+  pullRequestCardStore.insert({ card, context });
   staleSessions.add(input.sessionId);
   if (choosingBefore !== hasChoosingTaskCard(input.sessionId))
     emitChoosingTaskChange(input.sessionId);
@@ -717,7 +612,7 @@ export function patchPullRequestCard(
 
 /** Test seam: wipe the store. */
 export function resetPullRequestCardsStoreForTests(): void {
-  cards().clear();
+  pullRequestCardStore.clear();
   summaryIndex = undefined;
   staleSessions.clear();
 }

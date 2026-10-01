@@ -154,26 +154,25 @@ The package's install check boots from an unrelated temporary cwd and data
 directory, applies exactly the migration set named by the packaged lock to a
 fresh database, checks health, web and WebSocket service, verifies the native
 process executable, restarts against the same database, and asserts the explicit
-file set. The first boot also imports a seeded pre-SQLite
-`pending-approvals.json` and moves it aside. A wrong-token WebSocket upgrade
-must be closed within 5 s without opening. A granted port-forward session echoes
-1 MiB through a local TCP target in frames of at most 64 KiB, and both the
-target's end and the client's close end it. The restart is a Claude session's
-whole life, driven over the WebSocket with `scripts/fake-claude-cli.mjs`
-standing in for the Claude CLI through the existing `ASSISTANT_CLAUDE_CLI_BIN`
-override, so no account or network is involved. The fake speaks the SDK's
-stream-json protocol and answers each prompt with `Fake reply to: <prompt>`. The
-session is created with a turn, opened while resident, released once unviewed,
-opened by a reader from storage and released again, resumed for a second turn
-with `--resume`, and deleted through the one-transaction delete. Every open must
-show the model and thinking level it was created with. That boot runs the same
-`server.js` under the packaged Bun with `scripts/bun-check-short-graces.mjs`
-preloaded, a check-only file that shortens the two release graces to 200 ms. The
-check waits for the server's `[sessions] released <id>: …` lines. A SIGUSR1 must
-leave the server running and write a private V8-format heap snapshot, and a
-second one right after must write nothing. The check starts every process in its
-own process group and ends every group still running before it deletes its
-temporary directory, on success or failure.
+file set. A wrong-token WebSocket upgrade must be closed within 5 s without
+opening. A granted port-forward session echoes 1 MiB through a local TCP target
+in frames of at most 64 KiB, and both the target's end and the client's close
+end it. The restart is a Claude session's whole life, driven over the WebSocket
+with `scripts/fake-claude-cli.mjs` standing in for the Claude CLI through the
+existing `ASSISTANT_CLAUDE_CLI_BIN` override, so no account or network is
+involved. The fake speaks the SDK's stream-json protocol and answers each prompt
+with `Fake reply to: <prompt>`. The session is created with a turn, opened while
+resident, released once unviewed, opened by a reader from storage and released
+again, resumed for a second turn with `--resume`, and deleted through the
+one-transaction delete. Every open must show the model and thinking level it was
+created with. That boot runs the same `server.js` under the packaged Bun with
+`scripts/bun-check-short-graces.mjs` preloaded, a check-only file that shortens
+the two release graces to 200 ms. The check waits for the server's
+`[sessions] released <id>: …` lines. A SIGUSR1 must leave the server running and
+write a private V8-format heap snapshot, and a second one right after must write
+nothing. The check starts every process in its own process group and ends every
+group still running before it deletes its temporary directory, on success or
+failure.
 
 Before booting, the check asserts the pragma on the first line of `server.js`,
 the worker and the watcher wrapper. It then runs a copy of `server.js` whose
@@ -194,13 +193,12 @@ subscribes the packaged watcher with that set, which must report the watched
 edits and none under the ignored directories. It runs the SQLite paths the shim
 must carry: `inDbTransaction` nested in a transaction, the links memo
 invalidated by another connection's commit (`PRAGMA data_version`) and never
-kept from a rolled-back transaction, the legacy JSON import rolling back when
-its file changes mid-transaction, and the session delete rolling its tombstone
-back when the session write fails. A synchronous spawn must see a variable
-deleted from `process.env` as gone. The probe starts the real package proxy,
-which must leave `process.env` untouched. The proxy answers plain HTTP with 501
-for every host, so the probe's own `fetch` and `node:http` requests to an
-`.invalid` host must fail to resolve, while a packaged-Bun child given
+kept from a rolled-back transaction, and the session delete rolling its
+tombstone back when the session write fails. A synchronous spawn must see a
+variable deleted from `process.env` as gone. The probe starts the real package
+proxy, which must leave `process.env` untouched. The proxy answers plain HTTP
+with 501 for every host, so the probe's own `fetch` and `node:http` requests to
+an `.invalid` host must fail to resolve, while a packaged-Bun child given
 `childProcessEnv()` must get the proxy's 501 for the same URL, and git through
 the broker must see the bundle's `HTTPS_PROXY`. The check removes any proxy
 variables it inherited from the probe's environment. pi loads each provider's

@@ -210,12 +210,9 @@ import {
   type PromptQueueDriver,
 } from "./promptQueue.ts";
 import {
-  importLegacyApprovals,
   recoverAutoApprovalsOnBoot,
   runAutoApprovals,
 } from "./pendingApprovals.ts";
-import { importLegacyPullRequestCards } from "./pullRequestCards.ts";
-import type { LegacyImportOutcome } from "./legacyJsonStoreImport.ts";
 import {
   setHumanPromptHook,
   setSessionIdleHook,
@@ -253,31 +250,6 @@ import { contentTypeFor, serveWebStatic } from "./webStatic.ts";
 
 const WEB_DIST = WEB_DIST_DIR;
 const WEB_BUILD_ID = webBuildId(join(WEB_DIST, "index.html"));
-
-/** One line per whole-file store moved into SQLite at boot; silent when there was none. */
-function logLegacyStoreImport(
-  label: string,
-  outcome: LegacyImportOutcome,
-): void {
-  switch (outcome.kind) {
-    case "absent":
-      return;
-    case "quarantined":
-      console.warn(
-        `[assistant] legacy ${label} store quarantined to ${outcome.target}`,
-      );
-      return;
-    case "failed":
-      console.error(
-        `[assistant] legacy ${label} store NOT imported; the store refuses reads until it is: ${outcome.reason}`,
-      );
-      return;
-    case "imported":
-      console.log(
-        `[assistant] imported ${outcome.imported} legacy ${label} record(s) into SQLite (${outcome.existing} already stored, ${outcome.duplicates} repeated, ${outcome.invalid} invalid)${outcome.backup ? `; the file is kept as ${outcome.backup}` : "; the file could not be renamed and stays in place"}`,
-      );
-  }
-}
 
 /** Conservative id allow-list for path segments (uuids / pi ids / entry ids). */
 function isSafeId(id: string): boolean {
@@ -1986,12 +1958,6 @@ verifyRequiredHostTools();
 // unless its bin dir already holds them; link the host's copies there once.
 linkPiToolBinaries();
 
-// The two card stores leave their legacy JSON files before the server accepts
-// a connection, so no request or tool can meet a store mid-import. Each store
-// also imports on first read, and one that could not refuses reads until it has.
-logLegacyStoreImport("pull-request card", importLegacyPullRequestCards());
-logLegacyStoreImport("approval", importLegacyApprovals());
-
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;
   console.log(
@@ -2112,8 +2078,8 @@ server.listen(PORT, HOST, () => {
     const profileId = usageProfileForSession(sessionId);
     if (profileId) markUsageProfileDirty(profileId);
   });
-  // Each boot recovery is its own step: one that throws (an unavailable card
-  // store, a corrupt row) must not skip every recovery after it.
+  // Each boot recovery is its own step: one that throws (a corrupt row) must
+  // not skip every recovery after it.
   bootStep("legacy agent-relay import", () => {
     const legacy = importLegacyAgentRelays();
     if (legacy.imported > 0)

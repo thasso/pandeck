@@ -37,7 +37,6 @@ import {
 import { sessionStore } from "../app/server/src/db/sessionStore.ts";
 import { GitCommandError, git } from "../app/server/src/gitExec.ts";
 import { updateGithubSettings } from "../app/server/src/githubSettings.ts";
-import { importLegacyJsonStore } from "../app/server/src/legacyJsonStoreImport.ts";
 import {
   packageProxyEnvironment,
   startPackageProxyIfEnabled,
@@ -315,55 +314,6 @@ function checkSqlite() {
     if (error.message !== "roll back") throw error;
   }
   assert(!read().has(rolledBack), "A rolled-back value was memoized.");
-
-  // #370: the legacy import commits rows and its record in one transaction,
-  // and rolls both back when the file changes under it.
-  const legacyFile = join(scratch, "legacy.json");
-  const rowsOf = () =>
-    db
-      .prepare("SELECT COUNT(*) AS n FROM links WHERE from_id LIKE ?")
-      .get(`probe-legacy-${mode}-%`).n;
-  let rewrites = 1;
-  writeFileSync(legacyFile, JSON.stringify(["a", "b"]));
-  const changing = importLegacyJsonStore(legacyFile, (parsed) => ({
-    records: parsed.length,
-    invalid: 0,
-    duplicates: 0,
-    write() {
-      for (const id of parsed)
-        addLink(
-          { type: "session", id: `probe-legacy-${mode}-${id}` },
-          "context",
-          { type: "task", id: "1" },
-        );
-      // Rewrite the file mid-transaction until the attempts run out.
-      writeFileSync(legacyFile, JSON.stringify(["a", "b", `${rewrites++}`]));
-      return parsed.length;
-    },
-  }));
-  assert(
-    changing.kind === "failed" && rowsOf() === 0,
-    `A changing legacy file committed rows (${JSON.stringify(changing)}).`,
-  );
-  const imported = importLegacyJsonStore(legacyFile, (parsed) => ({
-    records: parsed.length,
-    invalid: 0,
-    duplicates: 0,
-    write() {
-      for (const id of parsed)
-        addLink(
-          { type: "session", id: `probe-legacy-${mode}-${id}` },
-          "context",
-          { type: "task", id: "1" },
-        );
-      return parsed.length;
-    },
-  }));
-  assert(
-    imported.kind === "imported" && imported.imported === 3 && rowsOf() === 3,
-    `The legacy import did not commit (${JSON.stringify(imported)}).`,
-  );
-  assert(!existsSync(legacyFile), "The imported legacy file was not renamed.");
 
   // #376: the session delete is one transaction, rolled back as a whole.
   const owner = `probe-owner-${mode}`;

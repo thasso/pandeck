@@ -749,15 +749,6 @@ export interface UIState {
    */
   unopenableSessions: Record<string, string>;
   /**
-   * Session notes that state a condition of the SERVER PROCESS
-   * (`notice.serverCondition`: a card store it could not import), keyed by id,
-   * with the note. Retired — with that session's note, while it is still this
-   * one — on every `ready`: a restarted server that still has the condition
-   * says it again after `ready`, and a healthy one says nothing, which would
-   * otherwise leave "restart the server" on the composer after the restart.
-   */
-  serverConditionSessions: Record<string, string>;
-  /**
    * The same thing for the other objects that own a surface: the failure a
    * project, Task or Knowledge entry is carrying, keyed by id under its type and
    * rendered by that object's page (`docs/messaging.md`).
@@ -921,7 +912,6 @@ const emptyInitial: UIState = {
   streamingMessageId: null,
   sessionFailures: {},
   unopenableSessions: {},
-  serverConditionSessions: {},
   objectFailures: { project: {}, task: {}, knowledge: {} },
   taskProjectsAssignedSeq: 0,
   error: null,
@@ -4213,10 +4203,7 @@ function withoutSessionFailure(
 export function reduceAssistantState(state: UIState, action: Action): UIState {
   const inner = reduceAssistantStateInner(state, action);
   if (action.kind !== "server") return inner;
-  const next = withServerConditions(
-    withUnopenableSessions(inner, action.msg),
-    action.msg,
-  );
+  const next = withUnopenableSessions(inner, action.msg);
   const failure = sessionFailureFrom(action.msg);
   if (failure)
     return {
@@ -4257,33 +4244,6 @@ function retireUnopenable(state: UIState, ids: readonly string[]): UIState {
     delete unopenableSessions[id];
   }
   return { ...state, unopenableSessions, sessionFailures };
-}
-
-/**
- * Keep {@link UIState.serverConditionSessions} in step with an arriving
- * message: marked when a server-condition notice lands on a session, retired
- * (with that session's note, while it is still this one) on every `ready`.
- */
-function withServerConditions(state: UIState, msg: ServerMessage): UIState {
-  if (msg.type === "notice") {
-    const id = msg.target?.type === "session" ? msg.target.id : undefined;
-    if (!msg.serverCondition || !id || msg.severity !== "error") return state;
-    return {
-      ...state,
-      serverConditionSessions: {
-        ...state.serverConditionSessions,
-        [id]: msg.message,
-      },
-    };
-  }
-  if (msg.type !== "ready") return state;
-  const ids = Object.keys(state.serverConditionSessions);
-  if (ids.length === 0) return state;
-  const sessionFailures = { ...state.sessionFailures };
-  for (const id of ids)
-    if (sessionFailures[id] === state.serverConditionSessions[id])
-      delete sessionFailures[id];
-  return { ...state, serverConditionSessions: {}, sessionFailures };
 }
 
 /** Keep {@link UIState.unopenableSessions} in step with an arriving message. */

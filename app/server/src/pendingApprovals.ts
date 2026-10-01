@@ -6,8 +6,7 @@
  * question flow's six
  * properties so approvals behave the same on pi AND claude-sdk:
  *
- *  - persistent: records live in SQLite (`db/approvalStore.ts`; imported once from
- *    `DATA_DIR/pending-approvals.json`) and survive reload;
+ *  - persistent: records live in SQLite (`db/approvalStore.ts`) and survive reload;
  *  - attention: a pending approval marks the session `awaitingInput` (sidebar icon);
  *  - interactive + decision-recorded: the card runs pending → executing → executed
  *    | failed | rejected, and the decision/result are stored on the card;
@@ -27,7 +26,6 @@
  * approved by the server instead of blocking the session, and its outcome
  * reaches the agent through the same handoff as a clicked decision.
  */
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { notifySessionBlocked } from "./webPush.ts";
 import { applyPatch, approvalGrantKeys } from "@assistant/shared";
@@ -45,18 +43,8 @@ import type {
   DisplayMessage,
   Patch,
 } from "@assistant/shared";
-import { DATA_DIR } from "./config.ts";
 import { inDbTransaction } from "./db/index.ts";
 import { approvalStore, type StoredApproval } from "./db/approvalStore.ts";
-import {
-  firstByKey,
-  importLegacyJsonStore,
-  legacyImportGate,
-  type LegacyImportOutcome,
-} from "./legacyJsonStoreImport.ts";
-
-/** The whole-file store approvals lived in before SQLite; imported once. */
-const LEGACY_STORE_PATH = join(DATA_DIR, "pending-approvals.json");
 
 /** Hidden-prompt lead line handed to the agent when an approval resolves. */
 const APPROVAL_OUTCOME_MARKER = "[approval decision]";
@@ -107,129 +95,8 @@ export function registerApprovalExecutor(
 /* ------------------------------- store access ------------------------------ */
 
 /**
- * Whether `pending-approvals.json` has been moved into SQLite — see
- * `legacyJsonStoreImport.ts` for the crash, backup and failure rules. Cards are
- * reconciled on the way in exactly as the file store reconciled them on every
- * read, cards and grants keep the file's order, and the first of two records
- * sharing an id (or a session and grant key) wins, as the file's `find` did;
- * the repeat stays in the backup. A store written before grants existed simply
- * has none.
- */
-const legacy = legacyImportGate("approval", () =>
-  importLegacyJsonStore(LEGACY_STORE_PATH, (parsed) => {
-    if (!isObject(parsed)) return undefined;
-    const cards = firstByKey(
-      Array.isArray(parsed.approvals) ? parsed.approvals : [],
-      isApprovalRecord,
-      (record) => record.card.id,
-    );
-    const grants = firstByKey(
-      Array.isArray(parsed.grants) ? parsed.grants : [],
-      isGrantRecord,
-      (grant) => JSON.stringify([grant.sessionId, grant.key]),
-    );
-    // Reconciled before the transaction opens: a record reconciliation cannot
-    // read counts as invalid (the backup keeps it) instead of failing the rest.
-    const reconciled: StoredApproval[] = [];
-    let unreadable = 0;
-    for (const record of cards.records)
-      try {
-        reconciled.push({
-          card: reconcileLegacyPartialApprovalCard(record.card),
-          context: isObject(record.context) ? record.context : {},
-        });
-      } catch {
-        unreadable += 1;
-      }
-    return {
-      records: reconciled.length + grants.records.length,
-      invalid: cards.invalid + grants.invalid + unreadable,
-      duplicates: cards.duplicates + grants.duplicates,
-      write() {
-        let inserted = 0;
-        for (const record of reconciled)
-          if (approvalStore.insert(record)) inserted += 1;
-        for (const grant of grants.records)
-          if (
-            approvalStore.insertGrant(grant.sessionId, {
-              key: grant.key,
-              grantedAt:
-                typeof grant.grantedAt === "number" ? grant.grantedAt : 0,
-              sourceApprovalId:
-                typeof grant.sourceApprovalId === "string"
-                  ? grant.sourceApprovalId
-                  : "",
-            })
-          )
-            inserted += 1;
-        return inserted;
-      },
-    };
-  }),
-);
-
-/**
- * The approval tables, once the legacy import has completed. Every read and
- * write goes through here, so no caller can see the tables before the records
- * it is about to receive; while the legacy file is still unimported this
- * THROWS rather than reading as empty — no grants would otherwise read as none.
- */
-function approvals(): typeof approvalStore {
-  legacy.ensure();
-  return approvalStore;
-}
-
-/** Run the legacy import now: boot's logged, early run of what {@link approvals} ensures. */
-export function importLegacyApprovals(): LegacyImportOutcome {
-  return legacy.run();
-}
-
-/**
- * Why the approval store cannot be read right now, or `undefined`. The
- * READ-ONLY projections — the attention set, a session's cards and grants for
- * showing — answer empty while this is set, so a session list or view never
- * fails over this one store; whoever shows them says approvals are unavailable
- * (`connection.ts`), so an empty answer is never read as "nothing pending".
- * Decisions, grants, revokes and new cards still REFUSE.
- */
-export function approvalStoreUnavailable(): string | undefined {
-  return legacy.unavailable();
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isApprovalRecord(
-  value: unknown,
-): value is { card: ApprovalCard; context?: unknown } {
-  return (
-    isObject(value) &&
-    isObject(value.card) &&
-    typeof value.card.id === "string" &&
-    typeof value.card.sessionId === "string" &&
-    // Reconciliation reads it; without one the file store lost every card.
-    isObject(value.card.body)
-  );
-}
-
-function isGrantRecord(value: unknown): value is {
-  sessionId: string;
-  key: string;
-  grantedAt?: unknown;
-  sourceApprovalId?: unknown;
-} {
-  return (
-    isObject(value) &&
-    typeof value.sessionId === "string" &&
-    typeof value.key === "string"
-  );
-}
-
-/**
  * A stored record as the domain reads it: reconciled on every read, as the file
- * store did. The import already persisted the reconciled shape, so this only
- * ever changes a card written with the legacy shape since.
+ * store did, so a card written with the legacy shape still reads repaired.
  */
 const asRecord = (stored: StoredApproval): ApprovalRecord => ({
   card: reconcileLegacyPartialApprovalCard(stored.card),
@@ -299,7 +166,7 @@ export function reconcileLegacyPartialApprovalCard(
 }
 
 function getRecord(approvalId: string): ApprovalRecord | undefined {
-  const stored = approvals().get(approvalId);
+  const stored = approvalStore.get(approvalId);
   return stored ? asRecord(stored) : undefined;
 }
 
@@ -327,8 +194,7 @@ function emitChange(sessionId: string): void {
 
 /** True while the session has an approval awaiting the user's decision. */
 export function hasPendingApproval(sessionId: string): boolean {
-  if (legacy.unavailable()) return false;
-  return approvals().sessionAwaits(sessionId);
+  return approvalStore.sessionAwaits(sessionId);
 }
 
 /**
@@ -338,16 +204,14 @@ export function hasPendingApproval(sessionId: string): boolean {
  * broadcast.
  */
 export function pendingApprovalSessionIds(): Set<string> {
-  if (legacy.unavailable()) return new Set();
-  return approvals().awaitingSessionIds();
+  return approvalStore.awaitingSessionIds();
 }
 
 /* ----------------------------- read projections --------------------------- */
 
 /** All approval cards for a session, oldest first (re-emitted to a viewer on attach). */
 export function approvalsForSession(sessionId: string): ApprovalCard[] {
-  if (legacy.unavailable()) return [];
-  return approvals()
+  return approvalStore
     .forSession(sessionId)
     .map((stored) => asRecord(stored).card);
 }
@@ -480,7 +344,7 @@ export function createApproval(input: CreateApprovalInput): ApprovalCard {
   };
   const superseded = inDbTransaction(() => {
     const retired: ApprovalCard[] = [];
-    for (const rec of approvals()
+    for (const rec of approvalStore
       .pendingForSession(input.sessionId)
       .map(asRecord)) {
       if (decisionLocks.has(rec.card.id) || !input.supersedes?.(rec.card))
@@ -491,10 +355,10 @@ export function createApproval(input: CreateApprovalInput): ApprovalCard {
         supersededBy: card.id,
         error: undefined,
       });
-      approvals().update({ card: old, context: rec.context });
+      approvalStore.update({ card: old, context: rec.context });
       retired.push(old);
     }
-    approvals().insert({ card, context: input.context ?? {} });
+    approvalStore.insert({ card, context: input.context ?? {} });
     return retired;
   });
   for (const old of superseded) void broadcast(input.sessionId, old);
@@ -522,14 +386,14 @@ function patchCard(
   patch: Patch<ApprovalCard>,
 ): ApprovalRecord | undefined {
   return inDbTransaction(() => {
-    const stored = approvals().get(approvalId);
+    const stored = approvalStore.get(approvalId);
     if (!stored) return undefined;
     const rec = asRecord(stored);
     const card = applyPatch(rec.card, patch);
     // Against the row, not `rec`: a card reconciled on read is worth storing.
     if (JSON.stringify(card) === JSON.stringify(stored.card)) return rec;
     const updated = { card, context: rec.context };
-    approvals().update(updated);
+    approvalStore.update(updated);
     return updated;
   });
 }
@@ -743,16 +607,14 @@ function coveredByGrants(sessionId: string, body: ApprovalBody): boolean {
   const keys = approvalGrantKeys(body);
   if (keys.length === 0) return false;
   const held = new Set(
-    approvals()
-      .grantsForSession(sessionId)
-      .map((g) => g.key),
+    approvalStore.grantsForSession(sessionId).map((g) => g.key),
   );
   return keys.every((key) => held.has(key));
 }
 
 /** The session's grants, oldest first. */
 export function approvalGrantsForSession(sessionId: string): ApprovalGrant[] {
-  return approvals().grantsForSession(sessionId);
+  return approvalStore.grantsForSession(sessionId);
 }
 
 /** Grant every operation `card` performs for the rest of its session. */
@@ -761,7 +623,7 @@ function grantOperations(card: ApprovalCard): void {
   inDbTransaction(() => {
     // A key the session already holds keeps its original grant.
     for (const key of approvalGrantKeys(card.body))
-      approvals().insertGrant(card.sessionId, {
+      approvalStore.insertGrant(card.sessionId, {
         key,
         grantedAt: now,
         sourceApprovalId: card.id,
@@ -775,7 +637,7 @@ function grantOperations(card: ApprovalCard): void {
  * waiting to start is handed back to the user by {@link autoApprove}.
  */
 export function revokeApprovalGrant(sessionId: string, key: string): void {
-  approvals().deleteGrant(sessionId, key);
+  approvalStore.deleteGrant(sessionId, key);
   void broadcastGrants(sessionId);
 }
 
@@ -881,7 +743,7 @@ function handBackToUser(card: ApprovalCard, error?: string): void {
  */
 export async function runAutoApprovals(sessionId: string): Promise<void> {
   let queued = false;
-  for (const id of approvals().autoApprovalIds(sessionId))
+  for (const id of approvalStore.autoApprovalIds(sessionId))
     if (await autoApprove(id)) queued = true;
   if (queued) await drainOutcomes(sessionId);
 }
@@ -892,7 +754,7 @@ export async function runAutoApprovals(sessionId: string): Promise<void> {
  * its action may have happened.
  */
 export function recoverAutoApprovalsOnBoot(): void {
-  for (const sessionId of approvals().autoApprovalSessionIds())
+  for (const sessionId of approvalStore.autoApprovalSessionIds())
     void runAutoApprovals(sessionId).catch((err: unknown) =>
       console.warn(
         `[approvals] auto-approval recovery for ${sessionId} failed:`,

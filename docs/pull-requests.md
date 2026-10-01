@@ -460,85 +460,12 @@ a list build, delivery's worktree lookup and the workflow run list issue no
 other statement.
 
 Until 0063 the cards lived in `DATA_DIR/pull-request-cards.json`, rewritten
-whole on every change. The server imports that file once
-(`legacyJsonStoreImport.ts`). It runs at boot before the server listens, and
-again on a store's first read if boot did not finish it. The rows and a
-`legacy_file_imports` row naming the file's sha256 commit in ONE transaction,
-and only then is the file renamed to
-`pull-request-cards.json.imported-<ms>.bak`. The file is never deleted:
-
-- A crash before the commit imported nothing; the file is still there.
-- A crash after the commit but before the rename leaves bytes whose hash is
-  already recorded. The next boot only renames them.
-- A snapshot commits only while it is still the file. The file is read and
-  parsed through one descriptor, the rows are inserted, and then, still inside
-  the transaction, the path must have the same inode and hash. If it changed,
-  the attempt rolls back and the file is read again. After three attempts the
-  import is `failed` with nothing committed and the file where it was. So a
-  record rewritten mid-import can never keep its stale state behind `OR IGNORE`.
-- After the commit, the file is renamed only if it is still unchanged. A file
-  that changed in the window between that check and the rename stays in place
-  and is logged. The next boot imports it, adding new ids only. That window is
-  outside the contract: this server is the only writer of these files, a second
-  server on the same `DATA_DIR` is refused at boot, and restoring one while the
-  server runs is unsupported.
-- A different file appearing later (an older build run in between) imports its
-  new ids. A row SQLite already holds is never overwritten.
-- Two records in one file sharing an id: the first wins, and the import logs and
-  counts the repeat. SQLite ids are unique. The old whole-file projections
-  walked every entry, so a transcript could show both and a row summary could
-  pick the later one. The backup keeps both. The real store had none.
-- A file that does not parse, or is not an object, moves to
-  `<name>.corrupt-<ms>.json` and imports nothing. The file store read such a
-  file as empty too, but then overwrote it on its next write.
-- A record with no card id or session is not imported and stays in the backup.
-  The file store could not read one either. The same goes for an approval that
-  reconciliation cannot read; see `approvals.md`.
-- Any unexpected error while importing (a database error, a record the import
-  cannot handle) is a `failed` outcome, never a throw out of boot.
-- An import that could not finish leaves the file, its records not in SQLite:
-  the file could not be read, a corrupt file could not be moved aside, or the
-  file kept changing. Such a store is UNAVAILABLE until the file is fixed and
-  the server restarted. There is no in-process retry: every cause needs someone
-  to fix the file, and a store that came back mid-process would leave each
-  client with a stale outage notice and missing cards until it reattached.
-  Boot's import is the retry. A store first touched inside a caller's open
-  transaction before its import ran is unavailable too, until the first read
-  outside one imports it. An import whose only failure is the final rename is
-  complete, since its records are in SQLite. The next boot finds the bytes
-  recorded and renames them.
-- While a store is unavailable it fails CLOSED on everything that decides or
-  writes: approving, rejecting, granting, revoking, creating an approval, card
-  actions and card lookups all refuse with `LegacyStoreUnavailableError`.
-- Read-only projections DEGRADE instead, so one store cannot take the app down:
-  the session list, a row's attention and PR summary, a session's cards on show,
-  and a Workflow run's delivery controls answer empty. The server says so in ONE
-  `error` notice naming every unavailable store and telling the user to fix the
-  file and restart. Every connection gets it after `ready`, and showing a
-  session repeats it targeted there. The client keeps one failure per session
-  and one global error, so a notice per store would leave only the last one on
-  screen. The notice carries `serverCondition: true`: the web retires that note
-  (and only that note) from the session on the next `ready`, since a healthy
-  restarted server says nothing about it and a still-broken one says it again.
-  Showing also skips the `approvalGrants` resend, since an empty list would
-  replace the client's. Empty is therefore never shown as "nothing pending".
-- Server DECISIONS that act on attention treat unknown as blocking, since an
-  empty projection is not proof nothing is pending (`attentionAvailability.ts`).
-  While either store is unavailable, three things refuse with the reason (e.g.
-  "the approval store is unavailable, so a pending approval cannot be ruled
-  out."): settling a session or a cluster, including the idle auto-settle, run
-  settlement and PR cleanup; the worktree-removal preflight; and the
-  auto-archive pass, which is skipped and logged. The projections are never
-  faked, so the UI shows no made-up badges.
-- The watcher's sweep logs and skips each tick while the store is unavailable,
-  so the timer never dies; the next process imports the fixed file at boot. Boot
-  runs each recovery as its own step (`bootStep.ts`), so an unavailable store
-  fails only its own step, under its own name.
-
-Rolling back to a build older than 0063 after the rename is an operational
-limit, not a supported path. That build finds no JSON file and shows empty card
-and approval stores. What it writes lands in a fresh JSON file, which the next
-forward deploy imports, adding new ids only.
+whole on every change. A one-time boot import moved them into these rows and
+renamed the file to `pull-request-cards.json.imported-<ms>.bak`. That importer
+is retired: every deployment had run it, and 0064 drops its
+`legacy_file_imports` bookkeeping. The server neither reads nor deletes a
+leftover `pull-request-cards.json` or its backup. A build older than 0063 is not
+a rollback target.
 
 ### States
 

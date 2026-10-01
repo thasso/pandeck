@@ -308,17 +308,12 @@ import { existsSync } from "node:fs";
 import {
   approvalForId,
   approvalGrantsForSession,
-  approvalStoreUnavailable,
   approvalsForSession,
   resolveApproval,
   revokeApprovalGrant,
 } from "./pendingApprovals.ts";
 import { approvalAnchorFor } from "./approvalAnchor.ts";
-import {
-  cardsForSession,
-  pullRequestCardById,
-  pullRequestCardStoreUnavailable,
-} from "./pullRequestCards.ts";
+import { cardsForSession, pullRequestCardById } from "./pullRequestCards.ts";
 import {
   finalizePullRequestCard,
   pullRequestOutcomePrompt,
@@ -525,15 +520,6 @@ export class Connection implements Viewer {
   /** The session this connection is currently displaying (pi or Claude SDK). */
   private viewing: HarnessDriver | undefined;
   /**
-   * Session-targeted `serverCondition` notices a view produced before `ready`
-   * went out. The client retires those notes on `ready` (they describe the
-   * server process, which a restart may have fixed), so one sent before it —
-   * the deep-linked view, or a `loadSession` a cache-painted client sends
-   * early — would be erased by the very `ready` that follows. Flushed right
-   * after `ready`; `undefined` once it has been sent.
-   */
-  private conditionNoticesBeforeReady: ServerMessage[] | undefined = [];
-  /**
    * The connection renders viewed sessions through the normalized runtime +
    * transport. Holds the prompt/abort/model handle for the active view.
    */
@@ -693,10 +679,6 @@ export class Connection implements Viewer {
       contextInfo: viewing?.contextInfo() ?? null,
     });
     if (initial.unavailable) this.send(initial.unavailable);
-    for (const notice of cardStoreNotices()) this.send(notice);
-    const deferred = this.conditionNoticesBeforeReady ?? [];
-    this.conditionNoticesBeforeReady = undefined;
-    for (const notice of deferred) this.send(notice);
     hub.sendReloadStateTo(this);
     await this.deliverInitialPendingAgentRelays();
     await this.maybeStartPostReloadContinuation();
@@ -5966,25 +5948,20 @@ export class Connection implements Viewer {
     // Re-emit any approval cards for this session AFTER the atomic snapshot
     // (which carries only the durable timeline), so the store-driven cards
     // reappear on reload/navigation, not just on live broadcast.
-    //
-    // An unavailable store sends nothing here, not an empty list — an empty
-    // grant list would REPLACE what the client holds — and says why instead.
-    if (!approvalStoreUnavailable()) {
-      for (const approval of approvalsForSession(live.sessionId)) {
-        this.send({
-          type: "approvalUpdate",
-          sessionId: live.sessionId,
-          approval,
-        });
-      }
-      // Always, even empty: the client keeps the last list it saw for this
-      // session, and a revoke made while it looked elsewhere must replace it.
+    for (const approval of approvalsForSession(live.sessionId)) {
       this.send({
-        type: "approvalGrants",
+        type: "approvalUpdate",
         sessionId: live.sessionId,
-        grants: approvalGrantsForSession(live.sessionId),
+        approval,
       });
     }
+    // Always, even empty: the client keeps the last list it saw for this
+    // session, and a revoke made while it looked elsewhere must replace it.
+    this.send({
+      type: "approvalGrants",
+      sessionId: live.sessionId,
+      grants: approvalGrantsForSession(live.sessionId),
+    });
     // Same reasoning for pull-request cards: store-driven, so they must be
     // re-emitted after the atomic snapshot rather than assumed to be in it.
     for (const card of cardsForSession(live.sessionId)) {
@@ -5994,13 +5971,6 @@ export class Connection implements Viewer {
         card,
       });
     }
-    for (const notice of cardStoreNotices({
-      type: "session",
-      id: live.sessionId,
-    }))
-      if (this.conditionNoticesBeforeReady)
-        this.conditionNoticesBeforeReady.push(notice);
-      else this.send(notice);
   }
 
   /**
@@ -6329,45 +6299,4 @@ function mergeSessionRefs(
     merged.push(ref);
   }
   return merged;
-}
-
-/**
- * What a client is told while a card store cannot be read, as ONE notice
- * naming every store that is out: the client keeps a single failure per session
- * and a single global error, so two notices would leave only the last one
- * standing. Its read-only projections answer empty then (the session list, a
- * row's attention, a session's cards), so this is what keeps "no pending
- * approval" from being read off an empty answer: said at connect, and at the
- * session being shown. It stays true until a restart (`legacyJsonStoreImport.ts`
- * has no in-process retry), so there is no recovery to announce.
- */
-function cardStoreNotices(target?: MessageTarget): ServerMessage[] {
-  const out: Array<{ store: string; hidden: string; reason: string }> = [];
-  const approvals = approvalStoreUnavailable();
-  if (approvals)
-    out.push({
-      store: "approval store",
-      hidden: "pending approvals, approval cards and session grants",
-      reason: approvals,
-    });
-  const cards = pullRequestCardStoreUnavailable();
-  if (cards)
-    out.push({
-      store: "pull-request card store",
-      hidden: "pull-request cards and their status on session rows",
-      reason: cards,
-    });
-  if (out.length === 0) return [];
-  const stores = out.map((o) => `the ${o.store}`).join(" and ");
-  const hidden = out.map((o) => o.hidden).join("; ");
-  const reasons = out.map((o) => `${o.store}: ${o.reason}`).join(" — ");
-  return [
-    {
-      type: "notice",
-      severity: "error",
-      serverCondition: true,
-      message: `${stores.charAt(0).toUpperCase()}${stores.slice(1)} ${out.length > 1 ? "are unavailable: their legacy files" : "is unavailable: its legacy file"} could not be imported. Until the file is fixed and the server restarted, ${hidden} may be missing or stale, and approving and card actions are refused. (${reasons})`,
-      ...(target ? { target } : {}),
-    },
-  ];
 }

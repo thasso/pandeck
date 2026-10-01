@@ -2172,8 +2172,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   own host-command `CommitDisplay` card — it is a user slash command, not an
   agent-proposed mutation, and its rich durable `command.result` history would
   regress if forced onto the generic card.) It mirrors the question flow's six
-  properties: a durable per-session store (`DATA_DIR/pending-approvals.json`)
-  with lifecycle `pending → executing → executed | failed | rejected`; cards
+  properties: a durable per-session store (SQLite, `db/approvalStore.ts`) with
+  lifecycle `pending → executing → executed | failed | rejected`; cards
   interleaved into BOTH harnesses' `snapshot()` (`withApprovalBlocks`) AND
   re-emitted to a viewer on attach (`connection.view` → `approvalsForSession`)
   so they survive reload at the tool/time position where issued
