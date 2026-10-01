@@ -941,11 +941,11 @@ export async function deleteSkill(
         // detached: the same ceiling a rename places under.
         const committed = await ctx.committedFiles(
           target.folder,
-          MAX_PLACED_ENTRIES,
+          maxPlacedEntries,
         );
         if (committed === undefined) {
           throw new SkillValidationError(
-            `"${target.folder}" holds more than ${MAX_PLACED_ENTRIES} committed files, which is more than this tool removes in one commit. Remove the folder by hand, or split the skill.`,
+            `"${target.folder}" holds more than ${maxPlacedEntries} committed files, which is more than this tool removes in one commit. Remove the folder by hand, or split the skill.`,
           );
         }
         // Nothing has moved yet, so a stop here is free; the call below detaches
@@ -967,7 +967,7 @@ export async function deleteSkill(
             return { holds: false };
           }
           const contents = await treeHoldsCommitted(tree, ctx, committed, {
-            entries: MAX_PLACED_ENTRIES,
+            entries: maxPlacedEntries,
             depth: MAX_REMOVED_DEPTH,
           });
           // Hashing every committed file is the long part of a delete and it is
@@ -1415,16 +1415,22 @@ type PinKeeper = (create: () => Promise<SkillPin>) => Promise<SkillPin>;
  * what makes an undo delete somebody else's file.
  */
 const MAX_PLACED_ENTRIES = 512;
+let maxPlacedEntries = MAX_PLACED_ENTRIES;
+
+/** Test seam: a smaller ceiling, so a test need not build a 512-entry folder. */
+export function setMaxPlacedEntriesForTests(value: number | null): void {
+  maxPlacedEntries = value ?? MAX_PLACED_ENTRIES;
+}
 
 /** A keeper that refuses to place more than a rename can hold pinned. */
 function pinKeeper(ctx: SkillMutationContext, folder: string): PinKeeper {
   let held = 0;
   return async (create) => {
-    if (held >= MAX_PLACED_ENTRIES) {
+    if (held >= maxPlacedEntries) {
       // Refused BEFORE the create-or-fail call runs, so nothing is placed that
       // this mutation could not take back again.
       throw new SkillValidationError(
-        `"${folder}" holds more than ${MAX_PLACED_ENTRIES} files and directories, which is more than this tool renames in one commit. Move the folder by hand, or split the skill.`,
+        `"${folder}" holds more than ${maxPlacedEntries} files and directories, which is more than this tool renames in one commit. Move the folder by hand, or split the skill.`,
       );
     }
     held += 1;
