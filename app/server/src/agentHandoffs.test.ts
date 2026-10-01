@@ -349,9 +349,17 @@ describe("agent handoffs", () => {
       outcomeRef: { kind: TEST_OUTCOME, id: "card-1", token: "tok-1" },
     });
     outcomes.length = 0;
-    // Boot with a zero-length TTL: every queued handoff is already expired,
-    // which is the state a week of nobody being able to take it produces.
-    recoverAgentHandoffsOnBoot(0);
+    // Boot with a zero-length TTL one millisecond later: every queued handoff
+    // is already expired, which is the state a week of nobody being able to
+    // take it produces. Expiry is strictly older-than, so without moving the
+    // clock a handoff written in the same millisecond would still be live.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + 1);
+    try {
+      recoverAgentHandoffsOnBoot(0);
+    } finally {
+      vi.useRealTimers();
+    }
     assert.equal(agentHandoffStore.listForSession(driver.sessionId).length, 0);
     assert.equal(outcomes.length, 1, "expiry is reported, not silent");
     assert.match(outcomes[0] ?? "", /^dropped:card-1:.*waited a week/);
