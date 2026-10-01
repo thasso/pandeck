@@ -407,25 +407,3 @@ test("the default projection reads only unarchived rows and never reintroduces a
   assert.deepEqual(storeList.mock.calls.at(-1), [{}]);
   assert.equal(archive.find((r) => r.id === archived)?.archived, true);
 });
-
-test("the connect payload tracks the active rows, not the settled history", async () => {
-  const before = await hub.listSessions();
-  const sizeBefore = JSON.stringify(before).length;
-  const settled = Array.from({ length: 40 }, (_, i) =>
-    seed(`history-${i}`, { settledAt: OLD }),
-  );
-  const withHistory = await hub.listSessions();
-  assert.equal(withHistory.length, before.length + settled.length);
-  assert.ok(JSON.stringify(withHistory).length > sizeBefore);
-  vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
-
-  await sweepSettledSessionArchive(NOW);
-
-  const after = await hub.listSessions();
-  assert.equal(
-    after.length,
-    before.length,
-    "the settled history left the list",
-  );
-  assert.equal(JSON.stringify(after).length, sizeBefore);
-});

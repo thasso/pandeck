@@ -4,6 +4,7 @@ import type { AgentType } from "../agentTypes.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
   agentToolsFor,
+  assistantIntegrationTools,
   eagerToolNamesFor,
   modeGatedActiveToolNames,
   toolGroupsFor,
@@ -403,6 +404,22 @@ describe("tool catalog", () => {
           !names.has("session_submit_result"),
           `${persona} must not expose workflow result submission`,
         );
+    }
+  });
+
+  test("first-class kb_* tools are exposed", () => {
+    const names = assistantIntegrationTools().map((tool) => tool.name);
+    for (const tool of [
+      "kb_tree",
+      "kb_search",
+      "kb_get_entry",
+      "kb_write_entry",
+      "kb_edit_entry",
+    ]) {
+      assert.ok(
+        names.includes(tool),
+        `expected ${tool} in the assistant tool list`,
+      );
     }
   });
 

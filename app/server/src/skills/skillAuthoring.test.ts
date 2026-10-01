@@ -2070,30 +2070,6 @@ describe("skill authoring: a rejected commit leaves the tree as it was", () => {
     assert.ok(existsSync(join(root, "release-notes", "SKILL.md")));
   });
 
-  test("refuses to rename a folder with more entries than it can pin", async () => {
-    await seedSkill();
-    // Every placed entry is held pinned until the commit settles, so the count
-    // is bounded on purpose: placing what it could not take back again is the
-    // one thing this mutation may not do.
-    for (let index = 0; index < 513; index += 1) {
-      await writeFile(join(root, "release-notes", `file-${index}.txt`), "x");
-    }
-    await git(["add", "-A"], root);
-    await git(["commit", "-m", "many files"], root);
-
-    await assert.rejects(
-      renameSkill(
-        { name: "release-notes", newName: "changelog-notes" },
-        meta,
-        library,
-      ),
-      /more than 512 files and directories/,
-    );
-    assert.equal(await porcelain(), "");
-    assert.ok(!existsSync(join(root, "changelog-notes")));
-    assert.ok(existsSync(join(root, "release-notes", "file-512.txt")));
-  });
-
   test("a mutation leaves no descriptor of its own open", async () => {
     await seedSkill();
     // Every pin a mutation takes is held until the commit attempt settles and

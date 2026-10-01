@@ -23,6 +23,7 @@ import {
   updateTask,
 } from "./tasks.ts";
 import { taskStore } from "./db/taskStore.ts";
+import { updateForgejoSettings } from "./forgejoSettings.ts";
 
 test("tasks list/save/read use the current task shape without inert compatibility fields", () => {
   const created = createTask({
@@ -98,6 +99,36 @@ test("GitHub issue links are stored canonical, replaced on update, and searchabl
     assert.equal(Object.hasOwn(cleared, "githubIssues"), false);
   } finally {
     deleteTask(created.id);
+  }
+});
+
+// Forgejo is self-hosted, so its links are classified against the CONFIGURED
+// instance — the one classification that depends on settings. The URL matching
+// itself is `isForgejoInstanceUrl`'s, covered in shared/taskExternalLinks.test.ts.
+test("external links classify the configured Forgejo instance", () => {
+  updateForgejoSettings({ enabled: true, baseUrl: "https://git.example.test" });
+  const created = createTask({
+    title: "External link task",
+    status: "todo",
+    source: { createdBy: "user" },
+    externalLinks: [
+      "https://git.example.test/acme/repo/pulls/7",
+      "https://github.com/acme/repo/pull/7",
+      "https://other.example.test/acme/repo/pulls/7",
+    ].map((url) => ({
+      url,
+      type: "source" as const,
+      source: "unknown" as const,
+    })),
+  });
+  try {
+    assert.deepEqual(
+      (created.externalLinks ?? []).map((link) => link.source),
+      ["forgejo", "github", "unknown"],
+    );
+  } finally {
+    deleteTask(created.id);
+    updateForgejoSettings({ enabled: false, baseUrl: "" });
   }
 });
 
