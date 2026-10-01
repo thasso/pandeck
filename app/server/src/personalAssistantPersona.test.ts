@@ -29,6 +29,7 @@ import {
 } from "./claudeSdk/options.ts";
 import { sessionDirFor } from "./piSdk/options.ts";
 import { PERSONAL_ASSISTANT_SESSION_DIR } from "./config.ts";
+import { assertPromptRules } from "./test/promptRules.ts";
 
 test("personal-assistant is a real persona in the registry with the ordinary Assistant toolset", () => {
   const def = AGENT_TYPES["personal-assistant"];
@@ -132,9 +133,22 @@ test("claude-sdk personal-assistant is locked down like the assistant and always
   );
 });
 
-test("the personal-assistant prompt carries dedicated behavior guidance", () => {
-  const prompt = personalAssistantSystemPromptText();
-  assert.match(prompt, /permanent Personal Assistant/i);
-  // Distinct from the ordinary assistant prompt.
-  assert.notEqual(prompt, AGENT_TYPES.assistant.systemPrompt());
+test("the personal-assistant prompt states its persona rules", () => {
+  assertPromptRules({
+    "personal-assistant prompt": {
+      text: personalAssistantSystemPromptText(),
+      rules: {
+        "is-the-permanent-assistant": /permanent Personal Assistant/i,
+        "differs-from-assistant": (text) =>
+          text !== AGENT_TYPES.assistant.systemPrompt(),
+        // The persona file wraps its lines, so a sentence may span several.
+        "continuous-across-days-and-channels": /across[^.]*days[^.]*channels/i,
+        "records-people-via-contacts": /contacts_manage/,
+        "enrichment-is-expected": /not optional/i,
+        // The shared Memory section forbids secrets too; this is the PA's own rule.
+        "enrichment-skips-sensitive-personal-data":
+          /never[^.]*sensitive\s+personal\s+data/i,
+      },
+    },
+  });
 });

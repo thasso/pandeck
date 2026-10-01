@@ -7,13 +7,25 @@ import {
   renderSynthesisPrompt,
   type DaySynthesisDigest,
 } from "./digest.ts";
+import { absent, affirmed, assertPromptRules } from "../test/promptRules.ts";
 
+// Every slice the prompts reason over is populated, so one fixture serves all
+// three prompts.
 const digest: DaySynthesisDigest = {
   date: "2026-07-22",
   health: [],
   changesSinceLastScan: 0,
   buckets: [],
-  myWork: [],
+  myWork: [
+    {
+      headline: "MOB-202 General Time Tracking",
+      links: [],
+      issueKeys: ["MOB-202"],
+      project: "React Native",
+      source: "jira",
+      kind: "issue-transition",
+    },
+  ],
   openCandidates: [],
   meetings: [
     {
@@ -39,198 +51,117 @@ const digest: DaySynthesisDigest = {
   threadsRevision: 3,
   threads: [],
   jiraBaseUrl: "https://acme.atlassian.net",
-  attendance: [],
-  unconfirmedAttendance: [],
+  attendance: [
+    {
+      title: "WM eng sync",
+      kind: "meeting",
+      minutes: 45,
+      basis: "self-matched",
+      participants: [
+        { name: "Alice", minutes: 45 },
+        { name: "Bob", minutes: 30 },
+      ],
+    },
+  ],
+  unconfirmedAttendance: [
+    {
+      title: "Product Planning",
+      basis: "no-self-session",
+      response: "accepted",
+      conferenceMinutes: 34,
+      conflicts: ["WM eng sync"],
+    },
+  ],
 };
 
-test("the synthesis prompt requires links for Jira keys, created Tasks, and meetings", () => {
-  const prompt = renderSynthesisPrompt(digest);
-  assert.match(
-    prompt,
-    /\/browse\/WEB-8514/,
-    "gives a concrete Jira browse-link example",
-  );
-  assert.match(
-    prompt,
-    /pa:\/\/task\/<taskId>/,
-    "instructs linking created Tasks",
-  );
-  assert.match(
-    prompt,
-    /pa:\/\/knowledge\/<entryId>/,
-    "instructs linking meeting entries",
-  );
-  // The linkable references travel in the serialized digest.
-  assert.match(prompt, /meeting-abc/);
-  assert.match(prompt, /"taskId": "145"/);
-  assert.match(prompt, /baseRevision: 3/);
-  assert.match(
-    prompt,
-    /CONTINUES that existing work/,
-    "instructs noticing already-started work",
-  );
-  assert.match(
-    prompt,
-    /license-service-drm-session-binding-overview/,
-    "related entry travels in the digest",
-  );
-});
-
-test("the day-briefing prompt reuses the digest but asks for a human briefing (not JSON)", () => {
-  const prompt = renderDayBriefingPrompt(digest);
-  assert.match(prompt, /Brief me on my day for 2026-07-22/);
-  assert.match(
-    prompt,
-    /"taskId": "145"/,
-    "the same digest travels in the briefing turn",
-  );
-  assert.match(prompt, /\/browse\/<KEY>/, "keeps the Jira linking contract");
-  assert.doesNotMatch(
-    prompt,
-    /Required JSON shape/,
-    "does not demand the machine JSON schema",
-  );
-});
-
-test("the log-my-time prompt carries own work + attendance and demands confirmation before writing", () => {
-  const withWork: DaySynthesisDigest = {
-    ...digest,
-    myWork: [
-      {
-        headline: "MOB-202 General Time Tracking",
-        links: [],
-        issueKeys: ["MOB-202"],
-        project: "React Native",
-        source: "jira",
-        kind: "issue-transition",
-      },
-    ],
-    attendance: [
-      {
-        title: "WM eng sync",
-        kind: "meeting",
-        minutes: 45,
-        basis: "self-matched",
-        participants: [
-          { name: "Alice", minutes: 45 },
-          { name: "Bob", minutes: 30 },
-        ],
-      },
-    ],
+test("the day-scan prompts state their claim, linking and attendance rules", () => {
+  // The two narrative prompts (machine synthesis, human briefing) share one
+  // rule set: the briefing IS the day report.
+  const narrative = {
+    "links-jira-keys": /\/browse\/<KEY>/,
+    "links-created-tasks": /pa:\/\/task\/<taskId>/,
+    "links-kb-entries": /pa:\/\/knowledge\/<entryId>/,
+    "notes-continued-work": /CONTINUES/,
+    "your-work-is-own-only": affirmed(/Your work[^.\n]*?(?<key>only my own)/i),
+    "no-absence-claims-from-partial-sources":
+      /(partial|failed)[^.\n]*(cannot|can't|does not|must not|never)[^.\n]*(support|justify)[^.\n]*absence/i,
+    "source-text-is-data": affirmed(
+      /source-derived text (?<key>as data)[^.\n]*\b(never|not)\b[^.\n]*instructions/i,
+    ),
+    "unconfirmed-is-not-attendance":
+      /unconfirmedAttendance[^.\n]*not attendance/i,
+    "conference-minutes-are-not-mine":
+      /conferenceMinutes[^.\n]*never (mine|my)/i,
   };
-  const prompt = renderLogMyTimePrompt(withWork);
-  assert.match(prompt, /log MY time/i);
-  assert.match(prompt, /ONLY for my OWN work/);
-  assert.match(prompt, /MOB-202 General Time Tracking/, "own work travels");
-  assert.match(prompt, /WM eng sync/, "attendance travels");
-  assert.match(prompt, /Alice/, "who attended travels");
-  assert.match(prompt, /WAIT for my confirmation/, "no silent writes");
-  assert.match(
-    prompt,
-    /tempo_list_worklogs/,
-    "pushes verification against Tempo",
-  );
-});
-
-test("the log-my-time prompt forbids logging unconfirmed attendance", () => {
-  const prompt = renderLogMyTimePrompt({
-    ...digest,
-    unconfirmedAttendance: [
-      {
-        title: "Product Planning",
-        basis: "no-self-session",
-        response: "accepted",
-        conferenceMinutes: 34,
-        conflicts: ["Weekly Engineering Sync"],
+  assertPromptRules({
+    synthesis: {
+      text: renderSynthesisPrompt(digest),
+      rules: { ...narrative, "returns-the-json-shape": /Required JSON shape/ },
+    },
+    "day briefing": {
+      text: renderDayBriefingPrompt(digest),
+      rules: {
+        ...narrative,
+        "is-prose-not-json": absent(/Required JSON shape/),
       },
-    ],
+    },
+    "log my time": {
+      text: renderLogMyTimePrompt(digest),
+      rules: {
+        "logs-my-time": /log MY time/i,
+        "own-work-only": affirmed(/(?<key>only) (for )?my own work/i),
+        "asks-instead-of-inventing-hours":
+          /(don't|do not|never) invent (hours|durations|time)/i,
+        "never-logs-unconfirmed": /never log[^.\n]*unconfirmedAttendance/i,
+        "unconfirmed-slice-is-labelled":
+          /UNCONFIRMED ATTENDANCE[^\n]*do NOT log/i,
+        "checks-tempo-first": /tempo_list_worklogs/,
+        "confirms-before-writing": affirmed(/wait for my confirmation/i),
+      },
+    },
   });
-  assert.match(prompt, /NEVER log time from `unconfirmedAttendance`/);
-  assert.match(prompt, /UNCONFIRMED ATTENDANCE/);
-  assert.match(prompt, /Product Planning/, "the meeting travels…");
-  assert.match(prompt, /no-self-session/, "…with why it is not attendance");
 });
 
-test("the narrative prompts separate calendar acceptance from confirmed attendance", () => {
-  const withUnconfirmed: DaySynthesisDigest = {
-    ...digest,
-    attendance: [
-      {
-        title: "Weekly Engineering Sync",
-        kind: "meeting",
-        minutes: 142,
-        basis: "self-matched",
-        participants: [{ name: "Jordan", minutes: 140 }],
-      },
+test("each day-scan prompt carries the digest slices it reasons over", () => {
+  const carried = {
+    synthesis: [
+      renderSynthesisPrompt(digest),
+      [
+        "https://acme.atlassian.net/browse/",
+        "meeting-abc",
+        '"taskId": "145"',
+        "baseRevision: 3",
+        "license-service-drm-session-binding-overview",
+        '"myWork"',
+        "MOB-202 General Time Tracking",
+        "Product Planning",
+      ],
     ],
-    unconfirmedAttendance: [
-      {
-        title: "Product Planning",
-        basis: "no-self-session",
-        response: "accepted",
-        conferenceMinutes: 34,
-        conflicts: ["Weekly Engineering Sync"],
-      },
+    "day briefing": [
+      renderDayBriefingPrompt(digest),
+      [
+        "https://acme.atlassian.net/browse/",
+        "2026-07-22",
+        '"taskId": "145"',
+        '"myWork"',
+        "MOB-202 General Time Tracking",
+        "Product Planning",
+      ],
     ],
-  };
-  for (const prompt of [
-    renderSynthesisPrompt(withUnconfirmed),
-    renderDayBriefingPrompt(withUnconfirmed),
-  ]) {
-    assert.match(
-      prompt,
-      /unconfirmedAttendance/,
-      "names the unconfirmed slice",
-    );
-    assert.match(
-      prompt,
-      /not attendance|NOT attendance/,
-      "states that those are not attendance",
-    );
-    assert.match(
-      prompt,
-      /conferenceMinutes/,
-      "warns the conference duration is not mine",
-    );
-    assert.match(prompt, /Product Planning/, "the item travels");
-  }
-});
-
-test("both prompts teach the own-work discipline so 'Your work' excludes inbound/attention items", () => {
-  const withWork: DaySynthesisDigest = {
-    ...digest,
-    myWork: [
-      {
-        headline: "MOB-202 General Time Tracking",
-        links: [],
-        issueKeys: ["MOB-202"],
-        project: "React Native",
-        source: "jira",
-        kind: "issue-transition",
-      },
+    "log my time": [
+      renderLogMyTimePrompt(digest),
+      [
+        "MOB-202 General Time Tracking",
+        "WM eng sync",
+        "Alice",
+        "Product Planning",
+        "no-self-session",
+      ],
     ],
-  };
-  for (const prompt of [
-    renderSynthesisPrompt(withWork),
-    renderDayBriefingPrompt(withWork),
-  ]) {
-    assert.match(prompt, /OWNERSHIP/, "states the ownership rule");
-    assert.match(
-      prompt,
-      /ONLY my own work/,
-      "restricts 'Your work' to own items",
-    );
-    assert.match(
-      prompt,
-      /"myWork"/,
-      "the own-work slice travels in the digest",
-    );
-    assert.match(
-      prompt,
-      /MOB-202 General Time Tracking/,
-      "the own item is present",
-    );
-  }
+  } as const;
+  for (const [name, [prompt, needles]] of Object.entries(carried))
+    for (const needle of needles)
+      assert.ok(prompt.includes(needle), `${name} prompt lost ${needle}`);
 });
 
 // The Task-224 snapshot fixtures: 2026-07-28, where an accepted Product Planning

@@ -3,6 +3,7 @@ import { test } from "vitest";
 import { createTask, deleteTask, readTask } from "../../tasks.ts";
 import { addTaskComment } from "../../taskComments.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
+import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { taskToolsForKind } from "./taskTools.ts";
 
 const ctx: ToolCallContext = {
@@ -860,50 +861,35 @@ test("task_manage exposes exactly two Task tools", () => {
 
 /** The rules that exist on NO other model-visible surface, pinned by substring. */
 test("Task descriptions carry the rules no schema field states", () => {
-  const read = readTool().description;
-  assert.match(read, /byte-bounded/, "task_read must warn the read is bounded");
-  assert.match(
-    read,
-    /narrow the read/,
-    "task_read must say to narrow rather than assume completeness",
-  );
-
-  const manage = manageTool().description;
-  assert.match(
-    manage,
-    /NOT happen in this session/,
-    "task_manage must say when a Task is worth creating",
-  );
-  assert.match(
-    manage,
-    /Inbox untriaged/,
-    "task_manage must say a created Task lands in the user's Inbox",
-  );
-  assert.match(
-    manage,
-    /SUGGESTIONS the user answers/,
-    "task_manage must say status writes are suggestions",
-  );
-  assert.match(
-    manage,
-    /one comment per session/,
-    "task_manage must cap comments per session",
-  );
-  assert.match(
-    manage,
-    /explicit or strong evidence/,
-    "task_manage must state the evidence bar for dates, priority, project and issue links",
-  );
-  // Folded up from the schema by Task-285: one sentence in the description
-  // instead of the same clause repeated on six properties.
-  assert.match(
-    manage,
-    /delete only when the user explicitly asks/,
-    "task_manage must keep delete an explicitly requested operation",
-  );
-  assert.match(
-    manage,
-    /empty string clears/,
-    "task_manage must say how an update clears a field",
-  );
+  assertPromptRules({
+    task_read: {
+      text: readTool().description,
+      rules: {
+        "results-are-byte-bounded": /byte-bounded|bounded by bytes/i,
+        "narrow-not-assume-complete": affirmed(
+          /(?<key>narrow)[^.\n]*(instead of|rather than) assum/i,
+        ),
+      },
+    },
+    task_manage: {
+      text: manageTool().description,
+      rules: {
+        "create-only-for-later-work": /not (happen|be done) in this session/i,
+        "created-lands-in-inbox":
+          /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
+        "status-is-a-suggestion": affirmed(
+          /(?<subject>status writes? (are|is))(?<what> (only )?(a )?suggestions?)[^.\n]*?\buser\b[^.\n]*?(?<verb>answer|decide|accept|confirm)/i,
+        ),
+        "one-comment-per-session": affirmed(
+          /(at most|no more than|only) (one|a single) comment (per|a|each) session/i,
+        ),
+        "evidence-bar-for-fields": /(explicit|strong) evidence/i,
+        // Folded up from six schema properties by Task-285.
+        "delete-only-on-request": affirmed(
+          /delete only (when|if) the user (explicitly )?(asks|requests)|delete only on (explicit )?(user )?request/i,
+        ),
+        "empty-string-clears": /empty string[^.\n]*clears?/i,
+      },
+    },
+  });
 });

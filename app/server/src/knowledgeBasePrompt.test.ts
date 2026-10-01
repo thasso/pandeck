@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "vitest";
+import { test } from "vitest";
 import { knowledgeBaseBehaviorGuidance } from "./knowledgeBasePrompt.ts";
 import {
   kbAddAssetTool,
@@ -9,143 +9,98 @@ import {
 } from "./tools/knowledge/knowledgeBaseTools.ts";
 import { projectRegistryReadTool } from "./tools/core/projectRegistryTools.ts";
 import { eagerToolNamesFor } from "./tools/catalog.ts";
+import { absent, affirmed, assertPromptRules } from "./test/promptRules.ts";
 
 /**
- * KB 284/286: Task 284 moves KB guidance from eager prompts to deferred tool
- * descriptions. The eager section shrinks to a minimal pointer; full operational
- * guidance lives in the kb_* tool descriptions and parameters. Tests verify:
- * - eager guidance stays compact (<= 600 chars) and points to tools,
- * - deferred tool descriptions teach critical KB behaviors (when/how to read/write/ask,
- *   scoping, pa:// links, stable ids, frontmatter/validation, assets, comments, provenance),
- * - the split is clean: shared rules live only in tools' descriptions, not duplicated.
+ * KB 284/286: KB guidance lives on the deferred kb_* tool descriptions; the
+ * eager section is a compact pointer that makes the tools discoverable and
+ * restates none of their rules.
  */
-describe("knowledge base agent guidance", () => {
-  const guidance = knowledgeBaseBehaviorGuidance();
-
-  test("eager pointer stays compact and references kb_* tools", () => {
-    assert.ok(
-      guidance.length <= 600,
-      `eager guidance too long (${guidance.length} chars); move detail to tool descriptions`,
-    );
-    for (const tool of [
-      "kb_search",
-      "kb_get_entry",
-      "kb_write_entry",
-      "kb_edit_entry",
-    ]) {
-      assert.match(
-        guidance,
-        new RegExp(tool),
-        `eager pointer should mention ${tool}`,
-      );
-    }
-    assert.doesNotMatch(
-      guidance,
-      /knowledge_[a-z]/,
-      "obsolete knowledge_* skill tools must not be taught",
-    );
-    assert.match(
-      guidance,
-      /never edit DATA_DIR\/knowledge directly/i,
-      "must forbid raw filesystem writes",
-    );
+test("the KB pointer and tool descriptions state the KB rules", () => {
+  const noSecrets = /never (store|save|record|keep)[^.\n]*secrets/i;
+  assertPromptRules({
+    "eager pointer": {
+      text: knowledgeBaseBehaviorGuidance(),
+      rules: {
+        // check:prompts budgets whole prompts; this one section has its own cap.
+        "fits-600-chars": (text) => text.length <= 600,
+        "names-kb_search": /kb_search/,
+        "names-kb_get_entry": /kb_get_entry/,
+        "names-kb_write_entry": /kb_write_entry/,
+        "names-kb_edit_entry": /kb_edit_entry/,
+        "tools-load-via-tool-search": /tool search/i,
+        "search-before-answering-durable":
+          /search[^.\n]*before answering[^.\n]*durable/i,
+        "forbids-raw-fs-writes":
+          /never (edit|write)[^.\n]*DATA_DIR\/knowledge/i,
+        "no-obsolete-knowledge_*-tools": absent(/knowledge_[a-z]/),
+        "no-restated-write-rule": absent(/durable long-form/i),
+        "no-restated-scoping-rule": absent(/separate entries/i),
+        "no-tool-local-asset-rule": absent(/kb_read_asset/),
+      },
+    },
+    kb_write_entry: {
+      text: kbWriteEntryTool.description,
+      rules: {
+        "for-durable-long-form": /durable long-form/i,
+        "scopes-in-separate-entries":
+          /separate[^.\n]*entries|entries[^.\n]*separate/i,
+        "tags-avoid-cross-contamination": affirmed(
+          /(?<key>avoid|prevent)[^.\n]*cross-contaminat/i,
+        ),
+        "never-invent-entry-ids": /never invent[^.\n]*\bids?\b/i,
+        "links-via-pa-uris": /pa:\/\//,
+        "no-secrets": noSecrets,
+        "records-provenance": /provenance/i,
+        "marks-uncertain-facts": /mark[^.\n]*uncertain/i,
+        "atomic-facts-go-to-memory": affirmed(
+          /belongs? in Memory|Memory[^.\n]*not the KB/i,
+        ),
+        "asks-on-ambiguity-or-conflict":
+          /ask (first|before)[^.\n]*(ambiguous|conflict)/i,
+      },
+    },
+    kb_edit_entry: {
+      text: kbEditEntryTool.description,
+      rules: {
+        "schema-is-1": /kb\.schema\s*=\s*1\b/,
+        "type-enum": /kb\.type/,
+        "status-enum": /kb\.status/,
+        "error-names-the-field": /error[^.\n]*names[^.\n]*field/i,
+        "no-secrets": noSecrets,
+      },
+    },
+    kb_add_asset: {
+      text: kbAddAssetTool.description,
+      rules: { "no-secrets": noSecrets },
+    },
+    kb_read_asset: {
+      text: kbReadAssetTool.description,
+      rules: {
+        "extracts-are-kb_read_extract": affirmed(
+          /kb_read_extract[^.\n]*?(?<key>only)[^.\n]*GENERATED/,
+        ),
+      },
+    },
+    project_registry_read: {
+      text: projectRegistryReadTool.description,
+      rules: {
+        "read-before-assuming": /before assuming/i,
+        "weighs-match-evidence": /matchedBy.*confidence.*warnings/i,
+        "no-match-is-said-not-invented": affirmed(
+          /(?<premise>no registry match)[^.\n]*?(?<key>say)[^.\n]*?((instead of|rather than) invent|(never|not|don't) invent)/i,
+        ),
+      },
+    },
   });
+});
 
-  test("eager pointer makes the KB discoverable now that no kb_* tool is eager", () => {
-    // Task-286 defers `knowledge-core`. The pointer is the ONLY eager surface
-    // left that can send a session to the KB, so it must say the tools are
-    // loaded on demand rather than assume they are in context.
-    assert.match(
-      guidance,
-      /tool search/i,
-      "the pointer must tell the session to load the kb_* tools first",
-    );
-    for (const persona of ["assistant", "developer"] as const) {
-      const eager = eagerToolNamesFor(persona);
-      for (const name of ["kb_search", "kb_get_entry"])
-        assert.ok(
-          !eager.has(name),
-          `${name} is eager again for ${persona} — the pointer's discovery wording is now misleading`,
-        );
-    }
-  });
-
-  test("eager pointer teaches when to search (before answering durable questions)", () => {
-    const surface = `${guidance}`;
-    assert.match(
-      surface,
-      /before answering durable questions/i,
-      "the trigger for KB search must be in eager text so Task-286 deference doesn't hide it",
-    );
-  });
-
-  test("kb_write_entry teaches when/how to write, scoping, provenance, and secrets", () => {
-    const surface = `${kbWriteEntryTool.description}`;
-    assert.match(surface, /durable long-form knowledge/i);
-    assert.match(surface, /separate entries/i);
-    assert.match(surface, /cross-contamination/i);
-    assert.match(surface, /never invent/i);
-    assert.match(surface, /pa:\/\//);
-    assert.match(surface, /never store secrets/i);
-    assert.match(surface, /record provenance/i);
-    assert.match(surface, /mark uncertain facts/i);
-    assert.match(surface, /Memory.*not the KB/i);
-  });
-
-  test("kb_edit_entry teaches frontmatter validation and secrets", () => {
-    const surface = `${kbEditEntryTool.description}`;
-    assert.match(surface, /kb\.schema/);
-    assert.match(surface, /kb\.type/);
-    assert.match(surface, /kb\.status/);
-    assert.match(surface, /error names the exact field/i);
-    assert.match(surface, /never store secrets/i);
-  });
-
-  test("kb_add_asset teaches to never store secrets", () => {
-    const surface = `${kbAddAssetTool.description}`;
-    assert.match(surface, /never store secrets/i);
-  });
-
-  test("project_registry_read teaches when to use it and anti-confabulation", () => {
-    const surface = `${projectRegistryReadTool.description}`;
-    assert.match(surface, /before assuming/i);
-    assert.match(surface, /matchedBy.*confidence.*warnings/i);
-    assert.match(
-      surface,
-      /no registry match.*say that.*instead of inventing/i,
-      "anti-confabulation rule must be in the read tool description",
-    );
-  });
-
-  test("eager KB pointer does not restate what deferred tool descriptions teach", () => {
-    // The eager section is a discovery pointer. It should not restate the operational
-    // rules (when to write, scoping, provenance, secrets) that now live on the tools.
-    // This prevents duplication and keeps the eager section compact.
-    assert.doesNotMatch(
-      guidance,
-      /durable long-form/i,
-      "eager text should not repeat write-tool-specific rules",
-    );
-    assert.doesNotMatch(
-      guidance,
-      /separate entries/i,
-      "scoping rules belong on tools, not eager text",
-    );
-  });
-
-  test("the one tool-local KB rule lives on its tool, not in eager guidance", () => {
-    // kb_read_asset reads COMMITTED entry assets; kb_read_extract reads
-    // GENERATED extracts. Confusing them is a real call error, and the eager
-    // section deliberately does not teach it — so the tool must.
-    assert.doesNotMatch(
-      guidance,
-      /kb_read_asset/,
-      "the shared section should not carry a single tool's local rule",
-    );
-    assert.match(
-      kbReadAssetTool.description,
-      /kb_read_extract reads only GENERATED extracts/,
-      "kb_read_asset must state what separates it from kb_read_extract",
-    );
-  });
+test("no kb_* read tool is eager, so the pointer's discovery rule is the only way in", () => {
+  // Task-286 defers `knowledge-core`. If a read tool turns eager again, the
+  // pointer's "load them with a tool search" rule is misleading.
+  for (const persona of ["assistant", "developer"] as const) {
+    const eager = eagerToolNamesFor(persona);
+    for (const name of ["kb_search", "kb_get_entry"])
+      assert.ok(!eager.has(name), `${name} is eager again for ${persona}`);
+  }
 });
