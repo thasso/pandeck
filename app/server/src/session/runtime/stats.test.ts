@@ -70,7 +70,7 @@ const entries: SessionEntry[] = [
 ];
 
 /* ----------------------------- durable (idle) ---------------------------- */
-{
+test("durable (idle)", () => {
   const snap: SessionSnapshot = {
     sessionId: "s",
     runState: "idle",
@@ -107,10 +107,10 @@ const entries: SessionEntry[] = [
     "context window from reported usage",
   );
   assert.equal(info.currentTurn, undefined, "no live estimate when idle");
-}
+});
 
 /* -------------------- context snapshot from usage -------------------- */
-{
+test("context snapshot from usage", () => {
   // When the harness reports the REAL context size (usage.contextTokens), it
   // wins over the prompt-token-sum fallback (which over-counts a tool loop).
   const withSnapshot: SessionEntry[] = [
@@ -144,10 +144,10 @@ const entries: SessionEntry[] = [
     5000,
     "context tokens prefer the reported usage.contextTokens snapshot",
   );
-}
+});
 
 /* --------------------------- live current turn --------------------------- */
-{
+test("live current turn", () => {
   const streaming: StreamingEntry[] = [
     {
       streamId: "m",
@@ -181,10 +181,4 @@ const entries: SessionEntry[] = [
     info.currentTurn!.thinking > 0,
     "live thinking estimate from streamed thinking",
   );
-}
-
-console.log("session stats unit test: PASS");
-
-test("derives normalized session stats", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });

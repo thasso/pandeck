@@ -21,7 +21,7 @@ function collect(source: NativeAdapterEventSource): AdapterEvent[] {
   return events;
 }
 
-{
+test("tool finish forwards a live passthrough before the durable assistant and toolResult entries", () => {
   const source = new NativeAdapterEventSource();
   const events = collect(source);
 
@@ -68,10 +68,10 @@ function collect(source: NativeAdapterEventSource): AdapterEvent[] {
     ["text", "toolCall"],
     "assistant content accumulated from deltas + tool open",
   );
-}
+});
 
 /* ------------------------- aborted turn --------------------------------- */
-{
+test("aborted turn", () => {
   const source = new NativeAdapterEventSource();
   const out = collect(source);
   source.messageStarted("abort1");
@@ -117,7 +117,7 @@ function collect(source: NativeAdapterEventSource): AdapterEvent[] {
   );
   const done = out.at(-1) as Extract<AdapterEvent, { type: "runCompleted" }>;
   assert.equal(done.stopReason, "aborted", "abort stop reason is preserved");
-}
+});
 
 test("an intermediate attempt completes its message without completing the run", () => {
   const source = new NativeAdapterEventSource();
@@ -216,7 +216,7 @@ test("discarded host-command phase closes without a durable result", () => {
   );
 });
 
-{
+test("host-command passthrough", () => {
   const source = new NativeAdapterEventSource();
   const out = collect(source);
   const commit = { renderKind: "commit", commitHash: "abc1234" } as never;
@@ -267,10 +267,10 @@ test("discarded host-command phase closes without a durable result", () => {
     "abc1234",
     "card carries the commit payload verbatim",
   );
-}
+});
 
 /* ------------------------- host-command passthrough: /push --------------- */
-{
+test("host-command passthrough: /push", () => {
   const source = new NativeAdapterEventSource();
   const out = collect(source);
   const push = {
@@ -314,10 +314,10 @@ test("discarded host-command phase closes without a durable result", () => {
     "pushed",
     "card carries the push payload verbatim",
   );
-}
+});
 
 /* ------------------------- provider error on a turn ---------------------- */
-{
+test("provider error on a turn", () => {
   const source = new NativeAdapterEventSource();
   const out = collect(source);
   source.messageStarted("err1");
@@ -343,10 +343,10 @@ test("discarded host-command phase closes without a durable result", () => {
     done.errorMessage,
     "Model usage limit reached (openai-codex/gpt-5): quota exceeded.",
   );
-}
+});
 
 /* ------------------------- per-turn usage deltas ------------------------- */
-{
+test("per-turn usage deltas", () => {
   const totals = (
     input: number,
     output: number,
@@ -404,10 +404,10 @@ test("discarded host-command phase closes without a durable result", () => {
     { outputTokens: 50 },
     "negative deltas clamp to zero",
   );
-}
+});
 
 /* ------------------------- run timing on completion ---------------------- */
-{
+test("run timing on completion", () => {
   const source = new NativeAdapterEventSource();
   const out = collect(source);
   source.messageStarted("time1");
@@ -427,10 +427,4 @@ test("discarded host-command phase closes without a durable result", () => {
     Date.parse(completed.completedAt!) >= Date.parse(completed.startedAt!),
     "completion is not before the start",
   );
-}
-
-console.log("native adapter events contract test: PASS");
-
-test("emits adapter-native turn events", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });

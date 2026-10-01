@@ -195,11 +195,17 @@ function attach(
   return message.snapshot;
 }
 
-/* ------------- 1. an uncached open is bounded and turn-aligned ------------ */
-{
+/** Scenarios 1–4 all read one long session opened with no cache. */
+function uncachedOpen() {
   const log = longLog();
   const full = log.clientTimeline({ lazyBodies: true });
   const snapshot = attach(log);
+  return { log, full, snapshot };
+}
+
+/* ------------- 1. an uncached open is bounded and turn-aligned ------------ */
+test("an uncached open is bounded and turn-aligned", () => {
+  const { full, snapshot } = uncachedOpen();
 
   assert.equal(
     snapshot.totalEntryCount,
@@ -247,8 +253,11 @@ function attach(
     describeTimelineCache(snapshot.timeline, snapshot.timelineStart),
     "the persist anchor describes the RANGE, start offset included",
   );
+});
 
-  /* ---------------- 2. the seed makes the windowed rows honest ----------- */
+/* ---------------- 2. the seed makes the windowed rows honest ------------- */
+test("the seed makes the windowed rows honest", () => {
+  const { full, snapshot } = uncachedOpen();
   const seed = snapshot.turnStatsSeed;
   assert.ok(seed, "a windowed snapshot carries a turn-stats seed");
   const fullRows = cumulativePerTurn(full);
@@ -263,8 +272,17 @@ function attach(
     fullRows.length - windowRows.length,
     "the seed counts the usage turns that precede the window",
   );
+});
 
-  /* -------------- 3. loading older entries keeps those rows -------------- */
+/* -------------- 3. loading older entries keeps those rows ---------------- */
+test("loading older entries keeps those rows", () => {
+  const { log, full, snapshot } = uncachedOpen();
+  const first = snapshot.timeline[0]!;
+  const fullRows = cumulativePerTurn(full);
+  const windowRows = cumulativePerTurn(
+    snapshot.timeline,
+    snapshot.turnStatsSeed,
+  );
   const range = log.clientTimelineRange(first.seq, 240);
   assert.ok(range, "the anchor resolves to a range");
   assert.deepEqual(
@@ -287,8 +305,13 @@ function attach(
     fullRows.slice(fullRows.length - grownRows.length),
     "the grown transcript still agrees with the full projection",
   );
+});
 
-  /* ------- 4. reaching the session start ends with a zero-seed range ----- */
+/* ------- 4. reaching the session start ends with a zero-seed range ------- */
+test("reaching the session start ends with a zero-seed range", () => {
+  const { log, snapshot } = uncachedOpen();
+  const range = log.clientTimelineRange(snapshot.timeline[0]!.seq, 240)!;
+  const grown = [...range.entries, ...snapshot.timeline];
   let cursor = grown[0]!.seq;
   let start = range.timelineStart;
   while (start > 0) {
@@ -306,10 +329,10 @@ function attach(
     undefined,
     "nothing precedes the session start, so no seed is sent",
   );
-}
+});
 
 /* ------------- 5. a cached RANGE earns the tail-only answer -------------- */
-{
+test("a cached RANGE earns the tail-only answer", () => {
   const log = longLog();
   const full = log.clientTimeline({ lazyBodies: true });
   const windowStart = attach(log).timelineStart;
@@ -355,10 +378,10 @@ function attach(
   const empty = attach(log, describeTimelineCache([]));
   assert.equal(empty.timelineStart, windowStart);
   assert.ok(empty.turnStatsSeed, "and it is seeded like any other window");
-}
+});
 
 /* ---- 6. one turn bigger than the budget: bounded, and honest about it ---- */
-{
+test("one turn bigger than the budget: bounded, and honest about it", () => {
   // A single turn of 900 fat runs. There is no turn boundary to start at that
   // the budget can pay for, so the window opens INSIDE the turn — which is the
   // one case the payload bound must still hold and the seed must declare.
@@ -413,10 +436,10 @@ function attach(
     true,
     "and so does a range that is still inside that turn",
   );
-}
+});
 
 /* -- 7. a tool-loop turn whose declarer breaks the budget still renders ---- */
-{
+test("a tool-loop turn whose declarer breaks the budget still renders", () => {
   // Task 449: ONE assistant entry declares 226 calls, followed by 226 results.
   // The results fit the byte budget, the declaring entry does not, so the
   // budget walk used to open the window right after it — a snapshot of nothing
@@ -444,10 +467,10 @@ function attach(
     true,
     "the window is still a mid-turn fragment and says so",
   );
-}
+});
 
 /* ---- 8. an UNRENDERABLE cached range is dropped, not honoured ------------- */
-{
+test("an UNRENDERABLE cached range is dropped, not honoured", () => {
   // Task 450: a browser that cached the pre-449 window holds exactly the orphan
   // range `[2, 228)`. It is a legitimate, matching range of the projection, so
   // the anchor check accepts it — and the tail delta after it is EMPTY, leaving a
@@ -500,10 +523,10 @@ function attach(
     "a range whose rendered result now holds a visible entry is honoured",
   );
   assert.equal(revived.timelineStart, 2 + CALLS, "and only the tail is sent");
-}
+});
 
 /* ---- 9. the snapshot projection IS the full one, minus unused bodies ----- */
-{
+test("the snapshot projection IS the full one, minus unused bodies", () => {
   const log = longLog();
   const full = log.clientTimeline({ lazyBodies: true });
   const { timeline, contentFromRow } = log.clientTimelineForSnapshot();
@@ -529,10 +552,10 @@ function attach(
     full.slice(snapshot.timelineStart),
     "the window sent is the full projection's tail",
   );
-}
+});
 
 /* -- 10. an orphan run LONGER than the bodied tail still finds its declarer -- */
-{
+test("an orphan run LONGER than the bodied tail still finds its declarer", () => {
   // The renderability floor searches BACKWARD for the assistant entry that
   // declared the orphan results in the window — by reading its `toolCall`
   // blocks. A snapshot projects bodies only for the tail, so a tool loop longer
@@ -560,10 +583,4 @@ function attach(
     full.slice(snapshot.timelineStart),
     "and what it sends is still exactly the full projection's tail",
   );
-}
-
-console.log("timeline window test: PASS");
-
-test("windowed snapshot, seeds and ranges", () => {
-  // Assertions run during module evaluation, matching the sibling transport test.
 });

@@ -9,7 +9,7 @@
  * isolation, and race-safe reconnect snapshots.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -106,7 +106,7 @@ function makeRuntime() {
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 /* ---------------------- run gate + idempotency --------------------------- */
-{
+test("run gate + idempotency", async () => {
   const { runtime, adapter } = makeRuntime();
   const events: string[] = [];
   const runtimeEvents: string[] = [];
@@ -162,10 +162,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   );
   unsubscribe();
   unsubscribeRuntimeEvents();
-}
+});
 
 /* -------------- observed out-of-band adapter work drives state ----------- */
-{
+test("observed out-of-band adapter work drives state", () => {
   const { runtime, adapter } = makeRuntime();
   const events: string[] = [];
   runtime.openSessionStream("s1", (e) => events.push(e.type));
@@ -206,10 +206,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     2,
     "external observed run emitted running and idle transitions",
   );
-}
+});
 
 /* -------- observed host-command turns settle without runCompleted -------- */
-{
+test("observed host-command turns settle without runCompleted", async () => {
   const { runtime, adapter } = makeRuntime();
   const events: string[] = [];
   runtime.openSessionStream("s1", (e) => events.push(e.type));
@@ -274,10 +274,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   adapter.finishRun({ stopReason: "end" });
   await next;
   unsubscribeStarted();
-}
+});
 
 /* ---------------- skipped host-command turns leave no durable row -------- */
-{
+test("skipped host-command turns leave no durable row", async () => {
   const { runtime, adapter } = makeRuntime();
   adapter.emit({ type: "messageStarted", streamId: "synthetic-skip" });
   adapter.emit({
@@ -306,10 +306,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   adapter.finishRun({ stopReason: "end" });
   await next;
   unsubscribeStarted();
-}
+});
 
 /* ------------------------ steering during a run -------------------------- */
-{
+test("steering during a run", async () => {
   const { runtime, adapter } = makeRuntime();
   adapter.capabilities.steer = true;
   const run = runtime.prompt("s1", "main");
@@ -355,10 +355,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     false,
     "main run completion still controls run-state",
   );
-}
+});
 
 /* --------------- stream accumulation + durable handover ------------------ */
-{
+test("stream accumulation + durable handover", async () => {
   const { runtime, adapter } = makeRuntime();
   const seen: string[] = [];
   runtime.openSessionStream("s1", (e) => seen.push(e.type));
@@ -437,10 +437,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* ------ live toolEnd survives snapshots before durable toolResult flush --- */
-{
+test("live toolEnd survives snapshots before durable toolResult flush", async () => {
   const { runtime, adapter } = makeRuntime();
   const toolCompletions: string[] = [];
   const unsubscribeToolCompleted = subscribeSessionToolCompleted((sessionId) =>
@@ -524,10 +524,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   });
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* ---------------------- failed run: throw + cleanup ---------------------- */
-{
+test("failed run: throw + cleanup", async () => {
   const { runtime, adapter } = makeRuntime();
   const statuses: string[] = [];
   runtime.openSessionStream("s1", (e) => {
@@ -559,10 +559,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "dangling streams cleared on failed run",
   );
   assert.deepEqual(statuses, ["error"], "runStatus error emitted");
-}
+});
 
 /* --------------------------- abort settles to idle ----------------------- */
-{
+test("abort settles to idle", async () => {
   const { runtime, adapter } = makeRuntime();
   const run = runtime.prompt("s1", "long task");
   await tick();
@@ -585,10 +585,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     false,
     "session settles to idle after abort",
   );
-}
+});
 
 /* -------------------------- durable provider notices --------------------- */
-{
+test("durable provider notices", () => {
   const { runtime, adapter } = makeRuntime();
   adapter.emit({
     type: "providerNotice",
@@ -625,10 +625,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
       ],
     },
   ]);
-}
+});
 
 /* --------------------------- subscriber isolation ------------------------ */
-{
+test("subscriber isolation", async () => {
   const { runtime, adapter } = makeRuntime();
   const good: string[] = [];
   runtime.openSessionStream("s1", () => {
@@ -649,10 +649,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   );
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* --------------------- reconnect snapshot is race-safe ------------------- */
-{
+test("reconnect snapshot is race-safe", async () => {
   const { runtime, adapter } = makeRuntime();
   const run = runtime.prompt("s1", "first", { clientRequestId: "c1" });
   await tick();
@@ -697,10 +697,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   });
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* ----------------------- attachments → durable user entry --------------- */
-{
+test("attachments → durable user entry", async () => {
   const { runtime, adapter } = makeRuntime();
   const run = runtime.prompt("s1", "see this", {
     attachments: [
@@ -751,10 +751,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   );
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* -------- model-only structured context stays out of the durable log ----- */
-{
+test("model-only structured context stays out of the durable log", async () => {
   const { runtime, adapter } = makeRuntime();
   const run = runtime.prompt("s1", "Visible user instruction", {
     contextBlock: "Hidden structured review context",
@@ -776,13 +776,13 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
   );
   adapter.finishRun({ stopReason: "end" });
   await run;
-}
+});
 
 /* -------- disposeSession: frees the session + allows a fresh re-create ---- */
 // This is the property hub eviction relies on (gap 4): once the hub evicts a
 // session and the runtime disposes it, a later re-acquire must build a FRESH
 // adapter rather than reuse a stale one wrapping a disposed hub session.
-{
+test("disposeSession: frees the session + allows a fresh re-create", async () => {
   const { runtime, adapter } = makeRuntime();
   assert.equal(
     runtime.get("s1"),
@@ -808,10 +808,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "a fresh session can be created after disposal",
   );
   await runtime.disposeSession("s1");
-}
+});
 
 /* -------------- semantic completion hook excludes generic idle ---------- */
-{
+test("semantic completion hook excludes generic idle", async () => {
   const { runtime, adapter } = makeRuntime();
   const completed: Array<{
     sessionId: string;
@@ -870,10 +870,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
   unsubscribeCompleted();
   await runtime.dispose();
-}
+});
 
 /* ----------------------- inactive session + config ---------------------- */
-{
+test("inactive session + config", async () => {
   const { runtime } = makeRuntime();
   await assert.rejects(
     () => runtime.prompt("nope", "hi"),
@@ -887,10 +887,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "config lists models via the adapter",
   );
   await runtime.dispose();
-}
+});
 
 /* ------------------------- fork anchor resolution ------------------------ */
-{
+test("fork anchor resolution", async () => {
   const { runtime, adapter } = makeRuntime();
   const turn = async (prompt: string, native: string) => {
     const run = runtime.prompt("s1", prompt);
@@ -961,10 +961,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "entry text is recoverable for an edit-and-retry composer",
   );
   await runtime.dispose();
-}
+});
 
 /* ------------- anchors bound the pi way (post-turn scan) ----------------- */
-{
+test("anchors bound the pi way (post-turn scan)", async () => {
   // pi never carries a native id on `messageCompleted`; it recovers EVERY id
   // from its session file after the turn and emits `entriesBound`, which the log
   // records as immutable `message.providerBound` rows. Anything that folds only
@@ -1033,10 +1033,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "and tool results, which the scan binds by the call they answer",
   );
   await runtime.dispose();
-}
+});
 
 /* --------- a post-turn scan binds THIS turn, never the history ----------- */
-{
+test("a post-turn scan binds THIS turn, never the history", async () => {
   // A scan reports the provider's whole file, so the runtime hands the log the
   // boundary the turn opened at. Without it, the first scan of an existing
   // session would anchor every turn it ever had — a backfill this feature must
@@ -1085,10 +1085,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "and the new prompt anchors on the provider's newest, not on an older one",
   );
   await runtime.dispose();
-}
+});
 
 /* --------- a REFUSED steering prompt never joins the turn's prompts ------ */
-{
+test("a REFUSED steering prompt never joins the turn's prompts", async () => {
   // A steering message is appended to the log BEFORE the provider answers. When
   // it refuses, our log holds a prompt its transcript never got — and counting
   // that as one of the turn's prompts would pair the turn's OWN prompt with the
@@ -1179,10 +1179,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "while the earlier turn keeps the anchor it earned",
   );
   await runtime.dispose();
-}
+});
 
 /* --------- an out-of-band turn with no prompt of ours binds nothing ------ */
-{
+test("an out-of-band turn with no prompt of ours binds nothing", async () => {
   // Without a prompt there is nothing to anchor the scan's tail to: the rows
   // after the provider's last prompt would be read against whatever that prompt
   // left behind, and a fork at the result would include a prompt our copy does
@@ -1213,10 +1213,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "an observed turn with no prompt of ours is left unanchored",
   );
   await runtime.dispose();
-}
+});
 
 /* --------------- a forked log inherits no foreign ids -------------------- */
-{
+test("a forked log inherits no foreign ids", async () => {
   // Two kinds of id in a copied prefix name something outside the child: the
   // native anchor (the provider remapped it) and the submitting client's
   // idempotency token. An inherited token is the nastier one — the child would
@@ -1284,14 +1284,9 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
     "each inherited row names the session that produced it, not the hop it came through",
   );
   await runtime.dispose();
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("session runtime unit test: PASS");
-
-test("coordinates normalized session runtime state", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 /* ------- the run bracket: what a killed turn leaves behind ---------------- */
 /**
@@ -1300,7 +1295,7 @@ test("coordinates normalized session runtime state", () => {
  * record at all. The bracket is what makes it visible afterwards, and it must be
  * open for exactly as long as the turn is.
  */
-{
+test("the run bracket: what a killed turn leaves behind", async () => {
   const { runtime, adapter } = makeRuntime();
   assert.equal(
     runtime.interruptedRunAt("s1"),
@@ -1337,4 +1332,4 @@ test("coordinates normalized session runtime state", () => {
     undefined,
     "and each later turn brackets independently",
   );
-}
+});

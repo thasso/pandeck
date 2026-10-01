@@ -9,7 +9,7 @@
  * receiving durable history via a fresh snapshot.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,7 +37,7 @@ const { ClaudeSdkSession } =
   await import("../../claudeSdk/ClaudeSdkSession.ts");
 
 /* --------------------- 1. projection: folding + overlay ------------------ */
-{
+test("projection: folding + overlay", () => {
   const entries: SessionEntry[] = [
     {
       id: "u0",
@@ -242,7 +242,7 @@ const { ClaudeSdkSession } =
     "host-command entry projects to a message keyed by its timeline entry id",
   );
   assert.equal(commitMsg!.blocks[0]!.kind, "commit", "renders a commit block");
-}
+});
 
 /* --------------------- scripted seam for the gateway run ----------------- */
 const TOOL_ID = "toolu_abc";
@@ -326,7 +326,7 @@ const stubState = () => ({ sessionId: "cs" }) as unknown as SessionState;
 const stubContext = () => ({ sessionId: "cs" }) as unknown as ContextInfo;
 
 /* --------------------- 2. gateway: native snapshot + event relay --------- */
-{
+test("gateway: native snapshot + event relay, then a reconnect snapshot carries the timeline", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const session = new ClaudeSdkSession("cs", {
     seam: async () => fakeSeam(scripted()),
@@ -544,10 +544,10 @@ const stubContext = () => ({ sessionId: "cs" }) as unknown as ContextInfo;
   );
 
   await runtime.dispose();
-}
+});
 
 /* --------- 4. config changes still refresh full SessionState metadata ----- */
-{
+test("config changes still refresh full SessionState metadata", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   let listener: ((event: unknown) => void) | undefined;
   const adapter = {
@@ -605,11 +605,6 @@ const stubContext = () => ({ sessionId: "cs" }) as unknown as ContextInfo;
   );
 
   await runtime.dispose();
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("runtime transport test: PASS");
-
-test("transports runtime snapshots and deltas over the wire", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));

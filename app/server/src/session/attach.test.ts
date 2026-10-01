@@ -8,7 +8,7 @@
  * duplicating the session.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,7 +80,7 @@ function fakeSeam(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
 }
 
 /* --------------------- attach an existing session ------------------------ */
-{
+test("attach an existing session, and a durable /commit card survives reconnect", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const hubSession = new ClaudeSdkSession("cs", {
     seam: async () => fakeSeam(scripted()),
@@ -196,11 +196,6 @@ function fakeSeam(messages: ClaudeSdkMessage[]): ClaudeSdkSeam {
   reconnect.detach();
   view.detach();
   await runtime.dispose();
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("runtime attachment test: PASS");
-
-test("assembles runtime-backed Claude SDK attachment flow", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));

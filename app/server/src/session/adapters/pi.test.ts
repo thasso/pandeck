@@ -9,7 +9,7 @@
  * resolving on turn end, and the adapter→runtime normalized projection.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,7 @@ const { SessionRuntime } = await import("../runtime/runtime.ts");
 const { SessionLogStore } = await import("../log/store.ts");
 
 /* ------------------------------ entry scanner ---------------------------- */
-{
+test("entry scanner", () => {
   const path = join(tmp, "scan.jsonl");
   writeFileSync(
     path,
@@ -91,7 +91,7 @@ const { SessionLogStore } = await import("../log/store.ts");
     [],
     "missing file → empty",
   );
-}
+});
 
 /* --------------------------- fake pi driver ------------------------------ */
 /**
@@ -194,7 +194,7 @@ class FakePiDriver implements PiDriver {
 }
 
 /* ------------------------- adapter: events + binding --------------------- */
-{
+test("adapter: events + binding", async () => {
   const driver = new FakePiDriver(join(tmp, "run.jsonl"));
   const adapter = createPiAdapter("p", driver);
   const events: string[] = [];
@@ -249,10 +249,10 @@ class FakePiDriver implements PiDriver {
     driver.sessionFile,
     "binding references the pi session file",
   );
-}
+});
 
 /* ---------------- driver completion fallback: no runCompleted ------------ */
-{
+test("driver completion fallback: a turn that ends without runCompleted completes once and ignores late events", async () => {
   class RejectsWithoutEndDriver implements PiDriver {
     private events = new NativeAdapterEventSource();
     readonly sessionFile = undefined;
@@ -347,9 +347,9 @@ class FakePiDriver implements PiDriver {
     0,
     "late buffered tool completions after fallback are suppressed",
   );
-}
+});
 
-{
+test("driver completion fallback: an empty successful completion without runCompleted is a quiet no-op", async () => {
   class CompletesWithoutEndDriver implements PiDriver {
     readonly sessionFile = undefined;
     subscribeAdapterEvents(): () => void {
@@ -370,10 +370,10 @@ class FakePiDriver implements PiDriver {
     "end",
     "empty successful driver completion without runCompleted is a quiet no-op",
   );
-}
+});
 
 /* ------------------------- aborted pi turn is lossless ------------------- */
-{
+test("aborted pi turn is lossless", async () => {
   class AbortPiDriver implements PiDriver {
     private events = new NativeAdapterEventSource();
     constructor(readonly sessionFile: string) {}
@@ -467,10 +467,10 @@ class FakePiDriver implements PiDriver {
     "while the turn ends on the result, which is what the cut names",
   );
   await runtime.dispose();
-}
+});
 
 /* -------------------------- steering prompt ------------------------------ */
-{
+test("steering prompt", async () => {
   class ManualPiDriver implements PiDriver {
     private events = new NativeAdapterEventSource();
     private running = false;
@@ -528,10 +528,10 @@ class FakePiDriver implements PiDriver {
     "end",
     "steering does not clobber the active run promise",
   );
-}
+});
 
 /* ------------------------ steer-only prompt mapping ---------------------- */
-{
+test("steer-only prompt mapping", async () => {
   // `steerOnly` moves the steer/start decision into the driver, so the adapter's
   // whole job is reporting WHICH happened. Mapping a driver that declined to
   // steer onto a successful steer is exactly how a lost race used to spend a
@@ -626,10 +626,10 @@ class FakePiDriver implements PiDriver {
     ),
     "an ordinary steer pi rejected must not resolve as sent",
   );
-}
+});
 
 /* ------------------------- adapter → runtime projection ------------------ */
-{
+test("adapter → runtime projection", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const driver = new FakePiDriver(join(tmp, "run2.jsonl"));
   runtime.createSession("p2", createPiAdapter("p2", driver));
@@ -671,11 +671,6 @@ class FakePiDriver implements PiDriver {
     "and OUR copy runs through the last result of that same turn",
   );
   await runtime.dispose();
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("pi adapter test: PASS");
-
-test("adapts pi turns into the normalized runtime", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
