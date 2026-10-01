@@ -318,6 +318,26 @@ it("opens a huge range at its first line when that line is deep in the file", as
   expect(scrollIntoView).toHaveBeenCalled();
 });
 
+it("reveals more of the file, not more of the mark, past a capped range", async () => {
+  await showBody(json(2_000), { start: 1, end: 500_000 });
+  // The drawn part is a CLOSED region: the cap is where it ends, not an open
+  // bottom edge that suggests the mark continues below the fold.
+  expect(linesWithClass("cb-anchored-start")).toEqual([1]);
+  expect(linesWithClass("cb-anchored-end")).toEqual([500]);
+
+  const more = [...container!.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("500 more lines"),
+  );
+  act(() => more!.click());
+  await settle();
+
+  // The rehighlighted window keeps the address bounded to its 500 lines.
+  expect(renderedWindow().rows).toBe(1_000);
+  expect(markedLines()).toHaveLength(500);
+  expect(markedLines().at(-1)).toBe(500);
+  expect(linesWithClass("cb-anchored-end")).toEqual([500]);
+});
+
 it("closes the region on the last line of a range that runs past the file", async () => {
   await showBody(json(20), { start: 15, end: 500_000 });
   expect(markedLines()).toEqual([15, 16, 17, 18, 19, 20]);
