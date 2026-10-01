@@ -47,7 +47,7 @@ function fakeSocket(sent: ServerMessage[]) {
 }
 
 /** The session broadcast is debounced (`hub.flushSessionsBroadcast`). */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 80));
+const settled = () => hub.flushPendingBroadcastsForTests();
 
 let counter = 0;
 function directSession(title: string): string {

@@ -269,6 +269,13 @@ interface TreeWatch {
   subscribing: boolean;
   /** A failed subscribe or release waits for its armed retry, not a re-rank. */
   backingOff: boolean;
+  /**
+   * What this watch has done, for {@link treeActivityForTests}: a test waits
+   * for these instead of a clock. Nothing branches on them.
+   */
+  eventBatches: number;
+  scansScheduled: number;
+  settlesPending: number;
 }
 
 const repoWatches = new Map<string, RepoWatch>();
@@ -814,6 +821,7 @@ export async function scanTreeEventForTests(
 function scheduleTreeScan(worktreeId: string): void {
   const tree = treeWatches.get(worktreeId);
   if (!tree) return;
+  tree.scansScheduled += 1;
   if (tree.debounce) clearTimeout(tree.debounce);
   tree.debounce = setTimeout(() => {
     tree.debounce = undefined;
@@ -860,6 +868,7 @@ function onTreeEvents(
   // `.git` itself can still surface; filter defensively.
   const changed = events.filter((event) => !inGitDir(root, event.path));
   if (changed.length === 0) return;
+  tree.eventBatches += 1;
   if (
     changed.length >= TREE_BULK_EVENTS ||
     changed.some((event) => basename(event.path) === ".gitignore")
@@ -1068,12 +1077,14 @@ function retryTree(tree: TreeWatch, ms: number, release = false): void {
   if (!release && (tree.refs === 0 || !isActive(tree))) return;
   clearRetry(tree);
   tree.retryRelease = release;
-  tree.retry = setTimeout(() => {
-    tree.retry = undefined;
-    tree.backingOff = false;
-    if (release ? tree.subscription : tree.refs > 0 && isActive(tree))
-      void reconcileTree(tree);
-  }, ms);
+  tree.retry = setTimeout(() => runRetry(tree, release), ms);
+}
+
+function runRetry(tree: TreeWatch, release: boolean): void {
+  tree.retry = undefined;
+  tree.backingOff = false;
+  if (release ? tree.subscription : tree.refs > 0 && isActive(tree))
+    void reconcileTree(tree);
 }
 
 function clearRetry(tree: TreeWatch): void {
@@ -1085,6 +1096,7 @@ function clearRetry(tree: TreeWatch): void {
 
 /** Queue a {@link settleTree} step; resolves once this one has run. */
 function reconcileTree(tree: TreeWatch): Promise<void> {
+  tree.settlesPending += 1;
   tree.reconciling = tree.reconciling
     .then(() => settleTree(tree))
     .catch((err: unknown) => {
@@ -1092,6 +1104,9 @@ function reconcileTree(tree: TreeWatch): Promise<void> {
         "[worktrees] failed to settle worktree watch:",
         err instanceof Error ? err.message : String(err),
       );
+    })
+    .finally(() => {
+      tree.settlesPending -= 1;
     });
   return tree.reconciling;
 }
@@ -1163,6 +1178,9 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
       retired: false,
       subscribing: false,
       backingOff: false,
+      eventBatches: 0,
+      scansScheduled: 0,
+      settlesPending: 0,
     };
     treeWatches.set(id, tree);
   }
@@ -1277,6 +1295,32 @@ export function endTreeLingersForTests(): void {
     if (tree.linger) {
       clearTimeout(tree.linger);
       endLinger(tree);
+    }
+}
+
+/**
+ * Test hook: what a registered watch has done — event batches delivered, scans
+ * scheduled, settle steps not yet run, and whether a retry is armed — so a test
+ * waits for a signal instead of a production timer.
+ */
+export function treeActivityForTests(worktreeId: string) {
+  const tree = treeWatches.get(canonicalWorktreeId(worktreeId));
+  return (
+    tree && {
+      eventBatches: tree.eventBatches,
+      scansScheduled: tree.scansScheduled,
+      settlesPending: tree.settlesPending,
+      retryArmed: tree.retry !== undefined,
+    }
+  );
+}
+
+/** Test hook: run every registered watch's armed retry now, as its timer would. */
+export function fireTreeRetriesForTests(): void {
+  for (const tree of [...treeWatches.values()])
+    if (tree.retry) {
+      clearTimeout(tree.retry);
+      runRetry(tree, tree.retryRelease);
     }
 }
 

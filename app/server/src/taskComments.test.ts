@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "task-comments-test-"));
@@ -20,8 +20,8 @@ const { taskCommentStore } = await import("./db/taskCommentStore.ts");
 const { hub } = await import("./hub.ts");
 const { closeDb } = await import("./db/index.ts");
 
-/** The task-list broadcast is coalesced (see `hub.flushTaskBroadcast`); wait for its window. */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 60));
+/** The task-list broadcast is coalesced (see `hub.flushTaskBroadcast`); end its window. */
+const settled = () => hub.flushPendingBroadcastsForTests();
 
 test("Task comments: append-only trace, counts, broadcast, and lifecycle cleanup", async () => {
   const messages: ServerMessage[] = [];
@@ -122,7 +122,12 @@ test("Task comments: append-only trace, counts, broadcast, and lifecycle cleanup
         authorName: "Alice",
         body: "third",
       });
-      await settled();
+      // Comment events travel their own per-target queue, not a broadcast
+      // window, so wait for this one to arrive.
+      await vi.waitFor(
+        () => assert.ok(holderMessages.some((m) => m.type === "commentEvents")),
+        { interval: 5 },
+      );
       const delivered = [...holderMessages]
         .reverse()
         .find((m) => m.type === "commentEvents");

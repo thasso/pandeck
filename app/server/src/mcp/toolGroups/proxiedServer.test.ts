@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { CWD } from "../../config.ts";
 import { PLAYWRIGHT_MCP_CLI_PATH } from "../../runtimeAssets.ts";
 import type { AgentTool, ToolCallContext } from "../tool.ts";
-import { browserArtifactRoot } from "./browserGroups.ts";
+import { browserArtifactRoot, settleDeadlineMs } from "./browserGroups.ts";
 import {
   listProxiedConnections,
   setProxiedClientFactoryForTests,
@@ -352,20 +352,18 @@ test("a page that never holds still returns the last tree with a warning", async
   assert.match(text, /Call browser_snapshot again/);
 });
 
-test("an empty PA_BROWSER_SETTLE_MS falls back to the default instead of disabling settling", async () => {
-  const ID = `proxied-empty-env-${Date.now()}`;
+test("an empty PA_BROWSER_SETTLE_MS falls back to the default instead of disabling settling", () => {
+  delete process.env.PA_BROWSER_SETTLE_MS;
+  const unset = settleDeadlineMs();
+  assert.ok(unset > 0, "settling is on by default");
   process.env.PA_BROWSER_SETTLE_MS = "  ";
-  const fake = installFakeProxy((name) =>
-    name === "browser_snapshot" ? pageState(READY_TREE) : undefined,
-  );
-  trackSession(ID);
-
-  await browserTool("browser_navigate").execute({ url: "/" }, ctxFor(ID));
-
-  assert.ok(
-    fake.calls.some((call) => call.name === "browser_snapshot"),
+  assert.equal(
+    settleDeadlineMs(),
+    unset,
     "a blank value is unset, not a zero budget",
   );
+  process.env.PA_BROWSER_SETTLE_MS = "0";
+  assert.equal(settleDeadlineMs(), 0, "only an explicit 0 disables settling");
 });
 
 test("a file-linked tree is compared by content, not by its timestamped name", async () => {

@@ -22,11 +22,13 @@ const {
   addWorktreeViewer,
   affectedWorktreeIdsForGitPaths,
   endTreeLingersForTests,
+  fireTreeRetriesForTests,
   gitDirIgnoreForTests,
   refreshGitStatusesForTests,
   removeWorktreeViewer,
   rescanSessionWorktree,
   setTreeWatchLimitsForTests,
+  treeActivityForTests,
   treeWatchLiveForTests,
   worktreeViewerRefs,
   onWorktreeGitStateChange,
@@ -115,7 +117,7 @@ async function waitFor(
   while (!predicate()) {
     if (Date.now() - start > timeoutMs)
       throw new Error("Timed out waiting for watcher event.");
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
 }
 
@@ -1169,8 +1171,16 @@ test(
     removeWorktreeViewer(record.id);
     assert.equal(await treeWatchLiveForTests(record.id), true);
     broadcasts.length = 0;
+    const before = treeActivityForTests(record.id)!;
     writeFileSync(join(record.path, "idle-edit.txt"), "wip\n");
-    await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
+    // The event reaches the lingering watch, which schedules no scan for it.
+    await waitFor(
+      () => treeActivityForTests(record.id)!.eventBatches > before.eventBatches,
+    );
+    assert.equal(
+      treeActivityForTests(record.id)!.scansScheduled,
+      before.scansScheduled,
+    );
     // The git-state tier may still report the new branch; a tree scan would
     // push the edited file.
     assert.ok(
@@ -1181,9 +1191,17 @@ test(
       ),
     );
 
-    await addWorktreeViewer(record.id);
-    const status = await computeWorktreeStatus(getWorktree(record.id)!);
-    assert.equal(status.dirty, true, "the returning viewer reads fresh");
+    // The returning viewer's read is as fresh as the status cache allows, so
+    // move the clock past that window rather than waiting it out.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 1_500);
+      await addWorktreeViewer(record.id);
+      const status = await computeWorktreeStatus(getWorktree(record.id)!);
+      assert.equal(status.dirty, true, "the returning viewer reads fresh");
+    } finally {
+      vi.useRealTimers();
+    }
     removeWorktreeViewer(record.id);
     await removeWorktree(record.id, { force: true, deleteBranch: true });
   },
@@ -1275,7 +1293,7 @@ async function waitForAsync(
   while (!(await predicate())) {
     if (Date.now() - start > timeoutMs)
       throw new Error("Timed out waiting for watcher state.");
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
 }
 
@@ -1283,7 +1301,8 @@ test(
   "an un-ignore inside the refresh cooldown still re-subscribes when it ends",
   { timeout: 30_000 },
   async () => {
-    const previous = setTreeWatchLimitsForTests({ ignoreRefreshMs: 1_500 });
+    // Long enough that the edit below surely lands inside it.
+    const previous = setTreeWatchLimitsForTests({ ignoreRefreshMs: 60_000 });
     const record = await createWorktree({
       projectId: "watch-proj",
       name: "unignore-cooldown",
@@ -1299,15 +1318,19 @@ test(
       );
 
       // Within the cooldown of that subscribe: nothing in `generated/` would
-      // ever send the event that asks again.
+      // ever send the event that asks again, so the refresh arms its own retry.
       writeFileSync(join(record.path, ".gitignore"), "");
+      await waitFor(() => treeActivityForTests(record.id)!.retryArmed);
+      assert.equal(subscribesOf(subscribe, record.path).length, 1);
+      // The cooldown ends: its timer fires and finds the window over.
+      setTreeWatchLimitsForTests({ ignoreRefreshMs: 0 });
+      fireTreeRetriesForTests();
       await waitFor(
         () =>
           subscribesOf(subscribe, record.path).length === 2 &&
           !subscribesOf(subscribe, record.path)[1]?.ignore?.includes(
             "generated",
           ),
-        10_000,
       );
       await treeWatchLiveForTests(record.id);
 
@@ -1334,7 +1357,7 @@ test(
   "a failed subscribe of a viewed tree retries until events flow",
   { timeout: 30_000 },
   async () => {
-    const previous = setTreeWatchLimitsForTests({ retryBaseMs: 200 });
+    const previous = setTreeWatchLimitsForTests({ retryBaseMs: 60_000 });
     const record = await createWorktree({
       projectId: "watch-proj",
       name: "subscribe-retry",
@@ -1354,6 +1377,8 @@ test(
       await addWorktreeViewer(record.id);
       assert.ok(failed);
       assert.equal(await treeWatchLiveForTests(record.id), false);
+      assert.equal(treeActivityForTests(record.id)!.retryArmed, true);
+      fireTreeRetriesForTests();
       await waitForAsync(() => treeWatchLiveForTests(record.id));
 
       broadcasts.length = 0;
@@ -1418,7 +1443,7 @@ test(
   async () => {
     const previous = setTreeWatchLimitsForTests({
       ignoreRefreshMs: 0,
-      retryBaseMs: 1_500,
+      retryBaseMs: 60_000,
     });
     const record = await createWorktree({
       projectId: "watch-proj",
@@ -1441,6 +1466,9 @@ test(
       );
       assert.equal(await treeWatchLiveForTests(record.id), true);
 
+      // The failed release armed its own retry; it releases, then subscribes.
+      assert.equal(treeActivityForTests(record.id)!.retryArmed, true);
+      fireTreeRetriesForTests();
       await waitFor(
         () =>
           subscribesOf(spy, record.path).length === 2 &&
@@ -1498,7 +1526,7 @@ test(
   "a re-view after a failed release reuses the retiring watch",
   { timeout: 30_000 },
   async () => {
-    const previous = setTreeWatchLimitsForTests({ retryBaseMs: 300 });
+    const previous = setTreeWatchLimitsForTests({ retryBaseMs: 60_000 });
     const record = await createWorktree({
       projectId: "watch-proj",
       name: "reuse-after-failure",
@@ -1515,8 +1543,10 @@ test(
 
       await addWorktreeViewer(record.id);
       state.failUnsubscribes = 0;
-      // Past the release retry, which now finds the watch wanted again.
-      await new Promise<void>((resolve) => setTimeout(resolve, 900));
+      // The release retry fires and now finds the watch wanted again.
+      assert.equal(treeActivityForTests(record.id)!.retryArmed, true);
+      fireTreeRetriesForTests();
+      await treeWatchLiveForTests(record.id);
       assert.equal(state.maxLive, 1, "never two subscriptions of the path");
       assert.equal(
         subscribesOf(spy, record.path).length,
@@ -1564,7 +1594,8 @@ test(
       await waitFor(() => state.unsubscribeCalls >= 1);
 
       const viewing = addWorktreeViewer(record.id);
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      // The view's step queues behind the release still in flight.
+      await waitFor(() => treeActivityForTests(record.id)!.settlesPending >= 2);
       assert.equal(
         subscribesOf(spy, record.path).length,
         1,
@@ -1621,7 +1652,8 @@ test(
       // stays in flight: `second` must wait for the slot, not crawl beside it.
       await addWorktreeViewer(second.id);
       await waitFor(() => state.unsubscribeCalls >= 1);
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      // Every step `second` has queued has run, and none subscribed.
+      assert.equal(await treeWatchLiveForTests(second.id), false);
       assert.equal(subscribesOf(spy, second.path).length, 0);
       assert.equal(state.maxLive, 1, "never above the cap");
 
