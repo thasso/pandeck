@@ -81,6 +81,10 @@ export function forbidden(...acts: (string | RegExp)[]): PromptRule {
 }
 
 const CLAUSE_BOUNDARY = /[.;:!?\n]|\s—\s|,\s+but\b/g;
+/**
+ * Negation is spotted by TOKEN, not by what it governs: any of these in the
+ * text leading up to a key word counts, so the check errs toward failing.
+ */
 const NEGATED =
   /\b(?:not|never|no longer|no|cannot|without|neither|nor)\b|n't\b/i;
 
@@ -100,6 +104,14 @@ function clauseStart(text: string, at: number): number {
  * channel" and "is never recorded as accepted" fail. Text INSIDE a named group
  * is not checked: a premise such as `(?<premise>NOT restate)` may negate. With
  * no named group, the whole match is the key word.
+ *
+ * This is lexical and deliberately conservative, not a parser of English.
+ * Double negatives ("Never fail to consolidate") and negated conditional
+ * antecedents ("If there is no room, consolidate", "No matter what,
+ * consolidate") are unsupported unless the row marks that part as a named
+ * premise group, so they fail even though the rule holds. A failure like that
+ * is a false failure, never a missed rule: rephrase the prompt, or mark the
+ * premise in the row's pattern.
  */
 export function affirmed(pattern: RegExp): PromptRule {
   const flags = `${pattern.flags.replace(/[gyd]/g, "")}gd`;
