@@ -947,17 +947,10 @@ async function runRuntimeProbes() {
 }
 
 const claudeProfile = "bun-check";
-const legacyGrant = {
-  sessionId: "legacy-session",
-  key: "legacy-grant",
-  grantedAt: 1,
-  sourceApprovalId: "legacy-approval",
-};
 
 /**
- * What the lifecycle boot needs in its data directory: Claude sessions on, one
- * PA-isolated Claude credential profile, and a whole-file approval store from
- * before #370 for the first boot to import.
+ * What the lifecycle boot needs in its data directory: Claude sessions on and
+ * one PA-isolated Claude credential profile.
  */
 function seedDataDir() {
   const now = Date.now();
@@ -979,34 +972,6 @@ function seedDataDir() {
         updatedAt: now,
       },
     ]),
-  );
-  writeFileSync(
-    join(data, "pending-approvals.json"),
-    JSON.stringify({ approvals: [], grants: [legacyGrant] }),
-  );
-}
-
-/** The first boot moved the legacy approval store into SQLite and aside. */
-function checkLegacyImport() {
-  const database = new Database(join(data, "app.sqlite3"), { readonly: true });
-  const grant = database
-    .query("SELECT key FROM approval_grants WHERE session_id = ?")
-    .get(legacyGrant.sessionId);
-  const recorded = database
-    .query("SELECT COUNT(*) AS count FROM legacy_file_imports WHERE name = ?")
-    .get("pending-approvals.json").count;
-  database.close();
-  assert(
-    grant?.key === legacyGrant.key && recorded === 1,
-    "The packaged server did not import the legacy approval store.",
-  );
-  assert(
-    !existsSync(join(data, "pending-approvals.json")) &&
-      readdirSync(data).some(
-        (name) =>
-          name.startsWith("pending-approvals") && name.includes("imported"),
-      ),
-    "The imported legacy approval store was not moved aside.",
   );
 }
 
@@ -1404,7 +1369,6 @@ try {
     firstMigrationCount === expectedMigrationCount,
     `Fresh database applied ${firstMigrationCount} of ${expectedMigrationCount} packaged migrations.`,
   );
-  checkLegacyImport();
 
   const second = await startLifecycleServer();
   await waitForHealth(second.child);
@@ -1423,7 +1387,7 @@ try {
   );
 
   console.log(
-    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, legacy import, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
+    `Bun bundle runtime passed: fresh DB, web, WebSocket, restart, ${firstMigrationCount} migrations, Claude session lifecycle, SIGUSR1 heap snapshot, runtime probes, package-proxy env only for children, Bun pragma and parse+link RSS, Playwright MCP, native process identity, explicit assets only.`,
   );
 } finally {
   await terminateChildren();

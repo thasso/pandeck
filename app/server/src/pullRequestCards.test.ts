@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "vitest";
-import type { DisplayMessage, TaskSummary } from "@assistant/shared";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { DATA_DIR } from "./config.ts";
+import type {
+  DisplayMessage,
+  PullRequestCard,
+  TaskSummary,
+} from "@assistant/shared";
 import { closeDb, getDb } from "./db/index.ts";
+import { pullRequestCardStore } from "./db/pullRequestCardStore.ts";
 import {
   beginPullRequestCardObservation,
   cardsForSession,
   choosingTaskSessionIds,
   createPullRequestCard,
   hasChoosingTaskCard,
-  importLegacyPullRequestCards,
   patchPullRequestCard,
   patchPullRequestCardObservation,
   pullRequestCardById,
@@ -683,45 +684,45 @@ test("a patch that changes nothing writes nothing, and still reaches the card's 
 });
 
 test("the index stays equal to a full rebuild when a card moves session and legacy values are malformed", () => {
-  // Shapes an old file could hold that no current write produces.
-  writeFileSync(
-    join(DATA_DIR, "pull-request-cards.json"),
-    JSON.stringify({
-      cards: [
-        {
-          card: {
-            id: "m1",
-            sessionId: "m-a",
-            status: "open",
-            createdAt: "yesterday",
-            number: "7",
-            ci: "green",
-            title: "m1",
-          },
-        },
-        {
-          card: {
-            id: "m2",
-            sessionId: "m-a",
-            status: "weird",
-            title: "m2",
-            draft: 1,
-          },
-        },
-        {
-          card: {
-            id: "m3",
-            sessionId: "m-b",
-            status: "merged",
-            createdAt: 5,
-            review: null,
-            title: "m3",
-          },
-        },
-      ],
-    }),
-  );
-  assert.equal(importLegacyPullRequestCards().kind, "imported");
+  // Shapes the retired file store could hold, and so rows its import wrote,
+  // that no current write produces.
+  const malformed = [
+    {
+      card: {
+        id: "m1",
+        sessionId: "m-a",
+        status: "open",
+        createdAt: "yesterday",
+        number: "7",
+        ci: "green",
+        title: "m1",
+      },
+    },
+    {
+      card: {
+        id: "m2",
+        sessionId: "m-a",
+        status: "weird",
+        title: "m2",
+        draft: 1,
+      },
+    },
+    {
+      card: {
+        id: "m3",
+        sessionId: "m-b",
+        status: "merged",
+        createdAt: 5,
+        review: null,
+        title: "m3",
+      },
+    },
+  ];
+  for (const { card } of malformed)
+    pullRequestCardStore.insert({
+      card: card as unknown as PullRequestCard,
+      context: {},
+    });
   const steps: Array<() => void> = [
     () => {},
     () => patchPullRequestCard("m1", { sessionId: "m-b" }),

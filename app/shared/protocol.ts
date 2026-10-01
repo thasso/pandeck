@@ -7659,14 +7659,6 @@ export type ServerMessage =
       severity: NoticeSeverity;
       message: string;
       target?: MessageTarget;
-      /**
-       * The notice states a condition of the SERVER PROCESS (a card store whose
-       * legacy file could not be imported), not of its target. A client that
-       * keeps it on a session retires it on the next `ready`: a restarted server
-       * that still has the condition says it again, and a healthy one says
-       * nothing — so without this the note would outlive the outage.
-       */
-      serverCondition?: true;
     }
   /**
    * The same alert the server delivers as a Declarative Web Push, offered to

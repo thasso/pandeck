@@ -25,7 +25,7 @@ import {
   listSteps,
   type WorkflowRunRow,
 } from "./db/workflowStore.ts";
-import { pullRequestCardForProjection } from "./pullRequestCards.ts";
+import { pullRequestCardById } from "./pullRequestCards.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import {
   canProjectWorkflowRunCard,
@@ -122,7 +122,7 @@ export function workflowRunDeliveryOf(
 ): WorkflowRunDelivery | undefined {
   // One indexed row per run: each run names its own card.
   const pullRequest = card.pullRequest
-    ? pullRequestCardForProjection(card.pullRequest.cardId)
+    ? pullRequestCardById(card.pullRequest.cardId)
     : undefined;
   if (!pullRequest) return undefined;
   const capabilities = pullRequest.repositoryCapabilities;

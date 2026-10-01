@@ -195,68 +195,6 @@ describe("useAssistant message arrivals on their object", () => {
     contextInfo: null,
   };
 
-  // A card-store outage is a condition of the server PROCESS: after a restart
-  // a healthy server sends nothing about it, so the note has to go on `ready`
-  // (a server that still has it says it again after `ready`) — and only that
-  // note, never another failure on the same or another session.
-  it("retires a server-condition note on a healthy reconnect, and nothing else", () => {
-    const outage: ServerMessage = {
-      type: "notice",
-      severity: "error",
-      message:
-        "The approval store is unavailable: its legacy file could not be imported.",
-      target: { type: "session", id: "s1" },
-      serverCondition: true,
-    };
-    let state = apply(snapshotOf("s1"));
-    state = apply(outage, state);
-    state = apply(
-      {
-        type: "error",
-        message: "Failed to rename session: session not found.",
-        target: { type: "session", id: "s2" },
-      },
-      state,
-    );
-    state = apply(unavailable("s3"), state);
-    expect(state.sessionFailures.s1).toBe(outage.message);
-
-    // The server restarts healthy: a fresh `ready`, then the viewed snapshot.
-    state = apply(readyMessage, state);
-    state = apply(snapshotOf("s1"), state);
-    expect(state.sessionFailures.s1).toBeUndefined();
-    expect(state.sessionFailures.s2).toBe(
-      "Failed to rename session: session not found.",
-    );
-    expect(state.serverConditionSessions).toEqual({});
-
-    // Still broken after the restart, in the server's real connect order, which
-    // the server's card-store outage suite pins: the deep-linked snapshot, then
-    // ready, the global notice, and the targeted one last. The note survives.
-    const globalOutage: ServerMessage = {
-      type: "notice",
-      severity: "error",
-      message: outage.message,
-      serverCondition: true,
-    };
-    for (const frame of [snapshotOf("s1"), readyMessage, globalOutage, outage])
-      state = apply(frame, state);
-    expect(state.sessionFailures.s1).toBe(outage.message);
-    expect(state.error).toBe(outage.message);
-
-    // A different failure that replaced the note on s1 survives the reconnect.
-    state = apply(
-      {
-        type: "error",
-        message: "Failed to fork session: no anchor",
-        target: { type: "session", id: "s1" },
-      },
-      state,
-    );
-    state = apply(readyMessage, state);
-    expect(state.sessionFailures.s1).toBe("Failed to fork session: no anchor");
-  });
-
   // Recovery WITHOUT a dismissal first: a stale "cannot be opened" note must
   // not stand over the chat that did open.
   it("retires the unavailable note when that session opens after all", () => {
@@ -434,48 +372,6 @@ describe("useAssistant message arrivals on their object", () => {
     expect(
       apply({ type: "notice", severity: "error", message: "It broke." }).error,
     ).toBe("It broke.");
-  });
-
-  // The server says a card-store outage in ONE notice naming every store that
-  // is out (`connection.ts` `cardStoreNotices`): the client keeps one failure
-  // per session and one global error, so a notice per store would leave only
-  // the last one on screen.
-  it("keeps both card stores' outage visible at once, globally and on the viewed session", () => {
-    const outage =
-      "The approval store and the pull-request card store are unavailable: their legacy files could not be imported.";
-    let state = apply({ type: "notice", severity: "error", message: outage });
-    state = apply(
-      {
-        type: "notice",
-        severity: "error",
-        message: outage,
-        target: { type: "session", id: "s1" },
-      },
-      state,
-    );
-    for (const shown of [state.error, state.sessionFailures.s1]) {
-      expect(shown).toMatch(/approval store/);
-      expect(shown).toMatch(/pull-request card store/);
-    }
-
-    // Why one: a second notice on the same session replaces the first.
-    const split = [
-      "The approval store is unavailable.",
-      "The pull-request card store is unavailable.",
-    ].reduce(
-      (acc, message) =>
-        apply(
-          {
-            type: "notice",
-            severity: "error",
-            message,
-            target: { type: "session", id: "s1" },
-          },
-          acc,
-        ),
-      createInitialState(),
-    );
-    expect(split.sessionFailures.s1).not.toMatch(/approval store/);
   });
 
   // Deleted rather than announced: the rows move in the list, which is the

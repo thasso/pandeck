@@ -719,10 +719,10 @@ vocabulary, display projection, and normalized session model types.
   exposes whether the server recorded the required grant, without exposing
   tokens or raw credential state. The two pull-request providers are SEPARATE
   kinds (`githubPullRequest`, `forgejoPullRequest`) rather than one
-  provider-generic kind: cards persisted in `DATA_DIR/pending-approvals.json`
-  carry the kind string, so collapsing them would make existing cards
-  unreadable. The Forgejo shapes also encode that instance's real contract —
-  `ForgejoPrReviewEvent` is `APPROVED`/`COMMENT`/`REQUEST_CHANGES` (not GitHub's
+  provider-generic kind: cards persisted in the `approvals` table carry the kind
+  string, so collapsing them would make existing cards unreadable. The Forgejo
+  shapes also encode that instance's real contract — `ForgejoPrReviewEvent` is
+  `APPROVED`/`COMMENT`/`REQUEST_CHANGES` (not GitHub's
   `APPROVE`/`CHANGES_REQUESTED`), `draft` is documented as the `WIP: ` title
   prefix because the API has no draft field, `ForgejoPrInlineCommentDisplay`'s
   `side` is a display choice translated to `new_position`/`old_position`, and a

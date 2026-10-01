@@ -2172,8 +2172,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   own host-command `CommitDisplay` card — it is a user slash command, not an
   agent-proposed mutation, and its rich durable `command.result` history would
   regress if forced onto the generic card.) It mirrors the question flow's six
-  properties: a durable per-session store (`DATA_DIR/pending-approvals.json`)
-  with lifecycle `pending → executing → executed | failed | rejected`; cards
+  properties: a durable per-session store (SQLite, `db/approvalStore.ts`) with
+  lifecycle `pending → executing → executed | failed | rejected`; cards
   interleaved into BOTH harnesses' `snapshot()` (`withApprovalBlocks`) AND
   re-emitted to a viewer on attach (`connection.view` → `approvalsForSession`)
   so they survive reload at the tool/time position where issued
@@ -2578,8 +2578,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `liveSession` `setHumanPromptHook` seam. The engine talks to the hub through
   one `getHub()`/`setHubForTests` seam (not scattered `await import("./hub.ts")`
   call sites), so tests substitute a deterministic fake hub rather than
-  module-mocking a process-wide singleton. `peerPromptLegacyImport.ts` runs the
-  one-time `agent-relays.json` import at boot.
+  module-mocking a process-wide singleton.
 - `slackAssistantChat.ts` adapts authorized private `message.im` events into the
   permanent Assistant queue and adapts delivery events back into one updated
   private Slack placeholder; it must reject bot echoes/subtypes/other users,

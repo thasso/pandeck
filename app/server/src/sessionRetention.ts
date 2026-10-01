@@ -22,7 +22,6 @@
  * invocation at a time, and a failure is logged and retried by the next run
  * rather than failing startup or any user mutation.
  */
-import { attentionUnknownReason } from "./attentionAvailability.ts";
 import {
   settleBlockedReason,
   workflowRunOwnerBySession,
@@ -115,14 +114,6 @@ export async function sweepSettledSessionArchive(
   try {
     // Imported here, not at module scope: `hub.ts` owns the session list this
     // module reads and is itself wired from `index.ts` beside this scheduler.
-    // A settled session may still owe an answer the card stores cannot show
-    // right now; archiving it would bury that. Skip the pass; the next one
-    // reconsiders everything once the stores are readable again.
-    const unknown = attentionUnknownReason();
-    if (unknown) {
-      console.warn(`[sessions] auto-archive skipped: ${unknown}`);
-      return [];
-    }
     const { hub } = await import("./hub.ts");
     const rows = await hub.listSessions();
     const candidates = selectSettledArchiveCandidates(rows, {

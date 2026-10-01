@@ -280,19 +280,6 @@ function reserveHop(chainId: string, now = Date.now()): number {
   }
 }
 
-/** Raise a chain's next_hop to at least `nextHop` (used to restore imported counters). */
-function bumpChainNextHopTo(
-  chainId: string,
-  nextHop: number,
-  now = Date.now(),
-): void {
-  getDb()
-    .prepare(
-      "UPDATE peer_prompt_chains SET next_hop = MAX(next_hop, ?), updated_at_ms = ? WHERE chain_id = ?",
-    )
-    .run(nextHop, now, chainId);
-}
-
 function addParticipant(
   chainId: string,
   sessionId: string,
@@ -1401,84 +1388,11 @@ function pruneTerminal(cutoffMs: number): number {
   );
 }
 
-/* ------------------------------- import ---------------------------------- */
-
-export interface ImportedRecord {
-  id: string;
-  conversationId: string;
-  chainId: string;
-  hop: number;
-  senderSessionId: string;
-  recipientSessionId: string;
-  taskId?: string;
-  prompt: string;
-  responseRequested: boolean;
-  status: PeerPromptStatus;
-  senderLabel?: string;
-  taskLabel?: string;
-  createdAt: number;
-  acceptedAt?: number;
-}
-
-/** Idempotently insert a pre-formed (e.g. migrated) row, preserving its id/status. */
-function insertImported(rec: ImportedRecord): boolean {
-  const queueSeq = nextId("peer_prompt_seq");
-  const result = getDb()
-    .prepare(
-      `
-    INSERT OR IGNORE INTO peer_prompts (
-      id, conversation_id, chain_id, hop, queue_seq, sender_session_id, recipient_session_id,
-      task_id, prompt, response_requested, status, attempts, sender_label, task_label,
-      created_at_ms, updated_at_ms, accepted_at_ms, transitions_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
-  `,
-    )
-    .run(
-      rec.id,
-      rec.conversationId,
-      rec.chainId,
-      rec.hop,
-      queueSeq,
-      rec.senderSessionId,
-      rec.recipientSessionId,
-      rec.taskId ?? null,
-      rec.prompt,
-      rec.responseRequested ? 1 : 0,
-      rec.status,
-      rec.senderLabel ?? null,
-      rec.taskLabel ?? null,
-      rec.createdAt,
-      rec.createdAt,
-      rec.acceptedAt ?? null,
-      JSON.stringify([{ to: rec.status, at: rec.createdAt }]),
-    );
-  return result.changes > 0;
-}
-
-/* ------------------------------- migration ------------------------------- */
-
-function migrationDone(key: string): boolean {
-  return Boolean(
-    getDb()
-      .prepare("SELECT 1 FROM peer_prompt_migrations WHERE key = ?")
-      .get(key),
-  );
-}
-
-function markMigrationDone(key: string, now = Date.now()): void {
-  getDb()
-    .prepare(
-      "INSERT OR IGNORE INTO peer_prompt_migrations (key, applied_at_ms) VALUES (?, ?)",
-    )
-    .run(key, now);
-}
-
 export const peerPromptStore = {
   // chains
   createChain,
   getChain,
   reserveHop,
-  bumpChainNextHopTo,
   addParticipant,
   participantsOf,
   chainsForSession,
@@ -1500,7 +1414,6 @@ export const peerPromptStore = {
   markFailed,
   markExpired,
   cancelPending,
-  insertImported,
   markSenderNotified,
   // reads
   getById,
@@ -1523,7 +1436,4 @@ export const peerPromptStore = {
   requeueDueRetries,
   expireUnresolved,
   pruneTerminal,
-  // migration bookkeeping
-  migrationDone,
-  markMigrationDone,
 };

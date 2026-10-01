@@ -329,8 +329,8 @@ function sweep(): Promise<void> {
   try {
     open = openPullRequestCards();
   } catch (err) {
-    // An unavailable card store (its legacy import has not finished) retries
-    // on its own; this timer must survive to poll once it has.
+    // A store read that fails (a database error) is retried by the next tick;
+    // this timer must survive to poll once it reads again.
     console.warn(
       "[pull-requests] watcher sweep skipped:",
       err instanceof Error ? err.message : String(err),

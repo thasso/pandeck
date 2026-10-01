@@ -130,19 +130,11 @@ unchanged writes nothing. Granting a key the session already holds keeps the
 original grant.
 
 `reconcileLegacyPartialApprovalCard` still runs on every read, as it did on
-every read of the file. The import also stores its result, so the repair is
-persisted rather than re-derived.
+every read of the file, so a card stored in the old partial-failure shape reads
+repaired.
 
 Until 0063 both lived in `DATA_DIR/pending-approvals.json`, read and rewritten
-whole. The server imports that file once and renames it to
-`pending-approvals.json.imported-<ms>.bak`, never deleting it. The crash,
-replaced-file, duplicate, bad-file, unavailable-store and rollback rules are the
-pull-request cards' ones ([pull-requests.md](pull-requests.md#storage)). A
-repeated card id, or a repeated grant for one session and key, keeps the first
-and stays in the backup. An unavailable approval store refuses reads, and so
-refuses to answer "no grants", rather than auto-approving nothing or everything
-on a guess. A store written before grants existed imports its cards and no
-grants. A card with no body, or one reconciliation cannot read (a Jira body
-without usable items), counts as invalid and is left in the backup. The rest of
-the file imports. In the file store such a card made every read fail and the
-store read as empty.
+whole. A one-time boot import moved them into these tables and renamed the file
+to `pending-approvals.json.imported-<ms>.bak`. That importer is retired, like
+the pull-request cards' one ([pull-requests.md](pull-requests.md#storage)): the
+server neither reads nor deletes a leftover `pending-approvals.json`.
