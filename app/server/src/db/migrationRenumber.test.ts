@@ -10,7 +10,8 @@
  *   pnpm --filter @assistant/server test src/db/migrationRenumber.test.ts
  */
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -82,7 +83,51 @@ test("an edit to a shipped migration still reports as an edit", () => {
   closeDb();
 });
 
+// The one superseded checksum `index.ts` accepts: 0005_projects.sql as it was
+// applied before two comment examples changed for publication.
+const SUPERSEDED_0005 =
+  "edeadbf7cfded7d01ca03af36c3a39d6b02935dd40ed5afd7b3d328601b68e4f";
+
+function versionOf(name: string): number {
+  const raw = new DatabaseSync(DB_PATH);
+  const row = raw
+    .prepare("SELECT version FROM schema_migrations WHERE name = ?")
+    .get(name) as { version: number };
+  raw.close();
+  return row.version;
+}
+
+test("a database that applied 0005 before publication still opens", () => {
+  // Undo the earlier cases' damage to the highest row; only 0005 differs here.
+  setRow(shipped.version, shipped.name, shipped.checksum);
+  const version = versionOf("0005_projects.sql");
+  setRow(version, "0005_projects.sql", SUPERSEDED_0005);
+  assert.doesNotThrow(() => getDb());
+  closeDb();
+});
+
+test("a superseded checksum is accepted only under its own name", () => {
+  const version = versionOf("0005_projects.sql");
+  setRow(version, "0005_projects.sql", "2".repeat(64));
+  assert.throws(() => getDb(), /checksum changed after it was applied/);
+  closeDb();
+
+  setRow(shipped.version, shipped.name, SUPERSEDED_0005);
+  assert.throws(() => getDb(), /checksum changed after it was applied/);
+  closeDb();
+});
+
 test("an intact database opens cleanly", () => {
+  const version = versionOf("0005_projects.sql");
+  const current = createHash("sha256")
+    .update(
+      readFileSync(
+        join(import.meta.dirname, "migrations", "0005_projects.sql"),
+        "utf8",
+      ),
+    )
+    .digest("hex");
+  setRow(version, "0005_projects.sql", current);
   setRow(shipped.version, shipped.name, shipped.checksum);
 
   assert.doesNotThrow(() => getDb());

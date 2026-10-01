@@ -85,6 +85,21 @@ export function inDbTransaction<T>(fn: () => T): T {
 }
 
 /** sha256 of a migration's content — the checksum recorded in the database. */
+/**
+ * Checksums a shipped migration was applied under before an edit that left its
+ * statements unchanged. Each entry is a reviewed exception for databases that
+ * already exist; editing a shipped migration is otherwise refused
+ * (`docs/migrations.md`). Only the file's own name is accepted.
+ */
+const SUPERSEDED_CHECKSUMS: ReadonlyMap<string, readonly string[]> = new Map([
+  // Two example values in column comments changed when the source was
+  // published; every database created before that recorded this checksum.
+  [
+    "0005_projects.sql",
+    ["edeadbf7cfded7d01ca03af36c3a39d6b02935dd40ed5afd7b3d328601b68e4f"],
+  ],
+]);
+
 function hashMigration(name: string): string {
   return createHash("sha256")
     .update(readFileSync(join(MIGRATIONS_DIR, name), "utf8"))
@@ -127,6 +142,11 @@ function runMigrations(database: DatabaseSync): void {
       continue;
     }
     if (applied.checksum === hashMigration(name)) continue;
+    if (
+      applied.name === name &&
+      SUPERSEDED_CHECKSUMS.get(name)?.includes(applied.checksum ?? "")
+    )
+      continue;
     // Same version, different content. Distinguish the two ways that happens:
     // an edit to a shipped file, or — far more confusing to read in a crash
     // loop — two branches that both claimed this version number, one of them

@@ -25,6 +25,12 @@ Two consequences follow, and every rule below is one of them:
 
 1. Create `NNNN_short_name.sql` with the next free number. Never edit a file
    that has shipped: add a forward migration instead, even to fix a mistake.
+   That includes comments: the checksum covers the whole file. The one exception
+   is `SUPERSEDED_CHECKSUMS` in `index.ts`, which accepts the checksum
+   `0005_projects.sql` was applied under before two comment examples changed for
+   publication; a database that recorded either checksum opens. Adding an entry
+   is a reviewed decision for a statement-preserving edit that already shipped,
+   never a way around this rule.
 2. `pnpm --filter @assistant/server migrations:lock`, and commit
    `migrations.lock.json` with the migration.
 3. Update the row mapping in the same change.
