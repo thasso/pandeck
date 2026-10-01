@@ -11,7 +11,7 @@
   `rehype-katex` runs LAST because sanitize strips MathML. Keep the `components`
   map at MODULE scope and per-render data in `MarkdownRenderContext`, or React
   remounts every element, losing scroll and re-running Shiki
-  (`Markdown.rerender.test.tsx`; `docs/served-files.md`).
+  (`Markdown.test.tsx` re-renders; `docs/served-files.md`).
 - Settings and integration pages are end-user surfaces: deployment details,
   protocol names, scopes, token diagnostics and test controls stay out of the
   primary flow; tokens and raw credential files never enter the UI.

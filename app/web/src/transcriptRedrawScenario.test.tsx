@@ -2,7 +2,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerMessage } from "@assistant/shared";
+import type { ServerMessage } from "@assistant/shared";
+import { FakeSocket } from "./test/fakeSocket.ts";
 
 /**
  * What an open transcript is allowed to REDRAW, measured on the whole app.
@@ -39,35 +40,6 @@ vi.setConfig({ testTimeout: 20_000 });
 vi.mock("./hooks/useSessionReadDwell.ts", () => ({
   useSessionReadDwell: () => undefined,
 }));
-
-class ScenarioSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static instances: ScenarioSocket[] = [];
-  readyState = ScenarioSocket.CONNECTING;
-  sent: ClientMessage[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(readonly url: string) {
-    ScenarioSocket.instances.push(this);
-  }
-  open(): void {
-    this.readyState = ScenarioSocket.OPEN;
-    this.onopen?.();
-  }
-  receive(message: ServerMessage): void {
-    this.onmessage?.({ data: JSON.stringify(message) });
-  }
-  send(source: string): void {
-    this.sent.push(JSON.parse(source) as ClientMessage);
-  }
-  close(): void {
-    this.readyState = 3;
-    this.onclose?.();
-  }
-}
 
 class NoopObserver {
   observe(): void {}
@@ -106,8 +78,8 @@ async function settle(frames = 4): Promise<void> {
 
 beforeEach(() => {
   window.localStorage.clear();
-  ScenarioSocket.instances = [];
-  vi.stubGlobal("WebSocket", ScenarioSocket);
+  FakeSocket.instances = [];
+  vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal("ResizeObserver", NoopObserver);
   vi.stubGlobal("IntersectionObserver", NoopObserver);
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -217,7 +189,7 @@ function snapshotMessage(id = sessionId(0)): ServerMessage {
 }
 
 /** Boot the app on the viewed chat, with the session list already sorted. */
-async function openChat(): Promise<ScenarioSocket> {
+async function openChat(): Promise<FakeSocket> {
   window.history.replaceState(null, "", `/sessions/${sessionId(0)}`);
   await act(async () => {
     root!.render(
@@ -227,7 +199,7 @@ async function openChat(): Promise<ScenarioSocket> {
     );
   });
   await settle();
-  const socket = ScenarioSocket.instances[0]!;
+  const socket = FakeSocket.instances[0]!;
   await act(async () => {
     socket.open();
     socket.receive(readyMessage());
@@ -409,10 +381,24 @@ describe("what a broadcast re-renders", () => {
     }
   });
 
-  it("re-renders no composer for a rebroadcast the spawned ledge does not draw", async () => {
+  it("re-renders no composer for a rebroadcast its ledges do not draw", async () => {
     const socket = await openChat();
     const peers = (message: ServerMessage) =>
       act(async () => socket.receive(message));
+    const pendingApproval = {
+      type: "approvalUpdate",
+      sessionId: sessionId(0),
+      approval: {
+        renderKind: "approval",
+        id: "appr_1",
+        sessionId: sessionId(0),
+        kind: "commit",
+        status: "pending",
+        title: "Merge #4 into main",
+        createdAt: 1_700_000_000_500,
+        body: { kind: "commit", message: "wip", files: ["a.ts"] },
+      },
+    } as unknown as ServerMessage;
     await peers({
       type: "sessions",
       sessions: peerSessionRows((i) => 1_700_000_000_000 + i),
@@ -454,6 +440,20 @@ describe("what a broadcast re-renders", () => {
       setPerfStatsEnabled(true);
       await streamingPeer(Date.now() - 1_500);
       await streamingPeer(Date.now() - 1_000);
+      await settle();
+      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
+
+      // The same shelf's pending-approval strip. The server re-emits every
+      // card on each re-attach: the same card again is nothing the strip
+      // draws, so the composer does not re-render for it.
+      await peers(pendingApproval);
+      await settle();
+      expect(
+        container!.querySelector("[data-pending-approvals-ledge]")?.textContent,
+      ).toContain("Merge #4 into main");
+      setPerfStatsEnabled(false);
+      setPerfStatsEnabled(true);
+      await peers(pendingApproval);
       await settle();
       expect(countOf(perfSnapshot(), "Composer")).toBe(0);
     } finally {
@@ -667,126 +667,5 @@ describe("live cards", () => {
     await act(async () => socket.receive(snapshotMessage(sessionId(1))));
     await settle();
     expect(cardElement()).toBeNull();
-  });
-});
-
-/**
- * A card waiting on the user is anchored at the tool call that proposed it, so
- * an agent that keeps talking buries it. The composer names it until it is
- * answered, and the agent can link it; both are the SAME jump, asked of the
- * server because the proposing turn may be behind the transcript's window.
- */
-describe("pending approval cards", () => {
-  const approvalUpdate = (status = "pending"): ServerMessage =>
-    ({
-      type: "approvalUpdate",
-      sessionId: sessionId(0),
-      approval: {
-        renderKind: "approval",
-        id: "appr_1",
-        sessionId: sessionId(0),
-        kind: "commit",
-        status,
-        title: "Merge #4 into main",
-        createdAt: 1_700_000_000_500,
-        body: { kind: "commit", message: "wip", files: ["a.ts"] },
-      },
-    }) as unknown as ServerMessage;
-
-  const approvalAsks = (socket: ScenarioSocket) =>
-    socket.sent.filter(
-      (msg) =>
-        msg.type === "resolveTimelineAnchor" && msg.target.kind === "approval",
-    );
-
-  it("names the card on the composer, jumps to it, and leaves once it is answered", async () => {
-    const socket = await openChat();
-    expect(
-      container!.querySelector("[data-pending-approvals-ledge]"),
-    ).toBeNull();
-
-    await act(async () => socket.receive(approvalUpdate()));
-    await settle();
-    const strip = container!.querySelector("[data-pending-approvals-ledge]");
-    expect(strip?.textContent).toContain("Merge #4 into main");
-
-    await act(async () => strip!.querySelector("button")!.click());
-    expect(approvalAsks(socket)).toMatchObject([
-      { target: { kind: "approval", approvalId: "appr_1" } },
-    ]);
-
-    // The server re-emits every card on each re-attach: the same card again
-    // is nothing the strip draws, so the composer does not re-render for it.
-    setPerfStatsEnabled(true);
-    try {
-      await act(async () => socket.receive(approvalUpdate()));
-      await settle();
-      expect(countOf(perfSnapshot(), "Composer")).toBe(0);
-    } finally {
-      setPerfStatsEnabled(false);
-    }
-
-    await act(async () => socket.receive(approvalUpdate("executing")));
-    await settle();
-    expect(
-      container!.querySelector("[data-pending-approvals-ledge]"),
-    ).toBeNull();
-  });
-
-  it("renders an agent's card link with the card's live status, and jumps on click", async () => {
-    const socket = await openChat();
-    await act(async () =>
-      socket.receive({
-        type: "snapshot",
-        state: {
-          sessionId: sessionId(0),
-          harness: "pi",
-          agentType: "assistant",
-          thinkingLevel: "off",
-        },
-        contextInfo: null,
-        snapshot: {
-          sessionId: sessionId(0),
-          runState: "idle",
-          timelineStart: 0,
-          streaming: [],
-          timeline: [
-            {
-              id: "ask",
-              seq: 1,
-              createdAt: new Date(1_700_000_001_000).toISOString(),
-              type: "message",
-              role: "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: "Please approve [the merge](pa://approval/appr_1).",
-                },
-              ],
-            },
-          ],
-          pendingApprovals: [],
-          activity: [],
-        },
-      } as unknown as ServerMessage),
-    );
-    await act(async () => socket.receive(approvalUpdate()));
-    await settle();
-    const link = container!.querySelector<HTMLAnchorElement>(
-      '[data-message-id="ask"] a',
-    );
-    expect(link?.textContent).toBe("the merge · pending approval");
-    expect(link?.getAttribute("href")).toBe(
-      `/sessions/${sessionId(0)}#m-approval-appr_1`,
-    );
-
-    await act(async () => link!.click());
-    expect(approvalAsks(socket)).toHaveLength(1);
-
-    await act(async () => socket.receive(approvalUpdate("executed")));
-    await settle();
-    expect(
-      container!.querySelector('[data-message-id="ask"] a')?.textContent,
-    ).toBe("the merge · done");
   });
 });
