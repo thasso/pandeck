@@ -1,0 +1,48 @@
+name: Set up Nix
+description:
+  Nix with flakes, plus the package's pnpm dependency store (a fixed-output
+  derivation) restored from the Actions cache when its inputs are unchanged.
+
+outputs:
+  deps-key:
+    description: Cache key of the pnpm dependency store export.
+    value: ${{ steps.deps-key.outputs.key }}
+  deps-cache-hit:
+    description: Whether the dependency store was restored.
+    value: ${{ steps.deps.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Nix
+      uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+      with:
+        # All inputs are public; no secrets or private binary cache.
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+
+    # Everything that can change what the dependency fetch downloads. The FOD's
+    # store path depends only on its declared hash, so a restored copy would
+    # stand in for a fetch whose inputs changed under a stale hash: there are
+    # deliberately no restore-keys, and any input change re-fetches and
+    # re-verifies it.
+    - name: Dependency store key
+      id: deps-key
+      shell: bash
+      run: |
+        week=$(date -u +%G-%V)
+        echo "key=nix-pnpm-deps-${{ hashFiles('flake.nix', 'flake.lock', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json') }}-$week" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the dependency store
+      id: deps
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ runner.temp }}/pnpm-deps.nar
+        key: ${{ steps.deps-key.outputs.key }}
+
+    - name: Import the dependency store
+      if: steps.deps.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        nix-store --import < "$RUNNER_TEMP/pnpm-deps.nar"
+        rm "$RUNNER_TEMP/pnpm-deps.nar"
