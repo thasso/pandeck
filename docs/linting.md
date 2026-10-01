@@ -397,9 +397,9 @@ empty. Moving both shapes into test callbacks is a test-architecture change.
 (seven `caretRangeFromPoint` uses preserve Safari support where
 `caretPositionFromPoint` is absent, and `execCommand` is the clipboard
 fallback), three MCP SDK `Server` uses that need the `Server` → `McpServer` API
-migration rather than a type rename, 24 `matchMedia` test stubs that still
+migration rather than a type rename, 26 `matchMedia` test stubs that still
 implement `addListener`/`removeListener`, and one each of `MutableRefObject` and
-`FormEvent`. The last 26 are cheap.
+`FormEvent`. The last 28 are cheap.
 
 `switch-exhaustiveness-check`'s 23 is not the smallest job: `connection.ts`
 would need dozens of no-op cases, while a missing `"failed"` or `"file"` case

@@ -253,25 +253,25 @@
         // rejected, not queued, and sits here only so the rule has one home.
         // Its sharpest findings are runtime guards at trust boundaries that
         // the type system only believes because of an `as` cast.
-        "typescript/require-await": "off", // 1091
-        "typescript/no-unsafe-member-access": "off", // 892
-        "typescript/no-unsafe-assignment": "off", // 646
+        "typescript/require-await": "off", // 1886
+        "typescript/no-unsafe-member-access": "off", // 1021
+        "typescript/no-unsafe-assignment": "off", // 719
         // Its autofix removed assertions tsc still requires; re-run
         // `pnpm run typecheck` after every fix.
-        "typescript/no-unnecessary-type-assertion": "off", // 556
-        "typescript/no-explicit-any": "off", // 268
-        "typescript/no-base-to-string": "off", // 160
-        "typescript/consistent-type-imports": "off", // 134
-        "typescript/no-unsafe-argument": "off", // 107
-        "typescript/no-unsafe-call": "off", // 60
-        "typescript/no-unsafe-return": "off", // 49
-        "typescript/unbound-method": "off", // 43
-        "preserve-caught-error": "off", // 34
-        "typescript/no-unnecessary-condition": "off", // 877, not adoptable
-        // Nine intentional browser-compat fallbacks and three deferred MCP SDK
-        // migration sites.
-        "typescript/no-deprecated": "off", // 12
-        "no-useless-assignment": "off" // 19
+        "typescript/no-unnecessary-type-assertion": "off", // 871
+        "typescript/no-explicit-any": "off", // 273
+        "typescript/no-base-to-string": "off", // 212
+        "typescript/consistent-type-imports": "off", // 194
+        "typescript/no-unsafe-argument": "off", // 109
+        "typescript/no-unsafe-call": "off", // 76
+        "typescript/no-unsafe-return": "off", // 56
+        "typescript/unbound-method": "off", // 73
+        "preserve-caught-error": "off", // 47
+        "typescript/no-unnecessary-condition": "off", // 1265, not adoptable
+        // Eight intentional browser-compat fallbacks, three deferred MCP SDK
+        // migration sites, and 28 cheap ones (see `docs/linting.md`).
+        "typescript/no-deprecated": "off", // 39
+        "no-useless-assignment": "off" // 20
       }
     },
 
@@ -319,7 +319,7 @@
         // ------------------------- STAGED, NOT YET ON -------------------------
         // Mirrored props, cache-key changes, and authoritative server echoes
         // each need a state-ownership decision rather than an effect deletion.
-        "react/no-deriving-state-in-effects": "off", // 3
+        "react/no-deriving-state-in-effects": "off", // 4
         // Unlike upstream's, oxlint's port also reports EXTRA dependencies,
         // which is this repo's deliberate trigger-token idiom, and requires
         // functions that capture only state setters. `exhaustive-deps` above
@@ -352,7 +352,7 @@
 
         // ------------------------- STAGED, NOT YET ON -------------------------
         // Cannot follow assertions behind a helper or a module-level `main()`.
-        "vitest/expect-expect": "off" // 38
+        "vitest/expect-expect": "off" // 47
       }
     },
 
