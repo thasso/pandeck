@@ -22,11 +22,6 @@ export function getDb(): DatabaseSync {
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
-    // Tests only (`src/test/setup.ts`): each test file builds a throwaway
-    // database, and waiting on fsync for every commit was half the suite.
-    if (process.env.ASSISTANT_TEST_DB_NO_FSYNC === "1") {
-      db.exec("PRAGMA synchronous = OFF");
-    }
   }
   if (!migrated) {
     runMigrations(db);
