@@ -9,7 +9,7 @@
  * and torn/corrupt-line tolerance on load.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +27,7 @@ function mem() {
 }
 
 /* ----------------------------- seq + ordering ---------------------------- */
-{
+test("seq + ordering", () => {
   const log = mem();
   const u = log.append({
     type: "message",
@@ -46,10 +46,10 @@ function mem() {
   assert.equal(log.seqCursor, 2, "cursor advances past the last seq");
   assert.notEqual(u.id, a.id, "entries get distinct ids");
   assert.ok(u.createdAt, "createdAt assigned");
-}
+});
 
 /* --------------------------- clientRequestId idempotency ------------------ */
-{
+test("clientRequestId idempotency", () => {
   const log = mem();
   const first = log.append({
     type: "message",
@@ -84,10 +84,10 @@ function mem() {
     clientRequestId: "req-2",
   } as never);
   assert.equal(log.seqCursor, 2, "a new clientRequestId appends");
-}
+});
 
 /* ------------------------------- binding -------------------------------- */
-{
+test("binding", () => {
   const log = mem();
   const u = log.append({
     type: "message",
@@ -123,7 +123,7 @@ function mem() {
     undefined,
     "a trailing assistant entry means the prompt ran",
   );
-}
+});
 
 /* ---------- bindScannedEntries: reconcile ONE completed turn -------------- */
 /**
@@ -233,7 +233,7 @@ function ourToolTurn(log: Log, prompt: string) {
   return { user, assistant, results };
 }
 
-{
+test("bindScannedEntries: reconcile ONE completed turn", () => {
   const log = mem();
   const turnStart = log.seqCursor;
   const { user, assistant, results } = ourToolTurn(log, "first prompt");
@@ -267,10 +267,10 @@ function ourToolTurn(log: Log, prompt: string) {
     5,
     "re-scanning the same turn binds nothing twice",
   );
-}
+});
 
 /* ---------- an entry anchored mid-turn does not block the rest ------------ */
-{
+test("an entry anchored mid-turn does not block the rest", () => {
   // A harness may anchor the prompt when it accepts it (`promptAccepted`) and
   // scan afterwards. Idempotence is therefore PER ENTRY: the prompt keeps the
   // anchor it already has, and the rest of the turn still binds — refusing the
@@ -297,10 +297,10 @@ function ourToolTurn(log: Log, prompt: string) {
     ],
     "the already-anchored prompt keeps its binding and the answer gets its own",
   );
-}
+});
 
 /* ---------- the boundary: a scan never reaches earlier turns -------------- */
-{
+test("the boundary: a scan never reaches earlier turns", () => {
   // A scan reports the provider's WHOLE file, so without the turn boundary the
   // first run after any change here would backfill every historical turn of
   // every existing session — which is not what this feature may do.
@@ -336,10 +336,10 @@ function ourToolTurn(log: Log, prompt: string) {
     ),
     "the history a session already had is left exactly as it was",
   );
-}
+});
 
 /* ---------- the match is anchored at the END of both transcripts --------- */
-{
+test("the match is anchored at the END of both transcripts", () => {
   // A prompt the provider never received (refused before it ran) leaves our log
   // with one more prompt than the file has. Pairing from the START would shift
   // every later prompt by one and mis-bind silently; pairing from the END is
@@ -366,10 +366,10 @@ function ourToolTurn(log: Log, prompt: string) {
     ],
     "our newest prompt pairs with the provider's newest, not with an older one",
   );
-}
+});
 
 /* ---------- a steered turn owns both of its prompts ---------------------- */
-{
+test("a steered turn owns both of its prompts", () => {
   // Steering injects a second prompt INTO the running turn, so pi's transcript
   // carries it between the turn's own messages. Both are this turn's.
   const log = mem();
@@ -400,10 +400,10 @@ function ourToolTurn(log: Log, prompt: string) {
     ],
     "both prompts of a steered turn bind, in order, with the turn around them",
   );
-}
+});
 
 /* ---------- a REFUSED steering prompt is not one of the turn's ----------- */
-{
+test("a REFUSED steering prompt is not one of the turn's", () => {
   // A steering message is appended before the provider answers, so a refused one
   // sits in our log and in no transcript. Counting it would pair this turn's
   // prompts one row too far back — its own prompt onto the PREVIOUS turn's
@@ -449,10 +449,10 @@ function ourToolTurn(log: Log, prompt: string) {
     !bindingsOf(log).some((b) => b.boundEntryId === refusedSteer.id),
     "and the refused steer is never anchored at all",
   );
-}
+});
 
 /* ---------- a match may never reach into the session's history ----------- */
-{
+test("a match may never reach into the session's history", () => {
   // The floor under every pairing rule: if the tail we matched contains a row an
   // earlier entry is already bound to, we are reading the history, not this turn.
   const log = mem();
@@ -493,10 +493,10 @@ function ourToolTurn(log: Log, prompt: string) {
     boundBefore,
     "the turn is refused rather than pairing a prompt with a historical row",
   );
-}
+});
 
 /* ---------- turn ending on a tool result (an abort) ---------------------- */
-{
+test("turn ending on a tool result (an abort)", () => {
   // An aborted turn stops after the tool ran and never writes a final answer, so
   // the LAST native row of the turn is that result. Only it names the whole turn.
   const log = mem();
@@ -530,10 +530,10 @@ function ourToolTurn(log: Log, prompt: string) {
     "n-r",
     "and carries the tool result the turn ended on, which a fork must cut at",
   );
-}
+});
 
 /* ---------- a run the provider retried mid-turn --------------------------- */
-{
+test("a run the provider retried mid-turn", () => {
   // A connection that drops mid-turn leaves a mark on both sides: our log closes
   // the abandoned attempt as a CONTENT-EMPTY assistant entry, and the provider's
   // transcript keeps the call that attempt made — one it never answered and our
@@ -577,10 +577,10 @@ function ourToolTurn(log: Log, prompt: string) {
     false,
     "the content-empty entry mirrors no native message, so it gets no anchor",
   );
-}
+});
 
 /* ---------- a turn whose ONLY answer is empty is placed as before --------- */
-{
+test("a turn whose ONLY answer is empty is placed as before", () => {
   // Nothing was retried here: the run simply produced no content. The entry is
   // still the turn's answer and still mirrors what the provider wrote, so the
   // allowance above must not turn a turn we place today into a refused one.
@@ -609,7 +609,7 @@ function ourToolTurn(log: Log, prompt: string) {
     ],
     "a lone content-empty answer keeps its anchor, and so does its prompt",
   );
-}
+});
 
 /* ---------- an unplaceable turn binds NOTHING ---------------------------- */
 /**
@@ -618,7 +618,7 @@ function ourToolTurn(log: Log, prompt: string) {
  * no fork action) rather than anchor part of it to a message that may be the
  * wrong one — and never let it disturb the turns around it.
  */
-{
+test("an unplaceable turn binds NOTHING", () => {
   const unplaceable = (
     build: (log: Log) => void,
     scan: Scan[],
@@ -919,10 +919,10 @@ function ourToolTurn(log: Log, prompt: string) {
     [{ role: "assistant", providerMessageId: "n-a" }],
     "a turn whose prompt the provider never recorded refuses the turn",
   );
-}
+});
 
 /* ---------- an unplaceable turn leaves its neighbours alone -------------- */
-{
+test("an unplaceable turn leaves its neighbours alone", () => {
   // The turn before it keeps the anchors it earned, and the turn after it is
   // matched independently — divergence is never contagious.
   const log = mem();
@@ -976,10 +976,10 @@ function ourToolTurn(log: Log, prompt: string) {
     "n3-a",
     "against its own tail of the same file",
   );
-}
+});
 
 /* ---------------------- projection: client strips server fields ----------- */
-{
+test("projection: client strips server fields", () => {
   const log = mem();
   log.append({
     type: "message",
@@ -1018,10 +1018,10 @@ function ourToolTurn(log: Log, prompt: string) {
     1,
     "binding entry absent from server view too",
   );
-}
+});
 
 /* ----------------------- tool result is its own entry --------------------- */
-{
+test("tool result is its own entry", () => {
   const log = mem();
   log.append({
     type: "message",
@@ -1050,10 +1050,10 @@ function ourToolTurn(log: Log, prompt: string) {
     "assistant + toolResult are two client entries",
   );
   assert.equal(client[1]?.role, "toolResult");
-}
+});
 
 /* --------------------------- file persistence restore --------------------- */
-{
+test("file persistence restore", () => {
   const path = join(tmp, "restore.jsonl");
   const log = new SessionLog(
     "sess-restore",
@@ -1100,10 +1100,10 @@ function ourToolTurn(log: Log, prompt: string) {
     2,
     "no new entry from a restored-dup request",
   );
-}
+});
 
 /* --------------------------- corrupt / torn line -------------------------- */
-{
+test("corrupt / torn line", () => {
   const path = join(tmp, "corrupt.jsonl");
   const log = new SessionLog(
     "sess-corrupt",
@@ -1131,14 +1131,9 @@ function ourToolTurn(log: Log, prompt: string) {
     1,
     "corrupt + torn lines are skipped; the one good entry survives",
   );
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("session log unit test: PASS");
-
-test("stores and restores normalized session log entries", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 /* ---------------- run markers: the only trace of a killed turn ------------ */
 /**
@@ -1147,7 +1142,7 @@ test("stores and restores normalized session log entries", () => {
  * The run bracket is the evidence, and it is read from the tail — boot asks it of
  * every session, and rehydrating every transcript is not a boot step.
  */
-{
+test("run markers: the last marker is read from the tail", () => {
   const log = mem();
   assert.equal(
     log.lastRunMarker(),
@@ -1177,9 +1172,9 @@ test("stores and restores normalized session log entries", () => {
     "run.aborted",
     "the NEWEST marker answers; an earlier closed run never masks it",
   );
-}
+});
 
-{
+test("run markers: the file reader agrees with memory across the tail read and a reopen", () => {
   // The file reader has to agree with the in-memory one, including across the
   // bounded tail read and a reopen.
   const path = join(tmp, "run-marker.jsonl");
@@ -1208,9 +1203,9 @@ test("stores and restores normalized session log entries", () => {
     "reopening reads the same verdict off disk",
   );
   rmSync(path, { force: true });
-}
+});
 
-{
+test("run markers: the tail walk finds a marker buried past one chunk", () => {
   // Nothing bounds how much follows an opener — the prompt that drove the turn
   // is appended after it and has no size limit — so the walk must not give up
   // after one read. This buries the marker well past a single chunk.
@@ -1253,9 +1248,9 @@ test("stores and restores normalized session log entries", () => {
     "including across a chunk boundary, which splits a line in two",
   );
   rmSync(path, { force: true });
-}
+});
 
-{
+test("run markers: a fork copies no run bracket", () => {
   // A fork cuts at a conversation entry — INSIDE the turn, before that turn's
   // closing marker. Copying the bracket would leave the child holding an opener
   // it never wrote, and boot would read the fresh fork as a crashed session.
@@ -1286,4 +1281,4 @@ test("stores and restores normalized session log entries", () => {
     2,
     "and the conversation it forked from is copied intact",
   );
-}
+});

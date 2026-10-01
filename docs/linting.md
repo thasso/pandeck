@@ -358,7 +358,7 @@ guess.
 | `typescript/no-unsafe-call`                                                    | 76    | 24    |
 | `typescript/unbound-method`                                                    | 73    | 38    |
 | `typescript/no-unsafe-return`                                                  | 56    | 31    |
-| `vitest/expect-expect`                                                         | 47    | 29    |
+| `vitest/expect-expect`                                                         | 36    | 18    |
 | `preserve-caught-error` (TS)                                                   | 47    | 40    |
 | `typescript/no-deprecated`                                                     | 39    | 20    |
 | `react/exhaustive-effect-dependencies`                                         | 39    | 27    |
@@ -388,10 +388,11 @@ browser-persisted viewed paths keyed by worktree and scope, and an optimistic
 Task order reset by authoritative server replies. Removing those effects means
 redesigning state ownership in each hook, not deleting redundant state.
 
-`vitest/expect-expect` cannot follow assertions hidden behind a test function or
-an awaited standalone `main()`. The remaining shape is older test modules whose
-assertions deliberately run during module evaluation and whose `test()` body is
-empty. Moving both shapes into test callbacks is a test-architecture change.
+`vitest/expect-expect` cannot follow assertions hidden behind a test helper or
+an awaited standalone `main()`, and those two shapes are all its 36 are. Its row
+was re-measured when the eleven session test modules that asserted during module
+evaluation behind an empty `test()` became one `test()` per scenario (47 → 36).
+Moving the remaining shapes into test callbacks is a test-architecture change.
 
 `typescript/no-deprecated`'s 39: eight deliberate browser-compatibility sites
 (seven `caretRangeFromPoint` uses preserve Safari support where

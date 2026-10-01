@@ -7,7 +7,7 @@
  * normalized projection and abort behavior.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -236,7 +236,7 @@ function abortableSeam(): ClaudeSdkSeam {
 }
 
 /* -------------------- adapter → runtime: normalized projection ----------- */
-{
+test("adapter → runtime: normalized projection", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const session = new ClaudeSdkSession("cs-1", {
     seam: async () => fakeSeam(scriptedMessages()),
@@ -292,10 +292,10 @@ function abortableSeam(): ClaudeSdkSeam {
   );
 
   await runtime.dispose();
-}
+});
 
 /* -------------------- abort preserves partial assistant output ----------- */
-{
+test("abort preserves partial assistant output", async () => {
   const runtime = new SessionRuntime(new SessionLogStore(true));
   const session = new ClaudeSdkSession("cs-abort", {
     seam: async () => abortableSeam(),
@@ -363,11 +363,6 @@ function abortableSeam(): ClaudeSdkSeam {
   );
 
   await runtime.dispose();
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("claude-sdk adapter test: PASS");
-
-test("adapts Claude SDK turns into the normalized runtime", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));

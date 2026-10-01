@@ -352,7 +352,7 @@
 
         // ------------------------- STAGED, NOT YET ON -------------------------
         // Cannot follow assertions behind a helper or a module-level `main()`.
-        "vitest/expect-expect": "off" // 47
+        "vitest/expect-expect": "off" // 36
       }
     },
 

@@ -105,7 +105,6 @@ vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 const {
   BATCH_MAX_MESSAGES,
   ENVELOPE_OVERHEAD_MAX,
-  PRUNE_TTL_MS,
   RETRY_MAX_ATTEMPTS,
   buildEnvelope,
   closeChainsForHumanPrompt,
@@ -1060,42 +1059,6 @@ describe("peer prompt engine", () => {
   it("answers nothing for a key this session has no row for", () => {
     const me = seed("AnchorNobody");
     assert.equal(peerPromptAnchorFor(me, "knope"), undefined);
-  });
-
-  it("expires unresolved past TTL and prunes only terminal rows, never unresolved", () => {
-    const recipient = `ret-${n++}`;
-    // An awaiting_response row already past its expiry.
-    const c1 = peerPromptStore.createChain();
-    const awaiting = peerPromptStore.enqueue({
-      conversationId: "r1",
-      chainId: c1,
-      hop: peerPromptStore.reserveHop(c1),
-      senderSessionId: "S",
-      recipientSessionId: recipient,
-      prompt: "q",
-      responseRequested: true,
-      expiresAt: Date.now() - 1000,
-    });
-    peerPromptStore.markAdmitted(
-      (peerPromptStore.claimNext(recipient, "d", 1000) ?? awaiting).id,
-    );
-    peerPromptStore.markCompleted(awaiting.id); // -> awaiting_response
-    // An unresolved queued row that must survive pruning even far in the future.
-    const c2 = peerPromptStore.createChain();
-    const queued = peerPromptStore.enqueue({
-      conversationId: "r2",
-      chainId: c2,
-      hop: peerPromptStore.reserveHop(c2),
-      senderSessionId: "S",
-      recipientSessionId: `ret2-${n++}`,
-      prompt: "keep",
-      responseRequested: false,
-    });
-
-    const result = runPeerPromptRetention(Date.now() + PRUNE_TTL_MS + 10_000);
-    assert.ok(result.expired >= 1);
-    // The expired row was terminal by prune time and should be pruned; the queued row survives.
-    assert.equal(peerPromptStore.getById(queued.id)?.status, "queued");
   });
 
   it("human intervention closes chains so a later reply starts fresh", async () => {

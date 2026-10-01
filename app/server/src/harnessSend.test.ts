@@ -14,7 +14,7 @@
  *      decision is exercised.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +38,7 @@ function wellFormed(harness: string) {
   };
 }
 
-{
+test("validation", () => {
   const okSdk = validateClientMessage(wellFormed("claude-sdk"));
   assert.equal(
     okSdk.ok,
@@ -82,7 +82,7 @@ function wellFormed(harness: string) {
     false,
     "non-array attachments should be rejected",
   );
-}
+});
 
 /* --------------------------- 2. dispatch --------------------------- */
 
@@ -100,7 +100,7 @@ function makeConnection() {
   return { conn, sent };
 }
 
-{
+test("dispatch: claude-sdk routes to the sdk path", async () => {
   const { conn } = makeConnection();
   const calls: Array<{ which: string; msg: Record<string, unknown> }> = [];
   // Stub the private create-on-first-prompt helper so dispatch is observable
@@ -129,9 +129,9 @@ function makeConnection() {
     "sdk",
     "claude-sdk should route to the sdk path",
   );
-}
+});
 
-{
+test("dispatch: pi routes to the pi create-on-first-prompt path", async () => {
   // pi harness → pi create-on-first-prompt path.
   const { conn } = makeConnection();
   const calls: Array<{ which: string; msg: Record<string, unknown> }> = [];
@@ -158,11 +158,6 @@ function makeConnection() {
   });
   assert.equal(calls.length, 1, "pi harnessSend should dispatch once");
   assert.equal(calls[0]?.which, "pi", "pi should route to the pi path");
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("harnessSend unit test: PASS");
-
-test("validates and dispatches harnessSend messages", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));

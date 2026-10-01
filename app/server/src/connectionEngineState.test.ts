@@ -12,7 +12,7 @@
  * chat-stream envelopes and run-state stay owned by the RuntimeTransport.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -38,7 +38,7 @@ function makeConnection() {
   return { conn, sent };
 }
 
-{
+test("engine state envelopes reach a runtime-viewing connection until it detaches", () => {
   const { conn, sent } = makeConnection();
 
   // A minimal fake engine session that captures the viewer the connection adds.
@@ -130,9 +130,9 @@ function makeConnection() {
   // Detach removes the engine viewer so no further envelopes are forwarded.
   (conn as unknown as { detachRuntimeView: () => void }).detachRuntimeView();
   assert.equal(captured, undefined, "detach removes the engine state viewer");
-}
+});
 
-{
+test("viewing sends one runtime snapshot and adds no direct engine viewer", async () => {
   const sessionId = "conn-runtime-view-test";
   const { conn, sent } = makeConnection();
   const sdk = new ClaudeSdkSession(sessionId, {
@@ -168,11 +168,6 @@ function makeConnection() {
 
   (conn as unknown as { dispose: () => void }).dispose();
   await sessionRuntime.disposeSession(sessionId);
-}
-
-rmSync(tmp, { recursive: true, force: true });
-console.log("connection engine-state bridge test: PASS");
-
-test("bridges engine state into runtime-backed connections", () => {
-  // Assertions run during module evaluation to preserve the former standalone script structure.
 });
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));

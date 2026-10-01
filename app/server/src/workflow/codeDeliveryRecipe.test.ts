@@ -3194,12 +3194,13 @@ test("a dirty or moved delivery gate routes back through commit/sync and review"
 });
 
 test("a pass applies only to the head it names: a stale pass forces a new range and assessment", () => {
-  const steps = round("pass", {});
-  const review = steps[2]!;
+  // The second of three passes, so a reissue that spent a pass would show.
+  const review = reviewed("pass", { headCommit: "ccc", reviewPass: 2 });
+  const steps = [implemented(), committed(), review];
+  const passes = run({ maxReviewPasses: 3 });
   // The reviewer verified HEAD and it was NOT the assigned range head: the
   // workspace changed after commit/sync, so nothing may move toward delivery.
-  review.result!.payload = { verdict: "pass", headCommit: "ccc", findings: [] };
-  assert.deepEqual(decideNextStep(run(), steps), {
+  assert.deepEqual(decideNextStep(passes, steps), {
     kind: "append",
     step: {
       kind: "host-operation",
@@ -3209,6 +3210,37 @@ test("a pass applies only to the head it names: a stale pass forces a new range 
       },
       predecessorId: review.id,
     },
+  });
+
+  // That commit/sync ends at the head that actually landed, and the same
+  // assessment is reissued for the new range: still the author's pass, not a
+  // fresh one.
+  const resynced = step({
+    kind: "host-operation",
+    payload: {
+      operation: "commit-sync",
+      idempotencyKey: commitSyncIdempotencyKey(RUN_ID, review.id),
+    },
+    contractId: COMMIT_SYNC_RESULT_CONTRACT_ID,
+    resultPayload: {
+      operation: "commit-sync",
+      baseCommit: "aaa",
+      headCommit: "ccc",
+    },
+    predecessorId: review.id,
+  });
+  const reissued = decideNextStep(passes, [...steps, resynced]);
+  assert.equal(reissued.kind, "append");
+  const next = (reissued as Extract<WorkflowDecision, { kind: "append" }>).step;
+  assert.equal(next.kind, "agent");
+  assert.equal(next.predecessorId, resynced.id);
+  const payload = next.payload as Record<string, WorkflowJsonValue>;
+  assert.equal(payload.role, "reviewer");
+  assert.equal(payload.objective, "review");
+  assert.equal(payload.reviewPass, 2, "the reissue spends no review pass");
+  assert.deepEqual(payload.commitRange, {
+    baseCommit: "aaa",
+    headCommit: "ccc",
   });
 });
 

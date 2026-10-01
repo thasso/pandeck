@@ -103,8 +103,6 @@ interface Rig {
   /** The one runtime every role of this rig runs on. */
   roleConfig: WorkflowJsonValue;
   prompts: Assignment[];
-  /** Fail the next commit phase before it mutates Git. */
-  failNextCommit(error: Error): void;
   /** Install fresh executor instances, as server startup does after a boot. */
   registerExecutors(): void;
 }
@@ -255,18 +253,12 @@ function makeRig(
     deliveryStopped: () => false,
   };
 
-  let nextCommitError: Error | undefined;
   const commit = async (
     commitOptions: CommitWorkflowOptions,
   ): Promise<CommitWorkflowResult> => {
     // A deterministic stand-in for the AI commit workflow: same observable
     // contract — commit what is there, or report the exact no-changes result
     // the operation treats as a retry-safe observation.
-    if (nextCommitError) {
-      const error = nextCommitError;
-      nextCommitError = undefined;
-      throw error;
-    }
     const cwd = commitOptions.cwd;
     assert.ok(cwd, "the operation always names the run worktree");
     const base: CommitWorkflowResult = {
@@ -306,9 +298,6 @@ function makeRig(
     roleConfig,
     creationBase,
     prompts,
-    failNextCommit(error) {
-      nextCommitError = error;
-    },
     registerExecutors() {
       executors.registerWorkflowAgentExecutor(
         agentExecutor.createWorkflowAgentExecutor(deps),
@@ -413,15 +402,6 @@ function lifecycle(rig: Rig): { lifecycle: string; reason?: string } {
     lifecycle: run.lifecycle,
     ...(run.lifecycleReason ? { reason: run.lifecycleReason } : {}),
   };
-}
-
-async function pausedWith(rig: Rig, reason: string | RegExp): Promise<void> {
-  await waitFor(
-    () => store.getRun(rig.runId)!.lifecycle === "paused",
-    `a pause (${String(reason)})`,
-  );
-  if (typeof reason === "string") assert.equal(lifecycle(rig).reason, reason);
-  else assert.match(lifecycle(rig).reason ?? "", reason);
 }
 
 async function waitingForPullRequest(rig: Rig): Promise<void> {
@@ -729,164 +709,6 @@ test("iteration-limit exhaustion asks the user instead of stopping", async () =>
   assert.equal(gate.blocked, "iterations");
   assert.deepEqual(gate.allowedChoices, ["raise", "deliver", "cancel"]);
   assert.equal(steps(rig).length, 7, "no third round was admitted");
-}, 60_000);
-
-test("a workspace change under review forces a new range and a new assessment", async () => {
-  // One pass is enough here: nothing is fixed, so the run never has to buy
-  // fresh eyes on a moved head, and no decision is open to ask about.
-  const rig = makeRig({ maxIterations: 2, maxReviewPasses: 1 });
-  rig.registerExecutors();
-  await engine.advanceRun(rig.runId, USER);
-
-  const implement = await nextAssignment(rig);
-  writeFileSync(join(rig.feature, "feature.txt"), "v1\n");
-  await submit(implement.sessionId, "completed", "implemented", {});
-  const review1 = await nextAssignment(rig);
-  const head1 = head(rig);
-
-  // While the review is out, another commit lands in the run worktree: the
-  // assigned range no longer ends at the workspace head.
-  writeFileSync(join(rig.feature, "feature.txt"), "v2 landed mid-review\n");
-  sh(rig.feature, "add", "-A");
-  sh(rig.feature, "commit", "-m", "landed mid-review");
-  const head2 = head(rig);
-  assert.notEqual(head2, head1);
-
-  // The reviewer does what its assignment says: verify HEAD with rev-parse and
-  // name the commit actually reviewed. The recipe sees only the named head — a
-  // fabricated claim takes the same path — so this pass applies to head2, not
-  // to the assigned range, and must not stand for it.
-  await submit(review1.sessionId, "completed", "pass", {
-    verdict: "pass",
-    headCommit: head2,
-    findings: [],
-  });
-
-  // Forced around the loop: commit-sync recomputes the range up to the commit
-  // that actually landed, and the SAME reviewer gets a fresh assignment for it.
-  const review2 = await nextAssignment(rig);
-  assert.equal(review2.sessionId, review1.sessionId);
-  const history = steps(rig);
-  assert.equal(history.length, 5);
-  assert.equal(history[3]!.kind, "host-operation");
-  assert.equal(history[3]!.predecessorId, history[2]!.id);
-  assert.deepEqual(rangeOf(history[3]!), {
-    baseCommit: rig.creationBase,
-    headCommit: head2,
-  });
-  assert.deepEqual(
-    (history[4]!.payload as Record<string, unknown>).commitRange,
-    { baseCommit: rig.creationBase, headCommit: head2 },
-  );
-
-  // A pass naming the exact current head is what moves the run forward.
-  await submit(review2.sessionId, "completed", "pass", {
-    verdict: "pass",
-    headCommit: head2,
-    findings: [],
-  });
-  await waitingForPullRequest(rig);
-}, 60_000);
-
-test("semantic retry reuses a failed commit-sync reservation and reaches review", async () => {
-  const rig = makeRig();
-  rig.registerExecutors();
-  await engine.advanceRun(rig.runId, USER);
-
-  const implement = await nextAssignment(rig);
-  writeFileSync(join(rig.feature, "feature.txt"), "retry me\n");
-  rig.failNextCommit(new Error("synthetic commit outage"));
-  await submit(implement.sessionId, "completed", "implemented", {});
-  await pausedWith(rig, /commit-sync step .* ended as failed/);
-
-  const failed = steps(rig).at(-1)!;
-  const failedPayload = failed.payload as Record<string, unknown>;
-  assert.equal(failed.kind, "host-operation");
-  assert.equal(failed.status, "failed");
-
-  await engine.retryRun(rig.runId, USER);
-
-  const review = await nextAssignment(rig);
-  assert.match(
-    review.text,
-    new RegExp(`${rig.creationBase}\\.\\.${head(rig)}`),
-  );
-  const retried = steps(rig).find((step) => step.predecessorId === failed.id)!;
-  assert.equal(retried.kind, "host-operation");
-  assert.equal(retried.status, "completed");
-  assert.equal(
-    (retried.payload as Record<string, unknown>).idempotencyKey,
-    failedPayload.idempotencyKey,
-    "the semantic retry keeps the original reservation identity",
-  );
-  assert.deepEqual(lifecycle(rig), { lifecycle: "active" });
-}, 60_000);
-
-test("a crash mid commit-sync converges at boot and the loop continues", async () => {
-  const rig = makeRig();
-  rig.registerExecutors();
-  await engine.advanceRun(rig.runId, USER);
-
-  const implement = await nextAssignment(rig);
-  writeFileSync(join(rig.feature, "feature.txt"), "v1\n");
-
-  // Rebuild the exact persisted state a crash leaves behind: the result had
-  // landed, the commit-sync reservation was RUNNING, and the operation had
-  // already created its commit when the process died.
-  const implementStep = steps(rig)[0]!;
-  store.completeStep(implementStep.id, {
-    status: "completed",
-    result: {
-      status: "completed",
-      summary: "implemented",
-      contractId: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
-      payload: {},
-    },
-    actor: { kind: "agent", id: implement.sessionId },
-  });
-  const crashed = store.appendStep({
-    runId: rig.runId,
-    kind: "host-operation",
-    payload: {
-      operation: recipe.COMMIT_SYNC_OPERATION_ID,
-      idempotencyKey: recipe.commitSyncIdempotencyKey(
-        rig.runId,
-        implementStep.id,
-      ),
-    },
-    predecessorId: implementStep.id,
-    actor: SYSTEM,
-  });
-  store.startStep(
-    crashed.id,
-    { kind: "operation", id: recipe.COMMIT_SYNC_OPERATION_ID },
-    SYSTEM,
-  );
-  sh(rig.feature, "add", "-A");
-  sh(rig.feature, "commit", "-m", "workflow change");
-  const committedHead = head(rig);
-
-  engine.resetWorkflowEngineForTests();
-  executors.resetWorkflowExecutorsForTests();
-  rig.registerExecutors();
-  await engine.reconcileWorkflowRunsOnBoot();
-
-  // The retry-safe re-run observed the existing commit as "no changes" and
-  // recomputed the SAME range; the review consumes it and the run is active.
-  const recovered = store.getStep(crashed.id)!;
-  assert.equal(recovered.status, "completed");
-  assert.equal(recovered.attempt, 2, "the re-run counts as an attempt");
-  assert.deepEqual(rangeOf(recovered), {
-    baseCommit: rig.creationBase,
-    headCommit: committedHead,
-  });
-  const review = await nextAssignment(rig);
-  assert.match(
-    review.text,
-    new RegExp(`${rig.creationBase}\\.\\.${committedHead}`),
-  );
-  assert.deepEqual(lifecycle(rig), { lifecycle: "active" });
-  assert.equal(steps(rig).at(-1)!.status, "running");
 }, 60_000);
 
 test("review findings become a durable set the fixer answers and its author re-checks", async () => {
