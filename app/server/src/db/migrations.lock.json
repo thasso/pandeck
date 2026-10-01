@@ -61,5 +61,6 @@
   "0060_session_index_unarchived_idx.sql": "dbde42c1081e4640558003afb61fafc87c0d1bb03af07010136172613fb1f20c",
   "0061_agent_handoff_queue.sql": "824dbe157d9b571965d4a7236f77da80dfd231147e6ce6fa5f0c801ae6673013",
   "0062_session_prompt_queue.sql": "e5d0db1b652844fbfd3d9ba362eb8a067c3fb148b5ccd3dae8db76038cb06871",
-  "0063_card_stores.sql": "a12768def66ba18cf51f098438693edffda9c5af50606ec43dfe034808ad4900"
+  "0063_card_stores.sql": "a12768def66ba18cf51f098438693edffda9c5af50606ec43dfe034808ad4900",
+  "0064_drop_legacy_import_bookkeeping.sql": "fb6ae04bd39777efc4125c05f824a5245f74ddc32c3d4e57d55f1fea60748f69"
 }
