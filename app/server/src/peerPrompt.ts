@@ -55,7 +55,7 @@ const LEASE_MS = 60_000;
 /** Unresolved reply expectations expire after 30 days. */
 const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Completed/expired conversation detail is pruned after 90 days. */
-export const PRUNE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const PRUNE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 /** Bounds on the durable per-session history projection. */
 const HISTORY_MAX_MESSAGES = 50;
 /** Hard ceiling for an explicit history-expansion request. */
