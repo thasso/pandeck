@@ -6,6 +6,9 @@ import { afterAll } from "vitest";
 const testCwd = mkdtempSync(join(tmpdir(), "assistant-server-test-"));
 
 process.env.ASSISTANT_CWD = testCwd;
+// Every database here is a throwaway in a temp directory; durability across a
+// power cut is not under test, and fsync per commit was half the suite's time.
+process.env.ASSISTANT_TEST_DB_NO_FSYNC = "1";
 delete process.env.DATA_DIR;
 // Production performs a one-time legacy pi seed. Tests must never inspect the
 // developer's real ~/.pi; targeted migration tests pass an explicit source.
