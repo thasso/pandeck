@@ -24,6 +24,7 @@ import type { AgentTool, ToolCallContext } from "../mcp/tool.ts";
 import { createTask, deleteTask } from "../tasks.ts";
 import { memoryTools } from "./knowledge/memoryTools.ts";
 import { taskToolsForKind } from "./tasks/taskTools.ts";
+import { assertPromptRules } from "../test/promptRules.ts";
 
 const ctx: ToolCallContext = {
   toolCallId: "eager-guidance-test",
@@ -58,117 +59,107 @@ function propertyText(tool: AgentTool, path: string): string {
   return typeof node.description === "string" ? node.description : "";
 }
 
-/**
- * Each case is a rule that was ONLY ever carried by this string. Shortening the
- * wording is fine; losing the distinction is what these patterns catch.
- */
-const KEPT_DISAMBIGUATION: {
-  tool: string;
-  path?: string;
-  patterns: RegExp[];
-  why: string;
-}[] = [
-  {
-    tool: "task_manage",
-    path: "operations.dueDate",
-    patterns: [/DEADLINE/, /scheduledFor/],
-    why: "a deadline written into scheduledFor is a valid call with the wrong meaning",
-  },
-  {
-    tool: "task_manage",
-    path: "operations.scheduledFor",
-    patterns: [/WORK/, /plan/i],
-    why: "planning a day must not land on dueDate",
-  },
-  {
-    tool: "task_manage",
-    path: "operations.userRequestedStatus",
-    patterns: [/ONLY when the user asked/],
-    why: "the flag turns a suggestion into an applied status; nothing else says when it is allowed",
-  },
-  {
-    tool: "task_manage",
-    path: "operations.comment",
-    patterns: [/never progress narration/],
-    why: "the trace stays readable only if narration never reaches it",
-  },
-  {
-    tool: "task_manage",
-    path: "operations.externalLinks.type",
-    patterns: [/source = where the Task came from/, /related/],
-    why: "'source' is what Slack intake and minutes processing deduplicate on, and both values validate",
-  },
-  {
-    tool: "task_read",
-    path: "comments",
-    patterns: [/most recent/],
-    why: "a bounded trace returns the LATEST page; read as the oldest N it hides current decisions",
-  },
-  {
-    tool: "task_read",
-    path: "id",
-    patterns: [/id/, /query never matches an id/],
-    why: "a Task-32 lookup passed as query silently returns text hits instead",
-  },
-  {
-    tool: "task_read",
-    path: "scheduled",
-    patterns: [/PLANNED/, /not the deadline/],
-    why: "scheduled and due are both date filters and would otherwise be picked by coin toss",
-  },
-  {
-    tool: "memory_manage",
-    path: "operations.expectedRevision",
-    patterns: [/revision/i, /stale/],
-    why: "a memory write without the observed revision is refused; the caller has to know to carry it",
-  },
-  {
-    tool: "memory_manage",
-    path: "operations.text",
-    patterns: [/create\/correct/],
-    why: "reinforce/archive/pin ignore text instead of refusing it, so the write silently does nothing",
-  },
-  {
-    tool: "memory_manage",
-    path: "operations.kind",
-    patterns: [/create\/correct/],
-    why: "same silent ignore as text",
-  },
-  {
-    tool: "memory_manage",
-    path: "operations.pin",
-    patterns: [/on create/],
-    why: "pin on a later op is ignored, and there is a pin OPERATION next to it",
-  },
-  {
-    tool: "memory_search",
-    path: "query",
-    patterns: [/[Ll]exical/],
-    why: "a semantic paraphrase silently returns nothing",
-  },
-  {
-    tool: "ask_questions",
-    path: "questions.allowTypedAnswer",
-    patterns: [/none of the options/],
-    why: "without it a choice question forces the user into a wrong answer",
-  },
-  // The Task descriptions' own rules are pinned by `taskTools.test.ts`.
-  {
-    tool: "ask_questions",
-    patterns: [/disposition=discuss/],
-    why: "a discuss disposition read as an answer is answered instead of discussed",
-  },
-];
+/** One eager tool's description, or one of its schema properties' (`tool.path`). */
+function surface(address: string): { text: string } {
+  const [name, ...path] = address.split(".");
+  const tool = eagerTool(name!);
+  return {
+    text: path.length ? propertyText(tool, path.join(".")) : tool.description,
+  };
+}
 
 test("the eager tools keep the guidance that no other surface carries", () => {
-  for (const { tool: name, path, patterns, why } of KEPT_DISAMBIGUATION) {
-    const tool = eagerTool(name);
-    const text = path ? propertyText(tool, path) : tool.description;
-    const where = path ? `${name}.${path}` : `${name} description`;
-    assert.ok(text.length > 0, `${where} lost its prose entirely: ${why}`);
-    for (const pattern of patterns)
-      assert.match(text, pattern, `${where} no longer says it: ${why}`);
-  }
+  // Each row is a rule that was ONLY ever carried by this string. Shortening
+  // the wording is fine; losing the distinction is what the patterns catch.
+  // The Task descriptions' own rules are pinned by `taskTools.test.ts`.
+  assertPromptRules({
+    // A deadline written into scheduledFor is a valid call with the wrong meaning.
+    "task_manage.operations.dueDate": {
+      ...surface("task_manage.operations.dueDate"),
+      rules: {
+        "is-a-deadline": /DEADLINE/,
+        "not-scheduledFor": /scheduledFor/,
+      },
+    },
+    // Planning a day must not land on dueDate.
+    "task_manage.operations.scheduledFor": {
+      ...surface("task_manage.operations.scheduledFor"),
+      rules: { "is-when-work-happens": /WORK/, "set-when-planning": /plan/i },
+    },
+    // The flag turns a suggestion into an applied status; nothing else says when.
+    "task_manage.operations.userRequestedStatus": {
+      ...surface("task_manage.operations.userRequestedStatus"),
+      rules: { "only-on-user-request": /ONLY when the user asked/ },
+    },
+    // The trace stays readable only if narration never reaches it.
+    "task_manage.operations.comment": {
+      ...surface("task_manage.operations.comment"),
+      rules: { "no-progress-narration": /never progress narration/ },
+    },
+    // 'source' is what Slack intake and minutes processing deduplicate on, and
+    // both values validate.
+    "task_manage.operations.externalLinks.type": {
+      ...surface("task_manage.operations.externalLinks.type"),
+      rules: {
+        "source-is-origin": /source = where the Task came from/,
+        "related-is-context": /related/,
+      },
+    },
+    // A bounded trace returns the LATEST page; read as the oldest N it hides
+    // current decisions.
+    "task_read.comments": {
+      ...surface("task_read.comments"),
+      rules: { "is-the-latest-page": /most recent/ },
+    },
+    // A Task-32 lookup passed as query silently returns text hits instead.
+    "task_read.id": {
+      ...surface("task_read.id"),
+      rules: { "query-never-matches-id": /query never matches an id/ },
+    },
+    // scheduled and due are both date filters, otherwise picked by coin toss.
+    "task_read.scheduled": {
+      ...surface("task_read.scheduled"),
+      rules: {
+        "is-the-plan": /PLANNED/,
+        "not-the-deadline": /not the deadline/,
+      },
+    },
+    // A write without the observed revision is refused; the caller must carry it.
+    "memory_manage.operations.expectedRevision": {
+      ...surface("memory_manage.operations.expectedRevision"),
+      rules: { "carries-revision": /revision/i, "stale-does-nothing": /stale/ },
+    },
+    // reinforce/archive/pin IGNORE text and kind instead of refusing them, so
+    // the write silently does nothing.
+    "memory_manage.operations.text": {
+      ...surface("memory_manage.operations.text"),
+      rules: { "create-correct-only": /create\/correct/ },
+    },
+    "memory_manage.operations.kind": {
+      ...surface("memory_manage.operations.kind"),
+      rules: { "create-correct-only": /create\/correct/ },
+    },
+    // pin on a later op is ignored, and there is a pin OPERATION next to it.
+    "memory_manage.operations.pin": {
+      ...surface("memory_manage.operations.pin"),
+      rules: { "create-only": /on create/ },
+    },
+    // A semantic paraphrase silently returns nothing.
+    "memory_search.query": {
+      ...surface("memory_search.query"),
+      rules: { "is-lexical": /[Ll]exical/ },
+    },
+    // Without it a choice question forces the user into a wrong answer.
+    "ask_questions.questions.allowTypedAnswer": {
+      ...surface("ask_questions.questions.allowTypedAnswer"),
+      rules: { "when-no-option-fits": /none of the options/ },
+    },
+    // A discuss disposition read as an answer is answered instead of discussed.
+    ask_questions: {
+      ...surface("ask_questions"),
+      rules: { "discuss-is-not-an-answer": /disposition=discuss/ },
+    },
+  });
 });
 
 test("the prose the trim dropped is carried by the error the call fails with", async () => {
