@@ -1,7 +1,22 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll } from "vitest";
+import { afterAll, vi } from "vitest";
+
+// Every database a test opens is a throwaway in a temp directory, so durability
+// across a power cut is not under test, and waiting on fsync for every commit
+// was half the suite's time. Mocking the module here keeps the setting out of
+// production code and out of any environment a server under test hands down.
+vi.mock("node:sqlite", async (importOriginal) => {
+  const sqlite = await importOriginal<typeof import("node:sqlite")>();
+  class DatabaseSync extends sqlite.DatabaseSync {
+    constructor(...args: ConstructorParameters<typeof sqlite.DatabaseSync>) {
+      super(...args);
+      if (this.isOpen) this.exec("PRAGMA synchronous = OFF");
+    }
+  }
+  return { ...sqlite, DatabaseSync };
+});
 
 const testCwd = mkdtempSync(join(tmpdir(), "assistant-server-test-"));
 
