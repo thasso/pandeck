@@ -11,29 +11,22 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   DEFAULT_SESSION_SCOPE,
-  THINKING_LEVELS,
   type BrowserRuntimeInfo,
   type SessionForkOrigin,
   type SessionScope,
-  type ThinkingLevel,
 } from "@assistant/shared";
-import type { InternalSessionListItem } from "../sessions.ts";
 import { CWD, DATA_DIR } from "../config.ts";
 import type { AgentType } from "../agentTypes.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { sessionStore } from "../db/sessionStore.ts";
-import { pendingApprovalSessionIds } from "../pendingApprovals.ts";
-import { choosingTaskSessionIds } from "../pullRequestCards.ts";
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
-import { claudeSdkModelOption } from "./modelSettings.ts";
 import { claudeProfileSessionStore } from "./profileSessionStore.ts";
 import { defaultClaudeProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import {
   claudeSdkEntryFigures,
-  claudeSdkRecordIds,
   claudeSdkRecordPresent,
   ClaudeSdkRecordReadError,
   readClaudeSdkRecord,
@@ -47,14 +40,6 @@ import {
 } from "./claudeSdkRecords.ts";
 
 const STORE_DIR = join(DATA_DIR, "claude-sdk");
-
-function normalizeThinkingLevel(
-  level: string | undefined,
-): ThinkingLevel | undefined {
-  return THINKING_LEVELS.includes(level as ThinkingLevel)
-    ? (level as ThinkingLevel)
-    : undefined;
-}
 
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();
@@ -620,63 +605,6 @@ class ClaudeSdkSessionStore {
     } catch {
       // Best-effort: the record and metadata row are already gone.
     }
-  }
-
-  /**
-   * Session-list entries for every known (live + persisted) session. The
-   * approval-blocked and Task-pick-blocked sets are read ONCE here (one query
-   * each) and handed to each live row, matching `sessions.ts`'s one-pass
-   * contract.
-   */
-  listItems(readAt: (id: string) => number): InternalSessionListItem[] {
-    const ids = new Set<string>(this.sessions.keys());
-    for (const id of this.persistedIds())
-      if (!this.deleted.has(id)) ids.add(id);
-    const approvals = pendingApprovalSessionIds();
-    const taskChoices = choosingTaskSessionIds();
-    const items: InternalSessionListItem[] = [];
-    for (const id of ids) {
-      const live = this.sessions.get(id);
-      if (live) {
-        items.push(live.listItem(readAt(id), approvals, taskChoices));
-        continue;
-      }
-      let stored: ReturnType<typeof readClaudeSdkRecordMeta>;
-      try {
-        stored = readClaudeSdkRecordMeta(STORE_DIR, id);
-      } catch (err) {
-        // Listed as absent, never rewritten: acquiring it fails with the error.
-        console.error(`[claude-sdk] ${(err as Error).message}`);
-        continue;
-      }
-      if (!stored) continue;
-      const record = stored.meta;
-      this.syncRegistryRecord(record, stored.figures);
-      const thinkingLevelValue = normalizeThinkingLevel(record.thinkingLevel);
-      items.push({
-        id,
-        file: id,
-        harness: "claude-sdk",
-        agentType: record.agentType ?? "workshop",
-        title: record.title,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-        messageCount: stored.figures.messages,
-        ...(record.modelId
-          ? { model: claudeSdkModelOption(record.modelId) }
-          : {}),
-        ...(thinkingLevelValue !== undefined
-          ? { thinkingLevel: thinkingLevelValue }
-          : {}),
-        unread: record.updatedAt > readAt(id),
-      });
-    }
-    return items;
-  }
-
-  /** Rehydrate the registry's id set from disk (does not instantiate sessions). */
-  private persistedIds(): string[] {
-    return claudeSdkRecordIds(STORE_DIR);
   }
 }
 

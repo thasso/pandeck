@@ -7,13 +7,11 @@
  * It exercises ONLY the plumbing that does NOT require a real Claude turn — it
  * never calls `prompt()` (that path is covered by ClaudeSdkSession.test.ts via a
  * fake seam). It asserts:
- *   1. A newly-created session appears in `claudeSdkStore.listItems` (the entries
- *      the hub merges into the broadcast `sessions` list) with kind "claude-sdk".
- *   2. `hub.acquireClaudeSdk` returns a session that exposes an empty snapshot()
+ *   1. `hub.acquireClaudeSdk` returns a session that exposes an empty snapshot()
  *      and a state() with kind "claude-sdk", and the SAME id is idempotent.
- *   3. The empty runtime does not show in `hub.listSessions()` until prompted.
- *   4. `hub.removeClaudeSdk` tombstones the id: it disappears from listItems /
- *      listSessions and a later acquire does NOT resurrect the old record.
+ *   2. The empty runtime does not show in `hub.listSessions()` until prompted.
+ *   3. `hub.removeClaudeSdk` tombstones the id: it disappears from listSessions
+ *      and a later acquire does NOT resurrect the old record.
  *
  * The session is created with a model/thinking level to confirm those flow
  * through to state(). No SDK seam is built because no turn runs.
@@ -77,13 +75,7 @@ async function main(): Promise<void> {
     "acquire is idempotent for a live id",
   );
 
-  // 1. It appears in the store's list-item entries (what the hub merges).
-  const items = claudeSdkStore.listItems(() => 0);
-  const item = items.find((i) => i.id === ID);
-  assert.ok(item, "session appears in claudeSdkStore.listItems");
-  assert.equal(item.harness, "claude-sdk", "listItem harness is claude-sdk");
-
-  // 3. Acquiring the runtime alone is not a conversation. Prompt acceptance is
+  // 2. Acquiring the runtime alone is not a conversation. Prompt acceptance is
   // covered in ClaudeSdkSession.test.ts; until then the merged list hides it.
   const sessions = await hub.listSessions();
   const listed = sessions.find(
@@ -147,16 +139,12 @@ async function main(): Promise<void> {
     "orphan removal tombstones and deletes the record",
   );
 
-  // 4. Remove → tombstone. It must disappear and stay gone.
+  // 3. Remove → tombstone. It must disappear and stay gone.
   hub.removeClaudeSdk(ID);
   assert.equal(
     claudeSdkStore.get(ID),
     undefined,
     "live session is dropped after remove",
-  );
-  assert.ok(
-    !claudeSdkStore.listItems(() => 0).some((i) => i.id === ID),
-    "removed session is gone from listItems",
   );
   const afterSessions = await hub.listSessions();
   assert.ok(
