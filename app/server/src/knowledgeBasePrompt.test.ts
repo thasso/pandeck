@@ -45,7 +45,8 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "for-durable-long-form": /durable long-form/i,
         "scopes-in-separate-entries":
           /separate[^.\n]*entries|entries[^.\n]*separate/i,
-        "tags-avoid-cross-contamination": /cross-contaminat/i,
+        "tags-avoid-cross-contamination":
+          /(avoid|prevent)[^.\n]*cross-contaminat/i,
         "never-invent-entry-ids": /never invent[^.\n]*\bids?\b/i,
         "links-via-pa-uris": /pa:\/\//,
         "no-secrets": noSecrets,
@@ -74,7 +75,8 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
     kb_read_asset: {
       text: kbReadAssetTool.description,
       rules: {
-        "extracts-are-kb_read_extract": /kb_read_extract[^.\n]*GENERATED/,
+        "extracts-are-kb_read_extract":
+          /kb_read_extract[^.\n]*(?<!not )only[^.\n]*GENERATED/,
       },
     },
     project_registry_read: {
@@ -83,7 +85,7 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         "read-before-assuming": /before assuming/i,
         "weighs-match-evidence": /matchedBy.*confidence.*warnings/i,
         "no-match-is-said-not-invented":
-          /no registry match[^.\n]*say[^.\n]*invent/i,
+          /no registry match[^.\n]*(instead of|rather than|never|not|don't) invent/i,
       },
     },
   });

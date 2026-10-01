@@ -78,7 +78,7 @@ test("the eager tools keep the guidance that no other surface carries", () => {
       ...surface("task_manage.operations.dueDate"),
       rules: {
         "is-a-deadline": /DEADLINE/,
-        "not-scheduledFor": /scheduledFor/,
+        "not-scheduledFor": /(never|not)[^.\n]*scheduledFor/i,
       },
     },
     // Planning a day must not land on dueDate.
@@ -132,7 +132,11 @@ test("the eager tools keep the guidance that no other surface carries", () => {
     // A write without the observed revision is refused; the caller must carry it.
     "memory_manage.operations.expectedRevision": {
       ...surface("memory_manage.operations.expectedRevision"),
-      rules: { "carries-revision": /revision/i, "stale-does-nothing": /stale/ },
+      rules: {
+        "carries-revision": /revision/i,
+        "stale-does-nothing":
+          /stale[^.\n]*(changes nothing|is refused|is rejected|has no effect|does nothing)/i,
+      },
     },
     // reinforce/archive/pin IGNORE text and kind instead of refusing them, so
     // the write silently does nothing.
@@ -147,7 +151,10 @@ test("the eager tools keep the guidance that no other surface carries", () => {
     // pin on a later op is ignored, and there is a pin OPERATION next to it.
     "memory_manage.operations.pin": {
       ...surface("memory_manage.operations.pin"),
-      rules: { "create-only": /(on|at|with) create|create only/i },
+      rules: {
+        "create-only":
+          /(on|at|with) create\b(?![^.\n]*\b(or|and|any|later)\b)|create only/i,
+      },
     },
     // A semantic paraphrase silently returns nothing.
     "memory_search.query": {
@@ -162,7 +169,10 @@ test("the eager tools keep the guidance that no other surface carries", () => {
     // A discuss disposition read as an answer is answered instead of discussed.
     ask_questions: {
       ...surface("ask_questions"),
-      rules: { "discuss-is-not-an-answer": /disposition=discuss/ },
+      rules: {
+        "discuss-is-not-an-answer":
+          /disposition=discuss[^.\n]*(not an answer|rather than an answer|instead of (an )?answer)/i,
+      },
     },
   });
 });
