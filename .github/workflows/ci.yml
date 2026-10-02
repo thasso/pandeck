@@ -162,9 +162,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Nix
-        id: nix
-        uses: ./.github/actions/setup-nix
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          # All inputs are public; no secrets or private binary cache.
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
       # The package's install check boots and probes the server under packaged
       # Bun. The module checks remain gates, even though CI no longer deploys.
@@ -183,24 +186,6 @@ jobs:
           out=$(nix path-info .#personal-assistant)
           echo "hash=$(nix-store --query --hash "$out")" >> "$GITHUB_OUTPUT"
 
-      # Like the Node caches, only main publishes it.
-      - name: Export the dependency store
-        if:
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.nix.outputs.deps-cache-hit != 'true'
-        run: |
-          deps=$(nix eval --raw .#personal-assistant.pnpmDeps.outPath)
-          nix-store --export "$deps" > "$RUNNER_TEMP/pnpm-deps.nar"
-
-      - name: Save the dependency store
-        if:
-          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.nix.outputs.deps-cache-hit != 'true'
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ runner.temp }}/pnpm-deps.nar
-          key: ${{ steps.nix.outputs.deps-key }}
-
   # Reproducibility: a second, independent build of the package on another
   # runner, compared by NAR hash. It runs beside nix-build instead of after it.
   nix-rebuild:
@@ -214,8 +199,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Nix
-        uses: ./.github/actions/setup-nix
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          # All inputs are public; no secrets or private binary cache.
+          extra_nix_config: |
+            experimental-features = nix-command flakes
 
       - name: Build the production package
         run: nix build .#personal-assistant --print-build-logs

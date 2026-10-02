@@ -28,8 +28,8 @@ in the test suites on two vCPUs:
 
 - `check` — every gate except the server and web suites: format, lint, dead
   code, instruction and prompt budgets, migration lock, typecheck, the script
-  and shared tests, and the web build. It is the only Node job that saves the
-  pnpm store and the Prettier cache.
+  and shared tests, and the web build. It is the only job that saves the pnpm
+  store and the Prettier cache.
 - `test-server (i/3)` and `test-web (i/2)` — the server and web suites, split by
   `vitest --shard` (equal file counts, ordered by path hash). Measured shards
   stay within about 30% of each other, and their sum matches the unsharded
@@ -55,17 +55,8 @@ defaults to one worker below the CPU count, a single worker on the 2-vCPU
 private-repository runner, and one per CPU took the server suite from 327s to
 250s on two pinned SMT CPUs, while three or four workers gained nothing and
 added memory (1.4 GB → 2.0 GB peak). The percentage scales to the 4-vCPU runner
-public repositories get.
-
-`.github/actions/setup-nix` installs Nix and restores the package's pnpm
-dependency store, a 1.7 GB fixed-output derivation that otherwise takes about
-90s to fetch on every run. It follows the cache rules below with one exception:
-there are no `restore-keys`. A fixed-output path depends only on its declared
-hash, so a copy restored for older inputs would stand in for a fetch whose
-inputs changed under a stale hash. The key therefore covers every input of the
-fetch (`flake.nix`, `flake.lock`, the lockfile, the workspace file and every
-`package.json`), and a change to any of them re-fetches and re-verifies the
-hash. `nix-build` exports and saves it on `main` only.
+public repositories get. `VITEST_MAX_WORKERS`, when set, overrides the flag
+(Vitest reads it after the CLI), so CI must not set it.
 
 `pnpm run lint` (oxlint, `docs/linting.md`) is a step of the `check` job. It
 takes about 5s on four CPUs at about 1.7 GB peak, so it needs no cache, no
