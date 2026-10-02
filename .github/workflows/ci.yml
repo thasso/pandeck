@@ -242,3 +242,21 @@ jobs:
             echo "::error::The package is not reproducible: two independent builds differ."
             exit 1
           fi
+
+  # The one check branch protection requires. A job skipped because a
+  # dependency failed reports `skipped`, which GitHub counts as passing for a
+  # required check, so this gate demands `success` from every job instead. It
+  # runs on `always()`, not `!cancelled()`: a cancelled run must fail the gate,
+  # not skip it.
+  ci:
+    if: always()
+    needs: [check, test-server, test-web, nix-build, nix-rebuild, reproducible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null

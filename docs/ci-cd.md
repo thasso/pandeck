@@ -40,6 +40,14 @@ in the test suites on two vCPUs:
   `nix build --rebuild` step after the first build, which ran on the same runner
   and added about 2.5 minutes to the critical path; two runners also compare
   across machines, not only across time.
+- `ci` — the gate, and the only check branch protection should require. It
+  `needs:` every other job, runs on `always()` and fails unless every one of
+  them reported `success`. Requiring the individual jobs instead would not be
+  enough: a job skipped because its dependency failed (`reproducible` after a
+  failed build) reports `skipped`, which GitHub counts as passing, and the
+  matrix legs' names change with the shard count. `always()` rather than
+  `!cancelled()` makes a cancelled run fail the gate instead of skipping it. A
+  new job must be added to the gate's `needs:` or it gates nothing.
 
 Every Node job runs `.github/actions/setup-workspace` (Node, corepack, pnpm
 store restore, frozen install). The suites pass `--maxWorkers=100%`: Vitest
