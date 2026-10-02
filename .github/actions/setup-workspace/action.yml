@@ -1,0 +1,59 @@
+name: Set up the workspace
+description:
+  Node 24, pnpm via corepack, the weekly pnpm store restore and a frozen
+  install. Every Node job runs it after checkout; only one job saves the store.
+
+outputs:
+  week:
+    description: ISO year-week (`date -u +%G-%V`) that cache keys carry.
+    value: ${{ steps.window.outputs.week }}
+  pnpm-store:
+    description: Path of the pnpm content-addressed store.
+    value: ${{ steps.window.outputs.pnpm-store }}
+  pnpm-cache-hit:
+    description: Whether the store restore matched the exact key.
+    value: ${{ steps.pnpm-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Configure git
+      # Worktree and merge tests need an ambient identity.
+      shell: bash
+      run: |
+        git config --global user.email "ci@localhost"
+        git config --global user.name "CI"
+        git config --global init.defaultBranch main
+
+    - name: Set up Node
+      uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: "24"
+        package-manager-cache: false
+
+    - name: Enable pnpm
+      shell: bash
+      run: corepack enable
+
+    - name: Cache window
+      id: window
+      shell: bash
+      run: |
+        echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        echo "pnpm-store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm store
+      id: pnpm-cache
+      uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ steps.window.outputs.pnpm-store }}
+        key:
+          pnpm-${{ hashFiles('pnpm-lock.yaml') }}-${{ steps.window.outputs.week
+          }}
+        restore-keys: |
+          pnpm-${{ hashFiles('pnpm-lock.yaml') }}-
+          pnpm-
+
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

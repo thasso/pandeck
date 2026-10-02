@@ -15,13 +15,48 @@ and the runner still never holds general root.
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` is CI for the public `pandeck` repository. It runs
-`check` and `nix-build` on GitHub-hosted `ubuntu-latest` runners for pushes to
-`main` and all pull requests, including forks. It preserves the Forgejo gate
-order, the migration lock check, and the weekly pnpm and Prettier cache restores
-described below. Only pushes to `main` save caches. Node 24 runs the workspace
-gates; Nix builds and tests the Bun package, checks the closure and NixOS module
-policies, then verifies reproducibility.
+`.github/workflows/ci.yml` is CI for the public `pandeck` repository. It runs on
+GitHub-hosted `ubuntu-latest` runners for pushes to `main` and all pull
+requests, including forks. It preserves the Forgejo gates, the migration lock
+check, and the weekly pnpm and Prettier cache restores described below. Only
+pushes to `main` save caches. Node 24 runs the workspace gates; Nix builds and
+tests the Bun package, checks the closure and NixOS module policies, and
+verifies reproducibility.
+
+The jobs run in parallel, because a single job spent ten of its eleven minutes
+in the test suites on two vCPUs:
+
+- `check` — every gate except the server and web suites: format, lint, dead
+  code, instruction and prompt budgets, migration lock, typecheck, the script
+  and shared tests, and the web build. It is the only job that saves the pnpm
+  store and the Prettier cache.
+- `test-server (i/3)` and `test-web (i/2)` — the server and web suites, split by
+  `vitest --shard` (equal file counts, ordered by path hash). Measured shards
+  stay within about 30% of each other, and their sum matches the unsharded
+  suite, so a shard costs only its ~25s of setup.
+- `nix-build` — the package and its flake checks.
+- `nix-rebuild` — a second, independent build of the package on another runner.
+  `reproducible` then compares the two NAR hashes. This replaced a
+  `nix build --rebuild` step after the first build, which ran on the same runner
+  and added about 2.5 minutes to the critical path; two runners also compare
+  across machines, not only across time.
+- `ci` — the gate, and the only check branch protection should require. It
+  `needs:` every other job, runs on `always()` and fails unless every one of
+  them reported `success`. Requiring the individual jobs instead would not be
+  enough: a job skipped because its dependency failed (`reproducible` after a
+  failed build) reports `skipped`, which GitHub counts as passing, and the
+  matrix legs' names change with the shard count. `always()` rather than
+  `!cancelled()` makes a cancelled run fail the gate instead of skipping it. A
+  new job must be added to the gate's `needs:` or it gates nothing.
+
+Every Node job runs `.github/actions/setup-workspace` (Node, corepack, pnpm
+store restore, frozen install). The suites pass `--maxWorkers=100%`: Vitest
+defaults to one worker below the CPU count, a single worker on the 2-vCPU
+private-repository runner, and one per CPU took the server suite from 327s to
+250s on two pinned SMT CPUs, while three or four workers gained nothing and
+added memory (1.4 GB → 2.0 GB peak). The percentage scales to the 4-vCPU runner
+public repositories get. `VITEST_MAX_WORKERS`, when set, overrides the flag
+(Vitest reads it after the CLI), so CI must not set it.
 
 `pnpm run lint` (oxlint, `docs/linting.md`) is a step of the `check` job. It
 takes about 5s on four CPUs at about 1.7 GB peak, so it needs no cache, no
@@ -32,12 +67,13 @@ cancelled after 25 minutes (#3).
 The workflow has read-only repository permissions, uses no secrets, pins actions
 to commit SHAs, and cancels superseded PR runs per ref. Active main runs are not
 cancelled, preserving their verdict and cache saves. Job timeouts are 30 minutes
-for check and 60 for nix-build. Before the public cut, the repository must
-require workflow approval for all external contributors in its Actions settings.
-Dependabot checks only GitHub Actions weekly, groups updates into one PR and
-applies a seven-day cooldown; the pnpm catalog remains manually managed. There
-are no GitHub deployment, preview or release workflows. The Forgejo pipeline
-remains for the current deployment until the switch.
+for the Node jobs and 60 for the Nix builds. Before the public cut, the
+repository must require workflow approval for all external contributors in its
+Actions settings. Dependabot checks only GitHub Actions (workflows and local
+composite actions) weekly, groups updates into one PR and applies a seven-day
+cooldown; the pnpm catalog remains manually managed. There are no GitHub
+deployment, preview or release workflows. The Forgejo pipeline remains for the
+current deployment until the switch.
 
 ## Gates
 

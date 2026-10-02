@@ -13,13 +13,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # History-relative checks compare with this PR's base, not always main.
+  PA_BASE_REF: ${{ github.event.pull_request.base.sha }}
+
 jobs:
+  # Every gate except the test suites. The only job that saves caches.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # History-relative checks compare with this PR's base, not always main.
-      PA_BASE_REF: ${{ github.event.pull_request.base.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -27,42 +29,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Configure git
-        # Worktree and merge tests need an ambient identity.
-        run: |
-          git config --global user.email "ci@localhost"
-          git config --global user.name "CI"
-          git config --global init.defaultBranch main
-
-      - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-
-      - name: Enable pnpm
-        run: corepack enable
-
-      - name: Cache window
-        id: window
-        run: |
-          echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-          echo "pnpm-store=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore pnpm store
-        id: pnpm-cache
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ steps.window.outputs.pnpm-store }}
-          key:
-            pnpm-${{ hashFiles('pnpm-lock.yaml') }}-${{
-            steps.window.outputs.week }}
-          restore-keys: |
-            pnpm-${{ hashFiles('pnpm-lock.yaml') }}-
-            pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Set up the workspace
+        id: setup
+        uses: ./.github/actions/setup-workspace
 
       - name: Package config contains no secrets
         run: pnpm run check:package-config-secrets
@@ -72,13 +41,13 @@ jobs:
       - name: Save pnpm store
         if:
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          steps.pnpm-cache.outputs.cache-hit != 'true'
+          steps.setup.outputs.pnpm-cache-hit != 'true'
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
-          path: ${{ steps.window.outputs.pnpm-store }}
+          path: ${{ steps.setup.outputs.pnpm-store }}
           key:
-            pnpm-${{ hashFiles('pnpm-lock.yaml') }}-${{
-            steps.window.outputs.week }}
+            pnpm-${{ hashFiles('pnpm-lock.yaml') }}-${{ steps.setup.outputs.week
+            }}
 
       - name: Restore Prettier cache
         id: prettier-cache
@@ -87,7 +56,7 @@ jobs:
           path: node_modules/.cache/prettier
           key:
             prettier-${{ hashFiles('pnpm-lock.yaml', '.prettierrc.json',
-            '.prettierignore') }}-${{ steps.window.outputs.week }}
+            '.prettierignore') }}-${{ steps.setup.outputs.week }}
           restore-keys: |
             prettier-${{ hashFiles('pnpm-lock.yaml', '.prettierrc.json', '.prettierignore') }}-
             prettier-
@@ -104,7 +73,7 @@ jobs:
           path: node_modules/.cache/prettier
           key:
             prettier-${{ hashFiles('pnpm-lock.yaml', '.prettierrc.json',
-            '.prettierignore') }}-${{ steps.window.outputs.week }}
+            '.prettierignore') }}-${{ steps.setup.outputs.week }}
 
       - name: Lint
         run: pnpm run lint
@@ -124,15 +93,69 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
-      - name: Test
-        run: pnpm run test:suites
+      - name: Script and shared tests
+        run: |
+          pnpm run test:release
+          pnpm run test:package-config-secrets
+          pnpm --filter @assistant/shared test
 
       - name: Build
         run: pnpm run build
 
+  # The server suite is most of CI's wall time, so it is sharded by file.
+  test-server:
+    name: test-server (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      # Vitest defaults to one worker below the CPU count, a single worker on
+      # a 2-vCPU runner; one per CPU is ~24% faster there, and more is not.
+      - name: Server tests
+        run:
+          pnpm --filter @assistant/server exec vitest run --maxWorkers=100%
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+  test-web:
+    name: test-web (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up the workspace
+        uses: ./.github/actions/setup-workspace
+
+      - name: Web tests
+        run:
+          pnpm --filter @assistant/web exec vitest run --maxWorkers=100%
+          --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
   nix-build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      nar-hash: ${{ steps.nar.outputs.hash }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -157,9 +180,72 @@ jobs:
             .#checks.x86_64-linux.personal-assistant-oom-policy \
             --print-build-logs
 
-      - name: Verify the package is reproducible
+      - name: Record the package's NAR hash
+        id: nar
         run: |
-          nix build .#personal-assistant \
-            --rebuild \
-            --keep-failed \
-            --print-build-logs
+          out=$(nix path-info .#personal-assistant)
+          echo "hash=$(nix-store --query --hash "$out")" >> "$GITHUB_OUTPUT"
+
+  # Reproducibility: a second, independent build of the package on another
+  # runner, compared by NAR hash. It runs beside nix-build instead of after it.
+  nix-rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      nar-hash: ${{ steps.nar.outputs.hash }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          # All inputs are public; no secrets or private binary cache.
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build the production package
+        run: nix build .#personal-assistant --print-build-logs
+
+      - name: Record the package's NAR hash
+        id: nar
+        run: |
+          out=$(nix path-info .#personal-assistant)
+          echo "hash=$(nix-store --query --hash "$out")" >> "$GITHUB_OUTPUT"
+
+  reproducible:
+    needs: [nix-build, nix-rebuild]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Both builds produced the same package
+        env:
+          FIRST: ${{ needs.nix-build.outputs.nar-hash }}
+          SECOND: ${{ needs.nix-rebuild.outputs.nar-hash }}
+        run: |
+          echo "nix-build:   $FIRST"
+          echo "nix-rebuild: $SECOND"
+          if [ -z "$FIRST" ] || [ "$FIRST" != "$SECOND" ]; then
+            echo "::error::The package is not reproducible: two independent builds differ."
+            exit 1
+          fi
+
+  # The one check branch protection requires. A job skipped because a
+  # dependency failed reports `skipped`, which GitHub counts as passing for a
+  # required check, so this gate demands `success` from every job instead. It
+  # runs on `always()`, not `!cancelled()`: a cancelled run must fail the gate,
+  # not skip it.
+  ci:
+    if: always()
+    needs: [check, test-server, test-web, nix-build, nix-rebuild, reproducible]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
