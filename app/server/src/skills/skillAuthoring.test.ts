@@ -42,6 +42,7 @@ import {
 } from "./skillLibraryStore.ts";
 
 let root: string;
+let outsideRoot: string;
 let library: SkillLibraryStore;
 let broadcasts: ServerMessage[];
 
@@ -53,6 +54,9 @@ const meta = {
 
 beforeEach(async () => {
   root = mkdtempSync(join(tmpdir(), "skills-authoring-test-"));
+  // Symlink targets that must live outside the library get their own unique
+  // directory: fixed names beside `root` collide across concurrent runs.
+  outsideRoot = mkdtempSync(join(tmpdir(), "skills-authoring-outside-"));
   library = new SkillLibraryStore(root);
   await library.ensureInitialized();
   broadcasts = [];
@@ -64,6 +68,7 @@ beforeEach(async () => {
 afterEach(() => {
   setSkillLibraryBroadcaster({ broadcast: () => undefined });
   rmSync(root, { recursive: true, force: true });
+  rmSync(outsideRoot, { recursive: true, force: true });
 });
 
 async function head(): Promise<string> {
@@ -567,7 +572,7 @@ describe("skill authoring: supporting files", () => {
 
   test("refuses to write through a supporting symlink", async () => {
     await seedSkill();
-    const outside = join(root, "..", "outside.md");
+    const outside = join(outsideRoot, "outside.md");
     await writeFile(outside, "outside\n");
     await mkdir(join(root, "release-notes/references"), { recursive: true });
     await symlink(outside, join(root, "release-notes/references/link.md"));
@@ -609,7 +614,6 @@ describe("skill authoring: supporting files", () => {
       ),
     );
     assert.equal(await readFile(outside, "utf8"), "outside\n");
-    await rm(outside, { force: true });
   });
 
   test("rolls a partially applied batch back completely", async () => {
@@ -805,7 +809,7 @@ describe("skill authoring: editing supporting files", () => {
       join(root, "release-notes/big.md"),
       "x".repeat(MAX_SKILL_TEXT_FILE_BYTES + 1),
     );
-    const outside = join(root, "..", "outside-edit.md");
+    const outside = join(outsideRoot, "outside-edit.md");
     await writeFile(outside, "outside\n");
     await symlink(outside, join(root, "release-notes/link.md"));
     await git(["add", "-A"], root);
@@ -910,14 +914,13 @@ describe("skill authoring: editing supporting files", () => {
       assert.match(error.message, expected);
     }
     assert.equal(await readFile(outside, "utf8"), "outside\n");
-    await rm(outside, { force: true });
   });
 });
 
 describe("skill authoring: symlinked sources", () => {
   test("a source folder swapped for a symlink can no longer be mutated", async () => {
     await seedSkill();
-    const elsewhere = join(root, "..", "elsewhere");
+    const elsewhere = join(outsideRoot, "elsewhere");
     await mkdir(elsewhere, { recursive: true });
     await writeFile(
       join(elsewhere, "SKILL.md"),
@@ -964,7 +967,6 @@ describe("skill authoring: symlinked sources", () => {
       await readFile(join(elsewhere, "SKILL.md"), "utf8"),
       '---\nname: release-notes\ndescription: "Outside"\n---\n\nOutside\n',
     );
-    await rm(elsewhere, { recursive: true, force: true });
   });
 });
 
