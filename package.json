@@ -3,7 +3,7 @@
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
-  "version": "0.51.0",
+  "version": "0.52.0",
   "description": "Pandeck: a self-hosted web UI and server for supervising AI agent sessions",
   "packageManager": "pnpm@11.9.0",
   "scripts": {
