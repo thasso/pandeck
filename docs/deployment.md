@@ -52,13 +52,18 @@ also be run under Bun by hand (Running the server suite under Bun, below).
 `scripts/build-bun-server-bundle.mjs` owns the target layout. Nix installs pnpm
 dependencies against `pnpm-lock.yaml`, builds the web UI, and invokes that
 builder with nixpkgs' pinned Bun. If the lockfile changes, `nix build` prints
-the new fixed-output `pnpmDeps` hash. The flake then applies two Nix-specific
-ELF fixes and wraps the runtime as `bin/personal-assistant-server` with
-`NODE_ENV=production`, the build commit, and a pinned git and OpenSSH PATH
-prefix. The first fix gives the `@parcel/watcher` addon an rpath to libstdc++.
-The second runs `patchelf --set-interpreter` over the copied Bun-compiled Claude
-CLI, which otherwise requests the FHS loader `/lib64/ld-linux-*.so.2`, absent on
-NixOS. Both SDK sessions and the browser-streamed official Claude profile-login
+the new fixed-output `pnpmDeps` hash. That fetch and the offline install take
+optional platform packages only for `pnpmPlatformFlags` (Linux x64 and arm64 on
+glibc), named explicitly rather than detected from the host, so the hash is the
+same wherever it is built; a new target system extends that list and changes the
+hash. The offline install hardlinks from the unpacked store. The flake then
+applies two Nix-specific ELF fixes and wraps the runtime as
+`bin/personal-assistant-server` with `NODE_ENV=production`, the build commit,
+and a pinned git and OpenSSH PATH prefix. The first fix gives the
+`@parcel/watcher` addon an rpath to libstdc++. The second runs
+`patchelf --set-interpreter` over the copied Bun-compiled Claude CLI, which
+otherwise requests the FHS loader `/lib64/ld-linux-*.so.2`, absent on NixOS.
+Both SDK sessions and the browser-streamed official Claude profile-login
 terminal resolve this exact binary. Only the interpreter may be rewritten:
 `--set-rpath` corrupts Bun's appended payload (segfault), and the binary links
 nothing beyond glibc. Equally, it must be exec'd directly and never through a
