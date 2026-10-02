@@ -25,6 +25,12 @@
           # Node 24; the packaged server runs on Bun and ships no Node at all.
           pnpm = pkgs.pnpm_11.override { nodejs-slim = pkgs.nodejs-slim_22; };
 
+          # Which optional platform packages pnpm installs: the Linux systems
+          # above, on glibc (nixpkgs' Linux stdenv). Named explicitly, never
+          # "current", so the dependency FOD's hash does not depend on the host
+          # that fetches it, and the offline install selects from the same set.
+          pnpmPlatformFlags = [ "--os=linux" "--cpu=x64" "--cpu=arm64" "--libc=glibc" ];
+
           cleanSrc = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
 
           # The production package: the pinned Bun runtime, one esbuild-bundled
@@ -82,11 +88,8 @@
 
                 pnpm config set store-dir $storePath
 
-                # --force makes pnpm fetch optional platform packages for all
-                # supported targets, keeping the dependency FOD hash independent
-                # of the host that builds it.
                 pnpm install \
-                  --force \
+                  ${pkgs.lib.escapeShellArgs pnpmPlatformFlags} \
                   --ignore-scripts \
                   --frozen-lockfile \
                   --registry="''${NIX_NPM_REGISTRY:-https://registry.npmjs.org/}"
@@ -127,8 +130,18 @@
               dontFixup = true;
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "sha256-V5HBsED/i/LgUTKqgwU50TrMLc5w+td9epc1ij9pQwA=";
+              outputHash = "sha256-8vid2Wy3O4mv987ECvqVMenKPWvyM657WqXwPwLbwyA=";
             };
+
+            # Appended here, not set as `pnpmInstallFlags`: without structured
+            # attrs a list reaches the hook as one space-joined argument.
+            # pnpmConfigHook's clone-or-copy copies on filesystems without
+            # reflinks; the unpacked store and node_modules share the build
+            # directory, so hardlinks always work and are faster.
+            prePnpmInstall = ''
+              pnpmInstallFlags+=(${pkgs.lib.escapeShellArgs pnpmPlatformFlags})
+              pnpm config set package-import-method hardlink
+            '';
 
             # The source itself already entered the store. Refuse to build a
             # package from config that contains secret-shaped fields.
