@@ -298,26 +298,22 @@ test("first-parent changes group Task merges and link every PR", () => {
     [
       {
         hash: "a".repeat(40),
-        subject:
-          "Merge pull request 'Task-362: Release management' (#63) from task into main",
+        subject: "Task-362: Release management (#63)",
       },
-      {
-        hash: "b".repeat(40),
-        subject: "Merge pull request 'Maintenance' (#64) from tidy into main",
-      },
+      { hash: "b".repeat(40), subject: "Maintenance (#64)" },
       { hash: "c".repeat(40), subject: "Direct fix" },
     ],
-    "https://forgejo.example/owner/repo",
+    "https://github.com/owner/repo",
   );
 
   assert.deepEqual(changes.tasks, [
     {
       task: "Task-362",
       title: "Release management",
-      pulls: ["[PR #63](https://forgejo.example/owner/repo/pulls/63)"],
+      pulls: ["[PR #63](https://github.com/owner/repo/pull/63)"],
     },
   ]);
-  assert.match(changes.other[0], /pulls\/64/);
+  assert.match(changes.other[0], /pull\/64/);
   assert.match(changes.other[1], /commit\/cccc/);
 });
 

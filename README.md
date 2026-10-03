@@ -245,9 +245,8 @@ per-PR preview instances. The option descriptions in `flake.nix` and
 `docs/deployment.md` are the reference. The host provides the agents' toolchain
 (`docs/deployment.md#host-tools`).
 
-The project's own pipeline (Forgejo Actions with a runner on the NixOS host,
-release by tag, opt-in PR previews) is described in `docs/ci-cd.md`. You need
-none of it to run the app.
+The project's CI (GitHub Actions) and release process are described in
+`docs/ci-cd.md`. You need none of it to run the app.
 
 ## Develop
 
@@ -359,12 +358,10 @@ Roll back the same way, to an older tag. Neither direction undoes a data
 migration, so a release that migrates `DATA_DIR` is not reversible by rollback
 alone (`docs/migrations.md`).
 
-The project's own pipeline automates this: publishing a release on its Forgejo
-starts a host oneshot that pins, switches, restarts and waits for `/api/health`,
-and **Actions → Preview** brings up an isolated per-PR instance
-(`docs/ci-cd.md`, `docs/deployment.md#pr-previews`). A new preview starts with
-empty application state and a separate HOME; production data and credentials are
-not copied.
+The module can also run an isolated instance per pull request
+(`sudo pa-pr deploy <n>`, `docs/deployment.md#pr-previews`). A new preview
+starts with empty application state and a separate HOME; production data and
+credentials are not copied.
 
 ### Stuck stop / hanging deploy
 
@@ -393,9 +390,9 @@ sudo systemctl start personal-assistant.service   # if nothing restarts it
 ```
 
 This discards any in-flight agent turns but never touches data on disk
-(`DATA_DIR`). The project's pipeline wraps the same steps in a host-provided
-`personal-assistant-force-restart` oneshot that CI may start (**Actions → Ops**,
-`docs/ci-cd.md`).
+(`DATA_DIR`). A host can wrap the same steps in a
+`personal-assistant-force-restart` oneshot
+(`docs/deployment.md#service-lifecycle-and-environment`).
 
 ### "start request repeated too quickly"
 

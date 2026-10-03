@@ -165,12 +165,11 @@ only binding rules; everything else lives here.
   heap snapshots), the NixOS service's lifecycle and PATH/environment, the
   one-server-per-DATA_DIR lock, its host dependencies, and the PR-preview
   instances.
-- `ci-cd.md` — the project's current Forgejo pipeline and its host contract:
-  automatic `ci.yml`, the deliberate `release.yml`/`preview.yml`/`ops.yml` runs,
-  SemVer and changelog preparation, cutting a release with
-  `forgejo_create_release`, what a build reports itself as (the three
-  independent `BuildInfo` answers behind Settings → About and the desktop About
-  panel), the runner→root deploy path, and rollback.
+- `ci-cd.md` — the GitHub Actions workflow: its jobs and the `ci` gate, test
+  sharding, the gate order and measured parallelism, the cache rules, SemVer and
+  changelog preparation, publishing a release tag, and what a build reports
+  itself as (the three independent `BuildInfo` answers behind Settings → About
+  and the desktop About panel).
 - `linting.md` — the static-analysis contract: the shared `tsconfig.base.json`
   and which strictness flags are on where, why the gate is oxlint rather than
   type-aware ESLint (with the measurements), the oxlint ruleset and why it

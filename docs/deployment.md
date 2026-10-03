@@ -2,8 +2,8 @@
 
 How the app is packaged with Nix and how it runs as a NixOS service: the
 service, its environment, the host dependencies it leans on, dictation, and the
-PR preview instances. The pipeline that builds and switches it is in
-`docs/ci-cd.md`.
+PR preview instances. How CI builds and checks it, and how a release is cut, is
+in `docs/ci-cd.md`.
 
 ## Host and data
 
@@ -11,12 +11,10 @@ Target: a user-space systemd service on a NixOS host (running as the user for
 real filesystem/home access), fronted by a reverse proxy such as Caddy and
 reachable only on a private network (a VPN such as Tailscale, or a LAN). The
 browser token gates `/api/*`, but the app is not designed to face the public
-internet: an agent session can read whatever the service user can. Production is
-deployed from a published RELEASE TAG by a deliberate Release run — never from a
-branch head and never by a push. The deploy moves the host configuration's
-`personalAssistant` flake pin to that tag, so the host's `flake.nix` +
-`flake.lock` are the record of what production runs and `git log` there is the
-deploy history.
+internet: an agent session can read whatever the service user can. Deploy a
+RELEASE TAG, not a branch head: pin the host configuration's flake input to the
+tag, so the host's `flake.nix` + `flake.lock` are the record of what production
+runs and `git log` there is the deploy history.
 
 `DATA_DIR` (module option `dataDir`, default
 `/home/<user>/.local/share/personal-assistant`; this documentation writes
@@ -230,17 +228,17 @@ recreated source tree. The builder therefore uses pinned esbuild for the server
 module and its two bundled helpers; Bun remains the packaged runtime. The flake
 closure check rejects Node, tsx, `node_modules`, and source derivations, then
 confirms pinned git and OpenSSH remain present. The install check also scans
-every runtime file for the Nix source path and build directory. Forgejo CI
-builds the package and its closure check on every change, and a Release builds
-and ships the same derivation.
+every runtime file for the Nix source path and build directory. CI builds the
+package and its closure check on every change (`docs/ci-cd.md`), and a
+deployment of that commit builds the same derivation.
 
 The package must not use `bun build --compile` or Bun's ordinary bundler: Bun
 1.3.13's standalone compiler encrypts its embedded module table with a random
 nonce, while ordinary bundles vary in module order and short identifier names.
 Keeping the pinned Bun runtime and esbuild-produced `server.js` separate avoids
-both sources of nondeterminism. Forgejo CI performs an ordered normal build and
-`--rebuild` of `.#personal-assistant` on the same native runner so a return to
-either path cannot silently regress reproducibility.
+both sources of nondeterminism. CI builds `.#personal-assistant` twice on
+separate runners and compares the NAR hashes, so a return to either path cannot
+silently regress reproducibility.
 
 ### Bun runtime differences
 
@@ -463,11 +461,10 @@ paths into every unit.
 `inputs.personal-assistant.inputs.nixpkgs.follows`. That reflex — added to
 deduplicate closures — collapses `paPkgs` onto the host's `pkgs`, so the drain
 script and `cfg.package` rebuild from host nixpkgs and the churn returns with
-nothing to notice it by. As a belt, the module leaves one setting to the host:
-the project's pipeline host marks the unit `restartIfChanged = false` and its
-release unit issues an explicit `systemctl restart` after its switch
-(`docs/ci-cd.md`), so a restart means "a release shipped". Without that, a
-switch that changes the package restarts the service. It is the same shape the
+nothing to notice it by. As a belt, the module leaves one setting to the host: a
+host can mark the unit `restartIfChanged = false` and restart it explicitly as
+the last step of a deploy, so a restart means "a release shipped". Without that,
+a switch that changes the package restarts the service. It is the same shape the
 module uses for `pa-pr@` previews, restarted only by `pa-pr deploy`. The unit's
 `ExecStop` implements drain-then-sweep: it waits for the main process to exit,
 then SIGKILLs anything left in the unit cgroup — stray processes spawned by
@@ -476,8 +473,8 @@ and hold the stop, and any deploy waiting on the restart, for the full timeout.
 Manual recovery runbook: README "Operations"; a host-provided
 `personal-assistant-force-restart` root oneshot SIGKILLs the cgroup and
 restarts, runnable via
-`sudo systemctl start personal-assistant-force-restart.service` or the Ops
-workflow (the module's polkit rule already lets the runner start it).
+`sudo systemctl start personal-assistant-force-restart.service` (the module's
+polkit rule also lets a CI runner user start it).
 
 **Out of memory: make the runaway the likely victim (best effort).** Every agent
 process runs in the unit's cgroup. On 2026-09-30 a global OOM kill of an agent's
@@ -520,8 +517,8 @@ once times their cap, plus the host baseline, plus CI and nix-build headroom.
 
 None of this is a guarantee, so do not read it as "the service cannot die":
 
-- Pressure outside the unit (Forgejo, CI containers, nix builds, previews) can
-  cause a global OOM before any cap is reached.
+- Pressure outside the unit (other services, CI containers, nix builds,
+  previews) can cause a global OOM before any cap is reached.
 - The victim is the highest score, which is usually but not always the runaway.
 - A process forked in vendor code keeps -900 until the next sweep, which can run
   late while the host is reclaiming.
@@ -550,10 +547,10 @@ give up rather than retry a failure restarting cannot fix — the pre-bind
 refusals above. Know what that state costs: systemd then refuses MANUAL starts
 too, so `systemctl start` answers "start request repeated too quickly" until
 `systemctl reset-failed personal-assistant.service`. The force-restart oneshot
-already does that reset itself, so it and the Ops workflow keep working; a bare
-`systemctl restart` from a shell does not. README has the sequence. It runs as
-`cfg.user` with `HOME` set, so file-based config (`~/.gitconfig`, `~/.ssh/*`) is
-already used; git clone/pull over `ssh://` remotes runs with a non-interactive
+already does that reset itself, so it keeps working; a bare `systemctl restart`
+from a shell does not. README has the sequence. It runs as `cfg.user` with
+`HOME` set, so file-based config (`~/.gitconfig`, `~/.ssh/*`) is already used;
+git clone/pull over `ssh://` remotes runs with a non-interactive
 `GIT_SSH_COMMAND` (`projectProvision.ts` `PROVISION_ENV`) so a passphrase-less
 key in `~/.ssh` is required. The service `path` is the HOST's, and only the
 host's: the user's Nix profile dirs (`/etc/profiles/per-user/<user>`,
@@ -750,8 +747,9 @@ from another device.
 PR previews are opt-in through `services.personal-assistant.prDeployments`. A PR
 `<n>` gets a `pa-pr@<n>` instance at `pr-<n>.<domain>` (option
 `prDeployments.domain`, e.g. `pr-42.assistant.example.net`), listening on
-`portBase + n` behind Caddy, only after someone runs the Preview workflow or
-`sudo pa-pr deploy <n>`. Opening a PR does not create one.
+`portBase + n` behind Caddy, only after someone runs `sudo pa-pr deploy <n>`
+(directly or through the `pa-pr-deploy@<n>` oneshot). Opening a PR does not
+create one.
 
 The `pa-pr` root script resolves `refs/pull/<n>/head`, builds that revision, and
 provisions `stateDir/<n>` on the first deploy. Provisioning is clean: it creates

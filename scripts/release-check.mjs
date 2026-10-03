@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 /**
- * The gate a release passes before it is published. It used to live inside
- * `tag-release.yml`; publication now happens through the approval-gated
- * `forgejo_create_release` tool, so the checks the workflow ran on its checkout
- * run here instead — same three questions, one command:
+ * The gate a release passes before its tag is published with the
+ * approval-gated `git_publish_tag` tool (`docs/ci-cd.md#cutting-a-release`).
+ * Three questions, one command:
  *
  *   1. does every version declaration in the tree say this version?
  *   2. does CHANGELOG.md hold exactly one non-empty section for it?
  *   3. is the target commit on origin/main's first-parent history, where branch
  *      protection and CI gate it?
  *
- * Prints the target SHA and the notes to hand to the release tool. Read-only:
+ * Prints the target SHA to tag and the release notes. Read-only:
  * it never tags, pushes, or fetches.
  */
 import { execFileSync } from "node:child_process";

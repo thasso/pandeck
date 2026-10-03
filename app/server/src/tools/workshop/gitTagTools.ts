@@ -284,7 +284,7 @@ export const gitPublishTagTool = defineAgentTool<TagInput>({
   name: "git_publish_tag",
   label: "Propose git tag publication",
   description:
-    "Propose creating a lightweight tag at an exact published commit and pushing only that tag to the checked-out branch's upstream remote. Works in ordinary and managed checkouts. Always stages an approval card; no tag is created or pushed until approved, except a previously approved session grant for this exact target. Never moves a tag, pushes a branch, or forces a ref. Requires a clean checkout, same-named upstream branch at expectedHead, and exact local HEAD. For Pandeck releases use forgejo_create_release instead.",
+    "Propose creating a lightweight tag at an exact published commit and pushing only that tag to the checked-out branch's upstream remote. Works in ordinary and managed checkouts. Always stages an approval card; no tag is created or pushed until approved, except a previously approved session grant for this exact target. Never moves a tag, pushes a branch, or forces a ref. Requires a clean checkout, same-named upstream branch at expectedHead, and exact local HEAD.",
   parameters: {
     type: "object",
     additionalProperties: false,
