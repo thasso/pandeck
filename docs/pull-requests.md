@@ -76,9 +76,10 @@ and managed worktrees, including main checkouts. It stages an approval card for
 the exact absolute checkout path, tag, commit, tracked branch and push
 destination. Nothing is written until the user approves; on approval, the
 executor rechecks the checkout and destination. A session-wide grant covers only
-the same checkout, destination, tag and commit. For Pandeck releases, use
-`forgejo_create_release` instead: that approval creates an annotated tag and
-publishes the release.
+the same checkout, destination, tag and commit. Pandeck's own releases are
+published with this tool (`docs/ci-cd.md#cutting-a-release`); for a Forgejo
+repository whose releases carry notes, `forgejo_create_release` creates the
+annotated tag and the release together.
 
 The tool creates a lightweight tag at the checked-out HEAD and pushes only that
 tag to the branch's single upstream push URL, disabling follow-tags and

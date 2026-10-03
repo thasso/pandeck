@@ -49,28 +49,26 @@ Repository utility scripts run from pnpm commands or manually by maintainers.
 - The release utilities keep release preparation deterministic and reviewable.
   `set-version.mjs` updates all package manifests and the Nix package together;
   `generate-changelog.mjs` turns first-parent history since a selected or
-  nearest tag into Task-grouped notes with Forgejo links and formats the result
-  with the repository's Prettier; `release-notes.mjs` extracts one exact
+  nearest tag into Task-grouped notes with GitHub PR links and formats the
+  result with the repository's Prettier; `release-notes.mjs` extracts one exact
   non-empty section for maintainer inspection via `pnpm run release:notes`.
   `release-check.mjs` (`pnpm run release:check <version> [--ref <ref>]`) owns
-  the pre-publication gate that `tag-release.yml` used to run on its own
-  checkout — every declaration equal to the version (it prints how many agreed),
-  exactly one non-empty changelog section, and a target on the local
-  `origin/main`'s first-parent history — and prints the target SHA plus those
-  notes for the `forgejo_create_release` approval. It is read-only and never
-  fetches, so a stale `origin/main` rejects a target rather than admitting a
-  wrong one; `--root <dir>` exists only so the gate can be tested against a
-  fixture repository. `release-utils.mjs` owns the shared SemVer,
-  changelog-extraction, declaration-reading and first-parent predicates, with
-  its Node test wired into the root test gate. It also owns the LIST of version
-  declarations, in two kinds: manifests re-serialized from JSON, and
-  declarations embedded in a larger file (the Nix package, and the native
-  shell's `tauri.conf.json`, `Cargo.toml` and `Cargo.lock`) patched by an
-  anchored pattern that captures the version itself — `d`-flagged, so only the
-  capture is rewritten and Prettier's or cargo's formatting around it survives.
-  Every pattern must match exactly once or the run fails, and all reads and
-  validations precede the first write, so a broken tree is never left
-  half-bumped.
+  the pre-publication gate — every declaration equal to the version (it prints
+  how many agreed), exactly one non-empty changelog section, and a target on the
+  local `origin/main`'s first-parent history — and prints the target SHA plus
+  those notes to publish with the tag. It is read-only and never fetches, so a
+  stale `origin/main` rejects a target rather than admitting a wrong one;
+  `--root <dir>` exists only so the gate can be tested against a fixture
+  repository. `release-utils.mjs` owns the shared SemVer, changelog-extraction,
+  declaration-reading and first-parent predicates, with its Node test wired into
+  the root test gate. It also owns the LIST of version declarations, in two
+  kinds: manifests re-serialized from JSON, and declarations embedded in a
+  larger file (the Nix package, and the native shell's `tauri.conf.json`,
+  `Cargo.toml` and `Cargo.lock`) patched by an anchored pattern that captures
+  the version itself — `d`-flagged, so only the capture is rewritten and
+  Prettier's or cargo's formatting around it survives. Every pattern must match
+  exactly once or the run fails, and all reads and validations precede the first
+  write, so a broken tree is never left half-bumped.
 
 ## Contract notes and rationale
 

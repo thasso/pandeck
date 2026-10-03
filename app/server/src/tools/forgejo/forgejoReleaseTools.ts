@@ -7,8 +7,8 @@
  * server-side only after the user approves.
  *
  * Publishing a release is not a neutral bookkeeping act — a repository can
- * deploy from the release event (this one does, see `docs/ci-cd.md`), so the
- * approval card is the moment a human decides to ship.
+ * deploy from the release event, so the approval card is the moment a human
+ * decides to ship.
  *
  * The target is resolved to a COMMIT when the proposal is made, and it is that
  * sha the executor tags: the user approves a revision, not "whatever the branch

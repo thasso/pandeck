@@ -40,12 +40,12 @@ export function collectChanges(commits, repoUrl) {
   const other = [];
 
   for (const { hash, subject } of commits) {
-    const pull =
-      /^Merge pull request '(.+)' \(#(\d+)\) from .+ into main$/.exec(subject);
+    // A squash merge on GitHub: the pull request's title, then its number.
+    const pull = /^(.+) \(#(\d+)\)$/.exec(subject);
     if (pull) {
       const [, title, number] = pull;
       const task = /^Task-(\d+):\s*(.+)$/.exec(title);
-      const link = `[PR #${number}](${repoUrl}/pulls/${number})`;
+      const link = `[PR #${number}](${repoUrl}/pull/${number})`;
       if (task) {
         const key = task[1];
         const entry = tasks.get(key) ?? {
