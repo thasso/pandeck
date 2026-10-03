@@ -470,11 +470,10 @@ module uses for `pa-pr@` previews, restarted only by `pa-pr deploy`. The unit's
 then SIGKILLs anything left in the unit cgroup — stray processes spawned by
 agent sessions (e.g. a backgrounded dev server) would otherwise survive SIGTERM
 and hold the stop, and any deploy waiting on the restart, for the full timeout.
-Manual recovery runbook: README "Operations"; a host-provided
-`personal-assistant-force-restart` root oneshot SIGKILLs the cgroup and
-restarts, runnable via
-`sudo systemctl start personal-assistant-force-restart.service` (the module's
-polkit rule also lets a CI runner user start it).
+Manual recovery runbook: README "Operations". A host may wrap it in a
+`personal-assistant-force-restart` root oneshot that SIGKILLs the cgroup and
+restarts; the module does not define one, but its polkit rule lets
+`prDeployments.deployUser` start a unit of that name.
 
 **Out of memory: make the runaway the likely victim (best effort).** Every agent
 process runs in the unit's cgroup. On 2026-09-30 a global OOM kill of an agent's
@@ -546,11 +545,11 @@ The server needs no special handling when something is killed:
 give up rather than retry a failure restarting cannot fix — the pre-bind
 refusals above. Know what that state costs: systemd then refuses MANUAL starts
 too, so `systemctl start` answers "start request repeated too quickly" until
-`systemctl reset-failed personal-assistant.service`. The force-restart oneshot
-already does that reset itself, so it keeps working; a bare `systemctl restart`
-from a shell does not. README has the sequence. It runs as `cfg.user` with
-`HOME` set, so file-based config (`~/.gitconfig`, `~/.ssh/*`) is already used;
-git clone/pull over `ssh://` remotes runs with a non-interactive
+`systemctl reset-failed personal-assistant.service`. A host-provided
+force-restart oneshot should run that reset before it starts the unit; a bare
+`systemctl restart` from a shell does not. README has the sequence. It runs as
+`cfg.user` with `HOME` set, so file-based config (`~/.gitconfig`, `~/.ssh/*`) is
+already used; git clone/pull over `ssh://` remotes runs with a non-interactive
 `GIT_SSH_COMMAND` (`projectProvision.ts` `PROVISION_ENV`) so a passphrase-less
 key in `~/.ssh` is required. The service `path` is the HOST's, and only the
 host's: the user's Nix profile dirs (`/etc/profiles/per-user/<user>`,

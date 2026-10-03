@@ -317,6 +317,31 @@ test("first-parent changes group Task merges and link every PR", () => {
   assert.match(changes.other[1], /commit\/cccc/);
 });
 
+test("squash subjects keep parentheses in titles and reverts", () => {
+  const changes = collectChanges(
+    [
+      { hash: "a".repeat(40), subject: "Fix (re)connect handling (#70)" },
+      {
+        hash: "b".repeat(40),
+        subject: 'Revert "Fix (re)connect handling (#70)"',
+      },
+      {
+        hash: "c".repeat(40),
+        subject: 'Revert "Fix (re)connect handling (#70)" (#71)',
+      },
+      { hash: "d".repeat(40), subject: "Tidy (no PR)" },
+    ],
+    "https://github.com/owner/repo",
+  );
+
+  assert.deepEqual(changes.other, [
+    "- Fix (re)connect handling ([PR #70](https://github.com/owner/repo/pull/70))",
+    `- Revert "Fix (re)connect handling (#70)" ([bbbbbbbb](https://github.com/owner/repo/commit/${"b".repeat(40)}))`,
+    '- Revert "Fix (re)connect handling (#70)" ([PR #71](https://github.com/owner/repo/pull/71))',
+    `- Tidy (no PR) ([dddddddd](https://github.com/owner/repo/commit/${"d".repeat(40)}))`,
+  ]);
+});
+
 test("SSH remotes become browser URLs without the SSH port", () => {
   assert.equal(
     repositoryWebUrl("ssh://git@git.example.test:2222/owner/repository.git"),

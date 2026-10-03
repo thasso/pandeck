@@ -381,11 +381,10 @@ persona toolsets.
   `resolveRepo` from `githubTools.ts`.
 
 - `forgejo/forgejoCiTools.ts` owns the Forgejo CI reads (catalog group
-  `forgejo-ci`, deferred, gate `forgejo`), the twin of `github-ci` and the group
-  that pays for itself here because this repo's own pipeline runs on Forgejo
-  Actions: `forgejo_watch_pull_request_checks` (the same current/wait and merge
-  preflight contract as the GitHub twin, with status target/run web links as the
-  only authenticated-log handoff Forgejo supports), `forgejo_get_ref_checks`
+  `forgejo-ci`, deferred, gate `forgejo`), the twin of `github-ci`:
+  `forgejo_watch_pull_request_checks` (the same current/wait and merge preflight
+  contract as the GitHub twin, with status target/run web links as the only
+  authenticated-log handoff Forgejo supports), `forgejo_get_ref_checks`
   (aggregate CI for a branch/tag/SHA via the shared
   `forgejoClient.forgejoRefChecks` core that `gitHosting.ts`'s Forgejo
   `ciStatus` reuses, plus opt-in `includeHistory` superseded status rows from
@@ -441,21 +440,20 @@ persona toolsets.
   `replyPath` + `replyLine` anchor.
 - `forgejo/forgejoReleaseTools.ts` owns `forgejo_create_release` (catalog group
   `forgejo-releases`, coding personas only, deferred, gate `forgejo`), staging
-  kind `forgejoRelease` and registering its executor. It exists because this
-  repository deploys from the release event and Forgejo suppresses events raised
-  by the Actions user, so a release has to be published with the USER's token to
-  start a deploy (`docs/ci-cd.md`). Three decisions carry the safety: the target
-  is resolved to a commit while PROPOSING (`GET /git/commits/{ref}`, or the
-  repository's `default_branch` when no target is given) and the executor tags
-  that sha, so a branch moving between proposal and approval cannot redirect the
-  release; the annotated tag is created through `POST /tags` BEFORE
-  `POST /releases`, since the release endpoint would otherwise leave a
-  lightweight tag it cannot upgrade; and both the release check and the tag
-  check run again inside the executor, where an existing release always fails
-  and an existing tag is reused only when it already resolves to the approved
-  commit (the retry case after a partial failure). Tag names are validated as
-  git tag names before any request, and the card renders tag, short sha, target
-  subject and notes.
+  kind `forgejoRelease` and registering its executor. A repository can deploy
+  from the release event, and Forgejo suppresses events raised by the Actions
+  user, so a release published with the USER's token is what starts such a
+  deploy. Three decisions carry the safety: the target is resolved to a commit
+  while PROPOSING (`GET /git/commits/{ref}`, or the repository's
+  `default_branch` when no target is given) and the executor tags that sha, so a
+  branch moving between proposal and approval cannot redirect the release; the
+  annotated tag is created through `POST /tags` BEFORE `POST /releases`, since
+  the release endpoint would otherwise leave a lightweight tag it cannot
+  upgrade; and both the release check and the tag check run again inside the
+  executor, where an existing release always fails and an existing tag is reused
+  only when it already resolves to the approved commit (the retry case after a
+  partial failure). Tag names are validated as git tag names before any request,
+  and the card renders tag, short sha, target subject and notes.
 - `container/containerImageTools.ts` owns the single-tool container family
   (catalog group `container-images`, coding personas only, deferred, gate
   `github` because the credential is the GitHub integration token):

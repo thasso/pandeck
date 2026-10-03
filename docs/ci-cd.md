@@ -186,7 +186,7 @@ green, then check the merged commit from an up-to-date `main` checkout:
 
 ```bash
 git fetch origin && git merge --ff-only origin/main
-pnpm run release:check 0.53.0            # add --ref <sha> to release an older commit
+pnpm run release:check 0.53.0
 ```
 
 `release:check` is the gate before publication: every version declaration must
@@ -196,13 +196,18 @@ unchecked), `CHANGELOG.md` must hold exactly one non-empty section for it, and
 the target must be on `origin/main`'s first-parent history, which `ci.yml`
 gates. It reads the local `origin/main`, so fetch before trusting it, and it
 writes nothing — it prints the target SHA and the notes.
-(`pnpm run release:notes <version>` prints the section alone.)
+(`pnpm run release:notes <version>` prints the section alone.) It reads the
+versions and the changelog from the working tree, not from the target, so run it
+on a checkout of the commit you are releasing: its `--ref` option does not check
+an older commit's metadata.
 
 Publication is the tag. Ask an agent for `git_publish_tag` with tag `v0.53.0` on
 the main checkout at that SHA and approve the card it stages; nothing is pushed
-before the approval, and the tool refuses to move an existing tag. A GitHub
-Release is optional: paste the `release:notes` output into one for the tag if
-you want the notes on the releases page.
+before the approval, and the tool refuses to move an existing tag. The tool tags
+only a checkout whose HEAD equals the published `main` head, so this flow
+releases the current `main`; merge the release PR last, or tag before anything
+else lands. A GitHub Release is optional: paste the `release:notes` output into
+one for the tag if you want the notes on the releases page.
 
 Rolling back a deployment means deploying an older tag. Neither direction undoes
 a data migration: `DATA_DIR`/SQLite changes made by the new version are not
@@ -252,11 +257,11 @@ ship the new version there, after the release is published:
 
 ```bash
 git fetch --tags                        # the tag decides `-dev`, and it is read LOCALLY
-git checkout v0.15.0                    # or main, if it is still the tagged commit
+git checkout v0.52.0                    # or main, if it is still the tagged commit
 cd app/shell && cargo tauri build
 ```
 
 Order matters only in that the tag must be present before the build: without it
-the panel honestly reads `0.15.0-dev`. Fetching the tag after an earlier build
+the panel honestly reads `0.52.0-dev`. Fetching the tag after an earlier build
 of the same commit is enough — `build.rs` watches `packed-refs`/`refs/tags`, so
 the arriving tag re-runs the stamp instead of relinking the stale one.
