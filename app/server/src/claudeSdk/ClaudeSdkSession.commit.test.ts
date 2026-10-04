@@ -4,7 +4,7 @@
  *
  * Run through Vitest: `pnpm --filter @assistant/server test src/claudeSdk/ClaudeSdkSession.commit.test.ts`
  *
- * Asserts that begin → finishSyntheticCommit emits assistantStart → toolStart →
+ * Asserts that begin → finishSyntheticCard (a commit) emits assistantStart → toolStart →
  * commitResult → assistantEnd (all sharing one id), the snapshot has exactly ONE
  * assistant turn with a single `commit` block (no duplicate), and the record
  * persists it. (No `history` envelope: on the runtime path the durable commit
@@ -48,7 +48,7 @@ function main(): void {
     rawArgs: "",
   });
   session.updateSyntheticTool("Generating commit message…");
-  session.finishSyntheticCommit(fakeCommit());
+  session.finishSyntheticCard({ kind: "commit", commit: fakeCommit() });
 
   const types = envelopes.map((e) => e.type);
   assert.ok(

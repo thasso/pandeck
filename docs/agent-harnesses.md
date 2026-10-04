@@ -66,9 +66,12 @@ Four layers, each depending only on the ones below it:
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
    `SessionResidency` owns the viewer set and the idle clock, and the engine
-   says only when it is idle and how its store releases it. Synthetic
-   host-command turns join the kit next; the live display-block helpers already
-   live in `session/runtime/liveBlocks.ts`.
+   says only when it is idle and how its store releases it. `hostCommandTurn.ts`
+   emits a synthetic host-command turn (open, progress, tool output or card) to
+   viewers and the runtime adapter alike, while the engine keeps the turn's ids,
+   running state and teardown. A host command ends its turn with one
+   `finishSyntheticCard`, whichever card it renders. The live display-block
+   helpers live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    Two pieces of the folder are still migration work: the adapter bridge
@@ -119,7 +122,7 @@ table when a later step needs them.
 | 6    | Models and usage ports                                                        | landed |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | landed |
 | 8a   | Shared session kit: viewers and idle clock (`SessionResidency`)               | landed |
-| 8b   | Shared session kit: synthetic host-command turns                              | open   |
+| 8b   | Shared session kit: synthetic host-command turns                              | landed |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |

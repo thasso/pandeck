@@ -17,6 +17,7 @@
 import assert from "node:assert/strict";
 import { test, vi } from "vitest";
 import { slashCommandApplies } from "@assistant/shared";
+import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
 import {
   hostSlashCommandRunner,
   runClearForHost,
@@ -79,9 +80,9 @@ function fakeHost(
       state.running = false;
       finishedTools.push({ output, isError });
     },
-    finishSyntheticContextClear: (contextClear: { tokensBefore?: number }) => {
+    finishSyntheticCard: (result: HostCommandResult) => {
       state.running = false;
-      cards.push(contextClear);
+      if (result.kind === "contextClear") cards.push(result.contextClear);
     },
     clearContext: async () => {
       calls.push("clear");

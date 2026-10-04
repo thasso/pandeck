@@ -1219,58 +1219,6 @@ function appendCustomResult(
   }
 }
 
-export function formatCommitWorkflowResult(
-  result: CommitWorkflowResult,
-): string {
-  const lines: string[] = [];
-  if (result.status === "committed") {
-    lines.push(`Committed ${result.commitHash ?? "changes"}.`);
-  } else if (result.status === "dry-run") {
-    lines.push("Dry run: no changes were staged or committed.");
-  } else if (result.status === "blocked") {
-    lines.push(
-      result.forced
-        ? "Blocked by checks, but force was requested."
-        : "Commit blocked by safety checks.",
-    );
-  } else {
-    lines.push("Commit failed.");
-  }
-  if (result.repoRoot)
-    lines.push(`Repository: ${relative(CWD, result.repoRoot) || "."}`);
-  if (result.commitMessage) {
-    lines.push(
-      "",
-      "Commit message:",
-      "```",
-      result.commitMessage.trim(),
-      "```",
-    );
-  }
-  if (result.addressedTasks.length) {
-    lines.push(
-      "",
-      "Session Task context:",
-      ...result.addressedTasks.map(
-        (task) =>
-          `- [${task.status}] ${task.title}${task.commitHash ? ` (${task.commitHash})` : ""}`,
-      ),
-    );
-  }
-  if (result.blockers.length) {
-    lines.push(
-      "",
-      result.forced ? "Overridden blockers:" : "Blockers:",
-      renderBlockers(result.blockers),
-    );
-  }
-  if (result.warnings.length) {
-    lines.push("", "Warnings:", renderWarnings(result.warnings));
-  }
-  if (result.error) lines.push("", `Error: ${result.error}`);
-  return lines.join("\n");
-}
-
 export async function runCommitWorkflow(
   options: CommitWorkflowOptions,
 ): Promise<CommitWorkflowResult> {

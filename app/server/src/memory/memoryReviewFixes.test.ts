@@ -669,9 +669,7 @@ function fakeCompactHost(
     beginSyntheticTool: () => ({ assistantId: "a1", toolId: "slash-1" }),
     updateSyntheticTool: () => {},
     finishSyntheticTool: () => {},
-    finishSyntheticCommit: () => {},
-    finishSyntheticPush: () => {},
-    finishSyntheticCompaction: () => {},
+    finishSyntheticCard: () => {},
     commitWorkflowContext: () => ({ sessionManager: undefined }),
     compactContext: async () => outcome,
   } as unknown as SyntheticToolHost;

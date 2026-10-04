@@ -152,11 +152,14 @@ async function testCompactedCard(): Promise<void> {
     "summary comes from the PostCompact hook",
   );
 
-  session.finishSyntheticCompaction({
-    summary: outcome.summary,
-    tokensBefore: outcome.tokensBefore,
-    tokensAfter: outcome.tokensAfter,
-    firstKeptEntryId: outcome.firstKeptEntryId,
+  session.finishSyntheticCard({
+    kind: "compaction",
+    compaction: {
+      summary: outcome.summary,
+      tokensBefore: outcome.tokensBefore,
+      tokensAfter: outcome.tokensAfter,
+      firstKeptEntryId: outcome.firstKeptEntryId,
+    },
   });
 
   const types = envelopes.map((e) => e.type);

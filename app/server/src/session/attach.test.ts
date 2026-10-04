@@ -138,11 +138,14 @@ test("attach an existing session, and a durable /commit card survives reconnect"
   // envelopes. The card must (a) render LIVE and (b) re-appear on a fresh attach
   // (reconnect), WITHOUT leaving a dangling "/commit" assistant/tool entry.
   hubSession.beginSyntheticTool("/commit", { command: "/commit" });
-  hubSession.finishSyntheticCommit({
-    renderKind: "commit",
-    commitHash: "abc1234",
-    status: "committed",
-  } as never);
+  hubSession.finishSyntheticCard({
+    kind: "commit",
+    commit: {
+      renderKind: "commit",
+      commitHash: "abc1234",
+      status: "committed",
+    } as never,
+  });
 
   const liveEvents = sent
     .filter(

@@ -11,6 +11,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import type { SessionMode } from "@assistant/shared";
+import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
 import {
   runCommitForHost,
   runPrForHost,
@@ -47,11 +48,12 @@ function fakeHost(sessionMode: SessionMode | undefined): {
     ) => {
       finished.push({ name: state.activeName, output, isError });
     },
-    finishSyntheticPush: (push: { output: string; error?: string }) => {
+    finishSyntheticCard: (result: HostCommandResult) => {
+      if (result.kind !== "push") return;
       finished.push({
         name: state.activeName,
-        output: push.error ?? push.output,
-        isError: Boolean(push.error),
+        output: result.push.error ?? result.push.output ?? "",
+        isError: Boolean(result.push.error),
       });
     },
     commitWorkflowContext: () => {

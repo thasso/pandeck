@@ -71,11 +71,13 @@ async function testClearedCard(): Promise<void> {
     "the dropped context size is reported",
   );
 
-  session.finishSyntheticContextClear(
-    outcome.tokensBefore !== undefined
-      ? { tokensBefore: outcome.tokensBefore }
-      : {},
-  );
+  session.finishSyntheticCard({
+    kind: "contextClear",
+    contextClear:
+      outcome.tokensBefore !== undefined
+        ? { tokensBefore: outcome.tokensBefore }
+        : {},
+  });
 
   const types = envelopes.map((e) => e.type);
   assert.ok(
