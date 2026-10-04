@@ -4,9 +4,9 @@
  * A client addresses a fork by OUR log entry id — the only id it holds — and the
  * connection translates that to the harness's own anchor. pi branches FROM the
  * selected native entry (it walks to the parent itself for a "before" fork), so
- * `hub.forkSession` must receive pi's native entry id, never our log id. The
- * existing pi fork tests all call `piStore.forkSession` directly with native
- * ids, so nothing else covers this seam.
+ * `piStore.forkSession` must receive pi's native entry id, never our log id. The
+ * other pi fork tests call `piStore.forkSession` directly with native ids, so
+ * nothing else covers this seam (`harnesses/fork.ts`).
  *
  * Run through the server Vitest suite:
  *   pnpm --filter @assistant/server test src/piForkTranslation.test.ts
@@ -36,18 +36,6 @@ vi.mock("./hub.ts", async (importOriginal) => {
     ...actual,
     hub: {
       ...actual.hub,
-      forkSession: (
-        _kind: string,
-        file: string,
-        entryId: string,
-        position: string,
-        originEntryId: string,
-      ) => {
-        forkCalls.push({ file, entryId, position, originEntryId });
-        return (
-          forkOutcome?.() ?? Promise.reject(new Error("stop after translation"))
-        );
-      },
       listSessions: () => Promise.resolve([]),
       broadcastSessions: () => Promise.resolve(),
     },
@@ -55,6 +43,15 @@ vi.mock("./hub.ts", async (importOriginal) => {
 });
 
 const { Connection } = await import("./connection.ts");
+const settings = await import("./settings.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
+vi.spyOn(piStore, "forkSession").mockImplementation(
+  (_kind, file, entryId, position, originEntryId) => {
+    forkCalls.push({ file, entryId, position, originEntryId });
+    return (forkOutcome?.() ??
+      Promise.reject(new Error("stop after translation"))) as never;
+  },
+);
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { SessionLogStore } = await import("./session/log/store.ts");
@@ -676,6 +673,44 @@ test("an unanchored pi entry is refused with a clear message", async () => {
     /no provider anchor/,
     "the user gets the same clear message the claude-sdk branch gives",
   );
+});
+
+test("a refused fork never claims the view, on either engine", async () => {
+  const claims = vi.spyOn(
+    Connection.prototype as unknown as { claimViewRequest(): unknown },
+    "claimViewRequest",
+  );
+  const real = settings.getSettings();
+  const enabled = vi.spyOn(settings, "getSettings").mockReturnValue({
+    ...real,
+    claudeSdk: { ...real.claudeSdk, enabled: true },
+  });
+  try {
+    const ids = await seedPiSession("unbound-for-claims", false);
+    const { fork, sent } = makeConnection();
+
+    await fork("unbound-for-claims", ids[1]!, "at");
+    // The same session as Claude's: before its first prompt there is nothing
+    // to cut at, which only the Claude engine says this way.
+    sessionStore.upsert({
+      id: "unbound-for-claims",
+      harness: "claude-sdk",
+      agentType: "developer",
+    });
+    await fork("unbound-for-claims", ids[0]!, "before");
+
+    assert.equal(claims.mock.calls.length, 0);
+    assert.deepEqual(
+      sent.filter((message) => message.type === "error").map((m) => m.message),
+      [
+        "Failed to fork session: this message has no provider anchor to branch from.",
+        "Failed to fork session: there is nothing before this prompt to branch from.",
+      ],
+    );
+  } finally {
+    claims.mockRestore();
+    enabled.mockRestore();
+  }
 });
 
 afterAll(() => {

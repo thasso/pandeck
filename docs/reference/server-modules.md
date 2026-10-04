@@ -147,9 +147,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   listing/broadcast, restore dispatch, dev/deploy restart draining, and
   session-driver lookup. Which engine holds a session is the harness registry's
   to answer (`harnesses/registry.ts`); per-harness lifecycle lives in `piSdk/`
-  and `claudeSdk/`. The hub creates no session (`harnesses/create.ts` does);
-  fork, rename and removal still delegate to the stores until step 11d. Git
-  state lives with worktrees (`worktrees/`), not the hub.
+  and `claudeSdk/`. The hub creates, forks, renames and removes no session:
+  `harnesses/create.ts`, `harnesses/fork.ts` and the registry do. Git state
+  lives with worktrees (`worktrees/`), not the hub.
 - `harness.ts` owns the harness-neutral driver interfaces (`Viewer`,
   `HarnessDriver`, `LiveSession` with its `isLiveSession` guard) shared by both
   harnesses.
@@ -159,9 +159,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   session model display), `curatedModels.ts` (the Claude curated options,
   loading no engine SDK), `usage.ts` (per-account usage, OpenAI reset-credit
   redeem), `registry.ts` (`harnessRegistry`: id routing, resident sessions,
-  store wiring), `firstSend.ts` (each engine's admission and preparation for a
-  session's first send) and `create.ts` (`createSession`: each engine's creation
-  sequence). `harnessBoundary.test.ts` pins what still bypasses it.
+  store wiring, rename and the engine half of a delete), `firstSend.ts` (each
+  engine's admission and preparation for a session's first send), `create.ts`
+  (`createSession`: each engine's creation sequence) and `fork.ts`
+  (`prepareFork`: each engine's fork cut and refusals).
+  `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock
   that lets the owning store release an unviewed, idle session) and

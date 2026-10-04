@@ -10,7 +10,7 @@
  *   1. `claudeSdkStore.acquire` returns a session that exposes an empty snapshot()
  *      and a state() with kind "claude-sdk", and the SAME id is idempotent.
  *   2. The empty runtime does not show in `hub.listSessions()` until prompted.
- *   3. `hub.removeClaudeSdk` tombstones the id: it disappears from listSessions
+ *   3. `claudeSdkStore.remove` tombstones the id: it disappears from listSessions
  *      and a later acquire does NOT resurrect the old record.
  *
  * The session is created with a model/thinking level to confirm those flow
@@ -135,7 +135,7 @@ async function main(): Promise<void> {
     "orphan resolves to the claude-sdk harness",
   );
   assert.equal(orphan.snapshot().length, 1, "orphan history is loaded");
-  hub.removeClaudeSdk(ORPHAN_ID);
+  claudeSdkStore.remove(ORPHAN_ID);
   assert.equal(
     claudeSdkStore.exists(ORPHAN_ID),
     false,
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   );
 
   // 3. Remove → tombstone. It must disappear and stay gone.
-  hub.removeClaudeSdk(ID);
+  claudeSdkStore.remove(ID);
   assert.equal(
     claudeSdkStore.get(ID),
     undefined,
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
   );
   // Note: the tombstone forbids reading the old record; the fresh session is
   // tracked again, so clean up after ourselves.
-  hub.removeClaudeSdk(ID);
+  claudeSdkStore.remove(ID);
   cleanup();
 
   console.log("claude-sdk plumbing test: PASS");

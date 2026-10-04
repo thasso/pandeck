@@ -56,7 +56,6 @@ import {
   type PromptAttachment,
 } from "@assistant/shared";
 import { TIMELINE_RANGE_MAX_LIMIT } from "@assistant/shared/runtime";
-import { rm } from "node:fs/promises";
 import {
   drainRecipient,
   HISTORY_EXPANSION_MAX_MESSAGES,
@@ -98,8 +97,9 @@ import {
   type Viewer,
 } from "./harness.ts";
 import { randomUUID } from "node:crypto";
-import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
 import { createSession, type PiModel } from "./harnesses/create.ts";
+import { prepareFork } from "./harnesses/fork.ts";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import {
   firstSendEngine,
@@ -274,7 +274,6 @@ import {
   isManagedRepoDir,
 } from "./projectProvision.ts";
 import {
-  broadcastWorktreeEdgeChange,
   broadcastWorktreeList,
   createWorktree,
   listWorktreeRecords,
@@ -291,10 +290,7 @@ import {
   sanitizeWorktreeSuffix,
   taskWorktreeName,
 } from "./worktrees/worktreeNaming.ts";
-import {
-  linkSessionToWorktree,
-  worktreeIdForSession,
-} from "./db/worktreeStore.ts";
+import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import { removeWorktreeAndSettleSessions } from "./worktreeRemoval.ts";
 import {
   acknowledgeMissingSessionWorktree,
@@ -4967,10 +4963,8 @@ export class Connection implements Viewer {
     // supplies the id. Resolved before the delete below, from which on nothing
     // awaits until every viewer has left and the harness is evicted.
     const resolved =
-      ref.harness === "claude-sdk"
-        ? undefined
-        : (ref.file ??
-          (await hub.listSessions()).find((item) => item.id === id)?.file);
+      ref.file ??
+      (await hub.listSessions()).find((item) => item.id === id)?.file;
     // The delete itself is ONE store transaction, run before any other
     // destructive step: it rechecks live work (closing the window the
     // projection above was read in), marks the session deleted and tombstones
@@ -4990,8 +4984,7 @@ export class Connection implements Viewer {
       });
       return;
     }
-    // Harness-neutral, so it covers both branches below: a deleted session owes
-    // no Plan clearing line to anyone.
+    // A deleted session owes no Plan clearing line to anyone.
     forgetPlanHintState(id);
     // Drop every Task reference to this session so nothing links to (or tries to
     // resume) a session that no longer exists.
@@ -5012,23 +5005,33 @@ export class Connection implements Viewer {
     // `piStore.acquireExisting`).
     this.sessionRemoved(id);
     hub.clearSessionViews(id);
-    if (ref.harness === "claude-sdk") {
-      // In-process: tombstone + delete the record (aborts any in-flight turn via
-      // dispose). Every connection is already detached above; the new-session
-      // route stays client-staged until its first prompt.
-      projectStore.forgetSessionProject(id);
-      hub.removeClaudeSdk(id); // tombstones the id + broadcasts the updated list
-      return;
+    // The engine disposes its session (aborting any in-flight turn) before its
+    // first await, still in this synchronous run. What is awaited, after the
+    // cleanup below, is pi's transcript removal; Claude deletes its record at
+    // once and its native transcript in the background.
+    const removal = harnessRegistry.remove({
+      harness: ref.harness,
+      id,
+      agentType: ref.kind,
+      file: resolved,
+    });
+    // The cleanup below is keyed by session id and runs whichever engine held
+    // the session. The metadata row is already tombstoned above, so a delete
+    // cannot be retried: each step is best-effort, and one that fails (an
+    // artifact folder that cannot be removed) leaves the rest to run.
+    for (const cleanup of [
+      clearPendingQuestion,
+      deleteSessionPromptQueue,
+      deleteToolGroupSessionData,
+      (sessionId: string) => projectStore.forgetSessionProject(sessionId),
+    ]) {
+      try {
+        cleanup(id);
+      } catch (err) {
+        console.warn("[delete] session cleanup failed:", errorText(err));
+      }
     }
-    // The in-memory cleanup below is keyed by session id and is always safe to
-    // run. The metadata row is already tombstoned above.
-    const key = id;
-    hub.evict(key);
-    clearPendingQuestion(id);
-    deleteSessionPromptQueue(id);
-    deleteToolGroupSessionData(id);
-    projectStore.forgetSessionProject(key);
-    if (resolved) await rm(resolved, { force: true }).catch(() => {});
+    await removal;
     await hub.broadcastSessions();
   }
 
@@ -5202,43 +5205,18 @@ export class Connection implements Viewer {
       });
       return;
     }
-    // pi branches FROM the selected native entry (it walks to the parent itself
-    // for a "before" fork), so it always wants that entry's OWN anchor. Passing
-    // our log id when none is bound would reach piStore as an id it cannot
-    // resolve and surface as an obscure downstream error, so refuse here with
-    // the same message the claude-sdk branch gives.
-    if (harness !== "claude-sdk" && !anchors.own) {
+    const prepared = prepareFork(harness, {
+      id,
+      kind,
+      file,
+      entryId,
+      position,
+      anchors,
+    });
+    if ("refusal" in prepared) {
       this.send({
         type: "error",
-        message:
-          "Failed to fork session: this message has no provider anchor to branch from.",
-        target: { type: "session", id },
-      });
-      return;
-    }
-    const piCut =
-      harness === "claude-sdk"
-        ? undefined
-        : this.piForkCut(id, entryId, position, anchors);
-    // An "at" fork whose turn end cannot be named on BOTH sides is refused rather
-    // than cut: our copy always runs to the end of the turn, so branching pi
-    // anywhere earlier hands the child tool calls whose results nothing holds.
-    if (piCut && !piCut.anchor) {
-      this.send({
-        type: "error",
-        message:
-          "Failed to fork session: this turn has no provider anchor for its end to branch from.",
-        target: { type: "session", id },
-      });
-      return;
-    }
-    // OUR cut is resolved and validated BEFORE pi branches: its branch writes a
-    // session file that nothing would reference if the copy then proved
-    // impossible, and unlike the claude-sdk path there is nothing to undo.
-    if (piCut?.logCut && !sessionRuntime.canForkLogAt(id, piCut.logCut)) {
-      this.send({
-        type: "error",
-        message: "Cannot fork: selected message is no longer available.",
+        message: prepared.refusal,
         target: { type: "session", id },
       });
       return;
@@ -5253,34 +5231,7 @@ export class Connection implements Viewer {
         position === "before"
           ? sessionRuntime.entryText(id, entryId)
           : undefined;
-      const live =
-        harness === "claude-sdk"
-          ? await this.forkClaudeSdkSession(id, entryId, position, anchors)
-          : // `entryId` — OUR id for the row the user picked — travels
-            // alongside the native anchor: it is what the fork's recorded
-            // lineage must carry, since the client resolves `parentEntryId`
-            // against its own transcript and pi's ids name nothing there.
-            await hub.forkSession(
-              kind,
-              file,
-              piCut!.anchor!,
-              position,
-              entryId,
-            );
-      // Seed the child's durable transcript. pi branches its OWN session file
-      // and leaves our log untouched, so without this the fork opens on an
-      // empty chat beside a pi session carrying the whole history. (The
-      // claude-sdk branch does it inside `claudeSdkStore.forkSession`, where
-      // the session record is derived from the same copy.)
-      if (piCut?.logCut)
-        sessionRuntime.forkLog(id, live.sessionId, piCut.logCut);
-      // Forks inherit the parent's execution context durably: copy the
-      // in_worktree edge so a later reopen resolves the same cwd.
-      const parentWorktreeId = worktreeIdForSession(id);
-      if (parentWorktreeId) {
-        linkSessionToWorktree(live.sessionId, parentWorktreeId);
-        broadcastWorktreeEdgeChange();
-      }
+      const live = await prepared.fork();
       // Listed before attaching: snapshot and route message leave together
       // (see `onOpenPermanentAssistant`). A newer navigation meanwhile keeps
       // the fork unviewed: it exists, and the client is where it went.
@@ -5305,104 +5256,6 @@ export class Connection implements Viewer {
     }
   }
 
-  /**
-   * The two halves of a pi fork, which must name the SAME point: the native id
-   * pi branches at, and OUR log entry the copy runs through.
-   *
-   * "before" is the simpler half: pi walks to the selected prompt's PARENT, so
-   * we copy through the entry immediately preceding that prompt in our log —
-   * anchored or not, because a copy needs no anchor. Cutting at the nearest
-   * ANCHORED entry instead would drop a turn that was left unbound (the
-   * reconciliation refuses a turn it cannot place with certainty) from the
-   * child's transcript while pi's branch still carries it in context. For the
-   * first prompt there is nothing before it, so the copy is empty — which is
-   * what pi answers with a fresh session too.
-   *
-   * "at" takes the work, because ONE of our assistant entries is the whole pi
-   * turn: natively that turn is `assistant(call) → result → … → final
-   * assistant`, while our log holds the aggregated entry followed by its tool
-   * results. So the two cuts run to each transcript's own end of that turn — our
-   * copy through the last owned tool result (`forkCutEntryId`), pi through the
-   * turn's terminal native id (`ownTurnEnd`, which the post-turn scan resolved).
-   * Cutting pi at the entry's own native message instead would hand the child
-   * tool calls whose results nothing holds and drop the turn's final answer,
-   * while our copy showed both.
-   *
-   * An entry anchored BEFORE turn ends were resolved has no `ownTurnEnd`, and
-   * its `own` is whatever that older binding recorded — the message that OPENED
-   * the turn, not its end. Those keep the rule they were written under: cut pi
-   * at the anchor of OUR turn-end entry, the last row both transcripts agree on.
-   * When that entry carries no anchor either — the common shape of a legacy
-   * multi-cycle turn, whose positional binding stopped before its tool results —
-   * there is NO id that names the end of the turn, so the fork is refused
-   * (`anchor` undefined) rather than cut at the opening message: our copy would
-   * carry results and a final answer the child's provider context never got.
-   * Nothing here repairs such a binding.
-   */
-  private piForkCut(
-    id: string,
-    entryId: string,
-    position: "before" | "at",
-    anchors: {
-      own?: string;
-      ownTurnEnd?: string;
-      previous?: string;
-      previousEntryId?: string;
-      precedingEntryId?: string;
-    },
-  ): { anchor?: string; logCut?: string } {
-    if (position === "before")
-      return {
-        anchor: anchors.own!,
-        ...(anchors.precedingEntryId
-          ? { logCut: anchors.precedingEntryId }
-          : {}),
-      };
-    const logCut = sessionRuntime.forkCutEntryId(id, entryId) ?? entryId;
-    if (anchors.ownTurnEnd) return { anchor: anchors.ownTurnEnd, logCut };
-    // Legacy binding: only OUR turn-end entry's own anchor can name the end.
-    const legacyTurnEndAnchor = sessionRuntime.forkAnchors(id, logCut).own;
-    return legacyTurnEndAnchor
-      ? { anchor: legacyTurnEndAnchor, logCut }
-      : { logCut };
-  }
-
-  /**
-   * Branch a claude-sdk session. The SDK slices its transcript INCLUSIVELY, so
-   * the two positions differ only in where the cut lands: "at" keeps the chosen
-   * assistant turn, while "before" cuts at the turn PRECEDING the chosen prompt.
-   */
-  private async forkClaudeSdkSession(
-    id: string,
-    entryId: string,
-    position: "before" | "at",
-    anchors: { own?: string; previous?: string; previousEntryId?: string },
-  ): Promise<ClaudeSdkSession> {
-    // Both the native cut and OUR slice stop at the same entry: the chosen turn
-    // for "at", the one before the chosen prompt for "before".
-    const cut =
-      position === "at"
-        ? { anchor: anchors.own, entryId }
-        : { anchor: anchors.previous, entryId: anchors.previousEntryId };
-    if (!cut.anchor || !cut.entryId)
-      throw new Error(
-        position === "at"
-          ? "this message has no provider anchor to branch from."
-          : "there is nothing before this prompt to branch from.",
-      );
-    return claudeSdkStore.forkSession(id, {
-      anchor: cut.anchor,
-      keepThroughEntryId: cut.entryId,
-      forkOrigin: {
-        harness: "claude-sdk",
-        parentSessionId: id,
-        parentEntryId: entryId,
-        position,
-        createdAt: Date.now(),
-      },
-    });
-  }
-
   private async onRenameSession(id: string, title: string): Promise<void> {
     const ref = this.resolveSessionRef(id);
     if (!ref) {
@@ -5413,10 +5266,13 @@ export class Connection implements Viewer {
       });
       return;
     }
-    const { kind, file } = ref;
     if (!this.guardSessionRef(ref)) return;
     try {
-      await hub.renameSession(kind, file ?? "", id, title);
+      await harnessRegistry.rename(
+        { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
+        title,
+      );
+      await hub.broadcastSessions();
     } catch (err) {
       this.send({
         type: "error",
