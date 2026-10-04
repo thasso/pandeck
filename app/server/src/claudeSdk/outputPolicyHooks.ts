@@ -19,7 +19,10 @@ export interface ClaudeQueryLifecycleHooks {
     toolName: string;
     toolInput: Record<string, unknown>;
     toolUseId: string;
-  }): Promise<{ allowed: true } | { allowed: false; reason: string }>;
+  }): Promise<
+    /** `context` reaches the model beside the call (the job's PA id). */
+    { allowed: true; context?: string } | { allowed: false; reason: string }
+  >;
   stop(
     tasks: Array<{
       id: string;
@@ -73,6 +76,14 @@ export function claudeOutputPolicyHooks(
                     hookEventName: "PreToolUse" as const,
                     permissionDecision: "deny" as const,
                     permissionDecisionReason: admission.reason,
+                  },
+                };
+              if (admission.context)
+                return {
+                  continue: true,
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse" as const,
+                    additionalContext: admission.context,
                   },
                 };
             }

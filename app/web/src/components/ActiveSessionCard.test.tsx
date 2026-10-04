@@ -177,8 +177,8 @@ describe("ActiveSessionCard clusters", () => {
     Cluster,
     "childrenWithSettled" | "settledCount" | "counts"
   > & {
-    counts: Omit<Cluster["counts"], "running" | "jobs"> &
-      Partial<Pick<Cluster["counts"], "running" | "jobs">>;
+    counts: Omit<Cluster["counts"], "running" | "jobs" | "services"> &
+      Partial<Pick<Cluster["counts"], "running" | "jobs" | "services">>;
   };
 
   function clusterMarkup(
@@ -190,7 +190,7 @@ describe("ActiveSessionCard clusters", () => {
       childrenWithSettled: input.children,
       settledCount: 0,
       ...input,
-      counts: { running: 0, jobs: 0, ...input.counts },
+      counts: { running: 0, jobs: 0, services: 0, ...input.counts },
     };
     return renderToStaticMarkup(
       <ActiveSessionCard

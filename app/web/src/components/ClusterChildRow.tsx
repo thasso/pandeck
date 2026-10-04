@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { Activity, Users } from "lucide-react";
+import { awaitedBackgroundCount } from "@assistant/shared";
 import {
   sameClusterChildProps,
   sessionClusterSummary,
@@ -99,8 +100,19 @@ function ClusterChildRowImpl({
     AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
+  // The badge counts every process; the words keep the fold's split between
+  // jobs somebody waits on and services nobody does.
   const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
-  const jobsText = `${jobs} background job${jobs === 1 ? "" : "s"} running`;
+  const services = session.backgroundActivity?.serviceCount ?? 0;
+  const awaited = awaitedBackgroundCount(session.backgroundActivity);
+  const jobsText = `${[
+    ...(awaited > 0
+      ? [`${awaited} background job${awaited === 1 ? "" : "s"}`]
+      : []),
+    ...(services > 0
+      ? [`${services} service${services === 1 ? "" : "s"}`]
+      : []),
+  ].join(" and ")} running`;
   const peers = card.peers;
   // The composer ledge lists what a chat SPAWNED, owned or not, so its rows
   // claim no coordination either.

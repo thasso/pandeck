@@ -144,6 +144,11 @@ describe("state and activity classification", () => {
     expect(
       backgroundWorkKindLabel(item({ id: "e", kind: "monitor-websocket" })),
     ).toBe("WebSocket monitor");
+    expect(
+      backgroundWorkKindLabel(
+        item({ id: "f", kind: "shell", intent: "service" }),
+      ),
+    ).toBe("Shell · service");
   });
 });
 
@@ -513,6 +518,22 @@ describe("the session card's chip", () => {
     expect(
       backgroundActivityText(activity({ startingCount: 1, stoppingCount: 1 })),
     ).toBe("2 background processes running, 1 starting, 1 stopping");
+  });
+
+  it("says which of the running processes are services", () => {
+    expect(backgroundActivityText(activity({ serviceCount: 1 }))).toBe(
+      "2 background processes running, 1 of them service",
+    );
+    expect(
+      backgroundActivityText(
+        activity({
+          activeCount: 1,
+          shellCount: 1,
+          monitorCommandCount: 0,
+          serviceCount: 1,
+        }),
+      ),
+    ).toBe("1 background process running, a service");
   });
 
   it("keys on the rendered chip, so a tick that changes nothing is stable", () => {

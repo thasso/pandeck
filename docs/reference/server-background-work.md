@@ -391,17 +391,26 @@ the global rules already forbid those packages outside their own folders.
 tool in the shared catalog for eligible interactive user sessions on either
 harness. It derives ownership from the calling tool context and the shared
 background-work policy, then reads only the canonical store projections. Its
-four operations are bounded `list`, `status`, `stop`, and `stop_all`; the latter
-two delegate entirely to `supervisor.ts`. PA task ids are the only model-facing
-address, `all` is active-first, and history uses a keyset cursor over immutable
-creation/id keys so pages do not overlap or skip when rows are touched or new
-rows arrive. Results contain no provider handles, process ids, vendor paths,
-environments, credentials, or output bodies. When PA retained output, the result
-includes its stable PA-owned `outputFile` so the agent can inspect it without
-listing every item to rediscover the completion. Completion is delivered
-automatically; list/status are recovery and inspection, not polling. The tool is
-a deliberate Plan-mode safety exception so existing work remains inspectable and
-stoppable while new admission is disabled.
+operations are bounded `list`, `status`, `stop`, `stop_all` and `set_intent`;
+`stop` and `stop_all` delegate entirely to `supervisor.ts`. `set_intent` records
+whether the owner waits on a nonterminal item (`awaited`, every item's default)
+or keeps it beside its work (`service`: a dev server, a watcher) —
+`backgroundWorkStore.setIntent`, column `intent` from
+`0067_background_work_intent.sql`. The session list's
+`SessionBackgroundActivity.serviceCount` carries it, and the browser reads a
+service as running but never as work in progress. A launch tells the agent the
+item's PA id and how to declare it (`backgroundWork/intent.ts`): in the pi tool
+result, and for Claude as the admitting PreToolUse hook's `additionalContext`,
+since Claude's own task id is not an address this tool accepts. PA task ids are
+the only model-facing address, `all` is active-first, and history uses a keyset
+cursor over immutable creation/id keys so pages do not overlap or skip when rows
+are touched or new rows arrive. Results contain no provider handles, process
+ids, vendor paths, environments, credentials, or output bodies. When PA retained
+output, the result includes its stable PA-owned `outputFile` so the agent can
+inspect it without listing every item to rediscover the completion. Completion
+is delivered automatically; list/status are recovery and inspection, not
+polling. The tool is a deliberate Plan-mode safety exception so existing work
+remains inspectable and stoppable while new admission is disabled.
 
 ## Human-facing Stop
 

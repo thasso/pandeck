@@ -613,11 +613,13 @@ capability logic.
   `sessionInbox.ts`'s memo keys, since CI turning red moves nothing else about a
   session. Tested in `sessionDelivery.test.ts`. `sessionInbox.ts` also owns the
   ONE effect background work has on a card: `SessionBackgroundActivity` may lift
-  an otherwise QUIET card from the `active` tier into `working` — the session
-  really is busy, just not with a turn — and it may do nothing else. It never
-  becomes the card's `status`, so the badge, the spinner and unread are
-  untouched, and `sessionCardKey` folds in the rendered chip
-  (`backgroundActivityKey`) plus the resulting tier.
+  an otherwise QUIET card from the `active` tier into `working` when it holds
+  work somebody waits on or an empty retained host in its grace
+  (`backgroundWorkBusy`; a declared service does not) — the session really is
+  busy, just not with a turn — and it may do nothing else. It never becomes the
+  card's `status`, so the badge, the spinner and unread are untouched, and
+  `sessionCardKey` folds in the rendered chip (`backgroundActivityKey`) plus the
+  resulting tier.
 - `sessionInbox.ts` shapes ONE more surface: `spawnedSessionsView` is the peers
   a single session spawned, for the composer's spawned-session ledge. Every row
   is built by the same private `inboxCard` the inbox and the cluster fold use,

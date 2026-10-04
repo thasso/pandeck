@@ -6,6 +6,7 @@
 import {
   backgroundWorkBackendsForHarness,
   type BackgroundWorkBackend,
+  type BackgroundWorkIntent,
   type Harness,
 } from "@assistant/shared";
 import { backgroundWorkItemSummaryOf } from "../backgroundWorkRegistry.ts";
@@ -29,7 +30,8 @@ type BackgroundTasksParams =
     }
   | { operation: "status"; taskId: string }
   | { operation: "stop"; taskId: string; reason?: string }
-  | { operation: "stop_all"; reason?: string };
+  | { operation: "stop_all"; reason?: string }
+  | { operation: "set_intent"; taskId: string; intent: BackgroundWorkIntent };
 
 type ListCursor = {
   operation: "list";
@@ -57,8 +59,14 @@ const reasonSchema = {
 
 const operationSchema = {
   type: "string",
-  enum: ["list", "status", "stop", "stop_all"],
+  enum: ["list", "status", "stop", "stop_all", "set_intent"],
   description: "The catalog operation to perform.",
+};
+const intentSchema = {
+  type: "string",
+  enum: ["awaited", "service"],
+  description:
+    "For set_intent: service for work nobody waits on (dev server, watcher); awaited (the default) for work whose end you wait for.",
 };
 const backgroundTasksSchema = {
   type: "object",
@@ -83,6 +91,7 @@ const backgroundTasksSchema = {
     },
     taskId: taskIdSchema,
     reason: reasonSchema,
+    intent: intentSchema,
   },
 } as const;
 
@@ -207,10 +216,12 @@ function assertOperationFields(
           ? new Set(["operation", "taskId", "reason"])
           : operation === "stop_all"
             ? new Set(["operation", "reason"])
-            : undefined;
+            : operation === "set_intent"
+              ? new Set(["operation", "taskId", "intent"])
+              : undefined;
   if (!allowed)
     throw new Error(
-      "operation must be one of list, status, stop, or stop_all.",
+      "operation must be one of list, status, stop, stop_all, or set_intent.",
     );
   for (const key of Object.keys(params))
     if (!allowed.has(key)) throw new Error(`${key} is not accepted here.`);
@@ -235,7 +246,7 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
   name: "background_tasks",
   label: "Background Tasks",
   description:
-    "Inspect or Stop background work owned by this interactive session. Completion is delivered automatically; use list and status for recovery and inspection, not polling. Retained output is returned as outputFile. Address work only by the PA task id returned here. Stop is available in both Build and Plan. No wait, tail, stream, subscribe, or raw-output operation is provided.",
+    "Inspect, Stop or classify background work owned by this interactive session. Completion is delivered automatically; use list and status for recovery and inspection, not polling. Retained output is returned as outputFile. Address work only by the PA task id returned here. Stop is available in both Build and Plan. set_intent service marks work nobody waits on (dev server, watcher) so it never reads as work in progress. No wait, tail, stream, subscribe, or raw-output operation is provided.",
   parameters: backgroundTasksSchema,
   executionMode: "sequential",
   async execute(params, ctx) {
@@ -341,8 +352,28 @@ const backgroundTasksTool = defineAgentTool<BackgroundTasksParams>({
       });
     }
 
+    if (operation === "set_intent") {
+      const taskId = requireString(params.taskId, "taskId", MAX_ID_CHARS);
+      if (params.intent !== "awaited" && params.intent !== "service")
+        throw new Error("intent must be awaited or service.");
+      const item = ownedItemOrThrow(taskId, ctx.session.sessionId, backend);
+      if (item.terminalAt !== undefined)
+        throw new Error("Background task has already finished.");
+      const updated = backgroundWorkStore.setIntent({
+        itemId: item.id,
+        ownerSessionId: ctx.session.sessionId,
+        intent: params.intent,
+      });
+      return jsonResult({
+        operation,
+        taskId,
+        item: displayItem(updated, Date.now()),
+        humanLink: humanLink(taskId),
+      });
+    }
+
     throw new Error(
-      "operation must be one of list, status, stop, or stop_all.",
+      "operation must be one of list, status, stop, stop_all, or set_intent.",
     );
   },
 });

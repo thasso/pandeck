@@ -33,6 +33,7 @@ import type {
 } from "../backgroundWork/backends.ts";
 import { BoundedBackgroundMonitorBuffer } from "../backgroundWork/monitorBuffer.ts";
 import { backgroundWorkSupervisor } from "../backgroundWork/supervisor.ts";
+import { backgroundWorkIntentHint } from "../backgroundWork/intent.ts";
 import {
   backgroundWorkDescription,
   backgroundWorkTitle,
@@ -1034,7 +1035,13 @@ async function admitProcess(input: {
     }
     state = launched.state;
   }
-  return jsonResult({ taskId: admission.item.id, state });
+  return jsonResult({
+    taskId: admission.item.id,
+    state,
+    ...(admission.item.intent === "service"
+      ? { intent: "service" }
+      : { hint: backgroundWorkIntentHint(admission.item.id) }),
+  });
 }
 
 async function admitSocket(input: {
@@ -1076,5 +1083,11 @@ async function admitSocket(input: {
     }
     state = launched.state;
   }
-  return jsonResult({ taskId: admission.item.id, state });
+  return jsonResult({
+    taskId: admission.item.id,
+    state,
+    ...(admission.item.intent === "service"
+      ? { intent: "service" }
+      : { hint: backgroundWorkIntentHint(admission.item.id) }),
+  });
 }

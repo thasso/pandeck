@@ -431,6 +431,13 @@ test("background admission lazily retains one query and binds after the level si
   assert.equal(admitted.label, "sleep 1");
   assert.equal(admitted.command, "sleep 1");
   assert.equal(admitted.description, undefined);
+  // The model learns the job's PA id beside the call, and how to say nobody
+  // waits on it: Claude's own task id is not one background_tasks accepts.
+  const context = (
+    hookResult as { hookSpecificOutput?: { additionalContext?: string } }
+  ).hookSpecificOutput?.additionalContext;
+  assert.match(context ?? "", new RegExp(`task ${admitted.id} `));
+  assert.match(context ?? "", /set_intent/);
 
   query.output.emit({
     type: "system",

@@ -22,6 +22,8 @@ const {
 } = await import("./backgroundWorkStore.ts");
 const { sessionStore } = await import("./sessionStore.ts");
 const { getDb } = await import("./index.ts");
+const { backgroundWorkItemSummaryOf } =
+  await import("../backgroundWorkRegistry.ts");
 
 let serial = 0;
 function makeSession(scope: "user" | "internal" = "user"): string {
@@ -744,6 +746,13 @@ test("every public write enters the revision seam and reports touched ids", () =
         evidence: { originalBytes: 4, capturedBytes: 4 },
       }),
     );
+    bump("setIntent", () =>
+      backgroundWorkStore.setIntent({
+        itemId: item.id,
+        ownerSessionId: owner,
+        intent: "service",
+      }),
+    );
     bump("requestStop", () =>
       backgroundWorkStore.requestStop({
         itemId: item.id,
@@ -1383,6 +1392,68 @@ test("a live epoch keeps its owner visibly busy after its last child ends", () =
   assert.deepEqual(backgroundWorkStore.deleteOwnerSession(owner).itemIds, [
     item.id,
   ]);
+});
+
+test("an owner declares a running item a service, and the activity counts it apart", () => {
+  const owner = makeSession();
+  const build = backgroundWorkStore.reserveItem(
+    reserveInput(owner, { sourceRequestId: "intent-build" }),
+  );
+  const server = backgroundWorkStore.reserveItem(
+    reserveInput(owner, { sourceRequestId: "intent-server" }),
+  );
+  assert.equal(build.intent, "awaited");
+  const declared = backgroundWorkStore.setIntent({
+    itemId: server.id,
+    ownerSessionId: owner,
+    intent: "service",
+  });
+  assert.equal(declared.intent, "service");
+  assert.equal(backgroundWorkItemSummaryOf(declared).intent, "service");
+  assert.equal(backgroundWorkItemSummaryOf(build).intent, undefined);
+  const activity = backgroundWorkStore.activityByOwner().get(owner);
+  assert.equal(activity?.activeCount, 2);
+  assert.equal(activity?.serviceCount, 1);
+
+  // Repeating it writes nothing; another session may not declare it; a
+  // finished item's intent is history.
+  assert.equal(
+    backgroundWorkStore.setIntent({
+      itemId: server.id,
+      ownerSessionId: owner,
+      intent: "service",
+    }).revision,
+    declared.revision,
+  );
+  assert.throws(
+    () =>
+      backgroundWorkStore.setIntent({
+        itemId: server.id,
+        ownerSessionId: makeSession(),
+        intent: "awaited",
+      }),
+    BackgroundWorkValidationError,
+  );
+  backgroundWorkStore.terminalize({ itemId: build.id, state: "completed" });
+  assert.throws(
+    () =>
+      backgroundWorkStore.setIntent({
+        itemId: build.id,
+        ownerSessionId: owner,
+        intent: "service",
+      }),
+    BackgroundWorkValidationError,
+  );
+  // Back to awaited: the count drops with it.
+  backgroundWorkStore.setIntent({
+    itemId: server.id,
+    ownerSessionId: owner,
+    intent: "awaited",
+  });
+  assert.equal(
+    backgroundWorkStore.activityByOwner().get(owner)?.serviceCount,
+    undefined,
+  );
 });
 
 test("a provider id is unique per epoch, not globally", () => {
