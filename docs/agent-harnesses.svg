@@ -98,7 +98,7 @@
   </g>
   <g id="node-callers" data-graph-role="node" data-node-id="callers" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="590,138,800,198">
   <rect x="590.0" y="138.0" width="210.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
-  <text data-text-role="title" data-full-text="11 one-shot callers" data-text-max-width="186.0" x="695.0" y="168.0" text-anchor="middle" class="node-title" font-size="17.11">11 one-shot callers</text>
+  <text data-text-role="title" data-full-text="10 one-shot callers" data-text-max-width="186.0" x="695.0" y="168.0" text-anchor="middle" class="node-title" font-size="17.11">10 one-shot callers</text>
   <text data-text-role="subtitle" data-full-text="naming · commit · PR · memory" data-text-max-width="186.0" x="695.0" y="190.0" text-anchor="middle" class="node-sub" font-size="11.49">naming · commit · PR · memory</text>
   </g>
   <g id="node-consumers" data-graph-role="node" data-node-id="consumers" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="820,138,1015,198">

@@ -51,8 +51,11 @@ Four layers, each depending only on the ones below it:
    shared session host kit (`session/host/`: viewer set, idle eviction,
    synthetic host-command turns, display-block helpers) instead of carrying a
    copy.
-4. **`session/`** (runtime, log, transport and the `PromptableAdapter` contract)
-   is already harness-neutral and does not change.
+4. **`session/`**: the runtime, log and transport core and the
+   `PromptableAdapter` contract are already harness-neutral and do not change.
+   Two pieces of the folder are still migration work: the adapter bridge
+   `session/adapters/claudeSdk.ts` imports the engine's `modelSettings.ts`, and
+   `session/planHint.ts` branches on a harness id. Both are pinned below.
 
 `HARNESSES` in `app/shared/` is the one table that maps a harness to its account
 provider, model provider, label and capabilities (fork, steering,
@@ -64,9 +67,17 @@ mapping.
 - Outside `piSdk/`, `claudeSdk/`, `harnesses/` and `test/`, a module reaches an
   engine folder only through `harnesses/`. `harnessBoundary.test.ts` pins every
   remaining exception by module and fails on a new one.
-- App code does not compare a harness id against a literal (`=== "pi"`,
-  `case "claude-sdk":`). It reads a capability from `HARNESSES` or asks the
-  backend. The same test pins the remaining comparisons per file.
+- App code does not compare a harness id against a literal. It reads a
+  capability from `HARNESSES` or asks the backend. The same test pins the
+  remaining comparisons per file: `==`/`===`/`!=`/`!==` with a harness-id
+  literal on either side, a `case` with one, and `.includes()` on an array
+  literal holding one.
+- The test parses every non-test `.ts` module under `app/server/src` (and fails
+  if a source with another extension appears there), so comments and unrelated
+  strings never count. It does not cover the web client, which reaches no engine
+  but repeats the harness mapping until step 4, or scripts outside the server
+  source such as `scripts/bun-runtime-probe.mjs`, which imports
+  `piSdk/models.ts` on purpose to probe the packaged runtime.
 - The allowlists in that test only shrink. A change that removes an engine
   import or a comparison deletes its entry in the same change; the test fails on
   a stale entry so the list cannot drift above reality.
@@ -83,7 +94,7 @@ mapping.
 | 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | open   |
 | 3    | One persona type instead of `AgentKind`/`AgentType`/`SessionAgentType`        | open   |
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | open   |
-| 5    | `runOneShot()` and its 11 callers                                             | open   |
+| 5    | `runOneShot()` and its 10 callers                                             | open   |
 | 6    | Models and usage ports                                                        | open   |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
 | 8    | Shared session host kit                                                       | open   |
