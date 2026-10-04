@@ -7,7 +7,9 @@
  * Both engines answer with the same {@link OneShotResult}. A run that failed
  * without writing anything throws {@link OneShotError}; a run that failed after
  * writing some text returns that text with {@link OneShotResult.failure} set,
- * and the caller decides whether partial output is usable.
+ * and the caller decides whether partial output is usable. A timeout or an
+ * engine exception throws a plain `Error`, drops any partial text and is not
+ * recorded: the engine never reported what it consumed.
  */
 import {
   CLAUDE_SDK_PROVIDER,
@@ -18,8 +20,8 @@ import type { AgentUsage } from "@assistant/shared/session";
 import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
 import type { ClaudeUsage } from "../claudeSdk/messageMapper.ts";
 import type { AgentTool } from "../mcp/tool.ts";
-import { findModelForProfile } from "../piSdk/models.ts";
 import {
+  findPiModelExact,
   runPiOneShot,
   selectPiModelWithFallback,
   type PiRegistryModel,
@@ -177,16 +179,13 @@ async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
 function piModelFor(
   request: OneShotRequest,
 ): Promise<PiRegistryModel | undefined> {
+  const model = {
+    provider: request.model.provider,
+    modelId: request.model.modelId,
+  };
   return request.modelFallback === "none"
-    ? findModelForProfile(
-        request.credentialProfileId,
-        request.model.provider,
-        request.model.modelId,
-      )
-    : selectPiModelWithFallback(
-        { provider: request.model.provider, modelId: request.model.modelId },
-        request.credentialProfileId,
-      );
+    ? findPiModelExact(model, request.credentialProfileId)
+    : selectPiModelWithFallback(model, request.credentialProfileId);
 }
 
 function agentUsageFromClaude(usage: ClaudeUsage): AgentUsage {

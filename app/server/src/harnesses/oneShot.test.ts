@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { beforeEach, test, vi } from "vitest";
 import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
 import { sessionStore } from "../db/sessionStore.ts";
-import { findModelForProfile } from "../piSdk/models.ts";
-import { runPiOneShot, selectPiModelWithFallback } from "../piSdk/oneShot.ts";
+import {
+  findPiModelExact,
+  runPiOneShot,
+  selectPiModelWithFallback,
+} from "../piSdk/oneShot.ts";
 import {
   NoHelperModelError,
   OneShotError,
@@ -13,10 +16,10 @@ import {
 
 vi.mock("../claudeSdk/oneShot.ts", () => ({ runClaudeSdkOneShot: vi.fn() }));
 vi.mock("../piSdk/oneShot.ts", () => ({
+  findPiModelExact: vi.fn(),
   runPiOneShot: vi.fn(),
   selectPiModelWithFallback: vi.fn(),
 }));
-vi.mock("../piSdk/models.ts", () => ({ findModelForProfile: vi.fn() }));
 vi.mock("../db/sessionStore.ts", () => ({
   sessionStore: { createInternalUsageSession: vi.fn() },
 }));
@@ -84,7 +87,7 @@ test("any other model runs on pi through the helper fallback", async () => {
 });
 
 test("modelFallback none requires the exact model", async () => {
-  vi.mocked(findModelForProfile).mockResolvedValue(undefined);
+  vi.mocked(findPiModelExact).mockResolvedValue(undefined);
 
   await assert.rejects(
     () => runOneShot(request({ modelFallback: "none" })),
@@ -92,10 +95,9 @@ test("modelFallback none requires the exact model", async () => {
       err instanceof NoHelperModelError &&
       err.message === "No model for this helper.",
   );
-  assert.deepEqual(vi.mocked(findModelForProfile).mock.calls[0], [
+  assert.deepEqual(vi.mocked(findPiModelExact).mock.calls[0], [
+    { provider: "openai-codex", modelId: "gpt-test" },
     "profile-1",
-    "openai-codex",
-    "gpt-test",
   ]);
   assert.equal(vi.mocked(selectPiModelWithFallback).mock.calls.length, 0);
   assert.equal(vi.mocked(runPiOneShot).mock.calls.length, 0);

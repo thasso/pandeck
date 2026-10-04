@@ -1,9 +1,8 @@
 /**
  * Headless one-shot run against a pi agent session.
  *
- * This is the pi counterpart to `claudeSdk/oneShot.ts`, shared by the
- * lightweight helper agents (session naming, commit message, prompt
- * refinement, local-agent summary). It builds a locked-down resource loader
+ * The pi engine half of `runOneShot` (`harnesses/oneShot.ts`), which is the
+ * only caller; app code never reaches this module directly. It builds a locked-down resource loader
  * (no extensions/skills/prompt-templates/context files, custom system
  * prompt), runs a single prompt against an in-memory session, optionally
  * exposing an explicit app-tool allowlist through the direct AgentTool
@@ -18,8 +17,8 @@ import type { AgentTool } from "../mcp/tool.ts";
 import type { findModel } from "./models.ts";
 
 // pi's SDK, the model registry and the tool adapter load on the first run:
-// importing them costs ~0.75s, and the helper agents that import this module
-// (commit messages, naming, memory, minutes) are reached from most of the
+// importing them costs ~0.75s, and `harnesses/oneShot.ts` is reached through
+// the helper agents (commit messages, naming, memory, minutes) from most of the
 // server long before any of them runs.
 async function loadPi() {
   const { DefaultResourceLoader, SessionManager, createAgentSession } =
@@ -52,6 +51,16 @@ export type PiRegistryModel = NonNullable<ReturnType<typeof findModel>>;
  * 0.87 dropped it and every remaining Copilot model reports `reasoning: true`,
  * so the non-reasoning tier below now only ever matches other providers.
  */
+/** The configured model if the account offers it; never a fallback. */
+export async function findPiModelExact(
+  settings: { provider: string; modelId: string },
+  credentialProfileId: string,
+): Promise<PiRegistryModel | undefined> {
+  const { modelRegistryForProfile } = await loadPi();
+  const registry = await modelRegistryForProfile(credentialProfileId);
+  return registry.find(settings.provider, settings.modelId);
+}
+
 export async function selectPiModelWithFallback(
   settings: { provider: string; modelId: string },
   credentialProfileId: string,

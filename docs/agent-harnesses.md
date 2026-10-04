@@ -45,8 +45,10 @@ Four layers, each depending only on the ones below it:
      engine a model slot names and returns one result shape: text and
      `AgentUsage`. A run that failed without writing anything throws
      `OneShotError` (carrying its usage); one that failed after writing text
-     returns it with `failure` set, and the caller decides. It records the
-     internal usage session itself when asked.
+     returns it with `failure` set, and the caller decides. A timeout or engine
+     exception throws a plain error and drops partial text. It records the
+     internal usage session itself when asked, for every run that reported its
+     usage (so not a timeout).
    - The models and usage ports list and resolve models per credential profile
      and read subscription usage.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are

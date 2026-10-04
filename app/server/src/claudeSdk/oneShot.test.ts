@@ -217,3 +217,55 @@ async function main(): Promise<void> {
 test("runs Claude SDK one-shot prompts through a fake seam", async () => {
   await main();
 });
+
+test("an API failure is reported as the failure, never as model text", async () => {
+  const run = (messages: ClaudeSdkMessage[]) => {
+    setClaudeSdkOneShotSeam(() => Promise.resolve(fakeSeam(messages)));
+    return runClaudeSdkOneShot({
+      modelId: "sonnet",
+      thinkingLevel: "off",
+      systemPrompt: "x",
+      prompt: "y",
+    });
+  };
+
+  // The CLI's synthetic assistant message carries the provider's wording.
+  const spendLimit = await run([
+    {
+      type: "assistant",
+      uuid: "a1",
+      session_id: "s1",
+      error: "billing_error",
+      message: {
+        id: "m1",
+        model: "<synthetic>",
+        content: [
+          { type: "text", text: "You've hit your org's monthly spend limit" },
+        ],
+      },
+    } as unknown as ClaudeSdkMessage,
+    {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 402,
+      session_id: "s1",
+      result: "You've hit your org's monthly spend limit",
+    } as unknown as ClaudeSdkMessage,
+  ]);
+  assert.equal(spendLimit.text, "");
+  assert.equal(spendLimit.failure, "You've hit your org's monthly spend limit");
+
+  // A result-only API failure still fails, named by its status.
+  const rateLimited = await run([
+    {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 429,
+      session_id: "s2",
+    } as unknown as ClaudeSdkMessage,
+  ]);
+  assert.equal(rateLimited.text, "");
+  assert.equal(rateLimited.failure, "Claude SDK run ended with: HTTP 429");
+});

@@ -28,7 +28,7 @@ export function registerPdfClaudeFallback(): void {
   setPdfClaudeFallback(async ({ bytes }) => {
     const settings = getSettings().pdfConversion;
     if (!settings.fallbackEnabled) return null;
-    const { text } = await runOneShot({
+    const { text, failure } = await runOneShot({
       model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
       credentialProfileId: accountForSlot(settings),
@@ -44,6 +44,8 @@ export function registerPdfClaudeFallback(): void {
       timeoutMs: settings.timeoutMs,
       timeoutMessage: "PDF Claude fallback timed out.",
     });
+    // A transcript cut short by an error must not stand in for the document.
+    if (failure !== undefined) throw new Error(failure);
     const markdown = text.trim();
     return markdown ? { markdown } : null;
   });
