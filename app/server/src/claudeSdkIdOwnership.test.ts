@@ -21,7 +21,7 @@ writeFileSync(
 );
 
 const { Connection } = await import("./connection.ts");
-const { hub } = await import("./hub.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
@@ -48,7 +48,7 @@ function firstSend(id: string) {
     readyState: 1,
     send: (raw: string) => sent.push(JSON.parse(raw)),
   });
-  const acquire = vi.spyOn(hub, "acquireClaudeSdk");
+  const acquire = vi.spyOn(claudeSdkStore, "acquire");
   const freeze = vi.spyOn(promptConditions, "sessionPromptConditions");
   return {
     conn,

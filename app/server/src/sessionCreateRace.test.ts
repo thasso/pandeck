@@ -8,7 +8,7 @@
  *
  *   pnpm --filter @assistant/server test src/sessionCreateRace.test.ts
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
@@ -22,6 +22,12 @@ import type {
 const tmp = mkdtempSync(join(tmpdir(), "session-create-race-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
+// Enabled, so a Claude first send runs.
+mkdirSync(join(tmp, "data", "settings"), { recursive: true });
+writeFileSync(
+  join(tmp, "data", "settings", "app.json"),
+  JSON.stringify({ claudeSdk: { enabled: true } }),
+);
 
 // The prerequisites the test holds open, and the prompt a first send runs.
 const held = vi.hoisted(() => ({
@@ -48,6 +54,8 @@ vi.mock("./session/runtimePrompt.ts", async (importOriginal) => ({
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 
@@ -62,6 +70,10 @@ afterEach(() => {
 const codexProfile = createCredentialProfile({
   name: "Pi account",
   provider: "openai-codex",
+});
+const claudeProfile = createCredentialProfile({
+  name: "Claude account",
+  provider: "claude",
 });
 
 function fakeSeam(): ClaudeSdkSeam {
@@ -121,8 +133,13 @@ function harness(sent: ServerMessage[]) {
   );
   const created: string[] = [];
   vi.spyOn(hub, "viewById").mockImplementation((id: string) => sessionFor(id));
-  vi.spyOn(hub, "acquireNew").mockImplementation(async () => {
+  // At the stores, where every creation path ends (`harnesses/create.ts`).
+  vi.spyOn(piStore, "acquireNew").mockImplementation(async () => {
     const id = `created-${created.length + 1}`;
+    created.push(id);
+    return sessionFor(id) as never;
+  });
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id: string) => {
     created.push(id);
     return sessionFor(id) as never;
   });
@@ -246,6 +263,39 @@ describe("creating a session against a newer load", () => {
     expect(h.session("created-1").viewers.size).toBe(0);
     await expectCommandsRouteTo(h.connection, sent, B, "created-1");
   });
+  test("Claude first send: a load completing during worktree resolution keeps the view, and the prompt still runs", async () => {
+    const sent: ServerMessage[] = [];
+    const h = harness(sent);
+    let releaseWorktree!: () => void;
+    (
+      h.connection as unknown as { resolveWorktreeContext: unknown }
+    ).resolveWorktreeContext = () =>
+      new Promise((resolve) => {
+        releaseWorktree = () => resolve(null);
+      });
+    void h.connection.handle({
+      type: "harnessSend",
+      harness: "claude-sdk",
+      id: "claude-first-send",
+      agentType: "assistant",
+      text: "hello claude",
+      credentialProfileId: claudeProfile.id,
+      clientRequestId: "creq-2",
+    } as ClientMessage);
+    await settle();
+    void h.connection.handle({ type: "loadSession", id: B } as ClientMessage);
+    await h.completeLoad(B);
+    expect(snapshots(sent)).toEqual([B]);
+    releaseWorktree();
+    await settle();
+    // Created and prompted — the send is not lost — but not viewed.
+    expect(h.created).toEqual(["claude-first-send"]);
+    expect(held.prompts).toEqual(["hello claude"]);
+    expect(snapshots(sent)).toEqual([B]);
+    expect(h.session("claude-first-send").viewers.size).toBe(0);
+    await expectCommandsRouteTo(h.connection, sent, B, "claude-first-send");
+  });
+
   /** View a resident session that runs a pi model on the codex account. */
   async function viewResidentPi(
     h: ReturnType<typeof harness>,

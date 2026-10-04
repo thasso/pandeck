@@ -55,15 +55,19 @@ Four layers, each depending only on the ones below it:
      before a worktree is provisioned (`prepare`, pi's model), and how it brings
      the session live (pi mints its id and freezes the prompt evidence inside
      creation; Claude takes the client's id, links the worktree and freezes
-     first). Until then `firstSend.ts` imports `hub.ts`, a layer above it. Step
-     11 starts by moving that creation into a registry-level `create` reaching
-     the hub through `HarnessHost`, which removes that import and keeps this
-     module to admission and preparation. Every other caller that builds a
-     Claude session by hand moves onto it too: spawn, workflow, the
-     review-comment new session and day session in `connection.ts`, the worktree
-     merge agent and the permanent assistant. All of them mint their ids
-     server-side, which is what lets `hub.acquireClaudeSdk`'s backstop skip the
-     disk; `create` keeps that a stated precondition.
+     first), through `createSession`.
+   - `createSession` (`harnesses/create.ts`) is the one place that knows each
+     engine's creation sequence; a caller names what the session starts with
+     (`NewSession`: persona, model, account, cwd and worktree, prompt evidence,
+     skills, title) and keeps its own admission and model resolution. It calls
+     the stores directly, never `hub.ts`. A Claude session's id is checked
+     against every other holder right before its registration, with nothing
+     awaited in between: with the disk scan for a client-supplied id
+     (`clientId`), from memory and the row for a server-minted one. Step 11b
+     moves every other creation caller onto it — spawn, workflow, the
+     review-comment new session, day session, new session and draft in
+     `connection.ts`, the worktree merge agent and the permanent assistant — and
+     retires `hub.acquireClaudeSdk` and `hub.acquireNew`.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -152,7 +156,9 @@ table when a later step needs them.
 | 8b   | Shared session kit: synthetic host-command turns                              | landed |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | landed |
 | 10   | One first-send path for both harnesses                                        | landed |
-| 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |
+| 11a  | `createSession`; the first send creates through it                            | landed |
+| 11b  | Every other creation caller on `createSession`                                | open   |
+| 11c  | Fork, delete and rename through the registry                                  | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order

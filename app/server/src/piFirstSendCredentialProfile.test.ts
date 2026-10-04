@@ -16,11 +16,12 @@ vi.mock("./session/runtimePrompt.ts", () => ({
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 const { createCredentialProfile, setCredentialProfileEnabled } =
   await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 
-const originalAcquireNew = hub.acquireNew;
+const originalAcquireNew = piStore.acquireNew;
 const originalBroadcastSessions = hub.broadcastSessions;
 
 function makeConnection() {
@@ -58,7 +59,7 @@ test("pi first send validates and persists the selected OpenAI profile", async (
   });
   let captured: unknown;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async (...args) => {
@@ -92,7 +93,7 @@ test("pi first send freezes coding-session skills before its first prompt", asyn
     provider: "openai-codex",
   });
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => ({ sessionId: "coding-pi-session" });
@@ -116,7 +117,7 @@ test("pi first send carries and persists its starting mode", async () => {
   });
   let captured: unknown;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{
         sessionId: string;
         sessionMode: "plan";
@@ -153,7 +154,7 @@ test("pi first send rejects a disabled profile before acquisition", async () => 
   setCredentialProfileEnabled(profile.id, false);
   let acquired = false;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => {
@@ -186,7 +187,7 @@ test("pi first send rejects a profile from the wrong provider before acquisition
   });
   let acquired = false;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => {
@@ -217,7 +218,7 @@ test("pi first send rejects a profile from the wrong provider before acquisition
 
 afterAll(() => {
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: typeof originalAcquireNew;
       broadcastSessions: typeof originalBroadcastSessions;
     }
