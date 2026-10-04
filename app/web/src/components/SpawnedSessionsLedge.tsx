@@ -1,8 +1,9 @@
-import { ChevronDown, ChevronUp, Users, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Hourglass, Users, X } from "lucide-react";
 import {
   clusterBubbleDismissible,
   sessionClusterBubbleLabel,
   spawnedSessionsSummary,
+  stallLabel,
   sessionStatusBadge,
   type SessionStatusTone,
   type SpawnedSessionsView,
@@ -152,6 +153,25 @@ export function SpawnedSessionsLedge({
               <X size={12} aria-hidden />
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {/* The tree has stopped and a peer still owes this chat a reply: on a
+          line of its own, like the bubble, naming the peer to poke. */}
+      {view.stall ? (
+        <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
+          <button
+            type="button"
+            title={`Open “${view.stall.peers[0]?.title.trim() || "the peer"}”`}
+            aria-label={`Stalled: ${stallLabel(view.stall)}`}
+            onClick={() => {
+              const peer = view.stall?.peers[0];
+              if (peer) onOpenSession(peer.id);
+            }}
+            className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${BADGE_TONE.warning}`}
+          >
+            <Hourglass size={10} className="shrink-0" aria-hidden="true" />
+            <span className="min-w-0 truncate">{stallLabel(view.stall)}</span>
+          </button>
         </div>
       ) : null}
       {open ? (

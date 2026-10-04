@@ -108,6 +108,107 @@ export interface SessionInboxCard {
    * states its whole cluster.
    */
   peers?: SessionClusterCounts;
+  /**
+   * The card's tree is STALLED: nothing in it is moving, and these peers
+   * still owe it a reply ({@link spawnTreeStall}). Set only on a top-level
+   * card; a stalled tree needs a poke, so it lifts the card to `attention`.
+   */
+  stall?: SpawnTreeStall;
+}
+
+/**
+ * A quiet tree that is still owed an answer — the "done, or does it need a
+ * poke?" question a coordinator's card has to answer when its own agent is
+ * idle. Peers the user can open, newest activity first.
+ */
+export interface SpawnTreeStall {
+  peers: SessionListItem[];
+}
+
+/**
+ * Whether a session is doing anything right now: a turn, queued work, a
+ * background job starting or running, or a retained background host.
+ */
+function isMoving(session: SessionListItem): boolean {
+  const activity = session.backgroundActivity;
+  return Boolean(
+    session.isStreaming ||
+    session.queuedWork ||
+    (activity &&
+      (activity.activeCount > 0 ||
+        activity.startingCount > 0 ||
+        activity.retainedHost)),
+  );
+}
+
+/** Whether a session is waiting on a human decision (its own bubble says so). */
+function waitsOnHuman(session: SessionListItem): boolean {
+  return Boolean(
+    session.awaitingInput ||
+    session.attention === "question" ||
+    session.attention === "approval" ||
+    session.attention === "task-choice",
+  );
+}
+
+/**
+ * Is this tree STALLED, and on whom? `scope` is the root and the sessions in
+ * its tree. The tree is stalled when someone in it still owes a reply
+ * (`awaitingRepliesFrom`), yet nothing in it — nor any peer that owes it — is
+ * moving or waiting on the user: nobody is working, so the reply is not
+ * coming without a poke.
+ *
+ * Read over the WHOLE tree rather than per request, deliberately: a
+ * coordinator commonly tells an implementer to report to a reviewer instead
+ * of to itself, so the request to the implementer stays open while the work
+ * is plainly going on elsewhere in the tree. Only when all of it has stopped
+ * does an open request mean a stall. A peer that is archived, deleted or
+ * outside this browser's list owes nothing here — the user put it away.
+ */
+export function spawnTreeStall(
+  scope: readonly SessionListItem[],
+  byId: ReadonlyMap<string, SessionListItem>,
+): SpawnTreeStall | undefined {
+  const owed = new Map<string, SessionListItem>();
+  for (const session of scope)
+    for (const id of session.awaitingRepliesFrom ?? []) {
+      const peer = byId.get(id);
+      if (peer && !peer.archived) owed.set(id, peer);
+    }
+  if (owed.size === 0) return undefined;
+  const peers = [...owed.values()];
+  if ([...scope, ...peers].some((s) => isMoving(s) || waitsOnHuman(s)))
+    return undefined;
+  peers.sort((a, b) => activityAt(b) - activityAt(a));
+  return { peers };
+}
+
+/** What a stall chip draws, as a content key. */
+function stallKey(stall: SpawnTreeStall): string {
+  return stall.peers.map((peer) => `${peer.id}:${peer.title}`).join("\u001f");
+}
+
+/**
+ * The stall chip's words: the peer that owes the reply, and how many more do.
+ * "No reply from «Reviewer»", or "… +2" when several are owed.
+ */
+export function stallLabel(stall: SpawnTreeStall): string {
+  const first = stall.peers[0];
+  const title = first?.title.trim() || "a peer";
+  const more = stall.peers.length - 1;
+  return `No reply from “${title}”${more > 0 ? ` +${more}` : ""}`;
+}
+
+/** A top-level card with its tree's stall, if any, lifting its tier. */
+function withStall(
+  card: SessionInboxCard,
+  scope: readonly SessionListItem[],
+  byId: ReadonlyMap<string, SessionListItem>,
+): SessionInboxCard {
+  const stall = spawnTreeStall(scope, byId);
+  return stall
+    ? { ...card, stall, tier: higherTier(card.tier, "attention") }
+    : card;
 }
 
 /**
@@ -1121,6 +1222,8 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     card.cluster ? clusterCountsKey(card.cluster.counts) : "",
     // The settled-history toggle's count, which the open fold states.
     card.cluster ? String(card.cluster.settledCount) : "",
+    // The stall chip: which peers it names, by what they are called.
+    card.stall ? stallKey(card.stall) : "",
     // A tree row's place and its own peers, which the row draws.
     String(card.depth ?? ""),
     card.peers ? clusterCountsKey(card.peers) : "",
@@ -1324,7 +1427,11 @@ export function buildSessionInbox(
     nodes.set(session.id, { card, settled: isShelvedSession(session) });
   }
 
-  for (const card of foldSpawnClusters(nodes, settledRows)) {
+  for (const card of foldSpawnClusters(
+    nodes,
+    settledRows,
+    new Map(sessions.map((session) => [session.id, session])),
+  )) {
     const item: SessionInboxItem = { kind: "session", card };
     if (card.tier === "needs-you") needsYou.push(item);
     else active.push(item);
@@ -1386,6 +1493,11 @@ export interface SpawnedSessionsView {
   settled: number;
   /** Whether {@link rows} includes that history. */
   settledShown: boolean;
+  /**
+   * The chat's tree is stalled — nothing in it moving, a reply still owed
+   * ({@link spawnTreeStall}) — and on whom.
+   */
+  stall?: SpawnTreeStall;
   /**
    * The peer that speaks for the set — one waiting on a human, or one holding
    * a failure. Named on the collapsed line for the same reason a cluster card
@@ -1542,11 +1654,21 @@ export function spawnedSessionsView(options: {
     .map((id) => cards.get(id) as SessionInboxCard)
     .sort(compareSessionCards);
   const bubbled = firstBubble(liveCards);
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const coordinator = byId.get(coordinatorId);
+  const stall = spawnTreeStall(
+    [
+      ...(coordinator ? [coordinator] : []),
+      ...liveCards.map((card) => card.session),
+    ],
+    byId,
+  );
   return {
     rows,
     counts: clusterCounts(liveCards),
     settled: order.length - live.size,
     settledShown: includeSettled,
+    ...(stall ? { stall } : {}),
     ...(bubbled ? { bubbled } : {}),
   };
 }
@@ -1628,6 +1750,7 @@ export function spawnedSessionsKey(
   return [
     clusterCountsKey(view.counts),
     String(view.settled),
+    view.stall ? stallKey(view.stall) : "",
     view.settledShown ? "1" : "",
     // The bubble's own facts are keyed raw as well. Its label is time-free
     // today; a bubbled peer that ever carried an elapsed one would otherwise
@@ -1737,6 +1860,7 @@ interface ClusterNode {
 function foldSpawnClusters(
   nodes: Map<string, ClusterNode>,
   settledRows: SessionListItem[],
+  allById: ReadonlyMap<string, SessionListItem>,
 ): SessionInboxCard[] {
   const sessions = [...nodes.values()].map((node) => node.card.session);
   const forest = spawnClusterForest(sessions);
@@ -1794,6 +1918,7 @@ function foldSpawnClusters(
     bubbleOf,
     peerCounts,
     unsettledBelow,
+    allById,
     shelvedChildrenOf,
     cards,
     settledRows,
@@ -1844,6 +1969,8 @@ interface EmitContext {
   peerCounts: Map<string, SessionClusterCounts>;
   /** Members with an unsettled session folded somewhere below them. */
   unsettledBelow: ReadonlySet<string>;
+  /** Every listed session, for the peers a stalled tree is waiting on. */
+  allById: ReadonlyMap<string, SessionListItem>;
   /**
    * Shelf rows by the session that spawned them, along `coordinator`-owned
    * edges: the settled history a fold puts back on request. Never part of a
@@ -1876,14 +2003,21 @@ interface EmitContext {
  * woken by a later failure) or one it spawned after it was put down.
  */
 function emitCluster(id: string, context: EmitContext): void {
-  const { nodes, bubbleOf, peerCounts, unsettledBelow, cards, settledRows } =
-    context;
+  const {
+    nodes,
+    bubbleOf,
+    peerCounts,
+    unsettledBelow,
+    allById,
+    cards,
+    settledRows,
+  } = context;
   const node = nodes.get(id) as ClusterNode;
   const counts = peerCounts.get(id);
   const bubbled = bubbleOf.get(id);
   if (!counts) {
     if (node.settled) settledRows.push(node.card.session);
-    else cards.push(node.card);
+    else cards.push(withStall(node.card, [node.card.session], allById));
     return;
   }
   // Put down, and nothing under it is unsettled or waiting on the user: the
@@ -1901,19 +2035,25 @@ function emitCluster(id: string, context: EmitContext): void {
 
   const children = clusterTree(id, context, false);
   const childrenWithSettled = clusterTree(id, context, true);
-  cards.push({
-    ...node.card,
-    tier: bubbled
-      ? higherTier(node.card.tier, bubbled.card.tier)
-      : node.card.tier,
-    cluster: {
-      children,
-      childrenWithSettled,
-      settledCount: childrenWithSettled.length - children.length,
-      counts,
-      ...(bubbled ? { bubbled: bubbled.card } : {}),
-    },
-  });
+  cards.push(
+    withStall(
+      {
+        ...node.card,
+        tier: bubbled
+          ? higherTier(node.card.tier, bubbled.card.tier)
+          : node.card.tier,
+        cluster: {
+          children,
+          childrenWithSettled,
+          settledCount: childrenWithSettled.length - children.length,
+          counts,
+          ...(bubbled ? { bubbled: bubbled.card } : {}),
+        },
+      },
+      [node.card.session, ...children.map((child) => child.session)],
+      allById,
+    ),
+  );
 }
 
 /**

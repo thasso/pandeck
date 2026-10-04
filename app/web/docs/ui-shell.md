@@ -318,6 +318,21 @@ truncates inside it, carries the peer that needs the user. The complete
 running/jobs/waiting/failed aggregate stays in the card's accessible name and
 the disclosure's tooltip.
 
+A quiet card answers the last question too — finished, or waiting for a poke.
+Every session row lists the peers it asked for a reply and has not heard back
+from (`awaitingRepliesFrom`, the open `responseRequested` peer prompts). When a
+card's tree — the session and every peer folded under it — still owes a reply
+but nothing in it, nor any peer owing one, is moving (no turn, queued work,
+background job or retained host) or waiting on the user, the tree is STALLED:
+the card carries a warning chip, **No reply from «peer»** (`+N` when several
+owe), that opens that peer, and the card rises to the attention tier. The
+composer ledge of the owed chat shows the same line. It is judged over the whole
+tree, not request by request, because a coordinator often routes an
+implementer's report to a reviewer instead of to itself; while anything in the
+tree works, an open request is work in progress, not a stall. A peer that is
+archived or gone owes nothing here, and Settling the card puts the question down
+with it. A card with no chip and nothing moving is done.
+
 What the fold may never hide is the work that needs a human. A folded peer
 asking, awaiting approval, waiting on a Task choice or holding an unresolved
 failure LIFTS the whole cluster to that tier, is named on the card, and opens

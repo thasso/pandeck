@@ -176,6 +176,13 @@ the outcome:
   stop operation. Stopping leaves the ordinary session and its transcript
   intact.
 
+  The same open `responseRequested` rows tell the user when a tree needs a poke:
+  each session row lists the peers it still awaits a reply from, and a card
+  whose whole tree has stopped while a reply is still owed shows **No reply from
+  «peer»** (`app/web/docs/ui-shell.md`). Spawning with
+  `responseRequested: false` for a peer that reports elsewhere keeps that
+  question honest.
+
   ONE automatic signal exists, and only one. When the server RESTARTS while a
   delivered peer turn is still running, the sender of a prompt that asked for a
   reply is woken once with a notice naming the recipient session. This is not a

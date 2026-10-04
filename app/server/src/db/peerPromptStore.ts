@@ -45,6 +45,20 @@ export type PeerPromptStatus =
 type PeerPromptInterruptionKind = "restart" | "failure";
 
 /** Terminal states that hold no further obligation and may eventually be pruned. */
+/**
+ * Every status a requested reply can still come out of: the complement of
+ * {@link TERMINAL_STATUSES}, spelled out so the reads can use the
+ * status-leading indexes.
+ */
+const OPEN_RESPONSE_STATUSES: PeerPromptStatus[] = [
+  "queued",
+  "dispatching",
+  "admitted",
+  "acknowledged",
+  "awaiting_response",
+  "retryable_failed",
+];
+
 const TERMINAL_STATUSES: PeerPromptStatus[] = [
   "completed",
   "replied",
@@ -1066,6 +1080,33 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
   return row?.n ?? 0;
 }
 
+/**
+ * For every sender, the peers it asked for a reply and has not had one from
+ * yet ({@link outstandingResponseRequestCount}'s rows, by recipient) — the
+ * session list's "who still owes whom" fact. One indexed read over the
+ * non-terminal statuses, so the list rebuild pays it once, not per row.
+ */
+function outstandingRepliesBySender(): Map<string, string[]> {
+  const open = OPEN_RESPONSE_STATUSES.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT sender_session_id, recipient_session_id FROM peer_prompts
+        WHERE status IN (${open}) AND response_requested = 1
+        ORDER BY sender_session_id, recipient_session_id`,
+    )
+    .all(...OPEN_RESPONSE_STATUSES) as {
+    sender_session_id: string;
+    recipient_session_id: string;
+  }[];
+  const bySender = new Map<string, string[]>();
+  for (const row of rows) {
+    const recipients = bySender.get(row.sender_session_id);
+    if (recipients) recipients.push(row.recipient_session_id);
+    else bySender.set(row.sender_session_id, [row.recipient_session_id]);
+  }
+  return bySender;
+}
+
 function listByConversation(conversationId: string): PeerPromptRecord[] {
   return (
     getDb()
@@ -1423,6 +1464,7 @@ export const peerPromptStore = {
   listPendingForRecipient,
   unfinishedTurnCount,
   outstandingResponseRequestCount,
+  outstandingRepliesBySender,
   listByConversation,
   listByChain,
   listByParticipant,

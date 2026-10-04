@@ -320,6 +320,16 @@ function attentionFields(
  * (`agentHandoffs.ts`). Both are the same fact to a reader — something is
  * waiting for this session to finish — so they share the row's one flag.
  */
+/** Who still owes each session a reply; empty (and logged) when unreadable. */
+function awaitingRepliesBySender(): Map<string, string[]> {
+  try {
+    return peerPromptStore.outstandingRepliesBySender();
+  } catch (err) {
+    console.warn("Failed to read awaited peer replies for session list:", err);
+    return new Map();
+  }
+}
+
 function queuedWorkRecipients(): Set<string> {
   const queued = new Set<string>();
   try {
@@ -358,6 +368,7 @@ export async function listSessions(
   const worktreeAckBySession = sessionStore.worktreeMissingAckBySession();
   const objectRefsBySessionId = objectRefsBySession();
   const queuedRecipients = queuedWorkRecipients();
+  const awaitingReplies = awaitingRepliesBySender();
   const delegationBySession = subagentStore.delegationSummaries();
   // A separate component from `isStreaming`/`runStartedAt`: background work is
   // the session's, not its provider turn's, so an idle session can own active
@@ -497,6 +508,9 @@ export async function listSessions(
         ? { interruptedRun: { at: row.interruptedRunAt } }
         : {}),
       ...(queuedRecipients.has(row.id) ? { queuedWork: true } : {}),
+      ...(awaitingReplies.has(row.id)
+        ? { awaitingRepliesFrom: awaitingReplies.get(row.id)! }
+        : {}),
       // Settlement HOLDS only while the user has acknowledged the session's
       // latest outcome: an unacknowledged completion or failure is what takes a
       // shelved row back into the working set (Task-674). This is the ONE place
@@ -579,6 +593,9 @@ export async function listSessions(
         taskChoiceSessions,
       ),
       ...(queuedRecipients.has(key) ? { queuedWork: true } : {}),
+      ...(awaitingReplies.has(key)
+        ? { awaitingRepliesFrom: awaitingReplies.get(key)! }
+        : {}),
       unread: l.updatedAt > readAt(key),
     });
   }

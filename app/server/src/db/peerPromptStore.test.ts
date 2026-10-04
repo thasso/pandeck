@@ -132,6 +132,25 @@ describe("peerPromptStore", () => {
     assert.equal(replied?.repliedByMessageId, "reply-msg-id");
   });
 
+  it("lists who still owes each sender a reply, until it is answered", () => {
+    const sender = `owed-sender-${seq++}`;
+    const recipient = `owed-r-${seq++}`;
+    const owed = () => store.outstandingRepliesBySender().get(sender);
+    const m = enqueue(recipient, { sender, responseRequested: true });
+    // Owed from the moment it is queued, through the turn that ended without
+    // the answer (`awaiting_response`).
+    assert.deepEqual(owed(), [recipient]);
+    store.claimNext(recipient, "d", 1000);
+    store.markAdmitted(m.id);
+    store.markCompleted(m.id);
+    assert.deepEqual(owed(), [recipient]);
+    // A message that asked for no reply owes nothing.
+    enqueue(`owed-quiet-${seq++}`, { sender, responseRequested: false });
+    assert.deepEqual(owed(), [recipient]);
+    store.markReplied(m.id, "reply");
+    assert.equal(owed(), undefined, "an answered request owes nothing");
+  });
+
   it("completes terminally when no response is requested", () => {
     const m = enqueue(`r-${seq++}`, { responseRequested: false });
     store.claimNext(m.recipientSessionId, "d", 1000);

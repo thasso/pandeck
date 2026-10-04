@@ -339,3 +339,28 @@ describe("ActiveSessionCard worktree changes", () => {
     expect(html).toContain(">#12<");
   });
 });
+
+describe("ActiveSessionCard stall", () => {
+  it("names the peer that owes a reply when the tree has stopped", () => {
+    const reviewer = card({ id: "rev", title: "Reviewer" }).session;
+    const base = card({ id: "root", title: "Coordinator" });
+    const html = renderToStaticMarkup(
+      <ActiveSessionCard
+        card={{ ...base, stall: { peers: [reviewer] } }}
+        now={NOW}
+        active={false}
+        relations={{}}
+        onOpen={() => {}}
+        onSettle={() => {}}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+    expect(html).toContain("No reply from “Reviewer”");
+    expect(html).toContain('aria-label="Stalled: No reply from “Reviewer”"');
+    expect(html).toContain('title="Open “Reviewer”"');
+    // The card's own spoken label says it too: its chip may be icon-only.
+    expect(html).toContain("— stalled: No reply from “Reviewer”");
+  });
+});
