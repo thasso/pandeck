@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "vitest";
+import { getDb } from "./index.ts";
 import {
+  OUTSTANDING_REPLIES_SQL,
   peerPromptStore as store,
   PeerPromptHopLimitError,
 } from "./peerPromptStore.ts";
@@ -154,8 +156,12 @@ describe("peerPromptStore", () => {
       store.markCompleted(m.id);
       return { ...m, chainId: chain };
     };
-    /** Any later prompt, from `sender` to `recipient`, on `chainId`. */
-    const send = (sender: string, recipient: string, chainId?: string) => {
+    /** A later prompt from `sender` to `recipient` on `chainId`, queued. */
+    const enqueueLater = (
+      sender: string,
+      recipient: string,
+      chainId?: string,
+    ) => {
       const chain = chainId ?? store.createChain(`later-${seq++}`);
       return store.enqueue({
         conversationId: `later-conv-${seq++}`,
@@ -166,6 +172,13 @@ describe("peerPromptStore", () => {
         prompt: "report",
         responseRequested: false,
       });
+    };
+    /** …and delivered: it REACHED the recipient. */
+    const send = (sender: string, recipient: string, chainId?: string) => {
+      const m = enqueueLater(sender, recipient, chainId);
+      store.claimNext(recipient, "d", 1000);
+      store.markAdmitted(m.id);
+      return m;
     };
     const owedTo = (sender: string) =>
       store.outstandingRepliesBySender().get(sender);
@@ -218,6 +231,29 @@ describe("peerPromptStore", () => {
       unanswered(c, i);
       send(i, c);
       assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes no report that never reached the sender as the answer", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      // Cancelled before delivery...
+      enqueueLater(i, c);
+      store.cancelPending(c, "test", i);
+      assert.deepEqual(owedTo(c), [i]);
+      // ...or given up on after its retries: neither reached C.
+      const lost = enqueueLater(i, c);
+      store.markFailed(lost.id, "gave up");
+      assert.deepEqual(owedTo(c), [i]);
+    });
+
+    it("seeks an index for both answer checks, never scanning the inbox", () => {
+      const plan = getDb()
+        .prepare(`EXPLAIN QUERY PLAN ${OUTSTANDING_REPLIES_SQL}`)
+        .all() as { detail: string }[];
+      const details = plan.map((step) => step.detail).join("\n");
+      assert.match(details, /peer_prompts_recipient_sender_seq_idx/);
+      assert.match(details, /peer_prompts_recipient_chain_seq_idx/);
     });
 
     it("still counts a request when later traffic came from someone else", () => {

@@ -1066,6 +1066,32 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
   return row?.n ?? 0;
 }
 
+/** The read behind {@link outstandingRepliesBySender}; exported for its plan test. */
+export const OUTSTANDING_REPLIES_SQL = `SELECT DISTINCT o.sender_session_id, o.recipient_session_id
+         FROM peer_prompts o
+        WHERE o.status = 'awaiting_response' AND o.response_requested = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM peer_prompts r
+             WHERE r.recipient_session_id = o.sender_session_id
+               AND r.sender_session_id = o.recipient_session_id
+               AND r.queue_seq > o.queue_seq
+               AND r.accepted_at_ms IS NOT NULL
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM peer_prompts r
+             WHERE r.recipient_session_id = o.sender_session_id
+               AND r.chain_id = o.chain_id
+               AND r.queue_seq > o.queue_seq
+               AND r.accepted_at_ms IS NOT NULL
+               AND EXISTS (
+                 SELECT 1 FROM peer_prompts f
+                  WHERE f.chain_id = o.chain_id
+                    AND f.sender_session_id = o.recipient_session_id
+                    AND f.queue_seq > o.queue_seq
+                    AND f.queue_seq < r.queue_seq)
+          )
+        ORDER BY o.sender_session_id, o.recipient_session_id`;
+
 /**
  * For every sender, the peers that still OWE it a reply: a `responseRequested`
  * prompt whose turn ended without the answer (`awaiting_response`) — the
@@ -1078,11 +1104,16 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
  * - one effectively answered without being marked: a reply closes exactly
  *   one request by strict correlation, so a report forwarded through a third
  *   peer, or an answer after the sender re-asked, leaves the original row
- *   open. A LATER prompt that reached the sender from the owed peer counts as
- *   the answer, and so does one on the request's own chain (which a forward
- *   keeps) — but only once the owed peer itself has acted on that chain since
- *   the request: peers spawned in one turn share a chain, and one reviewer's
- *   reply must not answer for the reviewer beside it.
+ *   open. A LATER prompt that REACHED the sender (durably admitted — a report
+ *   cancelled or failed before delivery answers nothing) from the owed peer
+ *   counts as the answer, and so does one on the request's own chain (which a
+ *   forward keeps) — but only once the owed peer itself has acted on that
+ *   chain since the request: peers spawned in one turn share a chain, and one
+ *   reviewer's reply must not answer for the reviewer beside it.
+ *
+ * Each question is its own NOT EXISTS so each seeks an index
+ * (`0065_peer_prompt_reply_lookup.sql`) instead of scanning everything the
+ * sender ever received; `peerPromptStore.test.ts` pins the plan.
  *
  * Not modelled: a report that reaches the sender on a fresh chain through a
  * third peer (a poke closes the poked peer's chains, so its forward starts a
@@ -1090,26 +1121,7 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
  * down") — both stay owed until the user settles or archives that peer.
  */
 function outstandingRepliesBySender(): Map<string, string[]> {
-  const rows = getDb()
-    .prepare(
-      `SELECT DISTINCT o.sender_session_id, o.recipient_session_id
-         FROM peer_prompts o
-        WHERE o.status = 'awaiting_response' AND o.response_requested = 1
-          AND NOT EXISTS (
-            SELECT 1 FROM peer_prompts r
-             WHERE r.recipient_session_id = o.sender_session_id
-               AND r.queue_seq > o.queue_seq
-               AND (r.sender_session_id = o.recipient_session_id
-                    OR (r.chain_id = o.chain_id AND EXISTS (
-                      SELECT 1 FROM peer_prompts f
-                       WHERE f.chain_id = o.chain_id
-                         AND f.sender_session_id = o.recipient_session_id
-                         AND f.queue_seq > o.queue_seq
-                         AND f.queue_seq < r.queue_seq)))
-          )
-        ORDER BY o.sender_session_id, o.recipient_session_id`,
-    )
-    .all() as {
+  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all() as {
     sender_session_id: string;
     recipient_session_id: string;
   }[];

@@ -79,6 +79,19 @@ connection has the archive view open.
   the id down to `sessionStore.list({ ids })`. Every row is computed from its
   own inputs, so the one row equals the same row in a full build.
 
+## Owed peer replies
+
+Each rebuild also reads who still owes each session a reply
+(`peerPromptStore.outstandingRepliesBySender`, projected as
+`awaitingRepliesFrom`): one read over the `awaiting_response` rows, each tested
+by two `NOT EXISTS` probes — "a later admitted prompt from the owed peer" and "a
+later admitted prompt on the request's chain after the owed peer acted on it".
+Each probe seeks its own index (`0065_peer_prompt_reply_lookup.sql`); a single
+probe with `OR` could only seek the recipient and scanned everything the sender
+ever received, which grows with history rather than with what is owed.
+`peerPromptStore.test.ts` pins the plan. Measured on a copy of the production
+database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
+
 ## What was not done, and why
 
 - **No new `links` index.** An index on `(from_type, relation, from_id, …)`
