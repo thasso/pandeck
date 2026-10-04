@@ -130,7 +130,9 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   pastes a token into the chat. `test` runs a section's connection test through
   `testSettingsSection`, the same tests the page runs. When the write changes
   the assistant's own profile, the result says the user's next message starts a
-  fresh Personal Assistant session.
+  fresh Personal Assistant session. A credential the save dropped because its
+  URL moved to another host (see below) is listed under `credentialsCleared`,
+  with a note to ask the user again through `settings_request_input`.
 
 `settings_update`, `settings_request_input`, `accounts_update` and
 `accounts_sign_in` are `local` side effects, so Plan mode keeps only
@@ -165,6 +167,17 @@ harness enforces it before `execute`:
   it stores models, and stores them only if the endpoint and key are still the
   ones it asked, keeping any change saved meanwhile. Progress is streamed after
   each test.
+
+A stored credential stays with the URL origin (scheme, host and port) it was
+entered or connected for (`app/server/src/urlOrigin.ts`). Saving a URL on
+another origin drops it in the same write, unless that write also carries a new
+one: the Forgejo token, the OpenAI-compatible API key, and the Tempo connection.
+Otherwise anyone who can change a URL, the Personal Assistant included, could
+have the next call or connection test send a secret they cannot read to a host
+they choose. A path change on the same origin keeps the credential. This holds
+for the Settings page too, whose URL fields say so; its forms send the URL and a
+re-entered token in one save. An integration added later with a configurable URL
+and a stored credential must do the same in its store.
 
 The Google and Tempo token refreshes, which every tool and test go through,
 store a refreshed token only while the stored refresh token is still the one the

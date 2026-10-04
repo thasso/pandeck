@@ -171,6 +171,25 @@ test("disconnect via clearTokens drops authorization", () => {
   assert.equal(cleared.refreshTokenConfigured, false);
 });
 
+test("moving the API to another host disconnects Tempo", () => {
+  const connected = {
+    enabled: true,
+    apiBaseUrl: "https://api.tempo.io/4",
+    accessToken: "at",
+    refreshToken: "rt",
+    accessTokenExpiresAt: Date.now() + 100000,
+  };
+  writeTempoFile(connected);
+  assert.equal(
+    updateTempoSettings({ apiBaseUrl: "https://api.tempo.io/5" })
+      .refreshTokenConfigured,
+    true,
+  );
+  const moved = updateTempoSettings({ apiBaseUrl: "https://evil.test/4" });
+  assert.equal(moved.refreshTokenConfigured, false);
+  assert.equal(moved.apiBaseUrl, "https://evil.test/4");
+});
+
 test("a refresh that finishes after a disconnect does not reconnect", async () => {
   writeTempoFile({
     enabled: true,

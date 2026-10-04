@@ -20,6 +20,7 @@ import type {
 import { DATA_DIR } from "./config.ts";
 import { errorText, fileReadErrorText } from "./errors.ts";
 import { deadlineSignal } from "./httpRetry.ts";
+import { sameOrigin } from "./urlOrigin.ts";
 
 const OPENAI_COMPATIBLE_SETTINGS_DIR = join(DATA_DIR, "settings");
 const OPENAI_COMPATIBLE_CONFIG_PATH = join(
@@ -180,6 +181,9 @@ export function updateOpenAiCompatibleSettings(
   // with none, so a failed discovery cannot leave the old ids registered
   // against it.
   const endpointChanged = baseUrl !== undefined && baseUrl !== current.baseUrl;
+  // The stored key stays with the origin it was entered for (urlOrigin.ts).
+  const originChanged =
+    baseUrl !== undefined && !sameOrigin(current.baseUrl, baseUrl);
   // See braveSettings: `clearApiKey` must REMOVE the key, not blank it.
   const next: OpenAiCompatibleConfigFile = applyPatch(current, {
     ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
@@ -189,7 +193,7 @@ export function updateOpenAiCompatibleSettings(
     ...(patch.thinkingFormat !== undefined
       ? { thinkingFormat: normalizeThinkingFormat(patch.thinkingFormat) }
       : {}),
-    ...(patch.clearApiKey ? { apiKey: undefined } : {}),
+    ...(patch.clearApiKey || originChanged ? { apiKey: undefined } : {}),
     ...(patch.apiKey && patch.apiKey.trim()
       ? { apiKey: patch.apiKey.trim() }
       : {}),

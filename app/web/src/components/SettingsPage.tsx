@@ -2990,6 +2990,9 @@ function TempoCard({
             placeholder="https://api.tempo.io/4"
             className="settings-input"
           />
+          <span className="mt-1 block text-caption text-muted">
+            Moving to another host disconnects Tempo.
+          </span>
         </Field>
 
         <div className="text-caption text-muted">
@@ -3996,6 +3999,9 @@ function ForgejoSection({
             placeholder="https://git.example.com"
             className="settings-input w-full"
           />
+          <p className="text-caption text-muted">
+            Moving to another host clears the saved token.
+          </p>
         </div>
 
         <SecretField
@@ -4263,6 +4269,9 @@ function OpenAiCompatibleSection({
             placeholder="https://llm.example.net/v1"
             className="settings-input font-mono text-caption"
           />
+          <span className="mt-1 block text-caption text-muted">
+            Moving to another host clears the saved API key.
+          </span>
         </Field>
 
         <SecretField

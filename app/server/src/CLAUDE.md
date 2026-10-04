@@ -1,10 +1,11 @@
-<!-- instruction-budget: bytes=3904 reason="Thirteen dense contracts, each guarding a shipped defect or a migration in flight. The newest pins the harness boundary so no new engine reach slips past the agent-harness migration. Two older ones: the view rule (opening a session parsed its provider transcript first — 1.7s on one 51 MB pi file) and the spawn rule (every git process forked this 1.3 GB server, freezing all connections); one careless await or spawn brings either back." task=agent-harnesses date=2026-10-04 -->
+<!-- instruction-budget: bytes=4000 reason="Thirteen dense contracts, each guarding a shipped defect or a migration in flight. The credential rule pins tokens to their URL origin. The newest pins the harness boundary so no new engine reach slips past the agent-harness migration. Two older ones: the view rule (opening a session parsed its provider transcript first — 1.7s on one 51 MB pi file) and the spawn rule (every git process forked this 1.3 GB server, freezing all connections); one careless await or spawn brings either back." task=agent-harnesses date=2026-10-04 -->
 
 # Server modules
 
 - Validate client messages and untrusted ids before effects. Keep API,
   WebSocket, and MCP behind token/origin checks; credentials stay under
-  `DATA_DIR` or in the environment, never committed config.
+  `DATA_DIR` or in the environment, never committed config. A stored credential
+  is dropped when its URL moves to another origin (`urlOrigin.ts`).
 - Token-bearing content never executes on the API origin: raw HTML downloads,
   and agent HTML runs only under a typed source/directory grant
   (`directFileGrants.ts`) whose opaque id is its ONLY credential. Never token a
