@@ -41,10 +41,11 @@ Four layers, each depending only on the ones below it:
      so routing is a lookup by harness id, never a branch per method. An id
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
-     lookup answer from memory alone. Creation goes through `createSession`
-     (below); fork, rename and remove move behind the registry in step 11c, and
-     until then `hub.ts` still calls the stores for them and builds the merged
-     session list from each.
+     lookup answer from memory alone. A first send creates through
+     `createSession` (below) and step 11b moves the other creation callers onto
+     it; fork, rename and remove move behind the registry in step 11c, and until
+     then `hub.ts` still calls the stores for them and builds the merged session
+     list from each.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context

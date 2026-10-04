@@ -53,8 +53,7 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     id: "claude-new",
     agentType: "developer",
     modelId: "opus",
-    cwd: "/work/tree",
-    worktreeId: "wt-1",
+    worktree: { id: "wt-1", path: "/work/tree" },
     credentialProfileId: "profile-1",
     promptEvidence: evidence,
     skills: ["alpha"],
@@ -121,7 +120,7 @@ test("a Claude id another engine holds is refused before anything is written", a
       harness: "claude-sdk",
       id: "pi-row",
       agentType: "assistant",
-      worktreeId: "wt-1",
+      worktree: { id: "wt-1", path: "/work/tree" },
       credentialProfileId: "profile-1",
     }),
     SessionIdTakenError,
@@ -166,8 +165,7 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
     agentType: "developer",
     thinkingLevel: "low",
     mode: "plan",
-    cwd: "/work/tree",
-    worktreeId: "wt-1",
+    worktree: { id: "wt-1", path: "/work/tree" },
     credentialProfileId: "profile-2",
     promptEvidence: evidence,
     skills: true,
@@ -194,4 +192,22 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
   assert.equal(row?.purpose, "draft");
   assert.equal(row?.mode, "plan");
   assert.equal(row?.credentialProfileId, "profile-2");
+});
+
+test("a session in a bare directory runs there and is linked to no worktree", async () => {
+  const acquireNew = vi
+    .spyOn(piStore, "acquireNew")
+    .mockResolvedValue({ sessionId: "pi-bare" } as never);
+  const link = vi.spyOn(worktreeStore, "linkSessionToWorktree");
+  await createSession({
+    harness: "pi",
+    agentType: "workshop",
+    cwd: "/main/checkout",
+    credentialProfileId: "profile-2",
+  });
+  assert.equal(
+    (acquireNew.mock.calls[0]?.[3] as { cwd?: string } | undefined)?.cwd,
+    "/main/checkout",
+  );
+  assert.equal(link.mock.calls.length, 0);
 });

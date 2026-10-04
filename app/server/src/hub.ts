@@ -654,7 +654,7 @@ class SessionHub {
    * store wires the real SDK seam, persistence, and the onChange →
    * broadcastSessions hook. Server-minted ids only: its ownership backstop
    * reads memory and the row, never the disk, so a client-supplied id goes
-   * through `createSession` with `clientId` instead (`harnesses/create.ts`).
+   * through `createSession`, named as its `id`, instead (`harnesses/create.ts`).
    */
   acquireClaudeSdk(
     id: string,

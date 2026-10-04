@@ -44,21 +44,33 @@ export class SessionIdTakenError extends Error {
 /** A pi model handle, as the caller resolved it on the session's account. */
 type PiModel = Parameters<typeof piStore.acquireNew>[1];
 
+/**
+ * Where a session runs: in a worktree, whose path is its cwd and whose edge is
+ * linked at creation (the durable cwd every reopen follows), or in a bare
+ * directory with no edge (a merge agent in the main checkout); the app CWD
+ * when neither is given. One or the other, so the two cannot disagree.
+ */
+type SessionPlace =
+  | {
+      worktree: { id: string; path: string };
+      cwd?: undefined;
+    }
+  | {
+      worktree?: undefined;
+      cwd?: string | undefined;
+    };
+
 /** What every new session starts with, whichever engine runs it. */
-interface SessionStart {
+type SessionStart = SessionPlace & {
   agentType: AgentType;
   thinkingLevel?: ThinkingLevel | undefined;
   mode?: SessionMode | undefined;
-  /** Where the session runs; the app CWD when absent. */
-  cwd?: string | undefined;
-  /** The worktree the session runs in: its durable cwd, linked at creation. */
-  worktreeId?: string | undefined;
   credentialProfileId: string;
   /** Session-start evidence its prompt conditions freeze (Task 287). */
   promptEvidence?: SessionPromptEvidence | undefined;
   /** The title it starts with; a titled session is never auto-named. */
   title?: string | undefined;
-}
+};
 
 /** A session to create, with what only its engine takes. */
 export type NewSession =
@@ -101,6 +113,7 @@ export type NewSession =
  * conditions inside creation, so its row and edge follow it.
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
+  const cwd = spec.worktree?.path ?? spec.cwd;
   if (spec.harness === "claude-sdk") {
     const id = spec.id ?? randomUUID();
     // Resolved first: from the ownership check below to the session's
@@ -114,7 +127,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       onDisk: spec.id !== undefined,
     });
     if (holder) throw new SessionIdTakenError(id, holder);
-    linkWorktree(id, spec.worktreeId);
+    linkWorktree(id, spec.worktree?.id);
     if (spec.promptEvidence)
       sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
     // With the names resolved, the freeze lands right here, before the
@@ -130,15 +143,15 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
       ...(spec.thinkingLevel !== undefined
         ? { thinkingLevel: spec.thinkingLevel }
         : {}),
-      ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
       ...(spec.additionalSystemPrompt !== undefined
         ? { additionalSystemPrompt: spec.additionalSystemPrompt }
         : {}),
       ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
     });
-    await skillsFrozen;
     // Before the first prompt: `setTitle` also marks auto-naming done.
     if (spec.title !== undefined) session.setTitle(spec.title);
+    await skillsFrozen;
     return session;
   }
 
@@ -147,7 +160,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     spec.model,
     spec.thinkingLevel,
     {
-      ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
+      ...(cwd !== undefined ? { cwd } : {}),
       credentialProfileId: spec.credentialProfileId,
       // pi builds the system prompt inside creation, so the session-start
       // evidence arrives with it.
@@ -166,7 +179,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     ...(spec.purpose !== undefined ? { purpose: spec.purpose } : {}),
   });
   if (spec.skills) await sessionSkills(live.sessionId, spec.agentType);
-  linkWorktree(live.sessionId, spec.worktreeId);
+  linkWorktree(live.sessionId, spec.worktree?.id);
   // A stored title keeps the first prompt from auto-naming it.
   if (spec.title !== undefined) live.rename(spec.title);
   return live;
