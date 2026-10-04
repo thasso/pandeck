@@ -404,6 +404,18 @@ function allStatesFixture(
       spawnedBySessionId: "coordinator",
       spawnOwnership: "coordinator",
     }),
+    // A quiet coordinator whose tree stopped while a reply is still owed.
+    session(now, "stalled-coordinator", "Coordinator, stalled", {
+      agentType: "developer",
+      updatedAt: now - 25 * min,
+      awaitingRepliesFrom: ["stalled-reviewer"],
+    }),
+    session(now, "stalled-reviewer", "Reviewer: DynamoDB service backend", {
+      agentType: "developer",
+      updatedAt: now - 30 * min,
+      spawnedBySessionId: "stalled-coordinator",
+      spawnOwnership: "coordinator",
+    }),
     // Workflow Run roles (only with runs)
     ...(withRuns ? runRoleSessions() : []),
   ];

@@ -937,6 +937,22 @@ function queuedRecipientIds(): string[] {
 }
 
 /**
+ * Distinct recipient ids with peer prompts still on their way in: queued,
+ * mid-delivery (`dispatching`), or waiting out a retry backoff
+ * (`retryable_failed`). The session list's `queuedWork` — a reply still being
+ * delivered is coming without a poke, so a quiet tree is not stalled on it.
+ */
+function pendingDeliveryRecipientIds(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT DISTINCT recipient_session_id FROM peer_prompts WHERE status IN ('queued', 'dispatching', 'retryable_failed')",
+      )
+      .all() as { recipient_session_id: string }[]
+  ).map((r) => r.recipient_session_id);
+}
+
+/**
  * The rows that still owe their sender a "this never finished" notice: a reply
  * was requested, the process died under the delivered turn, and nobody has been
  * told yet. Ordered oldest-first so one notice reads as a timeline.
@@ -1064,6 +1080,113 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
     )
     .get(senderSessionId, ...TERMINAL_STATUSES) as { n: number };
   return row?.n ?? 0;
+}
+
+/** The read behind {@link outstandingRepliesBySender}; exported for its plan test. */
+export const OUTSTANDING_REPLIES_SQL = `
+  WITH owed AS (
+    SELECT id, sender_session_id, recipient_session_id, chain_id, queue_seq
+      FROM peer_prompts
+     WHERE status = 'awaiting_response' AND response_requested = 1
+       AND (expires_at_ms IS NULL OR expires_at_ms > ?)
+    UNION ALL
+    SELECT o.id, o.sender_session_id, o.recipient_session_id, o.chain_id,
+           o.queue_seq
+      FROM peer_prompts a
+      CROSS JOIN peer_prompts o ON o.replied_by_message_id = a.id
+     WHERE a.status IN ('cancelled', 'failed') AND a.accepted_at_ms IS NULL
+       AND o.status = 'replied' AND o.response_requested = 1
+       AND (o.expires_at_ms IS NULL OR o.expires_at_ms > ?)
+  )
+  SELECT DISTINCT o.sender_session_id, o.recipient_session_id
+    FROM owed o
+   WHERE NOT EXISTS (
+           SELECT 1 FROM peer_prompts r
+            WHERE r.recipient_session_id = o.sender_session_id
+              AND r.sender_session_id = o.recipient_session_id
+              AND r.queue_seq > o.queue_seq
+              AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
+         )
+     AND NOT EXISTS (
+           SELECT 1 FROM peer_prompts f
+            CROSS JOIN peer_prompts r
+            WHERE f.sender_session_id = o.recipient_session_id
+              AND f.queue_seq > o.queue_seq
+              AND (f.accepted_at_ms IS NOT NULL OR f.status = 'interrupted')
+              AND r.recipient_session_id = o.sender_session_id
+              AND r.sender_session_id = f.recipient_session_id
+              AND r.chain_id = f.chain_id
+              AND r.queue_seq > f.queue_seq
+              AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
+         )
+   ORDER BY o.sender_session_id, o.recipient_session_id`;
+
+/**
+ * For every sender, the peers that still OWE it a reply: a `responseRequested`
+ * prompt whose turn ended without the answer (`awaiting_response`) — the
+ * session list's "who still owes whom" fact, which a quiet tree reads as
+ * stalled. One read, so the list rebuild pays it once, not per row.
+ *
+ * A request marked `replied` whose correlated reply never reached the
+ * sender — cancelled or failed before admission — is still owed: `replied`
+ * is written when the reply is QUEUED, not when it lands. It keeps the
+ * request's own deadline: past `expires_at_ms` it owes nothing, as an
+ * `awaiting_response` row would have expired — and an `awaiting_response`
+ * row past its deadline owes nothing either, between its deadline and the
+ * (daily) sweep that marks it expired. That half starts
+ * from the few lost replies (`CROSS JOIN` keeps SQLite from driving it from
+ * every replied row instead) and follows the back-link index.
+ *
+ * Two kinds of open row do NOT count:
+ * - one still being delivered or retried (`queued` … `retryable_failed`):
+ *   delivery is work in progress, not a stall;
+ * - one effectively answered without being marked: a reply closes exactly
+ *   one request by strict correlation, so a report forwarded through a third
+ *   peer, or an answer after the sender re-asked, leaves the original row
+ *   open. A LATER prompt that REACHED the sender (durably admitted, or
+ *   recovered at boot as `interrupted` after reaching its log — a report
+ *   cancelled or failed before delivery answers nothing) counts as the
+ *   answer when it came from the owed peer, or from a session the owed peer
+ *   handed the work to since the request (a delivered handoff), on that
+ *   HANDOFF's chain. The handoff's chain, not the request's: a user prompt
+ *   to the coordinator or the owed peer closes their chains, so the handoff
+ *   and the report that follows it travel on a fresh one. And only from a
+ *   session the owed peer sent to: peers spawned in one turn share a chain,
+ *   and one reviewer's reply must not answer for the reviewer beside it that
+ *   never talked to it.
+ *
+ * Each question is its own NOT EXISTS, each answered by index seeks: the
+ * owed peer's own word by (recipient, sender, queue_seq) from
+ * `0065_peer_prompt_reply_lookup.sql`, the forwarded one by the owed peer's
+ * later sends (`peer_prompts_sender_idx`) and then (recipient, chain,
+ * queue_seq) from 0065 — whose header overstates the gain, since the sender
+ * and chain indexes already existed. The lost-reply half follows
+ * `0066_peer_prompt_replied_by_index.sql`; `peerPromptStore.test.ts` pins the
+ * plan.
+ *
+ * Not modelled: a forward whose report travels on a different chain than the
+ * handoff that carried the work (the user prompted the forwarding peer in
+ * between, closing its chains), a forward of two or more hops (owed peer → X
+ * → Y → sender), and a sender that releases a peer with a plain message
+ * ("stand down") — each stays owed until the user settles or archives that
+ * peer, or the request expires (`RESPONSE_TTL_MS`, 30 days). The other way
+ * round, any delivered message from the owed peer counts as a handoff: once it
+ * asked a sibling something on their shared chain, the sibling's own report
+ * clears it too — the same traffic as a real forward, so SQL cannot tell them
+ * apart, and the tree reads as done though the owed peer never answered.
+ */
+function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
+  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now, now) as {
+    sender_session_id: string;
+    recipient_session_id: string;
+  }[];
+  const bySender = new Map<string, string[]>();
+  for (const row of rows) {
+    const recipients = bySender.get(row.sender_session_id);
+    if (recipients) recipients.push(row.recipient_session_id);
+    else bySender.set(row.sender_session_id, [row.recipient_session_id]);
+  }
+  return bySender;
 }
 
 function listByConversation(conversationId: string): PeerPromptRecord[] {
@@ -1418,11 +1541,13 @@ export const peerPromptStore = {
   // reads
   getById,
   queuedRecipientIds,
+  pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
   senderIdsOwingNotice,
   listPendingForRecipient,
   unfinishedTurnCount,
   outstandingResponseRequestCount,
+  outstandingRepliesBySender,
   listByConversation,
   listByChain,
   listByParticipant,

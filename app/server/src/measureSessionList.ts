@@ -154,8 +154,8 @@ async function main(): Promise<void> {
       ["listTasks (full summaries)", () => listTasks()],
       ["taskStore.sessionTaskStatuses", () => taskStore.sessionTaskStatuses()],
       [
-        "peerPromptStore.queuedRecipientIds",
-        () => peerPromptStore.queuedRecipientIds(),
+        "peerPromptStore.pendingDeliveryRecipientIds",
+        () => peerPromptStore.pendingDeliveryRecipientIds(),
       ],
       [
         "agentHandoffStore.queuedSessionIds",

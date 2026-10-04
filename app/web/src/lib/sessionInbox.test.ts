@@ -11,6 +11,8 @@ import {
   inboxItemId,
   clusterBubbleDismissible,
   clusterLiveSummary,
+  spawnTreeStall,
+  stallLabel,
   sameClusterChildProps,
   sameWorkflowRunItemProps,
   sessionSettleCascade,
@@ -2870,3 +2872,418 @@ describe("a settled peer set running again", () => {
 function allCardsOf(view: ReturnType<typeof buildSessionInbox>) {
   return [...cards(view.needsYou), ...cards(view.active)];
 }
+
+describe("a stalled tree", () => {
+  const peer = (
+    id: string,
+    parent: string,
+    extra: Partial<SessionListItem> = {},
+  ): SessionListItem =>
+    session({
+      id,
+      spawnedBySessionId: parent,
+      spawnOwnership: "coordinator",
+      ...extra,
+    });
+  const jobs = {
+    activeCount: 1,
+    shellCount: 1,
+    monitorCommandCount: 0,
+    monitorWebsocketCount: 0,
+    startingCount: 0,
+    stoppingCount: 0,
+    oldestStartedAt: NOW - 1_000,
+  };
+  const stallOf = (rows: SessionListItem[]) => {
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return spawnTreeStall(rows, byId)?.peers.map((p) => p.id);
+  };
+
+  it("is a quiet tree still owed a reply, naming who owes it", () => {
+    expect(
+      stallOf([
+        session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+        peer("rev", "root", { title: "Reviewer" }),
+      ]),
+    ).toEqual(["rev"]);
+  });
+
+  it("is not a stall while anything in the tree, or the peer owed, is moving", () => {
+    const owed = session({ id: "root", awaitingRepliesFrom: ["rev"] });
+    for (const moving of [
+      { isStreaming: true },
+      { queuedWork: true },
+      { backgroundActivity: jobs },
+    ]) {
+      // The owed peer itself is working on the answer...
+      expect(stallOf([owed, peer("rev", "root", moving)])).toBe(undefined);
+      // ...or the work went elsewhere in the tree: an implementer told to
+      // report to the reviewer, not to the coordinator that asked.
+      expect(
+        stallOf([owed, peer("rev", "root"), peer("impl", "root", moving)]),
+      ).toBe(undefined);
+    }
+    // The coordinator's own background job is work going on too.
+    expect(
+      stallOf([
+        session({
+          id: "root",
+          awaitingRepliesFrom: ["rev"],
+          backgroundActivity: jobs,
+        }),
+        peer("rev", "root"),
+      ]),
+    ).toBe(undefined);
+  });
+
+  it("leaves a tree waiting on the user to its own bubble", () => {
+    expect(
+      stallOf([
+        session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+        peer("rev", "root", { attention: "question" }),
+      ]),
+    ).toBe(undefined);
+  });
+
+  it("is nothing when no reply is owed, or the owed peer was put away", () => {
+    expect(stallOf([session({ id: "root" }), peer("rev", "root")])).toBe(
+      undefined,
+    );
+    expect(
+      stallOf([
+        session({ id: "root", awaitingRepliesFrom: ["gone", "archived"] }),
+        peer("archived", "root", { archived: true }),
+      ]),
+    ).toBe(undefined);
+  });
+
+  it("lifts the coordinator's card to attention and names the peer", () => {
+    const view = buildSessionInbox([
+      session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+      peer("rev", "root", { title: "Reviewer" }),
+    ]);
+    const card = [...cards(view.needsYou), ...cards(view.active)][0];
+    expect(card?.tier).toBe("attention");
+    expect(card?.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+    expect(stallLabel(card!.stall!)).toBe("No reply from “Reviewer”");
+    // The chip is keyed, so a stall that starts or ends repaints the card.
+    const quiet = buildSessionInbox([
+      session({ id: "root" }),
+      peer("rev", "root", { title: "Reviewer" }),
+    ]);
+    expect(
+      sessionCardKey(cards(quiet.active)[0] as SessionInboxCard, NOW),
+    ).not.toBe(sessionCardKey(card as SessionInboxCard, NOW));
+  });
+
+  it("is stated on the composer ledge of the chat that is owed", () => {
+    const sessions = [
+      session({ id: "root", awaitingRepliesFrom: ["rev", "impl"] }),
+      peer("rev", "root", { title: "Reviewer", updatedAt: NOW - 1_000 }),
+      peer("impl", "root", { title: "Implementer", updatedAt: NOW - 9_000 }),
+    ];
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["rev", "impl"]);
+    expect(stallLabel(ledge.stall!)).toBe("No reply from “Reviewer” +1");
+    expect(spawnedSessionsKey(ledge, false)).not.toBe(
+      spawnedSessionsKey(
+        spawnedSessionsView({
+          sessions: [session({ id: "root" }), ...sessions.slice(1)],
+          coordinatorId: "root",
+        }),
+        false,
+      ),
+    );
+  });
+});
+
+describe("a stalled tree, at its edges", () => {
+  const row = (id: string, extra: Partial<SessionListItem> = {}) =>
+    session({ id, ...extra });
+  const stallOf = (scope: SessionListItem[], others: SessionListItem[] = []) =>
+    spawnTreeStall(
+      scope,
+      new Map([...scope, ...others].map((s) => [s.id, s])),
+    )?.peers.map((p) => p.id);
+  const host = {
+    activeCount: 0,
+    shellCount: 0,
+    monitorCommandCount: 0,
+    monitorWebsocketCount: 0,
+    startingCount: 0,
+    stoppingCount: 0,
+    oldestStartedAt: 0,
+  };
+
+  it("weighs an owed peer outside the tree by whether it is working", () => {
+    const root = row("root", { awaitingRepliesFrom: ["outside"] });
+    expect(stallOf([root], [row("outside", { isStreaming: true })])).toBe(
+      undefined,
+    );
+    expect(stallOf([root], [row("outside")])).toEqual(["outside"]);
+  });
+
+  it("owes nothing from a peer the user settled", () => {
+    // A coordinator told it to stand down, and the user put it down.
+    const root = row("root", { awaitingRepliesFrom: ["done"] });
+    expect(stallOf([root], [row("done", { settledAt: NOW - 1_000 })])).toBe(
+      undefined,
+    );
+  });
+
+  it("counts working subagent runs as work, but not one waiting on its parent", () => {
+    const root = row("root", { awaitingRepliesFrom: ["rev"] });
+    const delegation = (working: number, awaiting: number) => ({
+      activeCount: working + awaiting,
+      startingCount: 0,
+      workingCount: working,
+      awaitingParentCount: awaiting,
+    });
+    expect(stallOf([root, row("rev", { delegation: delegation(1, 0) })])).toBe(
+      undefined,
+    );
+    expect(
+      stallOf([root, row("rev", { delegation: delegation(0, 1) })]),
+    ).toEqual(["rev"]);
+  });
+
+  it("counts a job starting, or a retained host, as work going on", () => {
+    const root = row("root", { awaitingRepliesFrom: ["rev"] });
+    for (const activity of [
+      { ...host, startingCount: 1 },
+      { ...host, retainedHost: true },
+    ])
+      expect(
+        stallOf([root, row("rev", { backgroundActivity: activity })]),
+      ).toBe(undefined);
+  });
+
+  it("hears a grandchild that still owes its own coordinator", () => {
+    const view = buildSessionInbox([
+      row("root"),
+      row("impl", {
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["rev"],
+      }),
+      row("rev", {
+        title: "Reviewer",
+        spawnedBySessionId: "impl",
+        spawnOwnership: "coordinator",
+      }),
+    ]);
+    const card = [...cards(view.needsYou), ...cards(view.active)][0];
+    expect(card?.session.id).toBe("root");
+    expect(card?.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+  });
+
+  it("leaves a settled tree on the shelf, where it raises nothing", () => {
+    const view = buildSessionInbox([
+      row("root", { settledAt: NOW - 1_000, awaitingRepliesFrom: ["rev"] }),
+      row("rev", {
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 1_000,
+      }),
+    ]);
+    expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+  });
+});
+
+describe("the composer ledge's stall", () => {
+  it("is judged over the card's tree: a taken-over child's work does not hide it", () => {
+    const sessions = [
+      session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+      session({
+        id: "rev",
+        title: "Reviewer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+      }),
+      session({
+        id: "mine",
+        spawnedBySessionId: "root",
+        spawnOwnership: "taken-over",
+        isStreaming: true,
+      }),
+    ];
+    const card = [
+      ...cards(buildSessionInbox(sessions).needsYou),
+      ...cards(buildSessionInbox(sessions).active),
+    ].find((c) => c.session.id === "root");
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(card?.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+    expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+  });
+
+  it("is read for a chat that spawned no one but asked an existing session", () => {
+    const ledge = spawnedSessionsView({
+      sessions: [
+        session({ id: "root", awaitingRepliesFrom: ["impl"] }),
+        session({ id: "impl", title: "Implementer" }),
+      ],
+      coordinatorId: "root",
+    });
+    expect(ledge.rows).toEqual([]);
+    expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["impl"]);
+  });
+});
+
+describe("the composer ledge for a Workflow Run's role", () => {
+  const activeRun: WorkflowRunSummary = {
+    id: "r1",
+    taskId: "676",
+    recipeId: "code-delivery",
+    recipeVersion: 1,
+    lifecycle: "active",
+    limits: { maxIterations: 3, maxReviewPasses: 2 },
+    createdAt: NOW - 3_600_000,
+    updatedAt: NOW - 30_000,
+  };
+  const card: WorkflowRunCard = {
+    runId: "r1",
+    phase: "review",
+    iterationsUsed: 1,
+    nextAction: "Wait for the implementer.",
+    mergeDecisionReady: false,
+    canRebaseAndReview: false,
+    canRetry: false,
+    canResume: true,
+    coordinatorSessionId: "coord",
+    implementerSessionId: "impl",
+  };
+
+  it("raises no stall of its own, spawned peers or not", () => {
+    for (const spawned of [false, true]) {
+      const sessions = [
+        session({ id: "coord", awaitingRepliesFrom: ["impl"] }),
+        session({
+          id: "impl",
+          ...(spawned
+            ? {
+                spawnedBySessionId: "coord",
+                spawnOwnership: "coordinator" as const,
+              }
+            : {}),
+        }),
+      ];
+      const ledge = spawnedSessionsView({
+        sessions,
+        coordinatorId: "coord",
+        workflowRuns: [activeRun],
+        workflowCards: { r1: card },
+      });
+      expect(ledge.stall, spawned ? "with peers" : "alone").toBe(undefined);
+    }
+  });
+});
+
+describe("a tree waiting on its own coordinator", () => {
+  it("names the peer that waits, not the card itself", () => {
+    const sessions = [
+      session({ id: "root", title: "Coordinator" }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const view = buildSessionInbox(sessions);
+    const card = [...cards(view.needsYou), ...cards(view.active)][0];
+    expect(card?.stall?.peers).toEqual([]);
+    expect(card?.stall?.askers.map((s) => s.id)).toEqual(["impl"]);
+    expect(stallLabel(card!.stall!)).toBe("“Implementer” awaits a reply");
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(stallLabel(ledge.stall!)).toBe("“Implementer” awaits a reply");
+  });
+
+  it("raises nothing once the user settled that coordinator, though a live peer keeps the card", () => {
+    const sessions = [
+      session({ id: "root", title: "Coordinator", settledAt: NOW - 1_000 }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const view = buildSessionInbox(sessions);
+    const card = [...cards(view.needsYou), ...cards(view.active)].find(
+      (c) => c.session.id === "root",
+    );
+    expect(card, "the live peer keeps the card").toBeDefined();
+    expect(card?.stall).toBe(undefined);
+    expect(spawnedSessionsView({ sessions, coordinatorId: "root" }).stall).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("the composer ledge of a chat the user put down", () => {
+  const owedBy = (extra: Partial<SessionListItem>) => [
+    session({ id: "root", awaitingRepliesFrom: ["x"], ...extra }),
+    session({ id: "x" }),
+  ];
+
+  it("raises nothing for a settled or archived chat, as its card does not", () => {
+    for (const extra of [{ settledAt: NOW - 1_000 }, { archived: true }]) {
+      const sessions = owedBy(extra);
+      expect(
+        [
+          ...cards(buildSessionInbox(sessions).needsYou),
+          ...cards(buildSessionInbox(sessions).active),
+        ].find((c) => c.session.id === "root"),
+      ).toBe(undefined);
+      expect(
+        spawnedSessionsView({ sessions, coordinatorId: "root" }).stall,
+        JSON.stringify(extra),
+      ).toBe(undefined);
+    }
+  });
+});
+
+describe("the stall chip's content key", () => {
+  it("changes when only the direction of the debt changes", () => {
+    // Same idle rows, titles and times: the coordinator owed by its peer,
+    // then the peer waiting on the coordinator. The chip's words differ.
+    const owedByPeer = [
+      session({ id: "root", awaitingRepliesFrom: ["impl"] }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+      }),
+    ];
+    const peerWaits = [
+      session({ id: "root" }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const card = (rows: SessionListItem[]) =>
+      [
+        ...cards(buildSessionInbox(rows).needsYou),
+        ...cards(buildSessionInbox(rows).active),
+      ][0] as SessionInboxCard;
+    expect(stallLabel(card(owedByPeer).stall!)).not.toBe(
+      stallLabel(card(peerWaits).stall!),
+    );
+    expect(sessionCardKey(card(owedByPeer), NOW)).not.toBe(
+      sessionCardKey(card(peerWaits), NOW),
+    );
+    const ledge = (rows: SessionListItem[]) =>
+      spawnedSessionsKey(
+        spawnedSessionsView({ sessions: rows, coordinatorId: "root" }),
+        false,
+      );
+    expect(ledge(owedByPeer)).not.toBe(ledge(peerWaits));
+  });
+});

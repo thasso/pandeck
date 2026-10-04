@@ -572,12 +572,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   lookup belongs in the batched prologue, never the loop: the pending-approval
   set (`pendingApprovals.ts` `pendingApprovalSessionIds`, one read of the
   FILE-backed store) and the queued-peer-prompt recipient set
-  (`db/peerPromptStore.ts` `queuedRecipientIds`, one query) are resolved once
-  per build, never per session — as is the `/pr` card each session's row states
-  (`pullRequestCards.ts` `pullRequestSummariesBySession`, which is itself
-  memoized, and dropped by its own `writeStore`, because that store carries
-  drafted bodies and linked Tasks rather than a handful of ids) and the
-  Task-pick-blocked set off that same index (`choosingTaskSessionIds`).
+  (`db/peerPromptStore.ts` `pendingDeliveryRecipientIds`, one query) are
+  resolved once per build, never per session — as is the `/pr` card each
+  session's row states (`pullRequestCards.ts` `pullRequestSummariesBySession`,
+  which is itself memoized, and dropped by its own `writeStore`, because that
+  store carries drafted bodies and linked Tasks rather than a handful of ids)
+  and the Task-pick-blocked set off that same index (`choosingTaskSessionIds`).
   `hub.ts`'s merge and `claudeSdk/claudeSdkStore.ts` pass those same approval
   and Task-pick sets into each `ClaudeSdkSession.listItem`, so the SDK overlay
   does not re-read them per row either. It also refuses to report a shelved

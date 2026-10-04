@@ -1,8 +1,13 @@
-import { ChevronDown, ChevronUp, Users, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Hourglass, Users, X } from "lucide-react";
 import {
   clusterBubbleDismissible,
   sessionClusterBubbleLabel,
   spawnedSessionsSummary,
+  stallLabel,
+  stallMore,
+  stallParts,
+  stallTarget,
+  stallTitle,
   sessionStatusBadge,
   type SessionStatusTone,
   type SpawnedSessionsView,
@@ -89,6 +94,41 @@ export function SpawnedSessionsLedge({
     : "";
   const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
   const Chevron = open ? ChevronDown : ChevronUp;
+  // The tree has stopped and a peer still owes this chat a reply: on a line
+  // of its own, like the bubble, naming the peer to poke.
+  const stallLine = view.stall ? (
+    <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
+      <button
+        type="button"
+        title={`Open “${stallTitle(view.stall)}”`}
+        aria-label={`Stalled: ${stallLabel(view.stall)}`}
+        onClick={() => {
+          if (view.stall) onOpenSession(stallTarget(view.stall).id);
+        }}
+        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${BADGE_TONE.warning}`}
+      >
+        <Hourglass size={10} className="shrink-0" aria-hidden="true" />
+        {stallParts(view.stall).before ? (
+          <span className="shrink-0">{stallParts(view.stall).before}</span>
+        ) : null}
+        <span className="min-w-0 truncate">{stallParts(view.stall).title}</span>
+        {stallParts(view.stall).after ? (
+          <span className="shrink-0">{stallParts(view.stall).after}</span>
+        ) : null}
+        {stallMore(view.stall) ? (
+          <span className="shrink-0">{stallMore(view.stall)}</span>
+        ) : null}
+      </button>
+    </div>
+  ) : null;
+  // A chat that spawned nothing can still be owed a reply by a session it
+  // asked: then the strip is that one line, and claims to have spawned no one.
+  if (view.counts.total === 0 && view.settled === 0)
+    return (
+      <div data-spawned-sessions-ledge className="min-w-0 pt-1.5">
+        {stallLine}
+      </div>
+    );
   return (
     <div data-spawned-sessions-ledge className="min-w-0">
       <button
@@ -154,6 +194,7 @@ export function SpawnedSessionsLedge({
           ) : null}
         </div>
       ) : null}
+      {stallLine}
       {open ? (
         <div
           id={`spawned-sessions-ledge-${sessionId}`}

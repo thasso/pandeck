@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "vitest";
+import { getDb } from "./index.ts";
 import {
+  OUTSTANDING_REPLIES_SQL,
   peerPromptStore as store,
   PeerPromptHopLimitError,
 } from "./peerPromptStore.ts";
@@ -130,6 +132,352 @@ describe("peerPromptStore", () => {
     const replied = store.markReplied(m.id, "reply-msg-id");
     assert.equal(replied?.status, "replied");
     assert.equal(replied?.repliedByMessageId, "reply-msg-id");
+  });
+
+  describe("who still owes a sender a reply", () => {
+    /** A delivered request whose turn ended without the answer. */
+    const unanswered = (
+      sender: string,
+      recipient: string,
+      chainId?: string,
+    ) => {
+      const chain = chainId ?? store.createChain(`owed-${seq++}`);
+      const m = store.enqueue({
+        conversationId: `owed-conv-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: sender,
+        recipientSessionId: recipient,
+        prompt: "please report back",
+        responseRequested: true,
+      });
+      store.claimNext(recipient, "d", 1000);
+      store.markAdmitted(m.id);
+      store.markCompleted(m.id);
+      return { ...m, chainId: chain };
+    };
+    /** A later prompt from `sender` to `recipient` on `chainId`, queued. */
+    const enqueueLater = (
+      sender: string,
+      recipient: string,
+      chainId?: string,
+    ) => {
+      const chain = chainId ?? store.createChain(`later-${seq++}`);
+      return store.enqueue({
+        conversationId: `later-conv-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: sender,
+        recipientSessionId: recipient,
+        prompt: "report",
+        responseRequested: false,
+      });
+    };
+    /** …and delivered: it REACHED the recipient. */
+    const send = (sender: string, recipient: string, chainId?: string) => {
+      const m = enqueueLater(sender, recipient, chainId);
+      store.claimNext(recipient, "d", 1000);
+      store.markAdmitted(m.id);
+      return m;
+    };
+    const owedTo = (sender: string) =>
+      store.outstandingRepliesBySender().get(sender);
+    /** A deadline far ahead, so no other test's expiry sweep sees it. */
+    const deadline = Date.now() + 365 * 24 * 60 * 60 * 1000;
+
+    it("counts a turn that ended without the answer, until it is answered", () => {
+      const c = `owed-c-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const m = unanswered(c, r);
+      assert.deepEqual(owedTo(c), [r]);
+      store.markReplied(m.id, "reply");
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("does not count a request still being delivered", () => {
+      const c = `owed-c-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      enqueue(r, { sender: c, responseRequested: true });
+      assert.equal(owedTo(c), undefined, "queued: delivery is in progress");
+    });
+
+    it("takes a report forwarded through a third peer as the answer", () => {
+      // C asks I; I hands the work to R; R reports to C on the same chain.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-rev-${seq++}`;
+      const request = unanswered(c, i);
+      assert.deepEqual(owedTo(c), [i]);
+      send(i, r, request.chainId); // I hands the work on, on the same chain
+      assert.deepEqual(owedTo(c), [i], "handing on is not yet the answer");
+      send(r, c, request.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("does not let one peer's reply answer for a peer beside it on the chain", () => {
+      // C spawns two reviewers in one turn: both requests share a chain.
+      const c = `owed-c-${seq++}`;
+      const sol = `owed-sol-${seq++}`;
+      const opus = `owed-opus-${seq++}`;
+      const first = unanswered(c, sol);
+      unanswered(c, opus, first.chainId);
+      send(sol, c, first.chainId);
+      assert.deepEqual(owedTo(c), [opus], "Opus never answered");
+    });
+
+    it("does not take a sibling's reply for a peer that delegated elsewhere", () => {
+      // A and B share C's chain; A hands work to helper H on it, and B
+      // reports to C. Nothing from A reached C.
+      const c = `owed-c-${seq++}`;
+      const a = `owed-a-${seq++}`;
+      const b = `owed-b-${seq++}`;
+      const first = unanswered(c, a);
+      unanswered(c, b, first.chainId);
+      send(a, `owed-helper-${seq++}`, first.chainId);
+      send(b, c, first.chainId);
+      assert.deepEqual(owedTo(c), [a]);
+    });
+
+    it("takes a sibling's report once the owed peer messaged it (not modelled)", () => {
+      // A only asks B a question on C's chain, then B reports its own work to
+      // C. The rows match a real A → B → C forward, so A's debt clears too.
+      const c = `owed-c-${seq++}`;
+      const a = `owed-a-${seq++}`;
+      const b = `owed-b-${seq++}`;
+      const first = unanswered(c, a);
+      unanswered(c, b, first.chainId);
+      send(a, b, first.chainId);
+      send(b, c, first.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes no undelivered handoff as passing the work on", () => {
+      // C asks I and R on one chain; I's handoff to R never lands, then R
+      // reports to C. Nothing reached C on I's behalf.
+      for (const lose of ["cancel", "fail", "queued"] as const) {
+        const c = `owed-c-${seq++}`;
+        const i = `owed-i-${seq++}`;
+        const r = `owed-r-${seq++}`;
+        const first = unanswered(c, i);
+        unanswered(c, r, first.chainId);
+        const handoff = enqueueLater(i, r, first.chainId);
+        if (lose === "cancel") store.cancelPending(r, "test", i);
+        if (lose === "fail") store.markFailed(handoff.id, "gave up");
+        send(r, c, first.chainId);
+        assert.deepEqual(owedTo(c), [i], `${lose} handoff`);
+      }
+    });
+
+    it("lets a lost-reply request expire at its own deadline", () => {
+      const c = `owed-c-${seq++}`;
+      const p = `owed-p-${seq++}`;
+      const chain = store.createChain(`exp-${seq++}`);
+      const request = store.enqueue({
+        conversationId: `exp-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: c,
+        recipientSessionId: p,
+        prompt: "report back",
+        responseRequested: true,
+        expiresAt: deadline,
+      });
+      store.claimNext(p, "d", 1000);
+      store.markAdmitted(request.id);
+      store.markCompleted(request.id);
+      store.enqueueRouted({
+        conversationId: `exp-reply-${seq++}`,
+        chainId: chain,
+        fallbackChainId: `exp-fallback-${seq++}`,
+        senderSessionId: p,
+        recipientSessionId: c,
+        prompt: "report",
+        responseRequested: false,
+        markRepliedId: request.id,
+        participants: [p, c],
+        maxHops: 100,
+      });
+      store.cancelPending(c, "test", p);
+      assert.deepEqual(
+        store.outstandingRepliesBySender(deadline - 1_000).get(c),
+        [p],
+        "before its deadline the lost reply is still owed",
+      );
+      assert.equal(
+        store.outstandingRepliesBySender(deadline + 1_000).get(c),
+        undefined,
+        "after it, the request owes nothing, as an unanswered one expires",
+      );
+    });
+
+    it("takes a report recovered at boot as interrupted as delivered", () => {
+      // The process died with the report in the sender's log: recovery marks
+      // it interrupted without an admission stamp. It still reached C.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      const report = enqueueLater(i, c);
+      store.claimNext(c, "d", 1000);
+      store.applyRecoveryDecisions(
+        [{ id: report.id, toStatus: "interrupted" as const }],
+        "restart",
+        "restart",
+      );
+      assert.equal(store.getById(report.id)?.status, "interrupted");
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes a handoff recovered at boot as interrupted as delivered", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const first = unanswered(c, i);
+      const handoff = enqueueLater(i, r, first.chainId);
+      store.claimNext(r, "d", 1000);
+      store.applyRecoveryDecisions(
+        [{ id: handoff.id, toStatus: "interrupted" as const }],
+        "restart",
+        "restart",
+      );
+      send(r, c, first.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("owes nothing past an unanswered request's deadline", () => {
+      const c = `owed-c-${seq++}`;
+      const p = `owed-p-${seq++}`;
+      const chain = store.createChain(`dead-${seq++}`);
+      const m = store.enqueue({
+        conversationId: `dead-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: c,
+        recipientSessionId: p,
+        prompt: "report back",
+        responseRequested: true,
+        expiresAt: deadline,
+      });
+      store.claimNext(p, "d", 1000);
+      store.markAdmitted(m.id);
+      store.markCompleted(m.id);
+      assert.deepEqual(
+        store.outstandingRepliesBySender(deadline - 1_000).get(c),
+        [p],
+      );
+      // Not yet swept to `expired`, but past its deadline: nothing is owed.
+      assert.equal(
+        store.outstandingRepliesBySender(deadline + 1_000).get(c),
+        undefined,
+      );
+    });
+
+    it("takes a forward on a fresh chain as the answer, after the coordinator was prompted", () => {
+      // The user prompted C, closing the chain C's request to I lives on, so
+      // I's handoff to R — and R's report to C — travel on a fresh chain.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      unanswered(c, i);
+      const fresh = store.createChain(`fresh-${seq++}`);
+      send(i, r, fresh);
+      assert.deepEqual(owedTo(c), [i], "handing on is not yet the answer");
+      send(r, c, fresh);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes no report on another chain than the handoff that carried the work", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const request = unanswered(c, i);
+      send(i, r, request.chainId);
+      send(r, c, store.createChain(`unrelated-${seq++}`));
+      assert.deepEqual(owedTo(c), [i]);
+    });
+
+    it("takes any later word from the owed peer as the answer", () => {
+      // After a poke (which closes the peer's chains) or a re-ask, the peer's
+      // report arrives on a different chain and marks nothing.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      send(i, c);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes no report that never reached the sender as the answer", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      // Cancelled before delivery...
+      enqueueLater(i, c);
+      store.cancelPending(c, "test", i);
+      assert.deepEqual(owedTo(c), [i]);
+      // ...or given up on after its retries: neither reached C.
+      const lost = enqueueLater(i, c);
+      store.markFailed(lost.id, "gave up");
+      assert.deepEqual(owedTo(c), [i]);
+    });
+
+    it("keeps owing a request whose correlated reply never landed", () => {
+      // A correlated reply marks the request `replied` when it is QUEUED.
+      for (const lose of ["cancel", "fail"] as const) {
+        const c = `owed-c-${seq++}`;
+        const p = `owed-p-${seq++}`;
+        const request = unanswered(c, p);
+        const reply = store.enqueueRouted({
+          conversationId: `reply-${seq++}`,
+          chainId: request.chainId,
+          fallbackChainId: `reply-fallback-${seq++}`,
+          senderSessionId: p,
+          recipientSessionId: c,
+          prompt: "my report",
+          responseRequested: false,
+          markRepliedId: request.id,
+          participants: [p, c],
+          maxHops: 100,
+        });
+        assert.equal(store.getById(request.id)?.status, "replied");
+        // Still on its way: the sender has queued work, so nothing stalls.
+        assert.equal(owedTo(c), undefined);
+        if (lose === "cancel") store.cancelPending(c, "test", p);
+        else store.markFailed(reply.id, "gave up");
+        assert.deepEqual(owedTo(c), [p], `${lose}: the answer never arrived`);
+      }
+    });
+
+    it("seeks an index for both answer checks, never scanning the inbox", () => {
+      const plan = getDb()
+        .prepare(`EXPLAIN QUERY PLAN ${OUTSTANDING_REPLIES_SQL}`)
+        .all(Date.now(), Date.now()) as { detail: string }[];
+      const details = plan.map((step) => step.detail).join("\n");
+      // Exact seeks: the recipient AND the sender or chain by equality, then
+      // a queue_seq range — never a recipient-only seek or a scan.
+      assert.match(
+        details,
+        /SEARCH r USING INDEX peer_prompts_recipient_sender_seq_idx \(recipient_session_id=\? AND sender_session_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH f USING INDEX peer_prompts_sender_idx \(sender_session_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH r USING INDEX peer_prompts_recipient_chain_seq_idx \(recipient_session_id=\? AND chain_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH o USING INDEX peer_prompts_replied_by_idx \(replied_by_message_id=\?\)/,
+      );
+    });
+
+    it("still counts a request when later traffic came from someone else", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      send(`owed-other-${seq++}`, c);
+      assert.deepEqual(owedTo(c), [i]);
+    });
   });
 
   it("completes terminally when no response is requested", () => {

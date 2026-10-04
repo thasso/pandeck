@@ -79,6 +79,32 @@ connection has the archive view open.
   the id down to `sessionStore.list({ ids })`. Every row is computed from its
   own inputs, so the one row equals the same row in a full build.
 
+## Owed peer replies
+
+Each rebuild also reads who still owes each session a reply
+(`peerPromptStore.outstandingRepliesBySender`, projected as
+`awaitingRepliesFrom`): one read over the `awaiting_response` rows, each tested
+by two `NOT EXISTS` probes — "a later admitted prompt from the owed peer" and "a
+later admitted prompt from a session the owed peer handed the work to since the
+request, on that handoff's chain" (the handoff's chain, not the request's: a
+user prompt closes chains, so a handoff after one travels on a fresh chain). The
+first probe is one exact seek on (recipient, sender, `queue_seq`) from
+`0065_peer_prompt_reply_lookup.sql`; the second walks the owed peer's later
+sends (`peer_prompts_sender_idx`) and seeks each handoff's report on (recipient,
+chain, `queue_seq`) from 0065. An earlier single probe joined by `OR` could seek
+only the recipient and scanned everything the sender ever received; split, the
+probes would also seek the older sender and chain indexes, reading the owed
+peer's later sends or the whole chain, so 0065's header overstates the gain. The
+seeks keep the cost bounded by what is owed and what the owed peer sent since,
+rather than by history. A request already marked `replied` whose correlated
+reply was cancelled or failed before delivery stays owed; that half starts from
+the lost replies and follows the `replied_by_message_id` back-link
+(`0066_peer_prompt_replied_by_index.sql`). `peerPromptStore.test.ts` pins the
+plan. Any delivered message from the owed peer counts as a handoff, so a peer
+that only asked a sibling something on their shared chain is cleared by that
+sibling's own report — the same rows as a real forward. Measured on a copy of
+the production database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
+
 ## What was not done, and why
 
 - **No new `links` index.** An index on `(from_type, relation, from_id, …)`

@@ -9,6 +9,7 @@ import {
   ClipboardList,
   FolderKanban,
   GitBranch,
+  Hourglass,
   MoreVertical,
   Pencil,
   Play,
@@ -28,6 +29,11 @@ import {
   sessionClusterSummary,
   sessionStatusBadge,
   sessionStatusDetail,
+  stallLabel,
+  stallMore,
+  stallParts,
+  stallTarget,
+  stallTitle,
   sessionStatusText,
   type SessionCardMetaItem,
   type SessionCardMetaKind,
@@ -322,7 +328,9 @@ function ActiveSessionCardImpl({
             : ""
       }${backgroundText ? ` — ${backgroundText}` : ""}${
         clusterSummary ? ` — coordinating ${clusterSummary}` : ""
-      }${bubbleLabel ? ` — ${bubbleLabel}` : ""}`}
+      }${bubbleLabel ? ` — ${bubbleLabel}` : ""}${
+        card.stall ? ` — stalled: ${stallLabel(card.stall)}` : ""
+      }`}
       onClick={showActions ? undefined : () => onOpen(session.id)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -548,6 +556,42 @@ function ActiveSessionCardImpl({
                     className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                   >
                     <X size={12} aria-hidden />
+                  </button>
+                ) : null}
+                {/* The tree has stopped and a peer still owes a reply: the
+                    one fact that says "this needs a poke" rather than "this
+                    is done". Named and openable, like the bubble; capped so a
+                    long title truncates inside it. */}
+                {card.stall ? (
+                  <button
+                    type="button"
+                    title={`Open “${stallTitle(card.stall)}”`}
+                    aria-label={`Stalled: ${stallLabel(card.stall)}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (card.stall) onOpen(stallTarget(card.stall).id);
+                    }}
+                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${SESSION_BADGE_TONE.warning}`}
+                  >
+                    <Hourglass size={10} className="shrink-0" aria-hidden />
+                    {stallParts(card.stall).before ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallParts(card.stall).before}
+                      </span>
+                    ) : null}
+                    <span className="session-status-badge-label min-w-0 truncate">
+                      {stallParts(card.stall).title}
+                    </span>
+                    {stallParts(card.stall).after ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallParts(card.stall).after}
+                      </span>
+                    ) : null}
+                    {stallMore(card.stall) ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallMore(card.stall)}
+                      </span>
+                    ) : null}
                   </button>
                 ) : null}
                 {backgroundChip ? (
