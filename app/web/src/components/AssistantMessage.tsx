@@ -11,13 +11,13 @@ import { AlertTriangle, Bot, PackageCheck } from "lucide-react";
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   CompactionDisplay,
   ContextClearDisplay,
   DisplayBlock,
   DisplayMessage,
   ModelOption,
-  SessionAgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -103,11 +103,7 @@ interface Props {
   view: TranscriptViewPrefs;
   onAcceptCommitDryRun?: ((entryId: string) => void) | undefined;
   onCreateDraftSession?:
-    | ((
-        agentType: SessionAgentType,
-        draftText: string,
-        notice?: string,
-      ) => void)
+    | ((agentType: AgentType, draftText: string, notice?: string) => void)
     | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
   onOpenWorktree?: ((worktreeId: string) => void) | undefined;

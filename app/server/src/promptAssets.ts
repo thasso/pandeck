@@ -29,10 +29,8 @@ import { join } from "node:path";
 import { PACKAGED_PROMPTS_DIR, PROMPTS_DIR } from "./config.ts";
 import { knowledgeBaseBehaviorGuidance } from "./knowledgeBasePrompt.ts";
 import { memoryBehaviorGuidance } from "./memoryPrompt.ts";
-// Type-only: agentTypes.ts imports agents.ts, which imports this module. A
-// value import here would close that cycle.
-import type { AgentType } from "./agentTypes.ts";
-// Type-only as well: prompt-asset resolution stays free of the session store
+import type { AgentType } from "@assistant/shared";
+// Type-only: prompt-asset resolution stays free of the session store
 // and the settings-backed integration gates that produce the conditions.
 import type {
   PromptConditionKey,

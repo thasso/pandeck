@@ -8,7 +8,7 @@ import {
   CLAUDE_SDK_PROVIDER,
   SESSION_MODES,
   projectSummaryOf,
-  type AgentKind,
+  type AgentType,
   type AgentQuestionResponse,
   type BroadcastTopic,
   type AppSettings,
@@ -39,7 +39,6 @@ import {
   type ProjectRecord,
   type ServerMessage,
   type SelectorBundle,
-  type SessionAgentType,
   type SessionMode,
   type ThinkingLevel,
   type TimelineCacheDescriptor,
@@ -1509,7 +1508,7 @@ export class Connection implements Viewer {
 
   private async handlePiFirstSend(msg: {
     id: string;
-    agentType: SessionAgentType;
+    agentType: AgentType;
     text: string;
     attachments?: PromptAttachment[];
     modelProvider?: string;
@@ -1653,7 +1652,7 @@ export class Connection implements Viewer {
    */
   private async handleClaudeSdkSend(msg: {
     id: string;
-    agentType: SessionAgentType;
+    agentType: AgentType;
     text: string;
     attachments?: PromptAttachment[];
     modelId?: string;
@@ -1802,7 +1801,7 @@ export class Connection implements Viewer {
     id: string,
     modelId?: string,
     thinkingLevel?: ThinkingLevel,
-    agentType?: SessionAgentType,
+    agentType?: AgentType,
     cwd?: string,
     credentialProfileId?: string,
     mode?: SessionMode,
@@ -2839,7 +2838,7 @@ export class Connection implements Viewer {
       | {
           kind: "new";
           harness: Harness;
-          agentType?: SessionAgentType;
+          agentType?: AgentType;
           modelProvider?: string;
           modelId?: string;
           thinkingLevel?: ThinkingLevel;
@@ -2902,7 +2901,7 @@ export class Connection implements Viewer {
       | {
           kind: "new";
           harness: Harness;
-          agentType: SessionAgentType;
+          agentType: AgentType;
           modelProvider?: string;
           modelId?: string;
           thinkingLevel?: ThinkingLevel;
@@ -4589,7 +4588,7 @@ export class Connection implements Viewer {
   }
 
   private async onNewSession(
-    agentType: SessionAgentType,
+    agentType: AgentType,
     selectedModel?: { provider: string; id: string },
     selectedThinkingLevel?: ThinkingLevel,
     mode?: SessionMode,
@@ -4669,7 +4668,7 @@ export class Connection implements Viewer {
    * reporting) when session creation must be rejected.
    */
   private guardDeveloperWorktree(
-    agentType: SessionAgentType,
+    agentType: AgentType,
     worktree: { id: string } | null,
   ): boolean {
     if (agentType !== "developer" || worktree) return true;
@@ -4989,12 +4988,12 @@ export class Connection implements Viewer {
   }
 
   private async onCreateDraftSession(
-    agentType: SessionAgentType,
+    agentType: AgentType,
     draftText: string,
     notice?: string,
   ): Promise<void> {
     // Draft sessions are always pi: the pi kind IS the persona.
-    const kind: AgentKind = agentType;
+    const kind: AgentType = agentType;
     if (!this.guardKind(kind)) return;
     // Drafts carry no worktree, so a developer draft would run in the app CWD.
     if (!this.guardDeveloperWorktree(agentType, null)) return;
@@ -5550,10 +5549,10 @@ export class Connection implements Viewer {
    */
   private resolveSessionRef(
     id: string,
-  ): { harness: Harness; kind: AgentKind; file?: string } | undefined {
+  ): { harness: Harness; kind: AgentType; file?: string } | undefined {
     const record = sessionStore.get(id);
     if (record) {
-      const kind: AgentKind = record.agentType;
+      const kind: AgentType = record.agentType;
       return {
         harness: record.harness,
         kind,
@@ -5613,7 +5612,7 @@ export class Connection implements Viewer {
   }
 
   /** Refuse a kind that isn't available (e.g. Workshop in production). */
-  private guardKind(kind: AgentKind): boolean {
+  private guardKind(kind: AgentType): boolean {
     if (isAgentAvailable(kind)) return true;
     this.send({
       type: "error",
@@ -5623,7 +5622,7 @@ export class Connection implements Viewer {
   }
 
   /** Refuse loading a session whose persona is environment-gated. */
-  private guardExistingKind(kind: AgentKind): boolean {
+  private guardExistingKind(kind: AgentType): boolean {
     if (isAgentSessionAvailable(kind)) return true;
     this.send({
       type: "error",
@@ -5639,7 +5638,7 @@ export class Connection implements Viewer {
    * existing-session availability. Internal personas remain loadable even though
    * ordinary client creation rejects them.
    */
-  private guardSessionRef(ref: { harness: Harness; kind: AgentKind }): boolean {
+  private guardSessionRef(ref: { harness: Harness; kind: AgentType }): boolean {
     if (ref.harness === "claude-sdk") {
       if (getSettings().claudeSdk.enabled) return true;
       this.send({

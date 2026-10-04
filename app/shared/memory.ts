@@ -10,8 +10,8 @@
  * commitments/events stay in Tasks/Calendar.
  */
 import type {
+  AgentType,
   CredentialProfilePin,
-  SessionAgentType,
   ThinkingLevel,
 } from "./protocol.ts";
 
@@ -69,7 +69,7 @@ export interface MemoryScope {
   /** Registry project id, or absent for any project. */
   projectId?: string;
   /** Persona, or absent for any persona. */
-  persona?: SessionAgentType;
+  persona?: AgentType;
 }
 
 /** The v1 recurring shape: a set of weekdays. Kept deliberately small. */
@@ -235,7 +235,7 @@ export interface MemoryListFilter {
   /** Free-text lexical search over card text. */
   text?: string;
   projectId?: string;
-  persona?: SessionAgentType;
+  persona?: AgentType;
   kinds?: MemoryKind[];
   states?: MemoryLifecycleState[];
   pinned?: boolean;

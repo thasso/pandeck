@@ -21,6 +21,7 @@ import {
   SendHorizontal,
 } from "lucide-react";
 import {
+  type AgentType,
   CLAUDE_SDK_PROVIDER,
   claudeSdkModelOption,
   clampThinkingLevelForModel,
@@ -34,7 +35,6 @@ import {
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
   type PullRequestInventoryItem,
-  type SessionAgentType,
   type SessionListItem,
   type SessionMode,
   type SessionState,
@@ -985,7 +985,7 @@ function AppContent() {
   const [pendingStart, setPendingStart] = useState<{
     id: string;
     harness: Harness;
-    agentType: SessionAgentType;
+    agentType: AgentType;
     provider?: string;
     modelId?: string;
     thinkingLevel: ThinkingLevel;
@@ -1149,7 +1149,7 @@ function AppContent() {
   // available and fall back to the generic Developer persona otherwise. Never
   // default to a persona the picker won't offer, or the label sticks on an agent
   // the user can no longer reselect.
-  const defaultCodingAgentType = useMemo<SessionAgentType>(
+  const defaultCodingAgentType = useMemo<AgentType>(
     () =>
       availableAgentTypes.includes("workshop")
         ? "workshop"
@@ -1807,7 +1807,7 @@ function AppContent() {
             harness: (isClaudeSdkModel(defaultNewSessionModel)
               ? "claude-sdk"
               : "pi") as Harness,
-            agentType: "assistant" as SessionAgentType,
+            agentType: "assistant" as AgentType,
             provider: defaultNewSessionModel?.provider,
             modelId: defaultNewSessionModel?.id,
             thinkingLevel: defaultNewSessionThinking,
@@ -2980,7 +2980,7 @@ function AppContent() {
     (opts: {
       id?: string;
       harness: Harness;
-      agentType: SessionAgentType;
+      agentType: AgentType;
       provider?: string;
       modelId?: string;
       thinkingLevel?: ThinkingLevel;
@@ -3024,7 +3024,7 @@ function AppContent() {
   // send-blocked hint above the composer carries it.
   const switchStagedAgentType = useCallback(
     (
-      agentType: SessionAgentType,
+      agentType: AgentType,
       opts?: {
         /**
          * This staging BEGINS a session rather than editing the one being
@@ -3877,8 +3877,7 @@ function AppContent() {
   // The displayed session's harness/agentType (server-populated, or staged on the
   // optimistic session). Defaults to a fresh pi assistant on the new-chat landing.
   const displayHarness: Harness = displaySession?.harness ?? "pi";
-  const displayAgentType: SessionAgentType =
-    displaySession?.agentType ?? "assistant";
+  const displayAgentType: AgentType = displaySession?.agentType ?? "assistant";
   // On the new-chat landing, show the agent-type picker in the Composer top-left.
   // It stays visible for a staged (optimistic) non-pi session too — staging a
   // Claude model must not look like the chat already started; the picker only
@@ -4114,7 +4113,7 @@ function AppContent() {
     : undefined;
   // The agentType applied to whatever harness the new chat picks (the top-left
   // agent picker drives this for ALL harnesses now).
-  const agentTypeForPicker: SessionAgentType = displayAgentType;
+  const agentTypeForPicker: AgentType = displayAgentType;
 
   // Model/provider locking is scoped to the displayed session's own first user
   // prompt. Fresh new-chat routes and unprompted sessions must remain free to

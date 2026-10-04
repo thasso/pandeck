@@ -16,7 +16,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, test } from "vitest";
-import { AGENT_TYPES, type AgentType } from "../agentTypes.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import type { AgentTool } from "../mcp/tool.ts";
 import { agentToolsFor, toolGroupsFor } from "./catalog.ts";
 

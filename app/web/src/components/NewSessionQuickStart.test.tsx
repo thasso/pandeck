@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
+  AgentType,
   CredentialProfileSummary,
   ModelOption,
   ProjectRecord,
-  SessionAgentType,
   SessionMode,
   ThinkingLevel,
   WorktreeRecord,
@@ -65,8 +65,8 @@ function render(
     models?: ModelOption[];
     thinkingLevel?: ThinkingLevel;
     loaded?: boolean;
-    agentTypes?: SessionAgentType[];
-    agentType?: SessionAgentType;
+    agentTypes?: AgentType[];
+    agentType?: AgentType;
     projects?: ProjectRecord[];
     projectsLoaded?: boolean;
     selectedProjectId?: string | null;

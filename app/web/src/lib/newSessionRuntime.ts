@@ -1,10 +1,10 @@
 import {
+  type AgentType,
   clampThinkingLevelForModel,
   isClaudeSdkModel,
   type Harness,
   type ModelOption,
   type PromptAttachment,
-  type SessionAgentType,
   type SessionMode,
   type SessionState,
   type ThinkingLevel,
@@ -184,7 +184,7 @@ export function newSessionRuntimeDefaults(
 export function reviewHandoffSessionTarget(input: {
   /** The runtime the composer displays (`firstPromptRuntimeSelection`). */
   runtime: NewSessionRuntimeDefaults;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   credentialProfileId: string;
   /** The user's own prompt; the comment bundle rides along as context. */
   additionalPrompt: string;
@@ -192,7 +192,7 @@ export function reviewHandoffSessionTarget(input: {
 }): {
   kind: "new";
   harness: Harness;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   modelProvider?: string;
   modelId?: string;
   thinkingLevel: ThinkingLevel;

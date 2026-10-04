@@ -1,10 +1,10 @@
-import type { PromptRefineResponse, SessionAgentType } from "@assistant/shared";
+import type { AgentType, PromptRefineResponse } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
 /** Optional session context the refinement endpoint may use. */
 export interface RefineTextOptions {
   sessionId?: string;
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   includeContext?: boolean;
 }
 

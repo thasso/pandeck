@@ -16,11 +16,11 @@
  * buffer to lose on Ctrl-C or a dev reload.
  */
 import {
+  type AgentType,
   DEFAULT_SESSION_SCOPE,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
-  type SessionAgentType,
   type SessionForkOrigin,
   type SessionMode,
   type SessionOutcomeAttention,
@@ -45,7 +45,7 @@ export interface SessionMeta {
   scope: SessionScope;
   purpose: string;
   harness: Harness;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   title: string;
   createdAt: number;
   updatedAt: number;
@@ -99,7 +99,7 @@ export interface SessionMeta {
 interface SessionUpsert {
   id: string;
   harness: Harness;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   /**
    * Set on the FIRST write of a session that is not the user's, before anything
    * live can observe it (`claimScope` is the gate that enforces the ordering).
@@ -146,7 +146,7 @@ interface DbSessionRow {
   scope: string;
   purpose: string;
   harness: Harness;
-  agent_type: SessionAgentType;
+  agent_type: AgentType;
   title: string;
   created_at_ms: number;
   updated_at_ms: number;
@@ -1089,7 +1089,7 @@ function liveDefaultScopeGate(
 function claimScope(input: {
   id: string;
   harness: Harness;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   scope?: SessionScope;
 }): void {
   const scope = input.scope ?? DEFAULT_SESSION_SCOPE;
@@ -1452,7 +1452,7 @@ function createInternalUsageSession(input: {
   purpose: string;
   title: string;
   harness: Harness;
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   provider?: string;
   providerSessionId?: string;
   model?: string;

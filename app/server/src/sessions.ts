@@ -4,9 +4,8 @@ import {
   THINKING_LEVELS,
   isCodingAgentType,
   pendingSessionOutcome,
-  type AgentKind,
+  type AgentType,
   type Harness,
-  type SessionAgentType,
   type SessionAttentionKind,
   type SessionForkOrigin,
   type SessionListItem,
@@ -199,11 +198,11 @@ export function reconcileMissingPiSessionMetadata(): number {
 
 /** A live session's contribution to the list, supplied by the hub. */
 export interface LiveListInfo {
-  kind: AgentKind;
+  kind: AgentType;
   /** Which engine runs this session (pi / claude-sdk). */
   harness?: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   sessionId: string;
   file: string | undefined;
   /** Live title, including the stable unlabeled placeholder before naming settles. */

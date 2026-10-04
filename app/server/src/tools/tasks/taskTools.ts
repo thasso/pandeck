@@ -1,5 +1,5 @@
 import type {
-  AgentKind,
+  AgentType,
   TaskComment,
   TaskDueFilter,
   TaskExternalLink,
@@ -390,7 +390,7 @@ const MANAGE_MUTATION_FIELDS = [
   "sortOrder",
 ] as const satisfies ReadonlyArray<keyof ManageOperation>;
 
-export function taskToolsForKind(_defaultKind: AgentKind) {
+export function taskToolsForKind(_defaultKind: AgentType) {
   return [makeTaskReadTool(), makeTaskManageTool()];
 }
 

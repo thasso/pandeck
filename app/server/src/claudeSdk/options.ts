@@ -7,6 +7,7 @@
 import { isAbsolute, join, resolve as pathResolve } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
+  type AgentType,
   isCodingAgentType,
   type SessionMode,
   type ThinkingLevel,
@@ -19,7 +20,7 @@ import {
 } from "./modelSettings.ts";
 import { planModeToolUnavailableMessage } from "../mcp/tool.ts";
 import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
-import { AGENT_TYPES, type AgentType } from "../agentTypes.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
 import type { PromptAssetOptions } from "../promptAssets.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { ClaudeSdkOptions } from "./sdkSeam.ts";

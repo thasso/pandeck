@@ -1,15 +1,10 @@
 import { existsSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentKind,
-  Harness,
-  SessionAgentType,
-  SessionForkOrigin,
-} from "@assistant/shared";
+import type { AgentType, Harness, SessionForkOrigin } from "@assistant/shared";
 import { readSessionHeaderId } from "./sessionOpen.ts";
 
 function piForkOrigin(
-  kind: AgentKind,
+  kind: AgentType,
   origin: Omit<SessionForkOrigin, "harness" | "agentType">,
 ): SessionForkOrigin {
   return { ...origin, harness: "pi", agentType: kind };
@@ -25,7 +20,7 @@ type ForkEntryLike = {
 };
 
 export function readForkOrigin(
-  kind: AgentKind,
+  kind: AgentType,
   sm: SessionManager,
 ): SessionForkOrigin | undefined {
   // Every entry, not the current BRANCH: where a session came from is a fact
@@ -47,7 +42,8 @@ export function readForkOrigin(
         ? obj.parentSessionFile
         : undefined;
     if (!parentSessionFile) continue;
-    if (!isHarness(obj.harness) || !isAgentType(obj.agentType)) continue;
+    if (!isHarness(obj.harness) || !isForkOriginAgentType(obj.agentType))
+      continue;
     return {
       harness: obj.harness,
       agentType: obj.agentType,
@@ -87,7 +83,12 @@ function isHarness(value: unknown): value is Harness {
   return value === "pi" || value === "claude-sdk";
 }
 
-function isAgentType(value: unknown): value is SessionAgentType {
+/**
+ * The personas a fork-origin entry may name. Narrower than the shared
+ * `isAgentType`: it omits `workflow-coordinator`, so a coordinator's fork
+ * origin is skipped. Widening it is a behavior change of its own.
+ */
+function isForkOriginAgentType(value: unknown): value is AgentType {
   return (
     value === "assistant" ||
     value === "workshop" ||

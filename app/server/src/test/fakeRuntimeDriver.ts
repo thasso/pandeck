@@ -5,7 +5,7 @@
  * `sessionRuntime` singleton (file-backed under the test's temp DATA_DIR), so
  * durable log entries persist normally; only the provider turn itself is faked.
  */
-import type { Harness, SessionAgentType } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 import type {
   AgentRunResult,
   ForkCapability,
@@ -72,7 +72,7 @@ export class FakeRuntimeDriver implements RuntimePromptDriver {
   readonly key: string;
   readonly sessionId: string;
   readonly harness: Harness = "pi";
-  readonly agentType: SessionAgentType = "assistant";
+  readonly agentType: AgentType = "assistant";
   readonly sessionFile: string | undefined = undefined;
   readonly canSteer = false;
   behavior: FakeTurnBehavior = { mode: "success" };

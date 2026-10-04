@@ -14,7 +14,7 @@
  * `memory_manage` remains independent). All processing goes through the bounded
  * processor, so the global call/cost ceilings cover every trigger and mode.
  */
-import type { SessionAgentType } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 import { looksSecretLike } from "@assistant/shared";
 import { getSettings } from "../settings.ts";
 import { userTimeZone } from "../userProfile.ts";
@@ -45,9 +45,7 @@ export function setMemorySchedulerClockForTests(now: () => number): void {
 }
 
 /** Personas whose ordinary turns are captured automatically in v1. */
-function isCaptureEligiblePersona(
-  persona: SessionAgentType | undefined,
-): boolean {
+function isCaptureEligiblePersona(persona: AgentType | undefined): boolean {
   return persona === "assistant" || persona === "personal-assistant";
 }
 
@@ -73,7 +71,7 @@ function detectHighSignal(text: string): boolean {
 interface ObserveTurnInput {
   sessionId: string;
   userTurnId: string;
-  persona: SessionAgentType;
+  persona: AgentType;
   humanText: string;
   assistantText?: string;
   /**

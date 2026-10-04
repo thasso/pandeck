@@ -15,7 +15,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "vitest";
-import { AGENT_TYPES, type AgentType } from "./agentTypes.ts";
+import { AGENT_TYPES } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { toolGroupsFor } from "./tools/catalog.ts";
 
 /** The repository's tracked prompt assets, independent of `ASSISTANT_CWD`. */

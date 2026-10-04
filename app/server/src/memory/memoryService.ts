@@ -10,13 +10,13 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AgentType,
   MemoryCard,
   MemoryKind,
   MemoryScope,
   MemorySourceKind,
   MemoryTemporal,
   MemoryValidationError,
-  SessionAgentType,
 } from "@assistant/shared";
 import {
   isMemoryKind,
@@ -586,12 +586,12 @@ export function expireDueMemories(nowMs = clock()): MemoryCard[] {
 
 /** The resolved effective context for a session, used for scope-intersection matching. */
 export interface MemoryScopeContext {
-  persona: SessionAgentType;
+  persona: AgentType;
   projectId?: string;
 }
 
 export interface ResolveScopeInput {
-  persona: SessionAgentType;
+  persona: AgentType;
   /** Explicit active-session project (standalone or Task-derived); wins over registry hints. */
   projectId?: string;
   /** Registry-derived fallback project when no explicit evidence exists. */

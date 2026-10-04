@@ -10,12 +10,12 @@
  * explicit path for remember/correct/forget and targeted recall.
  */
 import type {
+  AgentType,
   MemoryCard,
   MemoryKind,
   MemoryLifecycleState,
   MemoryScope,
   MemoryTemporal,
-  SessionAgentType,
 } from "@assistant/shared";
 import {
   defineAgentTool,
@@ -46,7 +46,7 @@ const KIND_ENUM = ["preference", "fact", "constraint", "working"];
 const STATE_ENUM = ["active", "superseded", "archived"];
 
 function sessionScope(ctx: ToolCallContext): MemoryScopeContext {
-  const persona = (ctx.session.agentType as SessionAgentType) ?? "assistant";
+  const persona = (ctx.session.agentType as AgentType) ?? "assistant";
   // Shared resolver so a Task-derived project (not just a standalone
   // session→project link) scopes tool reads/writes (Task 94).
   const projectId = resolveSessionProject(ctx.session.sessionId);

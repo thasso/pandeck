@@ -8,12 +8,12 @@
  * `SessionListItem`; the optimistic synthetic session staged on the client sets
  * them too, so these read the same off either shape.
  */
-import type { Harness, SessionAgentType } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 
 /** The subset of a session needed to derive its UI capabilities. */
 interface SessionCaps {
   harness?: Harness;
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
 }
 
 /**

@@ -2,13 +2,13 @@ import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   CommitDisplay,
   DisplayBlock,
   KnowledgeEntryCard,
   ModelOption,
   PushDisplay,
-  SessionAgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -56,7 +56,7 @@ export interface ToolRenderContext {
   /** Ephemeral transcript target for the rendered tool-result body. */
   commentTarget?: { entryId: string; blockIndex: number };
   onCreateDraftSession?: (
-    agentType: SessionAgentType,
+    agentType: AgentType,
     draftText: string,
     notice?: string,
   ) => void;

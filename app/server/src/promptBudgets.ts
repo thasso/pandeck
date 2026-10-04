@@ -27,7 +27,8 @@
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { AGENT_TYPES, type AgentType } from "./agentTypes.ts";
+import { AGENT_TYPES } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { gitOptional } from "./gitExec.ts";
 import { PI_PACKAGE_LABEL } from "./piSdk/piPromptMeasure.ts";
 import {

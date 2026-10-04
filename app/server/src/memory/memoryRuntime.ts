@@ -11,9 +11,9 @@
  * Both key off the same accepted user-turn id.
  */
 import type {
+  AgentType,
   MemoryLoadBatch,
   MemoryLoadDeliveryState,
-  SessionAgentType,
 } from "@assistant/shared";
 import { getSettings } from "../settings.ts";
 import { userTimeZone } from "../userProfile.ts";
@@ -87,13 +87,13 @@ export interface MemoryDeliveryDecision {
   memoryBlock?: string;
   injectedChars: number;
   /** Persona + project used, for diagnostics. */
-  persona: SessionAgentType;
+  persona: AgentType;
   projectId?: string;
 }
 
 interface DriverLike {
   readonly sessionId: string;
-  readonly agentType: SessionAgentType;
+  readonly agentType: AgentType;
 }
 
 /**

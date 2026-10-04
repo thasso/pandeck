@@ -2,7 +2,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentType } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { toolGroupsFor } from "./tools/catalog.ts";
 import { rankToolSearch } from "./tools/findTools.ts";

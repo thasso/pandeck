@@ -52,7 +52,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentType } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { readClaudeSdkRecord } from "./claudeSdk/claudeSdkRecords.ts";
 import { DATA_DIR } from "./config.ts";
 import { MCP_SERVER_NAME } from "./mcp/names.ts";

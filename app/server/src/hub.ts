@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import type {
-  AgentKind,
+  AgentType,
   BackgroundWorkItemSummary,
   BroadcastTopic,
   DisplayMessage,
@@ -24,7 +24,6 @@ import { pendingApprovalSessionIds } from "./pendingApprovals.ts";
 import { choosingTaskSessionIds } from "./pullRequestCards.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
-import type { AgentType } from "./agentTypes.ts";
 import type { SessionPromptEvidence } from "./promptConditions.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -442,7 +441,7 @@ class SessionHub {
 
   /** A fresh session for `kind`, carrying over the caller's model/thinking level. */
   async acquireNew(
-    kind: AgentKind,
+    kind: AgentType,
     model?: AgentSession["model"],
     thinkingLevel?: ThinkingLevel,
     opts?: {
@@ -465,7 +464,7 @@ class SessionHub {
    * {@link piStore.acquireExisting} for the id-guard semantics.
    */
   async acquireExisting(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     expectedId?: string,
   ): Promise<PiLiveSession> {
@@ -473,7 +472,7 @@ class SessionHub {
   }
 
   async forkSession(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     nativeEntryId: string,
     position: "before" | "at",
@@ -1259,7 +1258,7 @@ class SessionHub {
   }
 
   async renameSession(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     id: string,
     title: string,
@@ -1468,7 +1467,7 @@ class SessionHub {
 
   /** Resolve a pi session image to raw bytes (live branch or cold reopen). */
   async resolvePiImage(
-    kind: AgentKind,
+    kind: AgentType,
     sessionId: string,
     entryId: string,
     imageIndex: number,

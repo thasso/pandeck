@@ -38,7 +38,7 @@ import { pullRequestKey } from "./pullRequestIdentity.ts";
 /** Context needed to (re)draft and create the pull request; never sent to the client. */
 export interface PullRequestCardContext {
   repoRoot: string;
-  sessionKind: import("@assistant/shared").AgentKind;
+  sessionKind: import("@assistant/shared").AgentType;
   sessionId: string;
   headBranch: string;
   baseBranch: string;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DisplayMessage, SessionAgentType } from "@assistant/shared";
+import type { AgentType, DisplayMessage } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
   isPersonalAssistantAgentType,
@@ -55,7 +55,7 @@ export function isPermanentAssistantSession(sessionId: string): boolean {
 /** The identity a session-list row needs to be recognized as the singleton. */
 export interface SessionRowIdentity {
   id: string;
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
 }
 
 /**

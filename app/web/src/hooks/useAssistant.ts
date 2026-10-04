@@ -56,7 +56,7 @@ import type {
   DisplayMessage,
   GoogleConnectionStatus,
   Harness,
-  SessionAgentType,
+  AgentType,
   GoogleSettingsPatch,
   ModelOption,
   MessageTarget,
@@ -6087,7 +6087,7 @@ function applyTimelineBlockLoaded(
 export interface HarnessSendInput {
   id: string;
   harness: Harness;
-  agentType: SessionAgentType;
+  agentType: AgentType;
   text: string;
   attachments?: PromptAttachment[];
   modelProvider?: string;
@@ -6157,7 +6157,7 @@ export interface AssistantActions {
   requestSettings: () => void;
   /** Create a fresh pi bootstrap session of the given agent type (assistant/workshop). */
   newSession: (
-    agentType: SessionAgentType,
+    agentType: AgentType,
     model?: { provider: string; id: string },
     thinkingLevel?: ThinkingLevel,
   ) => void;
@@ -6228,7 +6228,7 @@ export interface AssistantActions {
     },
   ) => void;
   createDraftSession: (
-    agentType: SessionAgentType,
+    agentType: AgentType,
     draftText: string,
     notice?: string,
   ) => void;
@@ -6424,7 +6424,7 @@ export interface AssistantActions {
       | {
           kind: "new";
           harness: Harness;
-          agentType: SessionAgentType;
+          agentType: AgentType;
           modelProvider?: string;
           modelId?: string;
           thinkingLevel?: ThinkingLevel;

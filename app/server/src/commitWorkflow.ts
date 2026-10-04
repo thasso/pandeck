@@ -13,7 +13,7 @@ import { isAbsolute, join, relative } from "node:path";
 import type { AgentSession, SessionManager } from "./piSdk/index.ts";
 import type { ToolSessionManager } from "./mcp/tool.ts";
 import type {
-  AgentKind,
+  AgentType,
   CommitDisplay,
   CommitFileChange,
   CommitTotals,
@@ -74,7 +74,7 @@ export interface CommitWorkflowOptions {
   session?: AgentSession;
   /** Harness-neutral session manager supplied by an AgentTool caller. */
   sessionManager?: Pick<ToolSessionManager, "getBranch" | "appendCustomEntry">;
-  sessionKind?: AgentKind;
+  sessionKind?: AgentType;
   sessionId?: string;
   /** Working directory whose enclosing git repo should be committed. Defaults to the app CWD. */
   cwd?: string;
@@ -704,7 +704,7 @@ function renderPaths(paths: string[]): string {
 }
 
 function commitRelevantTasks(
-  kind: AgentKind | undefined,
+  kind: AgentType | undefined,
   sessionId: string | undefined,
 ): CommitTaskContext[] {
   if (!kind || !sessionId) return [];

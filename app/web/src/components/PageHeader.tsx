@@ -9,7 +9,7 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import type { Harness, SessionAgentType } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import {
   primarySlotShowsReview,
@@ -307,7 +307,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
  */
 export function sessionHeaderIcon(
   variant: "session" | "context",
-  identity: { harness?: Harness; agentType?: SessionAgentType } | undefined,
+  identity: { harness?: Harness; agentType?: AgentType } | undefined,
 ): { icon: ReactNode; iconTone: PageHeaderIconTone } {
   if (variant === "context")
     return { icon: <ClipboardList size={16} />, iconTone: "accent" };

@@ -26,12 +26,12 @@ import {
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   AppearanceSettings,
   DisplayAttachment,
   DisplayMessage,
   ModelOption,
-  SessionAgentType,
   SessionListItem,
   TaskStatus,
   ThinkingLevel,
@@ -774,7 +774,7 @@ interface Props {
   view: TranscriptViewPrefs;
   onAcceptCommitDryRun?: (entryId: string) => void;
   onCreateDraftSession?: (
-    agentType: SessionAgentType,
+    agentType: AgentType,
     draftText: string,
     notice?: string,
   ) => void;
@@ -890,11 +890,7 @@ interface MessageRowProps {
   view: TranscriptViewPrefs;
   onAcceptCommitDryRun?: ((entryId: string) => void) | undefined;
   onCreateDraftSession?:
-    | ((
-        agentType: SessionAgentType,
-        draftText: string,
-        notice?: string,
-      ) => void)
+    | ((agentType: AgentType, draftText: string, notice?: string) => void)
     | undefined;
   models?: ModelOption[] | undefined;
   defaultModel?: ModelOption | undefined;

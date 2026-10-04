@@ -4,7 +4,7 @@
  * runtime-controlled sessions. Leaf module — must not import `hub.ts`.
  */
 import type {
-  AgentKind,
+  AgentType,
   BroadcastTopic,
   ContextInfo,
   DisplayMessage,
@@ -13,7 +13,6 @@ import type {
   SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
-import type { AgentType } from "./agentTypes.ts";
 import type { SyntheticToolHost } from "./hostSlashCommands.ts";
 
 /**
@@ -70,12 +69,13 @@ export interface Viewer {
  * facade, while other mutations narrow to the runtime-capable concrete driver as
  * needed.
  *
- * Alongside the persona `kind`, every driver exposes its {@link Harness},
- * {@link AgentType}, and our session `id` (= {@link sessionId}; for pi this is
- * the pi session id — we do NOT mint a distinct uuid for pi sessions).
+ * `kind` and `agentType` both carry the session's persona ({@link AgentType});
+ * every driver also exposes its {@link Harness} and our session `id` (=
+ * {@link sessionId}; for pi this is the pi session id — we do NOT mint a
+ * distinct uuid for pi sessions).
  */
 export interface HarnessDriver extends SyntheticToolHost {
-  readonly kind: AgentKind;
+  readonly kind: AgentType;
   /** Which engine runs this session (pi / claude-sdk). */
   readonly harness: Harness;
   /** Which persona/toolset this session emulates (independent of harness). */

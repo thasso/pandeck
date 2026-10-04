@@ -28,11 +28,11 @@
  * the prompt.
  */
 import type {
+  AgentType,
   SessionMode,
   SessionToolExposure,
   SessionToolLoadEvent,
 } from "@assistant/shared";
-import type { AgentType } from "../agentTypes.ts";
 import {
   integrationGatedActiveToolNames,
   modeGatedActiveToolNames,

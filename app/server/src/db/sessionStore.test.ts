@@ -230,7 +230,7 @@ test("SQLite session store does not constrain future persona names", () => {
   const storedOk = sessionStore.upsert({
     id,
     harness: "pi",
-    agentType: "future-persona" as import("@assistant/shared").SessionAgentType,
+    agentType: "future-persona" as import("@assistant/shared").AgentType,
     title: "Future persona session",
     createdAt: 1,
     updatedAt: 2,
@@ -242,7 +242,7 @@ test("SQLite session store does not constrain future persona names", () => {
   assert.ok(stored, "future persona session was stored");
   assert.equal(
     stored.agentType,
-    "future-persona" as import("@assistant/shared").SessionAgentType,
+    "future-persona" as import("@assistant/shared").AgentType,
   );
 });
 

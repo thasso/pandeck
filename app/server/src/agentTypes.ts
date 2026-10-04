@@ -1,11 +1,11 @@
 /**
  * Harness-independent agent-type registry.
  *
- * An {@link AgentType} (`assistant` | `workshop` | …) is the persona a session
- * presents: its system prompt, its tool/permission policy, and which tools it
- * exposes. It is INDEPENDENT of the harness (pi / claude-sdk) that actually
- * runs it. This module is the single source of truth for those definitions;
- * each harness applier consumes the relevant fields:
+ * An `AgentType` (`assistant` | `workshop` | …, from `@assistant/shared`) is
+ * the persona a session presents: its system prompt, its tool/permission
+ * policy, and which tools it exposes. It is INDEPENDENT of the harness (pi /
+ * claude-sdk) that actually runs it. This module is the single source of truth
+ * for those definitions; each harness applier consumes the relevant fields:
  *   - pi (`buildAgentOptions` in {@link ./piSdk/options.ts}) consumes
  *     {@link AgentTypeDef.systemPrompt} and builds the pi tool policy there;
  *   - claude-sdk (the session MCP server) consumes {@link AgentTypeDef.systemPrompt}
@@ -16,6 +16,7 @@
  * its tool groups, which also carry the eager/deferred loading tiers and
  * integration gates.
  */
+import type { AgentType } from "@assistant/shared";
 import type { AgentTool } from "./mcp/tool.ts";
 import type { PromptAssetOptions } from "./promptAssets.ts";
 import {
@@ -26,22 +27,6 @@ import {
   workflowCoordinatorSystemPromptText,
 } from "./agents.ts";
 import { agentToolsFor } from "./tools/catalog.ts";
-
-/**
- * Which assistant persona/toolset a session emulates (independent of harness).
- *
- * `personal-assistant` is the permanent singleton Personal Assistant. It shares
- * the ordinary Assistant's integration-tool universe but owns separate behavior
- * guidance and always receives the permanent profile suffix. It is created only
- * by the server-owned singleton acquisition path, never through ordinary session
- * creation or persona pickers.
- */
-export type AgentType =
-  | "assistant"
-  | "workshop"
-  | "developer"
-  | "personal-assistant"
-  | "workflow-coordinator";
 
 /**
  * The harness-independent definition of an agent. Owns the system prompt and

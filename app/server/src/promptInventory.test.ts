@@ -16,7 +16,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "vitest";
-import { AGENT_TYPES, type AgentType } from "./agentTypes.ts";
+import { AGENT_TYPES } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { PACKAGED_PROMPTS_DIR } from "./config.ts";
 import {
   loadPiPromptBuilder,

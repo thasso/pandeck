@@ -13,7 +13,7 @@
  */
 import { REVIEW_REPORT_CONVENTION } from "@assistant/shared";
 import type {
-  SessionAgentType,
+  AgentType,
   SessionListItem,
   TaskSummary,
   WorktreeRecord,
@@ -335,8 +335,8 @@ export function reviewContextForSession(
  */
 export function reviewAgentType(
   context: Pick<SessionHandoffContext, "worktreeId">,
-  codingAgentType: SessionAgentType,
-): SessionAgentType {
+  codingAgentType: AgentType,
+): AgentType {
   if (context.worktreeId) return codingAgentType;
   return codingAgentType === "developer" ? "assistant" : codingAgentType;
 }
