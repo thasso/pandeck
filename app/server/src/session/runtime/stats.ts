@@ -16,6 +16,7 @@ import type {
   AgentUsage,
   SessionSnapshot,
 } from "@assistant/shared/session";
+import { estimateTokens } from "./liveBlocks.ts";
 
 /** Default context window when no assistant entry has reported one yet. */
 const DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -142,9 +143,4 @@ function currentTurnEstimate(
     thinking: estimateTokens(thinking),
     toolCalls: toolStreams.length,
   };
-}
-
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  return Math.max(1, Math.ceil(text.length / 4));
 }

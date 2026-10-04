@@ -19,7 +19,8 @@ tools). The pi harness consumes AgentTools directly via
 - `tool.ts` owns the `AgentTool`/`ToolResult`/`ToolCallContext`/`ToolSession`
   contracts, including the `sideEffects` axis, and helpers (`defineAgentTool`,
   `jsonResult`, `uniqueAgentTools`, the shared Plan denial message).
-- `meta.ts` owns the MCP `_meta` key contract: `pa/*` keys for the pi bridge
+- `meta.ts` owns the MCP `_meta` key contract: `pa/*` keys that no in-repo
+  client sends or reads, honoured for a possible external MCP client
   (`pa/toolCallId`, `pa/terminate`, `pa/details`, `pa/pi`, `pa/active`) and
   `anthropic/*` keys for the Claude SDK's native tool search
   (`anthropic/alwaysLoad` on eager-tier tools, `anthropic/searchHint` from

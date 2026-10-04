@@ -47,10 +47,10 @@ Four layers, each depending only on the ones below it:
    - The models and usage ports list and resolve models per credential profile
      and read subscription usage.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
-   the only place their SDK package is imported. Each session class composes the
-   shared session host kit (`session/host/`: viewer set, idle eviction,
-   synthetic host-command turns, display-block helpers) instead of carrying a
-   copy.
+   the only place their SDK package is imported. Each session class composes a
+   shared session kit (viewer set, idle eviction, synthetic host-command turns)
+   instead of carrying a copy; the live display-block helpers already live in
+   `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    Two pieces of the folder are still migration work: the adapter bridge
@@ -91,13 +91,13 @@ mapping.
 | Step | Change                                                                        | State  |
 | ---- | ----------------------------------------------------------------------------- | ------ |
 | 1    | This contract and the boundary ratchet                                        | landed |
-| 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | open   |
+| 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | landed |
 | 3    | One persona type instead of `AgentKind`/`AgentType`/`SessionAgentType`        | open   |
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | open   |
 | 5    | `runOneShot()` and its 10 callers                                             | open   |
 | 6    | Models and usage ports                                                        | open   |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
-| 8    | Shared session host kit                                                       | open   |
+| 8    | Shared session kit                                                            | open   |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |

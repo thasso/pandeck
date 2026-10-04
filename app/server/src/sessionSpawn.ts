@@ -23,7 +23,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   CLAUDE_SDK_PROVIDER,
-  kindFromHarnessAgentType,
   THINKING_LEVELS,
   supportedThinkingLevelsForModel,
   type ApprovalBody,
@@ -669,16 +668,11 @@ const REAL_DEPS: SessionSpawnDeps = {
       );
     const live = await (
       await harnessHub()
-    ).acquireNew(
-      kindFromHarnessAgentType("pi", input.agentType),
-      model,
-      input.thinkingLevel,
-      {
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        credentialProfileId: input.credentialProfileId,
-        promptEvidence: input.promptEvidence,
-      },
-    );
+    ).acquireNew(input.agentType, model, input.thinkingLevel, {
+      ...(input.cwd ? { cwd: input.cwd } : {}),
+      credentialProfileId: input.credentialProfileId,
+      promptEvidence: input.promptEvidence,
+    });
     sessionStore.upsert({
       id: live.sessionId,
       harness: "pi",

@@ -1,8 +1,9 @@
 /**
  * The generic per-session MCP server exposing the app's own {@link AgentTool}s
- * to ANY harness. The Claude SDK mounts `server` in-process (`mcpServers.pa`,
- * type "sdk"); the pi harness consumes it through the MCP client bridge in
- * `piSdk/mcpToolBridge.ts`.
+ * over MCP. The Claude SDK mounts `server` in-process (`mcpServers.pa`, type
+ * "sdk"); no other client connects today. The pi harness does not use it: it
+ * runs the same tools through the direct adapter in
+ * `piSdk/agentToolAdapter.ts`.
  *
  * Wire contract beyond plain MCP (all under `_meta`, see ./meta.ts):
  *  - request `_meta["pa/toolCallId"]`: caller-supplied tool-call id (falls back
@@ -10,11 +11,11 @@
  *  - progress: when the caller sends a `progressToken`, tool `ctx.progress`
  *    partials are emitted as `notifications/progress` with the partial
  *    {@link ToolResult} JSON-encoded in `message`;
- *  - result `_meta["pa/terminate"]`: pi's stop-after-this-batch hint;
+ *  - result `_meta["pa/terminate"]`: the tool's stop-after-this-batch flag;
  *  - result `_meta["pa/details"]`: the tool's `details` (never
  *    `structuredContent` — see {@link toCallToolResult});
- *  - listed tool `_meta["pa/pi"]`: prompt extras (snippet/guidelines/execution
- *    mode) and `_meta["pa/active"]`: active flag in `listMode: "all"`.
+ *  - listed tool `_meta["pa/pi"]`: the tool's `executionMode`, and
+ *    `_meta["pa/active"]`: active flag in `listMode: "all"`.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -42,8 +43,8 @@ export interface SessionToolServerConfig {
   /**
    * "active" — tools/list returns only currently-usable tools (Claude refreshes
    * its list on tools/list_changed). "all" — list every tool with an
-   * `_meta["pa/active"]` flag: pi cannot register tools mid-session, so its
-   * bridge registers the full universe up front and toggles the active set.
+   * `_meta["pa/active"]` flag, for a client that registers the full universe up
+   * front and toggles the active set. No production caller uses "all" today.
    */
   listMode: "active" | "all";
   /** Resolve the toolset fresh on every list/call (catalog + integration-gate state). */
@@ -210,8 +211,8 @@ export function createSessionToolServer(
     });
   };
   // Integration-gate changes → tools/list_changed, so every connected client
-  // (Claude directly, pi via its bridge) re-lists and picks up the new active
-  // set. Owned here so no harness wiring can forget it.
+  // (Claude today) re-lists and picks up the new active set. Owned here so no
+  // harness wiring can forget it.
   const unsubscribeIntegrations =
     subscribeIntegrationToolChanges(notifyToolsChanged);
 

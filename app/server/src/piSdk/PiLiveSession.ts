@@ -88,6 +88,11 @@ import {
 } from "../session/adapters/pi.ts";
 import type { PromptableAdapter } from "../session/adapters/contract.ts";
 import {
+  appendText,
+  estimateTokens,
+  updateTool,
+} from "../session/runtime/liveBlocks.ts";
+import {
   NativeAdapterEventSource,
   perTurnUsage,
   type AdapterEventListener,
@@ -229,32 +234,7 @@ function assistantErrorMetadata(message: unknown): {
   };
 }
 
-/* ----------------------------- block helpers ----------------------------- */
-
-function appendText(
-  blocks: DisplayBlock[],
-  kind: "text" | "thinking",
-  delta: string,
-): void {
-  const last = blocks[blocks.length - 1];
-  if (last && last.kind === kind) last.text += delta;
-  else blocks.push({ kind, text: delta });
-}
-
-function updateTool(
-  blocks: DisplayBlock[],
-  toolId: string,
-  patch: Partial<Extract<DisplayBlock, { kind: "tool" }>>,
-): void {
-  for (const b of blocks)
-    if (b.kind === "tool" && b.toolId === toolId) Object.assign(b, patch);
-}
-
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  // Fast, provider-agnostic live estimate. Completed turns use pi's real provider usage.
-  return Math.max(1, Math.ceil(text.length / 4));
-}
+/* -------------------------------- helpers -------------------------------- */
 
 function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
   return {

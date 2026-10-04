@@ -5,7 +5,6 @@ import {
   REVIEW_REPORT_CONVENTION,
   REVIEW_RESPONSE_CONVENTION,
   THINKING_LEVELS,
-  kindFromHarnessAgentType,
   type PromptAttachment,
   type ReviewFinding,
   type ThinkingLevel,
@@ -161,7 +160,7 @@ const REAL_DEPS: WorkflowAgentExecutorDeps = {
   findPiModel: findModelForProfile,
   acquirePi: async (input) => {
     const session = await hub.acquireNew(
-      kindFromHarnessAgentType("pi", input.agentType),
+      input.agentType,
       input.model ?? undefined,
       input.thinkingLevel,
       {
