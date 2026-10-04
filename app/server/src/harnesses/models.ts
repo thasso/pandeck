@@ -18,8 +18,10 @@ import {
   findModelForProfile,
   listModels,
   listModelsForProfile,
+  refreshModels,
   toModelOption,
 } from "../piSdk/models.ts";
+import { selectPiModelWithFallback } from "../piSdk/oneShot.ts";
 import { getSettings } from "../settings.ts";
 
 function claudeModels(settings: AppSettings): ModelOption[] {
@@ -72,4 +74,41 @@ export function storedSessionModelOption(
   if (!provider) return undefined;
   const model = findModel(provider, modelId);
   return model ? toModelOption(model) : undefined;
+}
+
+/**
+ * The pi model handle a new pi session runs on, resolved on its account:
+ * undefined when that account cannot run it. A Claude session names its model
+ * by id and needs no handle.
+ */
+export function piModelForAccount(
+  credentialProfileId: string,
+  provider: string,
+  modelId: string,
+): ReturnType<typeof findModelForProfile> {
+  return findModelForProfile(credentialProfileId, provider, modelId);
+}
+
+/** The same handle from the shared registry, for a selection with no account. */
+export function piModel(
+  provider: string,
+  modelId: string,
+): ReturnType<typeof findModel> {
+  return findModel(provider, modelId);
+}
+
+/**
+ * The pi model a configured slot names on its account, else the helper
+ * fallback; undefined when the account can run neither.
+ */
+export function piModelForSlot(
+  slot: { provider: string; modelId: string },
+  credentialProfileId: string,
+): ReturnType<typeof selectPiModelWithFallback> {
+  return selectPiModelWithFallback(slot, credentialProfileId);
+}
+
+/** Re-read pi's model registry from disk; the error says what was unreadable. */
+export function refreshPiModels(): ReturnType<typeof refreshModels> {
+  return refreshModels();
 }

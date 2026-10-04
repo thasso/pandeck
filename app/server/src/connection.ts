@@ -84,11 +84,6 @@ import { testSlackHuddleSettings, testSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
 import { testJiraSettings } from "./jiraSettings.ts";
-import {
-  findModel,
-  findModelForProfile,
-  refreshModels,
-} from "./piSdk/models.ts";
 import { hub } from "./hub.ts";
 import {
   isLiveSession,
@@ -100,7 +95,12 @@ import { randomUUID } from "node:crypto";
 import { createSession, type PiModel } from "./harnesses/create.ts";
 import { prepareFork } from "./harnesses/fork.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
-import { pickerModels } from "./harnesses/models.ts";
+import {
+  pickerModels,
+  piModel,
+  piModelForAccount,
+  refreshPiModels,
+} from "./harnesses/models.ts";
 import {
   firstSendEngine,
   type FirstSendRefusal,
@@ -2850,7 +2850,7 @@ export class Connection implements Viewer {
           let model: PiModel | undefined;
           if (target.modelProvider && target.modelId) {
             model =
-              (await findModelForProfile(
+              (await piModelForAccount(
                 profileId,
                 target.modelProvider,
                 target.modelId,
@@ -4104,7 +4104,7 @@ export class Connection implements Viewer {
 
   private async onRefreshModels(requestId: string): Promise<void> {
     try {
-      const { error } = await refreshModels();
+      const { error } = await refreshPiModels();
       const models = pickerModels();
       this.send({ type: "models", models, requestId });
       // The refreshed list is the receipt; only a broken models.json or an
@@ -4291,11 +4291,8 @@ export class Connection implements Viewer {
           if (useClaudeSdk)
             return createSession({ harness: "claude-sdk", modelId, ...start });
           const model =
-            (await findModelForProfile(
-              credentialProfileId,
-              provider,
-              modelId,
-            )) ?? undefined;
+            (await piModelForAccount(credentialProfileId, provider, modelId)) ??
+            undefined;
           return createSession({ harness: "pi", model, ...start });
         });
       }
@@ -4459,7 +4456,7 @@ export class Connection implements Viewer {
       ? undefined
       : await this.resolveViewedModel(carried);
     if (selectedModel) {
-      const found = await findModelForProfile(
+      const found = await piModelForAccount(
         credentialProfileId,
         selectedModel.provider,
         selectedModel.id,
@@ -5797,12 +5794,12 @@ export class Connection implements Viewer {
    */
   private async resolveViewedModel(
     selection: ViewedModelSelection,
-  ): Promise<ReturnType<typeof findModel>> {
+  ): Promise<ReturnType<typeof piModel>> {
     const model = selection.model;
     if (!model) return undefined;
     return model.account
-      ? findModelForProfile(model.account, model.provider, model.id)
-      : findModel(model.provider, model.id);
+      ? piModelForAccount(model.account, model.provider, model.id)
+      : piModel(model.provider, model.id);
   }
 
   /* --------------------------------- viewer -------------------------------- */

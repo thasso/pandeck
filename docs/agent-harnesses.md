@@ -109,12 +109,20 @@ Four layers, each depending only on the ones below it:
    - The models port (`harnesses/models.ts`) lists the models the pickers offer
      (`pickerModels`) and an account can run (`modelsForAccount`), answers
      whether an account offers an exact model (`accountOffersModel`), and
-     renders a stored session's model (`storedSessionModelOption`). The
-     Claude-only curated options sit in `harnesses/curatedModels.ts`, which
-     loads no engine SDK, so row projections stay cheap. The usage port
+     renders a stored session's model (`storedSessionModelOption`). It also
+     resolves the pi model handle a pi session is created with
+     (`NewSession.model`): on an account (`piModelForAccount`), from the shared
+     registry (`piModel`), or for a configured slot with its helper fallback
+     (`piModelForSlot`), and re-reads pi's registry (`refreshPiModels`); the
+     caller still says what a missing one means. The Claude-only curated options
+     sit in `harnesses/curatedModels.ts`, which loads no engine SDK, so row
+     projections and the Claude adapter stay cheap: an option by id, the alias a
+     model id runs as (`claudeModelAlias`) and the curated ids. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
-     redeems OpenAI reset credits. The pi model handle a session is created with
-     still comes from the engine (`NewSession.model`), resolved by the caller.
+     redeems OpenAI reset credits.
+   - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
+     starts in the engines: pi's tool binaries, its model provider sync, each
+     account's model runtime and the OpenAI account login.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -127,9 +135,8 @@ Four layers, each depending only on the ones below it:
    helpers live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
-   Two pieces of the folder are still migration work: the adapter bridge
-   `session/adapters/claudeSdk.ts` imports the engine's `modelSettings.ts`, and
-   `session/planHint.ts` branches on a harness id. Both are pinned below.
+   One piece of the folder is still migration work: `session/planHint.ts`
+   branches on a harness id, pinned below.
 
 `HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
 its account provider, its model-picker provider (Claude only; pi models keep
@@ -182,7 +189,9 @@ table when a later step needs them.
 | 11b  | Spawn and the workflow create through `createSession`                         | landed |
 | 11c  | Every other creation caller on `createSession`                                | landed |
 | 11d  | Fork, delete and rename through the registry                                  | landed |
-| 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
+| 12a  | Model resolution and engine boot through `harnesses/`                         | landed |
+| 12b  | The remaining engine imports and harness comparisons outside measurement      | open   |
+| 12c  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
 after 7.

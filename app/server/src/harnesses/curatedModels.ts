@@ -6,6 +6,8 @@
  */
 import type { Harness, ModelOption } from "@assistant/shared";
 import {
+  CLAUDE_SDK_MODELS,
+  claudeSdkModelAlias,
   claudeSdkModelOption,
   knownClaudeSdkModelAlias,
 } from "../claudeSdk/modelSettings.ts";
@@ -22,4 +24,16 @@ export function curatedModelOption(
   if (harness !== "claude-sdk") return undefined;
   const alias = knownClaudeSdkModelAlias(modelId);
   return alias ? claudeSdkModelOption(alias) : undefined;
+}
+
+/** The Claude SDK alias a model id runs as; an unknown id runs as the default. */
+export function claudeModelAlias(
+  id: string | undefined,
+): ReturnType<typeof claudeSdkModelAlias> {
+  return claudeSdkModelAlias(id);
+}
+
+/** Every model id the Claude SDK's curated list offers. */
+export function curatedClaudeModelIds(): string[] {
+  return CLAUDE_SDK_MODELS.map((model) => model.id);
 }

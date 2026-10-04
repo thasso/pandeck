@@ -12,7 +12,10 @@ import type {
   PromptDelivery,
   SessionConfigModel,
 } from "@assistant/shared/session";
-import { claudeSdkModelAlias } from "../../claudeSdk/modelSettings.ts";
+import {
+  claudeModelAlias,
+  curatedClaudeModelIds,
+} from "../../harnesses/curatedModels.ts";
 import type { ProviderBinding } from "../log/identity.ts";
 import type {
   AdapterEvent,
@@ -172,7 +175,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
     await this.driver.setModel(model.id);
     this.emit({
       type: "sessionConfigChanged",
-      model: { provider: PROVIDER, id: claudeSdkModelAlias(model.id) },
+      model: { provider: PROVIDER, id: claudeModelAlias(model.id) },
     });
   }
 
@@ -182,9 +185,7 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   }
 
   async listModels(): Promise<SessionConfigModel[]> {
-    const { CLAUDE_SDK_MODELS } =
-      await import("../../claudeSdk/modelSettings.ts");
-    return CLAUDE_SDK_MODELS.map((m) => ({ provider: PROVIDER, id: m.id }));
+    return curatedClaudeModelIds().map((id) => ({ provider: PROVIDER, id }));
   }
 
   dispose(): void {

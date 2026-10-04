@@ -32,7 +32,7 @@ import {
   type PiModel,
 } from "../harnesses/create.ts";
 import { hub } from "../hub.ts";
-import { findModelForProfile } from "../piSdk/models.ts";
+import { piModelForAccount } from "../harnesses/models.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
 import {
   InactiveSessionError,
@@ -125,7 +125,7 @@ const REAL_DEPS: WorkflowAgentExecutorDeps = {
   newSessionId: randomUUID,
   acquireById: async (id) =>
     (await hub.acquireById(id)) as RuntimePromptDriver | undefined,
-  findPiModel: findModelForProfile,
+  findPiModel: piModelForAccount,
   // Called through, never bound at load: creation reaches the tool catalog,
   // which may still be initializing this module.
   create: (spec) => createSession(spec),

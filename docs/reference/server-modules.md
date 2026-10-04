@@ -156,13 +156,14 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `harnesses/` is the seam between app code and the two engines
   (`docs/agent-harnesses.md`): `oneShot.ts` (`runOneShot`, every helper run),
   `models.ts` (picker and per-account model lists, exact availability, stored
-  session model display), `curatedModels.ts` (the Claude curated options,
-  loading no engine SDK), `usage.ts` (per-account usage, OpenAI reset-credit
-  redeem), `registry.ts` (`harnessRegistry`: id routing, resident sessions,
-  store wiring, rename and the engine half of a delete), `firstSend.ts` (each
-  engine's admission and preparation for a session's first send), `create.ts`
-  (`createSession`: each engine's creation sequence) and `fork.ts`
-  (`prepareFork`: each engine's fork cut and refusals).
+  session model display, pi model handles for creation), `curatedModels.ts` (the
+  Claude curated options and aliases, loading no engine SDK), `boot.ts` (engine
+  runtime setup the server boot starts), `usage.ts` (per-account usage, OpenAI
+  reset-credit redeem), `registry.ts` (`harnessRegistry`: id routing, resident
+  sessions, store wiring, rename and the engine half of a delete),
+  `firstSend.ts` (each engine's admission and preparation for a session's first
+  send), `create.ts` (`createSession`: each engine's creation sequence) and
+  `fork.ts` (`prepareFork`: each engine's fork cut and refusals).
   `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock

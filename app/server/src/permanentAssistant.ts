@@ -11,7 +11,7 @@ import { errorText } from "./errors.ts";
 import { createSession } from "./harnesses/create.ts";
 import type { HarnessDriver } from "./harness.ts";
 import { hub } from "./hub.ts";
-import { selectPiModelWithFallback } from "./piSdk/oneShot.ts";
+import { piModelForSlot } from "./harnesses/models.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import {
   promptRuntimeSession,
@@ -267,7 +267,7 @@ async function acquireOrCreatePermanentAssistant(
       credentialProfileId,
     });
   } else {
-    const model = await selectPiModelWithFallback(profile, credentialProfileId);
+    const model = await piModelForSlot(profile, credentialProfileId);
     if (!model)
       throw new Error(
         "No model is available for the permanent Personal Assistant",

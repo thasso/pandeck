@@ -62,8 +62,8 @@ import {
   startOpenAiProfileLogin,
   syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
-} from "./piSdk/models.ts";
-import { linkPiToolBinaries } from "./piSdk/toolBinaries.ts";
+  linkPiToolBinaries,
+} from "./harnesses/boot.ts";
 import { getDayState } from "./dayScan/dayState.ts";
 import {
   runDayCollection,

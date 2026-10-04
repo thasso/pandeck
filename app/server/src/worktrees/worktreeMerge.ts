@@ -31,7 +31,7 @@ import {
   formatCommitMessage,
   generateCommitMessageJson,
 } from "../commitAgent.ts";
-import { claudeSdkModelAlias } from "../claudeSdk/modelSettings.ts";
+import { claudeModelAlias } from "../harnesses/curatedModels.ts";
 import {
   getWorktree,
   listWorktrees,
@@ -421,12 +421,12 @@ async function spawnMergeAgent(
         );
       driver = await createSession({
         harness: "claude-sdk",
-        modelId: claudeSdkModelAlias(settings.modelId),
+        modelId: claudeModelAlias(settings.modelId),
         ...start,
       });
     } else {
-      const { findModelForProfile } = await import("../piSdk/models.ts");
-      const model = await findModelForProfile(
+      const { piModelForAccount } = await import("../harnesses/models.ts");
+      const model = await piModelForAccount(
         credentialProfileId,
         settings.provider,
         settings.modelId,
