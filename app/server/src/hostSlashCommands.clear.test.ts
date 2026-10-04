@@ -82,7 +82,9 @@ function fakeHost(
     },
     finishSyntheticCard: (result: HostCommandResult) => {
       state.running = false;
-      if (result.kind === "contextClear") cards.push(result.contextClear);
+      if (result.kind !== "contextClear")
+        throw new Error(`unexpected ${result.kind} card`);
+      cards.push(result.contextClear);
     },
     clearContext: async () => {
       calls.push("clear");

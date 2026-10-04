@@ -71,9 +71,9 @@ Four layers, each depending only on the ones below it:
    shared session kit (`sessionKit/`) instead of carrying a copy:
    `SessionResidency` owns the viewer set and the idle clock, and the engine
    says only when it is idle and how its store releases it. `hostCommandTurn.ts`
-   emits a synthetic host-command turn (open, progress, tool output or card) to
-   viewers and the runtime adapter alike, while the engine keeps the turn's ids,
-   running state and teardown. A host command ends its turn with one
+   emits a synthetic host-command turn (open, progress, discard, tool output or
+   card) to viewers and the runtime adapter alike, while the engine keeps the
+   turn's ids, running state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
    helpers live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the

@@ -30,7 +30,7 @@ function openTurn() {
     adapterEvents,
   };
   const turn = hostCommandTurn("a1", "t1", "/commit", { rawArgs: "" });
-  openHostCommandTurn(target, turn, "t1", "/commit", { rawArgs: "" });
+  openHostCommandTurn(target, turn);
   return { target, turn, sent, events };
 }
 
@@ -168,11 +168,12 @@ test("every card replaces the tool block and lands under its own envelope and en
       { type: envelope, sessionId: "s1", id: "a1", [payload[0]]: payload[1] },
       { type: "assistantEnd", sessionId: "s1", id: "a1" },
     ]);
-    assert.deepEqual(
-      events.slice(-2).map((e) => e.type),
-      // The adapter lands the card as the turn's durable entry.
-      ["passthrough", "hostCommandResult"],
-      result.kind,
-    );
+    assert.equal(events.at(-2)?.type, "passthrough", result.kind);
+    // The adapter lands the card as the turn's durable entry, under its name.
+    assert.deepEqual(events.at(-1), {
+      type: "hostCommandResult",
+      name,
+      card: { ...result, id: "a1" },
+    });
   }
 });

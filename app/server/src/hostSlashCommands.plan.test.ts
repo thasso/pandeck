@@ -49,7 +49,8 @@ function fakeHost(sessionMode: SessionMode | undefined): {
       finished.push({ name: state.activeName, output, isError });
     },
     finishSyntheticCard: (result: HostCommandResult) => {
-      if (result.kind !== "push") return;
+      if (result.kind !== "push")
+        throw new Error(`unexpected ${result.kind} card`);
       finished.push({
         name: state.activeName,
         output: result.push.error ?? result.push.output ?? "",
