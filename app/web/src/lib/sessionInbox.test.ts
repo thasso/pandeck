@@ -2608,3 +2608,145 @@ describe("worktreeChangesText", () => {
     );
   });
 });
+
+describe("peer trees without a depth cap", () => {
+  const peer = (
+    id: string,
+    parent: string,
+    extra: Partial<SessionListItem> = {},
+  ): SessionListItem =>
+    session({
+      id,
+      spawnedBySessionId: parent,
+      spawnOwnership: "coordinator",
+      ...extra,
+    });
+  const allCards = (view: ReturnType<typeof buildSessionInbox>) => [
+    ...cards(view.needsYou),
+    ...cards(view.active),
+  ];
+
+  it("shapes a long chain in work linear in its length, folded or open", () => {
+    // Every property read on every row is counted: a walk per node (the shape
+    // a capped depth used to make harmless) reads ~n²/2 rows on a chain, so
+    // over 750 per row here, where one sweep stays under 100.
+    let reads = 0;
+    const counted = (row: SessionListItem): SessionListItem =>
+      new Proxy(row, {
+        get(target, key, receiver) {
+          reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    const n = 1_500;
+    const chain = Array.from({ length: n }, (_, i) =>
+      counted(i === 0 ? session({ id: "s0" }) : peer(`s${i}`, `s${i - 1}`)),
+    );
+    const view = buildSessionInbox(chain);
+    expect(allCards(view)[0]?.cluster?.counts.total).toBe(n - 1);
+    expect(reads).toBeLessThan(150 * n);
+    reads = 0;
+    const ledge = spawnedSessionsView({ sessions: chain, coordinatorId: "s0" });
+    expect(ledge.counts.total).toBe(n - 1);
+    expect(reads).toBeLessThan(150 * n);
+  });
+
+  it("keys the spinner's own count, which no sentence states", () => {
+    const host = {
+      activeCount: 0,
+      shellCount: 0,
+      monitorCommandCount: 0,
+      monitorWebsocketCount: 0,
+      startingCount: 0,
+      stoppingCount: 0,
+      oldestStartedAt: 0,
+      retainedHost: true,
+    };
+    // The coordinator's own block holds the Settle reason still, so only the
+    // count can tell the two apart.
+    const rows = (retained: boolean) => [
+      session({ id: "root", queuedWork: true }),
+      peer("kid", "root", retained ? { backgroundActivity: host } : {}),
+    ];
+    const cardKey = (retained: boolean) =>
+      sessionCardKey(
+        allCards(buildSessionInbox(rows(retained)))[0] as SessionInboxCard,
+        NOW,
+      );
+    expect(cardKey(true)).not.toBe(cardKey(false));
+    const ledgeKey = (retained: boolean) =>
+      spawnedSessionsKey(
+        spawnedSessionsView({
+          sessions: rows(retained),
+          coordinatorId: "root",
+        }),
+        false,
+      );
+    expect(ledgeKey(true)).not.toBe(ledgeKey(false));
+  });
+
+  it("refuses a ledge peer's dismissal for what its Settle would settle", () => {
+    const sessions = [
+      session({ id: "root" }),
+      peer("helper", "root"),
+      peer("failed", "helper", {
+        title: "Verifier",
+        lastError: { at: NOW, message: "boom" },
+      }),
+      peer("busy", "failed", { isStreaming: true }),
+    ];
+    const view = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(view.bubbled?.session.id).toBe("failed");
+    expect(view.bubbled?.settleBlocked).toBe("it is still running.");
+    expect(clusterBubbleDismissible(view.bubbled as SessionInboxCard)).toBe(
+      false,
+    );
+    expect(sessionSettleCascade("failed", sessions, null, {}).blocked).toBe(
+      "it is still running.",
+    );
+    // A peer the user took over is not settled with it, so it blocks nothing.
+    const mine = spawnedSessionsView({
+      sessions: [
+        ...sessions.slice(0, 3),
+        peer("busy", "failed", {
+          isStreaming: true,
+          spawnOwnership: "taken-over",
+        }),
+      ],
+      coordinatorId: "root",
+    });
+    expect(mine.bubbled?.settleBlocked).toBe(undefined);
+    expect(clusterBubbleDismissible(mine.bubbled as SessionInboxCard)).toBe(
+      true,
+    );
+  });
+
+  it("never counts a settled host's acknowledged failure as live", () => {
+    const old = { lastError: { at: NOW - 60_000, message: "old failure" } };
+    const sessions = [
+      session({ id: "root", settledAt: NOW - 10_000, ...old }),
+      peer("mid", "root", { settledAt: NOW - 10_000, ...old }),
+      peer("live", "mid"),
+    ];
+    const card = allCards(buildSessionInbox(sessions))[0] as SessionInboxCard;
+    // Kept up by the live peer below, without reviving the history above it.
+    expect(card.session.id).toBe("root");
+    expect(card.status).toBe("quiet");
+    expect(card.cluster?.counts.failed).toBe(0);
+    expect(card.cluster?.bubbled).toBe(undefined);
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(ledge.counts.failed).toBe(0);
+    expect(ledge.bubbled).toBe(undefined);
+    // A failure the user has NOT acknowledged unsettles the row, and still
+    // counts and bubbles.
+    const fresh = allCards(
+      buildSessionInbox([
+        session({ id: "root" }),
+        peer("mid", "root", old),
+        peer("live", "mid"),
+      ]),
+    )[0] as SessionInboxCard;
+    expect(fresh.cluster?.counts.failed).toBe(1);
+    expect(fresh.cluster?.bubbled?.session.id).toBe("mid");
+  });
+});

@@ -2023,8 +2023,10 @@ export function spawnClusterForest(
       order.push(id);
       queue.push(id);
     }
-    while (queue.length > 0) {
-      const id = queue.shift() as string;
+    // A cursor, not `shift()`: a long chain must not pay to re-index the
+    // queue on every step.
+    for (let head = 0; head < queue.length; head += 1) {
+      const id = queue[head] as string;
       for (const childId of candidates.get(id) ?? []) {
         // An entry that has since detached (cycle) is no longer a child.
         if (parentOf.get(childId) !== id || visited.has(childId)) continue;
@@ -2087,12 +2089,10 @@ export function spawnClusterDescendantIds(
   rootId: string,
   forest: SpawnClusterForest,
 ): string[] {
-  const descendants: string[] = [];
-  const queue = [...(forest.childrenOf.get(rootId) ?? [])];
-  while (queue.length > 0) {
-    const id = queue.shift() as string;
-    descendants.push(id);
-    queue.push(...(forest.childrenOf.get(id) ?? []));
+  const descendants = [...(forest.childrenOf.get(rootId) ?? [])];
+  for (let head = 0; head < descendants.length; head += 1) {
+    const id = descendants[head] as string;
+    descendants.push(...(forest.childrenOf.get(id) ?? []));
   }
   return descendants;
 }
@@ -2123,6 +2123,51 @@ export function spawnClusterSettleBlockedReason(
     if (reason) return reason;
   }
   return undefined;
+}
+
+/**
+ * {@link spawnClusterSettleBlockedReason} for EVERY forest member at once, in
+ * one bottom-up sweep instead of one descendant walk per member — the shape a
+ * surface that disables every row's Settle needs, since with unbounded depth a
+ * walk per member is quadratic on a long chain. Same answer per id: the
+ * member's own reason, else that of its first blocked descendant in forest
+ * order. The forest's `order` restricted to one subtree IS that subtree's
+ * breadth-first order, so "first" is simply the lowest position. Members with
+ * no reason are absent.
+ */
+export function spawnClusterSettleBlockedReasons(
+  byId: ReadonlyMap<string, SessionListItem>,
+  forest: SpawnClusterForest,
+): Map<string, string> {
+  const position = new Map(forest.order.map((id, index) => [id, index]));
+  const own = new Map<string, string>();
+  for (const id of forest.order) {
+    const session = byId.get(id);
+    const reason = session ? settleBlockedReason(session) : undefined;
+    if (reason) own.set(id, reason);
+  }
+  const earlier = (a: string | undefined, b: string | undefined) =>
+    a === undefined ||
+    (b !== undefined && (position.get(b) ?? 0) < (position.get(a) ?? 0))
+      ? b
+      : a;
+  const firstBlockedBelow = new Map<string, string>();
+  for (let index = forest.order.length - 1; index >= 0; index -= 1) {
+    const id = forest.order[index] as string;
+    let first: string | undefined;
+    for (const childId of forest.childrenOf.get(id) ?? []) {
+      first = earlier(first, own.has(childId) ? childId : undefined);
+      first = earlier(first, firstBlockedBelow.get(childId));
+    }
+    if (first !== undefined) firstBlockedBelow.set(id, first);
+  }
+  const reasons = new Map<string, string>();
+  for (const id of forest.order) {
+    const below = firstBlockedBelow.get(id);
+    const reason = own.get(id) ?? (below ? own.get(below) : undefined);
+    if (reason) reasons.set(id, reason);
+  }
+  return reasons;
 }
 
 /** A renderable part of an assistant turn, in arrival order. */

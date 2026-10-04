@@ -4981,9 +4981,18 @@ function AppContent() {
             sessions: state.sessions,
             coordinatorId: ledgeSessionId,
             includeSettled: spawnedLedgeSettled,
+            workflowRuns: state.workflowRuns,
+            workflowCards: state.workflowCards,
           })
         : undefined,
-    [route.name, ledgeSessionId, state.sessions, spawnedLedgeSettled],
+    [
+      route.name,
+      ledgeSessionId,
+      state.sessions,
+      spawnedLedgeSettled,
+      state.workflowRuns,
+      state.workflowCards,
+    ],
   );
   const toggleSpawnedSettled = useCallback(
     () =>

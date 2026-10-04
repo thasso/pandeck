@@ -30,6 +30,7 @@ import {
   spawnClusterForest,
   spawnClusterMembers,
   spawnClusterSettleBlockedReason,
+  spawnClusterSettleBlockedReasons,
   workflowRunInWorkingSet,
   workflowRunOwnerBySession,
   workflowRunSettleBlockedReason,
@@ -197,7 +198,15 @@ function inboxCard(
   session: SessionListItem,
   readCurrentId: string | undefined,
 ): SessionInboxCard {
-  const status = classifySessionStatus(session, readCurrentId);
+  const classified = classifySessionStatus(session, readCurrentId);
+  // A SHELVED session's failure is one the user already acknowledged: the
+  // server withholds `settledAt` from a row whose latest outcome is still
+  // open, and a new failure unsettles it. Its stored `lastError` outlives the
+  // Settle, so a shelved session still listed live — the bridge to live work
+  // below it, or a settled coordinator kept up by its peers — must not count
+  // or bubble that history as a failure waiting on the user.
+  const status =
+    classified === "failed" && isShelvedSession(session) ? "quiet" : classified;
   const blocked = settleBlockedReason(session);
   return {
     session,
@@ -223,6 +232,69 @@ function clusterCounts(
     waiting: cards.filter((card) => card.tier === "needs-you").length,
     failed: cards.filter((card) => holdsFailure(card)).length,
   };
+}
+
+/** No sessions, nothing going on: the start of every sum below. */
+function zeroCounts(): SessionClusterCounts {
+  return { total: 0, working: 0, running: 0, jobs: 0, waiting: 0, failed: 0 };
+}
+
+/** `into` plus `add`, field by field, in place. */
+function addCounts(
+  into: SessionClusterCounts,
+  add: SessionClusterCounts,
+): SessionClusterCounts {
+  into.total += add.total;
+  into.working += add.working;
+  into.running += add.running;
+  into.jobs += add.jobs;
+  into.waiting += add.waiting;
+  into.failed += add.failed;
+  return into;
+}
+
+/**
+ * Every node's {@link clusterCounts} over its descendants, in ONE bottom-up
+ * sweep: `order` lists parents before children, so walking it backwards has
+ * every child's total ready before its parent adds it. With unbounded depth,
+ * counting each node's subtree separately is quadratic on a long chain, and
+ * this runs on every session broadcast. A node with no children has no entry.
+ */
+function subtreeCounts(
+  order: readonly string[],
+  childrenOf: (id: string) => readonly string[],
+  cardOf: (id: string) => SessionInboxCard | undefined,
+): Map<string, SessionClusterCounts> {
+  const below = new Map<string, SessionClusterCounts>();
+  for (let index = order.length - 1; index >= 0; index -= 1) {
+    const id = order[index] as string;
+    let sum: SessionClusterCounts | undefined;
+    for (const childId of childrenOf(id)) {
+      const card = cardOf(childId);
+      if (!card) continue;
+      sum ??= zeroCounts();
+      addCounts(sum, clusterCounts([card]));
+      const nested = below.get(childId);
+      if (nested) addCounts(sum, nested);
+    }
+    if (sum) below.set(id, sum);
+  }
+  return below;
+}
+
+/**
+ * The counts as a content key: EVERY field, including `working`, which no
+ * summary sentence says but the spinner and the accent are drawn from.
+ */
+function clusterCountsKey(counts: SessionClusterCounts): string {
+  return [
+    counts.total,
+    counts.working,
+    counts.running,
+    counts.jobs,
+    counts.waiting,
+    counts.failed,
+  ].join(",");
 }
 
 /** The background jobs one session owns right now; a retained host is none. */
@@ -765,7 +837,7 @@ export function workflowRunItemKey(
     `${badge.tone}:${badge.label}`,
     workflowRunPhaseLine(item) ?? "",
     workflowRunDetail(item) ?? "",
-    workflowRunRolesSummary(item.counts),
+    clusterCountsKey(item.counts),
     item.card?.phase ?? "",
     sessionDeliveryKey(workflowRunPullRequestSession(item) ?? {}),
     // Settle is drawn from these three: whether it is offered, whether it is
@@ -1032,17 +1104,17 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     // label that ticks while nothing else about the session moves.
     backgroundActivityKey(session.backgroundActivity, now),
     card.tier,
-    // The cluster as the CARD states it: the summary line and the bubbled
-    // child's own label. A folded child that starts asking repaints the card it
+    // The cluster as the CARD states it: every count it draws from (the
+    // summary, the spinner, the live icons) and the bubbled child's own label. A folded child that starts asking repaints the card it
     // is folded into; one that renames itself under a collapsed summary does
     // not, because nothing on the card would read differently — the expanded
     // child rows carry their own keys.
-    card.cluster ? sessionClusterSummary(card.cluster.counts) : "",
+    card.cluster ? clusterCountsKey(card.cluster.counts) : "",
     // The settled-history toggle's count, which the open fold states.
     card.cluster ? String(card.cluster.settledCount) : "",
     // A tree row's place and its own peers, which the row draws.
     String(card.depth ?? ""),
-    card.peers ? sessionClusterSummary(card.peers) : "",
+    card.peers ? clusterCountsKey(card.peers) : "",
     card.cluster?.bubbled
       ? `${card.cluster.bubbled.session.id}:${sessionClusterBubbleLabel(
           card.cluster.bubbled,
@@ -1338,9 +1410,39 @@ export function spawnedSessionsView(options: {
   coordinatorId: string;
   /** List the settled peers in the tree too. */
   includeSettled?: boolean;
+  /**
+   * The Workflow Runs the inbox folds, so a peer's Settle is refused for
+   * exactly the reason the inbox and the server would refuse it.
+   */
+  workflowRuns?: readonly WorkflowRunSummary[] | null;
+  workflowCards?: Readonly<Record<string, WorkflowRunCard>>;
 }): SpawnedSessionsView {
   const { sessions, coordinatorId } = options;
   const includeSettled = Boolean(options.includeSettled);
+  // A peer's Settle settles what the INBOX folds under it — coordinator-owned
+  // peers at every depth, along the shared forest — not this strip's
+  // ownership-blind tree. So the refusal each card carries (and with it
+  // whether a bubbled failure is dismissible) is the forest's, read for every
+  // member in one sweep; a session the forest does not hold answers alone.
+  const members = spawnClusterMembers(
+    sessions,
+    options.workflowRuns ?? [],
+    options.workflowCards ?? {},
+  );
+  const reasons = spawnClusterSettleBlockedReasons(
+    new Map(sessions.map((session) => [session.id, session])),
+    spawnClusterForest(members),
+  );
+  const memberIds = new Set(members.map((session) => session.id));
+  const peerCard = (session: SessionListItem): SessionInboxCard => {
+    // No `readCurrentId`: the ledge belongs to the session on screen, and a
+    // peer of it is by definition not the session being read.
+    const card = inboxCard(session, undefined);
+    if (!memberIds.has(session.id)) return card;
+    const { settleBlocked: _own, ...rest } = card;
+    const blocked = reasons.get(session.id);
+    return { ...rest, ...(blocked ? { settleBlocked: blocked } : {}) };
+  };
   const spawned = new Map<string, SessionListItem[]>();
   for (const session of sessions) {
     const parentId = session.spawnedBySessionId;
@@ -1357,14 +1459,12 @@ export function spawnedSessionsView(options: {
   const order: string[] = [];
   const queue = [coordinatorId];
   const seen = new Set([coordinatorId]);
-  while (queue.length > 0) {
-    const parentId = queue.shift() as string;
+  for (let head = 0; head < queue.length; head += 1) {
+    const parentId = queue[head] as string;
     for (const session of spawned.get(parentId) ?? []) {
       if (seen.has(session.id)) continue;
       seen.add(session.id);
-      // No `readCurrentId`: the ledge belongs to the session on screen, and a
-      // peer of it is by definition not the session being read.
-      cards.set(session.id, inboxCard(session, undefined));
+      cards.set(session.id, peerCard(session));
       const siblings = treeChildren.get(parentId);
       if (siblings) siblings.push(session.id);
       else treeChildren.set(parentId, [session.id]);
@@ -1384,27 +1484,21 @@ export function spawnedSessionsView(options: {
     )
       live.add(id);
   }
-  const liveBelow = (id: string): SessionInboxCard[] => {
-    const below: SessionInboxCard[] = [];
-    const pending = [...(treeChildren.get(id) ?? [])];
-    while (pending.length > 0) {
-      const childId = pending.pop() as string;
-      if (!live.has(childId)) continue;
-      below.push(cards.get(childId) as SessionInboxCard);
-      pending.push(...(treeChildren.get(childId) ?? []));
-    }
-    return below;
-  };
+  const liveBelow = subtreeCounts(
+    order,
+    (id) => (treeChildren.get(id) ?? []).filter((childId) => live.has(childId)),
+    (id) => cards.get(id),
+  );
 
   const rows = depthFirst(coordinatorId, (parentId, depth) => {
     const kids = (treeChildren.get(parentId) ?? [])
       .filter((id) => includeSettled || live.has(id))
       .map((id) => {
-        const nested = live.has(id) ? liveBelow(id) : [];
+        const nested = live.has(id) ? liveBelow.get(id) : undefined;
         return {
           ...(cards.get(id) as SessionInboxCard),
           depth,
-          ...(nested.length > 0 ? { peers: clusterCounts(nested) } : {}),
+          ...(nested ? { peers: nested } : {}),
         };
       })
       .sort(compareSessionActivity);
@@ -1470,7 +1564,7 @@ function spawnedPeerKey(card: SessionInboxCard): string {
     String(session.updatedAt),
     // The row's place in the tree and what it shows beside its title.
     String(card.depth ?? ""),
-    card.peers ? sessionClusterSummary(card.peers) : "",
+    card.peers ? clusterCountsKey(card.peers) : "",
     String(backgroundJobs(session)),
   ].join("\u001f");
 }
@@ -1503,7 +1597,8 @@ export function spawnedSessionsKey(
   open: boolean,
 ): string {
   return [
-    spawnedSessionsSummary(view),
+    clusterCountsKey(view.counts),
+    String(view.settled),
     view.settledShown ? "1" : "",
     // The bubble's own facts are keyed raw as well. Its label is time-free
     // today; a bubbled peer that ever carried an elapsed one would otherwise
@@ -1622,14 +1717,20 @@ function foldSpawnClusters(
   // Settle, and in the same order the server's refusal reads. A peer's FAILURE
   // never blocks it: acknowledging that is what the Settle is for.
   const byId = new Map(sessions.map((session) => [session.id, session]));
+  const reasons = spawnClusterSettleBlockedReasons(byId, forest);
   for (const [id, node] of nodes) {
-    const blocked = spawnClusterSettleBlockedReason(id, byId, forest);
+    const blocked = reasons.get(id);
     if (blocked === node.card.settleBlocked) continue;
     const { settleBlocked: _own, ...rest } = node.card;
     node.card = { ...rest, ...(blocked ? { settleBlocked: blocked } : {}) };
   }
 
   const bubbleOf = resolveBubbles(nodes, forest);
+  const peerCounts = subtreeCounts(
+    forest.order,
+    (id) => forest.childrenOf.get(id) ?? [],
+    (id) => nodes.get(id)?.card,
+  );
   const shelvedChildrenOf = new Map<string, string[]>();
   for (const [id, node] of nodes) {
     const { session } = node.card;
@@ -1648,6 +1749,7 @@ function foldSpawnClusters(
     nodes,
     forest,
     bubbleOf,
+    peerCounts,
     shelvedChildrenOf,
     cards,
     settledRows,
@@ -1694,6 +1796,8 @@ interface EmitContext {
   nodes: Map<string, ClusterNode>;
   forest: SpawnClusterForest;
   bubbleOf: Map<string, ClusterNode | undefined>;
+  /** What each member's own folded descendants are doing ({@link subtreeCounts}). */
+  peerCounts: Map<string, SessionClusterCounts>;
   /**
    * Shelf rows by the session that spawned them, along `coordinator`-owned
    * edges: the settled history a fold puts back on request. Never part of a
@@ -1723,12 +1827,10 @@ interface EmitContext {
  * woken by a later failure) or one it spawned after it was put down.
  */
 function emitCluster(id: string, context: EmitContext): void {
-  const { nodes, forest, bubbleOf, cards, settledRows } = context;
+  const { nodes, bubbleOf, peerCounts, cards, settledRows } = context;
   const node = nodes.get(id) as ClusterNode;
-  const descendants = spawnClusterDescendantIds(id, forest)
-    .map((childId) => nodes.get(childId))
-    .filter((child): child is ClusterNode => child !== undefined);
-  if (descendants.length === 0) {
+  const counts = peerCounts.get(id);
+  if (!counts) {
     if (node.settled) settledRows.push(node.card.session);
     else cards.push(node.card);
     return;
@@ -1746,7 +1848,7 @@ function emitCluster(id: string, context: EmitContext): void {
       children,
       childrenWithSettled,
       settledCount: childrenWithSettled.length - children.length,
-      counts: clusterCounts(descendants.map((child) => child.card)),
+      counts,
       ...(bubbled ? { bubbled: bubbled.card } : {}),
     },
   });
@@ -1770,7 +1872,7 @@ function clusterTree(
   context: EmitContext,
   withSettled: boolean,
 ): SessionInboxCard[] {
-  const { nodes, forest, bubbleOf, shelvedChildrenOf } = context;
+  const { nodes, forest, bubbleOf, peerCounts, shelvedChildrenOf } = context;
   const seen = new Set([rootId]);
   const childrenOf = (parentId: string, depth: number): SessionInboxCard[] => {
     const kids: SessionInboxCard[] = [];
@@ -1778,9 +1880,7 @@ function clusterTree(
       const child = nodes.get(childId);
       if (!child || seen.has(childId)) continue;
       seen.add(childId);
-      const nested = spawnClusterDescendantIds(childId, forest)
-        .map((id) => nodes.get(id)?.card)
-        .filter((card): card is SessionInboxCard => card !== undefined);
+      const nested = peerCounts.get(childId);
       const bubbled = bubbleOf.get(childId);
       kids.push({
         ...child.card,
@@ -1788,7 +1888,7 @@ function clusterTree(
         ...(bubbled
           ? { tier: higherTier(child.card.tier, bubbled.card.tier) }
           : {}),
-        ...(nested.length > 0 ? { peers: clusterCounts(nested) } : {}),
+        ...(nested ? { peers: nested } : {}),
       });
     }
     kids.sort(compareSessionCards);

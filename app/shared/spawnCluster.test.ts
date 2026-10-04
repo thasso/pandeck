@@ -5,6 +5,7 @@ import {
   spawnClusterForest,
   spawnClusterMembers,
   spawnClusterSettleBlockedReason,
+  spawnClusterSettleBlockedReasons,
   type SessionListItem,
   type WorkflowRunCard,
   type WorkflowRunSummary,
@@ -238,6 +239,56 @@ describe("spawnClusterSettleBlockedReason", () => {
         spawnClusterForest([]),
       ),
     ).toBe("it is still running.");
+  });
+});
+
+describe("spawnClusterSettleBlockedReasons", () => {
+  /** Every member's answer, the slow way: one walk per member. */
+  const oneByOne = (rows: SessionListItem[]) => {
+    const forest = spawnClusterForest(rows);
+    const byId = new Map(rows.map((session) => [session.id, session]));
+    const reasons = new Map<string, string>();
+    for (const id of forest.order) {
+      const reason = spawnClusterSettleBlockedReason(id, byId, forest);
+      if (reason) reasons.set(id, reason);
+    }
+    return reasons;
+  };
+  const bulk = (rows: SessionListItem[]) =>
+    spawnClusterSettleBlockedReasons(
+      new Map(rows.map((session) => [session.id, session])),
+      spawnClusterForest(rows),
+    );
+
+  test("answers every member exactly as the per-member walk does", () => {
+    const fixtures: SessionListItem[][] = [
+      // Breadth first, not depth first: `y` is shallower than `x1`, so it is
+      // the one the root's refusal names, though `x`'s branch comes first.
+      [
+        row({ id: "root" }),
+        child("x", "root"),
+        child("y", "root", { queuedWork: true }),
+        child("x1", "x", { isStreaming: true }),
+      ],
+      [
+        row({ id: "root", isStreaming: true }),
+        child("kid", "root", { attention: "question" }),
+      ],
+      // A cycle, and a shelved bridge with live work below it.
+      [
+        child("a", "b"),
+        child("b", "a", { isStreaming: true }),
+        row({ id: "root" }),
+        child("mid", "root", { settledAt: 1 }),
+        child("live", "mid", { queuedWork: true }),
+      ],
+      Array.from({ length: 30 }, (_, i) =>
+        i === 0
+          ? row({ id: "s0" })
+          : child(`s${i}`, `s${i - 1}`, i === 29 ? { isStreaming: true } : {}),
+      ),
+    ];
+    for (const rows of fixtures) expect(bulk(rows)).toEqual(oneByOne(rows));
   });
 });
 
