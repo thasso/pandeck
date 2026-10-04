@@ -170,3 +170,33 @@ test("disconnect via clearTokens drops authorization", () => {
   const cleared = updateTempoSettings({ clearTokens: true });
   assert.equal(cleared.refreshTokenConfigured, false);
 });
+
+test("a refresh that finishes after a disconnect does not reconnect", async () => {
+  writeTempoFile({
+    enabled: true,
+    apiBaseUrl: "https://api.tempo.io/4",
+    accessToken: "stale",
+    refreshToken: "rt-1",
+    accessTokenExpiresAt: Date.now() - 1000,
+  });
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  globalThis.fetch = vi.fn(async () => {
+    await gate;
+    return new Response(
+      JSON.stringify({
+        access_token: "fresh",
+        refresh_token: "rt-2",
+        expires_in: 3600,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  const pending = getTempoToolConfig();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  updateTempoSettings({ clearTokens: true });
+  release();
+  await pending;
+  assert.equal(getTempoSettings().refreshTokenConfigured, false);
+});

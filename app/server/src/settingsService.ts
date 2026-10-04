@@ -26,7 +26,7 @@ import {
   updateContext7Settings,
 } from "./context7Settings.ts";
 import { errorText } from "./errors.ts";
-import { redactSecrets } from "./secretRedaction.ts";
+import { redactSecretsWith, storedSecretForms } from "./secretRedaction.ts";
 import {
   testForgejoSettings,
   updateForgejoSettings,
@@ -392,19 +392,26 @@ export interface SettingsSectionTest {
 
 /**
  * The Settings page sections with a connection test, and the test each runs.
- * A test that stores what it discovers (OpenAI-compatible models) announces it.
+ * Tests that make their HTTP calls directly stop them when `signal` aborts;
+ * the rest (Confluence, Google, Slack) only read, so an abandoned one ends at
+ * its own request timeouts and changes nothing. A test that stores what it
+ * discovers (OpenAI-compatible models) checks `signal` before it stores and
+ * announces what it stored.
  */
 const SECTION_TESTS: Partial<
-  Record<SettingsSectionId, () => Promise<SettingsSectionTest>>
+  Record<
+    SettingsSectionId,
+    (signal: AbortSignal) => Promise<SettingsSectionTest>
+  >
 > = {
   jira: testJiraSettings,
-  confluence: testConfluenceSettings,
+  confluence: () => testConfluenceSettings(),
   tempo: testTempoSettings,
-  google: testGoogleSettings,
-  slack: testSlackSettings,
-  "slack-huddles": testSlackHuddleSettings,
-  "openai-compatible": async () => {
-    const status = await testOpenAiCompatibleSettings();
+  google: () => testGoogleSettings(),
+  slack: () => testSlackSettings(),
+  "slack-huddles": () => testSlackHuddleSettings(),
+  "openai-compatible": async (signal) => {
+    const status = await testOpenAiCompatibleSettings(signal);
     await announceSettingsWritten(["openAiCompatible"]);
     return status;
   },
@@ -422,11 +429,18 @@ export const TESTABLE_SETTINGS_SECTIONS = Object.keys(
 const SECTION_TEST_DEADLINE_MS = 45_000;
 
 /**
- * Run a section's connection test for an agent. The message is scrubbed of
- * secrets: the tests were written for the Settings page, and an endpoint may
- * echo the token it received. Throws for a section without a test, when
- * `signal` aborts, or past the deadline; the test's own HTTP calls carry
- * their own timeouts, so an abandoned one still ends.
+ * Run a section's connection test for an agent.
+ *
+ * A failure is reported in words the server writes: the section, the HTTP
+ * status when there was one, and where the details are. The tests' own
+ * failure text was written for the Settings page and quotes what the endpoint
+ * sent back, which may echo the credential it received; no scrubbing of that
+ * text can be complete. A success message, built from what the service says
+ * about the account, is scrubbed of every credential stored before the test
+ * started, of any length, and of every one stored after it.
+ *
+ * Throws for a section without a test, when `signal` aborts, or past the
+ * deadline.
  */
 export async function testSettingsSection(
   section: SettingsSectionId,
@@ -434,29 +448,44 @@ export async function testSettingsSection(
 ): Promise<SettingsSectionTest> {
   const test = SECTION_TESTS[section];
   if (!test) throw new Error(`${section} has no connection test`);
+  const details = `The Settings page shows the details: /settings/${section}.`;
   const stop = AbortSignal.any([
     ...(signal ? [signal] : []),
     AbortSignal.timeout(SECTION_TEST_DEADLINE_MS),
   ]);
-  stop.throwIfAborted();
+  const credentials = storedSecretForms(1);
+  const stopped = () =>
+    new Error(
+      signal?.aborted
+        ? `The ${section} connection test was cancelled.`
+        : `The ${section} connection test took longer than ${SECTION_TEST_DEADLINE_MS / 1000}s.`,
+    );
+  if (stop.aborted) throw stopped();
   let onAbort = () => {};
   const aborted = new Promise<never>((_, reject) => {
-    onAbort = () =>
-      reject(
-        signal?.aborted
-          ? new Error(`The ${section} connection test was cancelled.`)
-          : new Error(
-              `The ${section} connection test took longer than ${SECTION_TEST_DEADLINE_MS / 1000}s.`,
-            ),
-      );
+    onAbort = () => reject(stopped());
     stop.addEventListener("abort", onAbort, { once: true });
   });
+  let result: SettingsSectionTest;
   try {
-    const { ok, message } = await Promise.race([test(), aborted]);
-    return { ok, message: redactSecrets(message) };
-  } catch (err) {
-    throw new Error(redactSecrets(errorText(err)));
+    result = await Promise.race([test(stop), aborted]);
+  } catch {
+    if (stop.aborted) throw stopped();
+    throw new Error(`The ${section} connection test could not run. ${details}`);
   } finally {
     stop.removeEventListener("abort", onAbort);
   }
+  // A test that caught its own aborted request reports it as a failure.
+  if (stop.aborted) throw stopped();
+  if (!result.ok) {
+    const status = /\bHTTP (\d{3})\b/.exec(result.message)?.[1];
+    return {
+      ok: false,
+      message: `The ${section} connection test failed${status ? ` with HTTP ${status}` : ""}. ${details}`,
+    };
+  }
+  const forms = [...new Set([...credentials, ...storedSecretForms(1)])].sort(
+    (a, b) => b.length - a.length,
+  );
+  return { ok: true, message: redactSecretsWith(result.message, forms) };
 }

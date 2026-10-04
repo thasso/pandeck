@@ -161,7 +161,47 @@ describe("nothing secret reaches the agent", () => {
     );
     const text = JSON.stringify(result);
     assert.equal(text.includes(BRAVE_FIXTURE), false);
-    assert.match(text, /\[redacted\]/);
+    // A failure is told in the server's words, never the endpoint's.
+    assert.match(
+      text,
+      /The web-search connection test failed with HTTP 401\. The Settings page shows the details: \/settings\/web-search\./,
+    );
+    assert.equal(text.includes("X-Subscription-Token"), false);
+  });
+
+  test("a key too short to scrub from ordinary text is never echoed", async () => {
+    await saveSettings({ brave: { enabled: true, apiKey: "privkey" } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("bad key: privkey", { status: 401 })),
+    );
+    const text = JSON.stringify(
+      await settingsUpdate!.execute({ test: ["web-search"] }, {} as never),
+    );
+    assert.equal(text.includes("privkey"), false);
+  });
+
+  test("a key replaced while its test is out is never echoed", async () => {
+    const oldKey = "OLD_FIXTURE_BRAVE_VALUE";
+    const newKey = "NEW_FIXTURE_BRAVE_VALUE";
+    await saveSettings({ brave: { enabled: true, apiKey: oldKey } });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        await gate;
+        return new Response(`denied ${oldKey}`, { status: 401 });
+      }),
+    );
+    const pending = settingsUpdate!.execute(
+      { test: ["web-search"] },
+      {} as never,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await saveSettings({ brave: { apiKey: newKey } });
+    release();
+    assert.equal(JSON.stringify(await pending).includes(oldKey), false);
   });
 
   test("a Basic auth echo of email and token is scrubbed", async () => {
@@ -192,6 +232,8 @@ describe("nothing secret reaches the agent", () => {
     for (const baseUrl of [
       "https://alice:URL_PASSWORD_1@example.invalid/v1",
       "https://alice%40corp:URL%2FPASSWORD%3A2@example.invalid/v1",
+      // An unescaped `@` in the password: userinfo ends at the last one.
+      "https://alice:URL_PASSWORD_1@URL_PASSWORD_TAIL@example.invalid/v1",
     ]) {
       await saveSettings({ openAiCompatible: { baseUrl } });
       const result = await settingsRead!.execute(
@@ -291,5 +333,80 @@ describe("arguments are checked before anything changes", () => {
       ),
     );
     assert.equal(getSettings().sessionNaming.enabled, before);
+  });
+});
+
+describe("a cancelled or overtaken test changes nothing", () => {
+  /** A fetch that waits for `release`, and rejects like the real one on abort. */
+  function gatedFetch(body: unknown) {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        void gate.then(resolve);
+        init?.signal?.addEventListener("abort", () =>
+          reject(new Error("This operation was aborted")),
+        );
+      });
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    return { fetch, release: () => release() };
+  }
+
+  test("cancelling discovery mid-request keeps a change saved after it", async () => {
+    await saveSettings({
+      openAiCompatible: {
+        enabled: true,
+        baseUrl: "http://models.invalid/v1",
+      },
+    });
+    const { fetch, release } = gatedFetch({ data: [{ id: "late-model" }] });
+    vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    const pending = settingsUpdate!.execute({ test: ["openai-compatible"] }, {
+      signal: controller.signal,
+    } as never);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await assert.rejects(pending, /cancelled/);
+    await saveSettings({ openAiCompatible: { enabled: false } });
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const { openAiCompatible } = getSettings();
+    assert.equal(openAiCompatible.enabled, false);
+    assert.equal(
+      openAiCompatible.models.some((m) => m.id === "late-model"),
+      false,
+    );
+  });
+
+  test("discovery overtaken by a new endpoint stores nothing", async () => {
+    await saveSettings({
+      openAiCompatible: {
+        enabled: true,
+        baseUrl: "http://old-models.invalid/v1",
+      },
+    });
+    const { fetch, release } = gatedFetch({ data: [{ id: "stale-model" }] });
+    vi.stubGlobal("fetch", fetch);
+    const pending = settingsUpdate!.execute(
+      { test: ["openai-compatible"] },
+      {} as never,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await saveSettings({
+      openAiCompatible: { baseUrl: "http://new-models.invalid/v1" },
+    });
+    release();
+    const { tests } = (await pending).details as {
+      tests: Array<{ ok: boolean }>;
+    };
+    assert.equal(tests[0]?.ok, false);
+    const { openAiCompatible } = getSettings();
+    assert.equal(openAiCompatible.baseUrl, "http://new-models.invalid/v1");
+    assert.equal(
+      openAiCompatible.models.some((m) => m.id === "stale-model"),
+      false,
+    );
   });
 });

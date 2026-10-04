@@ -24,6 +24,7 @@ import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
 import { jiraGet } from "./jiraClient.ts";
 import { errorText, fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const TEMPO_SETTINGS_PATH = join(DATA_DIR, "settings", "tempo.json");
 const TEMPO_OAUTH_CALLBACK_PATH = "/api/tempo/oauth/callback";
@@ -284,6 +285,9 @@ async function ensureTempoAccessToken(
     );
   }
   const fresh = readPrivate();
+  // Disconnected, or refreshed by another request, while this one was out:
+  // writing back would reconnect or roll back the stored grant.
+  if (fresh.refreshToken !== settings.refreshToken) return token.access_token;
   fresh.accessToken = token.access_token;
   fresh.accessTokenExpiresAt = Date.now() + token.expires_in * 1000;
   if (token.refresh_token) fresh.refreshToken = token.refresh_token;
@@ -442,7 +446,9 @@ export async function resolveTempoAuthorAccountId(
   return me.accountId;
 }
 
-export async function testTempoSettings(): Promise<TempoConnectionStatus> {
+export async function testTempoSettings(
+  signal?: AbortSignal,
+): Promise<TempoConnectionStatus> {
   const settings = readPrivate();
   const checkedAt = Date.now();
   if (!tempoOAuthClient().configured) {
@@ -491,7 +497,7 @@ export async function testTempoSettings(): Promise<TempoConnectionStatus> {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: deadlineSignal(15_000, signal),
   });
   if (!res.ok) {
     return {

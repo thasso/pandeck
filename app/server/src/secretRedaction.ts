@@ -28,13 +28,18 @@ interface FileStrings {
   others: string[];
 }
 
-function collect(value: unknown, key: string, into: FileStrings): void {
+function collect(
+  value: unknown,
+  key: string,
+  into: FileStrings,
+  minLength: number,
+): void {
   if (typeof value === "string") {
-    if (value.length < MIN_SECRET_LENGTH) return;
+    if (value.length < minLength) return;
     (SECRET_KEY.test(key) ? into.secrets : into.others).push(value);
   } else if (value && typeof value === "object") {
     for (const [childKey, child] of Object.entries(value))
-      collect(child, Array.isArray(value) ? key : childKey, into);
+      collect(child, Array.isArray(value) ? key : childKey, into, minLength);
   }
 }
 
@@ -42,8 +47,13 @@ function base64(text: string): string {
   return Buffer.from(text, "utf8").toString("base64");
 }
 
-/** Every stored secret, in each form it may travel in. Longest first. */
-function secretForms(): string[] {
+/**
+ * Every stored secret, in each form it may travel in. Longest first. Text in
+ * general only loses secrets of {@link MIN_SECRET_LENGTH} or more, since a
+ * short one is likely to occur in ordinary words; a caller scrubbing what one
+ * request may have echoed can take a snapshot of every length first.
+ */
+export function storedSecretForms(minLength = MIN_SECRET_LENGTH): string[] {
   const forms = new Set<string>();
   const add = (secret: string) => {
     forms.add(secret);
@@ -51,7 +61,7 @@ function secretForms(): string[] {
     forms.add(base64(secret));
   };
   for (const value of Object.values(CORE_INTEGRATION_SECRETS))
-    if (value.length >= MIN_SECRET_LENGTH) add(value);
+    if (value.length >= minLength) add(value);
   let files: string[] = [];
   try {
     files = readdirSync(SETTINGS_DIR).filter(
@@ -67,6 +77,7 @@ function secretForms(): string[] {
         JSON.parse(readFileSync(join(SETTINGS_DIR, name), "utf8")),
         "",
         strings,
+        minLength,
       );
     } catch {
       continue;
@@ -81,10 +92,16 @@ function secretForms(): string[] {
   return [...forms].sort((a, b) => b.length - a.length);
 }
 
-function redactWith(text: string, forms: readonly string[]): string {
+/** `text` with the given secret forms and every URL credential and auth header value removed. */
+export function redactSecretsWith(
+  text: string,
+  forms: readonly string[],
+): string {
   let out = text
-    // Credentials in a URL, plain or percent-encoded.
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]*@/gi, `$1${REDACTED}@`)
+    // Credentials in a URL, plain or percent-encoded. Greedy on purpose: the
+    // userinfo ends at the LAST `@` before the path, and a password may hold
+    // an unescaped `@` that a URL parser still accepts.
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, `$1${REDACTED}@`)
     // Authorization header values.
     .replace(
       /\b(Basic|Bearer|token)(\s+)[A-Za-z0-9+/=._~-]{8,}/g,
@@ -103,14 +120,14 @@ function redactWith(text: string, forms: readonly string[]): string {
 
 /** `text` with every known secret, URL credential and auth header value removed. */
 export function redactSecrets(text: string): string {
-  return redactWith(text, secretForms());
+  return redactSecretsWith(text, storedSecretForms());
 }
 
 /** `value` with {@link redactSecrets} applied to every string inside it. */
 export function redactSecretsDeep<T>(value: T): T {
-  const forms = secretForms();
+  const forms = storedSecretForms();
   const walk = (node: unknown): unknown => {
-    if (typeof node === "string") return redactWith(node, forms);
+    if (typeof node === "string") return redactSecretsWith(node, forms);
     if (Array.isArray(node)) return node.map(walk);
     if (node && typeof node === "object")
       return Object.fromEntries(

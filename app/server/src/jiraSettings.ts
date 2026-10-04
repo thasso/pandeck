@@ -14,6 +14,7 @@ import type {
 import { DATA_DIR, JIRA_HOST } from "./config.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
 import { fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const JIRA_SETTINGS_PATH = join(DATA_DIR, "settings", "jira.json");
 
@@ -150,7 +151,9 @@ export function isJiraConfigured(): boolean {
   );
 }
 
-export async function testJiraSettings(): Promise<JiraConnectionStatus> {
+export async function testJiraSettings(
+  signal?: AbortSignal,
+): Promise<JiraConnectionStatus> {
   const settings = readPrivate();
   const checkedAt = Date.now();
   if (!JIRA_HOST) return { ok: false, checkedAt, message: NO_JIRA_HOST };
@@ -166,7 +169,7 @@ export async function testJiraSettings(): Promise<JiraConnectionStatus> {
   ).toString("base64");
   const res = await fetch(`https://${JIRA_HOST}/rest/api/3/myself`, {
     headers: { Authorization: `Basic ${auth}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(15_000),
+    signal: deadlineSignal(15_000, signal),
   });
   if (!res.ok) {
     return {

@@ -123,24 +123,42 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
 `settings_update` is a `local` side effect, so Plan mode keeps only
 `settings_read`.
 
-Both tools hold three guarantees the schema alone cannot give, since neither
+Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
 
 - **Arguments are checked in full first.** Unknown fields, unknown sections,
   over-long arrays and a change without its own `value` are refused before
   anything is written; an omitted value is never read as `null`, so a malformed
   call cannot clear a secret or disconnect an account.
-- **Everything returned or thrown is scrubbed** by
+- **A failed connection test is reported in the server's words**: the section,
+  the HTTP status when there was one, and the Settings page that shows the
+  details. The tests' own failure text was written for that page and quotes what
+  the endpoint sent back, which may echo the credential it received, and no
+  scrubbing of free text can be complete (a key may be short, or replaced while
+  its test is out). A success message is scrubbed of every credential stored
+  before the test started, at any length, and every one stored after.
+- **Everything else returned or thrown is scrubbed** by
   `app/server/src/secretRedaction.ts`. It removes every stored secret (any
   string under a token/key/secret/cookie/password key in the private settings
   files, plus the deployment secrets) as itself, URL-encoded, base64, and as a
   base64 `user:secret` basic-auth pair; a secret cut off at the end of a
-  truncated message; credentials in any URL; and `Basic`/`Bearer` header values.
-  Integration status messages were written for the Settings page and may echo
-  what an endpoint received, and a base URL may carry `user:password@`.
-- **Connection tests are bounded.** Named sections are deduplicated, each test
-  has a deadline and stops with the call's cancellation signal, and progress is
-  streamed after each one. Their HTTP calls carry their own timeouts.
+  truncated message; credentials in any URL, up to the last `@` before the path;
+  and `Basic`/`Bearer` header values. A base URL may carry `user:password@`.
+- **A cancelled or overtaken test changes nothing.** Named sections are
+  deduplicated, each test has a deadline, and the call's cancellation signal
+  reaches the HTTP requests of every test that makes them directly. The rest
+  (Confluence, Google, Slack) only read, so an abandoned one ends at its own
+  request timeouts. OpenAI-compatible discovery checks cancellation right before
+  it stores models, and stores them only if the endpoint and key are still the
+  ones it asked, keeping any change saved meanwhile. Progress is streamed after
+  each test.
+
+The Google and Tempo token refreshes, which every tool and test go through,
+store a refreshed token only while the stored refresh token is still the one the
+request used. A refresh that returns after a disconnect therefore cannot
+reconnect the account. A refresh is not cancelled mid-request: the provider may
+already have rotated the refresh token, and dropping the answer would lose the
+grant.
 
 Settings-file read errors never quote the file: a `JSON.parse` failure reads
 "the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the

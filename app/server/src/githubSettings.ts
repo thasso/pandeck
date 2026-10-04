@@ -31,6 +31,7 @@ import {
   resolveAuthenticatedLogin,
 } from "./githubClient.ts";
 import { fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 /** Scope a classic PAT needs so GHCR (`ghcr.io`) accepts a container pull. */
 const PACKAGE_READ_SCOPE = "read:packages";
@@ -169,7 +170,9 @@ export async function getGithubRegistryCredential(
 }
 
 /** Validate the saved token with a minimal `/user` call. */
-export async function testGithubSettings(): Promise<GithubConnectionStatus> {
+export async function testGithubSettings(
+  signal?: AbortSignal,
+): Promise<GithubConnectionStatus> {
   const settings = readPrivate();
   const checkedAt = Date.now();
   if (!settings.enabled)
@@ -185,7 +188,7 @@ export async function testGithubSettings(): Promise<GithubConnectionStatus> {
       { token: settings.token, apiBaseUrl: GITHUB_API_BASE },
       "GET",
       "/user",
-      { signal: AbortSignal.timeout(15_000) },
+      { signal: deadlineSignal(15_000, signal) },
     );
     const login = res.data?.login;
     const base = login

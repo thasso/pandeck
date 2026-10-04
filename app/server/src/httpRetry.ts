@@ -112,3 +112,12 @@ export async function fetchWithRetry(
   }
   throw lastError ?? new Error("fetchWithRetry exhausted attempts.");
 }
+
+/** A request deadline that also ends when the caller's `signal` aborts. */
+export function deadlineSignal(
+  timeoutMs: number,
+  signal?: AbortSignal,
+): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}

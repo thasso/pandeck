@@ -36,3 +36,10 @@ test("auth header values and URL credentials are scrubbed without being stored",
     "see https://[redacted]@host/x",
   );
 });
+
+test("URL credentials end at the last @ before the path", () => {
+  assert.equal(
+    redactSecrets("GET https://alice:head@tail@example.invalid/v1 failed"),
+    "GET https://[redacted]@example.invalid/v1 failed",
+  );
+});

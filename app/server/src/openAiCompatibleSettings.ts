@@ -19,6 +19,7 @@ import type {
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { errorText, fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const OPENAI_COMPATIBLE_SETTINGS_DIR = join(DATA_DIR, "settings");
 const OPENAI_COMPATIBLE_CONFIG_PATH = join(
@@ -273,7 +274,9 @@ export function getOpenAiCompatibleProviderConfigForRegistry():
   };
 }
 
-export async function testOpenAiCompatibleSettings(): Promise<OpenAiCompatibleConnectionStatus> {
+export async function testOpenAiCompatibleSettings(
+  signal?: AbortSignal,
+): Promise<OpenAiCompatibleConnectionStatus> {
   const config = normalizeConfig(readFile());
   const checkedAt = Date.now();
   if (!config.enabled) {
@@ -295,7 +298,7 @@ export async function testOpenAiCompatibleSettings(): Promise<OpenAiCompatibleCo
 
   let discovered: OpenAiCompatibleModelInfo[];
   try {
-    discovered = await discoverModels(config.baseUrl, config.apiKey);
+    discovered = await discoverModels(config.baseUrl, config.apiKey, signal);
   } catch (err) {
     // A status, not a throw: the caller still re-syncs the registry and sends
     // fresh settings, which matters after an endpoint change cleared the models.
@@ -306,7 +309,20 @@ export async function testOpenAiCompatibleSettings(): Promise<OpenAiCompatibleCo
       models: config.models,
     };
   }
-  const next = normalizeConfig({ ...config, models: discovered });
+  // A cancelled test stores nothing, and discovery answers only for the
+  // endpoint it asked: the config is read again so a change saved while the
+  // request was out (disabled, another URL or key) is kept, not overwritten.
+  signal?.throwIfAborted();
+  const current = normalizeConfig(readFile());
+  if (current.baseUrl !== config.baseUrl || current.apiKey !== config.apiKey)
+    return {
+      ok: false,
+      checkedAt,
+      message:
+        "The provider settings changed during discovery. Test again to discover models for the new settings.",
+      models: current.models,
+    };
+  const next = normalizeConfig({ ...current, models: discovered });
   writeFile(next);
   return {
     ok: true,
@@ -345,11 +361,12 @@ function redactCredentials(
 async function discoverModels(
   baseUrl: string,
   apiKey: string | undefined,
+  signal?: AbortSignal,
 ): Promise<OpenAiCompatibleModelInfo[]> {
   const url = `${normalizeBaseUrl(baseUrl)}/models`;
   const res = await fetch(url, {
     ...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
-    signal: AbortSignal.timeout(15_000),
+    signal: deadlineSignal(15_000, signal),
   });
   const text = await res.text();
   if (!res.ok) {
