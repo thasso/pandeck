@@ -5,10 +5,11 @@
  * admission, the model they resolve and how a missing one is reported, and
  * whatever they do with the session once it exists.
  */
+import { randomUUID } from "node:crypto";
 import type {
   AgentType,
+  Harness,
   SessionMode,
-  SessionScope,
   ThinkingLevel,
 } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
@@ -20,17 +21,22 @@ import {
   sessionPromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { sessionSkills } from "../sessionSkills.ts";
+import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { harnessRegistry } from "./registry.ts";
+
+/** Why a session cannot run under an id another engine holds. */
+export function sessionIdTakenMessage(id: string, holder: Harness): string {
+  return `Session ${id} belongs to the ${holder} harness.`;
+}
 
 /** Another engine already holds the id a Claude session was to run under. */
 export class SessionIdTakenError extends Error {
   constructor(
     readonly sessionId: string,
-    readonly holder: string,
+    readonly holder: Harness,
   ) {
-    super(`Session ${sessionId} belongs to the ${holder} harness.`);
+    super(sessionIdTakenMessage(sessionId, holder));
     this.name = "SessionIdTakenError";
   }
 }
@@ -50,12 +56,6 @@ interface SessionStart {
   credentialProfileId: string;
   /** Session-start evidence its prompt conditions freeze (Task 287). */
   promptEvidence?: SessionPromptEvidence | undefined;
-  /**
-   * Freeze its library skills before the first query, from these names when
-   * given (`sessionSkillPreset`; with them the freeze awaits nothing). pi
-   * already freezes inside creation; asking makes sure of it.
-   */
-  skills?: true | readonly string[] | undefined;
   /** The title it starts with; a titled session is never auto-named. */
   title?: string | undefined;
 }
@@ -64,15 +64,19 @@ interface SessionStart {
 export type NewSession =
   | (SessionStart & {
       harness: "claude-sdk";
-      /** The id it runs under. */
-      id: string;
       /**
-       * The id came from a client, so it is checked against everything another
-       * engine holds, a transcript on disk included. A server-minted id is
-       * checked against memory and the row only: no transcript can hold it.
+       * The id it runs under, when the caller names one (a client's): checked
+       * against everything another engine holds, a transcript on disk
+       * included. Absent, a fresh id is minted here and checked against memory
+       * and the row only, since no transcript can hold it.
        */
-      clientId?: boolean | undefined;
+      id?: string | undefined;
       modelId?: string | undefined;
+      /**
+       * Freeze its library skills before it exists: the current ones (`true`),
+       * or these names (a fork's inherited list).
+       */
+      skills?: true | readonly string[] | undefined;
       /** Instructions appended to its system prompt (the Personal Assistant). */
       additionalSystemPrompt?: string | undefined;
     })
@@ -80,10 +84,14 @@ export type NewSession =
       harness: "pi";
       /** pi mints the id; the model is a handle on the session's account. */
       model?: PiModel;
+      /**
+       * Make sure its current library skills are frozen. pi freezes them
+       * inside creation, before anything here could pass it names, so it takes
+       * no preset.
+       */
+      skills?: true | undefined;
       /** The row's purpose when it is not an ordinary chat (`draft`). */
       purpose?: string | undefined;
-      /** Declared at creation: it is persisted before the session goes live. */
-      scope?: SessionScope | undefined;
     });
 
 /**
@@ -94,26 +102,28 @@ export type NewSession =
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
   if (spec.harness === "claude-sdk") {
-    // The last ownership check: from here to the session's registration
-    // nothing yields, so no other engine can take the id in between, and a
-    // refusal comes before anything is written for it.
-    const holder = harnessRegistry.otherHolder(spec.id, "claude-sdk", {
-      onDisk: spec.clientId === true,
+    const id = spec.id ?? randomUUID();
+    // Resolved first: from the ownership check below to the session's
+    // registration nothing yields, so no other engine can take the id in
+    // between, and a refusal comes before anything is written for it.
+    const skills =
+      spec.skills === true
+        ? await sessionSkillPreset(id, spec.agentType)
+        : spec.skills;
+    const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
+      onDisk: spec.id !== undefined,
     });
-    if (holder) throw new SessionIdTakenError(spec.id, holder);
-    linkWorktree(spec.id, spec.worktreeId);
+    if (holder) throw new SessionIdTakenError(id, holder);
+    linkWorktree(id, spec.worktreeId);
     if (spec.promptEvidence)
-      sessionPromptConditions(spec.id, spec.agentType, spec.promptEvidence);
-    // Started, not awaited: with a preset the freeze lands right here, so
-    // nothing yields between the checks above and the session's registration.
+      sessionPromptConditions(id, spec.agentType, spec.promptEvidence);
+    // With the names resolved, the freeze lands right here, before the
+    // session exists; an existing freeze or a non-coding persona awaits
+    // nothing either.
     const skillsFrozen = spec.skills
-      ? sessionSkills(
-          spec.id,
-          spec.agentType,
-          spec.skills === true ? undefined : spec.skills,
-        )
+      ? sessionSkills(id, spec.agentType, skills)
       : undefined;
-    const session = claudeSdkStore.acquire(spec.id, {
+    const session = claudeSdkStore.acquire(id, {
       agentType: spec.agentType,
       credentialProfileId: spec.credentialProfileId,
       ...(spec.modelId !== undefined ? { modelId: spec.modelId } : {}),
@@ -145,7 +155,6 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
         ? { promptEvidence: spec.promptEvidence }
         : {}),
       ...(spec.mode !== undefined ? { mode: spec.mode } : {}),
-      ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
     },
   );
   sessionStore.upsert({
@@ -156,12 +165,7 @@ export async function createSession(spec: NewSession): Promise<LiveSession> {
     mode: live.sessionMode,
     ...(spec.purpose !== undefined ? { purpose: spec.purpose } : {}),
   });
-  if (spec.skills)
-    await sessionSkills(
-      live.sessionId,
-      spec.agentType,
-      spec.skills === true ? undefined : spec.skills,
-    );
+  if (spec.skills) await sessionSkills(live.sessionId, spec.agentType);
   linkWorktree(live.sessionId, spec.worktreeId);
   // A stored title keeps the first prompt from auto-naming it.
   if (spec.title !== undefined) live.rename(spec.title);

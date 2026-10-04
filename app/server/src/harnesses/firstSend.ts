@@ -16,9 +16,12 @@ import {
 import type { LiveSession } from "../harness.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
-import { sessionSkillPreset } from "../sessionSkills.ts";
 import { getSettings } from "../settings.ts";
-import { createSession, SessionIdTakenError } from "./create.ts";
+import {
+  createSession,
+  SessionIdTakenError,
+  sessionIdTakenMessage,
+} from "./create.ts";
 import { harnessRegistry } from "./registry.ts";
 
 /** A first send: the `harnessSend` the client opens a session with. */
@@ -84,7 +87,7 @@ function claudeOwnershipRefusal(id: string): FirstSendRefusal | undefined {
   const holder = harnessRegistry.otherHolder(id, "claude-sdk");
   return holder
     ? {
-        message: `Session ${id} belongs to the ${holder} harness.`,
+        message: sessionIdTakenMessage(id, holder),
         onSession: true,
       }
     : undefined;
@@ -173,15 +176,13 @@ const engines: Record<Harness, FirstSendEngine> = {
     },
     async prepare(req, profileId) {
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
-        // Resolved first, so the creation below awaits nothing between its
-        // last ownership check and the session's registration.
-        const skillPreset = await sessionSkillPreset(req.id, req.agentType);
         let live: LiveSession;
         try {
           live = await createSession({
             harness: "claude-sdk",
+            // The client's id: checked again, disk included, right before the
+            // session registers.
             id: req.id,
-            clientId: true,
             agentType: req.agentType,
             modelId: req.modelId,
             thinkingLevel: req.thinkingLevel,
@@ -190,7 +191,7 @@ const engines: Record<Harness, FirstSendEngine> = {
             worktreeId: worktree?.id,
             credentialProfileId: profileId,
             promptEvidence: evidence,
-            skills: skillPreset ?? true,
+            skills: true,
           });
         } catch (err) {
           if (err instanceof SessionIdTakenError)

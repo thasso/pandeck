@@ -217,12 +217,8 @@ test("pi first send rejects a profile from the wrong provider before acquisition
 });
 
 afterAll(() => {
-  (
-    piStore as unknown as {
-      acquireNew: typeof originalAcquireNew;
-      broadcastSessions: typeof originalBroadcastSessions;
-    }
-  ).acquireNew = originalAcquireNew;
+  (piStore as unknown as { acquireNew: typeof originalAcquireNew }).acquireNew =
+    originalAcquireNew;
   (
     hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
   ).broadcastSessions = originalBroadcastSessions;

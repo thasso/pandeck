@@ -666,9 +666,9 @@ class SessionHub {
     credentialProfileId = defaultClaudeProfileId(),
     mode?: SessionMode,
   ): ClaudeSdkSession {
-    // A backstop, never the first refusal: a client-supplied id was checked on
-    // disk already (`harnesses/firstSend.ts`), and every other id here is a
-    // server-minted UUID no transcript holds.
+    // A backstop, never the first refusal: only server-minted UUIDs reach this,
+    // which no transcript holds; a client-supplied id is created through
+    // `createSession`, which checks the disk too (`harnesses/create.ts`).
     const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
       onDisk: false,
     });
