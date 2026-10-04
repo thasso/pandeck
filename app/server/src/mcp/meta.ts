@@ -1,11 +1,10 @@
 /**
  * MCP `_meta` key contract between the session tool server and its clients.
- * `pa/*` keys have no in-repo reader (pi runs tools through
- * `piSdk/agentToolAdapter.ts`, Claude ignores them); they are kept for a
- * possible external MCP client. `anthropic/*` keys are read by the Claude Agent
- * SDK's native tool search. Everything
- * beyond the plain MCP tool surface rides under these keys so the wire stays
- * standard MCP.
+ * No in-repo client sends or reads the `pa/*` keys (pi runs tools through
+ * `piSdk/agentToolAdapter.ts`, Claude ignores them); the server still honours
+ * them for a possible external MCP client. `anthropic/*` keys are read by the
+ * Claude Agent SDK's native tool search. Everything beyond the plain MCP tool
+ * surface rides under these keys so the wire stays standard MCP.
  */
 
 /** Request `_meta` key: the caller's tool-call id (else the MCP request id is used). */

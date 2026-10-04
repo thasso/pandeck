@@ -97,7 +97,7 @@ mapping.
 | 5    | `runOneShot()` and its 10 callers                                             | open   |
 | 6    | Models and usage ports                                                        | open   |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
-| 8    | Shared session host kit                                                       | open   |
+| 8    | Shared session kit                                                            | open   |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |

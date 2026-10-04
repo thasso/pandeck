@@ -16,9 +16,6 @@
  *    `structuredContent` — see {@link toCallToolResult});
  *  - listed tool `_meta["pa/pi"]`: the tool's `executionMode`, and
  *    `_meta["pa/active"]`: active flag in `listMode: "all"`.
- *
- * Claude reads none of the `pa/*` keys and no external MCP client connects
- * today; they are kept for one.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {

@@ -5607,7 +5607,7 @@ export class Connection implements Viewer {
   ): { harness: Harness; kind: AgentKind; file?: string } | undefined {
     const record = sessionStore.get(id);
     if (record) {
-      const kind = record.agentType as AgentKind;
+      const kind: AgentKind = record.agentType;
       return {
         harness: record.harness,
         kind,

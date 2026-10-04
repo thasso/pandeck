@@ -259,7 +259,7 @@ function createClaudeTaskOutputTemp(): ClaudeTaskOutputTemp {
   }
 }
 
-/* ----------------------------- block helpers ----------------------------- */
+/* -------------------------------- helpers -------------------------------- */
 
 function textFromContent(content: readonly AgentContentBlock[]): string {
   return content

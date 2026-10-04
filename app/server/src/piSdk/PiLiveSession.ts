@@ -234,7 +234,7 @@ function assistantErrorMetadata(message: unknown): {
   };
 }
 
-/* ----------------------------- block helpers ----------------------------- */
+/* -------------------------------- helpers -------------------------------- */
 
 function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
   return {
