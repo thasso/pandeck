@@ -83,9 +83,9 @@ table when a later step needs them.
 - The test parses every non-test `.ts` module under `app/server/src` (and fails
   if a source with another extension appears there), so comments and unrelated
   strings never count. It does not cover the web client, which reaches no engine
-  but repeats the harness mapping until step 4, or scripts outside the server
-  source such as `scripts/bun-runtime-probe.mjs`, which imports
-  `piSdk/models.ts` on purpose to probe the packaged runtime.
+  and reads the shared `HARNESSES` helpers, or scripts outside the server source
+  such as `scripts/bun-runtime-probe.mjs`, which imports `piSdk/models.ts` on
+  purpose to probe the packaged runtime.
 - The allowlists in that test only shrink. A change that removes an engine
   import or a comparison deletes its entry in the same change; the test fails on
   a stale entry so the list cannot drift above reality.

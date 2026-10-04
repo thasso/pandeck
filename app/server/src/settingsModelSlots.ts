@@ -17,9 +17,8 @@ import {
   type CredentialProfileSlotUsage,
 } from "@assistant/shared";
 import {
+  automaticProfileIdFor,
   credentialProfileById,
-  defaultClaudeProfileId,
-  defaultOpenAiProfileId,
 } from "./credentialProfiles.ts";
 
 /** The model reference carried by every slot. */
@@ -135,8 +134,7 @@ export function resolveSlotAccount(
   slot: SettingsModelSlot,
 ): SlotAccountResolution {
   const wanted = accountProviderForModelProvider(slot.provider);
-  const automatic = () =>
-    wanted === "claude" ? defaultClaudeProfileId() : defaultOpenAiProfileId();
+  const automatic = () => automaticProfileIdFor(wanted);
   const pinned = slot.credentialProfileId?.trim();
   if (!pinned) return { profileId: automatic() };
   const profile = credentialProfileById(pinned);
