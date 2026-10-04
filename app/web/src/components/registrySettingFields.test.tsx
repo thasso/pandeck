@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 import type { AppSettings } from "@assistant/shared";
@@ -10,7 +10,11 @@ import {
   type SettingDescriptor,
 } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
-import { CLAIMED_SETTING_PATHS } from "./settingsClaims.ts";
+import {
+  CLAIMED_SETTING_PATHS,
+  OMITTED_SETTING_PATHS,
+  RENDERED_SETTING_PATHS,
+} from "./settingsClaims.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -55,15 +59,11 @@ test("every setting that needs hand-built UI is claimed", () => {
   );
 });
 
-test("today only the read-only values no section shows are rendered from the registry", () => {
+test("today only the Tempo worklog author is rendered from the registry", () => {
   const unclaimed = SETTINGS_REGISTRY.filter(
     (d) => !CLAIMED_SETTING_PATHS.has(d.path),
   ).map((d) => d.path);
-  expect(unclaimed).toEqual([
-    "google.redirectUri",
-    "tempo.redirectUri",
-    "tempo.authorAccountId",
-  ]);
+  expect(unclaimed).toEqual(["tempo.authorAccountId"]);
 });
 
 const settings = {
@@ -120,18 +120,10 @@ test("a new setting renders from its descriptor and saves through a section patc
   });
 
   const number = container!.querySelector<HTMLInputElement>(
-    'input[type="number"]',
+    'input[aria-label="Density"]',
   )!;
-  expect(number.min).toBe("1");
-  expect(number.max).toBe("5");
-  const setter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype,
-    "value",
-  )!.set!;
-  act(() => {
-    setter.call(number, "9");
-    number.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  type(number, "9");
+  blur(number);
   expect(onUpdate).toHaveBeenLastCalledWith({
     appearance: { turnStatsRow: true, density: 5 },
   });
@@ -149,14 +141,24 @@ test("a new setting renders from its descriptor and saves through a section patc
 test("a read-only setting shows its value", () => {
   render(
     <RegistrySettingFields
-      section="google"
-      settings={settings}
+      section="tempo"
+      settings={
+        { tempo: { authorAccountId: "acc-123" } } as unknown as AppSettings
+      }
       onUpdate={vi.fn()}
     />,
   );
-  expect(container!.textContent).toContain("OAuth redirect URI");
-  expect(container!.textContent).toContain("https://example.invalid/callback");
+  expect(container!.textContent).toContain("Worklog author account");
+  expect(container!.textContent).toContain("acc-123");
   expect(container!.querySelector("input")).toBeNull();
+});
+
+test("an omitted path says why, and is not also rendered", () => {
+  for (const [path, reason] of Object.entries(OMITTED_SETTING_PATHS)) {
+    expect(settingDescriptor(path), path).toBeDefined();
+    expect(reason.length, path).toBeGreaterThan(10);
+    expect(RENDERED_SETTING_PATHS, path).not.toContain(path);
+  }
 });
 
 test("a section whose own UI claims everything renders nothing", () => {
@@ -168,4 +170,180 @@ test("a section whose own UI claims everything renders nothing", () => {
     />,
   );
   expect(container!.textContent).toBe("");
+});
+
+function type(input: HTMLInputElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )!.set!;
+  act(() => {
+    setter.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function blur(input: HTMLElement): void {
+  act(() => {
+    input.dispatchEvent(new FocusEvent("blur"));
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+}
+
+const timeout: SettingDescriptor = {
+  path: "pdfConversion.timeoutMs",
+  section: "pdf-conversion",
+  label: "Timeout",
+  access: "value",
+  value: { kind: "integer", min: 30_000, max: 600_000 },
+};
+const projectId: SettingDescriptor = {
+  path: "taskIntakeAgent.projectId",
+  section: "task-intake",
+  label: "Project",
+  access: "value",
+  value: { kind: "string" },
+};
+
+/** A page that applies each save to its settings, as the server's echo does. */
+function Echoing({
+  initial,
+  descriptor,
+  section,
+  onSave,
+  expose,
+}: {
+  initial: object;
+  descriptor: SettingDescriptor;
+  section: SettingDescriptor["section"];
+  onSave: (patch: Partial<AppSettings>) => void;
+  expose?: (set: (next: object) => void) => void;
+}) {
+  const [current, setCurrent] = useState(initial);
+  expose?.(setCurrent);
+  return (
+    <RegistrySettingFields
+      section={section}
+      settings={current as AppSettings}
+      descriptors={[descriptor]}
+      claimed={new Set()}
+      onUpdate={(patch) => {
+        onSave(patch);
+        setCurrent((was) => ({ ...was, ...patch }));
+      }}
+    />
+  );
+}
+
+test("a number can be replaced digit by digit and is clamped only when saved", () => {
+  const onSave = vi.fn();
+  render(
+    <Echoing
+      initial={{ pdfConversion: { timeoutMs: 180_000 } }}
+      descriptor={timeout}
+      section="pdf-conversion"
+      onSave={onSave}
+    />,
+  );
+  const input = container!.querySelector<HTMLInputElement>("input")!;
+  type(input, "");
+  expect(input.value).toBe("");
+  type(input, "6");
+  type(input, "60");
+  type(input, "60000");
+  expect(onSave).not.toHaveBeenCalled();
+  expect(input.value).toBe("60000");
+  blur(input);
+  expect(onSave).toHaveBeenLastCalledWith({
+    pdfConversion: { timeoutMs: 60_000 },
+  });
+  expect(input.value).toBe("60000");
+
+  // Out of range is clamped when saved; nothing usable keeps the stored value.
+  type(input, "5");
+  blur(input);
+  expect(onSave).toHaveBeenLastCalledWith({
+    pdfConversion: { timeoutMs: 30_000 },
+  });
+  type(input, "");
+  blur(input);
+  expect(onSave).toHaveBeenCalledTimes(2);
+  expect(input.value).toBe("30000");
+});
+
+test("an incoming value never replaces text the user is still typing", () => {
+  let setFromServer: (next: object) => void = () => {};
+  const onSave = vi.fn();
+  render(
+    <Echoing
+      initial={{ taskIntakeAgent: { projectId: "alpha" } }}
+      descriptor={projectId}
+      section="task-intake"
+      onSave={onSave}
+      expose={(set) => (setFromServer = set)}
+    />,
+  );
+  const input = container!.querySelector<HTMLInputElement>("input")!;
+  type(input, "beta-in-progress");
+  // Another tab, or the assistant, saves a different value meanwhile.
+  act(() => setFromServer({ taskIntakeAgent: { projectId: "gamma" } }));
+  expect(input.value).toBe("beta-in-progress");
+  blur(input);
+  expect(onSave).toHaveBeenLastCalledWith({
+    taskIntakeAgent: { projectId: "beta-in-progress" },
+  });
+  // A pristine field follows the server again.
+  act(() => setFromServer({ taskIntakeAgent: { projectId: "delta" } }));
+  expect(input.value).toBe("delta");
+});
+
+test("Escape discards an edit", () => {
+  const onSave = vi.fn();
+  render(
+    <Echoing
+      initial={{ taskIntakeAgent: { projectId: "alpha" } }}
+      descriptor={projectId}
+      section="task-intake"
+      onSave={onSave}
+    />,
+  );
+  const input = container!.querySelector<HTMLInputElement>("input")!;
+  type(input, "oops");
+  act(() => {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  expect(input.value).toBe("alpha");
+  blur(input);
+  expect(onSave).not.toHaveBeenCalled();
+});
+
+test("an enum shows an unknown or missing value as such, not as the first choice", () => {
+  const strategy: SettingDescriptor = {
+    path: "worktrees.defaultMergeStrategy",
+    section: "worktrees",
+    label: "Strategy",
+    access: "value",
+    value: { kind: "enum", values: ["squash", "merge"] },
+  };
+  for (const [stored, label] of [
+    ["octopus", "Unsupported: octopus"],
+    [undefined, "Not set"],
+  ] as const) {
+    render(
+      <Echoing
+        initial={{ worktrees: { defaultMergeStrategy: stored } }}
+        descriptor={strategy}
+        section="worktrees"
+        onSave={vi.fn()}
+      />,
+    );
+    const select = container!.querySelector<HTMLSelectElement>("select")!;
+    expect(select.selectedOptions[0]?.textContent).toBe(label);
+    expect(select.selectedOptions[0]?.disabled).toBe(true);
+    act(() => root?.unmount());
+    container?.remove();
+    root = null;
+  }
 });

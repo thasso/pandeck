@@ -10,7 +10,7 @@
  * @useWhen Rendered by `SettingsPage` below every section; renders nothing
  *   when the section's own UI claims all its settings.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "@assistant/shared";
 import {
   INTEGRATION_SETTINGS_SECTIONS,
@@ -54,7 +54,49 @@ function Label({ descriptor }: { descriptor: SettingDescriptor }) {
   );
 }
 
-/** A text value saved when the field loses focus or Enter is pressed. */
+/**
+ * A typed value the user edits as text and commits on blur or Enter. While
+ * the user is editing (dirty), a new value from the server (another tab, the
+ * assistant, the echo of an earlier save) never replaces what they typed;
+ * a pristine field follows it. Escape discards the edit.
+ */
+function useDraft(value: string) {
+  const [draft, setDraft] = useState(value);
+  // A ref, so finishing an edit does not itself re-sync: a committed draft
+  // stays on screen until the server's next value (its echo) replaces it.
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) setDraft(value);
+  }, [value]);
+  return {
+    draft,
+    edit: (next: string) => {
+      dirty.current = true;
+      setDraft(next);
+    },
+    /** Hand the draft to `save` and stop editing. */
+    commit: (save: (draft: string) => void) => {
+      dirty.current = false;
+      if (draft !== value) save(draft);
+    },
+    discard: () => {
+      dirty.current = false;
+      setDraft(value);
+    },
+  };
+}
+
+function draftKeys(
+  draft: ReturnType<typeof useDraft>,
+  save: (value: string) => void,
+) {
+  return (event: React.KeyboardEvent) => {
+    if (event.key === "Enter" && !(event.target instanceof HTMLTextAreaElement))
+      draft.commit(save);
+    if (event.key === "Escape") draft.discard();
+  };
+}
+
 function TextValue({
   descriptor,
   value,
@@ -64,31 +106,60 @@ function TextValue({
   value: string;
   onSave: (value: string) => void;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const save = () => {
-    if (draft !== value) onSave(draft);
-  };
+  const draft = useDraft(value);
   const multiline =
     descriptor.value?.kind === "string" && descriptor.value.multiline;
-  return multiline ? (
-    <textarea
-      aria-label={descriptor.label}
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={save}
-      rows={4}
-      className="settings-input w-full"
-    />
-  ) : (
+  const props = {
+    "aria-label": descriptor.label,
+    value: draft.draft,
+    onChange: (
+      event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    ) => draft.edit(event.target.value),
+    onBlur: () => draft.commit(onSave),
+    onKeyDown: draftKeys(draft, onSave),
+    className: "settings-input w-full",
+  };
+  return multiline ? <textarea rows={4} {...props} /> : <input {...props} />;
+}
+
+/**
+ * A number edited freely as text (empty and partial input allowed) and
+ * validated, rounded and clamped to its bounds only when committed.
+ */
+function NumberValue({
+  descriptor,
+  spec,
+  value,
+  onSave,
+}: {
+  descriptor: SettingDescriptor;
+  spec: { kind: "integer" | "number"; min: number; max: number };
+  value: number | undefined;
+  onSave: (value: number) => void;
+}) {
+  const shown = value === undefined ? "" : String(value);
+  const draft = useDraft(shown);
+  const save = (text: string) => {
+    const typed = Number(text);
+    // Nothing usable typed: keep the stored value.
+    if (text.trim() === "" || !Number.isFinite(typed)) {
+      draft.discard();
+      return;
+    }
+    const whole = spec.kind === "integer" ? Math.round(typed) : typed;
+    const next = Math.min(spec.max, Math.max(spec.min, whole));
+    if (next !== value) onSave(next);
+    else draft.discard();
+  };
+  return (
     <input
+      type="text"
+      inputMode={spec.kind === "integer" ? "numeric" : "decimal"}
       aria-label={descriptor.label}
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={save}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") save();
-      }}
+      value={draft.draft}
+      onChange={(event) => draft.edit(event.target.value)}
+      onBlur={() => draft.commit(save)}
+      onKeyDown={draftKeys(draft, save)}
       className="settings-input w-full"
     />
   );
@@ -132,10 +203,23 @@ function Field({
       {spec.kind === "enum" ? (
         <select
           aria-label={descriptor.label}
-          value={typeof value === "string" ? value : ""}
+          value={
+            typeof value === "string" && spec.values.includes(value)
+              ? value
+              : ""
+          }
           onChange={(event) => onWrite(event.target.value)}
           className="settings-input w-full"
         >
+          {/* A stored value outside the choices, or none, is shown as such
+              rather than letting the browser pick the first option. */}
+          {!(typeof value === "string" && spec.values.includes(value)) && (
+            <option value="" disabled>
+              {typeof value === "string" && value
+                ? `Unsupported: ${value}`
+                : "Not set"}
+            </option>
+          )}
           {spec.values.map((option) => (
             <option key={option} value={option}>
               {option}
@@ -143,20 +227,11 @@ function Field({
           ))}
         </select>
       ) : spec.kind === "integer" || spec.kind === "number" ? (
-        <input
-          type="number"
-          aria-label={descriptor.label}
-          min={spec.min}
-          max={spec.max}
-          step={spec.kind === "integer" ? 1 : "any"}
-          value={typeof value === "number" ? value : ""}
-          onChange={(event) => {
-            const typed = event.target.valueAsNumber;
-            if (!Number.isFinite(typed)) return;
-            const whole = spec.kind === "integer" ? Math.round(typed) : typed;
-            onWrite(Math.min(spec.max, Math.max(spec.min, whole)));
-          }}
-          className="settings-input w-full"
+        <NumberValue
+          descriptor={descriptor}
+          spec={spec}
+          value={typeof value === "number" ? value : undefined}
+          onSave={onWrite}
         />
       ) : (
         <TextValue
@@ -164,6 +239,11 @@ function Field({
           value={typeof value === "string" ? value : ""}
           onSave={onWrite}
         />
+      )}
+      {(spec.kind === "integer" || spec.kind === "number") && (
+        <div className="text-caption text-faint">
+          {spec.min}–{spec.max}
+        </div>
       )}
     </div>
   );

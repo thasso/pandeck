@@ -1,15 +1,16 @@
 /**
- * The registry settings the Settings page's hand-written sections render, or
- * leave out on purpose ([Task-729](pa://task/729)). Every other setting of a
- * section is rendered from its registry descriptor below the section
- * (`RegistrySettingFields`), so a setting added to the registry reaches the
- * page without touching this file. Claim a path here only once a section's own
- * UI shows it.
+ * Which registry settings the Settings page's hand-written sections own
+ * ([Task-729](pa://task/729)). Every other setting of a section is rendered
+ * from its registry descriptor below the section (`RegistrySettingFields`), so
+ * a setting added to the registry reaches the page without touching this file.
  *
- * Secrets, OAuth connections, `json` values and writable integration fields
- * need hand-built UI, so a test requires each of them to be claimed.
+ * A path is claimed one of two ways: RENDERED by a section's own UI, or
+ * OMITTED on purpose, with the reason. Secrets, OAuth connections, `json`
+ * values and writable integration fields need hand-built UI, so a test
+ * requires each of them to be claimed.
  */
-export const CLAIMED_SETTING_PATHS: ReadonlySet<string> = new Set([
+/** Paths a section's own UI renders. */
+export const RENDERED_SETTING_PATHS: readonly string[] = [
   // appearance
   "appearance.separatorBeforeFinalResponse",
   "appearance.separatorAtTurnEnd",
@@ -147,14 +148,11 @@ export const CLAIMED_SETTING_PATHS: ReadonlySet<string> = new Set([
   "google.gmailMinutesLabelName",
   "google.connection",
   "google.accountEmail",
-  "google.scopes",
   "google.oauthClientConfigured",
   "google.gmailArchiveAuthorized",
   // slack
   "slack.enabled",
   "slack.connection",
-  "slack.userToken", // Connected through OAuth on the page; no manual entry.
-  "slack.botToken", // Connected through OAuth on the page; no manual entry.
   "slack.oauthClientConfigured",
   // slack-huddles
   "slack.huddlesEnabled",
@@ -190,4 +188,23 @@ export const CLAIMED_SETTING_PATHS: ReadonlySet<string> = new Set([
   // context7
   "context7.enabled",
   "context7.apiKey",
+];
+
+/** Paths no section shows, on purpose, and why. */
+export const OMITTED_SETTING_PATHS: Readonly<Record<string, string>> = {
+  "slack.userToken":
+    "Slack connects through OAuth on the page; there is no manual token entry.",
+  "slack.botToken":
+    "Slack connects through OAuth on the page; there is no manual token entry.",
+  "google.scopes":
+    "The OAuth scopes the app requests: a protocol detail, not a setting.",
+  "google.redirectUri":
+    "The OAuth app's redirect URI: deployment setup, not an end-user setting.",
+  "tempo.redirectUri":
+    "The OAuth app's redirect URI: deployment setup, not an end-user setting.",
+};
+
+export const CLAIMED_SETTING_PATHS: ReadonlySet<string> = new Set([
+  ...RENDERED_SETTING_PATHS,
+  ...Object.keys(OMITTED_SETTING_PATHS),
 ]);
