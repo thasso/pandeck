@@ -421,6 +421,7 @@ test("both stores reach the hub through one host", () => {
 
 test("a rename reaches the engine that holds the session, trimmed", async () => {
   const setTitle = vi.fn();
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(true);
   vi.spyOn(claudeSdkStore, "get").mockReturnValue({ setTitle } as never);
   const piRename = vi.spyOn(piStore, "renameSession").mockResolvedValue();
 
@@ -457,4 +458,16 @@ test("a blank or overlong title is refused before any engine is asked", async ()
     /120 characters or fewer/,
   );
   assert.equal(piRename.mock.calls.length, 0);
+});
+
+test("a Claude session without a record is not renamed into existence", async () => {
+  const acquire = vi.spyOn(claudeSdkStore, "acquire");
+  await assert.rejects(
+    harnessRegistry.rename(
+      { harness: "claude-sdk", id: "claude-no-record", agentType: "assistant" },
+      "A title",
+    ),
+    /session not found/,
+  );
+  assert.equal(acquire.mock.calls.length, 0);
 });

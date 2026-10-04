@@ -46,8 +46,10 @@ Four layers, each depending only on the ones below it:
      (`harnessRegistry.rename`, which validates the title) and a delete's engine
      half (`harnessRegistry.remove`: dispose, then delete what it stored) go to
      the engine entry too, while a delete's harness-neutral cleanup runs in one
-     flow for both. `hub.ts` still builds the merged session list from each
-     store.
+     flow for both, each step best-effort once the row is tombstoned. That
+     cleanup deletes the session's tool-output artifacts whichever engine held
+     it, so a fork's links into its deleted parent's artifacts stop resolving.
+     `hub.ts` still builds the merged session list from each store.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context

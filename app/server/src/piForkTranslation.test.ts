@@ -43,6 +43,7 @@ vi.mock("./hub.ts", async (importOriginal) => {
 });
 
 const { Connection } = await import("./connection.ts");
+const settings = await import("./settings.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 vi.spyOn(piStore, "forkSession").mockImplementation(
   (_kind, file, entryId, position, originEntryId) => {
@@ -672,6 +673,40 @@ test("an unanchored pi entry is refused with a clear message", async () => {
     /no provider anchor/,
     "the user gets the same clear message the claude-sdk branch gives",
   );
+});
+
+test("a refused fork never claims the view, on either engine", async () => {
+  const claims = vi.spyOn(
+    Connection.prototype as unknown as { claimViewRequest(): unknown },
+    "claimViewRequest",
+  );
+  const ids = await seedPiSession("unbound-for-claims", false);
+  const { fork, sent } = makeConnection();
+
+  await fork("unbound-for-claims", ids[1]!, "at");
+  // The same session as Claude's, whose cut is refused by the same anchor.
+  const real = settings.getSettings();
+  const enabled = vi.spyOn(settings, "getSettings").mockReturnValue({
+    ...real,
+    claudeSdk: { ...real.claudeSdk, enabled: true },
+  });
+  sessionStore.upsert({
+    id: "unbound-for-claims",
+    harness: "claude-sdk",
+    agentType: "developer",
+  });
+  await fork("unbound-for-claims", ids[1]!, "at");
+
+  assert.equal(claims.mock.calls.length, 0);
+  assert.deepEqual(
+    sent.filter((message) => message.type === "error").map((m) => m.message),
+    [
+      "Failed to fork session: this message has no provider anchor to branch from.",
+      "Failed to fork session: this message has no provider anchor to branch from.",
+    ],
+  );
+  claims.mockRestore();
+  enabled.mockRestore();
 });
 
 afterAll(() => {

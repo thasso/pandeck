@@ -57,12 +57,17 @@ test("a Claude fork the transcript cannot cut is refused before anything is writ
 
 test("a pi fork without the entry's own anchor is refused before pi branches", () => {
   const fork = vi.spyOn(piStore, "forkSession");
-  const prepared = prepareFork("pi", {
-    ...request,
-    position: "at",
-    anchors: { entryFound: true },
-  });
-  assert.ok("refusal" in prepared);
+  assert.deepEqual(
+    prepareFork("pi", {
+      ...request,
+      position: "at",
+      anchors: { entryFound: true },
+    }),
+    {
+      refusal:
+        "Failed to fork session: this message has no provider anchor to branch from.",
+    },
+  );
   assert.equal(fork.mock.calls.length, 0);
 });
 

@@ -18,7 +18,10 @@ import { canonicalPiSessionPath } from "../sessionStorage.ts";
 interface SessionRef {
   id: string;
   agentType: AgentType;
-  /** pi's transcript, which its rename and removal go through. */
+  /**
+   * pi's transcript, which its rename and removal go through. Only pi reads
+   * it: a Claude ref carries its id here, never a path to remove.
+   */
   file?: string | undefined;
 }
 
@@ -87,9 +90,12 @@ const sessions: Record<Harness, HarnessSessions> = {
       claudeSdkStore.acquire(id, {
         credentialProfileId: defaultClaudeProfileId(),
       }),
-    // Persisted with the session's record, which is opened for it.
-    rename: async ({ id }, title) =>
-      (claudeSdkStore.get(id) ?? claudeSdkStore.acquire(id)).setTitle(title),
+    // Persisted with the session's record, which is opened for it; a session
+    // without one is not renamed into existence.
+    rename: async ({ id }, title) => {
+      if (!claudeSdkStore.exists(id)) throw new Error("session not found.");
+      (claudeSdkStore.get(id) ?? claudeSdkStore.acquire(id)).setTitle(title);
+    },
     // Tombstones the id and deletes its record and native transcript.
     remove: async ({ id }) => claudeSdkStore.remove(id),
   },

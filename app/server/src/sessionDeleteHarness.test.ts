@@ -28,6 +28,7 @@ const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
 const questions = await import("./tools/core/questionTool.ts");
 const promptQueue = await import("./promptQueue.ts");
 const toolGroups = await import("./mcp/toolGroups/registry.ts");
+const { projectStore } = await import("./db/projectStore.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -75,4 +76,20 @@ test("a pi session's delete evicts it and removes its transcript", async () => {
   assert.deepEqual(evict.mock.calls, [[id]]);
   assert.equal(existsSync(file), false);
   for (const cleanup of ran) assert.deepEqual(cleanup.mock.calls, [[id]]);
+});
+
+test("a cleanup step that fails leaves the rest of the delete to run", async () => {
+  const id = "delete-claude-stuck-artifacts";
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "assistant" });
+  const forget = vi.spyOn(projectStore, "forgetSessionProject");
+  const remove = vi.spyOn(claudeSdkStore, "remove");
+  vi.spyOn(toolGroups, "deleteToolGroupSessionData").mockImplementation(() => {
+    throw new Error("EACCES: permission denied");
+  });
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  await connection().onDeleteSession(id);
+
+  assert.deepEqual(remove.mock.calls, [[id]]);
+  assert.deepEqual(forget.mock.calls, [[id]]);
 });

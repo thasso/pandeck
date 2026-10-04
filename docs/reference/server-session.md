@@ -317,13 +317,13 @@ harness adapters, runtime-to-wire transport, and runtime attachment helpers.
   and EVERY harness owes it. It is harness-neutral (the log store is keyed by
   session id alone), but the two branches reach it from different places:
   `claudeSdkStore.forkSession` calls it internally, because the session record
-  is derived from the copy, while a pi fork is seeded by `connection.ts` after
-  `hub.forkSession` returns — pi branches its own session file and never touches
-  our log, so a pi fork without that call opens on an empty chat beside a pi
-  session carrying the whole history. The connection validates its cut with
-  `SessionRuntime.canForkLogAt` BEFORE calling pi, whose branch writes a session
-  file nothing would reference if our copy then proved impossible.
-- A pi fork's two cuts must name the SAME TURN, and `connection.ts`'s
+  is derived from the copy, while a pi fork is seeded by `harnesses/fork.ts`
+  after `piStore.forkSession` returns — pi branches its own session file and
+  never touches our log, so a pi fork without that call opens on an empty chat
+  beside a pi session carrying the whole history. `prepareFork` validates its
+  cut with `SessionRuntime.canForkLogAt` BEFORE calling pi, whose branch writes
+  a session file nothing would reference if our copy then proved impossible.
+- A pi fork's two cuts must name the SAME TURN, and `harnesses/fork.ts`'s
   `piForkCut` is where that is decided. "before" is the simpler half: pi walks
   to the selected prompt's PARENT, so we copy through the entry immediately
   preceding that prompt (`forkAnchors().precedingEntryId`) — anchored or not,

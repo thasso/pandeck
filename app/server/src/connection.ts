@@ -4984,8 +4984,7 @@ export class Connection implements Viewer {
       });
       return;
     }
-    // Harness-neutral, so it covers both branches below: a deleted session owes
-    // no Plan clearing line to anyone.
+    // A deleted session owes no Plan clearing line to anyone.
     forgetPlanHintState(id);
     // Drop every Task reference to this session so nothing links to (or tries to
     // resume) a session that no longer exists.
@@ -5015,13 +5014,22 @@ export class Connection implements Viewer {
       agentType: ref.kind,
       file: resolved,
     });
-    // The in-memory cleanup below is keyed by session id and is always safe to
-    // run, whichever engine held the session. The metadata row is already
-    // tombstoned above.
-    clearPendingQuestion(id);
-    deleteSessionPromptQueue(id);
-    deleteToolGroupSessionData(id);
-    projectStore.forgetSessionProject(id);
+    // The cleanup below is keyed by session id and runs whichever engine held
+    // the session. The metadata row is already tombstoned above, so a delete
+    // cannot be retried: each step is best-effort, and one that fails (an
+    // artifact folder that cannot be removed) leaves the rest to run.
+    for (const cleanup of [
+      clearPendingQuestion,
+      deleteSessionPromptQueue,
+      deleteToolGroupSessionData,
+      (sessionId: string) => projectStore.forgetSessionProject(sessionId),
+    ]) {
+      try {
+        cleanup(id);
+      } catch (err) {
+        console.warn("[delete] session cleanup failed:", errorText(err));
+      }
+    }
     await removal;
     await hub.broadcastSessions();
   }
