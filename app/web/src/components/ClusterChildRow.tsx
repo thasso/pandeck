@@ -1,6 +1,8 @@
 import { memo } from "react";
+import { Activity, Users } from "lucide-react";
 import {
   sameClusterChildProps,
+  sessionClusterSummary,
   sessionStatusBadge,
   sessionStatusText,
   type SessionInboxCard,
@@ -22,10 +24,11 @@ export interface ClusterChildRowProps {
   /**
    * How this row is related to the item above it, for the spoken label: peers
    * of a spawn cluster are `coordinated`, a Workflow Run's own sessions are
-   * `workflow`. The row is otherwise identical, and the word is the only place
-   * the two folds differ.
+   * `workflow`, and the composer ledge's peers — owned or taken over — are
+   * `spawned`. The row is otherwise identical, and the word is the only place
+   * the surfaces differ.
    */
-  relation?: "coordinated" | "workflow";
+  relation?: "coordinated" | "workflow" | "spawned";
   /**
    * A tab stop of its own. The inbox says no: its rows are reached by arrow
    * key from the item above them, and a second stop per folded peer would put
@@ -34,6 +37,13 @@ export interface ClusterChildRowProps {
    * link is reachable by pointer alone.
    */
   tabbable?: boolean;
+  /**
+   * The row's `data-list-row-id`, when it must differ from the session id: a
+   * settled peer listed as a fold's history is ALSO a row of the Settled
+   * shelf, and two rows with one id would send a scroll restore to the wrong
+   * one.
+   */
+  listRowId?: string;
   /** Every callback takes the id it acts on, so the memo below survives. */
   onOpen: (sessionId: string) => void;
   /**
@@ -52,7 +62,9 @@ export interface ClusterChildRowProps {
  * @component ClusterChildRow
  * @purpose One session inside an EXPANDED fold — a spawn cluster's peer or a
  * Workflow Run's role session: the agent glyph, the title, its state badge, and
- * when it last moved.
+ * when it last moved. A peer is indented by its depth in the spawn tree, and
+ * says how many background jobs it runs and how many peers of its own it
+ * coordinates.
  * @useWhen The Sessions inbox has expanded a cluster card or a Workflow Run
  * item — by the user, or because a search matched inside it — or the composer
  * ledge has opened the peers the current session spawned.
@@ -73,6 +85,7 @@ function ClusterChildRowImpl({
   density = "tight",
   relation = "coordinated",
   tabbable = false,
+  listRowId,
   onOpen,
   onSettle,
   onArchive,
@@ -86,19 +99,32 @@ function ClusterChildRowImpl({
     AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
+  const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
+  const jobsText = `${jobs} background job${jobs === 1 ? "" : "s"} running`;
+  const peers = card.peers;
+  // The composer ledge lists what a chat SPAWNED, owned or not, so its rows
+  // claim no coordination either.
+  const peersText = peers
+    ? `${relation === "spawned" ? "spawned" : "coordinating"} ${sessionClusterSummary(peers)}`
+    : "";
+  // Each level steps in by the row's own leading inset; past six levels the
+  // step stops, so a deep chain keeps room for its titles.
+  const indent = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
 
   return (
     <div
       data-session-row
-      data-list-row-id={session.id}
+      data-list-row-id={listRowId ?? session.id}
       data-session-row-active={active ? "true" : undefined}
       role="button"
       tabIndex={tabbable ? 0 : -1}
-      aria-label={`Open ${relation} ${identityLabel(session)} session: ${title} — ${sessionStatusText(
-        session,
-        status,
-        now,
-      )}`}
+      aria-label={`Open ${relation} ${identityLabel(session)} session: ${title} — ${[
+        sessionStatusText(session, status, now),
+        jobs > 0 ? jobsText : "",
+        peersText,
+      ]
+        .filter(Boolean)
+        .join(", ")}`}
       onClick={() => onOpen(session.id)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -125,7 +151,8 @@ function ClusterChildRowImpl({
       }}
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
-      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pl-3 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+      style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
+      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
         density === "comfortable" ? "min-h-8" : "min-h-7"
       } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
     >
@@ -149,6 +176,26 @@ function ClusterChildRowImpl({
           pending={session.titleGenerationPending}
         />
       </span>
+      {jobs > 0 ? (
+        <span
+          title={jobsText}
+          className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted"
+        >
+          <Activity size={10} aria-hidden />
+          {jobs}
+        </span>
+      ) : null}
+      {peers ? (
+        <span
+          title={sessionClusterSummary(peers)}
+          className={`flex shrink-0 items-center gap-0.5 text-micro tabular-nums ${
+            peers.working > 0 ? "text-accent" : "text-faint"
+          }`}
+        >
+          <Users size={10} aria-hidden />
+          {peers.total}
+        </span>
+      ) : null}
       <span className="shrink-0 text-micro tabular-nums text-faint">
         {relativeAge(session.updatedAt, now)}
       </span>

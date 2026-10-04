@@ -623,26 +623,33 @@ capability logic.
   is built by the same private `inboxCard` the inbox and the cluster fold use,
   and the aggregate by the same `clusterCounts`, so the three can never state
   the same session — or count the same set — differently;
-  `spawnedSessionsSummary` is literally `sessionClusterSummary`, so the relation
-  is called one thing wherever it is read — including when that wording changes,
-  which is why the seam exists rather than a second format string. Two rules
-  differ from the fold on purpose. Membership is the durable
-  `spawnedBySessionId` edge ALONE: ownership does not filter here, because "what
-  did this chat start" is still answered by a peer the user has since taken over
-  (the fold's ownership rule exists to keep that peer a top-level row, which is
-  a different question). And its rows run by latest activity alone, newest
-  first, where the fold sorts by tier: the strip is a feed of what the peers
-  last did, and the tiering is stated on its collapsed line instead. It is
-  bounded by a `limit` (omitted once the user asks for every peer) with the
-  remainder counted as `hidden`, while `bubbled` — the peer waiting on a human
-  or holding a failure — is still picked in TIER order over ALL peers, so
-  neither the cut nor the activity order can hide the one that needs answering.
-  `spawnedSessionsKey` is the content key the host holds the strip on (`App.tsx`
-  gates the ledge node on it exactly as it gates the Backlog's session slice —
-  the composer is memoized, and a node rebuilt on every rebroadcast re-renders
-  the whole card for a line whose text did not change;
-  `transcriptRedrawScenario.test.tsx` counts it). Same contract, and the same
-  silent failure, as `sessionCardKey` — with the bubble and whether it is
+  `spawnedSessionsSummary` is `sessionClusterSummary` plus the strip's
+  `· N settled`, so the relation is called one thing wherever it is read —
+  including when that wording changes, which is why the seam exists rather than
+  a second format string. Three rules differ from the fold on purpose. Settled
+  history is a toggle on the strip itself, offered even when every peer is
+  settled, where the fold exists only while something is live. Membership is the
+  durable `spawnedBySessionId` edge ALONE: ownership does not filter here,
+  because "what did this chat start" is still answered by a peer the user has
+  since taken over (the fold's ownership rule exists to keep that peer a
+  top-level row, which is a different question). And its rows run by latest
+  activity alone, newest first, where the fold sorts by tier: the strip is a
+  feed of what the peers last did, and the tiering is stated on its collapsed
+  line instead. It walks EVERY depth (breadth-first, each peer once, so a cycle
+  cannot repeat one) and returns the peers as a tree with `depth` and nested
+  `peers` counts. The tree splits on `isDormantInSpawnTree`: LIVE peers — not
+  put down, a settled peer running a turn or holding jobs again, or a dormant
+  peer that live work hangs below (the branch it hangs from) — are always listed
+  and counted; DORMANT history is counted as `settled`, never in `counts`, and
+  listed in `rows` only with `includeSettled`, which adds rows and no numbers.
+  `bubbled` — the peer waiting on a human or holding a failure — is picked in
+  TIER order over all live peers, so the activity order cannot hide the one that
+  needs answering. `spawnedSessionsKey` is the content key the host holds the
+  strip on (`App.tsx` gates the ledge node on it exactly as it gates the
+  Backlog's session slice — the composer is memoized, and a node rebuilt on
+  every rebroadcast re-renders the whole card for a line whose text did not
+  change; `transcriptRedrawScenario.test.tsx` counts it). Same contract, and the
+  same silent failure, as `sessionCardKey` — with the bubble and whether it is
   DISMISSIBLE in it, and two differences that come from the CONSUMER rather than
   from taste: this key gates a value the host RETAINS, where a card key feeds a
   comparator that re-reads the old row against the new one at the current time.

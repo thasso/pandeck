@@ -171,11 +171,27 @@ describe("ActiveSessionCard clusters", () => {
     partial: Partial<SessionListItem> & { id: string },
   ): SessionInboxCard => card(partial);
 
+  type Cluster = NonNullable<SessionInboxCard["cluster"]>;
+  /** A cluster as the tests state it: no settled history, no live counts. */
+  type ClusterInput = Omit<
+    Cluster,
+    "childrenWithSettled" | "settledCount" | "counts"
+  > & {
+    counts: Omit<Cluster["counts"], "running" | "jobs"> &
+      Partial<Pick<Cluster["counts"], "running" | "jobs">>;
+  };
+
   function clusterMarkup(
-    cluster: SessionInboxCard["cluster"],
+    input: ClusterInput | undefined,
     expanded = false,
   ): string {
     const base = card({ id: "root", title: "Coordinator" });
+    const cluster: Cluster | undefined = input && {
+      childrenWithSettled: input.children,
+      settledCount: 0,
+      ...input,
+      counts: { running: 0, jobs: 0, ...input.counts },
+    };
     return renderToStaticMarkup(
       <ActiveSessionCard
         card={{ ...base, ...(cluster ? { cluster } : {}) }}
@@ -196,9 +212,9 @@ describe("ActiveSessionCard clusters", () => {
   it("states the aggregate instead of the peers themselves", () => {
     const html = clusterMarkup({
       children: [child({ id: "a" }), child({ id: "b", isStreaming: true })],
-      counts: { total: 2, working: 1, waiting: 0, failed: 0 },
+      counts: { total: 2, working: 1, running: 1, waiting: 0, failed: 0 },
     });
-    expect(html).toContain("2 sessions · 1 working");
+    expect(html).toContain("2 sessions · 1 running");
     // The card, not the line, is what says whose peers these are.
     expect(html).not.toContain(">Coordinating");
     // The peers are the browser's rows to lay out; the card names none of them.
@@ -241,6 +257,33 @@ describe("ActiveSessionCard clusters", () => {
     });
     expect(idle).not.toContain("animate-spin");
     expect(idle).toContain("text-muted hover:text-fg");
+  });
+
+  it("states running turns and background jobs on the line, not only in the tooltip", () => {
+    const html = clusterMarkup({
+      children: [child({ id: "a", isStreaming: true }), child({ id: "b" })],
+      counts: {
+        total: 2,
+        working: 2,
+        running: 1,
+        jobs: 3,
+        waiting: 0,
+        failed: 0,
+      },
+    });
+    // A visible fact, so a quiet coordinator says whether its tree is moving:
+    // icon and number inside the disclosure, the words in its label.
+    expect(html).toContain(
+      'aria-label="Show the 2 coordinated sessions — 1 running · 3 jobs"',
+    );
+    expect(html).toMatch(/<\/svg>1<\/span>/);
+    expect(html).toMatch(/<\/svg>3<\/span>/);
+    const quiet = clusterMarkup({
+      children: [child({ id: "a" })],
+      counts: { total: 1, working: 0, waiting: 0, failed: 0 },
+    });
+    expect(quiet).not.toContain("running");
+    expect(quiet).not.toContain(" job");
   });
 
   it("offers to dismiss a peer failure the user has moved on from", () => {

@@ -4516,13 +4516,21 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       action.settled,
       action.now,
     );
+    // A peer already down keeps its settled time, as the server's cascade
+    // does, so it does not jump to the top of the shelf until the list lands.
+    const alreadySettled = new Set(
+      sessions
+        .filter((session) => session.settledAt !== undefined)
+        .map((session) => session.id),
+    );
     for (const sessionId of action.peerSessionIds)
-      sessions = applyOptimisticSessionSettle(
-        sessions,
-        sessionId,
-        true,
-        action.now,
-      );
+      if (!alreadySettled.has(sessionId))
+        sessions = applyOptimisticSessionSettle(
+          sessions,
+          sessionId,
+          true,
+          action.now,
+        );
     return { ...state, sessions, error: null };
   }
   if (action.kind === "optimisticWorkflowRunSettle") {

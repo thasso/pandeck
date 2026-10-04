@@ -31,7 +31,7 @@ import {
   type WorkflowRunInboxItem,
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
-import type { RowDensity } from "../lib/rowDensity.ts";
+import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
@@ -76,10 +76,10 @@ function RunBadgeIcon({
 
 /** Settle, inline at the end of the status row like a session card's. */
 const INLINE_ACTION =
-  "-my-0.5 flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
-  tight: "size-6",
-  comfortable: "size-8",
+  tight: "size-6 -my-0.5",
+  comfortable: "size-8 -my-0.5",
 };
 
 export interface WorkflowRunInboxCardProps {
@@ -216,7 +216,9 @@ function WorkflowRunInboxCardImpl({
       <div
         className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
       >
-        <div className="flex min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint">
+        <div
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+        >
           <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
             {projectKey ? (
               <span
@@ -276,7 +278,9 @@ function WorkflowRunInboxCardImpl({
           </span>
         </div>
 
-        <div className="flex min-h-5 min-w-0 items-center gap-1.5 text-micro">
+        <div
+          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+        >
           {/* Signals show whole or not at all; DOM order is the drop order, so
               the role session that needs you outlasts the phase. */}
           <div

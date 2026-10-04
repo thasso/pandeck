@@ -5,11 +5,12 @@ import type {
   WorkflowRunCard,
   WorkflowRunSummary,
 } from "@assistant/shared";
-import { isShelvedSession, SPAWN_CLUSTER_MAX_DEPTH } from "@assistant/shared";
+import { isShelvedSession } from "@assistant/shared";
 import {
   buildSessionInbox,
   inboxItemId,
   clusterBubbleDismissible,
+  clusterLiveSummary,
   sameClusterChildProps,
   sameWorkflowRunItemProps,
   sessionSettleCascade,
@@ -863,12 +864,14 @@ describe("spawn clusters", () => {
     expect(card.cluster?.counts).toEqual({
       total: 5,
       working: 2,
+      running: 2,
+      jobs: 0,
       waiting: 1,
       failed: 1,
     });
     expect(
       sessionClusterSummary(card.cluster?.counts as SessionClusterCounts),
-    ).toBe("5 sessions · 2 working · 1 waiting · 1 failed");
+    ).toBe("5 sessions · 2 running · 1 waiting · 1 failed");
     expect(card.cluster?.children.map((c) => c.session.id)).toEqual([
       "c",
       "e",
@@ -939,21 +942,94 @@ describe("spawn clusters", () => {
     expect(root?.cluster?.counts.total).toBe(2);
   });
 
-  it("stops at a bounded root instead of walking a long chain", () => {
+  it("folds a chain of any depth into its one root", () => {
     const chain = [session({ id: "s0" })];
     for (let i = 1; i <= 9; i += 1) chain.push(child(`s${i}`, `s${i - 1}`));
     const view = buildSessionInbox(chain);
-    // The cap holds a cluster to the coordinator plus four levels; the session
-    // past it starts a bounded root of its own.
-    expect(topLevel(view)).toEqual(["s0", `s${SPAWN_CLUSTER_MAX_DEPTH + 1}`]);
-    // Every session appears exactly once, as a root or folded under one.
-    const seen = [
-      ...cards(view.active).flatMap((card) => [
-        card.session.id,
-        ...(card.cluster?.children ?? []).map((c) => c.session.id),
-      ]),
-    ];
-    expect(seen.sort()).toEqual(chain.map((s) => s.id).sort());
+    expect(topLevel(view)).toEqual(["s0"]);
+    const children = cards(view.active)[0]?.cluster?.children ?? [];
+    expect(children.map((c) => [c.session.id, c.depth])).toEqual(
+      Array.from({ length: 9 }, (_, i) => [`s${i + 1}`, i + 1]),
+    );
+  });
+
+  it("lists the fold as a tree: each peer under its spawner, with its own peers counted", () => {
+    const view = buildSessionInbox([
+      session({ id: "root" }),
+      child("impl", "root", { updatedAt: NOW - 50_000 }),
+      child("rev", "impl", {
+        updatedAt: NOW - 1_000,
+        backgroundActivity: {
+          activeCount: 2,
+          shellCount: 1,
+          monitorCommandCount: 1,
+          monitorWebsocketCount: 0,
+          startingCount: 0,
+          stoppingCount: 0,
+          oldestStartedAt: NOW - 30_000,
+        },
+      }),
+      child("fix", "impl", { isStreaming: true }),
+      child("helper", "root", { updatedAt: NOW - 20_000 }),
+    ]);
+    const card = cards(view.active)[0] as SessionInboxCard;
+    // Siblings in inbox order (working — a turn or a background job — first,
+    // then newest), every child right under its spawner however recently it
+    // moved.
+    expect(card.cluster?.children.map((c) => [c.session.id, c.depth])).toEqual([
+      ["helper", 1],
+      ["impl", 1],
+      ["rev", 2],
+      ["fix", 2],
+    ]);
+    const impl = card.cluster?.children.find((c) => c.session.id === "impl");
+    expect(impl?.peers).toMatchObject({ total: 2, running: 1, jobs: 2 });
+    expect(
+      card.cluster?.children.find((c) => c.session.id === "helper")?.peers,
+    ).toBe(undefined);
+    // The card counts every depth, and jobs separately from turns.
+    expect(card.cluster?.counts).toMatchObject({
+      total: 4,
+      running: 1,
+      jobs: 2,
+    });
+    expect(
+      clusterLiveSummary(card.cluster?.counts as SessionClusterCounts),
+    ).toBe("1 running · 2 jobs");
+  });
+
+  it("lists the coordinator's settled peers only on request, in their place in the tree", () => {
+    const view = buildSessionInbox([
+      session({ id: "root" }),
+      child("live", "root", { isStreaming: true }),
+      child("done", "root", { settledAt: NOW - 5_000 }),
+      child("done-under-live", "live", { settledAt: NOW - 5_000 }),
+      child("done-under-done", "done", { settledAt: NOW - 5_000 }),
+      // The user's own session stays out of the coordinator's history.
+      child("mine", "root", {
+        settledAt: NOW - 5_000,
+        spawnOwnership: "taken-over",
+      }),
+    ]);
+    const card = cards(view.active)[0] as SessionInboxCard;
+    expect(card.cluster?.children.map((c) => c.session.id)).toEqual(["live"]);
+    expect(card.cluster?.counts.total).toBe(1);
+    expect(card.cluster?.settledCount).toBe(3);
+    expect(
+      card.cluster?.childrenWithSettled.map((c) => [c.session.id, c.depth]),
+    ).toEqual([
+      ["live", 1],
+      ["done-under-live", 2],
+      ["done", 1],
+      ["done-under-done", 2],
+    ]);
+    // History is a view: the settled peers are still on the shelf.
+    expect(view.settled.map((s) => s.id).sort()).toEqual([
+      "done",
+      "done-under-done",
+      "done-under-live",
+      "mine",
+    ]);
   });
 
   it("terminates on a spawn cycle without dropping or duplicating a session", () => {
@@ -1189,7 +1265,7 @@ describe("spawn clusters", () => {
     expect(cards(view.active)[0]?.settleBlocked).toBe(undefined);
   });
 
-  it("releases the children of a settled coordinator nothing is waiting on", () => {
+  it("keeps a settled coordinator a card while live peers hang under it", () => {
     // A Settle from the card shelves the peers too; these are the peers that
     // came back on their own (an outcome woke them) or were spawned after.
     const view = buildSessionInbox([
@@ -1198,15 +1274,22 @@ describe("spawn clusters", () => {
       child("busy", "root", { isStreaming: true }),
       child("deep", "quiet"),
     ]);
-    expect(view.settled.map((s) => s.id)).toEqual(["root"]);
-    // The peers stand on their own rather than being buried in a shelf row, and
-    // each keeps whatever it spawned folded under it.
-    expect(topLevel(view).sort()).toEqual(["busy", "quiet"]);
+    // The live work stays under the session that started it rather than
+    // surfacing as cards of its own, and nothing live is on the shelf.
+    expect(view.settled).toEqual([]);
+    expect(topLevel(view)).toEqual(["root"]);
     expect(
-      cards(view.active)
-        .find((card) => card.session.id === "quiet")
-        ?.cluster?.children.map((c) => c.session.id),
-    ).toEqual(["deep"]);
+      cards(view.active)[0]?.cluster?.children.map((c) => c.session.id),
+    ).toEqual(["busy", "quiet", "deep"]);
+  });
+
+  it("puts a settled coordinator with nothing live under it on the shelf", () => {
+    const view = buildSessionInbox([
+      session({ id: "root", settledAt: NOW - 5_000 }),
+      child("done", "root", { settledAt: NOW - 5_000 }),
+    ]);
+    expect(view.settled.map((s) => s.id).sort()).toEqual(["done", "root"]);
+    expect(topLevel(view)).toEqual([]);
   });
 
   it("treats an unacknowledged failed outcome as a failure", () => {
@@ -1232,17 +1315,23 @@ describe("spawn clusters", () => {
     expect(card.settleBlocked).toBe(undefined);
   });
 
-  it("leaves a settled child on the shelf and releases what it spawned", () => {
+  it("keeps a settled child in the tree while what it spawned is live", () => {
     const view = buildSessionInbox([
       session({ id: "root" }),
       child("mid", "root", { settledAt: NOW - 5_000 }),
       child("leaf", "mid"),
     ]);
-    expect(view.settled.map((s) => s.id)).toEqual(["mid"]);
-    expect(topLevel(view).sort()).toEqual(["leaf", "root"]);
+    expect(view.settled).toEqual([]);
+    expect(topLevel(view)).toEqual(["root"]);
     expect(
-      cards(view.active).find((c) => c.session.id === "root")?.cluster,
-    ).toBe(undefined);
+      cards(view.active)[0]?.cluster?.children.map((c) => [
+        c.session.id,
+        c.depth,
+      ]),
+    ).toEqual([
+      ["mid", 1],
+      ["leaf", 2],
+    ]);
   });
 
   it("keys the card on what the cluster says, and on nothing else about it", () => {
@@ -1364,12 +1453,29 @@ describe("spawn clusters", () => {
   });
 
   it("says how many sessions a cluster holds, leaving out what is zero", () => {
+    const counts = (over: Partial<SessionClusterCounts>) => ({
+      total: 1,
+      working: 0,
+      running: 0,
+      jobs: 0,
+      waiting: 0,
+      failed: 0,
+      ...over,
+    });
+    expect(sessionClusterSummary(counts({}))).toBe("1 session");
     expect(
-      sessionClusterSummary({ total: 1, working: 0, waiting: 0, failed: 0 }),
-    ).toBe("1 session");
-    expect(
-      sessionClusterSummary({ total: 3, working: 3, waiting: 0, failed: 0 }),
-    ).toBe("3 sessions · 3 working");
+      sessionClusterSummary(counts({ total: 3, working: 3, running: 2 })),
+    ).toBe("3 sessions · 2 running");
+    expect(sessionClusterSummary(counts({ total: 2, jobs: 1 }))).toBe(
+      "2 sessions · 1 job",
+    );
+    expect(clusterLiveSummary(counts({ jobs: 0 }))).toBe("");
+    // Busy with neither a turn nor a job (a retained host): the spinner turns,
+    // so the words say why.
+    expect(clusterLiveSummary(counts({ working: 1 }))).toBe("1 working");
+    expect(clusterLiveSummary(counts({ working: 2, running: 1 }))).toBe(
+      "1 running",
+    );
   });
 });
 
@@ -1479,7 +1585,7 @@ describe("formal Workflow Runs", () => {
     expect(runItems(view)).toHaveLength(1);
     expect(cards(view.active)).toEqual([]);
     expect(cards(view.needsYou)).toEqual([]);
-    expect(runItems(view)[0]?.counts).toEqual({
+    expect(runItems(view)[0]?.counts).toMatchObject({
       total: 4,
       working: 2,
       waiting: 0,
@@ -1659,7 +1765,7 @@ describe("formal Workflow Runs", () => {
     expect(workflowRunPhaseLine(item)).toBe("Merge decision");
     // Every role is folded — none of the four is a card, whatever its own
     // pending outcome says — and the item still counts the failure it holds.
-    expect(item.counts).toEqual({
+    expect(item.counts).toMatchObject({
       total: 4,
       working: 0,
       waiting: 0,
@@ -2119,12 +2225,21 @@ describe("formal Workflow Runs", () => {
   });
 
   it("says how many sessions a run holds, leaving out what is zero", () => {
+    const counts = (over: Partial<SessionClusterCounts>) => ({
+      total: 1,
+      working: 0,
+      running: 0,
+      jobs: 0,
+      waiting: 0,
+      failed: 0,
+      ...over,
+    });
+    expect(workflowRunRolesSummary(counts({}))).toBe("1 workflow session");
     expect(
-      workflowRunRolesSummary({ total: 1, working: 0, waiting: 0, failed: 0 }),
-    ).toBe("1 workflow session");
-    expect(
-      workflowRunRolesSummary({ total: 5, working: 2, waiting: 1, failed: 1 }),
-    ).toBe("5 workflow sessions · 2 working · 1 waiting · 1 failed");
+      workflowRunRolesSummary(
+        counts({ total: 5, working: 2, running: 2, waiting: 1, failed: 1 }),
+      ),
+    ).toBe("5 workflow sessions · 2 running · 1 waiting · 1 failed");
   });
 });
 
@@ -2141,12 +2256,8 @@ describe("spawnedSessionsView", () => {
       ...extra,
     });
 
-  const view = (sessions: SessionListItem[], limit?: number) =>
-    spawnedSessionsView({
-      sessions,
-      coordinatorId: "root",
-      ...(limit === undefined ? {} : { limit }),
-    });
+  const view = (sessions: SessionListItem[], includeSettled = false) =>
+    spawnedSessionsView({ sessions, coordinatorId: "root", includeSettled });
 
   it("takes the peers of one session, newest activity first", () => {
     const shaped = view([
@@ -2173,10 +2284,79 @@ describe("spawnedSessionsView", () => {
     expect(shaped.counts).toEqual({
       total: 3,
       working: 1,
+      running: 1,
+      jobs: 0,
       waiting: 1,
       failed: 0,
     });
-    expect(shaped.hidden).toBe(0);
+    expect(shaped.settled).toBe(0);
+  });
+
+  it("walks every depth, whoever owns the edge, and draws it as a tree", () => {
+    const shaped = view([
+      session({ id: "root" }),
+      peer("impl", "root", { updatedAt: NOW - 50_000 }),
+      peer("rev", "impl", { updatedAt: NOW - 1_000, isStreaming: true }),
+      // A peer the user took over still started what it spawned in turn.
+      peer("mine", "root", {
+        spawnOwnership: "taken-over",
+        updatedAt: NOW - 40_000,
+      }),
+      peer("deep", "mine", { updatedAt: NOW - 30_000 }),
+    ]);
+    expect(shaped.rows.map((c) => [c.session.id, c.depth])).toEqual([
+      ["mine", 1],
+      ["deep", 2],
+      ["impl", 1],
+      ["rev", 2],
+    ]);
+    expect(shaped.counts).toMatchObject({ total: 4, running: 1 });
+    expect(
+      shaped.rows.find((c) => c.session.id === "impl")?.peers,
+    ).toMatchObject({ total: 1, running: 1 });
+  });
+
+  it("keeps settled peers out unless asked, but never cuts live work loose", () => {
+    const sessions = [
+      session({ id: "root" }),
+      peer("done", "root", { settledAt: NOW - 5_000 }),
+      peer("done-deep", "done", { settledAt: NOW - 5_000 }),
+      // Settled, but it spawned something still live: it stays as the branch
+      // that live peer hangs from.
+      peer("mid", "root", { settledAt: NOW - 5_000 }),
+      peer("live", "mid", { isStreaming: true }),
+    ];
+    const live = view(sessions);
+    expect(live.rows.map((c) => [c.session.id, c.depth])).toEqual([
+      ["mid", 1],
+      ["live", 2],
+    ]);
+    expect(live.settled).toBe(2);
+    expect(live.settledShown).toBe(false);
+    expect(spawnedSessionsSummary(live)).toBe(
+      "2 sessions · 1 running · 2 settled",
+    );
+    const all = view(sessions, true);
+    expect(all.rows.map((c) => c.session.id).sort()).toEqual([
+      "done",
+      "done-deep",
+      "live",
+      "mid",
+    ]);
+    // The counts stay about what is live, whatever the list shows.
+    expect(all.counts.total).toBe(2);
+    expect(spawnedSessionsKey(all, true)).not.toBe(
+      spawnedSessionsKey(live, true),
+    );
+  });
+
+  it("walks a spawn cycle once", () => {
+    const shaped = view([
+      session({ id: "root", spawnedBySessionId: "b" }),
+      peer("a", "root"),
+      peer("b", "a"),
+    ]);
+    expect(shaped.rows.map((c) => c.session.id)).toEqual(["a", "b"]);
   });
 
   it("keeps a peer the user took over — it is still one this chat started", () => {
@@ -2201,29 +2381,24 @@ describe("spawnedSessionsView", () => {
     expect(shaped.counts.total).toBe(1);
   });
 
-  it("names the peer that needs the user, and counts the ones past the cut", () => {
-    const shaped = view(
-      [
-        session({ id: "root" }),
-        peer("a", "root", { isStreaming: true }),
-        peer("b", "root", { isStreaming: true }),
-        peer("c", "root", {
-          title: "Reviewer",
-          outcomeAttention: {
-            kind: "failed",
-            revision: 3,
-            settledRevision: 2,
-            at: NOW - 1_000,
-          },
-        }),
-      ],
-      2,
-    );
-    expect(shaped.rows).toHaveLength(2);
-    expect(shaped.hidden).toBe(1);
+  it("names the peer that needs the user", () => {
+    const shaped = view([
+      session({ id: "root" }),
+      peer("a", "root", { isStreaming: true }),
+      peer("b", "root", { isStreaming: true }),
+      peer("c", "root", {
+        title: "Reviewer",
+        outcomeAttention: {
+          kind: "failed",
+          revision: 3,
+          settledRevision: 2,
+          at: NOW - 1_000,
+        },
+      }),
+    ]);
+    expect(shaped.rows).toHaveLength(3);
     expect(shaped.counts.total).toBe(3);
     expect(shaped.counts.failed).toBe(1);
-    // The failed peer is bubbled even though the cut could have hidden it.
     expect(shaped.bubbled?.session.id).toBe("c");
     expect(
       sessionClusterBubbleLabel(shaped.bubbled as SessionInboxCard, NOW),
@@ -2239,7 +2414,7 @@ describe("spawnedSessionsView", () => {
     expect(spawnedSessionsSummary(shaped)).toBe(
       sessionClusterSummary(shaped.counts),
     );
-    expect(spawnedSessionsSummary(shaped)).toBe("2 sessions · 1 working");
+    expect(spawnedSessionsSummary(shaped)).toBe("2 sessions · 1 running");
   });
 
   it("keys on what it renders, so a rebroadcast that changes nothing is free", () => {
@@ -2308,21 +2483,10 @@ describe("spawnedSessionsView", () => {
     ).not.toBe(
       closed([peer("a", "root", { attention: "question", title: "Reviewer" })]),
     );
-    // A peer past the cut is still counted, and the count is drawn.
+    // A settled peer is drawn as a count on the line.
     expect(
-      spawnedSessionsKey(
-        view(
-          [session({ id: "root" }), peer("a", "root"), peer("b", "root")],
-          1,
-        ),
-        false,
-      ),
-    ).not.toBe(
-      spawnedSessionsKey(
-        view([session({ id: "root" }), peer("a", "root")], 1),
-        false,
-      ),
-    );
+      closed([peer("a", "root"), peer("b", "root", { settledAt: NOW - 1 })]),
+    ).not.toBe(quiet);
   });
 
   it("keys the sentence a row says, not only its status", () => {
@@ -2450,3 +2614,259 @@ describe("worktreeChangesText", () => {
     );
   });
 });
+
+describe("peer trees without a depth cap", () => {
+  const peer = (
+    id: string,
+    parent: string,
+    extra: Partial<SessionListItem> = {},
+  ): SessionListItem =>
+    session({
+      id,
+      spawnedBySessionId: parent,
+      spawnOwnership: "coordinator",
+      ...extra,
+    });
+  const allCards = (view: ReturnType<typeof buildSessionInbox>) => [
+    ...cards(view.needsYou),
+    ...cards(view.active),
+  ];
+
+  it("shapes a long chain in work linear in its length, folded or open", () => {
+    // Every property read on every row is counted: a walk per node (the shape
+    // a capped depth used to make harmless) reads ~n²/2 rows on a chain, so
+    // over 750 per row here, where one sweep stays under 100.
+    let reads = 0;
+    const counted = (row: SessionListItem): SessionListItem =>
+      new Proxy(row, {
+        get(target, key, receiver) {
+          reads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    const n = 1_500;
+    const chain = Array.from({ length: n }, (_, i) =>
+      counted(i === 0 ? session({ id: "s0" }) : peer(`s${i}`, `s${i - 1}`)),
+    );
+    const view = buildSessionInbox(chain);
+    expect(allCards(view)[0]?.cluster?.counts.total).toBe(n - 1);
+    expect(reads).toBeLessThan(150 * n);
+    reads = 0;
+    const ledge = spawnedSessionsView({ sessions: chain, coordinatorId: "s0" });
+    expect(ledge.counts.total).toBe(n - 1);
+    expect(reads).toBeLessThan(150 * n);
+  });
+
+  it("keys the spinner's own count, which no sentence states", () => {
+    const host = {
+      activeCount: 0,
+      shellCount: 0,
+      monitorCommandCount: 0,
+      monitorWebsocketCount: 0,
+      startingCount: 0,
+      stoppingCount: 0,
+      oldestStartedAt: 0,
+      retainedHost: true,
+    };
+    // The coordinator's own block holds the Settle reason still, so only the
+    // count can tell the two apart.
+    const rows = (retained: boolean) => [
+      session({ id: "root", queuedWork: true }),
+      peer("kid", "root", retained ? { backgroundActivity: host } : {}),
+    ];
+    const cardKey = (retained: boolean) =>
+      sessionCardKey(
+        allCards(buildSessionInbox(rows(retained)))[0] as SessionInboxCard,
+        NOW,
+      );
+    expect(cardKey(true)).not.toBe(cardKey(false));
+    const ledgeKey = (retained: boolean) =>
+      spawnedSessionsKey(
+        spawnedSessionsView({
+          sessions: rows(retained),
+          coordinatorId: "root",
+        }),
+        false,
+      );
+    expect(ledgeKey(true)).not.toBe(ledgeKey(false));
+  });
+
+  it("refuses a ledge peer's dismissal for what its Settle would settle", () => {
+    const sessions = [
+      session({ id: "root" }),
+      peer("helper", "root"),
+      peer("failed", "helper", {
+        title: "Verifier",
+        lastError: { at: NOW, message: "boom" },
+      }),
+      peer("busy", "failed", { isStreaming: true }),
+    ];
+    const view = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(view.bubbled?.session.id).toBe("failed");
+    expect(view.bubbled?.settleBlocked).toBe("it is still running.");
+    expect(clusterBubbleDismissible(view.bubbled as SessionInboxCard)).toBe(
+      false,
+    );
+    expect(sessionSettleCascade("failed", sessions, null, {}).blocked).toBe(
+      "it is still running.",
+    );
+    // A peer the user took over is not settled with it, so it blocks nothing.
+    const mine = spawnedSessionsView({
+      sessions: [
+        ...sessions.slice(0, 3),
+        peer("busy", "failed", {
+          isStreaming: true,
+          spawnOwnership: "taken-over",
+        }),
+      ],
+      coordinatorId: "root",
+    });
+    expect(mine.bubbled?.settleBlocked).toBe(undefined);
+    expect(clusterBubbleDismissible(mine.bubbled as SessionInboxCard)).toBe(
+      true,
+    );
+  });
+
+  it("never counts a settled host's acknowledged failure as live", () => {
+    const old = { lastError: { at: NOW - 60_000, message: "old failure" } };
+    const sessions = [
+      session({ id: "root", settledAt: NOW - 10_000, ...old }),
+      peer("mid", "root", { settledAt: NOW - 10_000, ...old }),
+      peer("live", "mid"),
+    ];
+    const card = allCards(buildSessionInbox(sessions))[0] as SessionInboxCard;
+    // Kept up by the live peer below, without reviving the history above it.
+    expect(card.session.id).toBe("root");
+    expect(card.status).toBe("quiet");
+    expect(card.cluster?.counts.failed).toBe(0);
+    expect(card.cluster?.bubbled).toBe(undefined);
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(ledge.counts.failed).toBe(0);
+    expect(ledge.bubbled).toBe(undefined);
+    // A failure the user has NOT acknowledged unsettles the row, and still
+    // counts and bubbles.
+    const fresh = allCards(
+      buildSessionInbox([
+        session({ id: "root" }),
+        peer("mid", "root", old),
+        peer("live", "mid"),
+      ]),
+    )[0] as SessionInboxCard;
+    expect(fresh.cluster?.counts.failed).toBe(1);
+    expect(fresh.cluster?.bubbled?.session.id).toBe("mid");
+  });
+});
+
+describe("an expanded peer row", () => {
+  it("redraws when the age it draws moves, though a running card's key holds", () => {
+    const running = (updatedAt: number): SessionInboxCard =>
+      allCardsOf(
+        buildSessionInbox([
+          session({ id: "root" }),
+          session({
+            id: "kid",
+            spawnedBySessionId: "root",
+            spawnOwnership: "coordinator",
+            isStreaming: true,
+            runStartedAt: NOW - 120_000,
+            updatedAt,
+          }),
+        ]),
+      )[0]?.cluster?.children[0] as SessionInboxCard;
+    const before = running(NOW - 60_000);
+    const after = running(NOW);
+    // The card key reads the elapsed run, which did not move.
+    expect(sessionCardKey(before, NOW)).toBe(sessionCardKey(after, NOW));
+    expect(
+      sameClusterChildProps(
+        { card: before, now: NOW },
+        { card: after, now: NOW },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("a settled peer set running again", () => {
+  const rows = [
+    session({ id: "root" }),
+    session({
+      id: "kid",
+      spawnedBySessionId: "root",
+      spawnOwnership: "coordinator",
+      settledAt: NOW - 10_000,
+      isStreaming: true,
+      runStartedAt: NOW - 5_000,
+    }),
+  ];
+
+  it("is live work in the fold, and refuses the coordinator's Settle", () => {
+    const view = buildSessionInbox(rows);
+    const card = cards(view.active)[0] as SessionInboxCard;
+    expect(card.cluster?.children.map((c) => c.session.id)).toEqual(["kid"]);
+    expect(card.cluster?.counts.running).toBe(1);
+    expect(card.settleBlocked).toBe("it is still running.");
+    expect(view.settled).toEqual([]);
+  });
+
+  it("keeps a settled coordinator on the shelf: the peer runs from there", () => {
+    const shelvedRows = [
+      session({ id: "root", settledAt: NOW - 20_000 }),
+      ...rows.slice(1),
+    ];
+    const view = buildSessionInbox(shelvedRows);
+    // No card coming and going with every peer turn: nothing under the
+    // coordinator is unsettled or waiting on the user.
+    expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+    // Both keep their shelf rows; the peer runs from there.
+    expect(view.settled.map((s) => s.id).sort()).toEqual(["kid", "root"]);
+    // The coordinator's own ledge still shows the run.
+    const ledge = spawnedSessionsView({
+      sessions: shelvedRows,
+      coordinatorId: "root",
+    });
+    expect(ledge.counts.running).toBe(1);
+  });
+
+  it("keeps every session of a shelved fold on the shelf while a peer runs", () => {
+    const chain = (running: boolean) => [
+      session({ id: "root", settledAt: NOW - 30_000 }),
+      session({
+        id: "bridge",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 20_000,
+      }),
+      session({
+        id: "leaf",
+        spawnedBySessionId: "bridge",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 10_000,
+        ...(running ? { isStreaming: true, runStartedAt: NOW - 1_000 } : {}),
+      }),
+    ];
+    for (const running of [true, false]) {
+      const view = buildSessionInbox(chain(running), { currentId: "leaf" });
+      expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+      expect(view.settled.map((s) => s.id).sort()).toEqual([
+        "bridge",
+        "leaf",
+        "root",
+      ]);
+      expect(view.settledTotal).toBe(3);
+    }
+  });
+
+  it("is live work on the composer ledge", () => {
+    const ledge = spawnedSessionsView({
+      sessions: rows,
+      coordinatorId: "root",
+    });
+    expect(ledge.rows.map((c) => c.session.id)).toEqual(["kid"]);
+    expect(ledge.counts).toMatchObject({ total: 1, running: 1 });
+    expect(ledge.settled).toBe(0);
+  });
+});
+
+function allCardsOf(view: ReturnType<typeof buildSessionInbox>) {
+  return [...cards(view.needsYou), ...cards(view.active)];
+}

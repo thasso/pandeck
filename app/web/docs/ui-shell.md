@@ -271,8 +271,12 @@ part of the card's spoken label, not a visible line: the badge already says it.
 So is everything a row drops for lack of room; a control on a row's hidden
 overflow line is made `inert`, so keyboard focus never lands on what is not
 shown. Queued work is the one sentence still shown, beside an Idle card's empty
-slot. The expanded peer rows show type icon, state icon, title and time, with
-Idle as a neutral badge. The card stays in the working set until Settle
+slot. The expanded peer rows show type icon, state icon, title, its running
+background jobs, its own peers' count when it coordinates any, and time, with
+Idle as a neutral badge. The card's first and third rows are as tall as the
+inline actions take in that density (20px on the rail, 28px on a phone), so the
+title sits centred between them and no action's touch target reaches into the
+title row (`CARD_OUTER_ROW`). The card stays in the working set until Settle
 acknowledges the cursor; its presence there already states that it is unsettled.
 Every object is opened from exactly one target: Project from its front text
 item, Worktree and Task from the back action face. Their front metadata remains
@@ -295,19 +299,24 @@ A coordinator and the peers it still owns are ONE Sessions inbox item
 ownership, and nothing else — never a title or a role word: a peer folds while
 its ownership is `coordinator` and its spawner is present, unarchived and
 matched by the current filter, so a `taken-over` peer, an `unknown` one, and one
-whose spawner is gone each stay a card of their own. The walk up the edges is
-bounded by a depth cap and a cycle guard, so a deep or looping chain ends at a
-bounded root instead of one enormous card, and every session belongs to exactly
-one item. The card states the coordinator's own status plus a compact session
-count and renders no peer as a card of its own; this is not `delegation`, which
-counts subagent runs and is untouched. The complete working/waiting/failed
-aggregate stays in the card's accessible name and the disclosure's tooltip. On
-the visible line, a spinner replaces the peer glyph while any peer is working,
-and a named Answer/Approve/Pick task/Failed badge carries the peer that needs
-the user. This keeps the permanent middle row to one line while preserving the
-decisions. A coordinator that has gone quiet under running peers has no provider
-state of its own, so the spinner on the fold is where that activity remains
-visible.
+whose spawner is gone each stay a card of their own. Depth is unbounded: the top
+level is for the sessions the user drives, so every peer a coordinator still
+owns folds under it however deep the chain runs. A cycle guard breaks a looping
+chain at a deterministic root, so every session still belongs to exactly one
+item. The card states the coordinator's own status plus a compact session count
+over every depth and renders no peer as a card of its own; this is not
+`delegation`, which counts subagent runs and is untouched. The disclosure itself
+states what the tree is doing right now — agents running a turn and background
+jobs, each an icon and a number counted over every peer — because a coordinator
+that has gone quiet under its peers has no provider state of its own, and "an
+agent is busy" and "a job is still going" are different answers to whether to
+wait. They sit inside the disclosure because it is the line's first item and
+never wraps out of sight; on a narrow card its word "sessions" drops like every
+label on the line. A spinner replaces the peer glyph while any peer is working,
+and a named Answer/Approve/Pick task/Failed badge, capped so a long title
+truncates inside it, carries the peer that needs the user. The complete
+running/jobs/waiting/failed aggregate stays in the card's accessible name and
+the disclosure's tooltip.
 
 What the fold may never hide is the work that needs a human. A folded peer
 asking, awaiting approval, waiting on a Task choice or holding an unresolved
@@ -317,10 +326,25 @@ the coordinator itself is settled, so a settled coordinator can never bury a
 peer's question or failure. A failure here is the FAILED BADGE. A later run
 start may clear the failure's message, but the unacknowledged failed outcome
 keeps the session classified as `failed`, so the cluster still counts and
-bubbles it. A settled coordinator with nothing waiting under it keeps the shelf,
-and its live peers are released as cards of their own — the same promise from
-the other side, since nothing live may be folded into a row that is itself put
-down.
+bubbles it. More generally, a settled coordinator with an UNSETTLED peer folded
+anywhere under it stays a card in the working set, because work the user has not
+put down may never be folded into a row that is; otherwise it and every session
+folded under it take the shelf, each as its own shelf row, so none of them
+leaves the shelf while a peer runs. A settled peer merely running again does not
+bring it back: it runs from the shelf raising no outcome, exactly as the
+coordinator's own next turn does, so the card does not come and go with every
+peer turn. The coordinator's composer ledge still shows that run. The same rule
+holds inside the tree: a settled peer folds only while live work hangs below it,
+so a live peer it spawned stays under the coordinator above instead of surfacing
+as a card of its own. A settled peer its coordinator sets going again — a turn,
+or background jobs — is live work itself: it runs from the shelf raising no
+outcome, so it folds, counts under running (a turn) or jobs (background work),
+refuses the coordinator's Settle in its own wording like any busy peer, and
+returns to history when it goes quiet (`isDormantInSpawnTree`). A settled
+session kept up that way shows no failure: the server withholds `settledAt` from
+a row whose latest outcome is open, so a shelved row's stored error is one the
+user already acknowledged, and it neither counts nor bubbles. Settled peers are
+otherwise history: out of the counts, the Settle cascade and the tree.
 
 Settle on a session settles it AND the peers it still coordinates, in one
 command: its own `session:<id>` outcome revision is acknowledged through the
@@ -329,28 +353,27 @@ through its current outcome revision, the server-side privilege the user's
 acknowledgement of the coordinator grants. Membership is the shared spawn forest
 (`spawnClusterForest` over `spawnClusterMembers`: the unarchived rows no
 working-set Workflow Run owns, folded along `coordinator`-owned edges with the
-same depth cap and cycle break the browser draws), so what a card shows folded
-is exactly what its Settle shelves — on the card, on a folded peer's own row in
-the disclosure, and in the Session inspector, which all read the same
-`sessionSettleCascade`. The browser shelves those peers optimistically with it,
-so none of them surfaces as a card of its own in the gap before the
-authoritative list lands. The mutation is all-or-nothing, in one store
-transaction: a peer the shared session predicate still blocks — waiting on a
-human, still running, queued — blocks the Settle in that peer's own wording,
-read in forest order so the disabled button and the server's refusal name the
-same peer, because a coordinator put down while a peer stayed up would have that
-peer resurface as a card of its own. A peer's FAILURE never blocks it:
-acknowledging that is what the Settle is for. Unsettling brings back the one
-session alone.
+same cycle break the browser draws), so what a card shows folded is exactly what
+its Settle shelves — on the card, on a folded peer's own row in the disclosure,
+and in the Session inspector, which all read the same `sessionSettleCascade`.
+The browser shelves those peers optimistically with it, so none of them surfaces
+as a card of its own in the gap before the authoritative list lands. The
+mutation is all-or-nothing, in one store transaction: a peer the shared session
+predicate still blocks — waiting on a human, still running, queued — blocks the
+Settle in that peer's own wording, read in forest order so the disabled button
+and the server's refusal name the same peer, because a coordinator put down
+while a peer stayed up would have that peer resurface as a card of its own. A
+peer's FAILURE never blocks it: acknowledging that is what the Settle is for.
+Unsettling brings back the one session alone.
 
 A shelved coordinator-owned peer raises no outcome attention of its own, so it
 comes back in exactly one way: a later FAILURE unsettles it (server-side, with
 no revision), and the fold bubbles it under its coordinator again — a settled
 coordinator included — so a failure can never stay buried on the shelf. A later
 completion leaves it there: that result is the coordinator's to act on, and the
-coordinator's own outcome is what brings the cluster back. The released-peer
-rule above is therefore for a peer that came back on its own, or was spawned
-after the coordinator was put down.
+coordinator's own outcome is what brings the cluster back. The settled
+coordinator rule above is therefore for a peer that came back on its own, or was
+spawned after the coordinator was put down.
 
 A bubbled FAILURE is also dismissible from the card itself, which is where the
 user meets it: dismissing sends that peer's own Settle alone, so the peer lands
@@ -362,9 +385,23 @@ settling it is refused by the same rule, because the work cannot proceed without
 the answer, so that bubble is dealt with by opening it.
 
 The card's DISCLOSURE is the one way a folded peer is listed, and it lists every
-one of them: the button states what the click will do, and closing it returns to
-the cluster's single row. Listed that way, folded peers are ordinary rows of the
-browser: focusable, swipeable, and openable.
+one of them as a TREE: each peer directly under the session that spawned it,
+indented by its depth, siblings in inbox order. A peer that coordinates peers of
+its own shows their count, and any peer running background jobs shows how many.
+The button states what the click will do, and closing it returns to the
+cluster's single row. Listed that way, folded peers are ordinary rows of the
+browser: focusable, swipeable, and openable. When the coordinator's tree also
+holds settled peers, the open fold ends in a "Show N settled" row that puts them
+back in the tree where they were spawned, after their live siblings; they stay
+on the Settled shelf (listed here under a prefixed row id, so the two rows never
+share one), offer no Settle, and count for nothing on the card. No other settled
+session listed in the tree offers a Settle either — a bridge kept by live work
+below it, a settled peer running again, or a settled role of a Workflow Run: it
+is already down, and the coordinator's (or the run's) own Settle is the one that
+reaches it. Those live rows still count on the card, though: in its total, and
+under running or jobs while they are busy. A session whose peers are ALL settled
+has no fold at all: the card is about live work, and that history is on the
+Settled shelf and in the session's own composer ledge.
 
 A formal **Workflow Run** is one Sessions inbox item too
 ([Task-676](pa://task/676)). Every live run — active or paused — is a card of

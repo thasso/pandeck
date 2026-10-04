@@ -353,6 +353,89 @@ describe("SessionInbox clusters", () => {
     expect(rowIds()).toEqual(["root"]);
   });
 
+  it("lists the fold as a tree and its settled peers only on request", () => {
+    render([
+      session("root"),
+      peer("impl", "root"),
+      peer("rev", "impl"),
+      peer("done", "root", { settledAt: NOW - 5_000 }),
+    ]);
+    click(button("Show the 2 coordinated sessions"));
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+    // A nested peer steps in under the one that spawned it.
+    expect(row("rev").style.paddingLeft).toBe("1.5rem");
+    const toggle = () =>
+      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
+        (node) => /settled$/.test(node.textContent ?? ""),
+      ) as HTMLElement;
+    expect(toggle().textContent).toBe("Show 1 settled");
+    click(toggle());
+    // The history row is on the Settled shelf too, so it lists under its own
+    // id there and a prefixed one here.
+    expect(rowIds()).toEqual(["root", "impl", "rev", "history:done"]);
+    expect(toggle().textContent).toBe("Hide settled");
+    click(toggle());
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+    // Closing the fold forgets the toggle: it reopens on what is live.
+    click(toggle());
+    click(button("Hide the 2 coordinated sessions"));
+    click(button("Show the 2 coordinated sessions"));
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+  });
+
+  it("offers no Settle on a settled peer listed as history, by key or by swipe", () => {
+    vi.useFakeTimers();
+    const settled: Array<[string, boolean]> = [];
+    render(
+      [
+        session("root"),
+        peer("live", "root"),
+        peer("done", "root", { settledAt: NOW - 5_000 }),
+      ],
+      { onSettle: (id, value) => void settled.push([id, value]) },
+    );
+    click(button("Show the 1 coordinated session"));
+    click(
+      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
+        (node) => node.textContent === "Show 1 settled",
+      ) as HTMLElement,
+    );
+    const history = row("history:done");
+    act(() => {
+      history.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", bubbles: true }),
+      );
+    });
+    act(() => void vi.advanceTimersByTime(1_000));
+    swipeRight("history:done");
+    expect(settled).toEqual([]);
+    // A live row in the same fold still settles.
+    swipeRight("live");
+    expect(settled).toEqual([["live", true]]);
+  });
+
+  it("offers no Settle on a settled peer kept in the tree by live work below it", () => {
+    vi.useFakeTimers();
+    const settled: Array<[string, boolean]> = [];
+    render(
+      [
+        session("root"),
+        peer("mid", "root", { settledAt: NOW - 5_000 }),
+        peer("leaf", "mid"),
+      ],
+      { onSettle: (id, value) => void settled.push([id, value]) },
+    );
+    click(button("Show the 2 coordinated sessions"));
+    act(() => {
+      row("mid").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", bubbles: true }),
+      );
+    });
+    act(() => void vi.advanceTimersByTime(1_000));
+    swipeRight("mid");
+    expect(settled).toEqual([]);
+  });
+
   it("keeps the disclosure honest about what the click will do", () => {
     render([
       session("root", { title: "coordinator" }),
@@ -563,6 +646,20 @@ describe("SessionInbox density", () => {
     return found;
   }
 
+  /** The height classes of a card's first row and of its status row. */
+  function outerRows(id: string): string[] {
+    const card = row(id);
+    const first = card.querySelector<HTMLElement>(
+      ".whitespace-nowrap.text-micro",
+    );
+    const status = card.querySelector<HTMLElement>(
+      ".session-card-status-line",
+    )?.parentElement;
+    const height = (node: HTMLElement | null | undefined) =>
+      [...(node?.classList ?? [])].find((name) => /^(min-)?h-\d/.test(name));
+    return [height(first) ?? "", height(status) ?? ""];
+  }
+
   /** Open the fold and the shelf, so every kind of row is on screen. */
   function openEverything() {
     act(() => button("Show the 1 coordinated session").click());
@@ -577,6 +674,14 @@ describe("SessionInbox density", () => {
       "size-8",
     );
     expect(button("Session actions").className).toContain("size-8");
+    // The rows above and below the title are as tall as those actions take
+    // (32px less the 2px margins: 28px), so the title sits centred and no
+    // action's touch target reaches into the title row — where a tap meant
+    // to open the card would settle it.
+    expect(outerRows("root")).toEqual(["h-7", "min-h-7"]);
+    expect(button("Settle — move out of the working set").className).toContain(
+      "-my-0.5",
+    );
     // Folded peers are subordinate one-line rows, not another stack of cards.
     expect(row("kid").className).toContain("min-h-8");
     expect(row("kid").className).not.toContain("min-h-11");
@@ -596,6 +701,7 @@ describe("SessionInbox density", () => {
     expect(button("Settle — move out of the working set").className).toContain(
       "size-6",
     );
+    expect(outerRows("root")).toEqual(["h-5", "min-h-5"]);
     expect(row("kid").className).toContain("min-h-7");
     expect(row("done").className).toContain("h-7");
     expect(button("Bring back into the working set").className).toContain(

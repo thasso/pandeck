@@ -380,6 +380,30 @@ function allStatesFixture(
       spawnedBySessionId: "coordinator",
       spawnOwnership: "coordinator",
     }),
+    // A peer the implementer spawned in turn, waiting on its own test run.
+    session(now, "peer-nested", "Peer: implementer's reviewer", {
+      agentType: "developer",
+      updatedAt: now - 5 * min,
+      spawnedBySessionId: "peer-working",
+      spawnOwnership: "coordinator",
+      backgroundActivity: {
+        activeCount: 1,
+        shellCount: 1,
+        monitorCommandCount: 0,
+        monitorWebsocketCount: 0,
+        startingCount: 0,
+        stoppingCount: 0,
+        oldestStartedAt: now - 4 * min,
+      },
+    }),
+    // Settled history: out of the counts, listed only on request.
+    session(now, "peer-settled", "Peer: earlier review, settled", {
+      agentType: "developer",
+      updatedAt: now - 90 * min,
+      settledAt: now - 80 * min,
+      spawnedBySessionId: "coordinator",
+      spawnOwnership: "coordinator",
+    }),
     // Workflow Run roles (only with runs)
     ...(withRuns ? runRoleSessions() : []),
   ];

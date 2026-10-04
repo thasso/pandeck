@@ -11,6 +11,7 @@ import {
   GitBranch,
   MoreVertical,
   Pencil,
+  Play,
   Trash2,
   Users,
   X,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react";
 import {
   clusterBubbleDismissible,
+  clusterLiveSummary,
   sameSessionCardProps,
   sessionCardAge,
   sessionCardMeta,
@@ -36,7 +38,7 @@ import {
   backgroundActivityChip,
   backgroundActivityText,
 } from "../lib/backgroundWork.ts";
-import type { RowDensity } from "../lib/rowDensity.ts";
+import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
@@ -73,10 +75,10 @@ const GUTTER_FLOOR: Record<RowDensity, string> = {
 
 /** Settle and the actions flip, inline at the end of the status row. */
 const INLINE_ACTION =
-  "-my-0.5 flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
-  tight: "size-6",
-  comfortable: "size-8",
+  tight: "size-6 -my-0.5",
+  comfortable: "size-8 -my-0.5",
 };
 
 /**
@@ -234,6 +236,7 @@ function ActiveSessionCardImpl({
   // A quiet coordinator still shows motion in the permanent middle row while
   // peers run, even though the coordinator has no provider state of its own.
   const clusterWorking = (cluster?.counts.working ?? 0) > 0;
+  const clusterLive = cluster ? clusterLiveSummary(cluster.counts) : "";
   const bubbled = cluster?.bubbled;
   const bubbleLabel = bubbled ? sessionClusterBubbleLabel(bubbled, now) : "";
   const bubbleTone = bubbled
@@ -382,8 +385,11 @@ function ActiveSessionCardImpl({
                 shortens, into whatever width the others leave. Worktree and
                 Task actions live on the back, leaving this whole line to
                 identify the objects. The time closes the row outside that
-                area. */}
-            <div className="flex min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint">
+                area. The row is as tall as the live-state row below the
+                title, so the title sits centred between the two. */}
+            <div
+              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+            >
               <div
                 ref={metaRowRef}
                 className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
@@ -440,7 +446,9 @@ function ActiveSessionCardImpl({
                 makes this row permanent. Every changing signal stays on this
                 one line, so activity can change without changing the card's
                 geometry. Fixed badges survive; prose yields and clips. */}
-            <div className="flex min-h-5 min-w-0 items-center gap-1.5 text-micro">
+            <div
+              className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+            >
               {/* Signals show whole or not at all: the area is one line tall,
                   and whatever does not fit wraps onto a hidden second line. DOM
                   order is the drop order, so the peer that needs you outlasts
@@ -456,7 +464,7 @@ function ActiveSessionCardImpl({
                     aria-expanded={clusterExpanded}
                     aria-label={`${clusterExpanded ? "Hide" : "Show"} the ${cluster.counts.total} coordinated session${
                       cluster.counts.total === 1 ? "" : "s"
-                    }`}
+                    }${clusterLive ? ` — ${clusterLive}` : ""}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggleCluster?.(session.id);
@@ -472,10 +480,34 @@ function ActiveSessionCardImpl({
                     ) : (
                       <Users size={11} className="shrink-0" aria-hidden />
                     )}
+                    {/* On a narrow card the word goes, like every label on
+                        this line, so the live counts keep room. */}
                     <span>
-                      {cluster.counts.total} session
-                      {cluster.counts.total === 1 ? "" : "s"}
+                      {cluster.counts.total}
+                      <span className="session-status-badge-label">
+                        {cluster.counts.total === 1 ? " session" : " sessions"}
+                      </span>
                     </span>
+                    {/* What the tree is doing right now — agents running a
+                        turn, and background jobs — over every peer at every
+                        depth, so a quiet coordinator still says whether its
+                        tree is moving. Inside the disclosure rather than after
+                        it: this button is the line's first item and never
+                        wraps out of sight, where anything behind a long named
+                        badge would. Icon and number only; the words are in the
+                        label and the tooltip. */}
+                    {cluster.counts.running > 0 ? (
+                      <span className="flex items-center gap-0.5">
+                        <Play size={9} aria-hidden />
+                        {cluster.counts.running}
+                      </span>
+                    ) : null}
+                    {cluster.counts.jobs > 0 ? (
+                      <span className="flex items-center gap-0.5">
+                        <Activity size={10} aria-hidden />
+                        {cluster.counts.jobs}
+                      </span>
+                    ) : null}
                     <ChevronRight
                       size={11}
                       aria-hidden
@@ -492,7 +524,9 @@ function ActiveSessionCardImpl({
                       onOpen(bubbled.session.id);
                     }}
                     aria-label={bubbleLabel}
-                    className={`session-status-responsive-badge flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                    // Capped, so a long peer title truncates inside the badge
+                    // instead of wrapping the whole badge off the line.
+                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
                       SESSION_BADGE_TONE[bubbleTone ?? "accent"]
                     }`}
                   >

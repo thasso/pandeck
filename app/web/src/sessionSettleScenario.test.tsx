@@ -487,6 +487,24 @@ describe("settling a cluster", () => {
     ]);
   });
 
+  it("keeps an already-settled peer's settled time while shelving it again", async () => {
+    // A settled bridge with live work below it folds, so the cascade reaches
+    // it; re-stamping it would lift it to the top of the shelf.
+    await bootAll([
+      coordinator(),
+      peer({ settledAt: NOW - 600_000 }),
+      row({
+        id: "s-3",
+        title: "Live under the bridge",
+        spawnedBySessionId: "s-2",
+        spawnOwnership: "coordinator",
+      }),
+    ]);
+    await act(async () => actions!.settleSession("s-1"));
+    expect(current("s-2").settledAt).toBe(NOW - 600_000);
+    expect(current("s-3").settledAt).toBeDefined();
+  });
+
   it("unsettles the coordinator alone", async () => {
     const socket = await bootAll([
       coordinator({ settledAt: NOW - 20_000 }),

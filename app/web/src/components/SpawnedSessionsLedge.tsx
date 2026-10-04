@@ -11,18 +11,6 @@ import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { Spinner } from "./ui/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 
-/**
- * How many peers the ledge lists before folding the rest behind "Show N more".
- * Same bound, and the same reason, as the background ledge's: a strip on the
- * composer states a session's work, and a list that grows without limit is
- * what turns it into a second browser. The rest are one tap away rather than
- * off in the Sessions inbox, because a coordinator with many peers is exactly
- * the session whose user wants them all on the surface they are typing into —
- * and the opened list scrolls in place, so showing them all never pushes the
- * composer off the screen.
- */
-export const SPAWNED_SESSIONS_LEDGE_LIMIT = 10;
-
 /** Same semantic tones the cards and rows use, at the bubble badge's weight. */
 const BADGE_TONE: Record<SessionStatusTone, string> = {
   accent: "bg-accent-soft text-accent",
@@ -41,10 +29,10 @@ export interface SpawnedSessionsLedgeProps {
   /** Open one peer, exactly as its row in the Sessions inbox does. */
   onOpenSession: (sessionId: string) => void;
   /**
-   * List every peer, not just the first {@link SPAWNED_SESSIONS_LEDGE_LIMIT}.
-   * The host answers by handing back a view with no `hidden` rows.
+   * Show or hide the settled peers in the tree. The host answers by handing
+   * back a view built with or without them (`settledShown`).
    */
-  onShowAll: () => void;
+  onToggleSettled: () => void;
   /**
    * Settle one peer. The strip's ONE lifecycle action, and only ever on a
    * bubbled failure the user has moved on from — the same dismissal the
@@ -66,9 +54,12 @@ export interface SpawnedSessionsLedgeProps {
  * @intent It reads the session LIST this browser already holds and subscribes
  * to nothing: the peers are rows of the same list the Sessions inbox shapes,
  * so the ledge shows the same state, in the same words, through the same row —
- * newest activity first, so what a peer just did is at the top, with the
- * older ones folded behind a "Show N more" at the foot of a list that scrolls
- * in place. A peer waiting on a human or holding a failure is NAMED on the collapsed
+ * as a tree of every peer at every depth, newest activity first among
+ * siblings, in a list that scrolls in place. Dormant settled peers are
+ * history: never counted, and listed only behind a "Show N settled" at the
+ * foot of the list. A settled peer running or holding jobs again is live, and
+ * is listed and counted like any other.
+ * A peer waiting on a human or holding a failure is NAMED on the collapsed
  * line, because a summary may hide how much is running and never what needs
  * answering — and, when that is a failure the user has moved on from, dismissed
  * from here, which is the cluster card's own dismissal (that peer's Settle).
@@ -83,7 +74,7 @@ export function SpawnedSessionsLedge({
   open,
   onToggle,
   onOpenSession,
-  onShowAll,
+  onToggleSettled,
   onSettleSession,
 }: SpawnedSessionsLedgeProps) {
   const working = view.counts.working > 0;
@@ -170,10 +161,9 @@ export function SpawnedSessionsLedge({
         >
           {/* The rows scroll in a box of bounded height, so listing every
               peer changes what is in the box and never how tall the
-              composer's shelf is. Ten rows fill it on a laptop, which is why
-              the button below is OUTSIDE it: at the foot of the scroll box it
-              would sit past the fold, and a control the user has to know to
-              scroll for is not offered. */}
+              composer's shelf is. The settled toggle below is OUTSIDE it: at
+              the foot of the scroll box it would sit past the fold, and a
+              control the user has to know to scroll for is not offered. */}
           <div
             data-spawned-sessions-rows
             className="max-h-[40vh] overflow-y-auto py-1"
@@ -184,25 +174,31 @@ export function SpawnedSessionsLedge({
                 card={card}
                 now={now}
                 active={false}
+                relation="spawned"
                 tabbable
                 onOpen={onOpenSession}
               />
             ))}
           </div>
-          {/* Under the list, always in view: the rows above are the newest,
-              and this is where the older ones are. */}
-          {view.hidden > 0 ? (
+          {/* Under the list, always in view: the rows above are what is
+              going on now, and this is where what already ended is. */}
+          {view.settled > 0 ? (
             <button
               type="button"
-              onClick={onShowAll}
+              aria-expanded={view.settledShown}
+              onClick={onToggleSettled}
               className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
             >
               <ChevronDown
                 size={13}
-                className="shrink-0 text-faint"
+                className={`shrink-0 text-faint transition-transform ${view.settledShown ? "rotate-180" : ""}`}
                 aria-hidden="true"
               />
-              <span className="min-w-0 truncate">Show {view.hidden} more</span>
+              <span className="min-w-0 truncate">
+                {view.settledShown
+                  ? "Hide settled"
+                  : `Show ${view.settled} settled`}
+              </span>
             </button>
           ) : null}
         </div>
