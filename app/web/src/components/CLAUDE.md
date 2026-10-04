@@ -30,10 +30,10 @@
 - Import `diff/`, `ui/ChartBlock.tsx` and `rehype-katex` lazily — statically
   they pull pierre/Shiki, Chart.js and KaTeX into the main bundle — and never
   call `ui/highlighter.ts` outside its cache on a render path.
-- Nothing in a transcript row may rely on overflowing its box: rows use
-  `content-visibility: auto` off iOS, `visible` on iOS, and popovers portal to
-  the body. Nothing hit-testable may be STACKED OVER the transcript's top edge
-  either (overlay, sticky header): `useTranscriptScroll` hit-tests there for the
-  reader's row on every scroll, and intercepting it silently costs the iOS
-  reading-position hold. Blocks BETWEEN rows are fine — a hit resolves to the
-  row below.
+- Nothing in a transcript row may rely on overflowing its box. Rows use
+  `content-visibility: auto` off iOS, `visible` on iOS; portal popovers to the
+  body. Keep hit-testable overlays and sticky headers off the transcript's top
+  edge: `useTranscriptScroll` hits that edge to hold the reader's row on iOS.
+  Blocks between rows are safe.
+- Side activity follows `docs/chat-activity.md`: collapsed, one-line rows;
+  actions addressed to the user and failure indicators stay visible.

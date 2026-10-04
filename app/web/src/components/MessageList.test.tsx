@@ -956,8 +956,12 @@ describe("MessageList prompt origins", () => {
     expect(container.textContent).not.toContain("cd app/web && pnpm run build");
     expect(container.textContent).not.toContain("Output · 12 B");
     expect(container.textContent).not.toContain("Open in registry");
-    // The glyph is what the reader sees; the word is what a screen reader says.
-    expect(container.textContent).toContain("Background work, Completed:");
+    // The shared row exposes status even when the phone hides its visual label.
+    expect(
+      container
+        .querySelector("button[aria-expanded]")
+        ?.getAttribute("aria-label"),
+    ).toContain("Completed");
   });
 
   it("opens to the command, the output and the registry without moving its top line", () => {
@@ -1013,7 +1017,11 @@ describe("MessageList prompt origins", () => {
       }),
     );
 
-    expect(container.textContent).toContain("Background work, Failed:");
+    expect(
+      container
+        .querySelector("button[aria-expanded]")
+        ?.getAttribute("aria-label"),
+    ).toContain("Failed");
     act(() =>
       container
         .querySelector<HTMLButtonElement>('button[title="Run the gate"]')
@@ -1035,7 +1043,11 @@ describe("MessageList prompt origins", () => {
       }),
     );
 
-    expect(container.textContent).toContain("Background work, Stopped:");
+    expect(
+      container
+        .querySelector("button[aria-expanded]")
+        ?.getAttribute("aria-label"),
+    ).toContain("Stopped");
     act(() =>
       container
         .querySelector<HTMLButtonElement>(

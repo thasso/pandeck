@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AlertTriangle, Bot, PackageCheck } from "lucide-react";
+import { AlertTriangle, Bot, PackageCheck, Scissors } from "lucide-react";
+import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
@@ -239,12 +240,15 @@ function CompactionCard({
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
 }) {
   return (
-    <details className="my-2 rounded-xl border border-line bg-raised/40 px-3 py-2 text-caption text-muted">
-      <summary className="cursor-pointer select-none font-medium text-fg">
-        {compaction.tokensAfter === undefined
+    <ChatActivityRow
+      icon={Scissors}
+      title="Context"
+      preview={
+        compaction.tokensAfter === undefined
           ? `Compacted from ${compaction.tokensBefore.toLocaleString()} tokens`
-          : `Compacted ${compaction.tokensBefore.toLocaleString()} → ${compaction.tokensAfter.toLocaleString()} tokens`}
-      </summary>
+          : `Compacted ${compaction.tokensBefore.toLocaleString()} → ${compaction.tokensAfter.toLocaleString()} tokens`
+      }
+    >
       {compaction.firstKeptEntryId ? (
         <div className="mt-1 text-caption text-faint">
           First kept entry: {compaction.firstKeptEntryId}
@@ -261,7 +265,7 @@ function CompactionCard({
           onOpenPaObject={onOpenPaObject}
         />
       </div>
-    </details>
+    </ChatActivityRow>
   );
 }
 

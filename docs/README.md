@@ -63,6 +63,9 @@ only binding rules; everything else lives here.
   them, failures living on their object, silence as the default for success,
   conditions and the single app status slot, the push policy, and how it docks
   with `loading-states.md`.
+- `chat-activity.md` — collapsed transcript rows for peer messages, background
+  updates, compaction and visible automation; source links, status visibility,
+  disclosure actions, and the conversation content that stays separate.
 - `steering-and-queueing.md` — what becomes of a message sent while a turn runs:
   pi's immediate steer, Claude's deferred acceptance (folded, follow-up within
   the same run, or withdrawn on Stop), why Claude never offers `steerOnly`, and

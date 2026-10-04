@@ -688,6 +688,11 @@ body {
   content-visibility: auto;
   contain-intrinsic-size: auto var(--transcript-row-estimate, 240px);
 }
+/* Adjacent side activity uses the disclosure's own padding, not chat-turn gaps.
+   These remain separate chronological rows and separate scroll anchors. */
+.transcript-row[data-side-activity] + .transcript-row[data-side-activity] {
+  margin-top: 0;
+}
 /* Paint containment clips descendants to the row's border box. Give a row that
    contains a top-level breakout table its own bounded wide box, then restore
    the ordinary prose measure inside it. The shell inset also keeps classic
