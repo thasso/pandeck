@@ -214,3 +214,19 @@ test("an unrecorded run stores nothing", async () => {
     0,
   );
 });
+
+test("a thrown engine error passes through unchanged and is not recorded", async () => {
+  vi.mocked(runPiOneShot).mockRejectedValue(new Error("Timed out."));
+
+  await assert.rejects(
+    () => runOneShot(request({ record: { purpose: "p", title: "T" } })),
+    (err: unknown) =>
+      err instanceof Error &&
+      !(err instanceof OneShotError) &&
+      err.message === "Timed out.",
+  );
+  assert.equal(
+    vi.mocked(sessionStore.createInternalUsageSession).mock.calls.length,
+    0,
+  );
+});
