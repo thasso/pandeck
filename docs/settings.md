@@ -100,3 +100,25 @@ read-only settings, bad values and non-null OAuth writes.
 The connection-test messages (`saveAndTest*`, `test*`) still answer only the
 client that asked: a test result is that client's request, not shared state.
 What a test persists, such as discovered models, reaches every client.
+
+## Agent tools
+
+The Personal Assistant, and no other persona, has a deferred `settings` tool
+group (`app/server/src/tools/settings/settingsTools.ts`):
+
+- `settings_read`: with no arguments, the section list (and for each section
+  without settings, why). With `section` or `paths`, each setting's value, type,
+  access and hint. A `secret` reports `configured`, an `oauth` connection
+  reports `connected`; neither value is in `getSettings()`, so neither can be
+  returned.
+- `settings_update`: path writes through `settingsPatchForWrites` and
+  `saveSettings`, read back so the agent sees what was stored after
+  normalization. A secret accepts only `null` (clear); any other value is
+  refused with a pointer to the section's Settings page, so the user never
+  pastes a token into the chat. `test` runs a section's connection test through
+  `testSettingsSection`, the same tests the page runs. When the write changes
+  the assistant's own profile, the result says the user's next message starts a
+  fresh Personal Assistant session.
+
+`settings_update` is a `local` side effect, so Plan mode keeps only
+`settings_read`.

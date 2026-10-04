@@ -14,20 +14,37 @@ import type {
 import {
   settingDescriptor,
   settingValueError,
+  type SettingsSectionId,
 } from "@assistant/shared/settingsRegistry";
-import { updateBraveSettings } from "./braveSettings.ts";
-import { updateConfluenceSettings } from "./confluenceSettings.ts";
-import { updateContext7Settings } from "./context7Settings.ts";
+import { testBraveSettings, updateBraveSettings } from "./braveSettings.ts";
+import {
+  testConfluenceSettings,
+  updateConfluenceSettings,
+} from "./confluenceSettings.ts";
+import {
+  testContext7Settings,
+  updateContext7Settings,
+} from "./context7Settings.ts";
 import { errorText } from "./errors.ts";
-import { updateForgejoSettings } from "./forgejoSettings.ts";
-import { updateGithubSettings } from "./githubSettings.ts";
-import { updateGoogleSettings } from "./googleSettings.ts";
+import {
+  testForgejoSettings,
+  updateForgejoSettings,
+} from "./forgejoSettings.ts";
+import { testGithubSettings, updateGithubSettings } from "./githubSettings.ts";
+import { testGoogleSettings, updateGoogleSettings } from "./googleSettings.ts";
 import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
-import { updateJiraSettings } from "./jiraSettings.ts";
-import { updateOpenAiCompatibleSettings } from "./openAiCompatibleSettings.ts";
+import { testJiraSettings, updateJiraSettings } from "./jiraSettings.ts";
+import {
+  testOpenAiCompatibleSettings,
+  updateOpenAiCompatibleSettings,
+} from "./openAiCompatibleSettings.ts";
 import { getSettings, updateSettings } from "./settings.ts";
-import { updateSlackSettings } from "./slackSettings.ts";
-import { updateTempoSettings } from "./tempoSettings.ts";
+import {
+  testSlackHuddleSettings,
+  testSlackSettings,
+  updateSlackSettings,
+} from "./slackSettings.ts";
+import { testTempoSettings, updateTempoSettings } from "./tempoSettings.ts";
 import { appSettingsPatchError } from "./validateClientMessage.ts";
 
 /**
@@ -149,7 +166,8 @@ export function onSettingsChanged(
   return () => listeners.delete(listener);
 }
 
-const ASSISTANT_PROFILE_FIELDS = [
+/** The profile fields whose change starts the Personal Assistant afresh. */
+export const ASSISTANT_PROFILE_FIELDS = [
   "name",
   "provider",
   "modelId",
@@ -363,4 +381,48 @@ function setLeaf(
   const leaf = keys[keys.length - 1]!;
   if (optional && value === "") delete node[leaf];
   else node[leaf] = value;
+}
+
+/** The outcome of an integration's connection test, as the Settings page shows it. */
+export interface SettingsSectionTest {
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * The Settings page sections with a connection test, and the test each runs.
+ * A test that stores what it discovers (OpenAI-compatible models) announces it.
+ */
+const SECTION_TESTS: Partial<
+  Record<SettingsSectionId, () => Promise<SettingsSectionTest>>
+> = {
+  jira: testJiraSettings,
+  confluence: testConfluenceSettings,
+  tempo: testTempoSettings,
+  google: testGoogleSettings,
+  slack: testSlackSettings,
+  "slack-huddles": testSlackHuddleSettings,
+  "openai-compatible": async () => {
+    const status = await testOpenAiCompatibleSettings();
+    await announceSettingsWritten(["openAiCompatible"]);
+    return status;
+  },
+  "web-search": testBraveSettings,
+  context7: testContext7Settings,
+  github: testGithubSettings,
+  forgejo: testForgejoSettings,
+};
+
+export const TESTABLE_SETTINGS_SECTIONS = Object.keys(
+  SECTION_TESTS,
+) as SettingsSectionId[];
+
+/** Run a section's connection test. Throws for a section without one. */
+export async function testSettingsSection(
+  section: SettingsSectionId,
+): Promise<SettingsSectionTest> {
+  const test = SECTION_TESTS[section];
+  if (!test) throw new Error(`${section} has no connection test`);
+  const { ok, message } = await test();
+  return { ok, message };
 }
