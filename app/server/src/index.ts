@@ -60,6 +60,7 @@ import {
   listModelsForProfile,
   modelRuntimeForProfile,
   startOpenAiProfileLogin,
+  syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
 } from "./piSdk/models.ts";
 import { linkPiToolBinaries } from "./piSdk/toolBinaries.ts";
@@ -91,7 +92,10 @@ import { jiraIssueUrl, resolveJiraIssueInfos } from "./jiraClient.ts";
 import { resolveGithubLinkedIssues } from "./githubLinkedIssues.ts";
 import { getGithubConfigIfAvailable } from "./githubSettings.ts";
 import { slackSocketMode } from "./slackSocketMode.ts";
-import { announceSettingsWritten } from "./settingsService.ts";
+import {
+  announceSettingsWritten,
+  setModelProviderSync,
+} from "./settingsService.ts";
 import {
   startSlackShortcutIntake,
   stopSlackShortcutIntake,
@@ -1959,6 +1963,10 @@ verifyRequiredHostTools();
 // pi's grep/find resolve rg/fd on every call and fork this server to probe PATH
 // unless its bin dir already holds them; link the host's copies there once.
 linkPiToolBinaries();
+
+// Before any request can write settings: an OpenAI-compatible write must
+// re-register the configured providers with the engine.
+setModelProviderSync(syncConfiguredModelProviders);
 
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;

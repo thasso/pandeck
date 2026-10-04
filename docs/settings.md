@@ -70,6 +70,10 @@ sections need:
 | `openAiCompatible`    | Sync the configured model providers                                                                     |
 | any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                             |
 
+The service imports no engine (`docs/agent-harnesses.md`): the model-provider
+sync is the engine's `syncConfiguredModelProviders`, installed at boot by
+`index.ts` through `setModelProviderSync`.
+
 Then every `onSettingsChanged` listener hears which sections were written. The
 hub forwards that to each connection's `settingsChanged`, which sends that
 client its own `settings` (OAuth redirect URIs depend on the connection's public

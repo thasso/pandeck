@@ -151,6 +151,18 @@ function isIntegrationKey(key: string): key is IntegrationKey {
   return Object.hasOwn(INTEGRATION_WRITERS, key);
 }
 
+/**
+ * Re-registers the configured model providers with the engine after an
+ * OpenAI-compatible write. Installed at boot by `index.ts`, because only a
+ * harness module may import an engine (`docs/agent-harnesses.md`); before
+ * that, and in tests, there is no engine catalog to refresh.
+ */
+let syncModelProviders: () => void = () => {};
+
+export function setModelProviderSync(sync: () => void): void {
+  syncModelProviders = sync;
+}
+
 export interface SettingsChange {
   /** The sections that were written. */
   sections: (keyof AppSettings)[];
@@ -286,11 +298,7 @@ async function settingsWritten(
       await reconcilePackageProxy();
     });
   if (wrote("openAiCompatible"))
-    await effect("syncing model providers", async () => {
-      const { syncConfiguredModelProviders } =
-        await import("./piSdk/models.ts");
-      syncConfiguredModelProviders();
-    });
+    await effect("syncing model providers", () => syncModelProviders());
   // OpenAI-compatible models reach sessions through the model list, not tools.
   if (
     sections.some((key) => isIntegrationKey(key) && key !== "openAiCompatible")
