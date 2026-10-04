@@ -5597,17 +5597,17 @@ export class Connection implements Viewer {
   /**
    * Resolve OUR session id to the `{harness, kind, file?}` ref used by the
    * per-kind handlers. The metadata store is the id-only routing source; its
-   * agentType is the kind. For pi, the log path is
-   * derived from the canonical id for delete/fork operations. Falls back to a
-   * currently-resident live driver so a not-yet-persisted session (e.g. a pi
-   * bootstrap before its first prompt) still resolves.
+   * agentType is the kind. For pi, the log path is derived from the canonical
+   * id for delete/fork operations. Falls back to a currently-resident live
+   * driver so a not-yet-persisted session (e.g. a pi bootstrap before its first
+   * prompt) still resolves.
    */
   private resolveSessionRef(
     id: string,
   ): { harness: Harness; kind: AgentKind; file?: string } | undefined {
     const record = sessionStore.get(id);
     if (record) {
-      const kind = record.agentType as SessionAgentType;
+      const kind = record.agentType as AgentKind;
       return {
         harness: record.harness,
         kind,

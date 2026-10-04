@@ -91,7 +91,7 @@ import {
   appendText,
   estimateTokens,
   updateTool,
-} from "../session/host/liveBlocks.ts";
+} from "../session/runtime/liveBlocks.ts";
 import {
   NativeAdapterEventSource,
   perTurnUsage,

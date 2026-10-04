@@ -16,7 +16,7 @@ import type {
   AgentUsage,
   SessionSnapshot,
 } from "@assistant/shared/session";
-import { estimateTokens } from "../host/liveBlocks.ts";
+import { estimateTokens } from "./liveBlocks.ts";
 
 /** Default context window when no assistant entry has reported one yet. */
 const DEFAULT_CONTEXT_WINDOW = 200_000;

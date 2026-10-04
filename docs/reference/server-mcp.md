@@ -19,11 +19,11 @@ tools). The pi harness consumes AgentTools directly via
 - `tool.ts` owns the `AgentTool`/`ToolResult`/`ToolCallContext`/`ToolSession`
   contracts, including the `sideEffects` axis, and helpers (`defineAgentTool`,
   `jsonResult`, `uniqueAgentTools`, the shared Plan denial message).
-- `meta.ts` owns the MCP `_meta` key contract: `pa/*` keys for the pi bridge
-  (`pa/toolCallId`, `pa/terminate`, `pa/details`, `pa/pi`, `pa/active`) and
-  `anthropic/*` keys for the Claude SDK's native tool search
-  (`anthropic/alwaysLoad` on eager-tier tools, `anthropic/searchHint` from
-  `AgentTool.searchHint`).
+- `meta.ts` owns the MCP `_meta` key contract: `pa/*` keys kept for a possible
+  external MCP client, with no in-repo reader (`pa/toolCallId`, `pa/terminate`,
+  `pa/details`, `pa/pi`, `pa/active`) and `anthropic/*` keys for the Claude
+  SDK's native tool search (`anthropic/alwaysLoad` on eager-tier tools,
+  `anthropic/searchHint` from `AgentTool.searchHint`).
 - `names.ts` owns the `pa` server name and external `mcp__pa__*` tool-name
   mapping. It imports nothing, deliberately: `MCP_SERVER_NAME` is read at module
   top level by other modules, so joining the import cycle rooted at
