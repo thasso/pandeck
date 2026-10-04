@@ -3177,3 +3177,48 @@ describe("the composer ledge for a Workflow Run's role", () => {
     }
   });
 });
+
+describe("a tree waiting on its own coordinator", () => {
+  it("names the peer that waits, not the card itself", () => {
+    const sessions = [
+      session({ id: "root", title: "Coordinator" }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const view = buildSessionInbox(sessions);
+    const card = [...cards(view.needsYou), ...cards(view.active)][0];
+    expect(card?.stall?.peers).toEqual([]);
+    expect(card?.stall?.askers.map((s) => s.id)).toEqual(["impl"]);
+    expect(stallLabel(card!.stall!)).toBe("“Implementer” awaits a reply");
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(stallLabel(ledge.stall!)).toBe("“Implementer” awaits a reply");
+  });
+});
+
+describe("the composer ledge of a chat the user put down", () => {
+  const owedBy = (extra: Partial<SessionListItem>) => [
+    session({ id: "root", awaitingRepliesFrom: ["x"], ...extra }),
+    session({ id: "x" }),
+  ];
+
+  it("raises nothing for a settled or archived chat, as its card does not", () => {
+    for (const extra of [{ settledAt: NOW - 1_000 }, { archived: true }]) {
+      const sessions = owedBy(extra);
+      expect(
+        [
+          ...cards(buildSessionInbox(sessions).needsYou),
+          ...cards(buildSessionInbox(sessions).active),
+        ].find((c) => c.session.id === "root"),
+      ).toBe(undefined);
+      expect(
+        spawnedSessionsView({ sessions, coordinatorId: "root" }).stall,
+        JSON.stringify(extra),
+      ).toBe(undefined);
+    }
+  });
+});

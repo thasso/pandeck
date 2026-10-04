@@ -31,6 +31,8 @@ import {
   sessionStatusDetail,
   stallLabel,
   stallMore,
+  stallParts,
+  stallTarget,
   stallTitle,
   sessionStatusText,
   type SessionCardMetaItem,
@@ -567,18 +569,24 @@ function ActiveSessionCardImpl({
                     aria-label={`Stalled: ${stallLabel(card.stall)}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      const peer = card.stall?.peers[0];
-                      if (peer) onOpen(peer.id);
+                      if (card.stall) onOpen(stallTarget(card.stall).id);
                     }}
                     className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${SESSION_BADGE_TONE.warning}`}
                   >
                     <Hourglass size={10} className="shrink-0" aria-hidden />
-                    <span className="session-status-badge-label shrink-0">
-                      No reply from
-                    </span>
+                    {stallParts(card.stall).before ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallParts(card.stall).before}
+                      </span>
+                    ) : null}
                     <span className="session-status-badge-label min-w-0 truncate">
-                      {`“${stallTitle(card.stall)}”`}
+                      {stallParts(card.stall).title}
                     </span>
+                    {stallParts(card.stall).after ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallParts(card.stall).after}
+                      </span>
+                    ) : null}
                     {stallMore(card.stall) ? (
                       <span className="session-status-badge-label shrink-0">
                         {stallMore(card.stall)}

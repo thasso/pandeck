@@ -85,8 +85,9 @@ Each rebuild also reads who still owes each session a reply
 (`peerPromptStore.outstandingRepliesBySender`, projected as
 `awaitingRepliesFrom`): one read over the `awaiting_response` rows, each tested
 by two `NOT EXISTS` probes — "a later admitted prompt from the owed peer" and "a
-later admitted prompt on the request's chain after the owed peer acted on it".
-Each probe is one exact seek on (recipient, sender or chain, `queue_seq`) from
+later admitted prompt on the request's chain from a session the owed peer handed
+the work to, on that chain, since the request". Each probe is one exact seek on
+(recipient, sender or chain, `queue_seq`) from
 `0065_peer_prompt_reply_lookup.sql`. An earlier single probe joined by `OR`
 could seek only the recipient and scanned everything the sender ever received;
 split, the probes would also seek the older sender and chain indexes, reading

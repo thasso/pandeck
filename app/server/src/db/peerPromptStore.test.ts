@@ -236,6 +236,65 @@ describe("peerPromptStore", () => {
       assert.deepEqual(owedTo(c), [a]);
     });
 
+    it("takes no undelivered handoff as passing the work on", () => {
+      // C asks I and R on one chain; I's handoff to R never lands, then R
+      // reports to C. Nothing reached C on I's behalf.
+      for (const lose of ["cancel", "fail", "queued"] as const) {
+        const c = `owed-c-${seq++}`;
+        const i = `owed-i-${seq++}`;
+        const r = `owed-r-${seq++}`;
+        const first = unanswered(c, i);
+        unanswered(c, r, first.chainId);
+        const handoff = enqueueLater(i, r, first.chainId);
+        if (lose === "cancel") store.cancelPending(r, "test", i);
+        if (lose === "fail") store.markFailed(handoff.id, "gave up");
+        send(r, c, first.chainId);
+        assert.deepEqual(owedTo(c), [i], `${lose} handoff`);
+      }
+    });
+
+    it("lets a lost-reply request expire at its own deadline", () => {
+      const c = `owed-c-${seq++}`;
+      const p = `owed-p-${seq++}`;
+      const chain = store.createChain(`exp-${seq++}`);
+      const request = store.enqueue({
+        conversationId: `exp-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: c,
+        recipientSessionId: p,
+        prompt: "report back",
+        responseRequested: true,
+        expiresAt: 5_000,
+      });
+      store.claimNext(p, "d", 1000);
+      store.markAdmitted(request.id);
+      store.markCompleted(request.id);
+      store.enqueueRouted({
+        conversationId: `exp-reply-${seq++}`,
+        chainId: chain,
+        fallbackChainId: `exp-fallback-${seq++}`,
+        senderSessionId: p,
+        recipientSessionId: c,
+        prompt: "report",
+        responseRequested: false,
+        markRepliedId: request.id,
+        participants: [p, c],
+        maxHops: 100,
+      });
+      store.cancelPending(c, "test", p);
+      assert.deepEqual(
+        store.outstandingRepliesBySender(4_000).get(c),
+        [p],
+        "before its deadline the lost reply is still owed",
+      );
+      assert.equal(
+        store.outstandingRepliesBySender(6_000).get(c),
+        undefined,
+        "after it, the request owes nothing, as an unanswered one expires",
+      );
+    });
+
     it("takes any later word from the owed peer as the answer", () => {
       // After a poke (which closes the peer's chains) or a re-ask, the peer's
       // report arrives on a different chain and marks nothing.
@@ -290,7 +349,7 @@ describe("peerPromptStore", () => {
     it("seeks an index for both answer checks, never scanning the inbox", () => {
       const plan = getDb()
         .prepare(`EXPLAIN QUERY PLAN ${OUTSTANDING_REPLIES_SQL}`)
-        .all() as { detail: string }[];
+        .all(Date.now()) as { detail: string }[];
       const details = plan.map((step) => step.detail).join("\n");
       assert.match(details, /peer_prompts_recipient_sender_seq_idx/);
       assert.match(details, /peer_prompts_recipient_chain_seq_idx/);

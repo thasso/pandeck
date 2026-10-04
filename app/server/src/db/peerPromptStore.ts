@@ -1079,6 +1079,7 @@ export const OUTSTANDING_REPLIES_SQL = `
       CROSS JOIN peer_prompts o ON o.replied_by_message_id = a.id
      WHERE a.status IN ('cancelled', 'failed') AND a.accepted_at_ms IS NULL
        AND o.status = 'replied' AND o.response_requested = 1
+       AND (o.expires_at_ms IS NULL OR o.expires_at_ms > ?)
   )
   SELECT DISTINCT o.sender_session_id, o.recipient_session_id
     FROM owed o
@@ -1087,19 +1088,20 @@ export const OUTSTANDING_REPLIES_SQL = `
             WHERE r.recipient_session_id = o.sender_session_id
               AND r.sender_session_id = o.recipient_session_id
               AND r.queue_seq > o.queue_seq
-              AND r.accepted_at_ms IS NOT NULL
+              AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
          )
      AND NOT EXISTS (
            SELECT 1 FROM peer_prompts r
             WHERE r.recipient_session_id = o.sender_session_id
               AND r.chain_id = o.chain_id
               AND r.queue_seq > o.queue_seq
-              AND r.accepted_at_ms IS NOT NULL
+              AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
               AND EXISTS (
                 SELECT 1 FROM peer_prompts f
                  WHERE f.chain_id = o.chain_id
                    AND f.sender_session_id = o.recipient_session_id
                    AND f.recipient_session_id = r.sender_session_id
+                   AND (f.accepted_at_ms IS NOT NULL OR f.status = 'interrupted')
                    AND f.queue_seq > o.queue_seq
                    AND f.queue_seq < r.queue_seq)
          )
@@ -1113,7 +1115,9 @@ export const OUTSTANDING_REPLIES_SQL = `
  *
  * A request marked `replied` whose correlated reply never reached the
  * sender — cancelled or failed before admission — is still owed: `replied`
- * is written when the reply is QUEUED, not when it lands. That half starts
+ * is written when the reply is QUEUED, not when it lands. It keeps the
+ * request's own deadline: past `expires_at_ms` it owes nothing, as an
+ * `awaiting_response` row would have expired. That half starts
  * from the few lost replies (`CROSS JOIN` keeps SQLite from driving it from
  * every replied row instead) and follows the back-link index.
  *
@@ -1123,11 +1127,12 @@ export const OUTSTANDING_REPLIES_SQL = `
  * - one effectively answered without being marked: a reply closes exactly
  *   one request by strict correlation, so a report forwarded through a third
  *   peer, or an answer after the sender re-asked, leaves the original row
- *   open. A LATER prompt that REACHED the sender (durably admitted — a report
+ *   open. A LATER prompt that REACHED the sender (durably admitted, or
+ *   recovered at boot as `interrupted` after reaching its log — a report
  *   cancelled or failed before delivery answers nothing) from the owed peer
  *   counts as the answer, and so does one on the request's own chain (which a
  *   forward keeps) — but only from a session the owed peer itself handed the
- *   work to on that chain since the request: peers spawned in one turn share a
+ *   work to (a handoff that was delivered) on that chain since the request: peers spawned in one turn share a
  *   chain, and one reviewer's reply must not answer for the reviewer beside it,
  *   even when that reviewer delegated elsewhere on the same chain.
  *
@@ -1145,8 +1150,8 @@ export const OUTSTANDING_REPLIES_SQL = `
  * owed until the user settles or archives that peer, or the request expires
  * (`RESPONSE_TTL_MS`, 30 days).
  */
-function outstandingRepliesBySender(): Map<string, string[]> {
-  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all() as {
+function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
+  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now) as {
     sender_session_id: string;
     recipient_session_id: string;
   }[];

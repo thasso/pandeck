@@ -1394,6 +1394,11 @@ export function runPeerPromptRetention(now = Date.now()): {
   for (const m of expired) void broadcastCardUpdateFor(m);
   // An expired request owes nothing any more: the session list must hear it.
   if (expired.length > 0) void broadcastParticipants(expired);
+  // A request whose reply was lost stops being owed at its own deadline with
+  // no transition to announce it, so each sweep rebuilds the list (debounced).
+  void getHub()
+    .then((hub) => hub.broadcastSessions?.())
+    .catch(() => undefined);
   const pruned = peerPromptStore.pruneTerminal(now - PRUNE_TTL_MS);
   return { expired: expired.length, pruned };
 }

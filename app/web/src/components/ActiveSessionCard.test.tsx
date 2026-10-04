@@ -346,7 +346,7 @@ describe("ActiveSessionCard stall", () => {
     const base = card({ id: "root", title: "Coordinator" });
     const html = renderToStaticMarkup(
       <ActiveSessionCard
-        card={{ ...base, stall: { peers: [reviewer] } }}
+        card={{ ...base, stall: { peers: [reviewer], askers: [] } }}
         now={NOW}
         active={false}
         relations={{}}
@@ -371,7 +371,10 @@ describe("ActiveSessionCard stall chip fit", () => {
     const base = card({ id: "root", title: "Coordinator" });
     const html = renderToStaticMarkup(
       <ActiveSessionCard
-        card={{ ...base, stall: { peers: [long("a"), long("b"), long("c")] } }}
+        card={{
+          ...base,
+          stall: { peers: [long("a"), long("b"), long("c")], askers: [] },
+        }}
         now={NOW}
         active={false}
         relations={{}}

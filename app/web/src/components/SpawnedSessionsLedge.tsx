@@ -5,6 +5,8 @@ import {
   spawnedSessionsSummary,
   stallLabel,
   stallMore,
+  stallParts,
+  stallTarget,
   stallTitle,
   sessionStatusBadge,
   type SessionStatusTone,
@@ -101,16 +103,18 @@ export function SpawnedSessionsLedge({
         title={`Open “${stallTitle(view.stall)}”`}
         aria-label={`Stalled: ${stallLabel(view.stall)}`}
         onClick={() => {
-          const peer = view.stall?.peers[0];
-          if (peer) onOpenSession(peer.id);
+          if (view.stall) onOpenSession(stallTarget(view.stall).id);
         }}
         className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${BADGE_TONE.warning}`}
       >
         <Hourglass size={10} className="shrink-0" aria-hidden="true" />
-        <span className="shrink-0">No reply from</span>
-        <span className="min-w-0 truncate">
-          {`“${stallTitle(view.stall)}”`}
-        </span>
+        {stallParts(view.stall).before ? (
+          <span className="shrink-0">{stallParts(view.stall).before}</span>
+        ) : null}
+        <span className="min-w-0 truncate">{stallParts(view.stall).title}</span>
+        {stallParts(view.stall).after ? (
+          <span className="shrink-0">{stallParts(view.stall).after}</span>
+        ) : null}
         {stallMore(view.stall) ? (
           <span className="shrink-0">{stallMore(view.stall)}</span>
         ) : null}

@@ -330,13 +330,16 @@ one, is moving (no turn, queued work, working subagent run, background job or
 retained host) or waiting on the user, the tree is STALLED: the card carries a
 warning chip, **No reply from «peer»** (`+N` when several owe, kept apart from
 the title so it never truncates), that opens that peer, says so in the card's
-spoken label, and rises to the attention tier. It is judged over the whole tree,
-not request by request, because a coordinator often routes an implementer's
-report to a reviewer instead of to itself; while anything in the tree works, an
-open request is work in progress, not a stall. A peer that is archived, settled
-or gone owes nothing here — the user put it down; a peer the user took over
-still owes until it answers or is settled. A report that reaches the coordinator
-on a fresh chain through a third peer after a poke, a forward of two or more
+spoken label, and rises to the attention tier. When the one owed the reply is
+the card's own session — a peer asked its coordinator, which went quiet — the
+chip names the peer that waits instead, **«peer» awaits a reply**, and opens it.
+It is judged over the whole tree, not request by request, because a coordinator
+often routes an implementer's report to a reviewer instead of to itself; while
+anything in the tree works, an open request is work in progress, not a stall. A
+peer that is archived, settled or gone owes nothing here — the user put it down;
+a peer the user took over still owes until it answers or is settled. A report
+that reaches the coordinator on a fresh chain through a third peer after the
+user prompted that peer (which closes its chains), a forward of two or more
 hops, or a peer released with a plain message stays owed until that peer is
 settled or the request expires (30 days). The composer ledge says the same for
 the chat on screen, judged over the same tree its card folds — a peer the user

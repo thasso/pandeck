@@ -119,10 +119,13 @@ export interface SessionInboxCard {
 /**
  * A quiet tree that is still owed an answer — the "done, or does it need a
  * poke?" question a coordinator's card has to answer when its own agent is
- * idle. Peers the user can open, newest activity first.
+ * idle. `peers` owe the tree a reply; `askers` are sessions in the tree
+ * waiting on the ROOT itself, so the poke the tree needs is the root's own
+ * answer. Each newest activity first.
  */
 export interface SpawnTreeStall {
   peers: SessionListItem[];
+  askers: SessionListItem[];
 }
 
 /**
@@ -174,46 +177,82 @@ export function spawnTreeStall(
   scope: readonly SessionListItem[],
   byId: ReadonlyMap<string, SessionListItem>,
 ): SpawnTreeStall | undefined {
+  const rootId = scope[0]?.id;
   const owed = new Map<string, SessionListItem>();
+  const askers = new Map<string, SessionListItem>();
   for (const session of scope)
     for (const id of session.awaitingRepliesFrom ?? []) {
+      // Waiting on the root: the card would name itself, so it names who
+      // waits instead.
+      if (id === rootId) {
+        if (session.id !== rootId) askers.set(session.id, session);
+        continue;
+      }
       const peer = byId.get(id);
       // A peer the user put down — archived or settled — owes nothing here.
       if (peer && !peer.archived && !isShelvedSession(peer)) owed.set(id, peer);
     }
-  if (owed.size === 0) return undefined;
+  if (owed.size === 0 && askers.size === 0) return undefined;
   const peers = [...owed.values()];
   if ([...scope, ...peers].some((s) => isMoving(s) || waitsOnHuman(s)))
     return undefined;
-  peers.sort((a, b) => activityAt(b) - activityAt(a));
-  return { peers };
+  const newestFirst = (a: SessionListItem, b: SessionListItem) =>
+    activityAt(b) - activityAt(a);
+  return {
+    peers: peers.sort(newestFirst),
+    askers: [...askers.values()].sort(newestFirst),
+  };
 }
 
 /** What a stall chip draws, as a content key. */
 function stallKey(stall: SpawnTreeStall): string {
-  return stall.peers.map((peer) => `${peer.id}:${peer.title}`).join("\u001f");
+  return [...stall.peers, ...stall.askers]
+    .map((peer) => `${peer.id}:${peer.title}`)
+    .join("\u001f");
 }
 
 /**
- * The stall chip's words: the peer that owes the reply, and how many more do.
- * "No reply from «Reviewer»", or "… +2" when several are owed.
+ * The session a stall chip names and opens: the newest peer that owes a
+ * reply, else the newest session waiting on the root's own answer.
  */
-export function stallLabel(stall: SpawnTreeStall): string {
-  const more = stallMore(stall);
-  return `No reply from “${stallTitle(stall)}”${more ? ` ${more}` : ""}`;
-}
-
-/** The first owed peer's title, as the chip names it. */
-export function stallTitle(stall: SpawnTreeStall): string {
-  return stall.peers[0]?.title.trim() || "a peer";
+export function stallTarget(stall: SpawnTreeStall): SessionListItem {
+  return (stall.peers[0] ?? stall.askers[0]) as SessionListItem;
 }
 
 /**
- * "+N" for the further peers that owe a reply, or "" — drawn apart from the
- * title so a long title truncates without hiding how many more there are.
+ * The stall chip's words, in the pieces it draws: "No reply from «Reviewer»"
+ * when a peer owes the tree a reply, "«Implementer» awaits a reply" when the
+ * tree waits on the root itself — the title kept apart so only it truncates.
+ */
+export function stallParts(stall: SpawnTreeStall): {
+  before: string;
+  title: string;
+  after: string;
+} {
+  const title = `“${stallTarget(stall).title.trim() || "a peer"}”`;
+  return stall.peers.length > 0
+    ? { before: "No reply from", title, after: "" }
+    : { before: "", title, after: "awaits a reply" };
+}
+
+/** The whole chip as one sentence, for its spoken label. */
+export function stallLabel(stall: SpawnTreeStall): string {
+  const { before, title, after } = stallParts(stall);
+  const more = stallMore(stall);
+  return [before, title, after, more].filter(Boolean).join(" ");
+}
+
+/** The named session's title, as the chip's tooltip names it. */
+export function stallTitle(stall: SpawnTreeStall): string {
+  return stallTarget(stall).title.trim() || "a peer";
+}
+
+/**
+ * "+N" for the further sessions the stall involves, or "" — drawn apart from
+ * the title so a long title truncates without hiding how many more there are.
  */
 export function stallMore(stall: SpawnTreeStall): string {
-  const more = stall.peers.length - 1;
+  const more = stall.peers.length + stall.askers.length - 1;
   return more > 0 ? `+${more}` : "";
 }
 
@@ -1586,14 +1625,20 @@ export function spawnedSessionsView(options: {
   const ownedByRun = workflowRunOwnerBySession(runs, runCards).has(
     coordinatorId,
   );
-  const coordinator = ownedByRun ? undefined : byId.get(coordinatorId);
+  const found = ownedByRun ? undefined : byId.get(coordinatorId);
+  // An archived chat raises nothing; a settled one only while unsettled work
+  // is folded under it — the shelf rule its inbox card follows.
+  const coordinator = found && !found.archived ? found : undefined;
 
   // Almost every session on screen spawned nothing: answer that before
   // building the forest this view otherwise reads on every broadcast. Such a
   // chat may still be owed a reply — `session_send_prompt` asks existing
   // sessions too — so its stall is read over the chat alone.
   if (!spawned.has(coordinatorId)) {
-    const stall = coordinator ? spawnTreeStall([coordinator], byId) : undefined;
+    const stall =
+      coordinator && !isShelvedSession(coordinator)
+        ? spawnTreeStall([coordinator], byId)
+        : undefined;
     return {
       rows: [],
       counts: zeroCounts(),
@@ -1687,17 +1732,15 @@ export function spawnedSessionsView(options: {
   // the coordinator-owned peers under it — not this strip's ownership-blind
   // rows: a peer the user took over, or a run's role, is not this chat's work,
   // and its activity must not hide the chat's stall (nor its quiet raise one).
-  const stall = coordinator
-    ? spawnTreeStall(
-        [
-          coordinator,
-          ...spawnClusterDescendantIds(coordinatorId, forest)
-            .map((id) => byId.get(id))
-            .filter((row): row is SessionListItem => row !== undefined),
-        ],
-        byId,
-      )
-    : undefined;
+  const tree = spawnClusterDescendantIds(coordinatorId, forest)
+    .map((id) => byId.get(id))
+    .filter((row): row is SessionListItem => row !== undefined);
+  const stall =
+    coordinator &&
+    (!isShelvedSession(coordinator) ||
+      tree.some((row) => !isShelvedSession(row)))
+      ? spawnTreeStall([coordinator, ...tree], byId)
+      : undefined;
   return {
     rows,
     counts: clusterCounts(liveCards),
