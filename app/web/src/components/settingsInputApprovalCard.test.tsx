@@ -161,3 +161,40 @@ test("a resolved card shows its outcome and no controls", () => {
   expect(container!.querySelector("input")).toBeNull();
   expect(buttonLabels()).toEqual([]);
 });
+
+test("Dismiss empties the field before it rejects", () => {
+  const onResolve = vi.fn();
+  render(<ApprovalCard approval={card({})} onResolve={onResolve} />);
+  const input = container!.querySelector<HTMLInputElement>(
+    'input[type="password"]',
+  )!;
+  type(input, "typed-fixture");
+  click("Dismiss");
+  expect(input.value).toBe("");
+  expect(onResolve).toHaveBeenCalledWith("ap_settings", "rejected");
+});
+
+test("a card that stops waiting drops what was typed", () => {
+  render(<ApprovalCard approval={card({})} onResolve={vi.fn()} />);
+  type(
+    container!.querySelector<HTMLInputElement>('input[type="password"]')!,
+    "typed-fixture",
+  );
+  // Replaced by a newer card: the field, and its value, are gone.
+  act(() =>
+    root!.render(
+      <ApprovalCard
+        approval={{ ...card({}), status: "superseded" }}
+        onResolve={vi.fn()}
+      />,
+    ),
+  );
+  expect(container!.querySelector("input")).toBeNull();
+  // Even if it waited again, nothing typed before comes back.
+  act(() =>
+    root!.render(<ApprovalCard approval={card({})} onResolve={vi.fn()} />),
+  );
+  expect(
+    container!.querySelector<HTMLInputElement>('input[type="password"]')!.value,
+  ).toBe("");
+});

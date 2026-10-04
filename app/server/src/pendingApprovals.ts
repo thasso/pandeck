@@ -80,6 +80,12 @@ export interface ApprovalExecutor {
     card: ApprovalCard,
     context: Record<string, unknown>,
   ): Promise<{ resultSummary: string; resultUrl?: string }>;
+  /**
+   * Drop anything `prepare` held in memory for this resolution. Called once
+   * the resolution ends, whether it executed, failed, or stopped before
+   * `execute` ran.
+   */
+  release?(card: ApprovalCard): void;
 }
 
 const executors = new Map<ApprovalKind, ApprovalExecutor>();
@@ -494,65 +500,71 @@ async function resolveApprovalExclusive(
   // pending: a refusal here must leave a card the user can adjust and approve
   // again, not a half-executed one. Called even with no edits, since a pending
   // card's world can change under it.
-  if (options.underGrant) requireGrant(rec.card);
-  const preparer = executors.get(rec.card.kind)?.prepare;
-  if (preparer) {
-    const matching = edits?.kind === rec.card.body.kind ? edits : undefined;
-    patchCard(approvalId, { body: await preparer(rec.card, matching) });
-  }
-  // Again after `prepare`: it can await a network or model lookup, and a
-  // revoke that landed meanwhile must still stop what has not started.
-  if (options.underGrant) requireGrant(getRecord(approvalId)!.card);
-
-  // Granted once the decision is settled, before execution: the grant is
-  // permission for the operation, not a verdict on how this run turns out.
-  if (options.forSession) grantOperations(getRecord(approvalId)!.card);
-  const executing = patchCard(approvalId, {
-    status: "executing",
-    decision: "approved",
-    error: undefined,
-    ...(options.forSession ? { grantedForSession: true } : {}),
-  });
-  emitChange(sessionId); // no longer pending → clears the attention indicator
-  if (executing) await broadcast(sessionId, executing.card);
-
-  const executor = executors.get(rec.card.kind);
-  // Executors annotate the live body with per-item results. Keep this exact
-  // object through both success and failure so a thrown partial execution does
-  // not lose created ids, link outcomes, or item diagnostics by re-reading the
-  // older persisted body.
-  const live = getRecord(approvalId)!;
+  // Whatever `prepare` holds for this resolution is dropped however it ends,
+  // including a store write or broadcast that fails before `execute` runs.
   try {
-    if (!executor)
-      throw new Error(
-        `No executor registered for approval kind "${rec.card.kind}".`,
-      );
-    const outcome = await executor.execute(live.card, live.context);
-    const done = patchCard(approvalId, {
-      status: "executed",
-      resolvedAt: Date.now(),
-      resultSummary: outcome.resultSummary,
-      ...(outcome.resultUrl ? { resultUrl: outcome.resultUrl } : {}),
-      body: live.card.body,
+    if (options.underGrant) requireGrant(rec.card);
+    const preparer = executors.get(rec.card.kind)?.prepare;
+    if (preparer) {
+      const matching = edits?.kind === rec.card.body.kind ? edits : undefined;
+      patchCard(approvalId, { body: await preparer(rec.card, matching) });
+    }
+    // Again after `prepare`: it can await a network or model lookup, and a
+    // revoke that landed meanwhile must still stop what has not started.
+    if (options.underGrant) requireGrant(getRecord(approvalId)!.card);
+
+    // Granted once the decision is settled, before execution: the grant is
+    // permission for the operation, not a verdict on how this run turns out.
+    if (options.forSession) grantOperations(getRecord(approvalId)!.card);
+    const executing = patchCard(approvalId, {
+      status: "executing",
+      decision: "approved",
+      error: undefined,
+      ...(options.forSession ? { grantedForSession: true } : {}),
     });
-    const card = (done ?? live).card;
-    const outcomePrompt = outcomePromptFor(card);
-    settled(options, card, outcomePrompt);
-    if (done) await broadcast(sessionId, done.card);
-    return { card, outcomePrompt };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const failed = patchCard(approvalId, {
-      status: "failed",
-      resolvedAt: Date.now(),
-      error: message,
-      body: live.card.body,
-    });
-    const card = (failed ?? rec).card;
-    const outcomePrompt = outcomePromptFor(card);
-    settled(options, card, outcomePrompt);
-    if (failed) await broadcast(sessionId, failed.card);
-    return { card, outcomePrompt };
+    emitChange(sessionId); // no longer pending → clears the attention indicator
+    if (executing) await broadcast(sessionId, executing.card);
+
+    const executor = executors.get(rec.card.kind);
+    // Executors annotate the live body with per-item results. Keep this exact
+    // object through both success and failure so a thrown partial execution does
+    // not lose created ids, link outcomes, or item diagnostics by re-reading the
+    // older persisted body.
+    const live = getRecord(approvalId)!;
+    try {
+      if (!executor)
+        throw new Error(
+          `No executor registered for approval kind "${rec.card.kind}".`,
+        );
+      const outcome = await executor.execute(live.card, live.context);
+      const done = patchCard(approvalId, {
+        status: "executed",
+        resolvedAt: Date.now(),
+        resultSummary: outcome.resultSummary,
+        ...(outcome.resultUrl ? { resultUrl: outcome.resultUrl } : {}),
+        body: live.card.body,
+      });
+      const card = (done ?? live).card;
+      const outcomePrompt = outcomePromptFor(card);
+      settled(options, card, outcomePrompt);
+      if (done) await broadcast(sessionId, done.card);
+      return { card, outcomePrompt };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const failed = patchCard(approvalId, {
+        status: "failed",
+        resolvedAt: Date.now(),
+        error: message,
+        body: live.card.body,
+      });
+      const card = (failed ?? rec).card;
+      const outcomePrompt = outcomePromptFor(card);
+      settled(options, card, outcomePrompt);
+      if (failed) await broadcast(sessionId, failed.card);
+      return { card, outcomePrompt };
+    }
+  } finally {
+    executors.get(rec.card.kind)?.release?.(rec.card);
   }
 }
 

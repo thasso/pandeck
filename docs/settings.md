@@ -179,8 +179,13 @@ or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
   else. The executor's `prepare` checks it and holds it in memory for that one
   resolution; `execute` writes it through `saveSettings` and runs the section's
   connection test. The stored card, the outcome the agent reads and every client
-  see only "saved" and the server-written test result. An approval without a
-  value is refused and the card stays pending.
+  see only "saved" and the server-written test result. A failed save is reported
+  in the server's words too, since a writer's or side effect's message may carry
+  the value in some encoding. The executor's `release` drops the held value
+  however the resolution ends, including a failure between `prepare` and
+  `execute`. An approval without a value is refused and the card stays pending.
+  In the browser the field lives in a component mounted only while the card
+  waits, so a dismissed, answered or replaced card keeps no typed value.
 - **Connect**: the card opens the descriptor's `connectPath` (the server's OAuth
   start route) in a popup. The card cannot be approved before the account is
   connected; when the OAuth callback announces its section, every pending

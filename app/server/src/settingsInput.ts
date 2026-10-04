@@ -16,7 +16,7 @@ import {
   registerApprovalExecutor,
   resolveApproval,
 } from "./pendingApprovals.ts";
-import { redactSecretsWith } from "./secretRedaction.ts";
+import { redactSecrets } from "./secretRedaction.ts";
 import { getSettings } from "./settings.ts";
 import {
   onSettingsChanged,
@@ -43,8 +43,23 @@ import {
 /** Longer than any token an integration issues; a paste of something else. */
 const MAX_SECRET_CHARS = 8_192;
 
-/** Secrets between `prepare` and `execute` of one resolution, by approval id. */
+/**
+ * Secrets between `prepare` and `execute` of one resolution, by approval id.
+ * `release` drops an entry however the resolution ends.
+ */
 const submitted = new Map<string, string>();
+
+/** How many secrets wait between `prepare` and `execute`; for tests. */
+export function heldSecretCountForTests(): number {
+  return submitted.size;
+}
+
+/** How `saveSettings` reports a write that landed while a side effect failed. */
+const SAVED_BUT = "Settings saved, but";
+
+function details(body: SettingsInputApprovalBody): string {
+  return `The Settings page shows its state: /settings/${body.section}.`;
+}
 
 function bodyOf(card: ApprovalCard): SettingsInputApprovalBody {
   if (card.body.kind !== "settingsInput")
@@ -112,16 +127,25 @@ registerApprovalExecutor("settingsInput", {
       throw new Error(
         "The value did not reach the server's write. Nothing was saved; ask again.",
       );
+    // What failed is told in the server's words: a writer's or a side
+    // effect's message may carry the value in some encoding, and this text is
+    // stored on the card and handed to the agent.
     try {
       await saveSettings(settingsPatchForWrites([{ path: body.path, value }]));
     } catch (err) {
-      throw new Error(
-        `Saving ${body.label} failed: ${redactSecretsWith(errorText(err), [value])}`,
-      );
+      if (errorText(err).startsWith(SAVED_BUT))
+        return {
+          resultSummary: `${body.label} saved, but applying it did not complete everywhere. ${details(body)}`,
+        };
+      throw new Error(`Saving ${body.label} failed. ${details(body)}`);
     }
     return {
       resultSummary: `${body.label} saved.${await testOutcome(body)}`,
     };
+  },
+
+  release(card) {
+    submitted.delete(card.id);
   },
 });
 
@@ -133,35 +157,46 @@ registerApprovalExecutor("settingsInput", {
 async function resolveConnectedCards(
   sections: readonly (keyof AppSettings)[],
 ): Promise<void> {
-  const settings = getSettings();
-  for (const sessionId of pendingApprovalSessionIds()) {
+  const waiting: Array<{ card: ApprovalCard; descriptor: SettingDescriptor }> =
+    [];
+  for (const sessionId of pendingApprovalSessionIds())
     for (const card of approvalsForSession(sessionId)) {
       if (card.status !== "pending" || card.body.kind !== "settingsInput")
         continue;
-      const body = card.body;
-      if (body.mode !== "connect") continue;
-      const section = body.path.split(".")[0] as keyof AppSettings;
-      if (!sections.includes(section)) continue;
-      const descriptor = settingDescriptor(body.path);
-      if (!descriptor || !settingIsSet(descriptor, settings)) continue;
-      try {
-        const { outcomePrompt } = await resolveApproval(card.id, "approved");
-        if (outcomePrompt)
-          await deliverAgentHandoff({
-            sessionId,
-            text: outcomePrompt,
-            origin: { kind: "system", source: "approval-decision" },
-          });
-      } catch (err) {
-        console.warn(
-          `[settings] connecting ${body.path} did not resolve its card:`,
-          errorText(err),
-        );
-      }
+      if (card.body.mode !== "connect") continue;
+      const section = card.body.path.split(".")[0] as keyof AppSettings;
+      const descriptor = settingDescriptor(card.body.path);
+      if (descriptor && sections.includes(section))
+        waiting.push({ card, descriptor });
+    }
+  // Read full settings only when some card waits on this write: every other
+  // write would pay for, and could fail on, a read it does not need.
+  if (waiting.length === 0) return;
+  const settings = getSettings();
+  for (const { card, descriptor } of waiting) {
+    if (!settingIsSet(descriptor, settings)) continue;
+    try {
+      const { outcomePrompt } = await resolveApproval(card.id, "approved");
+      if (outcomePrompt)
+        await deliverAgentHandoff({
+          sessionId: card.sessionId,
+          text: outcomePrompt,
+          origin: { kind: "system", source: "approval-decision" },
+        });
+    } catch (err) {
+      console.warn(
+        `[settings] connecting ${descriptor.path} did not resolve its card:`,
+        redactSecrets(errorText(err)),
+      );
     }
   }
 }
 
 onSettingsChanged(({ sections }) => {
-  void resolveConnectedCards(sections);
+  resolveConnectedCards(sections).catch((err: unknown) =>
+    console.warn(
+      "[settings] could not check connection cards after a settings write:",
+      redactSecrets(errorText(err)),
+    ),
+  );
 });

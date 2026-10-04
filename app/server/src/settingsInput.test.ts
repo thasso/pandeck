@@ -188,3 +188,134 @@ describe("a connection card", () => {
     );
   });
 });
+
+describe("nothing outlives or leaks from a secret card", () => {
+  test("a side effect failing with the value in it reaches no card or outcome", async () => {
+    const { subscribeIntegrationToolChanges } =
+      await import("./integrationToolChanges.ts");
+    const encoded = Buffer.from(TYPED_FIXTURE).toString("base64");
+    const stop = subscribeIntegrationToolChanges(() => {
+      throw new Error(`subscriber saw ${encoded}`);
+    });
+    try {
+      const card = await raise("s-effect", "brave.apiKey");
+      const { card: done, outcomePrompt } = await resolveApproval(
+        card.id,
+        "approved",
+        { kind: "settingsInput", value: TYPED_FIXTURE },
+      );
+      assert.equal(done.status, "executed");
+      assert.match(
+        done.resultSummary ?? "",
+        /Brave API key saved, but applying it did not complete everywhere\./,
+      );
+      for (const text of [
+        JSON.stringify(approvalForId(card.id)),
+        outcomePrompt,
+      ]) {
+        assert.equal(text.includes(encoded), false);
+        assert.equal(text.includes(TYPED_FIXTURE), false);
+      }
+    } finally {
+      stop();
+    }
+  });
+
+  test("a failed write is reported in the server's words", async () => {
+    const { existsSync, renameSync, rmdirSync } = await import("node:fs");
+    const path = join(DATA_DIR, "settings", "context7.json");
+    const saved = `${path}.test-saved`;
+    // Raised first: raising reads every settings file.
+    const card = await raise("s-fail", "context7.apiKey");
+    const hadFile = existsSync(path);
+    if (hadFile) renameSync(path, saved);
+    // A directory where the file belongs makes the writer throw.
+    mkdirSync(path, { recursive: true });
+    try {
+      const { card: done, outcomePrompt } = await resolveApproval(
+        card.id,
+        "approved",
+        { kind: "settingsInput", value: TYPED_FIXTURE },
+      );
+      assert.equal(done.status, "failed");
+      assert.equal(
+        done.error,
+        "Saving Context7 API key failed. The Settings page shows its state: /settings/context7.",
+      );
+      assert.equal(outcomePrompt.includes(TYPED_FIXTURE), false);
+    } finally {
+      rmdirSync(path);
+      if (hadFile) renameSync(saved, path);
+    }
+  });
+
+  test("a resolution stopped between prepare and execute drops the value", async () => {
+    const { setApprovalBroadcastForTests } =
+      await import("./pendingApprovals.ts");
+    const { heldSecretCountForTests } = await import("./settingsInput.ts");
+    const card = await raise("s-stopped", "brave.apiKey");
+    setApprovalBroadcastForTests((_session, approval) => {
+      if (approval.status === "executing") throw new Error("broadcast failed");
+    });
+    try {
+      await assert.rejects(
+        resolveApproval(card.id, "approved", {
+          kind: "settingsInput",
+          value: TYPED_FIXTURE,
+        }),
+        /broadcast failed/,
+      );
+    } finally {
+      setApprovalBroadcastForTests(null);
+    }
+    assert.equal(heldSecretCountForTests(), 0);
+  });
+});
+
+test("an unreadable unrelated file never breaks the connection listener", async () => {
+  const { existsSync, renameSync, rmSync } = await import("node:fs");
+  const { saveSettings } = await import("./settingsService.ts");
+  const path = join(DATA_DIR, "settings", "slack.json");
+  const saved = `${path}.test-saved`;
+  const hadFile = existsSync(path);
+  if (hadFile) renameSync(path, saved);
+  writeFileSync(path, "{ not json");
+  const unhandled = vi.fn();
+  process.on("unhandledRejection", unhandled);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    // No connection card waits: the listener reads nothing. The save itself
+    // reports the unreadable file once its write has landed.
+    await saveSettings({
+      browserTools: { headed: true, rawMcpEnabled: false },
+    }).catch(() => {});
+    // One waits on Google: the full read fails, and is reported, not thrown.
+    createApproval({
+      sessionId: "s-unreadable",
+      kind: "settingsInput",
+      title: "Connect Google account connection",
+      body: {
+        kind: "settingsInput",
+        path: "google.connection",
+        label: "Google account connection",
+        section: "google",
+        mode: "connect",
+        wasConfigured: false,
+      },
+    });
+    await announceSettingsWritten(["google"]);
+    await vi.waitFor(() =>
+      assert.ok(
+        warn.mock.calls.some((call) =>
+          String(call[0]).includes("could not check connection cards"),
+        ),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(unhandled.mock.calls.length, 0);
+  } finally {
+    process.off("unhandledRejection", unhandled);
+    rmSync(path);
+    if (hadFile) renameSync(saved, path);
+  }
+});
