@@ -6,26 +6,22 @@
  * stays there. The engine answers only what differs: whether it is switched
  * off, whether the client's id becomes the session's and may be taken, which
  * persona gate applies, the account, what it resolves before a worktree can be
- * provisioned, and how it brings the session live. Until step 11's registry
- * `create`, the creation here reaches `hub.ts`, a layer above this one.
+ * provisioned, and what its session is created with (`create.ts` knows how).
  */
 import type { ClientMessage, Harness, TaskSessionRef } from "@assistant/shared";
 import {
   defaultOpenAiProfileId,
   enabledCredentialProfileById,
 } from "../credentialProfiles.ts";
-import { sessionStore } from "../db/sessionStore.ts";
-import { linkSessionToWorktree } from "../db/worktreeStore.ts";
 import type { LiveSession } from "../harness.ts";
-import { hub } from "../hub.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
-import {
-  sessionPromptConditions,
-  type SessionPromptEvidence,
-} from "../promptConditions.ts";
-import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
+import type { SessionPromptEvidence } from "../promptConditions.ts";
 import { getSettings } from "../settings.ts";
-import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
+import {
+  createSession,
+  SessionIdTakenError,
+  sessionIdTakenMessage,
+} from "./create.ts";
 import { harnessRegistry } from "./registry.ts";
 
 /** A first send: the `harnessSend` the client opens a session with. */
@@ -91,7 +87,7 @@ function claudeOwnershipRefusal(id: string): FirstSendRefusal | undefined {
   const holder = harnessRegistry.otherHolder(id, "claude-sdk");
   return holder
     ? {
-        message: `Session ${id} belongs to the ${holder} harness.`,
+        message: sessionIdTakenMessage(id, holder),
         onSession: true,
       }
     : undefined;
@@ -132,31 +128,17 @@ const engines: Record<Harness, FirstSendEngine> = {
           };
       }
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
-        const live = await hub.acquireNew(
-          req.agentType,
-          model,
-          req.thinkingLevel,
-          {
-            ...(worktree ? { cwd: worktree.path } : {}),
-            credentialProfileId: profileId,
-            // pi builds the system prompt inside creation, so the
-            // session-start evidence arrives with it (Task 287).
-            promptEvidence: evidence,
-            ...(req.mode ? { mode: req.mode } : {}),
-          },
-        );
-        sessionStore.upsert({
-          id: live.sessionId,
+        const live = await createSession({
           harness: "pi",
           agentType: req.agentType,
+          model,
+          thinkingLevel: req.thinkingLevel,
+          mode: req.mode,
+          ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
-          mode: live.sessionMode,
+          promptEvidence: evidence,
+          skills: true,
         });
-        await sessionSkills(live.sessionId, req.agentType);
-        if (worktree) {
-          linkSessionToWorktree(live.sessionId, worktree.id);
-          broadcastWorktreeEdgeChange();
-        }
         return {
           live,
           ref: {
@@ -193,35 +175,27 @@ const engines: Record<Harness, FirstSendEngine> = {
     },
     async prepare(req, profileId) {
       const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
-        // Everything the writes below need is resolved first: from the
-        // ownership check to the session's registration nothing awaits, so no
-        // other engine can take the id in between, and a refusal comes before
-        // any write.
-        const skillPreset = await sessionSkillPreset(req.id, req.agentType);
-        const held = claudeOwnershipRefusal(req.id);
-        if (held) return { refusal: held };
-        // Linked before the session exists: the store resolves its cwd from
-        // the edge.
-        if (worktree) {
-          linkSessionToWorktree(req.id, worktree.id);
-          broadcastWorktreeEdgeChange();
+        let live: LiveSession;
+        try {
+          live = await createSession({
+            harness: "claude-sdk",
+            // The client's id: checked again, disk included, right before the
+            // session registers.
+            id: req.id,
+            agentType: req.agentType,
+            modelId: req.modelId,
+            thinkingLevel: req.thinkingLevel,
+            mode: req.mode,
+            ...(worktree ? { worktree } : {}),
+            credentialProfileId: profileId,
+            promptEvidence: evidence,
+            skills: true,
+          });
+        } catch (err) {
+          if (err instanceof SessionIdTakenError)
+            return { refusal: { message: err.message, onSession: true } };
+          throw err;
         }
-        // Frozen before the first query builds the system prompt (Task 287):
-        // every resumed query then reproduces it.
-        sessionPromptConditions(req.id, req.agentType, evidence);
-        // With the preset, the freeze awaits nothing: it lands before the session.
-        const skillsFrozen = sessionSkills(req.id, req.agentType, skillPreset);
-        const live = hub.acquireClaudeSdk(
-          req.id,
-          req.modelId,
-          req.thinkingLevel,
-          req.agentType,
-          worktree?.path,
-          undefined,
-          profileId,
-          req.mode,
-        );
-        await skillsFrozen;
         return {
           live,
           ref: {

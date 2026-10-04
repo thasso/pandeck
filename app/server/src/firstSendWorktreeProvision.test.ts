@@ -62,7 +62,7 @@ sh(repoPath, "add", "-A");
 sh(repoPath, "commit", "-m", "init");
 
 const { Connection } = await import("./connection.ts");
-const { hub } = await import("./hub.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const claudeProfile = createCredentialProfile({
@@ -269,15 +269,9 @@ test("the first send provisions, records the genesis card, then runs the turn", 
   // attaches to view it.
   conn.view = () => {};
   let viewedCwd: string | undefined;
-  vi.spyOn(hub, "acquireClaudeSdk").mockImplementation(
-    (
-      _id: string,
-      _modelId?: string,
-      _thinking?: unknown,
-      _agentType?: unknown,
-      cwd?: string,
-    ) => {
-      viewedCwd = cwd;
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation(
+    (_id: string, options?: { cwd?: string }) => {
+      viewedCwd = options?.cwd;
       return {
         sessionId: "prov-session",
         broadcastState() {},
@@ -336,7 +330,7 @@ test("a blocked first send creates no session and runs no turn", async () => {
   )(fakeWs) as unknown as {
     handleFirstSend: (msg: Record<string, unknown>) => Promise<void>;
   };
-  vi.spyOn(hub, "acquireClaudeSdk").mockImplementation(() => {
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation(() => {
     throw new Error("no session may be created for a failed provision");
   });
 

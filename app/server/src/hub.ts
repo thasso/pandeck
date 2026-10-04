@@ -652,7 +652,9 @@ class SessionHub {
    * Get or create the in-process Claude-SDK session for `id`. It OWNS its
    * conversation and is driven directly via prompt/abort by the connection. The
    * store wires the real SDK seam, persistence, and the onChange →
-   * broadcastSessions hook.
+   * broadcastSessions hook. Server-minted ids only: its ownership backstop
+   * reads memory and the row, never the disk, so a client-supplied id goes
+   * through `createSession`, named as its `id`, instead (`harnesses/create.ts`).
    */
   acquireClaudeSdk(
     id: string,
@@ -664,9 +666,9 @@ class SessionHub {
     credentialProfileId = defaultClaudeProfileId(),
     mode?: SessionMode,
   ): ClaudeSdkSession {
-    // A backstop, never the first refusal: a client-supplied id was checked on
-    // disk already (`harnesses/firstSend.ts`), and every other id here is a
-    // server-minted UUID no transcript holds.
+    // A backstop, never the first refusal: only server-minted UUIDs reach this,
+    // which no transcript holds; a client-supplied id is created through
+    // `createSession`, which checks the disk too (`harnesses/create.ts`).
     const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
       onDisk: false,
     });

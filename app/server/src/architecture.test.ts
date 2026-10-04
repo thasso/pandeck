@@ -324,6 +324,22 @@ test("curated model options load no engine SDK", () => {
   assert.deepEqual(engineLoads(staticReach("harnesses/curatedModels.ts")), []);
 });
 
+/**
+ * Session creation sits below app code (`docs/agent-harnesses.md`): it reaches
+ * the hub's behaviour only through what the hub hands the registry, never by
+ * importing `hub.ts` or the connection.
+ */
+test("session creation and the first send import neither the hub nor the connection", () => {
+  for (const entry of ["harnesses/create.ts", "harnesses/firstSend.ts"]) {
+    const { modules } = staticReach(entry);
+    assert.ok(!modules.includes("hub.ts"), `${entry} reaches hub.ts`);
+    assert.ok(
+      !modules.includes("connection.ts"),
+      `${entry} reaches connection.ts`,
+    );
+  }
+});
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {

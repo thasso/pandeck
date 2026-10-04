@@ -45,7 +45,7 @@ vi.mock("./session/runtimePrompt.ts", () => ({
 }));
 
 const { Connection } = await import("./connection.ts");
-const { hub } = await import("./hub.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { createTask, readTask } = await import("./tasks.ts");
 const { addTaskComment } = await import("./taskComments.ts");
@@ -71,7 +71,7 @@ function makeConnection() {
   // The first prompt would otherwise create a real SDK session; the mocked
   // prompt facade never touches the returned driver, so a marker object is
   // enough, and nothing attaches to view it.
-  vi.spyOn(hub, "acquireClaudeSdk").mockReturnValue({
+  vi.spyOn(claudeSdkStore, "acquire").mockReturnValue({
     sessionId: "c1",
     broadcastState() {},
     contextInfo: () => ({}),

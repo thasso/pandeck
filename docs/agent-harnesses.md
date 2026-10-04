@@ -41,9 +41,11 @@ Four layers, each depending only on the ones below it:
      so routing is a lookup by harness id, never a branch per method. An id
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
-     lookup answer from memory alone. Create, fork, rename and remove move
-     behind it in step 11; until then `hub.ts` still calls the stores for them
-     and builds the merged session list from each.
+     lookup answer from memory alone. A first send creates through
+     `createSession` (below) and step 11b moves the other creation callers onto
+     it; fork, rename and remove move behind the registry in step 11c, and until
+     then `hub.ts` still calls the stores for them and builds the merged session
+     list from each.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context
@@ -55,15 +57,24 @@ Four layers, each depending only on the ones below it:
      before a worktree is provisioned (`prepare`, pi's model), and how it brings
      the session live (pi mints its id and freezes the prompt evidence inside
      creation; Claude takes the client's id, links the worktree and freezes
-     first). Until then `firstSend.ts` imports `hub.ts`, a layer above it. Step
-     11 starts by moving that creation into a registry-level `create` reaching
-     the hub through `HarnessHost`, which removes that import and keeps this
-     module to admission and preparation. Every other caller that builds a
-     Claude session by hand moves onto it too: spawn, workflow, the
-     review-comment new session and day session in `connection.ts`, the worktree
-     merge agent and the permanent assistant. All of them mint their ids
-     server-side, which is what lets `hub.acquireClaudeSdk`'s backstop skip the
-     disk; `create` keeps that a stated precondition.
+     first), through `createSession`.
+   - `createSession` (`harnesses/create.ts`) is the one place that knows each
+     engine's creation sequence; a caller names what the session starts with
+     (`NewSession`: persona, model, account, cwd and worktree, prompt evidence,
+     skills, title) and keeps its own admission and model resolution. It calls
+     the stores directly, never `hub.ts`. A Claude session's id is checked
+     against every other holder right before its registration, with nothing
+     awaited in between: with the disk scan for an id the caller names (a
+     client's), from memory and the row for one it mints itself. Step 11b moves
+     every other creation caller onto it — spawn, workflow, the review-comment
+     new session, day session, new session and draft in `connection.ts`, the
+     worktree merge agent and the permanent assistant — and retires
+     `hub.acquireClaudeSdk` and `hub.acquireNew`. Two things to settle there:
+     whether `NewSession` takes a neutral model (`{ provider, modelId }`,
+     resolved inside through the models port with a typed error the caller
+     words) so those callers stop branching on the engine; and that spawn must
+     reach `create.ts` through a dynamic import, as it does `hub.ts`, because
+     `create.ts` → the Claude store → the tool catalog → spawn closes a cycle.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -87,8 +98,9 @@ Four layers, each depending only on the ones below it:
      Claude-only curated options sit in `harnesses/curatedModels.ts`, which
      loads no engine SDK, so row projections stay cheap. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
-     redeems OpenAI reset credits. Model handles a session is created with still
-     come from the engines until step 11 routes creation through the registry.
+     redeems OpenAI reset credits. The pi model handle a session is created with
+     still comes from the engine (`NewSession.model`); step 11b decides whether
+     `createSession` resolves it.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -152,7 +164,9 @@ table when a later step needs them.
 | 8b   | Shared session kit: synthetic host-command turns                              | landed |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | landed |
 | 10   | One first-send path for both harnesses                                        | landed |
-| 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |
+| 11a  | `createSession`; the first send creates through it                            | landed |
+| 11b  | Every other creation caller on `createSession`                                | open   |
+| 11c  | Fork, delete and rename through the registry                                  | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
@@ -162,10 +176,10 @@ An id belongs to one engine, enforced in three places. Each store refuses to
 register an id the other holds resident (`setHeldElsewhere`, wired by the
 registry): the last word, whichever path asks. A Claude first send, the one path
 that takes a client-supplied id, refuses an id another engine holds resident, on
-record or on disk (`otherHolder`) before it writes anything, and checks again
-with nothing awaited before the session registers. `hub.acquireClaudeSdk` checks
-as a backstop for server-minted ids, from memory and the row only, and must
-never be the first refusal.
+record or on disk (`otherHolder`) before it writes anything, and `createSession`
+checks again, disk included, with nothing awaited before the session registers.
+`hub.acquireClaudeSdk`, which only server-minted ids reach, checks as a backstop
+from memory and the row only, and must never be the first refusal.
 
 Out of scope: splitting `ClaudeSdkSession.ts` internally. Step 8 removes its
 duplicated plumbing first, which makes that split a separate, smaller change.

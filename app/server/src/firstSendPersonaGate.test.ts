@@ -33,7 +33,7 @@ vi.mock("./agents.ts", async (importOriginal) => ({
 }));
 
 const { Connection } = await import("./connection.ts");
-const { hub } = await import("./hub.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("./piSdk/piStore.ts");
 const models = await import("./piSdk/models.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
@@ -69,11 +69,11 @@ function firstSend(msg: Record<string, unknown>) {
   });
   const claim = vi.spyOn(conn, "claimViewRequest");
   const claudeCreate = vi
-    .spyOn(hub, "acquireClaudeSdk")
+    .spyOn(claudeSdkStore, "acquire")
     .mockImplementation(() => {
       throw new Error("reached the session");
     });
-  const piCreate = vi.spyOn(hub, "acquireNew").mockImplementation(() => {
+  const piCreate = vi.spyOn(piStore, "acquireNew").mockImplementation(() => {
     throw new Error("reached the session");
   });
   const modelLookup = vi.spyOn(models, "findModelForProfile");
