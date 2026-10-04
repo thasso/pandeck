@@ -133,9 +133,11 @@ Four layers, each depending only on the ones below it:
    - `harnesses/availability.ts` says whether an existing session may be opened
      now (`existingSessionRefusal`): a Claude session waits on the Claude SDK
      setting, a pi session on its persona's availability.
-   - `harnesses/toolExposure.ts` and `harnesses/piSession.ts` carry the two
-     engine names app code still uses: pi's tool exposure for the session view,
-     and the pi session types a commit dry run is recorded on.
+   - `harnesses/toolExposure.ts` and `harnesses/piSession.ts` are pass-throughs
+     to the two pi modules app code still needs, pending a per-harness seam: the
+     session view asks pi's tool exposure for every session (a Claude session
+     has none recorded), and a commit dry run names the pi session types it is
+     recorded on. Step 12c replaces the first with a seam each engine answers.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:

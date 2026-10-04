@@ -8,7 +8,6 @@
  * tombstoned so a late event can't resurrect a removed session.
  */
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import {
   type AgentType,
   DEFAULT_SESSION_SCOPE,
@@ -16,7 +15,8 @@ import {
   type SessionForkOrigin,
   type SessionScope,
 } from "@assistant/shared";
-import { CWD, DATA_DIR } from "../config.ts";
+import { CWD } from "../config.ts";
+import { CLAUDE_SDK_STORE_DIR } from "../sessionStorage.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";
@@ -40,7 +40,7 @@ import {
   type ClaudeSdkRecordMeta,
 } from "./claudeSdkRecords.ts";
 
-const STORE_DIR = join(DATA_DIR, "claude-sdk");
+const STORE_DIR = CLAUDE_SDK_STORE_DIR;
 
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();

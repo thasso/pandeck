@@ -12,6 +12,9 @@ export function canonicalSessionLogPath(sessionId: string): string {
   return join(canonicalSessionDir(sessionId), "log.jsonl");
 }
 
+/** Where the Claude SDK store keeps its session records (`<id>.json` and log). */
+export const CLAUDE_SDK_STORE_DIR = join(DATA_DIR, "claude-sdk");
+
 /** Provider-native pi transcript used only to resume/fork pi sessions. */
 export function canonicalPiSessionPath(sessionId: string): string {
   return join(canonicalSessionDir(sessionId), "native.jsonl");

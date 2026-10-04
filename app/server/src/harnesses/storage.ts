@@ -6,9 +6,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Harness } from "@assistant/shared";
-import { claudeSdkRecordPresent } from "../claudeSdk/claudeSdkRecords.ts";
-import { DATA_DIR } from "../config.ts";
-import { canonicalPiSessionPath } from "../sessionStorage.ts";
+import {
+  canonicalPiSessionPath,
+  CLAUDE_SDK_STORE_DIR,
+} from "../sessionStorage.ts";
 
 interface SessionStorage {
   /**
@@ -23,8 +24,6 @@ interface SessionStorage {
   /** Why the session cannot be reopened when it has not. */
   missing: string;
 }
-
-const CLAUDE_SDK_DIR = join(DATA_DIR, "claude-sdk");
 
 const storage: Record<Harness, SessionStorage> = {
   pi: {
@@ -41,7 +40,8 @@ const storage: Record<Harness, SessionStorage> = {
   "claude-sdk": {
     refFile: (id) => id,
     transcript: () => undefined,
-    stored: (id) => claudeSdkRecordPresent(CLAUDE_SDK_DIR, id),
+    // Plainly on disk: a record that cannot even be stat'ed is not reopenable.
+    stored: (id) => existsSync(join(CLAUDE_SDK_STORE_DIR, `${id}.json`)),
     missing: "no Claude SDK state on disk",
   },
 };
