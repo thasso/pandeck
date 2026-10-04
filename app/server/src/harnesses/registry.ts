@@ -109,9 +109,24 @@ export const harnessRegistry = {
   },
 
   /**
+   * The engine other than `harness` that already holds `id`, resident or on
+   * record; undefined when `harness` may bring it live. An id belongs to one
+   * engine: a client-supplied id is checked here before anything is created
+   * for it, which is what lets {@link residentById} answer from memory alone.
+   */
+  otherHolder(id: string, harness: Harness): Harness | undefined {
+    const resident = HARNESS_ORDER.find(
+      (other) => other !== harness && sessions[other].get(id),
+    );
+    if (resident) return resident;
+    const row = sessionStore.get(id);
+    return row && row.harness !== harness ? row.harness : undefined;
+  },
+
+  /**
    * The resident session for our id, without loading or reopening anything
    * and without reading the metadata row: what a message for its viewers
-   * needs.
+   * needs. Ids are unique across engines ({@link otherHolder}).
    */
   residentById(id: string): LiveSession | undefined {
     return residentInMemory(id);

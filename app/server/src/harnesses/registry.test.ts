@@ -235,6 +235,44 @@ test("a resident session is driven as it is, with a full idle grace", async () =
   assert.equal(reopen.mock.calls.length, 0);
 });
 
+test("an id another engine holds, resident or on record, is named as held", () => {
+  const pi = resident("pi-held");
+  holdResident([pi], []);
+  sessionStore.upsert({
+    id: "pi-rowed",
+    harness: "pi",
+    agentType: "assistant",
+  });
+  sessionStore.upsert({
+    id: "claude-rowed",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+
+  assert.equal(harnessRegistry.otherHolder("pi-held", "claude-sdk"), "pi");
+  assert.equal(harnessRegistry.otherHolder("pi-rowed", "claude-sdk"), "pi");
+  assert.equal(
+    harnessRegistry.otherHolder("claude-rowed", "claude-sdk"),
+    undefined,
+  );
+  assert.equal(harnessRegistry.otherHolder("claude-rowed", "pi"), "claude-sdk");
+  assert.equal(
+    harnessRegistry.otherHolder("fresh-id", "claude-sdk"),
+    undefined,
+  );
+});
+
+test("a Claude session is never created over an id pi holds", () => {
+  const pi = resident("pi-taken");
+  holdResident([pi], []);
+  const created = vi.spyOn(claudeSdkStore, "acquire");
+  assert.throws(
+    () => hub.acquireClaudeSdk("pi-taken"),
+    /belongs to the pi harness/,
+  );
+  assert.equal(created.mock.calls.length, 0);
+});
+
 test("both stores reach the hub through one host", () => {
   const calls: string[] = [];
   // Captured, not applied: the hub's own host stays installed.

@@ -664,6 +664,9 @@ class SessionHub {
     credentialProfileId = defaultClaudeProfileId(),
     mode?: SessionMode,
   ): ClaudeSdkSession {
+    const holder = harnessRegistry.otherHolder(id, "claude-sdk");
+    if (holder)
+      throw new Error(`Session ${id} belongs to the ${holder} harness.`);
     return claudeSdkStore.acquire(id, {
       ...(modelId !== undefined ? { modelId } : {}),
       ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),

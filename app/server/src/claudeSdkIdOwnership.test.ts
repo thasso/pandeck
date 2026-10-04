@@ -1,0 +1,91 @@
+/**
+ * A Claude first send names its session id itself, so one that another engine
+ * already holds is refused before anything is written for it: no worktree
+ * edge, no frozen prompt conditions, no Claude session over a pi one.
+ *
+ *   pnpm --filter @assistant/server test src/claudeSdkIdOwnership.test.ts
+ */
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, test, vi } from "vitest";
+
+const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-id-ownership-"));
+process.env.ASSISTANT_CWD = tmp;
+process.env.DATA_DIR = join(tmp, "data");
+mkdirSync(join(tmp, "data", "settings"), { recursive: true });
+writeFileSync(
+  join(tmp, "data", "settings", "app.json"),
+  JSON.stringify({ claudeSdk: { enabled: true } }),
+);
+
+const { Connection } = await import("./connection.ts");
+const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
+const { createCredentialProfile } = await import("./credentialProfiles.ts");
+const promptConditions = await import("./promptConditions.ts");
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+afterEach(() => vi.restoreAllMocks());
+
+const claudeProfile = createCredentialProfile({
+  name: "Test Claude",
+  provider: "claude",
+});
+
+function firstSend(id: string) {
+  const sent: Array<{ type: string; message?: string }> = [];
+  const conn = new (
+    Connection as unknown as new (ws: unknown) => {
+      handleClaudeSdkSend: (msg: Record<string, unknown>) => Promise<void>;
+    }
+  )({
+    OPEN: 1,
+    readyState: 1,
+    send: (raw: string) => sent.push(JSON.parse(raw)),
+  });
+  const acquire = vi.spyOn(hub, "acquireClaudeSdk");
+  const freeze = vi.spyOn(promptConditions, "sessionPromptConditions");
+  return {
+    sent,
+    acquire,
+    freeze,
+    run: () =>
+      conn.handleClaudeSdkSend({
+        id,
+        agentType: "assistant",
+        text: "hello",
+        credentialProfileId: claudeProfile.id,
+      }),
+  };
+}
+
+test("a first send for a pi session's recorded id is refused before any write", async () => {
+  sessionStore.upsert({
+    id: "pi-recorded",
+    harness: "pi",
+    agentType: "assistant",
+  });
+  const send = firstSend("pi-recorded");
+  await send.run();
+  assert.deepEqual(send.sent.at(-1), {
+    type: "error",
+    message: "Session pi-recorded belongs to the pi harness.",
+  });
+  assert.equal(send.acquire.mock.calls.length, 0);
+  assert.equal(send.freeze.mock.calls.length, 0);
+  assert.equal(sessionStore.get("pi-recorded")?.harness, "pi");
+});
+
+test("a first send for a resident pi session's id is refused too", async () => {
+  vi.spyOn(piStore, "getLiveById").mockImplementation((id) =>
+    id === "pi-resident" ? ({ id } as never) : undefined,
+  );
+  const send = firstSend("pi-resident");
+  await send.run();
+  assert.equal(send.sent.at(-1)?.type, "error");
+  assert.equal(send.acquire.mock.calls.length, 0);
+  assert.equal(send.freeze.mock.calls.length, 0);
+});

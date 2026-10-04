@@ -100,6 +100,7 @@ import {
 import { randomUUID } from "node:crypto";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
 import { pickerModels } from "./harnesses/models.ts";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import {
@@ -1680,6 +1681,16 @@ export class Connection implements Viewer {
     // task link, prompt).
     if (!isSafeId(msg.id)) {
       this.rejectBadId();
+      return;
+    }
+    // The id is client-supplied: one another engine already holds is refused
+    // before anything (worktree edge, prompt conditions) is written for it.
+    const holder = harnessRegistry.otherHolder(msg.id, "claude-sdk");
+    if (holder) {
+      this.send({
+        type: "error",
+        message: `Session ${msg.id} belongs to the ${holder} harness.`,
+      });
       return;
     }
     // The singleton `personal-assistant` persona is server-owned; a crafted
