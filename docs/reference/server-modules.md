@@ -2255,16 +2255,15 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   skips that row. Worktrees resolve through `resolveWorktreeRow`, never the
   DB-only `getWorktree`: a project's MAIN checkout is the synthetic
   `main:<projectId>` row an agent copies out of `worktree_status`, and both its
-  checkout path and a spawned row's are proven to exist. Execution mirrors
-  `workflow/agentExecutor.ts`'s headless two-harness creation (claude-sdk: link
-  worktree → freeze prompt conditions → `hub.acquireClaudeSdk` → `setTitle`; pi:
-  `hub.acquireNew` → `sessionStore.upsert` → `rename`), and the title set BEFORE
-  the first prompt is what suppresses auto-naming on both. The opening prompt
-  then goes out through `sendPeerPrompt` from the proposing session: that gives
-  the new session a peer to answer and, having no shared history, opens a fresh
-  conversation and chain with a full hop budget. Its Project and Task context
-  comes from the shared `sessionContext.ts` seam like every other trigger's; the
-  peer envelope has no attachment slot, so delivery rebuilds it from the links
+  checkout path and a spawned row's are proven to exist. Execution creates
+  through `harnesses/create.ts` `createSession`, as `workflow/agentExecutor.ts`
+  does, and the title it sets BEFORE the first prompt is what suppresses
+  auto-naming on both engines. The opening prompt then goes out through
+  `sendPeerPrompt` from the proposing session: that gives the new session a peer
+  to answer and, having no shared history, opens a fresh conversation and chain
+  with a full hop budget. Its Project and Task context comes from the shared
+  `sessionContext.ts` seam like every other trigger's; the peer envelope has no
+  attachment slot, so delivery rebuilds it from the links
   ([Task-554](pa://task/554)). The row's OWN Project wins over the worktree's —
   what lets one agent drive a cross-project epic — and it is resolved once, at
   proposal time: execution uses the card's Project rather than re-deriving it,

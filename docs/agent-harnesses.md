@@ -41,9 +41,8 @@ Four layers, each depending only on the ones below it:
      so routing is a lookup by harness id, never a branch per method. An id
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
-     lookup answer from memory alone. A first send, spawn and the workflow
-     create through `createSession` (below), and step 11c moves the remaining
-     creation callers onto it; fork, rename and remove move behind the registry
+     lookup answer from memory alone. Every new session is created through
+     `createSession` (below); fork, rename and remove move behind the registry
      in step 11d, and until then `hub.ts` still calls the stores for them and
      builds the merged session list from each.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
@@ -76,11 +75,8 @@ Four layers, each depending only on the ones below it:
      themselves (`NewSession.model`), so each still branches on the engine for
      that one step. Spawn reaches `create.ts` through a dynamic import, as it
      does `hub.ts`, because `create.ts` → the Claude store → the tool catalog →
-     spawn closes a cycle. Step 11c moves the rest onto it — the review-comment
-     new session, day session, new session and draft in `connection.ts`, the
-     worktree merge agent and the permanent assistant — and retires
-     `hub.acquireClaudeSdk` and `hub.acquireNew`. Their Claude sessions then
-     freeze skills at creation, not at the first prompt's backstop.
+     spawn closes a cycle; the worktree merge agent reaches it the same way it
+     reaches `hub.ts`. The hub creates nothing itself.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -171,7 +167,7 @@ table when a later step needs them.
 | 10   | One first-send path for both harnesses                                        | landed |
 | 11a  | `createSession`; the first send creates through it                            | landed |
 | 11b  | Spawn and the workflow create through `createSession`                         | landed |
-| 11c  | Every other creation caller on `createSession`                                | open   |
+| 11c  | Every other creation caller on `createSession`                                | landed |
 | 11d  | Fork, delete and rename through the registry                                  | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
@@ -182,10 +178,10 @@ An id belongs to one engine, enforced in three places. Each store refuses to
 register an id the other holds resident (`setHeldElsewhere`, wired by the
 registry): the last word, whichever path asks. A Claude first send, the one path
 that takes a client-supplied id, refuses an id another engine holds resident, on
-record or on disk (`otherHolder`) before it writes anything, and `createSession`
-checks again, disk included, with nothing awaited before the session registers.
-`hub.acquireClaudeSdk`, which only server-minted ids reach, checks as a backstop
-from memory and the row only, and must never be the first refusal.
+record or on disk (`otherHolder`) before it writes anything. `createSession`,
+which every creation goes through, checks again with nothing awaited before the
+session registers: the disk included for an id its caller names, memory and the
+row for one it mints itself, which no transcript can hold.
 
 Out of scope: splitting `ClaudeSdkSession.ts` internally. Step 8 removes its
 duplicated plumbing first, which makes that split a separate, smaller change.

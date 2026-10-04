@@ -30,6 +30,7 @@ vi.mock("./piSdk/models.ts", async (importOriginal) => ({
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
@@ -79,7 +80,7 @@ async function carriedFrom(
   vi.spyOn(hub, "viewById").mockImplementation(
     (id: string) => residents.get(id) ?? viewSessionById(id),
   );
-  const acquireNew = vi.spyOn(hub, "acquireNew").mockImplementation(
+  const acquireNew = vi.spyOn(piStore, "acquireNew").mockImplementation(
     async () =>
       new ClaudeSdkSession(`created-${Math.random()}`, {
         seam: async () => idleSeam,

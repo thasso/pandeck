@@ -298,17 +298,6 @@ test("an id another engine holds, resident or on record, is named as held", () =
   );
 });
 
-test("a Claude session is never created over an id pi holds", () => {
-  const pi = resident("pi-taken");
-  holdResident([pi], []);
-  const created = vi.spyOn(claudeSdkStore, "acquire");
-  assert.throws(
-    () => hub.acquireClaudeSdk("pi-taken"),
-    /belongs to the pi harness/,
-  );
-  assert.equal(created.mock.calls.length, 0);
-});
-
 test("a legacy pi transcript is pi's, and a Claude record outranks a pi transcript", () => {
   legacyPiTranscript("pi-legacy");
   assert.equal(harnessRegistry.otherHolder("pi-legacy", "claude-sdk"), "pi");

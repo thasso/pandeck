@@ -79,10 +79,10 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
   });
   const sessionId = "review-profile-session";
 
-  const originalAcquireNew = hub.acquireNew;
+  const originalAcquireNew = piStore.acquireNew;
   const originalBroadcastSessions = hub.broadcastSessions;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => ({ sessionId });
@@ -175,8 +175,11 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
       internals.track = originalTrack;
     }
   } finally {
-    (hub as unknown as { acquireNew: typeof originalAcquireNew }).acquireNew =
-      originalAcquireNew;
+    (
+      piStore as unknown as {
+        acquireNew: typeof originalAcquireNew;
+      }
+    ).acquireNew = originalAcquireNew;
     (
       hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
     ).broadcastSessions = originalBroadcastSessions;

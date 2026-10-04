@@ -99,6 +99,7 @@ import {
 } from "./harness.ts";
 import { randomUUID } from "node:crypto";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
+import { createSession, type PiModel } from "./harnesses/create.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import {
   firstSendEngine,
@@ -2795,24 +2796,19 @@ export class Connection implements Viewer {
         if (target.harness === "claude-sdk") {
           if (!getSettings().claudeSdk.enabled)
             throw new Error("Claude SDK sessions are disabled.");
-          const id = randomUUID();
-          // Link BEFORE acquire so the store resolves the worktree cwd.
-          linkSessionToWorktree(id, canonicalId);
-          broadcastWorktreeEdgeChange();
           const profileId =
             target.credentialProfileId ?? defaultClaudeProfileId();
           if (enabledCredentialProfileById(profileId)?.provider !== "claude")
             throw new Error("Select an enabled Claude credential profile.");
-          driver = hub.acquireClaudeSdk(
-            id,
-            target.modelId,
-            target.thinkingLevel,
-            target.agentType,
-            row.path,
-            undefined,
-            profileId,
-            target.mode,
-          );
+          driver = await createSession({
+            harness: "claude-sdk",
+            agentType: target.agentType,
+            modelId: target.modelId,
+            thinkingLevel: target.thinkingLevel,
+            mode: target.mode,
+            worktree: { id: canonicalId, path: row.path },
+            credentialProfileId: profileId,
+          });
         } else {
           const kind = target.agentType;
           if (!this.guardKind(kind)) return;
@@ -2822,7 +2818,7 @@ export class Connection implements Viewer {
             enabledCredentialProfileById(profileId)?.provider !== "openai-codex"
           )
             throw new Error("Select an enabled OpenAI credential profile.");
-          let model: Parameters<typeof hub.acquireNew>[1] | undefined;
+          let model: PiModel | undefined;
           if (target.modelProvider && target.modelId) {
             model =
               (await findModelForProfile(
@@ -2835,21 +2831,15 @@ export class Connection implements Viewer {
                 `Model ${target.modelProvider}/${target.modelId} is not available.`,
               );
           }
-          const live = await hub.acquireNew(kind, model, target.thinkingLevel, {
-            cwd: row.path,
-            credentialProfileId: profileId,
-            ...(target.mode ? { mode: target.mode } : {}),
-          });
-          sessionStore.upsert({
-            id: live.sessionId,
+          driver = await createSession({
             harness: "pi",
-            agentType: target.agentType,
+            agentType: kind,
+            model,
+            thinkingLevel: target.thinkingLevel,
+            mode: target.mode,
+            worktree: { id: canonicalId, path: row.path },
             credentialProfileId: profileId,
-            mode: live.sessionMode,
           });
-          linkSessionToWorktree(live.sessionId, canonicalId);
-          broadcastWorktreeEdgeChange();
-          driver = live;
         }
       }
 
@@ -4260,18 +4250,15 @@ export class Connection implements Viewer {
         if (useClaudeSdk) {
           // Chat runs in-process on the Claude SDK with the assistant persona so
           // it gets the Google Calendar/Drive/Gmail and Tasks tools.
-          const sdk = hub.acquireClaudeSdk(
-            randomUUID(),
+          driver = await createSession({
+            harness: "claude-sdk",
+            agentType: "assistant",
             modelId,
             thinkingLevel,
-            "assistant",
-            undefined,
-            undefined,
             credentialProfileId,
-          );
-          sdk.setTitle(daySessionTitle(date));
-          setDaySessionId(date, sdk.sessionId);
-          driver = sdk;
+            title: daySessionTitle(date),
+          });
+          setDaySessionId(date, driver.sessionId);
         } else {
           const model =
             (await findModelForProfile(
@@ -4279,19 +4266,15 @@ export class Connection implements Viewer {
               provider,
               modelId,
             )) ?? undefined;
-          const live = await hub.acquireNew("assistant", model, thinkingLevel, {
-            credentialProfileId,
-          });
-          sessionStore.upsert({
-            id: live.sessionId,
+          driver = await createSession({
             harness: "pi",
             agentType: "assistant",
+            model,
+            thinkingLevel,
             credentialProfileId,
+            title: daySessionTitle(date),
           });
-          // Set the name before the first prompt so it never auto-renames.
-          live.rename(daySessionTitle(date));
-          setDaySessionId(date, live.sessionId);
-          driver = live;
+          setDaySessionId(date, driver.sessionId);
         }
       }
 
@@ -4474,23 +4457,19 @@ export class Connection implements Viewer {
     if (!this.guardDeveloperWorktree(agentType, worktree)) return;
     // view() attaches the runtime transport, which sends the atomic native
     // snapshot (state + empty timeline + context) for the fresh session.
-    const live = await hub.acquireNew(kind, model, thinkingLevel, {
-      ...(worktree ? { cwd: worktree.path } : {}),
-      credentialProfileId,
-      ...(mode ? { mode } : {}),
-    });
-    sessionStore.upsert({
-      id: live.sessionId,
+    const live = await createSession({
       harness: "pi",
-      agentType,
+      agentType: kind,
+      model,
+      thinkingLevel,
+      mode,
+      ...(worktree
+        ? { worktree: { id: worktree.id, path: worktree.path } }
+        : {}),
       credentialProfileId,
-      mode: live.sessionMode,
     });
-    if (worktree) {
-      linkSessionToWorktree(live.sessionId, worktree.id);
-      broadcastWorktreeEdgeChange();
+    if (worktree)
       projectStore.setSessionProject(live.sessionId, worktree.projectId);
-    }
     if (this.viewIfCurrent(ticket, live) && worktree)
       this.send({
         type: "contextInfo",
@@ -4897,15 +4876,13 @@ export class Connection implements Viewer {
           defaultOpenAiProfileId())
         : defaultOpenAiProfileId();
       const model = await this.resolveViewedModel(carried);
-      const live = await hub.acquireNew(kind, model, thinkingLevel, {
-        credentialProfileId,
-      });
-      sessionStore.upsert({
-        id: live.sessionId,
+      const live = await createSession({
         harness: "pi",
-        agentType,
-        purpose: "draft",
+        agentType: kind,
+        model,
+        thinkingLevel,
         credentialProfileId,
+        purpose: "draft",
       });
       // Listed before attaching: snapshot and route message leave together
       // (see `onOpenPermanentAssistant`). A newer navigation meanwhile keeps

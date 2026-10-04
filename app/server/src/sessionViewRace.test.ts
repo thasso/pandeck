@@ -29,6 +29,7 @@ process.env.ASSISTANT_CWD = tmp;
 
 const { Connection } = await import("./connection.ts");
 const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 
@@ -349,7 +350,7 @@ describe("session view requests", () => {
     const draft = new ClaudeSdkSession("draft-1", {
       seam: async () => fakeSeam(),
     });
-    vi.spyOn(hub, "acquireNew").mockImplementation(
+    vi.spyOn(piStore, "acquireNew").mockImplementation(
       () =>
         new Promise((resolve) => {
           releaseDraft = () => resolve(draft as never);

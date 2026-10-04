@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "worktree-merge-test-"));
@@ -25,6 +25,11 @@ const { repoLockKey, withRepoLock } = await import("../gitExec.ts");
 const { getComment, getWorktree, updateWorktree } =
   await import("../db/worktreeStore.ts");
 const { projectStore } = await import("../db/projectStore.ts");
+const { worktreeIdForSession } = await import("../db/worktreeStore.ts");
+const settings = await import("../settings.ts");
+const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
+
+afterEach(() => vi.restoreAllMocks());
 
 function sh(cwd: string, ...args: string[]): string {
   return execFileSync(
@@ -225,4 +230,47 @@ test("merge preconditions: dirty worktree refused; conflicts land in conflicts p
   // The conflicted merge is in progress in the main checkout.
   assert.match(sh(repoPath, "status"), /Unmerged paths|fix conflicts/i);
   sh(repoPath, "merge", "--abort");
+});
+
+/**
+ * Conflicting edits to `file` on both sides, with the default (Claude) merge
+ * agent enabled over a store stand-in; returns the worktree and what the
+ * stand-in was asked, and which worktree its id was linked to at that moment.
+ */
+async function conflictWithAgent(name: string, file: string) {
+  const record = await createWorktree({ projectId: "mg-proj", name });
+  writeFileSync(join(repoPath, file), "base\n");
+  sh(repoPath, "add", "-A");
+  sh(repoPath, "commit", "-m", `add ${file}`);
+  sh(record.path, "merge", "main");
+  writeFileSync(join(record.path, file), "worktree version\n");
+  sh(record.path, "commit", "-am", "worktree edit");
+  writeFileSync(join(repoPath, file), "main version\n");
+  sh(repoPath, "commit", "-am", "main edit");
+  const real = settings.getSettings();
+  vi.spyOn(settings, "getSettings").mockReturnValue({
+    ...real,
+    claudeSdk: { ...real.claudeSdk, enabled: true },
+  });
+  const agent: { cwd?: string | undefined; linkedTo?: string | undefined } = {};
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id, opts) => {
+    agent.cwd = opts?.cwd;
+    agent.linkedTo = worktreeIdForSession(id);
+    return { sessionId: id } as never;
+  });
+  return { record, agent };
+}
+
+test("a merge agent for the main checkout runs there and is linked to no worktree", async () => {
+  const { record, agent } = await conflictWithAgent("agentmain", "a.md");
+  await mergeWorktree(record.id, "merge");
+  assert.deepEqual(agent, { cwd: repoPath, linkedTo: undefined });
+  sh(repoPath, "merge", "--abort");
+});
+
+test("a rebase merge agent runs in its worktree, linked before it exists", async () => {
+  const { record, agent } = await conflictWithAgent("agentrebase", "b.md");
+  await mergeWorktree(record.id, "rebase");
+  assert.deepEqual(agent, { cwd: record.path, linkedTo: record.id });
+  sh(record.path, "rebase", "--abort");
 });

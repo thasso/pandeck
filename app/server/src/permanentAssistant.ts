@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AgentType, DisplayMessage } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
@@ -9,6 +8,7 @@ import {
   type PermanentAssistantQueueItem,
 } from "./db/permanentAssistantStore.ts";
 import { errorText } from "./errors.ts";
+import { createSession } from "./harnesses/create.ts";
 import type { HarnessDriver } from "./harness.ts";
 import { hub } from "./hub.ts";
 import { selectPiModelWithFallback } from "./piSdk/oneShot.ts";
@@ -193,31 +193,25 @@ async function acquirePermanentAssistant(): Promise<PermanentAssistantDriver> {
     profile.provider === CLAUDE_SDK_PROVIDER &&
     getSettings().claudeSdk.enabled
   ) {
-    driver = hub.acquireClaudeSdk(
-      randomUUID(),
-      profile.modelId,
-      profile.thinkingLevel,
-      "personal-assistant",
-      undefined,
-      profileInstructions,
+    driver = await createSession({
+      harness: "claude-sdk",
+      agentType: "personal-assistant",
+      modelId: profile.modelId,
+      thinkingLevel: profile.thinkingLevel,
+      additionalSystemPrompt: profileInstructions,
       credentialProfileId,
-    );
+    });
   } else {
     const model = await selectPiModelWithFallback(profile, credentialProfileId);
     if (!model)
       throw new Error(
         "No model is available for the permanent Personal Assistant",
       );
-    driver = await hub.acquireNew(
-      "personal-assistant",
-      model,
-      profile.thinkingLevel,
-      { credentialProfileId },
-    );
-    sessionStore.upsert({
-      id: driver.id,
+    driver = await createSession({
       harness: "pi",
       agentType: "personal-assistant",
+      model,
+      thinkingLevel: profile.thinkingLevel,
       credentialProfileId,
     });
   }

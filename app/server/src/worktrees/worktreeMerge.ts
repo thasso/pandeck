@@ -17,7 +17,6 @@
  * The state machine is persisted in the row's `merge_state_json` so a dev
  * reload can restore an in-flight conflict (`reconcileWorktreeMergesOnBoot`).
  */
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -35,7 +34,6 @@ import {
 import { claudeSdkModelAlias } from "../claudeSdk/modelSettings.ts";
 import {
   getWorktree,
-  linkSessionToWorktree,
   listWorktrees,
   updateWorktree,
   type WorktreeRow,
@@ -49,7 +47,6 @@ import {
 import { worktreeBroadcaster } from "./worktreeEvents.ts";
 import { purgeMainCommentsForBranchSubject } from "./worktreeComments.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
-import { sessionStore } from "../db/sessionStore.ts";
 
 const MAX_MESSAGE_DIFF_CHARS = 60_000;
 const VERIFY_DEBOUNCE_MS = 1_500;
@@ -398,26 +395,35 @@ async function spawnMergeAgent(
 
   try {
     const { hub } = await import("../hub.ts");
+    const { createSession } = await import("../harnesses/create.ts");
     const { promptRuntimeSession } =
       await import("../session/runtimePrompt.ts");
-    let sessionId: string;
-    let driver: import("../session/runtimePrompt.ts").RuntimePromptDriver;
     const credentialProfileId = accountForSlot(settings);
+    // Linked ONLY when the agent runs in the worktree (rebase). The
+    // in_worktree edge is the durable cwd source of truth, so linking a
+    // main-checkout merge/squash agent would reopen it in the wrong directory.
+    // Main-checkout agents keep their cwd through the session's own
+    // persistence (Claude record cwd / pi session header cwd); traceability
+    // lives in merge_state_json.agentSessionId.
+    const start = {
+      agentType: "workshop",
+      thinkingLevel: settings.thinkingLevel,
+      credentialProfileId,
+      ...(conflictCwd === row.path
+        ? { worktree: { id: row.id, path: row.path } }
+        : { cwd: conflictCwd }),
+    } as const;
+    let driver: import("../harness.ts").LiveSession;
     if (settings.provider === CLAUDE_SDK_PROVIDER) {
       if (!getSettings().claudeSdk.enabled)
         throw new Error(
           "Claude SDK is disabled; configure a pi model for the merge agent.",
         );
-      sessionId = randomUUID();
-      driver = hub.acquireClaudeSdk(
-        sessionId,
-        claudeSdkModelAlias(settings.modelId),
-        settings.thinkingLevel,
-        "workshop",
-        conflictCwd,
-        undefined,
-        credentialProfileId,
-      );
+      driver = await createSession({
+        harness: "claude-sdk",
+        modelId: claudeSdkModelAlias(settings.modelId),
+        ...start,
+      });
     } else {
       const { findModelForProfile } = await import("../piSdk/models.ts");
       const model = await findModelForProfile(
@@ -429,28 +435,9 @@ async function spawnMergeAgent(
         throw new Error(
           `Merge-agent model ${settings.provider}/${settings.modelId} is not available.`,
         );
-      const live = await hub.acquireNew(
-        "workshop",
-        model,
-        settings.thinkingLevel,
-        { cwd: conflictCwd, credentialProfileId },
-      );
-      sessionStore.upsert({
-        id: live.sessionId,
-        harness: "pi",
-        agentType: "workshop",
-        credentialProfileId,
-      });
-      sessionId = live.sessionId;
-      driver = live;
+      driver = await createSession({ harness: "pi", model, ...start });
     }
-    // Link ONLY when the agent actually runs in the worktree (rebase). The
-    // in_worktree edge is the durable cwd source of truth, so linking a
-    // main-checkout merge/squash agent would reopen it in the wrong directory.
-    // Main-checkout agents keep their cwd via the session's own persistence
-    // (claude record cwd / pi session header cwd); traceability lives in
-    // merge_state_json.agentSessionId.
-    if (conflictCwd === row.path) linkSessionToWorktree(sessionId, row.id);
+    const sessionId = driver.sessionId;
     watchMergeAgent(row.id, sessionId);
     setMergeState(row.id, {
       ...state,
