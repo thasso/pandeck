@@ -23,6 +23,12 @@ const { sessionStore } = await import("../db/sessionStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
 const { sessionDirFor } = await import("../piSdk/options.ts");
 const { SessionHeldElsewhereError } = await import("../harness.ts");
+const {
+  closeProxiedConnection,
+  getProxiedConnection,
+  openProxiedConnection,
+  setProxiedClientFactoryForTests,
+} = await import("../mcp/toolGroups/proxiedServer.ts");
 
 /** A pi transcript on disk for `id`, with no metadata row. */
 function piTranscript(id: string): void {
@@ -346,12 +352,40 @@ test("a pi reopen never registers an id the Claude store took meanwhile", async 
     id === "claude-took-it" ? ({ id } as never) : undefined,
   );
 
-  await assert.rejects(
-    piStore.acquireExisting("assistant", file, "claude-took-it"),
-    SessionHeldElsewhereError,
-  );
-  assert.equal(piStore.getLiveById("claude-took-it"), undefined);
-  assert.deepEqual(disposed, ["claude-took-it"], "what it built is disposed");
+  // The Claude session's browser runtime, keyed by the same id.
+  let browserClosed = 0;
+  setProxiedClientFactoryForTests(async () => ({
+    callTool: async () => ({ content: [] }),
+    close: async () => {
+      browserClosed += 1;
+    },
+    onUnexpectedClose() {},
+  }));
+  try {
+    await openProxiedConnection(
+      "claude-took-it",
+      {
+        name: "Test browser",
+        outputDir: (id) => join(tmp, "browser", id),
+        spawn: () => ({ command: "browser", args: [] }) as never,
+      },
+      false,
+    );
+
+    await assert.rejects(
+      piStore.acquireExisting("assistant", file, "claude-took-it"),
+      SessionHeldElsewhereError,
+    );
+    assert.equal(piStore.getLiveById("claude-took-it"), undefined);
+    assert.deepEqual(disposed, ["claude-took-it"], "what it built is disposed");
+    // What the id's holder owns stays open.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(getProxiedConnection("claude-took-it"), "browser still tracked");
+    assert.equal(browserClosed, 0);
+  } finally {
+    await closeProxiedConnection("claude-took-it");
+    setProxiedClientFactoryForTests(undefined);
+  }
 });
 
 test("both stores reach the hub through one host", () => {

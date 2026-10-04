@@ -27,10 +27,6 @@ const REAL_DEPS: SessionSkillsDeps = {
 };
 
 /**
- * Read a frozen JSON name list. A malformed row fails closed to an empty list:
- * it is still an existing freeze and must never be replaced from live settings.
- */
-/**
  * The names a coding session's first skills freeze would store, resolved ahead
  * so that freeze (`sessionSkills` with them as `preset`) awaits nothing.
  * Undefined when there is nothing to resolve: a non-coding persona, or a
@@ -54,6 +50,10 @@ export async function sessionSkillPreset(
   }
 }
 
+/**
+ * Read a frozen JSON name list. A malformed row fails closed to an empty list:
+ * it is still an existing freeze and must never be replaced from live settings.
+ */
 export function parseSessionSkills(
   raw: string | undefined,
 ): string[] | undefined {

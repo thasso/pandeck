@@ -72,11 +72,6 @@ import { sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 
-/**
- * A cold open lost to a delete: the session was tombstoned while its
- * transcript was opening, so nothing was registered and every acquisition
- * sharing that open is refused (`acquireExisting`).
- */
 /** Every persona a legacy per-persona transcript directory can hold. */
 const LEGACY_KINDS: readonly AgentType[] = [
   "assistant",
@@ -86,6 +81,11 @@ const LEGACY_KINDS: readonly AgentType[] = [
   "workflow-coordinator",
 ];
 
+/**
+ * A cold open lost to a delete: the session was tombstoned while its
+ * transcript was opening, so nothing was registered and every acquisition
+ * sharing that open is refused (`acquireExisting`).
+ */
 export class PiSessionDeletedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Session ${sessionId} was deleted while it was opening.`);
@@ -398,7 +398,7 @@ class PiSessionStore {
       // transcript was opening stays Claude's. Only a reopen registers an id
       // it did not mint, so this is the one place pi has to ask.
       if (this.heldElsewhere(created.session.sessionId)) {
-        this.discardUnregistered(created.session);
+        this.discardRefused(created.session);
         throw new SessionHeldElsewhereError(created.session.sessionId);
       }
       return this.track(kind, created.session, created.notices, cwd, profileId);
@@ -802,6 +802,17 @@ class PiSessionStore {
     this.closeToolRuntime(key);
     this.sessionModes.delete(key);
     void sessionRuntime.releaseHarness(key);
+  }
+
+  /**
+   * Tear down a session `create` built for an id another engine holds: only
+   * what pi made for it. Resources keyed by the id alone, its browser runtime
+   * above all, belong to the holder and stay open.
+   */
+  private discardRefused(session: AgentSession): void {
+    this.closeToolRuntime(session.sessionId);
+    this.sessionModes.delete(session.sessionId);
+    session.dispose();
   }
 
   /** Tear down a session `create` built that will never be registered. */

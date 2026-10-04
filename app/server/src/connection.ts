@@ -1808,15 +1808,6 @@ export class Connection implements Viewer {
   }
 
   /**
-   * Get the in-process Claude SDK session for `id`, creating + registering it on
-   * first use with the chosen model/thinking, and make this connection view it.
-   * Mirrors {@link ensureClaudeView}: there is no separate create step — the
-   * session comes into existence with its first prompt, so model/thinking are
-   * fixed exactly when the conversation starts. Viewing attaches the runtime
-   * transport, whose atomic snapshot swaps the optimistic placeholder for the
-   * real session.
-   */
-  /**
    * Refuse a Claude send whose client-supplied id another engine holds,
    * resident, on record or on disk (`harnessRegistry.otherHolder`), as an error
    * on that session that retires the optimistic prompt. Answers whether it
@@ -1839,6 +1830,15 @@ export class Connection implements Viewer {
     return true;
   }
 
+  /**
+   * Get the in-process Claude SDK session for `id`, creating + registering it on
+   * first use with the chosen model/thinking, and make this connection view it.
+   * Mirrors {@link ensureClaudeView}: there is no separate create step — the
+   * session comes into existence with its first prompt, so model/thinking are
+   * fixed exactly when the conversation starts. Viewing attaches the runtime
+   * transport, whose atomic snapshot swaps the optimistic placeholder for the
+   * real session.
+   */
   private ensureClaudeSdkView(
     ticket: number,
     id: string,
