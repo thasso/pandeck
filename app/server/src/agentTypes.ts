@@ -3,8 +3,8 @@
  *
  * An `AgentType` (`assistant` | `workshop` | …, from `@assistant/shared`) is
  * the persona a session presents: its system prompt, its tool/permission
- * policy, and which tools it exposes. It is INDEPENDENT of the harness (pi / claude-sdk) that actually
- * runs it. This module is the single source of truth for those definitions;
+ * policy, and which tools it exposes. It is INDEPENDENT of the harness (pi /
+ * claude-sdk) that actually runs it. This module is the single source of truth for those definitions;
  * each harness applier consumes the relevant fields:
  *   - pi (`buildAgentOptions` in {@link ./piSdk/options.ts}) consumes
  *     {@link AgentTypeDef.systemPrompt} and builds the pi tool policy there;

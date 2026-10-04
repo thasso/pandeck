@@ -18,13 +18,13 @@ import {
 } from "lucide-react";
 import type {
   AccountModelOption,
+  AgentType,
   AppSettings,
   MemoryCard,
   MemoryKind,
   MemoryLearningMode,
   MemoryScope,
   MemoryTemporal,
-  AgentType,
 } from "@assistant/shared";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { dataOf, isEmpty, isInitialLoad, isPending } from "../lib/loadState.ts";

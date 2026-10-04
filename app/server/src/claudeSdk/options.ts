@@ -7,10 +7,10 @@
 import { isAbsolute, join, resolve as pathResolve } from "node:path";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
+  type AgentType,
   isCodingAgentType,
   type SessionMode,
   type ThinkingLevel,
-  type AgentType,
 } from "@assistant/shared";
 import { MCP_SERVER_NAME } from "../mcp/names.ts";
 import {

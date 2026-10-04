@@ -11,13 +11,13 @@ import { AlertTriangle, Bot, PackageCheck } from "lucide-react";
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   CompactionDisplay,
   ContextClearDisplay,
   DisplayBlock,
   DisplayMessage,
   ModelOption,
-  AgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";

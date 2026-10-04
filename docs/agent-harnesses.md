@@ -13,9 +13,9 @@ what already holds.
 
 - **Harness** (`Harness` in `app/shared/protocol.ts`): which engine runs a
   session. Persisted on the session row; never changes for a session.
-- **Persona** (`agentType`): the system prompt and toolset a session presents
-  (`assistant`, `developer`, …). Independent of the harness: every persona runs
-  on either engine.
+- **Persona** (`AgentType` in `app/shared/protocol.ts`, field `agentType`): the
+  system prompt and toolset a session presents (`assistant`, `developer`, …).
+  Independent of the harness: every persona runs on either engine.
 - **Backend**: one engine's implementation of the harness seam. It owns the
   engine's session store, model catalog, one-shot runner and usage query.
 - **Account provider** (`claude`, `openai-codex`): which kind of credential

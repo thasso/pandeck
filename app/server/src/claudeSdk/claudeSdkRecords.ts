@@ -35,7 +35,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { SessionForkOrigin, AgentType } from "@assistant/shared";
+import type { AgentType, SessionForkOrigin } from "@assistant/shared";
 import { displayMessageCount } from "@assistant/shared/display";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
 

@@ -497,9 +497,8 @@ export interface ClaudeSdkSessionDeps {
 
 export class ClaudeSdkSession {
   /**
-   * The persona this session runs as. `AgentType` is persona-only now, so this
-   * mirrors {@link agentType} (a claude-sdk session may be `assistant` or
-   * `workshop`); the {@link harness} is what marks it as claude-sdk.
+   * The persona this session runs as: the same value as {@link agentType}. The
+   * {@link harness} is what marks it as claude-sdk.
    */
   readonly kind: AgentType;
   /** The in-process SDK harness. */

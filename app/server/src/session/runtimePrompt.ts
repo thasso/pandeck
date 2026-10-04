@@ -7,10 +7,10 @@
  * durable app-owned log are updated for viewed and background runs alike.
  */
 import type {
+  AgentType,
   ContextInfo,
   Harness,
   PromptAttachment,
-  AgentType,
   SessionMode,
 } from "@assistant/shared";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";

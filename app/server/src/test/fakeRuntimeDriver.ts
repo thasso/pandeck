@@ -5,7 +5,7 @@
  * `sessionRuntime` singleton (file-backed under the test's temp DATA_DIR), so
  * durable log entries persist normally; only the provider turn itself is faked.
  */
-import type { Harness, AgentType } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 import type {
   AgentRunResult,
   ForkCapability,

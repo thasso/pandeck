@@ -8,10 +8,10 @@
  * bounded load-event trail it recorded.
  */
 import type {
+  AgentType,
   SessionToolExposure,
   SessionToolExposureTool,
   SessionToolLoadEvent,
-  AgentType,
 } from "@assistant/shared";
 import { toolGroupsFor } from "./catalog.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";

@@ -14,7 +14,7 @@
  *     NO native file/shell tools (see `claudeCommand`), so ALL of its capability
  *     comes from these dedicated integration tools over the mounted server.
  */
-import type { SessionMode, AgentType } from "@assistant/shared";
+import type { AgentType, SessionMode } from "@assistant/shared";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import {

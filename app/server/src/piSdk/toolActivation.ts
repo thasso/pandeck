@@ -28,10 +28,10 @@
  * the prompt.
  */
 import type {
+  AgentType,
   SessionMode,
   SessionToolExposure,
   SessionToolLoadEvent,
-  AgentType,
 } from "@assistant/shared";
 import {
   integrationGatedActiveToolNames,

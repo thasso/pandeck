@@ -1,7 +1,7 @@
 import {
+  type AgentType,
   isCodingAgentType,
   isSafeSkillName,
-  type AgentType,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getSettings } from "./settings.ts";

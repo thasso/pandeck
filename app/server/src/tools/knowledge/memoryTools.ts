@@ -10,12 +10,12 @@
  * explicit path for remember/correct/forget and targeted recall.
  */
 import type {
+  AgentType,
   MemoryCard,
   MemoryKind,
   MemoryLifecycleState,
   MemoryScope,
   MemoryTemporal,
-  AgentType,
 } from "@assistant/shared";
 import {
   defineAgentTool,

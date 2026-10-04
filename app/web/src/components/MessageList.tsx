@@ -26,12 +26,12 @@ import {
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   AppearanceSettings,
   DisplayAttachment,
   DisplayMessage,
   ModelOption,
-  AgentType,
   SessionListItem,
   TaskStatus,
   ThinkingLevel,

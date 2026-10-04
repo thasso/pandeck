@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DisplayMessage, AgentType } from "@assistant/shared";
+import type { AgentType, DisplayMessage } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
   isPersonalAssistantAgentType,

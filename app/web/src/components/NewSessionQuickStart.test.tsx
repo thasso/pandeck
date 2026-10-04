@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type {
+  AgentType,
   CredentialProfileSummary,
   ModelOption,
   ProjectRecord,
-  AgentType,
   SessionMode,
   ThinkingLevel,
   WorktreeRecord,

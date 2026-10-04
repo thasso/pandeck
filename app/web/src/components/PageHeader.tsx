@@ -9,7 +9,7 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import type { Harness, AgentType } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import {
   primarySlotShowsReview,

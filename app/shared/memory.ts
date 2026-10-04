@@ -10,8 +10,8 @@
  * commitments/events stay in Tasks/Calendar.
  */
 import type {
-  CredentialProfilePin,
   AgentType,
+  CredentialProfilePin,
   ThinkingLevel,
 } from "./protocol.ts";
 

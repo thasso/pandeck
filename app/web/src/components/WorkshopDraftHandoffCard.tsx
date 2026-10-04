@@ -1,5 +1,5 @@
 import { ExternalLink, FileText, Hammer } from "lucide-react";
-import type { DisplayBlock, AgentType } from "@assistant/shared";
+import type { AgentType, DisplayBlock } from "@assistant/shared";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 

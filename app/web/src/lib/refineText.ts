@@ -1,4 +1,4 @@
-import type { PromptRefineResponse, AgentType } from "@assistant/shared";
+import type { AgentType, PromptRefineResponse } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
 /** Optional session context the refinement endpoint may use. */

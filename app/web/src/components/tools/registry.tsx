@@ -2,13 +2,13 @@ import { Suspense, lazy, useEffect, useState, type ReactNode } from "react";
 import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
+  AgentType,
   AnsweredAgentQuestion,
   CommitDisplay,
   DisplayBlock,
   KnowledgeEntryCard,
   ModelOption,
   PushDisplay,
-  AgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";

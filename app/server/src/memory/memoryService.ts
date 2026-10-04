@@ -10,13 +10,13 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AgentType,
   MemoryCard,
   MemoryKind,
   MemoryScope,
   MemorySourceKind,
   MemoryTemporal,
   MemoryValidationError,
-  AgentType,
 } from "@assistant/shared";
 import {
   isMemoryKind,

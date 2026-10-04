@@ -57,9 +57,8 @@
  * `basis`.
  */
 import { statSync } from "node:fs";
-import { isAgentType } from "@assistant/shared";
+import { type AgentType, isAgentType } from "@assistant/shared";
 import type { PromptConditions } from "./promptConditions.ts";
-import type { AgentType } from "@assistant/shared";
 import { FIND_TOOLS_NAME, MCP_SERVER_NAME } from "./mcp/names.ts";
 import { personaPromptInventory } from "./promptAssets.ts";
 import { forEachJsonlLine } from "./tools/sessions/sessionInspection.ts";
@@ -1234,10 +1233,6 @@ function definitionChars(tool: {
   return tool.wireName.length + tool.description.length + schema;
 }
 
-function isKnownAgentType(value: string): value is AgentType {
-  return isAgentType(value);
-}
-
 function buildToolActivity(
   meta: AuditSessionMeta,
   conditions: PromptConditions | undefined,
@@ -1247,7 +1242,7 @@ function buildToolActivity(
   inventory: AuditToolInventory | undefined,
 ): { report: ToolActivityReport; eagerDefChars: number } {
   const persona =
-    inventory && isKnownAgentType(meta.agentType) ? meta.agentType : undefined;
+    inventory && isAgentType(meta.agentType) ? meta.agentType : undefined;
   const claudeWire = meta.harness === "claude-sdk";
   const rows: ToolActivityRow[] = [];
   const callsNotInThisCatalog: Record<string, number> = {};
@@ -1367,7 +1362,7 @@ function systemPromptChars(
   meta: AuditSessionMeta,
   conditions: PromptConditions | undefined,
 ): number {
-  if (!isKnownAgentType(meta.agentType)) return 0;
+  if (!isAgentType(meta.agentType)) return 0;
   try {
     return personaPromptInventory(meta.agentType, {
       ...(conditions ? { conditions } : {}),
@@ -1464,7 +1459,7 @@ function buildTurnRows(
   inventory: AuditToolInventory | undefined,
 ): TurnRow[] {
   const persona =
-    inventory && isKnownAgentType(meta.agentType) ? meta.agentType : undefined;
+    inventory && isAgentType(meta.agentType) ? meta.agentType : undefined;
   const wireName = (name: string): string =>
     meta.harness === "claude-sdk" ? `${MCP_PREFIX}${name}` : name;
   const activeNames = new Set<string>();

@@ -11,9 +11,9 @@
  * Both key off the same accepted user-turn id.
  */
 import type {
+  AgentType,
   MemoryLoadBatch,
   MemoryLoadDeliveryState,
-  AgentType,
 } from "@assistant/shared";
 import { getSettings } from "../settings.ts";
 import { userTimeZone } from "../userProfile.ts";

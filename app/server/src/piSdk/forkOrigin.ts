@@ -42,7 +42,8 @@ export function readForkOrigin(
         ? obj.parentSessionFile
         : undefined;
     if (!parentSessionFile) continue;
-    if (!isHarness(obj.harness) || !isAgentType(obj.agentType)) continue;
+    if (!isHarness(obj.harness) || !isForkOriginAgentType(obj.agentType))
+      continue;
     return {
       harness: obj.harness,
       agentType: obj.agentType,
@@ -82,7 +83,13 @@ function isHarness(value: unknown): value is Harness {
   return value === "pi" || value === "claude-sdk";
 }
 
-function isAgentType(value: unknown): value is AgentType {
+/**
+ * The personas a fork-origin entry may name. Narrower than the shared
+ * `isAgentType`: it predates the `workflow-coordinator` persona, so a
+ * coordinator's fork origin is skipped. Widening it is a behavior change of its
+ * own, not part of a rename.
+ */
+function isForkOriginAgentType(value: unknown): value is AgentType {
   return (
     value === "assistant" ||
     value === "workshop" ||
