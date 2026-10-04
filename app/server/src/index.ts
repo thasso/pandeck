@@ -79,6 +79,7 @@ import {
   createGoogleOAuthStartUrl,
   handleGoogleOAuthCallback,
 } from "./googleSettings.ts";
+import { handleGoogleOAuthPrepare } from "./googleOAuthApi.ts";
 import {
   createSlackOAuthStartUrl,
   handleSlackOAuthCallback,
@@ -1480,6 +1481,16 @@ async function handleRequest(
     } catch {
       notFound();
     }
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/google/oauth/prepare") {
+    handleGoogleOAuthPrepare(
+      req,
+      res,
+      corsJsonHeaders(req),
+      requestPublicBaseUrl(req),
+    );
     return;
   }
 

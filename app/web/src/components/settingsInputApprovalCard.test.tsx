@@ -76,6 +76,8 @@ afterEach(() => {
   container?.remove();
   container = null;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.documentElement.removeAttribute("data-native-shell");
 });
 
 function card(body: Partial<SettingsInputApprovalBody>): ApprovalCardData {
@@ -139,8 +141,8 @@ test("Dismiss rejects the card", () => {
   expect(onResolve).toHaveBeenCalledWith("ap_settings", "rejected");
 });
 
-test("a connection opens the server's sign-in route", () => {
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
+test("a connection opens the server's sign-in route", async () => {
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
   render(
     <ApprovalCard
       approval={card({
@@ -153,12 +155,67 @@ test("a connection opens the server's sign-in route", () => {
     />,
   );
   expect(container!.querySelector("input")).toBeNull();
-  click("Connect");
+  await act(async () => click("Connect"));
   expect(open).toHaveBeenCalledOnce();
   expect(String(open.mock.calls[0]![0])).toMatch(
     /\/api\/google\/oauth\/start$/,
   );
   expect(buttonLabels()).toContain("Open again");
+});
+
+test("an iOS Google connection card opens consent in the system browser", async () => {
+  document.documentElement.setAttribute("data-native-shell", "ios");
+  const url =
+    "https://accounts.google.com/o/oauth2/v2/auth?state=fixture-state";
+  const fetch = vi.fn().mockResolvedValue(Response.json({ url }));
+  vi.stubGlobal("fetch", fetch);
+  const assign = vi.fn();
+  vi.stubGlobal("location", {
+    origin: location.origin,
+    hostname: location.hostname,
+    protocol: location.protocol,
+    assign,
+  });
+  const open = vi.spyOn(window, "open");
+  const onResolve = vi.fn();
+  render(
+    <ApprovalCard
+      approval={card({
+        path: "google.connection",
+        label: "Google account connection",
+        section: "google",
+        mode: "connect",
+      })}
+      onResolve={onResolve}
+    />,
+  );
+  await act(async () => click("Connect"));
+  expect(fetch).toHaveBeenCalledWith(
+    expect.stringMatching(/\/api\/google\/oauth\/prepare$/),
+    expect.objectContaining({ method: "POST" }),
+  );
+  expect(assign).toHaveBeenCalledExactlyOnceWith(url);
+  expect(open).not.toHaveBeenCalled();
+  expect(buttonLabels()).toContain("Open again");
+  expect(onResolve).not.toHaveBeenCalled();
+});
+
+test("a Google connection card reports a blocked popup without claiming it opened", async () => {
+  vi.spyOn(window, "open").mockReturnValue(null);
+  render(
+    <ApprovalCard
+      approval={card({
+        path: "google.connection",
+        section: "google",
+        mode: "connect",
+      })}
+      onResolve={vi.fn()}
+    />,
+  );
+  await act(async () => click("Connect"));
+  expect(container!.textContent).toContain("Allow popups");
+  expect(buttonLabels()).toContain("Connect");
+  expect(buttonLabels()).not.toContain("Open again");
 });
 
 test("a resolved card shows its outcome and no controls", () => {

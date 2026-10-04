@@ -64,6 +64,7 @@ import {
 import { isValidTimezone } from "../lib/timezone.ts";
 import type { BuildInfo } from "@assistant/shared/buildInfo";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
+import { startGoogleOAuth } from "../lib/googleOAuth.ts";
 import { settingBounds } from "@assistant/shared/settingsRegistry";
 import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import {
@@ -3033,7 +3034,7 @@ function TempoCard({
   );
 }
 
-function GoogleWorkspaceSection({
+export function GoogleWorkspaceSection({
   settings,
   status,
   onUpdateGoogle,
@@ -3056,6 +3057,9 @@ function GoogleWorkspaceSection({
     "idle",
   );
   const oauthWindow = useRef<Window | null>(null);
+  const externalOAuth = useRef(false);
+  const [oauthOpening, setOauthOpening] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   useEffect(() => {
     setEnabled(google.enabled);
@@ -3102,7 +3106,10 @@ function GoogleWorkspaceSection({
     };
 
     const onFocus = () => {
-      if (oauthWindow.current?.closed) checkNow();
+      if (externalOAuth.current || oauthWindow.current?.closed) checkNow();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") onFocus();
     };
 
     const timer = window.setInterval(() => {
@@ -3111,10 +3118,12 @@ function GoogleWorkspaceSection({
 
     window.addEventListener("message", onMessage);
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("message", onMessage);
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [oauthStartedAt, onTestGoogle]);
 
@@ -3144,16 +3153,22 @@ function GoogleWorkspaceSection({
     });
   };
 
-  const startOAuth = () => {
-    const popup = window.open(
-      `${serverHttpOrigin()}/api/google/oauth/start`,
-      "assistant-google-oauth",
-      "popup,width=560,height=760",
-    );
-    setOauthStartedAt(Date.now());
-    setOauthPhase(popup ? "opened" : "checking");
-    oauthWindow.current = popup;
-    if (!popup) window.setTimeout(onTestGoogle, 1000);
+  const startOAuth = async () => {
+    setOauthError(null);
+    setOauthOpening(true);
+    try {
+      const { popup, external } = await startGoogleOAuth();
+      oauthWindow.current = popup;
+      externalOAuth.current = external;
+      setOauthStartedAt(Date.now());
+      setOauthPhase("opened");
+    } catch (err) {
+      setOauthStartedAt(null);
+      setOauthPhase("idle");
+      setOauthError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOauthOpening(false);
+    }
   };
 
   const visibleStatus =
@@ -3249,7 +3264,7 @@ function GoogleWorkspaceSection({
               <RefreshCw size={13} />
             )}
             {oauthPhase === "opened"
-              ? "OAuth tab opened. Complete Google consent there; this page will refresh the connection status when you return."
+              ? "Complete Google sign-in in your browser, then return here to refresh the connection."
               : "Checking Google Workspace authorization…"}
           </div>
         )}
@@ -3257,10 +3272,12 @@ function GoogleWorkspaceSection({
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <button
             type="button"
-            onClick={startOAuth}
-            disabled={!google.oauthClientConfigured}
+            onClick={() => void startOAuth()}
+            disabled={!google.oauthClientConfigured || oauthOpening}
+            aria-busy={oauthOpening || undefined}
             className={`${connected ? "settings-button" : "settings-button-primary"} disabled:cursor-not-allowed disabled:opacity-50`}
           >
+            {oauthOpening && <Spinner size="sm" />}
             {connected ? "Reauthorize" : "Sign in with Google"}
           </button>
           {connected && (
@@ -3300,6 +3317,7 @@ function GoogleWorkspaceSection({
         )}
       </div>
 
+      {oauthError && <ErrorNote message={oauthError} />}
       {visibleStatus && !visibleStatus.ok && (
         <div className="mt-4 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-caption text-danger">
           <div className="mb-2 flex items-center gap-2 font-medium text-fg">

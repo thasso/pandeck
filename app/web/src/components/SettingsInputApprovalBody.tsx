@@ -19,6 +19,7 @@ import type {
 } from "@assistant/shared";
 import { settingDescriptor } from "@assistant/shared/settingsRegistry";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
+import { startGoogleOAuth } from "../lib/googleOAuth.ts";
 import {
   fetchCredentialProfiles,
   startOpenAiProfileLogin,
@@ -123,32 +124,46 @@ function SecretControls(
 function ConnectControls(props: ControlProps) {
   const { body, active } = props;
   const [connecting, setConnecting] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const connectPath = settingDescriptor(body.path)?.connectPath;
-  const connect = () => {
+  const connect = async () => {
     if (!connectPath) return;
-    window.open(
-      `${serverHttpOrigin()}${connectPath}`,
-      `assistant-${body.section}-oauth`,
-      "popup,width=560,height=760",
-    );
-    setConnecting(true);
+    setError(null);
+    setOpening(true);
+    try {
+      if (body.path === "google.connection") await startGoogleOAuth();
+      else
+        window.open(
+          `${serverHttpOrigin()}${connectPath}`,
+          `assistant-${body.section}-oauth`,
+          "popup,width=560,height=760",
+        );
+      setConnecting(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOpening(false);
+    }
   };
   return (
     <>
       <div className="text-caption text-faint">
         {connecting
-          ? "Approve access in the window that opened. This card updates once the account is connected."
-          : "Opens the sign-in in a new window. This card updates once the account is connected."}
+          ? "Approve access in your browser. This card updates once the account is connected."
+          : "Opens sign-in in your browser. This card updates once the account is connected."}
       </div>
+      {error && <ErrorNote message={error} />}
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton {...props} />
         <button
           type="button"
-          onClick={connect}
-          disabled={!active || !connectPath}
+          onClick={() => void connect()}
+          disabled={!active || !connectPath || opening}
+          aria-busy={opening || undefined}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
         >
-          <ExternalLink size={12} />
+          {opening ? <Spinner size="sm" /> : <ExternalLink size={12} />}
           {connecting ? "Open again" : "Connect"}
         </button>
       </div>

@@ -192,6 +192,25 @@ Settings-file read errors never quote the file: a `JSON.parse` failure reads
 "the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the
 quoted text could be a token.
 
+## Google sign-in
+
+Google consent runs in a browser, not the native shell's embedded webview.
+Browsers open `/api/google/oauth/start` synchronously from the click. A blocked
+popup is reported on the sign-in surface, not treated as a completed attempt.
+Native shells first POST to the token- and origin-guarded
+`/api/google/oauth/prepare`, which returns the Google consent URL with
+`Cache-Control: no-store`. A typed native helper sends the pinned Google URL
+through the shell's foreign-navigation guard, which opens the system browser and
+keeps the app page intact. This avoids popup restrictions after the fetch. The
+endpoint accepts no caller-supplied redirect or scope; it uses the same
+server-generated state and callback origin as the browser start route.
+
+The callback stores authorization and announces the updated settings even when
+there is no popup opener. Google settings rechecks the connection on focus or
+visibility return from the external browser. Connection cards use the same
+sign-in helper and resolve through the server's connection announcement. No
+native rebuild is required for shells with the foreign-navigation guard.
+
 ## Cards for secrets and connections
 
 `settings_request_input` raises a `settingsInput` approval card for a `secret`
@@ -211,11 +230,12 @@ or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
   In the browser the field lives in a component mounted only while the card
   waits, so a dismissed, answered or replaced card keeps no typed value.
 - **Connect**: the card opens the descriptor's `connectPath` (the server's OAuth
-  start route) in a popup. The card cannot be approved before the account is
-  connected; when the OAuth callback announces its section, every pending
-  connection card it satisfied is approved and its outcome handed to the
-  session. A connection the deployment has no OAuth client for is refused when
-  asked for. Google (`google.connection`), Tempo (`tempo.connection`) and Slack
+  start route) in a popup, or Google's system-browser flow in a native shell.
+  The card cannot be approved before the account is connected; when the OAuth
+  callback announces its section, every pending connection card it satisfied is
+  approved and its outcome handed to the session. A connection the deployment
+  has no OAuth client for is refused when asked for. Google
+  (`google.connection`), Tempo (`tempo.connection`) and Slack
   (`slack.connection`) connect this way. Slack's OAuth stores a user and a bot
   token together, so its projection reports `slack.connected` only when both are
   present, and its `disconnect` patch flag clears both.
