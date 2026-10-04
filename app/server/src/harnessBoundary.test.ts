@@ -69,6 +69,16 @@ const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
   "taskOverhead.ts": 4,
 };
 
+/**
+ * Modules that load something by a computed path, which the scan cannot read:
+ * `parcelWatcher.ts` requires the packaged native watcher by its absolute
+ * install path, and builds the development package name so the bundler leaves
+ * it alone. Neither can name an engine module.
+ */
+const COMPUTED_IMPORT_EXCEPTIONS: Record<string, number> = {
+  "parcelWatcher.ts": 3,
+};
+
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);
 
 /** An ESTree node as oxc-parser produces it; only `type` is relied on. */
@@ -130,7 +140,11 @@ function isHarnessId(value: unknown): boolean {
 function scanModule(
   file: string,
   source: string,
-): { engineImports: string[]; harnessComparisons: number } {
+): {
+  engineImports: string[];
+  harnessComparisons: number;
+  computedImports: number;
+} {
   const parsed = parseSync(file, source, { lang: "ts", sourceType: "module" });
   assert.deepEqual(
     parsed.errors.map((error) => error.message),
@@ -139,10 +153,16 @@ function scanModule(
   );
   const imports = new Set<string>();
   let harnessComparisons = 0;
+  // A path the scan cannot read could name an engine module unseen.
+  let computedImports = 0;
 
   const addSpecifier = (value: unknown) => {
     const specifier = constantString(value);
-    if (!specifier?.startsWith(".")) return;
+    if (specifier === undefined) {
+      if (value != null) computedImports++;
+      return;
+    }
+    if (!specifier.startsWith(".")) return;
     const target = relative(SRC_ROOT, resolve(dirname(file), specifier));
     if (ENGINE_FOLDER.test(target)) imports.add(target);
   };
@@ -199,7 +219,11 @@ function scanModule(
   };
   visit(parsed.program as unknown as AstNode);
 
-  return { engineImports: [...imports].sort(), harnessComparisons };
+  return {
+    engineImports: [...imports].sort(),
+    harnessComparisons,
+    computedImports,
+  };
 }
 
 function appModules(): { rel: string; file: string; source: string }[] {
@@ -248,6 +272,19 @@ test("only the measurement modules may reach an engine, and each still does", ()
   );
 });
 
+test("app code imports by literal paths only, so the scan sees every engine reach", () => {
+  const actual: Record<string, number> = {};
+  for (const { rel, file, source } of appModules()) {
+    const { computedImports } = scanModule(file, source);
+    if (computedImports) actual[rel] = computedImports;
+  }
+  assert.deepEqual(
+    actual,
+    COMPUTED_IMPORT_EXCEPTIONS,
+    "An import or require with a computed path hides what it loads from this scan; name the module with a string literal (docs/agent-harnesses.md).",
+  );
+});
+
 test("server sources are all .ts, so the scan sees every module", () => {
   const other = sourceFiles(SRC_ROOT)
     .map((file) => relative(SRC_ROOT, file))
@@ -290,6 +327,25 @@ test("the boundary scan sees every import form and ignores comments and strings"
     "piSdk/piStore.ts",
     "piSdk/toolBinaries.ts",
   ]);
+});
+
+test("the boundary scan counts every import whose path it cannot read", () => {
+  const file = join(SRC_ROOT, "workflow", "probe.ts");
+  const computed = [
+    'const engine = "../piSdk/oneShot.ts"; const a = await import(engine);',
+    'const b = await import(new URL("../piSdk/oneShot.ts", import.meta.url).href);',
+    'const c = await import("../" + "piSdk/models.ts");',
+    "const d = await import(`../piSdk/${name}.ts`);",
+    "const e = require(packageName);",
+  ].join("\n");
+  assert.equal(scanModule(file, computed).computedImports, 5);
+  const literal = [
+    'import { f } from "../session/runtimePrompt.ts";',
+    "export function g() {}",
+    'const h = await import("../piSdk/models.ts");',
+    "const i = await import(`../piSdk/options.ts`);",
+  ].join("\n");
+  assert.equal(scanModule(file, literal).computedImports, 0);
 });
 
 test("the boundary scan counts every comparison form and ignores comments and strings", () => {

@@ -182,7 +182,9 @@ table when a later step needs them.
   `taskOverhead.ts`): they measure what each engine actually sends or spends, so
   naming the engine is their job. `harnessBoundary.test.ts` names them
   (`MEASUREMENT_MODULES`), pins exactly what each still imports and compares,
-  and fails on any other module that appears.
+  and fails on any other module that appears. App code names what it imports
+  with a string literal so the scan sees every reach; `parcelWatcher.ts`, which
+  loads its native addon by a computed path, is the one pinned exception.
 - The test parses every non-test `.ts` module under `app/server/src` (and fails
   if a source with another extension appears there), so comments and unrelated
   strings never count. It does not cover the web client, which reaches no engine
