@@ -39,6 +39,7 @@ import {
 } from "./workflow.ts";
 import type { SkillLibraryList, SkillToggles } from "./skills.ts";
 import type { PeerSpawnRuntime } from "./peerRuntimes.ts";
+import type { SettingsSectionId } from "./settingsRegistry.ts";
 import {
   THINKING_LEVELS,
   supportedThinkingLevelsForModel,
@@ -3012,7 +3013,8 @@ export type ApprovalKind =
   | "commit"
   | "sessionSpawn"
   | "managedPullRequestMerge"
-  | "projectCreate";
+  | "projectCreate"
+  | "settingsInput";
 /**
  * pending → executing → executed | failed (approved path); rejected (declined);
  * superseded (a newer card from the same session replaced it while pending).
@@ -3224,6 +3226,30 @@ export type ProjectCreateRepository =
        */
       seedReadme?: boolean;
     };
+
+/**
+ * The Personal Assistant asking the user for a setting it may not handle
+ * itself ([Task-729](pa://task/729)): a secret the user types into the card,
+ * or an account the user connects in the browser. The card never carries the
+ * value. A secret travels only in the approving decision's
+ * {@link SettingsInputResolutionEdits}, is written by the server on approval
+ * and stored nowhere else; a connection resolves itself once the OAuth
+ * callback has stored the grant.
+ */
+export interface SettingsInputApprovalBody {
+  kind: "settingsInput";
+  /** Registry path of a `secret` or `oauth` setting, e.g. `github.token`. */
+  path: string;
+  /** The setting's label, e.g. "Personal access token". */
+  label: string;
+  /** The Settings page section it belongs to. */
+  section: SettingsSectionId;
+  mode: "secret" | "connect";
+  /** Why the assistant asks, in its words. */
+  reason?: string;
+  /** Whether a value was already set when the card was raised. */
+  wasConfigured: boolean;
+}
 
 /**
  * An agent proposing a NEW Project: the registry record, optionally its
@@ -3493,7 +3519,8 @@ export type ApprovalBody =
   | CommitApprovalBody
   | SessionSpawnApprovalBody
   | ManagedPullRequestMergeApprovalBody
-  | ProjectCreateApprovalBody;
+  | ProjectCreateApprovalBody
+  | SettingsInputApprovalBody;
 
 /**
  * The user's per-row adjustments, sent WITH the approve decision rather than
@@ -3514,8 +3541,19 @@ export interface SessionSpawnResolutionEdits {
   }>;
 }
 
+/**
+ * The secret a settings-input card's Save submits. It exists only in this
+ * message and the server's memory while the approval executes: no card,
+ * store, log or agent ever receives it.
+ */
+export interface SettingsInputResolutionEdits {
+  kind: "settingsInput";
+  value: string;
+}
+
 /** Edits carried by a `resolveApproval` decision, discriminated like the body. */
-export type ApprovalResolutionEdits = SessionSpawnResolutionEdits;
+export type ApprovalResolutionEdits =
+  SessionSpawnResolutionEdits | SettingsInputResolutionEdits;
 
 /**
  * @payload ApprovalCard

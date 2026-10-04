@@ -169,6 +169,9 @@ const ATTACHMENT_OPTIONAL: FieldSpecMap = { role: STRING };
  * edit names may actually run, is the executor's `prepare` decision — it can
  * refuse while leaving the card pending, which this boundary cannot.
  */
+/** Room for any token plus surrounding whitespace; the executor trims and re-bounds it. */
+const MAX_SETTINGS_INPUT_CHARS = 16_384;
+
 function validateResolveApproval(msg: Record<string, unknown>): string | null {
   const required = checkRequiredFields(msg, {
     approvalId: STRING,
@@ -180,6 +183,13 @@ function validateResolveApproval(msg: Record<string, unknown>): string | null {
   if (!hasOwn(msg, "edits") || msg.edits === undefined) return null;
   if (!isPlainObject(msg.edits)) return "edits must be an object";
   if (!isString(msg.edits.kind)) return "edits.kind must be a string";
+  // A settings-input secret: kind-checked and bounded here, judged by the
+  // card's executor. The value itself never appears in a rejection reason.
+  if (msg.edits.kind === "settingsInput")
+    return isString(msg.edits.value) &&
+      msg.edits.value.length <= MAX_SETTINGS_INPUT_CHARS
+      ? null
+      : `edits.value must be a string of at most ${MAX_SETTINGS_INPUT_CHARS} characters`;
   if (!Array.isArray(msg.edits.items)) return "edits.items must be an array";
   for (const item of msg.edits.items) {
     if (!isPlainObject(item)) return "each edits.items entry must be an object";

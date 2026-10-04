@@ -1,16 +1,22 @@
-import type { AppSettings } from "@assistant/shared";
+import type { AppSettings, SettingsInputApprovalBody } from "@assistant/shared";
 import {
   SETTINGS_OUTSIDE_REGISTRY,
   SETTINGS_REGISTRY,
   SETTINGS_SECTION_IDS,
   settingDescriptor,
+  valueAtPath,
   type SettingDescriptor,
   type SettingValueSpec,
   type SettingsSectionId,
 } from "@assistant/shared/settingsRegistry";
 import { errorText } from "../../errors.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
+import {
+  approvalCardReference,
+  createApproval,
+} from "../../pendingApprovals.ts";
 import { redactSecrets, redactSecretsDeep } from "../../secretRedaction.ts";
+import { settingIsSet } from "../../settingsInput.ts";
 import { getSettings } from "../../settings.ts";
 import {
   ASSISTANT_PROFILE_FIELDS,
@@ -31,10 +37,12 @@ import {
 
 const MAX_PATHS = 50;
 const MAX_CHANGES = 50;
+const MAX_REASON_CHARS = 500;
 
 // Typed loosely on purpose: the arguments are checked at execution.
 type SettingsReadParams = Record<string, unknown>;
 type SettingsUpdateParams = Record<string, unknown>;
+type SettingsRequestInputParams = Record<string, unknown>;
 
 const settingsReadSchema = {
   type: "object",
@@ -103,24 +111,15 @@ function describeValue(spec: SettingValueSpec): string {
   }
 }
 
-function valueAt(root: unknown, path: string): unknown {
-  let node = root;
-  for (const key of path.split(".")) {
-    if (!node || typeof node !== "object") return undefined;
-    node = (node as Record<string, unknown>)[key];
-  }
-  return node;
-}
-
 /** One setting as an agent sees it. A secret's value is never part of it. */
 function entryFor(descriptor: SettingDescriptor, settings: AppSettings) {
   const { path, label, access, value, hint, configuredBy } = descriptor;
   const state =
     access === "secret"
-      ? { configured: valueAt(settings, configuredBy!) === true }
+      ? { configured: valueAtPath(settings, configuredBy!) === true }
       : access === "oauth"
-        ? { connected: valueAt(settings, configuredBy!) === true }
-        : { value: valueAt(settings, path) ?? null };
+        ? { connected: valueAtPath(settings, configuredBy!) === true }
+        : { value: valueAtPath(settings, path) ?? null };
   return {
     path,
     label,
@@ -207,7 +206,7 @@ function updateParams(raw: unknown): {
     const descriptor = settingDescriptor(change.path);
     if (descriptor?.access === "secret" && change.value !== null)
       throw new Error(
-        `${change.path} is a secret, and secret values never pass through an agent. Ask the user to enter it on the Settings page (/settings/${descriptor.section}).`,
+        `${change.path} is a secret, and secret values never pass through an agent. Ask the user for it with settings_request_input.`,
       );
     return { path: change.path, value: change.value };
   });
@@ -231,9 +230,10 @@ function updateParams(raw: unknown): {
  * Settings values hold none by construction, but a base URL may carry
  * credentials and integration errors were written for the Settings page.
  */
-async function scrubbed(run: () => Promise<unknown>) {
+async function scrubbed(run: () => Promise<unknown>, terminate = false) {
   try {
-    return jsonResult(redactSecretsDeep(await run()));
+    const result = jsonResult(redactSecretsDeep(await run()));
+    return terminate ? { ...result, terminate: true } : result;
   } catch (err) {
     throw new Error(redactSecrets(errorText(err)));
   }
@@ -270,7 +270,7 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
   name: "settings_update",
   label: "Update Settings",
   description:
-    "Change settings, as the user could on the Settings page; the change applies at once. Each change names a path from settings_read and its new value: a field replaces only itself, a json value is written whole. null clears a secret or disconnects an OAuth connection. Never ask for a secret's value in chat: the user enters it on the section's Settings page. test runs integration connection tests after saving.",
+    "Change settings, as the user could on the Settings page; the change applies at once. Each change names a path from settings_read and its new value: a field replaces only itself, a json value is written whole. null clears a secret or disconnects an OAuth connection. Never ask for a secret's value in chat: settings_request_input lets the user enter it. test runs integration connection tests after saving.",
   parameters: settingsUpdateSchema,
   execute: (raw, ctx) =>
     scrubbed(async () => {
@@ -312,4 +312,93 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
     }),
 });
 
-export const settingsTools = [settingsReadTool, settingsUpdateTool];
+const settingsRequestInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description:
+        "A secret or oauth setting from settings_read, e.g. github.token or google.connection.",
+    },
+    reason: {
+      type: "string",
+      maxLength: MAX_REASON_CHARS,
+      description: "Why you need it, shown on the card.",
+    },
+  },
+} as const;
+
+function requestInputParams(raw: unknown): { path: string; reason?: string } {
+  if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+  rejectUnknownKeys(raw, ["path", "reason"], "settings_request_input");
+  if (typeof raw.path !== "string") throw new Error("path must be a string.");
+  if (raw.reason !== undefined && typeof raw.reason !== "string")
+    throw new Error("reason must be a string.");
+  const reason = raw.reason?.trim().slice(0, MAX_REASON_CHARS);
+  return { path: raw.path, ...(reason ? { reason } : {}) };
+}
+
+const settingsRequestInputTool = defineAgentTool<SettingsRequestInputParams>({
+  name: "settings_request_input",
+  label: "Request Setting Input",
+  description:
+    "Ask the user for a secret (an API key or token) or to connect an account, through a card in the chat. A secret goes from the card to the server and never reaches you; you learn only that it was saved and how the connection test went. Your turn ends; the outcome arrives when the user answers.",
+  parameters: settingsRequestInputSchema,
+  execute: (raw, ctx) =>
+    scrubbed(async () => {
+      const { path, reason } = requestInputParams(raw);
+      const descriptor = settingDescriptor(path);
+      if (!descriptor)
+        throw new Error(
+          `Unknown setting path: ${path}. Read a section to see its paths.`,
+        );
+      if (descriptor.access !== "secret" && descriptor.access !== "oauth")
+        throw new Error(
+          `${path} is not a secret or a connection; change it with settings_update.`,
+        );
+      const settings = getSettings();
+      const section = path.split(".")[0] ?? "";
+      if (
+        descriptor.access === "oauth" &&
+        valueAtPath(settings, `${section}.oauthClientConfigured`) === false
+      )
+        throw new Error(
+          `${descriptor.label} cannot be connected: this server has no OAuth client for it in its deployment config.`,
+        );
+      const body: SettingsInputApprovalBody = {
+        kind: "settingsInput",
+        path,
+        label: descriptor.label,
+        section: descriptor.section,
+        mode: descriptor.access === "oauth" ? "connect" : "secret",
+        ...(reason ? { reason } : {}),
+        wasConfigured: settingIsSet(descriptor, settings),
+      };
+      const card = createApproval({
+        sessionId: ctx.session.sessionId,
+        kind: "settingsInput",
+        title:
+          body.mode === "connect"
+            ? `Connect ${descriptor.label}`
+            : `Enter ${descriptor.label}`,
+        summary: `Settings → ${descriptor.section}`,
+        sourceToolCallId: ctx.toolCallId,
+        body,
+        // Asking again for the same setting replaces the earlier card.
+        supersedes: (earlier) =>
+          earlier.body.kind === "settingsInput" && earlier.body.path === path,
+      });
+      return {
+        requested: path,
+        note: `Waiting for the user. Nothing is saved until they answer in the card. ${approvalCardReference(card)}`,
+      };
+    }, true),
+});
+
+export const settingsTools = [
+  settingsReadTool,
+  settingsUpdateTool,
+  settingsRequestInputTool,
+];

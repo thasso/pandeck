@@ -24,6 +24,7 @@ import {
   GitBranch,
   GitMerge,
   GitPullRequestArrow,
+  KeyRound,
   MessageSquare,
   SquarePen,
   Sparkles,
@@ -57,6 +58,7 @@ import { ModelSelect, ThinkingSelect } from "./ui/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
+import { SettingsInputApprovalBody } from "./SettingsInputApprovalBody.tsx";
 
 /**
  * The two providers keep separate approval kinds (persisted cards must stay
@@ -224,6 +226,12 @@ function HeaderIcon({ approval }: { approval: ApprovalCardData }) {
     return (
       <div className={cls}>
         <FolderPlus size={14} />
+      </div>
+    );
+  if (approval.body.kind === "settingsInput")
+    return (
+      <div className={cls}>
+        <KeyRound size={14} />
       </div>
     );
   return (
@@ -948,10 +956,18 @@ function Body({
   approval,
   spawn,
   onDecide,
+  settingsInput,
 }: {
   approval: ApprovalCardData;
   /** The card's own Approve/Reject, for a body that offers them elsewhere too. */
   onDecide: ((decision: ApprovalDecision) => void) | undefined;
+  /** A settings-input card's own controls, which replace the footer. */
+  settingsInput: {
+    active: boolean;
+    busy: "submit" | "dismiss" | null;
+    onSubmit: (value: string) => void;
+    onDismiss: () => void;
+  };
   spawn: {
     editable: boolean;
     models: readonly AccountModelOption[];
@@ -1010,6 +1026,8 @@ function Body({
   if (b.kind === "projectCreate") return <ProjectCreateBody body={b} />;
   if (b.kind === "managedPullRequestMerge")
     return <ManagedMergeBody body={b} />;
+  if (b.kind === "settingsInput")
+    return <SettingsInputApprovalBody body={b} {...settingsInput} />;
   // commit
   return (
     <>
@@ -1086,6 +1104,11 @@ export function ApprovalCard({
       decision === "approvedForSession",
     );
   };
+  // The secret travels only in this decision; the card never stores it.
+  const submitSettingsInput = (value: string) => {
+    setBusy("approved");
+    onResolve?.(approval.id, "approved", { kind: "settingsInput", value });
+  };
   const operations = approvalGrantKeys(approval.body).map(approvalGrantLabel);
   // Only the grants THIS card created: an operation granted earlier belongs to
   // the card that granted it.
@@ -1125,6 +1148,17 @@ export function ApprovalCard({
         <Body
           approval={approval}
           onDecide={awaitingUser && busy === null ? decide : undefined}
+          settingsInput={{
+            active: awaitingUser && busy === null,
+            busy:
+              busy === "approved"
+                ? "submit"
+                : busy === "rejected"
+                  ? "dismiss"
+                  : null,
+            onSubmit: submitSettingsInput,
+            onDismiss: () => decide("rejected"),
+          }}
           spawn={{
             editable: awaitingUser,
             models: accountModels ?? [],
@@ -1190,7 +1224,7 @@ export function ApprovalCard({
         </div>
       )}
 
-      {awaitingUser && (
+      {awaitingUser && approval.body.kind !== "settingsInput" && (
         <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2.5">
           <button
             type="button"
