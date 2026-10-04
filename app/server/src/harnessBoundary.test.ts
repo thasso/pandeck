@@ -35,11 +35,6 @@ const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
  * `src/`. Delete an entry in the change that removes the import.
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
-  "hub.ts": [
-    "claudeSdk/claudeSdkStore.ts",
-    "piSdk/PiLiveSession.ts",
-    "piSdk/piStore.ts",
-  ],
   "promptBudgets.ts": ["piSdk/piPromptMeasure.ts"],
   "promptInventory.ts": [
     "claudeSdk/options.ts",
@@ -54,7 +49,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
  * number (or delete the entry) in the change that removes one.
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
-  "connection.ts": 1,
   "promptInventory.ts": 4,
   "sessionAudit.ts": 4,
   "sessionAuditSources.ts": 1,

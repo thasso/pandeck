@@ -92,7 +92,6 @@ const { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub } =
         if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
         return fakeDrivers.get(id);
       },
-      get: (id: string) => fakeDrivers.get(id),
       broadcastSessions: () => {
         listBroadcasts.count += 1;
       },

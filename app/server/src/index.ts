@@ -64,6 +64,7 @@ import {
   warmCredentialProfileModelRuntimes,
   linkPiToolBinaries,
 } from "./harnesses/boot.ts";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import { getDayState } from "./dayScan/dayState.ts";
 import {
   runDayCollection,
@@ -1462,7 +1463,7 @@ async function handleRequest(
       return;
     }
     try {
-      const result = await hub.resolvePiImage(
+      const result = await harnessRegistry.transcriptImage(
         kind,
         sessionId,
         entryId,

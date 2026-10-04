@@ -92,9 +92,10 @@ import {
   type Viewer,
 } from "./harness.ts";
 import { randomUUID } from "node:crypto";
-import { createSession, type PiModel } from "./harnesses/create.ts";
+import { createSession } from "./harnesses/create.ts";
 import { existingSessionRefusal } from "./harnesses/availability.ts";
 import { prepareFork } from "./harnesses/fork.ts";
+import { handoffEngine } from "./harnesses/handoffSession.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { sessionRefFile } from "./harnesses/storage.ts";
 import {
@@ -162,11 +163,7 @@ import {
   subagentThreadRevisionDigest,
   subagentThreadStateItems,
 } from "./subagentRegistry.ts";
-import {
-  defaultClaudeProfileId,
-  defaultOpenAiProfileId,
-  enabledCredentialProfileById,
-} from "./credentialProfiles.ts";
+import { defaultOpenAiProfileId } from "./credentialProfiles.ts";
 import { revalidateUsage, usageIndicators } from "./usageCache.ts";
 import {
   broadcastWorkflowRuns,
@@ -1701,7 +1698,7 @@ export class Connection implements Viewer {
     // while it reopened is newer and keeps the view; the prompt runs either way.
     const ticket = this.claimViewRequest();
     try {
-      const live = await hub.acquireExisting(
+      const live = await harnessRegistry.reopenTranscript(
         continuation.kind,
         continuation.sessionFile,
       );
@@ -2820,54 +2817,12 @@ export class Connection implements Viewer {
             `The "${String(target.agentType)}" agent cannot be created.`,
           );
         if (!this.guardDeveloperWorktree(target.agentType, row)) return;
-        if (target.harness === "claude-sdk") {
-          if (!getSettings().claudeSdk.enabled)
-            throw new Error("Claude SDK sessions are disabled.");
-          const profileId =
-            target.credentialProfileId ?? defaultClaudeProfileId();
-          if (enabledCredentialProfileById(profileId)?.provider !== "claude")
-            throw new Error("Select an enabled Claude credential profile.");
-          driver = await createSession({
-            harness: "claude-sdk",
-            agentType: target.agentType,
-            modelId: target.modelId,
-            thinkingLevel: target.thinkingLevel,
-            mode: target.mode,
-            worktree: { id: canonicalId, path: row.path },
-            credentialProfileId: profileId,
-          });
-        } else {
-          const kind = target.agentType;
-          if (!this.guardKind(kind)) return;
-          const profileId =
-            target.credentialProfileId ?? defaultOpenAiProfileId();
-          if (
-            enabledCredentialProfileById(profileId)?.provider !== "openai-codex"
-          )
-            throw new Error("Select an enabled OpenAI credential profile.");
-          let model: PiModel | undefined;
-          if (target.modelProvider && target.modelId) {
-            model =
-              (await piModelForAccount(
-                profileId,
-                target.modelProvider,
-                target.modelId,
-              )) ?? undefined;
-            if (!model)
-              throw new Error(
-                `Model ${target.modelProvider}/${target.modelId} is not available.`,
-              );
-          }
-          driver = await createSession({
-            harness: "pi",
-            agentType: kind,
-            model,
-            thinkingLevel: target.thinkingLevel,
-            mode: target.mode,
-            worktree: { id: canonicalId, path: row.path },
-            credentialProfileId: profileId,
-          });
-        }
+        const engine = handoffEngine(target.harness);
+        if (engine.guardsPersona && !this.guardKind(target.agentType)) return;
+        driver = await engine.create(target, {
+          id: canonicalId,
+          path: row.path,
+        });
       }
 
       markCommentsAttached(commentIds, driver.sessionId);

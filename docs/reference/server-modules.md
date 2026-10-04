@@ -147,9 +147,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   listing/broadcast, restore dispatch, dev/deploy restart draining, and
   session-driver lookup. Which engine holds a session is the harness registry's
   to answer (`harnesses/registry.ts`); per-harness lifecycle lives in `piSdk/`
-  and `claudeSdk/`. The hub creates, forks, renames and removes no session:
-  `harnesses/create.ts`, `harnesses/fork.ts` and the registry do. Git state
-  lives with worktrees (`worktrees/`), not the hub.
+  and `claudeSdk/`. The hub creates, forks, renames and removes no session and
+  reads neither store: `harnesses/create.ts`, `harnesses/fork.ts`,
+  `harnesses/sessionList.ts` and the registry do. Git state lives with worktrees
+  (`worktrees/`), not the hub.
 - `harness.ts` owns the harness-neutral driver interfaces (`Viewer`,
   `HarnessDriver`, `LiveSession` with its `isLiveSession` guard) shared by both
   harnesses.
@@ -160,13 +161,14 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   Claude curated options and aliases, loading no engine SDK), `boot.ts` (engine
   runtime setup the server boot starts), `storage.ts` (where each engine keeps a
   session on disk, from paths alone), `availability.ts` (whether an existing
-  session may be opened now), `toolExposure.ts` and `piSession.ts` (pi's tool
-  exposure and session types), `usage.ts` (per-account usage, OpenAI
-  reset-credit redeem), `registry.ts` (`harnessRegistry`: id routing, resident
-  sessions, store wiring, rename and the engine half of a delete),
-  `firstSend.ts` (each engine's admission and preparation for a session's first
-  send), `create.ts` (`createSession`: each engine's creation sequence) and
-  `fork.ts` (`prepareFork`: each engine's fork cut and refusals).
+  session may be opened now), `sessionList.ts` (the merged session list across
+  both stores), `handoffSession.ts` (each engine's checks for a review handoff's
+  new session), `piSession.ts` (pi's session types), `usage.ts` (per-account
+  usage, OpenAI reset-credit redeem), `registry.ts` (`harnessRegistry`: id
+  routing, resident sessions, store wiring, rename and the engine half of a
+  delete), `firstSend.ts` (each engine's admission and preparation for a
+  session's first send), `create.ts` (`createSession`: each engine's creation
+  sequence) and `fork.ts` (`prepareFork`: each engine's fork cut and refusals).
   `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock

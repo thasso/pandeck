@@ -43,7 +43,7 @@ import type {
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
-import { toolExposureForSession } from "./harnesses/toolExposure.ts";
+import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
 import { peerPromptThreadsFor } from "./peerPrompt.ts";
 import { promptQueueField } from "./promptQueue.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
@@ -149,7 +149,7 @@ export class ViewSession implements HarnessDriver {
     const worktreeIdValue = this.safeWorktreeId();
     const modelValue = this.modelOption();
     const originTaskValue = this.originTask();
-    const toolExposureValue = toolExposureForSession(this.id);
+    const toolExposureValue = sessionToolExposure(this.id);
     const coding = isCodingAgentType(this.kind);
     return {
       sessionId: this.id,
