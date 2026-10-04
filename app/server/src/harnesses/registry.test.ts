@@ -418,3 +418,43 @@ test("both stores reach the hub through one host", () => {
     "browserRuntimesFor:s1",
   ]);
 });
+
+test("a rename reaches the engine that holds the session, trimmed", async () => {
+  const setTitle = vi.fn();
+  vi.spyOn(claudeSdkStore, "get").mockReturnValue({ setTitle } as never);
+  const piRename = vi.spyOn(piStore, "renameSession").mockResolvedValue();
+
+  await harnessRegistry.rename(
+    { harness: "claude-sdk", id: "claude-titled", agentType: "assistant" },
+    "  New title  ",
+  );
+  await harnessRegistry.rename(
+    {
+      harness: "pi",
+      id: "pi-titled",
+      agentType: "developer",
+      file: "/sessions/pi-titled.jsonl",
+    },
+    "Other title",
+  );
+
+  assert.deepEqual(setTitle.mock.calls, [["New title"]]);
+  assert.deepEqual(piRename.mock.calls, [
+    ["developer", "/sessions/pi-titled.jsonl", "pi-titled", "Other title"],
+  ]);
+});
+
+test("a blank or overlong title is refused before any engine is asked", async () => {
+  const piRename = vi.spyOn(piStore, "renameSession");
+  const ref = {
+    harness: "pi",
+    id: "pi-untitled",
+    agentType: "assistant",
+  } as const;
+  await assert.rejects(harnessRegistry.rename(ref, "   "), /cannot be empty/);
+  await assert.rejects(
+    harnessRegistry.rename(ref, "x".repeat(121)),
+    /120 characters or fewer/,
+  );
+  assert.equal(piRename.mock.calls.length, 0);
+});

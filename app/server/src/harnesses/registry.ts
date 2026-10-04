@@ -5,6 +5,7 @@
  * here instead of dispatching on a harness id itself.
  */
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { defaultClaudeProfileId } from "../credentialProfiles.ts";
@@ -12,6 +13,14 @@ import { sessionStore } from "../db/sessionStore.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
 import { canonicalPiSessionPath } from "../sessionStorage.ts";
+
+/** A stored session as a lifecycle change names it. */
+interface SessionRef {
+  id: string;
+  agentType: AgentType;
+  /** pi's transcript, which its rename and removal go through. */
+  file?: string | undefined;
+}
 
 /** One engine's sessions, as the registry routes to them. */
 interface HarnessSessions {
@@ -36,6 +45,10 @@ interface HarnessSessions {
   setHeldElsewhere(check: (id: string) => boolean): void;
   /** Open the session from disk as the persona its row names. */
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
+  /** Persist a new title, which also marks auto-naming done. */
+  rename(ref: SessionRef, title: string): Promise<void>;
+  /** Dispose the session and delete what the engine stored for it. */
+  remove(ref: SessionRef): Promise<void>;
 }
 
 const sessions: Record<Harness, HarnessSessions> = {
@@ -55,6 +68,12 @@ const sessions: Record<Harness, HarnessSessions> = {
         if (err instanceof PiSessionDeletedError) return undefined;
         throw err;
       }),
+    rename: ({ id, agentType, file }, title) =>
+      piStore.renameSession(agentType, file ?? "", id, title),
+    remove: async ({ id, file }) => {
+      piStore.evict(id);
+      if (file) await rm(file, { force: true }).catch(() => {});
+    },
   },
   "claude-sdk": {
     list: () => claudeSdkStore.list(),
@@ -68,6 +87,11 @@ const sessions: Record<Harness, HarnessSessions> = {
       claudeSdkStore.acquire(id, {
         credentialProfileId: defaultClaudeProfileId(),
       }),
+    // Persisted with the session's record, which is opened for it.
+    rename: async ({ id }, title) =>
+      (claudeSdkStore.get(id) ?? claudeSdkStore.acquire(id)).setTitle(title),
+    // Tombstones the id and deletes its record and native transcript.
+    remove: async ({ id }) => claudeSdkStore.remove(id),
   },
 };
 
@@ -196,6 +220,30 @@ export const harnessRegistry = {
       sessions[harness].storedWithoutRow(id),
     );
     return holder ? sessions[holder].open(id, "developer") : undefined;
+  },
+
+  /**
+   * Retitle a stored session in whichever engine holds it. The caller
+   * broadcasts the list: pi's rename does not.
+   */
+  async rename(
+    ref: SessionRef & { harness: Harness },
+    title: string,
+  ): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error("Session title cannot be empty.");
+    if (trimmed.length > 120)
+      throw new Error("Session title must be 120 characters or fewer.");
+    await sessions[ref.harness].rename(ref, trimmed);
+  },
+
+  /**
+   * Take a deleted session out of whichever engine holds it: dispose it and
+   * delete its transcript. Everything harness-neutral about a delete is the
+   * caller's.
+   */
+  remove(ref: SessionRef & { harness: Harness }): Promise<void> {
+    return sessions[ref.harness].remove(ref);
   },
 
   /** The resident session that owns a browser runtime, as its listing shows it. */

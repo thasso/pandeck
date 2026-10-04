@@ -147,9 +147,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   listing/broadcast, restore dispatch, dev/deploy restart draining, and
   session-driver lookup. Which engine holds a session is the harness registry's
   to answer (`harnesses/registry.ts`); per-harness lifecycle lives in `piSdk/`
-  and `claudeSdk/`. The hub creates no session (`harnesses/create.ts` does);
-  fork, rename and removal still delegate to the stores until step 11d. Git
-  state lives with worktrees (`worktrees/`), not the hub.
+  and `claudeSdk/`. The hub creates, forks, renames and removes no session:
+  `harnesses/create.ts`, `harnesses/fork.ts` and the registry do. Git state
+  lives with worktrees (`worktrees/`), not the hub.
 - `harness.ts` owns the harness-neutral driver interfaces (`Viewer`,
   `HarnessDriver`, `LiveSession` with its `isLiveSession` guard) shared by both
   harnesses.

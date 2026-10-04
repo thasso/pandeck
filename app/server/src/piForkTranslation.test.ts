@@ -4,9 +4,9 @@
  * A client addresses a fork by OUR log entry id — the only id it holds — and the
  * connection translates that to the harness's own anchor. pi branches FROM the
  * selected native entry (it walks to the parent itself for a "before" fork), so
- * `hub.forkSession` must receive pi's native entry id, never our log id. The
- * existing pi fork tests all call `piStore.forkSession` directly with native
- * ids, so nothing else covers this seam.
+ * `piStore.forkSession` must receive pi's native entry id, never our log id. The
+ * other pi fork tests call `piStore.forkSession` directly with native ids, so
+ * nothing else covers this seam (`harnesses/fork.ts`).
  *
  * Run through the server Vitest suite:
  *   pnpm --filter @assistant/server test src/piForkTranslation.test.ts
@@ -36,18 +36,6 @@ vi.mock("./hub.ts", async (importOriginal) => {
     ...actual,
     hub: {
       ...actual.hub,
-      forkSession: (
-        _kind: string,
-        file: string,
-        entryId: string,
-        position: string,
-        originEntryId: string,
-      ) => {
-        forkCalls.push({ file, entryId, position, originEntryId });
-        return (
-          forkOutcome?.() ?? Promise.reject(new Error("stop after translation"))
-        );
-      },
       listSessions: () => Promise.resolve([]),
       broadcastSessions: () => Promise.resolve(),
     },
@@ -55,6 +43,14 @@ vi.mock("./hub.ts", async (importOriginal) => {
 });
 
 const { Connection } = await import("./connection.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
+vi.spyOn(piStore, "forkSession").mockImplementation(
+  (_kind, file, entryId, position, originEntryId) => {
+    forkCalls.push({ file, entryId, position, originEntryId });
+    return (forkOutcome?.() ??
+      Promise.reject(new Error("stop after translation"))) as never;
+  },
+);
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { SessionLogStore } = await import("./session/log/store.ts");

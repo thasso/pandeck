@@ -329,8 +329,12 @@ test("curated model options load no engine SDK", () => {
  * the hub's behaviour only through what the hub hands the registry, never by
  * importing `hub.ts` or the connection.
  */
-test("session creation and the first send import neither the hub nor the connection", () => {
-  for (const entry of ["harnesses/create.ts", "harnesses/firstSend.ts"]) {
+test("session creation, the first send and forks import neither the hub nor the connection", () => {
+  for (const entry of [
+    "harnesses/create.ts",
+    "harnesses/firstSend.ts",
+    "harnesses/fork.ts",
+  ]) {
     const { modules } = staticReach(entry);
     // The walk must see the engines, or a miss below would prove nothing.
     assert.ok(

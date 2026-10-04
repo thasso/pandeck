@@ -36,11 +36,7 @@ const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
   "commitWorkflow.ts": ["piSdk/index.ts"],
-  "connection.ts": [
-    "claudeSdk/ClaudeSdkSession.ts",
-    "claudeSdk/claudeSdkStore.ts",
-    "piSdk/models.ts",
-  ],
+  "connection.ts": ["claudeSdk/claudeSdkStore.ts", "piSdk/models.ts"],
   "hub.ts": [
     "claudeSdk/claudeSdkStore.ts",
     "piSdk/PiLiveSession.ts",
@@ -70,7 +66,7 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
  * number (or delete the entry) in the change that removes one.
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
-  "connection.ts": 11,
+  "connection.ts": 6,
   "promptInventory.ts": 4,
   "session/planHint.ts": 1,
   "sessionAudit.ts": 4,

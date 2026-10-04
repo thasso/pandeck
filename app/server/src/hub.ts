@@ -181,11 +181,10 @@ export function broadcastCommentEventToViewers(
 
 /**
  * Process-global registry of open connections. Which engine holds a session is
- * the harness registry's to answer (`harnesses/registry.ts`); the remaining
- * lifecycle calls (fork, rename, removal, pi images) and the merged listing
- * still delegate to {@link piStore} and {@link claudeSdkStore} until they move
- * behind it; creation goes through `harnesses/create.ts`. Keeps every tab's
- * session list in sync.
+ * the harness registry's to answer (`harnesses/registry.ts`), and session
+ * creation, forks, renames and removal go through `harnesses/`; pi images and
+ * the merged listing still read {@link piStore} and {@link claudeSdkStore}.
+ * Keeps every tab's session list in sync.
  */
 class SessionHub {
   private connections = new Set<Viewer>();
@@ -407,27 +406,6 @@ class SessionHub {
     return piStore.acquireExisting(kind, file, expectedId);
   }
 
-  async forkSession(
-    kind: AgentType,
-    file: string,
-    nativeEntryId: string,
-    position: "before" | "at",
-    originEntryId: string,
-  ): Promise<PiLiveSession> {
-    return piStore.forkSession(
-      kind,
-      file,
-      nativeEntryId,
-      position,
-      originEntryId,
-    );
-  }
-
-  /** Remove and dispose a live pi session (e.g. on delete). */
-  evict(key: string): void {
-    piStore.evict(key);
-  }
-
   /** The merged session list: pi sessions plus in-process Claude SDK sessions. */
   private async mergedSessions(
     opts: SessionListOptions = {},
@@ -620,11 +598,6 @@ class SessionHub {
 
   async archivedSessionCount(): Promise<number> {
     return archivedSessionCount();
-  }
-
-  /** Drop an in-process Claude-SDK session (tombstone + delete its record). */
-  removeClaudeSdk(id: string): void {
-    claudeSdkStore.remove(id);
   }
 
   /**
@@ -1095,27 +1068,6 @@ class SessionHub {
       ...update,
     };
     this.sendToSessionViewers(sessionId, msg);
-  }
-
-  async renameSession(
-    kind: AgentType,
-    file: string,
-    id: string,
-    title: string,
-  ): Promise<void> {
-    const trimmed = title.trim();
-    if (!trimmed) throw new Error("Session title cannot be empty.");
-    if (trimmed.length > 120)
-      throw new Error("Session title must be 120 characters or fewer.");
-
-    if (claudeSdkStore.exists(id)) {
-      const sdk = claudeSdkStore.get(id) ?? claudeSdkStore.acquire(id);
-      sdk.setTitle(trimmed); // persists + broadcasts the updated list
-      return;
-    }
-
-    await piStore.renameSession(kind, file, id, trimmed);
-    await this.broadcastSessions();
   }
 
   /* ----------------------------- dev reload ----------------------------- */

@@ -42,9 +42,12 @@ Four layers, each depending only on the ones below it:
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
      lookup answer from memory alone. Every new session is created through
-     `createSession` (below); fork, rename and remove move behind the registry
-     in step 11d, and until then `hub.ts` still calls the stores for them and
-     builds the merged session list from each.
+     `createSession` (below) and forked through `prepareFork` (below); a rename
+     (`harnessRegistry.rename`, which validates the title) and a delete's engine
+     half (`harnessRegistry.remove`: dispose, then delete what it stored) go to
+     the engine entry too, while a delete's harness-neutral cleanup runs in one
+     flow for both. `hub.ts` still builds the merged session list from each
+     store.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context
@@ -76,16 +79,22 @@ Four layers, each depending only on the ones below it:
      that one step. Spawn reaches `create.ts` through a dynamic import, as it
      does `hub.ts`, because `create.ts` → the Claude store → the tool catalog →
      spawn closes a cycle; the worktree merge agent reaches it the same way it
-     reaches `hub.ts`. Every other creation goes through `create.ts`; only forks
-     still go through the hub, until step 11d.
+     reaches `hub.ts`.
+   - `prepareFork` (`harnesses/fork.ts`) is what a fork asks of the engine that
+     holds the parent. The client names OUR log entry; each engine translates it
+     into its own native cut (Claude slices its transcript inclusively, pi
+     branches from the entry and needs our log cut to match its turn end) and
+     refuses one it cannot make before anything is written. It hands back the
+     step that forks, which also carries the parent's worktree edge to the
+     child; the connection keeps the persona guard, the view and the reply.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
      model it carries into a new session). `isLiveSession` tells it from a
      storage-backed view by its `live` marker; an engine-only feature is an
      optional method (`acceptCommitDryRun`, pi only), not an `instanceof` check.
-     Compact, clear and rename join it as later steps route them through the
-     registry.
+     Compact and clear join it as later steps route them through the registry; a
+     rename goes through the registry's engine entry instead.
    - `runOneShot()` (`harnesses/oneShot.ts`) runs a single prompt on whichever
      engine a model slot names and returns one result shape: text and
      `AgentUsage`. A run that failed without writing anything throws
@@ -169,7 +178,7 @@ table when a later step needs them.
 | 11a  | `createSession`; the first send creates through it                            | landed |
 | 11b  | Spawn and the workflow create through `createSession`                         | landed |
 | 11c  | Every other creation caller on `createSession`                                | landed |
-| 11d  | Fork, delete and rename through the registry                                  | open   |
+| 11d  | Fork, delete and rename through the registry                                  | landed |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
