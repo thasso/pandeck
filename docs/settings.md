@@ -249,17 +249,23 @@ Each Settings section is hand-written: grouping, descriptions and controls that
 depend on each other. Below it, `RegistrySettingFields`
 (`app/web/src/components/RegistrySettingFields.tsx`) renders every setting of
 the section that the section's own UI does not claim, from its descriptor's
-label, hint, kind and bounds: a toggle, a text field (saved on blur or Enter), a
-number field clamped to the bounds, a select for an enum, or the value of a
-read-only setting. Writes go through the page's ordinary settings patch, built
-by `writeAppSettingAt`, the same helper the agent write path uses. So a setting
-added to the registry appears on the page, and to the Personal Assistant, with
-no other change.
+label, hint, kind and bounds: a toggle, a select for an enum (a stored value
+outside the choices, or none, shows as such rather than as the first choice),
+the value of a read-only setting, or a text or number field. A text or number
+field is edited freely and saved on blur or Enter (Escape discards); a number is
+validated, rounded and clamped to its bounds only then. While the user is
+editing, a value arriving from the server (another tab, the assistant, the echo
+of an earlier save) never replaces what they typed. Writes go through the page's
+ordinary settings patch, built by `writeAppSettingAt`, the same helper the agent
+write path uses. So a setting added to the registry appears on the page, and to
+the Personal Assistant, with no other change.
 
 `app/web/src/components/settingsClaims.ts` lists the paths the hand-written
-sections render or leave out on purpose. Its tests require every claimed path to
-be a real setting, and every setting that needs hand-built UI (a secret, an
-OAuth connection, a `json` value, a writable field of an integration section,
-which saves through its own flow) to be claimed. `INTEGRATION_SETTINGS_SECTIONS`
-in the registry names the integration sections; a server test keeps it equal to
-the service's integration writers.
+sections render (`RENDERED_SETTING_PATHS`) and the ones no section shows on
+purpose, each with its reason (`OMITTED_SETTING_PATHS`: OAuth redirect URIs and
+scopes, Slack's manual tokens). Its tests require every claimed path to be a
+real setting, and every setting that needs hand-built UI (a secret, an OAuth
+connection, a `json` value, a writable field of an integration section, which
+saves through its own flow) to be claimed. `INTEGRATION_SETTINGS_SECTIONS` in
+the registry names the integration sections; a server test keeps it equal to the
+service's integration writers.
