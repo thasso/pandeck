@@ -34,7 +34,8 @@ const SRC_ROOT = dirname(fileURLToPath(import.meta.url));
 /** Folders that may reach the engines directly. */
 const EXEMPT_FOLDER = /^(?:piSdk|claudeSdk|harnesses|test)\//;
 
-const ENGINE_FOLDER = /^(?:piSdk|claudeSdk)\//;
+/** An engine folder or anything in it: the folder alone loads its index. */
+const ENGINE_FOLDER = /^(?:piSdk|claudeSdk)(?:\/|$)/;
 
 const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
 
@@ -427,6 +428,20 @@ test("the boundary scan sees every loader and every path form", () => {
     "piSdk/oneShot.ts",
     "piSdk/options.ts",
     "piSdk/piStore.ts",
+  ]);
+});
+
+test("loading an engine folder itself is an engine import", () => {
+  const file = join(SRC_ROOT, "probe.ts");
+  const source = [
+    'import { createRequire } from "node:module";',
+    "const load = createRequire(import.meta.url);",
+    'const a = load("./piSdk");',
+    'const b = await import("./claudeSdk/");',
+  ].join("\n");
+  assert.deepEqual(scanModule(file, source).engineImports, [
+    "claudeSdk",
+    "piSdk",
   ]);
 });
 
