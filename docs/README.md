@@ -86,6 +86,11 @@ only binding rules; everything else lives here.
   probes read per build, Task progress from one join, and `onlyIds` bounding the
   store read of a one-row refresh. Plus why neither a new index nor a
   touched-rows rebuild was added.
+- `agent-harnesses.md` — how app code reaches the two engines (pi, Claude SDK):
+  the target seam (`harnesses/`: registry, `LiveSession`, `runOneShot()`, models
+  and usage ports), the shared `HARNESSES` descriptor, the boundary ratchet that
+  pins remaining engine imports and harness-id comparisons, and the step-by-step
+  migration status.
 - `claude-session-records.md` — how a Claude SDK session's own record is stored:
   small atomically-replaced metadata beside an append-only timeline log, why it
   is not derived from the app-owned log, the byte-exact extent and crash-safety

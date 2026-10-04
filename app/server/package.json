@@ -52,6 +52,7 @@
     "@types/turndown": "catalog:",
     "@types/web-push": "catalog:",
     "@types/ws": "catalog:",
+    "oxc-parser": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
