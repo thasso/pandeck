@@ -1,10 +1,10 @@
 import {
+  type AgentType,
   clampThinkingLevelForModel,
   isClaudeSdkModel,
   type Harness,
   type ModelOption,
   type PromptAttachment,
-  type AgentType,
   type SessionMode,
   type SessionState,
   type ThinkingLevel,

@@ -10,11 +10,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  type AgentType,
   DEFAULT_SESSION_SCOPE,
   type BrowserRuntimeInfo,
   type SessionForkOrigin,
   type SessionScope,
-  type AgentType,
 } from "@assistant/shared";
 import { CWD, DATA_DIR } from "../config.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";

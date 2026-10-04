@@ -16,11 +16,11 @@
  * buffer to lose on Ctrl-C or a dev reload.
  */
 import {
+  type AgentType,
   DEFAULT_SESSION_SCOPE,
   sessionModeOrDefault,
   sessionScopeOrFailClosed,
   type Harness,
-  type AgentType,
   type SessionForkOrigin,
   type SessionMode,
   type SessionOutcomeAttention,

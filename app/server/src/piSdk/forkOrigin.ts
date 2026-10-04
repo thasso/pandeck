@@ -85,9 +85,8 @@ function isHarness(value: unknown): value is Harness {
 
 /**
  * The personas a fork-origin entry may name. Narrower than the shared
- * `isAgentType`: it predates the `workflow-coordinator` persona, so a
- * coordinator's fork origin is skipped. Widening it is a behavior change of its
- * own, not part of a rename.
+ * `isAgentType`: it omits `workflow-coordinator`, so a coordinator's fork
+ * origin is skipped. Widening it is a behavior change of its own.
  */
 function isForkOriginAgentType(value: unknown): value is AgentType {
   return (

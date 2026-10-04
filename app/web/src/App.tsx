@@ -21,6 +21,7 @@ import {
   SendHorizontal,
 } from "lucide-react";
 import {
+  type AgentType,
   CLAUDE_SDK_PROVIDER,
   claudeSdkModelOption,
   clampThinkingLevelForModel,
@@ -34,7 +35,6 @@ import {
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
   type PullRequestInventoryItem,
-  type AgentType,
   type SessionListItem,
   type SessionMode,
   type SessionState,
