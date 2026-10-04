@@ -3,6 +3,7 @@ import {
   SETTINGS_OUTSIDE_REGISTRY,
   SETTINGS_REGISTRY,
   SETTINGS_SECTION_IDS,
+  settingBounds,
   settingDescriptor,
   settingValueError,
 } from "./settingsRegistry.ts";
@@ -25,7 +26,9 @@ describe("settings registry", () => {
     for (const d of SETTINGS_REGISTRY) {
       if (d.access === "value" || d.access === "secret")
         expect(d.value, d.path).toBeDefined();
-      if (d.access === "readonly") expect(d.value, d.path).toBeUndefined();
+      // A read-only setting may declare the kind it reads as, never a bound.
+      if (d.access === "readonly" && d.value)
+        expect(["boolean", "string"], d.path).toContain(d.value.kind);
       if (d.access === "secret" || d.access === "oauth") {
         expect(d.configuredBy, d.path).toBeDefined();
         expect(d.clearWith, d.path).toBeDefined();
@@ -49,6 +52,13 @@ describe("settings registry", () => {
     const host = settingDescriptor("jira.jiraHost")!;
     expect(settingValueError(host, "x")).toBe(
       "jira.jiraHost cannot be written",
+    );
+  });
+
+  it("gives a numeric setting's bounds and refuses any other", () => {
+    expect(settingBounds("memory.maxCards")).toEqual({ min: 1, max: 32 });
+    expect(() => settingBounds("sessionNaming.enabled")).toThrow(
+      "sessionNaming.enabled is not a numeric setting",
     );
   });
 });

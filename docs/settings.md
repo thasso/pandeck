@@ -18,15 +18,23 @@ assistant can set too, and secrets stay out of its context
 - `access`: one of
   - `value`: read and written as is.
   - `readonly`: deployment config or derived status (the Atlassian host, a
-    discovered account email). Shown, never written.
+    discovered account email). Shown, never written. One the Settings page
+    echoes back in a patch declares the kind it reads as, so a wrong-kind echo
+    is refused.
   - `secret`: write-only. A read reports only the `configuredBy` flag. Writing
     `null` sets the `clearWith` patch flag.
   - `oauth`: connected through a browser flow. Only `null` (disconnect, via
     `clearWith`) can be written.
-- `value`: the kind and bounds a write must have. A `json` value (a model list,
-  the peer runtime roster, skill toggles, the dictation vocabulary) is written
-  whole and checked by `appSettingsPatchError` in `validateClientMessage.ts`,
-  the same check the socket message gets.
+- `value`: the kind and bounds a write must have. The Settings page reads its
+  number inputs' limits from it (`settingBounds`). Every settings message is
+  kind-checked against it by `appSettingsPatchError` in
+  `validateClientMessage.ts`: each present leaf of a writable setting must be
+  its registry kind, and each object on the way to it an object. Bounds and
+  vocabularies stay with the normalizers there, which clamp what an older or
+  hand-edited client sends; the agent path checks them strictly. A `json` value
+  (a model list, the peer runtime roster, skill toggles, the dictation
+  vocabulary) is written whole and passes its deep check in
+  `JSON_SETTING_VALIDATORS`; a test requires one for every `json` setting.
 - `optional`: writing `""` removes the field, for example an account pin back to
   automatic.
 

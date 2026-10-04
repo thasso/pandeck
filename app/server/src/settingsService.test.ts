@@ -376,3 +376,72 @@ test("models a connection test discovers reach every client", async () => {
     false,
   );
 });
+
+describe("the settings message checks come from the registry", () => {
+  test("every json setting has a deep check, and every deep check a setting", async () => {
+    const { JSON_SETTING_VALIDATORS } =
+      await import("./validateClientMessage.ts");
+    const jsonPaths = SETTINGS_REGISTRY.filter(
+      (d) => d.access === "value" && d.value?.kind === "json",
+    )
+      .map((d) => d.path)
+      .sort();
+    assert.deepEqual(Object.keys(JSON_SETTING_VALIDATORS).sort(), jsonPaths);
+  });
+
+  test("checks kinds the registry declares, including ones the old list missed", async () => {
+    const { appSettingsPatchError } =
+      await import("./validateClientMessage.ts");
+    const cases: Array<[unknown, string | null]> = [
+      [
+        { worktrees: { namingAgent: "x" } },
+        "patch.worktrees.namingAgent must be an object",
+      ],
+      [
+        { worktrees: { namingAgent: { provider: 1 } } },
+        "patch.worktrees.namingAgent.provider must be a string",
+      ],
+      [
+        { sessionNaming: { credentialProfileId: 7 } },
+        "patch.sessionNaming.credentialProfileId must be a string",
+      ],
+      [
+        { backgroundWork: { ownerSessionCap: "many" } },
+        "patch.backgroundWork.ownerSessionCap must be a finite number",
+      ],
+      [
+        { dayScan: { schedule: "07:00" } },
+        "patch.dayScan.schedule must be an object",
+      ],
+      [{ memory: "on" }, "patch.memory must be an object"],
+      [{ skills: { notes: "ON" } }, 'patch.skills.notes must be "on" or "off"'],
+      [
+        { speechToText: { vocabulary: [{ from: "a", to: 1 }] } },
+        "patch.speechToText.vocabulary[0].to must be a string",
+      ],
+      [
+        { peerSpawnRuntimes: "oops" },
+        "patch.peerSpawnRuntimes must be an array",
+      ],
+      [
+        { models: { hidden: [1] } },
+        "patch.models.hidden must be a string array",
+      ],
+      // Bounds and vocabularies stay with the normalizers, which clamp.
+      [{ backgroundWork: { ownerSessionCap: 10_000 } }, null],
+      [{ worktrees: { defaultMergeStrategy: "octopus" } }, null],
+      // A read-only projection echoed back must still be its kind.
+      [
+        { profile: { effectiveTimeZone: 3 } },
+        "patch.profile.effectiveTimeZone must be a string",
+      ],
+      [{ profile: { effectiveTimeZone: "UTC" } }, null],
+    ];
+    for (const [patch, expected] of cases)
+      assert.equal(
+        appSettingsPatchError(patch),
+        expected,
+        JSON.stringify(patch),
+      );
+  });
+});
