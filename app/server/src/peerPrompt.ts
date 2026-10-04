@@ -104,6 +104,8 @@ export interface PeerPromptHub {
   getLiveById(id: string): RuntimePromptDriver | undefined;
   acquireById(id: string): Promise<RuntimePromptDriver | undefined>;
   get(id: string): { broadcastState(): void } | undefined;
+  /** Rebuild the session list; optional so a test hub need not stub it. */
+  broadcastSessions?(): Promise<void> | void;
   broadcastPeerPromptCardUpdate(
     sessionId: string,
     update: {
@@ -1390,6 +1392,8 @@ export function runPeerPromptRetention(now = Date.now()): {
 } {
   const expired = peerPromptStore.expireUnresolved(now, now);
   for (const m of expired) void broadcastCardUpdateFor(m);
+  // An expired request owes nothing any more: the session list must hear it.
+  if (expired.length > 0) void broadcastParticipants(expired);
   const pruned = peerPromptStore.pruneTerminal(now - PRUNE_TTL_MS);
   return { expired: expired.length, pruned };
 }
@@ -1405,6 +1409,10 @@ async function broadcastParticipants(batch: PeerPromptRecord[]): Promise<void> {
       ids.add(m.recipientSessionId);
     }
     for (const id of ids) hub.get(id)?.broadcastState();
+    // The session LIST reads peer prompts too (`queuedWork`, the replies a
+    // session still awaits), and a transition outside any turn — a cancel, a
+    // retry that gave up — moves no other row; debounced, so a burst is one.
+    void hub.broadcastSessions?.();
   } catch {
     // Best-effort UI refresh only.
   }

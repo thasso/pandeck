@@ -132,23 +132,88 @@ describe("peerPromptStore", () => {
     assert.equal(replied?.repliedByMessageId, "reply-msg-id");
   });
 
-  it("lists who still owes each sender a reply, until it is answered", () => {
-    const sender = `owed-sender-${seq++}`;
-    const recipient = `owed-r-${seq++}`;
-    const owed = () => store.outstandingRepliesBySender().get(sender);
-    const m = enqueue(recipient, { sender, responseRequested: true });
-    // Owed from the moment it is queued, through the turn that ended without
-    // the answer (`awaiting_response`).
-    assert.deepEqual(owed(), [recipient]);
-    store.claimNext(recipient, "d", 1000);
-    store.markAdmitted(m.id);
-    store.markCompleted(m.id);
-    assert.deepEqual(owed(), [recipient]);
-    // A message that asked for no reply owes nothing.
-    enqueue(`owed-quiet-${seq++}`, { sender, responseRequested: false });
-    assert.deepEqual(owed(), [recipient]);
-    store.markReplied(m.id, "reply");
-    assert.equal(owed(), undefined, "an answered request owes nothing");
+  describe("who still owes a sender a reply", () => {
+    /** A delivered request whose turn ended without the answer. */
+    const unanswered = (
+      sender: string,
+      recipient: string,
+      chainId?: string,
+    ) => {
+      const chain = chainId ?? store.createChain(`owed-${seq++}`);
+      const m = store.enqueue({
+        conversationId: `owed-conv-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: sender,
+        recipientSessionId: recipient,
+        prompt: "please report back",
+        responseRequested: true,
+      });
+      store.claimNext(recipient, "d", 1000);
+      store.markAdmitted(m.id);
+      store.markCompleted(m.id);
+      return { ...m, chainId: chain };
+    };
+    /** Any later prompt, from `sender` to `recipient`, on `chainId`. */
+    const send = (sender: string, recipient: string, chainId?: string) => {
+      const chain = chainId ?? store.createChain(`later-${seq++}`);
+      return store.enqueue({
+        conversationId: `later-conv-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: sender,
+        recipientSessionId: recipient,
+        prompt: "report",
+        responseRequested: false,
+      });
+    };
+    const owedTo = (sender: string) =>
+      store.outstandingRepliesBySender().get(sender);
+
+    it("counts a turn that ended without the answer, until it is answered", () => {
+      const c = `owed-c-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const m = unanswered(c, r);
+      assert.deepEqual(owedTo(c), [r]);
+      store.markReplied(m.id, "reply");
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("does not count a request still being delivered", () => {
+      const c = `owed-c-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      enqueue(r, { sender: c, responseRequested: true });
+      assert.equal(owedTo(c), undefined, "queued: delivery is in progress");
+    });
+
+    it("takes a report forwarded through a third peer as the answer", () => {
+      // C asks I; I hands the work to R; R reports to C on the same chain.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-rev-${seq++}`;
+      const request = unanswered(c, i);
+      assert.deepEqual(owedTo(c), [i]);
+      send(r, c, request.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes any later word from the owed peer as the answer", () => {
+      // After a poke (which closes the peer's chains) or a re-ask, the peer's
+      // report arrives on a different chain and marks nothing.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      send(i, c);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("still counts a request when later traffic came from someone else", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      send(`owed-other-${seq++}`, c);
+      assert.deepEqual(owedTo(c), [i]);
+    });
   });
 
   it("completes terminally when no response is requested", () => {

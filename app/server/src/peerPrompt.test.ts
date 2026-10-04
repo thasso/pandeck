@@ -23,82 +23,88 @@ import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 // check), but the engine's OWN three `hub` call sites go through the explicit
 // `setHubForTests` seam below instead of relying on module-mocking a
 // process-wide dynamically-imported singleton for every call site.
-const { fakeDrivers, deadIds, cardUpdates, fakeHub } = vi.hoisted(() => {
-  const fakeDrivers = new Map<string, unknown>();
-  const deadIds = new Set<string>();
-  const cardUpdates: Array<{
-    sessionId: string;
-    messageKey: string;
-    state: string;
-    failureReason?: string;
-  }> = [];
-  // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
-  // registered via `driverFor()` — self-contained (no external class
-  // reference) to avoid a TDZ inside this hoisted factory.
-  function defaultStandIn(id: string) {
-    return {
-      id,
-      key: id,
-      sessionId: id,
-      harness: "pi",
-      agentType: "assistant",
-      sessionFile: undefined,
-      canSteer: false,
-      isRunning: false,
-      contextInfo: () => ({
+const { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub } =
+  vi.hoisted(() => {
+    const fakeDrivers = new Map<string, unknown>();
+    const deadIds = new Set<string>();
+    /** Session-list rebuilds the engine asked for (who still owes whom). */
+    const listBroadcasts = { count: 0 };
+    const cardUpdates: Array<{
+      sessionId: string;
+      messageKey: string;
+      state: string;
+      failureReason?: string;
+    }> = [];
+    // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
+    // registered via `driverFor()` — self-contained (no external class
+    // reference) to avoid a TDZ inside this hoisted factory.
+    function defaultStandIn(id: string) {
+      return {
+        id,
+        key: id,
         sessionId: id,
-        updatedAt: Date.now(),
-        messageCounts: {
-          user: 0,
-          assistant: 0,
-          toolCalls: 0,
-          toolResults: 0,
-          total: 0,
-        },
-        tokenUsage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-        cost: 0,
-      }),
-      broadcastState: () => {},
-      createRuntimeAdapter: () => ({
-        provider: "fake",
-        capabilities: { fork: "none", compact: false, attachments: false },
-        subscribe: () => () => {},
-        getBinding: () => ({ provider: "fake" }),
-        prompt: async () => ({ stopReason: "end" }),
-        abort: () => {},
-        setModel: () => {},
-        setReasoning: () => {},
-        dispose: () => {},
-      }),
+        harness: "pi",
+        agentType: "assistant",
+        sessionFile: undefined,
+        canSteer: false,
+        isRunning: false,
+        contextInfo: () => ({
+          sessionId: id,
+          updatedAt: Date.now(),
+          messageCounts: {
+            user: 0,
+            assistant: 0,
+            toolCalls: 0,
+            toolResults: 0,
+            total: 0,
+          },
+          tokenUsage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+          cost: 0,
+        }),
+        broadcastState: () => {},
+        createRuntimeAdapter: () => ({
+          provider: "fake",
+          capabilities: { fork: "none", compact: false, attachments: false },
+          subscribe: () => () => {},
+          getBinding: () => ({ provider: "fake" }),
+          prompt: async () => ({ stopReason: "end" }),
+          abort: () => {},
+          setModel: () => {},
+          setReasoning: () => {},
+          dispose: () => {},
+        }),
+      };
+    }
+    const fakeHub = {
+      getLiveById: (id: string) => {
+        if (deadIds.has(id)) return undefined;
+        if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
+        return fakeDrivers.get(id);
+      },
+      acquireById: async (id: string) => {
+        if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
+        if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
+        return fakeDrivers.get(id);
+      },
+      get: (id: string) => fakeDrivers.get(id),
+      broadcastSessions: () => {
+        listBroadcasts.count += 1;
+      },
+      broadcastPeerPromptCardUpdate: (
+        sessionId: string,
+        update: { messageKey: string; state: string; failureReason?: string },
+      ) => {
+        cardUpdates.push({ sessionId, ...update });
+      },
     };
-  }
-  const fakeHub = {
-    getLiveById: (id: string) => {
-      if (deadIds.has(id)) return undefined;
-      if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
-      return fakeDrivers.get(id);
-    },
-    acquireById: async (id: string) => {
-      if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
-      if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
-      return fakeDrivers.get(id);
-    },
-    get: (id: string) => fakeDrivers.get(id),
-    broadcastPeerPromptCardUpdate: (
-      sessionId: string,
-      update: { messageKey: string; state: string; failureReason?: string },
-    ) => {
-      cardUpdates.push({ sessionId, ...update });
-    },
-  };
-  return { fakeDrivers, deadIds, cardUpdates, fakeHub };
-});
+    return { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub };
+  });
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
@@ -107,6 +113,7 @@ const {
   ENVELOPE_OVERHEAD_MAX,
   RETRY_MAX_ATTEMPTS,
   buildEnvelope,
+  cancelQueuedPeerPrompts,
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
   drainRecipient,
@@ -690,6 +697,32 @@ describe("peer prompt engine", () => {
     );
   });
 
+  it("rebuilds the session list when queued requests are cancelled", async () => {
+    const recipient = `r-cancel-${n++}`;
+    const chainId = peerPromptStore.createChain();
+    peerPromptStore.enqueue({
+      conversationId: "cancel",
+      chainId,
+      hop: peerPromptStore.reserveHop(chainId),
+      senderSessionId: "S-cancel",
+      recipientSessionId: recipient,
+      prompt: "q",
+      responseRequested: true,
+    });
+    const listsBefore = listBroadcasts.count;
+    const cancelled = cancelQueuedPeerPrompts({
+      senderSessionId: "S-cancel",
+      recipientSessionId: recipient,
+      reason: "test",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancelled.length, 1);
+    assert.ok(
+      listBroadcasts.count > listsBefore,
+      "a cancel outside any turn still reaches the session list",
+    );
+  });
+
   it("runPeerPromptRetention appends an audited transition and broadcasts for each expired row", async () => {
     const recipient = `r-exp-${n++}`;
     const chainId = peerPromptStore.createChain();
@@ -708,10 +741,15 @@ describe("peer prompt engine", () => {
     );
     peerPromptStore.markCompleted(m.id); // -> awaiting_response
     cardUpdates.length = 0;
+    const listsBefore = listBroadcasts.count;
 
     const result = runPeerPromptRetention(Date.now() + 10_000);
-    await Promise.resolve(); // flush the fire-and-forget broadcast microtask
+    await new Promise((resolve) => setTimeout(resolve, 0)); // flush broadcasts
     assert.equal(result.expired, 1);
+    assert.ok(
+      listBroadcasts.count > listsBefore,
+      "an expired request owes nothing: the session list is rebuilt",
+    );
     const row = peerPromptStore.getById(m.id)!;
     assert.equal(row.status, "expired");
     assert.deepEqual(row.transitions.map((t) => t.to).slice(-1), ["expired"]);

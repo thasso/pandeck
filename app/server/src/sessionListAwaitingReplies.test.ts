@@ -34,12 +34,16 @@ test("a session row lists the peers it awaits a reply from", async () => {
   const row = async (id: string) =>
     (await listSessions([], () => Date.now())).find((item) => item.id === id);
   try {
+    // Still being delivered: nothing is owed yet.
+    assert.equal((await row(coordinator))?.awaitingRepliesFrom, undefined);
+    // Delivered, and the turn ended without the answer: now it is owed.
+    peerPromptStore.claimNext(reviewer, "drainer", 1_000);
+    peerPromptStore.markAdmitted(request.id);
+    peerPromptStore.markCompleted(request.id);
     assert.ok(await row(coordinator), "the coordinator is listed");
     assert.deepEqual((await row(coordinator))?.awaitingRepliesFrom, [reviewer]);
     assert.equal((await row(reviewer))?.awaitingRepliesFrom, undefined);
-    // Delivered, then answered: nothing is owed any more.
-    peerPromptStore.claimNext(reviewer, "drainer", 1_000);
-    peerPromptStore.markAdmitted(request.id);
+    // Answered: nothing is owed any more.
     peerPromptStore.markReplied(request.id, "reply");
     assert.equal((await row(coordinator))?.awaitingRepliesFrom, undefined);
   } finally {

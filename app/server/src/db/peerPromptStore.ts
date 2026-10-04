@@ -45,20 +45,6 @@ export type PeerPromptStatus =
 type PeerPromptInterruptionKind = "restart" | "failure";
 
 /** Terminal states that hold no further obligation and may eventually be pruned. */
-/**
- * Every status a requested reply can still come out of: the complement of
- * {@link TERMINAL_STATUSES}, spelled out so the reads can use the
- * status-leading indexes.
- */
-const OPEN_RESPONSE_STATUSES: PeerPromptStatus[] = [
-  "queued",
-  "dispatching",
-  "admitted",
-  "acknowledged",
-  "awaiting_response",
-  "retryable_failed",
-];
-
 const TERMINAL_STATUSES: PeerPromptStatus[] = [
   "completed",
   "replied",
@@ -1081,20 +1067,37 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
 }
 
 /**
- * For every sender, the peers it asked for a reply and has not had one from
- * yet ({@link outstandingResponseRequestCount}'s rows, by recipient) — the
- * session list's "who still owes whom" fact. One indexed read over the
- * non-terminal statuses, so the list rebuild pays it once, not per row.
+ * For every sender, the peers that still OWE it a reply: a `responseRequested`
+ * prompt whose turn ended without the answer (`awaiting_response`) — the
+ * session list's "who still owes whom" fact, which a quiet tree reads as
+ * stalled. One read, so the list rebuild pays it once, not per row.
+ *
+ * Two kinds of open row do NOT count:
+ * - one still being delivered or retried (`queued` … `retryable_failed`):
+ *   delivery is work in progress, not a stall;
+ * - one effectively answered without being marked: a reply closes exactly
+ *   one request by strict correlation, so a report forwarded through a third
+ *   peer, an answer after the user poked (which closes the peer's chains), or
+ *   one after the sender re-asked leaves the original row open. Any LATER
+ *   prompt that reached the sender from the owed peer, or on the request's
+ *   own chain (which a forward keeps), counts as the answer.
  */
 function outstandingRepliesBySender(): Map<string, string[]> {
-  const open = OPEN_RESPONSE_STATUSES.map(() => "?").join(", ");
   const rows = getDb()
     .prepare(
-      `SELECT DISTINCT sender_session_id, recipient_session_id FROM peer_prompts
-        WHERE status IN (${open}) AND response_requested = 1
-        ORDER BY sender_session_id, recipient_session_id`,
+      `SELECT DISTINCT o.sender_session_id, o.recipient_session_id
+         FROM peer_prompts o
+        WHERE o.status = 'awaiting_response' AND o.response_requested = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM peer_prompts r
+             WHERE r.recipient_session_id = o.sender_session_id
+               AND r.queue_seq > o.queue_seq
+               AND (r.sender_session_id = o.recipient_session_id
+                    OR r.chain_id = o.chain_id)
+          )
+        ORDER BY o.sender_session_id, o.recipient_session_id`,
     )
-    .all(...OPEN_RESPONSE_STATUSES) as {
+    .all() as {
     sender_session_id: string;
     recipient_session_id: string;
   }[];

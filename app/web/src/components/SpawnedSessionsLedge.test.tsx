@@ -329,4 +329,27 @@ describe("the composer's spawned-session ledge", () => {
     );
     expect(markup).toContain("1 settled session");
   });
+
+  it("is just the stall line for a chat that spawned no one but is owed a reply", () => {
+    /** A session nothing spawned: the fixture's spawn edge taken off. */
+    const plain = (id: string, extra: Partial<SessionListItem>) => {
+      const {
+        spawnedBySessionId: _parent,
+        spawnOwnership: _owner,
+        ...rest
+      } = session(id, extra);
+      return rest as SessionListItem;
+    };
+    const sessions = [
+      plain("root", { awaitingRepliesFrom: ["impl"] }),
+      plain("impl", { title: "Implementer" }),
+    ];
+    const markup = renderToStaticMarkup(ledge(sessions));
+    expect(markup).toContain(
+      'aria-label="Stalled: No reply from “Implementer”"',
+    );
+    // It claims no spawned sessions: there is no summary toggle at all.
+    expect(markup).not.toContain("aria-expanded");
+    expect(markup).not.toContain("this chat spawned");
+  });
 });

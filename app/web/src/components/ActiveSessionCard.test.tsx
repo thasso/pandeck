@@ -357,10 +357,33 @@ describe("ActiveSessionCard stall", () => {
         onDelete={() => {}}
       />,
     );
-    expect(html).toContain("No reply from “Reviewer”");
     expect(html).toContain('aria-label="Stalled: No reply from “Reviewer”"');
     expect(html).toContain('title="Open “Reviewer”"');
     // The card's own spoken label says it too: its chip may be icon-only.
     expect(html).toContain("— stalled: No reply from “Reviewer”");
+  });
+});
+
+describe("ActiveSessionCard stall chip fit", () => {
+  it("truncates only the title, never the prefix or the count", () => {
+    const long = (id: string) =>
+      card({ id, title: "A very long reviewer title that cannot fit" }).session;
+    const base = card({ id: "root", title: "Coordinator" });
+    const html = renderToStaticMarkup(
+      <ActiveSessionCard
+        card={{ ...base, stall: { peers: [long("a"), long("b"), long("c")] } }}
+        now={NOW}
+        active={false}
+        relations={{}}
+        onOpen={() => {}}
+        onSettle={() => {}}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onDelete={() => {}}
+      />,
+    );
+    expect(html).toMatch(/shrink-0">No reply from<\/span>/);
+    expect(html).toMatch(/min-w-0 truncate">“A very long reviewer title/);
+    expect(html).toMatch(/shrink-0">\+2<\/span>/);
   });
 });

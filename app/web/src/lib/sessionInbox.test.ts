@@ -2996,3 +2996,111 @@ describe("a stalled tree", () => {
     );
   });
 });
+
+describe("a stalled tree, at its edges", () => {
+  const row = (id: string, extra: Partial<SessionListItem> = {}) =>
+    session({ id, ...extra });
+  const stallOf = (scope: SessionListItem[], others: SessionListItem[] = []) =>
+    spawnTreeStall(
+      scope,
+      new Map([...scope, ...others].map((s) => [s.id, s])),
+    )?.peers.map((p) => p.id);
+  const host = {
+    activeCount: 0,
+    shellCount: 0,
+    monitorCommandCount: 0,
+    monitorWebsocketCount: 0,
+    startingCount: 0,
+    stoppingCount: 0,
+    oldestStartedAt: 0,
+  };
+
+  it("weighs an owed peer outside the tree by whether it is working", () => {
+    const root = row("root", { awaitingRepliesFrom: ["outside"] });
+    expect(stallOf([root], [row("outside", { isStreaming: true })])).toBe(
+      undefined,
+    );
+    expect(stallOf([root], [row("outside")])).toEqual(["outside"]);
+  });
+
+  it("counts a job starting, or a retained host, as work going on", () => {
+    const root = row("root", { awaitingRepliesFrom: ["rev"] });
+    for (const activity of [
+      { ...host, startingCount: 1 },
+      { ...host, retainedHost: true },
+    ])
+      expect(
+        stallOf([root, row("rev", { backgroundActivity: activity })]),
+      ).toBe(undefined);
+  });
+
+  it("hears a grandchild that still owes its own coordinator", () => {
+    const view = buildSessionInbox([
+      row("root"),
+      row("impl", {
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["rev"],
+      }),
+      row("rev", {
+        title: "Reviewer",
+        spawnedBySessionId: "impl",
+        spawnOwnership: "coordinator",
+      }),
+    ]);
+    const card = [...cards(view.needsYou), ...cards(view.active)][0];
+    expect(card?.session.id).toBe("root");
+    expect(card?.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+  });
+
+  it("leaves a settled tree on the shelf, where it raises nothing", () => {
+    const view = buildSessionInbox([
+      row("root", { settledAt: NOW - 1_000, awaitingRepliesFrom: ["rev"] }),
+      row("rev", {
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 1_000,
+      }),
+    ]);
+    expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+  });
+});
+
+describe("the composer ledge's stall", () => {
+  it("is judged over the card's tree: a taken-over child's work does not hide it", () => {
+    const sessions = [
+      session({ id: "root", awaitingRepliesFrom: ["rev"] }),
+      session({
+        id: "rev",
+        title: "Reviewer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+      }),
+      session({
+        id: "mine",
+        spawnedBySessionId: "root",
+        spawnOwnership: "taken-over",
+        isStreaming: true,
+      }),
+    ];
+    const card = [
+      ...cards(buildSessionInbox(sessions).needsYou),
+      ...cards(buildSessionInbox(sessions).active),
+    ].find((c) => c.session.id === "root");
+    const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
+    expect(card?.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+    expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["rev"]);
+  });
+
+  it("is read for a chat that spawned no one but asked an existing session", () => {
+    const ledge = spawnedSessionsView({
+      sessions: [
+        session({ id: "root", awaitingRepliesFrom: ["impl"] }),
+        session({ id: "impl", title: "Implementer" }),
+      ],
+      coordinatorId: "root",
+    });
+    expect(ledge.rows).toEqual([]);
+    expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["impl"]);
+  });
+});

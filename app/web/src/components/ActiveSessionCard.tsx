@@ -30,6 +30,8 @@ import {
   sessionStatusBadge,
   sessionStatusDetail,
   stallLabel,
+  stallMore,
+  stallTitle,
   sessionStatusText,
   type SessionCardMetaItem,
   type SessionCardMetaKind,
@@ -571,9 +573,17 @@ function ActiveSessionCardImpl({
                     className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${SESSION_BADGE_TONE.warning}`}
                   >
                     <Hourglass size={10} className="shrink-0" aria-hidden />
-                    <span className="session-status-badge-label min-w-0 truncate">
-                      {stallLabel(card.stall)}
+                    <span className="session-status-badge-label shrink-0">
+                      No reply from
                     </span>
+                    <span className="session-status-badge-label min-w-0 truncate">
+                      {`“${stallTitle(card.stall)}”`}
+                    </span>
+                    {stallMore(card.stall) ? (
+                      <span className="session-status-badge-label shrink-0">
+                        {stallMore(card.stall)}
+                      </span>
+                    ) : null}
                   </button>
                 ) : null}
                 {backgroundChip ? (

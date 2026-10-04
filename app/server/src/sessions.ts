@@ -314,12 +314,6 @@ function attentionFields(
   return { awaitingInput, ...(attention ? { attention } : {}) };
 }
 
-/**
- * Sessions with work queued behind their next turn (two queries): peer prompts,
- * and the card outcomes a mid-turn session could not be told about yet
- * (`agentHandoffs.ts`). Both are the same fact to a reader — something is
- * waiting for this session to finish — so they share the row's one flag.
- */
 /** Who still owes each session a reply; empty (and logged) when unreadable. */
 function awaitingRepliesBySender(): Map<string, string[]> {
   try {
@@ -330,6 +324,12 @@ function awaitingRepliesBySender(): Map<string, string[]> {
   }
 }
 
+/**
+ * Sessions with work queued behind their next turn (two queries): peer prompts,
+ * and the card outcomes a mid-turn session could not be told about yet
+ * (`agentHandoffs.ts`). Both are the same fact to a reader — something is
+ * waiting for this session to finish — so they share the row's one flag.
+ */
 function queuedWorkRecipients(): Set<string> {
   const queued = new Set<string>();
   try {

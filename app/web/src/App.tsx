@@ -5006,7 +5006,9 @@ function AppContent() {
   const spawnedLedge = useMemo(
     () =>
       spawnedLedgeView &&
-      (spawnedLedgeView.counts.total > 0 || spawnedLedgeView.settled > 0) &&
+      (spawnedLedgeView.counts.total > 0 ||
+        spawnedLedgeView.settled > 0 ||
+        spawnedLedgeView.stall) &&
       ledgeSessionId ? (
         <SpawnedSessionsLedge
           sessionId={ledgeSessionId}

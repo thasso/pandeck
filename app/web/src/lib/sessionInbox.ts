@@ -193,10 +193,22 @@ function stallKey(stall: SpawnTreeStall): string {
  * "No reply from «Reviewer»", or "… +2" when several are owed.
  */
 export function stallLabel(stall: SpawnTreeStall): string {
-  const first = stall.peers[0];
-  const title = first?.title.trim() || "a peer";
+  const more = stallMore(stall);
+  return `No reply from “${stallTitle(stall)}”${more ? ` ${more}` : ""}`;
+}
+
+/** The first owed peer's title, as the chip names it. */
+export function stallTitle(stall: SpawnTreeStall): string {
+  return stall.peers[0]?.title.trim() || "a peer";
+}
+
+/**
+ * "+N" for the further peers that owe a reply, or "" — drawn apart from the
+ * title so a long title truncates without hiding how many more there are.
+ */
+export function stallMore(stall: SpawnTreeStall): string {
   const more = stall.peers.length - 1;
-  return `No reply from “${title}”${more > 0 ? ` +${more}` : ""}`;
+  return more > 0 ? `+${more}` : "";
 }
 
 /** A top-level card with its tree's stall, if any, lifting its tier. */
@@ -1558,15 +1570,23 @@ export function spawnedSessionsView(options: {
     else spawned.set(parentId, [session]);
   }
 
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const coordinator = byId.get(coordinatorId);
+
   // Almost every session on screen spawned nothing: answer that before
-  // building the forest this view otherwise reads on every broadcast.
-  if (!spawned.has(coordinatorId))
+  // building the forest this view otherwise reads on every broadcast. Such a
+  // chat may still be owed a reply — `session_send_prompt` asks existing
+  // sessions too — so its stall is read over the chat alone.
+  if (!spawned.has(coordinatorId)) {
+    const stall = coordinator ? spawnTreeStall([coordinator], byId) : undefined;
     return {
       rows: [],
       counts: zeroCounts(),
       settled: 0,
       settledShown: includeSettled,
+      ...(stall ? { stall } : {}),
     };
+  }
 
   // A peer's Settle settles what the INBOX folds under it — coordinator-owned
   // peers at every depth, along the shared forest — not this strip's
@@ -1578,10 +1598,8 @@ export function spawnedSessionsView(options: {
     options.workflowRuns ?? [],
     options.workflowCards ?? {},
   );
-  const reasons = spawnClusterSettleBlockedReasons(
-    new Map(sessions.map((session) => [session.id, session])),
-    spawnClusterForest(members),
-  );
+  const forest = spawnClusterForest(members);
+  const reasons = spawnClusterSettleBlockedReasons(byId, forest);
   const memberIds = new Set(members.map((session) => session.id));
   const peerCard = (session: SessionListItem): SessionInboxCard => {
     // No `readCurrentId`: the ledge belongs to the session on screen, and a
@@ -1654,15 +1672,21 @@ export function spawnedSessionsView(options: {
     .map((id) => cards.get(id) as SessionInboxCard)
     .sort(compareSessionCards);
   const bubbled = firstBubble(liveCards);
-  const byId = new Map(sessions.map((session) => [session.id, session]));
-  const coordinator = byId.get(coordinatorId);
-  const stall = spawnTreeStall(
-    [
-      ...(coordinator ? [coordinator] : []),
-      ...liveCards.map((card) => card.session),
-    ],
-    byId,
-  );
+  // The stall is judged over the tree the inbox CARD folds — this chat and
+  // the coordinator-owned peers under it — not this strip's ownership-blind
+  // rows: a peer the user took over, or a run's role, is not this chat's work,
+  // and its activity must not hide the chat's stall (nor its quiet raise one).
+  const stall = coordinator
+    ? spawnTreeStall(
+        [
+          coordinator,
+          ...spawnClusterDescendantIds(coordinatorId, forest)
+            .map((id) => byId.get(id))
+            .filter((row): row is SessionListItem => row !== undefined),
+        ],
+        byId,
+      )
+    : undefined;
   return {
     rows,
     counts: clusterCounts(liveCards),
