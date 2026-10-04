@@ -206,7 +206,7 @@ table when a later step needs them.
 | 11d  | Fork, delete and rename through the registry                                  | landed |
 | 12a  | Model resolution and engine boot through `harnesses/`                         | landed |
 | 12b  | Session storage, availability and connection lookups through `harnesses/`     | landed |
-| 12c  | The hub's merged list and pi lookups; the review-handoff creation branch      | open   |
+| 12c  | Hub list and pi lookups, a tool-exposure seam, the review-handoff branch      | open   |
 | 12d  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order

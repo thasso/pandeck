@@ -34,6 +34,11 @@ test("a Claude session waits on the Claude SDK setting, whatever its persona", (
   );
   claudeEnabled(true);
   assert.equal(existingSessionRefusal("claude-sdk", "workshop"), undefined);
+  // A persona pi would refuse does not hold a Claude session back.
+  assert.equal(
+    existingSessionRefusal("claude-sdk", "retired-persona" as never),
+    undefined,
+  );
 });
 
 test("a pi session waits on its persona, not on the Claude setting", () => {
