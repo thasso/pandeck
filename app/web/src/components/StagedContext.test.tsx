@@ -175,6 +175,114 @@ describe("StagedContextPanel", () => {
     // The collapsed field reads back what is staged, like any other value.
     expect(staged).toContain("New worktree");
   });
+
+  it("lifts main checkout(s) ahead of the rest regardless of input order, with a divider between", () => {
+    const older = { ...worktree, id: "older", branch: "zzz-older-branch" };
+    const main = { ...worktree, id: "main:proj", branch: "main", isMain: true };
+    const recent = { ...worktree, id: "recent", branch: "zzz-recent-branch" };
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [older, main, recent],
+          value: { projectId: "proj", worktreeId: null, task: null },
+        })}
+        initialField="worktree"
+      />,
+    );
+    expect(html.indexOf("main checkout")).toBeLessThan(html.indexOf("<hr"));
+    expect(html.indexOf("<hr")).toBeLessThan(html.indexOf("zzz-older-branch"));
+    // Non-main entries keep their given (caller-sorted) relative order.
+    expect(html.indexOf("zzz-older-branch")).toBeLessThan(
+      html.indexOf("zzz-recent-branch"),
+    );
+  });
+
+  it("keeps multiple main checkouts together ahead of a single divider", () => {
+    const mainA = { ...worktree, id: "main:a", branch: "main", isMain: true };
+    const mainB = { ...worktree, id: "main:b", branch: "main", isMain: true };
+    const other = { ...worktree, id: "wtX", branch: "feature/x" };
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [other, mainA, mainB],
+          value: { projectId: "proj", worktreeId: null, task: null },
+        })}
+        initialField="worktree"
+      />,
+    );
+    const hrIndex = html.indexOf("<hr");
+    expect(hrIndex).toBeGreaterThan(-1);
+    expect(html.indexOf("main checkout")).toBeLessThan(hrIndex);
+    expect(hrIndex).toBeLessThan(html.indexOf("feature/x"));
+    // Exactly one divider, not one per pinned item.
+    expect(html.indexOf("<hr", hrIndex + 1)).toBe(-1);
+  });
+
+  it("renders no divider when every worktree in scope is a main checkout", () => {
+    const main = { ...worktree, id: "main:proj", branch: "main", isMain: true };
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [main],
+          value: { projectId: "proj", worktreeId: null, task: null },
+        })}
+        initialField="worktree"
+      />,
+    );
+    expect(html).not.toContain("<hr");
+  });
+
+  it("renders no divider with no main checkout and no + New worktree action", () => {
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [worktree],
+          value: { projectId: "proj", worktreeId: null, task: null },
+        })}
+        initialField="worktree"
+      />,
+    );
+    expect(html).not.toContain("<hr");
+  });
+
+  it("still divides the rest from a pinned + New worktree action with no main checkout", () => {
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [worktree],
+          value: { projectId: "proj", worktreeId: null, task: null },
+          onChangeNewWorktree: () => {},
+        })}
+        initialField="worktree"
+      />,
+    );
+    const hrIndex = html.indexOf("<hr");
+    expect(hrIndex).toBeGreaterThan(-1);
+    expect(html.indexOf("New worktree")).toBeLessThan(hrIndex);
+    expect(hrIndex).toBeLessThan(html.indexOf("feature/thing"));
+  });
+
+  it("scopes the worktree list and its ordering to the staged project", () => {
+    const otherMain = {
+      ...worktree,
+      id: "main:other",
+      projectId: "other",
+      branch: "main",
+      isMain: true,
+    };
+    const mine = { ...worktree, id: "wt-mine", branch: "feature/mine" };
+    const html = renderToStaticMarkup(
+      <StagedContextPanel
+        {...panelData({
+          worktrees: [otherMain, mine],
+          value: { projectId: "proj", worktreeId: null, task: null },
+        })}
+        initialField="worktree"
+      />,
+    );
+    expect(html).not.toContain("main checkout");
+    expect(html).toContain("feature/mine");
+  });
 });
 
 describe("Composer send gating", () => {

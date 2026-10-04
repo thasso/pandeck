@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -384,9 +384,14 @@ export function StagedContextPanel({
                 }
               : undefined
           }
-          items={activeWorktrees.map((w) => ({
+          items={[
+            // Main checkouts pin above the rest, same as the hero row.
+            ...activeWorktrees.filter((w) => w.isMain),
+            ...activeWorktrees.filter((w) => !w.isMain),
+          ].map((w) => ({
             id: w.id,
             label: w.isMain ? "main checkout" : w.branch,
+            pinned: Boolean(w.isMain),
             ...(!value.projectId && projectLabel(projects, w.projectId)
               ? { hint: projectLabel(projects, w.projectId)! }
               : {}),
@@ -495,6 +500,8 @@ interface Option {
   label: string;
   hint?: string;
   dot?: string;
+  /** Pinned above a divider, ahead of the unpinned rest (e.g. main checkouts). */
+  pinned?: boolean;
 }
 
 function OptionList({
@@ -537,6 +544,13 @@ function OptionList({
     : items;
   // Search only earns its keep past a screenful; keep the sheet tap-first below that.
   const showFilter = items.length > 8;
+  // The divider sits right after the pinned group — the leading action counts
+  // as pinned too, so it shows even with no pinned items (-1 when every item is
+  // pinned, which correctly renders no divider at all).
+  const hasPinnedGroup = Boolean(leadingAction) || items.some((i) => i.pinned);
+  const firstUnpinnedIndex = hasPinnedGroup
+    ? filtered.findIndex((i) => !i.pinned)
+    : -1;
 
   return (
     <div className="flex flex-col gap-1">
@@ -597,29 +611,39 @@ function OptionList({
             {items.length === 0 ? emptyLabel : "No matches."}
           </div>
         ) : (
-          filtered.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onSelect(item.id)}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-raised ${
-                selectedId === item.id ? "font-medium text-fg" : "text-muted"
-              }`}
-            >
-              {item.dot ? (
-                <span
-                  className="size-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: item.dot }}
-                  aria-hidden
-                />
-              ) : null}
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {item.hint ? (
-                <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-micro font-medium tracking-wide text-faint">
-                  {item.hint}
-                </span>
-              ) : null}
-            </button>
+          filtered.map((item, index) => (
+            <Fragment key={item.id}>
+              {
+                // Unfiltered only: a search narrows the pinned/rest split away.
+                // `items` puts pinned entries first, so the first unpinned one
+                // marks the boundary — covers a leading action with no pinned
+                // items too, and never fires when nothing unpinned follows.
+                !q && index === firstUnpinnedIndex ? (
+                  <hr className="my-1 border-line" />
+                ) : null
+              }
+              <button
+                type="button"
+                onClick={() => onSelect(item.id)}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-raised ${
+                  selectedId === item.id ? "font-medium text-fg" : "text-muted"
+                }`}
+              >
+                {item.dot ? (
+                  <span
+                    className="size-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: item.dot }}
+                    aria-hidden
+                  />
+                ) : null}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {item.hint ? (
+                  <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-micro font-medium tracking-wide text-faint">
+                    {item.hint}
+                  </span>
+                ) : null}
+              </button>
+            </Fragment>
           ))
         )}
       </div>

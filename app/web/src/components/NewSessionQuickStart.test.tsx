@@ -450,6 +450,42 @@ describe("NewSessionQuickStart", () => {
     expect(html).toContain("New worktree");
   });
 
+  it("pins + New worktree then main checkout(s) ahead of a divider, then the rest in order", () => {
+    // Activity order would otherwise put "recent" ahead of the main checkout.
+    const main = worktree({ id: "main:proj", isMain: true, branch: "main" });
+    const recent = worktree({ id: "recent", branch: "feature/recent" });
+    const older = worktree({ id: "older", branch: "feature/older" });
+    const html = render([recent, older, main], {
+      projects: [project, otherProject],
+      selectedProjectId: "proj",
+    });
+    expect(html.indexOf("New worktree")).toBeLessThan(
+      html.indexOf("main checkout"),
+    );
+    expect(html.indexOf("main checkout")).toBeLessThan(
+      html.indexOf("feature/recent"),
+    );
+    expect(html.indexOf("feature/recent")).toBeLessThan(
+      html.indexOf("feature/older"),
+    );
+    // A divider sits between the pinned group and the rest.
+    expect(html).toContain('<div aria-hidden="true" class="my-1');
+    expect(html.indexOf("main checkout")).toBeLessThan(
+      html.indexOf('<div aria-hidden="true" class="my-1'),
+    );
+    expect(html.indexOf('<div aria-hidden="true" class="my-1')).toBeLessThan(
+      html.indexOf("feature/recent"),
+    );
+  });
+
+  it("renders no divider when every active worktree is a main checkout", () => {
+    const html = render(
+      [worktree({ id: "main:proj", isMain: true, branch: "main" })],
+      { projects: [project, otherProject], selectedProjectId: "proj" },
+    );
+    expect(html).not.toContain('<div aria-hidden="true" class="my-1');
+  });
+
   it("renders the model row and a stepped thinking slider with a centered value label", () => {
     const html = render([worktree({})]);
     expect(html).toContain("GPT Test");
