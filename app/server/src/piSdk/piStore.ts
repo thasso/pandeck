@@ -239,18 +239,27 @@ class PiSessionStore {
     },
   ): Promise<PiLiveSession> {
     const cwd = opts?.cwd ?? CWD;
+    const credentialProfileId =
+      opts?.credentialProfileId ?? defaultOpenAiProfileId();
     const created = await this.create(
       kind,
       SessionManager.create(cwd, sessionDirFor(kind)),
       model,
       thinkingLevel,
       cwd,
-      opts?.credentialProfileId ?? defaultOpenAiProfileId(),
+      credentialProfileId,
       opts?.promptEvidence ? { evidence: opts.promptEvidence } : undefined,
       opts?.mode,
     );
     this.canonicalizeCreatedPiSession(created.session);
-    return this.track(kind, created.session, created.notices, cwd, opts?.scope);
+    return this.track(
+      kind,
+      created.session,
+      created.notices,
+      cwd,
+      credentialProfileId,
+      opts?.scope,
+    );
   }
 
   private canonicalizeCreatedPiSession(session: AgentSession): void {
@@ -356,7 +365,7 @@ class PiSessionStore {
         this.discardUnregistered(created.session);
         throw new PiSessionDeletedError(created.session.sessionId);
       }
-      return this.track(kind, created.session, created.notices, cwd);
+      return this.track(kind, created.session, created.notices, cwd, profileId);
     })();
     this.opening.set(canonical, open);
     try {
@@ -508,6 +517,7 @@ class PiSessionStore {
       created.session,
       created.notices,
       cwd,
+      credentialProfileId,
       parentMeta?.scope,
     );
     sessionStore.upsert({
@@ -706,8 +716,9 @@ class PiSessionStore {
   private track(
     kind: AgentType,
     session: AgentSession,
-    initialNotices: Array<{ severity: NoticeSeverity; message: string }> = [],
-    cwd: string = CWD,
+    initialNotices: Array<{ severity: NoticeSeverity; message: string }>,
+    cwd: string,
+    credentialProfileId: string,
     scope?: SessionScope,
   ): PiLiveSession {
     // The scope is claimed BEFORE the live map can hand this session to the
@@ -730,6 +741,7 @@ class PiSessionStore {
       cwd,
       this.sessionModes.get(session.sessionId) ?? "build",
       (mode) => this.applySessionMode(session.sessionId, mode),
+      credentialProfileId,
     );
     this.live.set(ls.key, ls);
     // Ownership from the first moment: an acquisition that is never viewed

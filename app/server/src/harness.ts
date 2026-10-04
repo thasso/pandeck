@@ -1,7 +1,8 @@
 /**
  * Harness-neutral driver contracts: the read/view surface a connection needs
  * from any backing engine ("harness"), plus the promptable extension for
- * runtime-controlled sessions. Leaf module — must not import `hub.ts`.
+ * runtime-controlled sessions and the {@link LiveSession} every resident
+ * session implements. Leaf module — must not import `hub.ts`.
  */
 import type {
   AgentType,
@@ -10,10 +11,12 @@ import type {
   DisplayMessage,
   Harness,
   ServerMessage,
+  SessionMode,
   SessionState,
   ThinkingLevel,
 } from "@assistant/shared";
 import type { SyntheticToolHost } from "./hostSlashCommands.ts";
+import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
 
 /**
  * How long a resident harness that nobody views and nothing drives stays in
@@ -85,6 +88,11 @@ export interface HarnessDriver extends SyntheticToolHost {
   readonly key: string;
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
+  /**
+   * True for a resident {@link LiveSession}; false for a storage-backed view
+   * (`viewSession.ts`), which renders a session without opening its harness.
+   */
+  readonly live: boolean;
   /** Engine-local running flag for sidebar/watch metadata; viewed chat run-state comes from the runtime. */
   readonly isRunning: boolean;
   /**
@@ -102,12 +110,44 @@ export interface HarnessDriver extends SyntheticToolHost {
 }
 
 /**
- * A {@link HarnessDriver} that also owns an active conversation and can be
- * controlled by the normalized runtime. App code must not prompt these drivers
- * directly; use the runtime prompt facade so run-state and durable logs stay
- * authoritative.
+ * A resident session on either engine (`docs/agent-harnesses.md`): the read
+ * surface, an active conversation the normalized runtime controls, and what
+ * the app may change on it. App code drives a session through this, never
+ * through a concrete engine class; an engine-only feature is an optional
+ * method. Prompts still go through the runtime prompt facade, never straight
+ * to the session, so run-state and durable logs stay authoritative.
  */
-export interface PromptableDriver extends HarnessDriver {
+export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
+  readonly live: true;
   abort(): void | Promise<void>;
-  setThinkingLevel(level: ThinkingLevel): void;
+  setThinkingLevel(level: ThinkingLevel): void | Promise<void>;
+  /**
+   * Redeclared because `RuntimePromptDriver` makes it optional while
+   * `HarnessDriver` requires it; every resident session answers it.
+   */
+  readonly released: boolean;
+  /** Build/Plan for the NEXT turn. */
+  readonly sessionMode: SessionMode;
+  /** The account the session runs on, when the engine recorded it. */
+  readonly credentialProfileId: string | undefined;
+  setMode(mode: SessionMode): void;
+  /**
+   * The model the session runs on (as its picker provider and id) and its
+   * thinking level, for carrying them into a new session.
+   */
+  modelSelection(): {
+    model?: { provider: string; id: string };
+    thinkingLevel?: ThinkingLevel;
+  };
+  /** Accept a dry-run commit card into the session. Only pi produces them. */
+  acceptCommitDryRun?(entryId: string): Promise<void>;
+}
+
+/** Whether a driver (or anything a lookup returned) is a resident session. */
+export function isLiveSession(driver: unknown): driver is LiveSession {
+  return (
+    typeof driver === "object" &&
+    driver !== null &&
+    (driver as { live?: unknown }).live === true
+  );
 }

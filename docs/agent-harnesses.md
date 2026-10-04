@@ -36,11 +36,14 @@ Four layers, each depending only on the ones below it:
 2. **`harnesses/`** is the seam and the only module that imports both backends:
    - `HarnessRegistry` resolves a session id or harness id to its backend and
      owns acquire, create, fork, rename and remove.
-   - `LiveSession` is the one driver interface every resident session
-     implements: the read surface (`HarnessDriver`), prompting through the
-     runtime, and the mutations (mode, model, thinking level, compact, clear,
-     rename). An engine-only feature is an optional method, not an `instanceof`
-     check.
+   - `LiveSession` (`harness.ts`) is the one driver interface every resident
+     session implements: the read surface (`HarnessDriver`), prompting through
+     the runtime, and what the app changes on it (mode, thinking level, the
+     model it carries into a new session). `isLiveSession` tells it from a
+     storage-backed view by its `live` marker; an engine-only feature is an
+     optional method (`acceptCommitDryRun`, pi only), not an `instanceof` check.
+     Compact, clear and rename join it as later steps route them through the
+     registry.
    - `runOneShot()` (`harnesses/oneShot.ts`) runs a single prompt on whichever
      engine a model slot names and returns one result shape: text and
      `AgentUsage`. A run that failed without writing anything throws
@@ -112,7 +115,7 @@ table when a later step needs them.
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | landed |
 | 5    | `runOneShot()` and its 10 callers                                             | landed |
 | 6    | Models and usage ports                                                        | landed |
-| 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
+| 7    | `LiveSession` interface; no `instanceof` on session classes                   | landed |
 | 8    | Shared session kit                                                            | open   |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |

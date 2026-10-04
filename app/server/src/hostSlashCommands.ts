@@ -62,7 +62,7 @@ export type HostClearOutcome =
  * harness implements so the dispatch + workflow live in ONE place
  * ({@link runCommitForHost}) instead of being special-cased per harness.
  *
- * Implemented by `LiveSession` (pi) and `ClaudeSdkSession`.
+ * Implemented by `PiLiveSession` and `ClaudeSdkSession`.
  * {@link import("./hub.ts").HarnessDriver} extends this, so any viewed session is
  * usable as a host.
  */

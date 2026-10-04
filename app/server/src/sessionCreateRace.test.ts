@@ -26,12 +26,14 @@ process.env.DATA_DIR = join(tmp, "data");
 // The prerequisites the test holds open, and the prompt a first send runs.
 const held = vi.hoisted(() => ({
   modelLookups: [] as Array<() => void>,
+  lookupArgs: [] as unknown[][],
   prompts: [] as string[],
 }));
 vi.mock("./piSdk/models.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./piSdk/models.ts")>()),
-  findModelForProfile: () =>
+  findModelForProfile: (...args: unknown[]) =>
     new Promise((resolve) => {
+      held.lookupArgs.push(args);
       held.modelLookups.push(() =>
         resolve({ provider: "openai-codex", id: "gpt-5", name: "GPT-5" }),
       );
@@ -53,6 +55,7 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => {
   vi.restoreAllMocks();
   held.modelLookups.length = 0;
+  held.lookupArgs.length = 0;
   held.prompts.length = 0;
 });
 
@@ -242,5 +245,68 @@ describe("creating a session against a newer load", () => {
     expect(snapshots(sent)).toEqual([B]);
     expect(h.session("created-1").viewers.size).toBe(0);
     await expectCommandsRouteTo(h.connection, sent, B, "created-1");
+  });
+  /** View a resident session that runs a pi model on the codex account. */
+  async function viewResidentPi(
+    h: ReturnType<typeof harness>,
+    id: string,
+  ): Promise<void> {
+    const session = h.session(id);
+    Object.defineProperty(session, "credentialProfileId", {
+      value: codexProfile.id,
+    });
+    session.modelSelection = () => ({
+      model: { provider: "openai-codex", id: "gpt-5" },
+      thinkingLevel: "low",
+    });
+    void h.connection.handle({ type: "loadSession", id } as ClientMessage);
+    await h.completeLoad(id);
+  }
+
+  test("newSession: a load completing during the carried-model lookup keeps the view", async () => {
+    const sent: ServerMessage[] = [];
+    const h = harness(sent);
+    await viewResidentPi(h, "viewed-pi");
+    sent.length = 0;
+    void h.connection.handle({
+      type: "newSession",
+      agentType: "assistant",
+    } as ClientMessage);
+    await settle();
+    // The viewed session's model resolves on the account it runs on.
+    expect(held.lookupArgs).toEqual([
+      [codexProfile.id, "openai-codex", "gpt-5"],
+    ]);
+    void h.connection.handle({ type: "loadSession", id: B } as ClientMessage);
+    await h.completeLoad(B);
+    expect(snapshots(sent)).toEqual([B]);
+    await h.releaseModelLookup();
+    expect(h.created).toEqual(["created-1"]);
+    expect(snapshots(sent)).toEqual([B]);
+    expect(h.session("created-1").viewers.size).toBe(0);
+    await expectCommandsRouteTo(h.connection, sent, B, "created-1");
+  });
+
+  test("createDraftSession: a load completing during the carried-model lookup keeps the view", async () => {
+    const sent: ServerMessage[] = [];
+    const h = harness(sent);
+    await viewResidentPi(h, "viewed-pi");
+    sent.length = 0;
+    void h.connection.handle({
+      type: "createDraftSession",
+      agentType: "assistant",
+      draftText: "draft this",
+    } as ClientMessage);
+    await settle();
+    expect(held.lookupArgs).toEqual([
+      [codexProfile.id, "openai-codex", "gpt-5"],
+    ]);
+    void h.connection.handle({ type: "loadSession", id: B } as ClientMessage);
+    await h.completeLoad(B);
+    expect(snapshots(sent)).toEqual([B]);
+    await h.releaseModelLookup();
+    expect(h.created).toEqual(["created-1"]);
+    expect(snapshots(sent)).toEqual([B]);
+    expect(sent.some((m) => m.type === "draftSession")).toBe(false);
   });
 });

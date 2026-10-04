@@ -413,7 +413,7 @@ export function setPeerPromptDeliveryStoppedForTests(stopped: boolean): void {
  * Bounded automatic retry for an interruption notice the provider refused.
  *
  * Nothing else would come back for it. The runtime fires its idle hook from
- * inside `LiveSession.prompt`'s `finally` — synchronously, while this module's
+ * inside `LiveRuntimeSession.prompt`'s `finally` — synchronously, while this module's
  * `drainLocks` entry for the session is still held — so the hook's own
  * `drainRecipient` coalesces onto the drain that is failing and starts nothing
  * new. After that the session is idle with no queue, so no further event exists

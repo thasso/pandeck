@@ -78,6 +78,7 @@ function kindOf(meta: SessionMeta): AgentType {
 }
 
 export class ViewSession implements HarnessDriver {
+  readonly live = false;
   readonly kind: AgentType;
   readonly harness: Harness;
   readonly agentType: AgentType;
