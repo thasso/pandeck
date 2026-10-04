@@ -57,14 +57,13 @@ import {
 import { registerApprovalExecutor } from "./pendingApprovals.ts";
 import { sendPeerPrompt } from "./peerPrompt.ts";
 import type { LiveSession } from "./harness.ts";
-import type { NewSession } from "./harnesses/create.ts";
+import type { NewSession, PiModel } from "./harnesses/create.ts";
 import {
   applySessionContext,
   resolveSessionContext,
   sessionContextEvidence,
 } from "./sessionContext.ts";
 import { readTask } from "./tasks.ts";
-import { broadcastWorktreeEdgeChange } from "./worktrees/worktrees.ts";
 import {
   isMainWorktreeId,
   mainCheckoutPathForProject,
@@ -592,9 +591,11 @@ export async function prepareSpawnApproval(
 /* -------------------------------- execution ------------------------------- */
 
 /** A pi model handle on the session's account, as creation takes it. */
-type PiSessionModel = Extract<NewSession, { harness: "pi" }>["model"];
 
-/** Injectable creation/delivery seams; validation stays real, and creation is `createSession`'s. */
+/**
+ * Injectable creation/delivery seams; validation stays real, and creation is
+ * `createSession`'s.
+ */
 export interface SessionSpawnDeps {
   newSessionId(): string;
   /** The pi model a row names, on its account; undefined when it is gone. */
@@ -602,7 +603,7 @@ export interface SessionSpawnDeps {
     credentialProfileId: string,
     provider: string,
     modelId: string,
-  ): Promise<PiSessionModel | undefined>;
+  ): Promise<PiModel | undefined>;
   /** Create and register the session (`harnesses/create.ts`). */
   create(spec: NewSession): Promise<LiveSession>;
   deliver(input: {
@@ -780,7 +781,6 @@ async function spawnOne(
       `Session ${sessionId} was created but its metadata could not be persisted.`,
     );
   sessionStore.linkSpawned(senderSessionId, sessionId);
-  if (worktree) broadcastWorktreeEdgeChange();
   // The attachments this returns are rebuilt from these same links when peer
   // delivery reaches the session, so they are not carried through the envelope
   // — and `pinProject` is what keeps that rebuild honest across the gap.

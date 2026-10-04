@@ -43,7 +43,7 @@ export class SessionIdTakenError extends Error {
 }
 
 /** A pi model handle, as the caller resolved it on the session's account. */
-type PiModel = Parameters<typeof piStore.acquireNew>[1];
+export type PiModel = Parameters<typeof piStore.acquireNew>[1];
 
 /**
  * Where a session runs: in a worktree, whose path is its cwd and whose edge is
@@ -110,7 +110,7 @@ export type NewSession =
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
   // Resolved here for both engines alike: Claude's store would read a
-  // pathless worktree from its edge, but pi's never looks.
+  // pathless worktree from its edge, but pi's `acquireNew` never looks.
   const cwd = spec.worktree
     ? (spec.worktree.path ?? worktreePathIfPresent(spec.worktree.id))
     : spec.cwd;

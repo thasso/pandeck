@@ -24,7 +24,10 @@ const skillResolver = await import("../skills/skillResolver.ts");
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
 
-/** A library whose current skills are `alpha`, so a freeze is told from the empty fallback. */
+/**
+ * A library whose current skills are `alpha`, so a freeze is told from the
+ * empty fallback.
+ */
 function libraryHasAlpha() {
   vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValue(["alpha"]);
 }

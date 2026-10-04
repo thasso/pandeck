@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, test, vi } from "vitest";
 import {
   REVIEW_REPORT_CONVENTION,
   REVIEW_RESPONSE_CONVENTION,
@@ -58,6 +58,13 @@ afterAll(() => {
 
 const ACTOR: WorkflowActor = { kind: "user", id: "test" };
 let nextSession: number;
+/**
+ * Bumped per test and part of every minted id: session rows, freezes and
+ * worktree edges outlive a test, so no new session may reuse an earlier id.
+ */
+let testTag = 0;
+/** The id of the `n`th session this test minted. */
+const sid = (kind: "pi" | "claude", n: number) => `${kind}-${testTag}-${n}`;
 let prompts: Array<{
   sessionId: string;
   text: string;
@@ -100,6 +107,7 @@ function driver(id: string, harness: "pi" | "claude-sdk" = "pi") {
 vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id, opts) => {
   // The edge must exist before Claude acquisition resolves cwd.
   assert.equal(worktrees.worktreeIdForSession(id), "wt-test");
+  createdCwds.push(opts?.cwd);
   sessionStore.upsert({
     id,
     harness: "claude-sdk",
@@ -120,16 +128,19 @@ vi.spyOn(piStore, "acquireNew").mockImplementation(
     createdCwds.push(opts?.cwd);
     createdEvidence.push(opts?.promptEvidence ?? { hasAttachments: false });
     return {
-      ...driver(`pi-${++nextSession}`),
+      ...driver(sid("pi", ++nextSession)),
       sessionMode: "build",
       rename: (title: string) => createdTitles.push(title),
     } as never;
   },
 );
 
+// The engine stand-ins above live for the whole file; a library seed does not.
+afterEach(() => vi.mocked(skillResolver.resolveSkillNames).mockRestore?.());
+
 function deps(): WorkflowAgentExecutorDeps {
   return {
-    newSessionId: () => `claude-${++nextSession}`,
+    newSessionId: () => sid("claude", ++nextSession),
     acquireById: async (id) => (available.has(id) ? driver(id) : undefined),
     findPiModel: async (_profile, provider, id) => ({ provider, id }) as never,
     create: createSession,
@@ -283,6 +294,7 @@ beforeEach(() => {
   engine.resetWorkflowEngineForTests();
   executors.resetWorkflowExecutorsForTests();
   nextSession = 0;
+  testTag += 1;
   prompts = [];
   rejectPrompt = undefined;
   available = new Set();
@@ -340,6 +352,7 @@ test("the coordinator can plan before a failed provision receives a worktree", a
   const started = store.getStep(plan.id)!;
   assert.equal(started.status, "running");
   assert.equal(worktrees.worktreeIdForSession(started.executor!.id), undefined);
+  assert.deepEqual(createdCwds, [undefined], "no checkout yet: the app CWD");
 });
 
 test("a coordinator falls back to CWD when its run worktree was removed", async () => {
@@ -365,6 +378,29 @@ test("a coordinator falls back to CWD when its run worktree was removed", async 
   });
 
   assert.deepEqual(createdCwds, [undefined], "the app CWD, not a dead path");
+});
+
+test("a role whose active worktree lost its folder runs in the app CWD, still linked", async () => {
+  const { run } = createRun();
+  const step = appendAgent(run.id, {
+    role: "implementer",
+    objective: "implement",
+    resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
+  });
+  rmSync(workflowWorktreePath, { recursive: true, force: true });
+  try {
+    await agentExecutor.createWorkflowAgentExecutor(deps()).dispatch({
+      run,
+      step,
+      actor: ACTOR,
+    });
+  } finally {
+    mkdirSync(workflowWorktreePath);
+  }
+
+  assert.deepEqual(createdCwds, [undefined], "the app CWD, not a dead path");
+  const id = store.getStep(step.id)!.executor!.id;
+  assert.equal(worktrees.worktreeIdForSession(id), "wt-test");
 });
 
 test("the coordinator is a constrained Task-context session in the run worktree", async () => {
@@ -516,7 +552,7 @@ test("the review decision reuses the coordinator's session and carries the evide
 });
 
 test("fresh dispatch creates and binds a deterministically named session with worktree and Task context", async () => {
-  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValueOnce(["alpha"]);
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValue(["alpha"]);
   const { run, task } = createRun({
     promptOverride: "Prefer focused tests.",
     taskTitle: "Add the workflow widget",
@@ -534,15 +570,15 @@ test("fresh dispatch creates and binds a deterministically named session with wo
 
   const started = store.getStep(step.id)!;
   assert.equal(started.status, "running");
-  assert.equal(started.executor?.id, "pi-1");
+  assert.equal(started.executor?.id, sid("pi", 1));
   assert.equal(
-    sessionStore.getSkills("pi-1"),
+    sessionStore.getSkills(sid("pi", 1)),
     '["alpha"]',
     "the pi workflow creation path freezes skills before prompting",
   );
-  assert.equal(worktrees.worktreeIdForSession("pi-1"), "wt-test");
+  assert.equal(worktrees.worktreeIdForSession(sid("pi", 1)), "wt-test");
   assert.ok(
-    objectRefsForSession("pi-1").some(
+    objectRefsForSession(sid("pi", 1)).some(
       (ref) => ref.objectType === "task" && ref.id === task.id,
     ),
   );
@@ -625,10 +661,10 @@ test("revise reuses the implementer while review gets an independent session", a
 
   assert.equal(
     implement.executor?.id ?? store.getStep(implement.id)!.executor?.id,
-    "pi-1",
+    sid("pi", 1),
   );
-  assert.equal(store.getStep(review.id)!.executor?.id, "pi-2");
-  assert.equal(store.getStep(revise.id)!.executor?.id, "pi-1");
+  assert.equal(store.getStep(review.id)!.executor?.id, sid("pi", 2));
+  assert.equal(store.getStep(revise.id)!.executor?.id, sid("pi", 1));
   assert.equal(
     prompts[2]!.attachments.length,
     0,
@@ -700,8 +736,8 @@ test("a persisted non-empty fixer choice gets its own runtime after executor res
     .createWorkflowAgentExecutor(deps())
     .dispatch({ run, step: revise, actor: ACTOR });
 
-  assert.equal(store.getStep(implement.id)!.executor?.id, "pi-1");
-  assert.equal(store.getStep(revise.id)!.executor?.id, "pi-2");
+  assert.equal(store.getStep(implement.id)!.executor?.id, sid("pi", 1));
+  assert.equal(store.getStep(revise.id)!.executor?.id, sid("pi", 2));
   assert.match(prompts[1]!.text, /fix the race/);
 });
 
@@ -760,7 +796,7 @@ test("the raised cap seats and names coordinator, implementer, reviewer, fixer, 
   }
   assert.deepEqual(
     assignments.map((assignment) => store.getStep(assignment.id)!.executor?.id),
-    ["pi-1", "pi-2", "pi-3", "pi-4"],
+    [sid("pi", 1), sid("pi", 2), sid("pi", 3), sid("pi", 4)],
   );
   const title = (role: string) =>
     `Task-${task.id} · ${role} — Add the workflow widget · Run ${run.id}`;
@@ -782,8 +818,8 @@ test("a vanished role session is replaced, with no cap to refuse it", async () =
   });
   await executor.dispatch({ run, step: first, actor: ACTOR });
   complete(first, contracts.IMPLEMENTATION_RESULT_CONTRACT_ID, {});
-  available.delete("pi-1");
-  sessionStore.remove("pi-1");
+  available.delete(sid("pi", 1));
+  sessionStore.remove(sid("pi", 1));
 
   const replacement = appendAgent(run.id, {
     role: "implementer",
@@ -793,14 +829,14 @@ test("a vanished role session is replaced, with no cap to refuse it", async () =
     resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
   });
   await executor.dispatch({ run, step: replacement, actor: ACTOR });
-  assert.equal(store.getStep(replacement.id)!.executor?.id, "pi-2");
+  assert.equal(store.getStep(replacement.id)!.executor?.id, sid("pi", 2));
 
   // A run no longer carries a session ceiling that could refuse the
   // replacement: what it may open follows from its two ceilings, so a
   // vanished session is replaced again rather than pausing the run.
   complete(replacement, contracts.IMPLEMENTATION_RESULT_CONTRACT_ID, {});
-  available.delete("pi-2");
-  sessionStore.remove("pi-2");
+  available.delete(sid("pi", 2));
+  sessionStore.remove(sid("pi", 2));
   const third = appendAgent(run.id, {
     role: "implementer",
     objective: "revise",
@@ -809,7 +845,7 @@ test("a vanished role session is replaced, with no cap to refuse it", async () =
     resultContract: contracts.IMPLEMENTATION_RESULT_CONTRACT_ID,
   });
   await executor.dispatch({ run, step: third, actor: ACTOR });
-  assert.equal(store.getStep(third.id)!.executor?.id, "pi-3");
+  assert.equal(store.getStep(third.id)!.executor?.id, sid("pi", 3));
   assert.equal(store.getRun(run.id)!.lifecycle, "active");
 });
 
@@ -907,7 +943,7 @@ test("a graceful drain holds a queued assignment for the next boot", async () =>
 test.each([
   [
     "a refusal that precedes the turn",
-    () => new SessionBusyError("pi-1"),
+    () => new SessionBusyError(sid("pi", 1)),
     { assignmentUndelivered: true },
   ],
   [
@@ -1059,7 +1095,7 @@ test("a prompt failure still ends and announces the run when the session owes de
 });
 
 test("Claude is named and links its worktree before acquire while prompt rejection fails the step", async () => {
-  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValueOnce(["alpha"]);
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValue(["alpha"]);
   const { run, task } = createRun({
     provider: "claude-sdk",
     taskTitle: "Add the workflow widget",
@@ -1089,9 +1125,10 @@ test("Claude is named and links its worktree before acquire while prompt rejecti
     kind: "system",
     id: "workflow-agent-executor",
   });
-  assert.equal(worktrees.worktreeIdForSession("claude-1"), "wt-test");
+  assert.equal(worktrees.worktreeIdForSession(sid("claude", 1)), "wt-test");
+  assert.deepEqual(createdCwds, [workflowWorktreePath]);
   assert.equal(
-    sessionStore.getSkills("claude-1"),
+    sessionStore.getSkills(sid("claude", 1)),
     '["alpha"]',
     "the Claude workflow creation path freezes skills before acquire",
   );

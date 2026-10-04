@@ -26,7 +26,11 @@ import {
 } from "../db/workflowStore.ts";
 import { getWorktree } from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
-import { createSession, type NewSession } from "../harnesses/create.ts";
+import {
+  createSession,
+  type NewSession,
+  type PiModel,
+} from "../harnesses/create.ts";
 import { hub } from "../hub.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
 import type { SessionPromptEvidence } from "../promptConditions.ts";
@@ -88,7 +92,6 @@ import {
  */
 type WorkflowAgentRole =
   "coordinator" | "implementer" | "reviewer" | "fixer" | "verdict";
-type PiSessionModel = Extract<NewSession, { harness: "pi" }>["model"];
 
 /** Injectable model/session seams; persistence and assignment rules stay real. */
 export interface WorkflowAgentExecutorDeps {
@@ -98,7 +101,7 @@ export interface WorkflowAgentExecutorDeps {
     credentialProfileId: string,
     provider: string,
     modelId: string,
-  ): Promise<PiSessionModel>;
+  ): Promise<PiModel | undefined>;
   create(spec: NewSession): Promise<RuntimePromptDriver>;
   prompt(
     driver: RuntimePromptDriver,
