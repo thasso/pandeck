@@ -242,3 +242,24 @@ routes call:
   code, link or token, so the tools never return it: an account in `error`
   status carries a server-written note pointing at its Settings page, which
   shows the error to the user.
+
+## The Settings page and the registry
+
+Each Settings section is hand-written: grouping, descriptions and controls that
+depend on each other. Below it, `RegistrySettingFields`
+(`app/web/src/components/RegistrySettingFields.tsx`) renders every setting of
+the section that the section's own UI does not claim, from its descriptor's
+label, hint, kind and bounds: a toggle, a text field (saved on blur or Enter), a
+number field clamped to the bounds, a select for an enum, or the value of a
+read-only setting. Writes go through the page's ordinary settings patch, built
+by `writeAppSettingAt`, the same helper the agent write path uses. So a setting
+added to the registry appears on the page, and to the Personal Assistant, with
+no other change.
+
+`app/web/src/components/settingsClaims.ts` lists the paths the hand-written
+sections render or leave out on purpose. Its tests require every claimed path to
+be a real setting, and every setting that needs hand-built UI (a secret, an
+OAuth connection, a `json` value, a writable field of an integration section,
+which saves through its own flow) to be claimed. `INTEGRATION_SETTINGS_SECTIONS`
+in the registry names the integration sections; a server test keeps it equal to
+the service's integration writers.

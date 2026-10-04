@@ -111,6 +111,15 @@ describe("registry coverage", () => {
     }
   });
 
+  test("the shared integration sections are the server's integration writers", async () => {
+    const { INTEGRATION_SETTINGS_SECTIONS } =
+      await import("@assistant/shared/settingsRegistry");
+    assert.deepEqual(
+      [...INTEGRATION_SETTINGS_SECTIONS].sort(),
+      Object.keys(INTEGRATION_PATCH_FIELDS).sort(),
+    );
+  });
+
   test("every integration patch field is written by some descriptor", () => {
     for (const [section, fields] of Object.entries(INTEGRATION_PATCH_FIELDS)) {
       for (const field of Object.keys(fields)) {

@@ -14,6 +14,7 @@ import type {
 import {
   settingDescriptor,
   settingValueError,
+  writeAppSettingAt,
   type SettingsSectionId,
 } from "@assistant/shared/settingsRegistry";
 import { testBraveSettings, updateBraveSettings } from "./braveSettings.ts";
@@ -358,14 +359,7 @@ export function settingsPatchForWrites(
     }
     const reason = settingValueError(descriptor, value);
     if (reason) throw new Error(`${path} ${reason}`);
-    if (rest.length === 0) {
-      patch[section] = value;
-      continue;
-    }
-    const sectionValue = (patch[section] ??= structuredClone(
-      current[section as keyof AppSettings],
-    )) as Record<string, unknown>;
-    setLeaf(sectionValue, rest, value, descriptor.optional === true);
+    writeAppSettingAt(patch, current, path, value);
   }
   const appPatch = Object.fromEntries(
     Object.entries(patch).filter(([key]) => !isIntegrationKey(key)),
@@ -373,24 +367,6 @@ export function settingsPatchForWrites(
   const reason = appSettingsPatchError(appPatch);
   if (reason) throw new Error(reason);
   return patch as SettingsPatch;
-}
-
-function setLeaf(
-  target: Record<string, unknown>,
-  keys: string[],
-  value: unknown,
-  optional: boolean,
-): void {
-  let node = target;
-  for (const key of keys.slice(0, -1)) {
-    const next = node[key];
-    node = (
-      next && typeof next === "object" ? next : (node[key] = {})
-    ) as Record<string, unknown>;
-  }
-  const leaf = keys[keys.length - 1]!;
-  if (optional && value === "") delete node[leaf];
-  else node[leaf] = value;
 }
 
 /** The outcome of an integration's connection test, as the Settings page shows it. */

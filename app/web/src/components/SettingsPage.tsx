@@ -65,6 +65,7 @@ import { isValidTimezone } from "../lib/timezone.ts";
 import type { BuildInfo } from "@assistant/shared/buildInfo";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { settingBounds } from "@assistant/shared/settingsRegistry";
+import { RegistrySettingFields } from "./RegistrySettingFields.tsx";
 import {
   createCredentialProfile,
   disableAccountImpact,
@@ -491,6 +492,14 @@ export function SettingsPage({
                 onOpenSection={onOpenSection}
               />
             </>
+          )}
+          {/* What the section's own UI does not show, from the registry. */}
+          {currentSection && (
+            <RegistrySettingFields
+              section={currentSection.id}
+              settings={settings}
+              onUpdate={onUpdate}
+            />
           )}
           {/* Index route: the section list is the browser, not this page. */}
           {!currentSection && (
