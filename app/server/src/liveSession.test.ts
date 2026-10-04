@@ -90,3 +90,19 @@ test("a pi session names its model and thinking level only when it has them", ()
   });
   assert.deepEqual(piSession({}).modelSelection(), {});
 });
+
+test("a session shows as its live title, and a pi session as pi's name without one", () => {
+  const pi = piSession({});
+  pi.title = undefined;
+  assert.equal(pi.sessionTitle, "Named");
+  pi.title = "Fix the build";
+  assert.equal(pi.sessionTitle, "Fix the build");
+
+  const claude = new ClaudeSdkSession("live-session-title", {
+    seam: () => Promise.resolve(idleSeam),
+  });
+  claude.title = "Plan the release";
+  const live: LiveSession = claude;
+  assert.equal(live.sessionTitle, "Plan the release");
+  claude.dispose();
+});

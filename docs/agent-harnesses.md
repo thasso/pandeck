@@ -37,9 +37,11 @@ Four layers, each depending only on the ones below it:
    - `harnessRegistry` (`harnesses/registry.ts`) resolves a session id to the
      store that holds it: it lists what both hold resident, finds a resident
      session, opens one by id, and wires both stores to the hub's behaviour
-     (`HarnessHost`). Create, fork, rename and remove move behind it in steps
-     10–11; until then `hub.ts` still calls the stores for them and builds the
-     merged session list from each.
+     (`HarnessHost`). Each engine answers through one `HarnessSessions` entry,
+     so routing is a lookup by harness id, never a branch per method. Create,
+     fork, rename and remove move behind it in steps 10–11; until then `hub.ts`
+     still calls the stores for them and builds the merged session list from
+     each.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the

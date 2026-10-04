@@ -5,26 +5,70 @@
  * here instead of dispatching on a harness id itself.
  */
 import { existsSync } from "node:fs";
-import type { BrowserRuntimeInfo } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 import { claudeSdkStore } from "../claudeSdk/claudeSdkStore.ts";
 import { defaultClaudeProfileId } from "../credentialProfiles.ts";
 import { sessionStore } from "../db/sessionStore.ts";
-import type { LiveSession } from "../harness.ts";
+import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
 import { canonicalPiSessionPath } from "../sessionStorage.ts";
 
-/** The hub behaviour both engines' sessions reach without importing `hub.ts`. */
-export interface HarnessHost {
-  /** Recompute the merged session list and push it to every connected tab. */
-  broadcastSessions(): Promise<void>;
-  /** A run just started; cancel any idle-settle countdown for a queued reload. */
-  noteRunStarted(): void;
-  /** Re-check after a run ends whether a deferred dev reload can now proceed. */
-  checkPendingReload(): void;
-  /** True while a requested dev reload is pending or already exiting. */
-  isReloadQueued(): boolean;
-  /** Browser runtimes visible to `sessionId`, for coding session state. */
-  browserRuntimesFor(sessionId: string): BrowserRuntimeInfo[];
+/** One engine's sessions, as the registry routes to them. */
+interface HarnessSessions {
+  /** Every session the engine holds resident. */
+  list(): LiveSession[];
+  /** The resident session with our id, from memory only. */
+  get(id: string): LiveSession | undefined;
+  /** The same, its idle clock restarted for a caller about to drive it. */
+  getForDrive(id: string): LiveSession | undefined;
+  /** Whether the engine has the session on disk without a metadata row. */
+  storedWithoutRow(id: string): boolean;
+  /** Open the session from disk as the persona its row names. */
+  open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
+}
+
+const sessions: Record<Harness, HarnessSessions> = {
+  pi: {
+    list: () => piStore.list(),
+    get: (id) => piStore.getLiveById(id),
+    getForDrive: (id) => piStore.getForDrive(id),
+    // Recovery for pi transcripts that predate a valid metadata row.
+    storedWithoutRow: (id) => existsSync(canonicalPiSessionPath(id)),
+    // The pi session reopens from its canonical native path, derived from the
+    // id, which also guards the open. A reopen the delete beat to registration
+    // is a session that no longer exists, not a failure.
+    open: (id, agentType) =>
+      piStore.acquireByRecordId(id, agentType).catch((err: unknown) => {
+        if (err instanceof PiSessionDeletedError) return undefined;
+        throw err;
+      }),
+  },
+  "claude-sdk": {
+    list: () => claudeSdkStore.list(),
+    get: (id) => claudeSdkStore.get(id),
+    getForDrive: (id) => claudeSdkStore.getForDrive(id),
+    storedWithoutRow: (id) => claudeSdkStore.exists(id),
+    // Rehydrated on the account its record names, else the default one.
+    open: async (id) =>
+      claudeSdkStore.acquire(id, {
+        credentialProfileId: defaultClaudeProfileId(),
+      }),
+  },
+};
+
+/**
+ * Pi first, as the session list and every fan-out have always run. An id
+ * belongs to one engine, so the order decides nothing else.
+ */
+const HARNESS_ORDER: readonly Harness[] = ["pi", "claude-sdk"];
+
+/** The resident session for our id, from memory only. */
+function residentInMemory(id: string): LiveSession | undefined {
+  for (const harness of HARNESS_ORDER) {
+    const session = sessions[harness].get(id);
+    if (session) return session;
+  }
+  return undefined;
 }
 
 /** What a browser runtime's listing says about the session that owns it. */
@@ -52,93 +96,53 @@ export const harnessRegistry = {
 
   /** Every session resident in memory, across both engines. */
   resident(): LiveSession[] {
-    return [...piStore.list(), ...claudeSdkStore.list()];
+    return HARNESS_ORDER.flatMap((harness) => sessions[harness].list());
   },
 
   /**
-   * The resident session for our id, without loading or reopening anything.
-   * The metadata row decides the engine; a session not yet persisted is looked
-   * for in both.
+   * The resident session for our id, without loading or reopening anything
+   * and without reading the metadata row: what a message for its viewers
+   * needs.
    */
   residentById(id: string): LiveSession | undefined {
-    const record = sessionStore.get(id);
-    if (!record) {
-      const sdk = claudeSdkStore.get(id);
-      if (sdk) return sdk;
-    }
-    if (record?.harness === "claude-sdk") return claudeSdkStore.get(id);
-    return piStore.getLiveById(id);
+    return residentInMemory(id);
   },
 
   /**
    * The session for our id, opening it from disk when it is not resident: the
    * one id-only entry point. A resident session gets a full idle grace first,
-   * since the caller is about to drive it. The metadata row decides the
-   * engine:
-   *   - `pi` reopens from its canonical native path (derived from the id), the
-   *     persona coming from the row and the id guarding the open;
-   *   - `claude-sdk` rehydrates its record on its default account.
-   * Undefined when there is no row (or it was tombstoned), or when a pi
-   * session has no native transcript to reopen from.
+   * since the caller is about to drive it. Otherwise the metadata row names the
+   * engine that opens it; a session without one is opened by the engine that
+   * has it on disk (a pi transcript as a developer session, the persona those
+   * predate the row for). Undefined when nothing holds the session or the row
+   * is tombstoned, or when a pi session has no transcript to reopen from.
    */
   async acquireById(id: string): Promise<LiveSession | undefined> {
     // A fresh pi session may be resident before its first prompt creates a
     // transcript or metadata row, so a singleton or system session can be
     // viewed as soon as it is created.
-    const resident = piStore.getForDrive(id) ?? claudeSdkStore.getForDrive(id);
-    if (resident) return resident;
+    for (const harness of HARNESS_ORDER) {
+      const resident = sessions[harness].getForDrive(id);
+      if (resident) return resident;
+    }
     const record = sessionStore.get(id);
-    // A pi reopen the delete beat to registration is a session that no longer
-    // exists — the same answer as a tombstoned row, not a failure.
-    const unlessDeleted = (err: unknown): undefined => {
-      if (err instanceof PiSessionDeletedError) return undefined;
-      throw err;
-    };
-    const acquireClaude = () =>
-      claudeSdkStore.acquire(id, {
-        credentialProfileId: defaultClaudeProfileId(),
-      });
-    if (!record) {
-      if (claudeSdkStore.exists(id)) return acquireClaude();
-      // Recovery for pi transcripts that predate a valid metadata row (notably
-      // developer sessions created before the database allowed that persona).
-      return existsSync(canonicalPiSessionPath(id))
-        ? piStore.acquireByRecordId(id, "developer").catch(unlessDeleted)
-        : undefined;
-    }
-    switch (record.harness) {
-      case "pi":
-        return piStore
-          .acquireByRecordId(id, record.agentType)
-          .catch(unlessDeleted);
-      case "claude-sdk":
-        return acquireClaude();
-    }
+    if (record) return sessions[record.harness].open(id, record.agentType);
+    const holder = (["claude-sdk", "pi"] as const).find((harness) =>
+      sessions[harness].storedWithoutRow(id),
+    );
+    return holder ? sessions[holder].open(id, "developer") : undefined;
   },
 
   /** The resident session that owns a browser runtime, as its listing shows it. */
   browserRuntimeOwner(sessionId: string): BrowserRuntimeOwner | undefined {
-    const pi = piStore.getLiveById(sessionId);
-    if (pi) {
-      const title = pi.title ?? pi.session.sessionName;
-      return {
-        agentKind: pi.kind,
-        agentStatus: pi.isRunning ? "running" : "idle",
-        ...(pi.session.sessionFile !== undefined
-          ? { sessionFile: pi.session.sessionFile }
-          : {}),
-        ...(title !== undefined ? { sessionTitle: title } : {}),
-      };
-    }
-    const sdk = claudeSdkStore.get(sessionId);
-    if (!sdk) return undefined;
+    const session = residentInMemory(sessionId);
+    if (!session) return undefined;
+    const { sessionFile, sessionTitle } = session;
     return {
-      agentKind: sdk.agentType,
-      agentStatus: sdk.isRunning ? "running" : "idle",
-      ...(sdk.sessionFile !== undefined
-        ? { sessionFile: sdk.sessionFile }
-        : {}),
-      ...(sdk.title !== undefined ? { sessionTitle: sdk.title } : {}),
+      agentKind: session.agentType,
+      agentStatus: session.isRunning ? "running" : "idle",
+      ...(sessionFile !== undefined ? { sessionFile } : {}),
+      ...(sessionTitle !== undefined ? { sessionTitle } : {}),
     };
   },
 };

@@ -3,8 +3,9 @@
  * `claudeSdk/claudeSdkStore.ts`: a singleton store the hub delegates to. Owns
  * the live-session map, session creation/reopen/fork, eviction, and the pi
  * halves of id-only lookup, rename, image resolution, and session listing.
- * The hub wires the {@link PiSessionHost} via {@link PiSessionStore.setHost};
- * this module must never import hub.ts.
+ * The hub's behaviour arrives as the {@link PiSessionHost} via
+ * {@link PiSessionStore.setHost} (`harnesses/registry.ts`); this module must
+ * never import hub.ts.
  */
 import {
   type AgentSession,
@@ -178,10 +179,10 @@ class PiSessionStore {
   private host: PiSessionHost | undefined;
 
   /**
-   * Wire the hub-side callbacks every {@link PiLiveSession} needs. The hub
-   * calls this once from its constructor (same pattern as
-   * `claudeSdkStore.setOnChange`), so the host inverts the session→hub calls
-   * and this module never imports hub.ts.
+   * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
+   * registry calls this once, when the hub hands it its host
+   * (`harnessRegistry.setHost`), so the host inverts the session→hub calls and
+   * this module never imports hub.ts.
    */
   setHost(host: PiSessionHost): void {
     this.host = host;

@@ -9,12 +9,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
+import type { ServerMessage } from "@assistant/shared";
 
 const tmp = mkdtempSync(join(tmpdir(), "harness-registry-test-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
 const { harnessRegistry } = await import("./registry.ts");
+const { hub } = await import("../hub.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { PiSessionDeletedError, piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
@@ -23,48 +25,102 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
 
 /** A stand-in for a resident session of either engine. */
-const resident = (id: string) => ({ id, sessionId: id }) as never;
+function resident(
+  id: string,
+  fields: Record<string, unknown> = {},
+): { id: string; received: ServerMessage[] } & Record<string, unknown> {
+  const received: ServerMessage[] = [];
+  return {
+    id,
+    sessionId: id,
+    received,
+    broadcast: (message: ServerMessage) => received.push(message),
+    ...fields,
+  };
+}
 
-test("a resident session is found in the store its metadata row names", () => {
-  const claude = resident("claude-row");
-  const pi = resident("pi-row");
-  vi.spyOn(claudeSdkStore, "get").mockImplementation((id) =>
-    id === "claude-row" ? claude : undefined,
+/** Hold `pi` and `claude` resident in their stores, by our id. */
+function holdResident(
+  pi: Array<ReturnType<typeof resident>>,
+  claude: Array<ReturnType<typeof resident>>,
+): void {
+  vi.spyOn(piStore, "getLiveById").mockImplementation(
+    (id) => pi.find((s) => s.id === id) as never,
   );
-  vi.spyOn(piStore, "getLiveById").mockImplementation((id) =>
-    id === "pi-row" ? pi : undefined,
+  vi.spyOn(claudeSdkStore, "get").mockImplementation(
+    (id) => claude.find((s) => s.id === id) as never,
   );
-  sessionStore.upsert({
-    id: "claude-row",
-    harness: "claude-sdk",
-    agentType: "assistant",
-  });
-  sessionStore.upsert({ id: "pi-row", harness: "pi", agentType: "assistant" });
+}
 
-  assert.equal(harnessRegistry.residentById("claude-row"), claude);
-  assert.equal(harnessRegistry.residentById("pi-row"), pi);
+test("a resident session is found in whichever store holds it, from memory alone", () => {
+  const claude = resident("claude-a");
+  const pi = resident("pi-a");
+  holdResident([pi], [claude]);
+  const rowRead = vi.spyOn(sessionStore, "get");
+
+  assert.equal(harnessRegistry.residentById("claude-a"), claude);
+  assert.equal(harnessRegistry.residentById("pi-a"), pi);
   assert.equal(harnessRegistry.residentById("nobody"), undefined);
-});
-
-test("a resident session without a metadata row is looked for in both stores", () => {
-  const claude = resident("claude-new");
-  const pi = resident("pi-new");
-  vi.spyOn(claudeSdkStore, "get").mockImplementation((id) =>
-    id === "claude-new" ? claude : undefined,
-  );
-  vi.spyOn(piStore, "getLiveById").mockImplementation((id) =>
-    id === "pi-new" ? pi : undefined,
-  );
-  assert.equal(harnessRegistry.residentById("claude-new"), claude);
-  assert.equal(harnessRegistry.residentById("pi-new"), pi);
+  assert.equal(rowRead.mock.calls.length, 0, "no metadata read");
 });
 
 test("every resident session is listed, pi's first", () => {
-  const pi = resident("pi-a");
-  const claude = resident("claude-a");
-  vi.spyOn(piStore, "list").mockReturnValue([pi]);
-  vi.spyOn(claudeSdkStore, "list").mockReturnValue([claude]);
+  const pi = resident("pi-b");
+  const claude = resident("claude-b");
+  vi.spyOn(piStore, "list").mockReturnValue([pi as never]);
+  vi.spyOn(claudeSdkStore, "list").mockReturnValue([claude as never]);
   assert.deepEqual(harnessRegistry.resident(), [pi, claude]);
+});
+
+test("a message for a session reaches its viewers in either engine, else every tab", () => {
+  const pi = resident("pi-c");
+  const claude = resident("claude-c");
+  holdResident([pi], [claude]);
+  const everyTab: ServerMessage[] = [];
+  const tab = { send: (message: ServerMessage) => everyTab.push(message) };
+  hub.register(tab);
+  try {
+    const queue = { items: [] } as never;
+    hub.broadcastPromptQueue("pi-c", queue);
+    hub.broadcastPromptQueue("claude-c", queue);
+    hub.broadcastPromptQueue("gone", queue);
+    assert.deepEqual(
+      [pi.received, claude.received, everyTab].map((sent) =>
+        sent.map((m) => (m as { sessionId?: string }).sessionId),
+      ),
+      [["pi-c"], ["claude-c"], ["gone"]],
+    );
+  } finally {
+    hub.unregister(tab);
+  }
+});
+
+test("a browser runtime's owner is listed with its title and file, when it has them", () => {
+  const pi = resident("pi-d", {
+    agentType: "developer",
+    isRunning: true,
+    sessionFile: "/sessions/pi-d.jsonl",
+    sessionTitle: "Fix the build",
+  });
+  const claude = resident("claude-d", {
+    agentType: "assistant",
+    isRunning: false,
+    sessionFile: undefined,
+    sessionTitle: undefined,
+  });
+  holdResident([pi], [claude]);
+
+  assert.deepEqual(harnessRegistry.browserRuntimeOwner("pi-d"), {
+    agentKind: "developer",
+    agentStatus: "running",
+    sessionFile: "/sessions/pi-d.jsonl",
+    sessionTitle: "Fix the build",
+  });
+  assert.deepEqual(harnessRegistry.browserRuntimeOwner("claude-d"), {
+    agentKind: "assistant",
+    agentStatus: "idle",
+  });
+  assert.equal(harnessRegistry.browserRuntimeOwner("nobody"), undefined);
 });
 
 test("a pi reopen the delete beat is no session, not a failure", async () => {
@@ -84,9 +140,56 @@ test("a pi reopen the delete beat is no session, not a failure", async () => {
   await assert.rejects(harnessRegistry.acquireById("pi-deleted"), /boom/);
 });
 
+test("the metadata row names the engine that opens a session, as its persona", async () => {
+  vi.spyOn(piStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "getForDrive").mockReturnValue(undefined);
+  const piOpen = vi
+    .spyOn(piStore, "acquireByRecordId")
+    .mockResolvedValue(resident("pi-row") as never);
+  const claudeOpen = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockReturnValue(resident("claude-row") as never);
+  sessionStore.upsert({ id: "pi-row", harness: "pi", agentType: "assistant" });
+  sessionStore.upsert({
+    id: "claude-row",
+    harness: "claude-sdk",
+    agentType: "assistant",
+  });
+
+  await harnessRegistry.acquireById("pi-row");
+  await harnessRegistry.acquireById("claude-row");
+  assert.deepEqual(piOpen.mock.calls, [["pi-row", "assistant"]]);
+  assert.deepEqual(
+    claudeOpen.mock.calls.map(([id]) => id),
+    ["claude-row"],
+  );
+});
+
+test("a session without a row is opened by the engine that has it on disk", async () => {
+  vi.spyOn(piStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "exists").mockImplementation(
+    (id) => id === "claude-rowless",
+  );
+  const claudeOpen = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockReturnValue(resident("claude-rowless") as never);
+  const piOpen = vi.spyOn(piStore, "acquireByRecordId");
+
+  assert.ok(await harnessRegistry.acquireById("claude-rowless"));
+  assert.equal(await harnessRegistry.acquireById("nowhere"), undefined);
+  assert.deepEqual(
+    claudeOpen.mock.calls.map(([id]) => id),
+    ["claude-rowless"],
+  );
+  assert.equal(piOpen.mock.calls.length, 0, "no pi transcript to reopen");
+});
+
 test("a resident session is driven as it is, with a full idle grace", async () => {
   const pi = resident("pi-live");
-  const getForDrive = vi.spyOn(piStore, "getForDrive").mockReturnValue(pi);
+  const getForDrive = vi
+    .spyOn(piStore, "getForDrive")
+    .mockReturnValue(pi as never);
   const reopen = vi.spyOn(piStore, "acquireByRecordId");
   assert.equal(await harnessRegistry.acquireById("pi-live"), pi);
   assert.deepEqual(getForDrive.mock.calls, [["pi-live"]]);

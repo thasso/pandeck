@@ -66,7 +66,7 @@ import { sessionStore } from "../db/sessionStore.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
-import type { LiveSession, Viewer } from "../harness.ts";
+import type { HarnessHost, LiveSession, Viewer } from "../harness.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
 import {
   discardHostCommandTurn,
@@ -138,7 +138,6 @@ import { promptQueueField } from "../promptQueue.ts";
 import {
   closeToolGroupSession,
   getPendingPostReloadContinuation,
-  listBrowserRuntimes,
 } from "../mcp/toolGroups/registry.ts";
 import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
 import { errorText } from "../errors.ts";
@@ -245,23 +244,11 @@ function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
 }
 
 /**
- * The hub-side callbacks a {@link PiLiveSession} needs: session-list
- * broadcasting, dev-reload gating, and workshop git-info refreshes. hub.ts
- * implements it with an object literal closing over the hub instance, keeping
- * this module free of any hub import.
+ * The hub-side callbacks a {@link PiLiveSession} needs (`HarnessHost`, shared
+ * with the Claude store): session-list broadcasting, dev-reload gating and
+ * browser runtimes, keeping this module free of any hub import.
  */
-export interface PiSessionHost {
-  /** Recompute the merged session list and push it to every connected tab. */
-  broadcastSessions(): Promise<void>;
-  /** A run just started; cancel any idle-settle countdown for a queued reload. */
-  noteRunStarted(): void;
-  /** Re-check after a run ends whether a deferred dev reload can now proceed. */
-  checkPendingReload(): void;
-  /** True while a requested dev reload is pending or already exiting. */
-  isReloadQueued(): boolean;
-  /** Browser runtimes visible to `sessionId`, for workshop session state. */
-  browserRuntimesFor(sessionId: string): ReturnType<typeof listBrowserRuntimes>;
-}
+export type PiSessionHost = HarnessHost;
 
 /**
  * One long-lived agent run, decoupled from any socket. Multiple {@link Viewer}s
@@ -439,6 +426,11 @@ export class PiLiveSession implements LiveSession {
 
   get sessionFile(): string | undefined {
     return this.session.sessionFile;
+  }
+
+  /** The live title, else the name pi itself gave the session. */
+  get sessionTitle(): string | undefined {
+    return this.title ?? this.session.sessionName;
   }
 
   get isRunning(): boolean {

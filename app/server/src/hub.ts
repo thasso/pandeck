@@ -187,9 +187,11 @@ export function broadcastCommentEventToViewers(
 }
 
 /**
- * Process-global registry of open connections and harness stores. Delegates pi
- * session lifecycle to {@link piStore} and Claude-SDK sessions to
- * {@link claudeSdkStore}, and keeps every tab's session list in sync.
+ * Process-global registry of open connections. Which engine holds a session is
+ * the harness registry's to answer (`harnesses/registry.ts`); session creation,
+ * rename and listing still delegate to {@link piStore} and
+ * {@link claudeSdkStore} until they move behind it. Keeps every tab's session
+ * list in sync.
  */
 class SessionHub {
   private connections = new Set<Viewer>();
@@ -683,9 +685,10 @@ class SessionHub {
   /**
    * The driver for OUR session id, opening it from disk when it is not resident:
    * the single entry point the id-only `/sessions/<id>` routing uses. The
-   * registry decides the engine (`harnesses/registry.ts`). Undefined when there
-   * is no record (or it was tombstoned), or when a pi record has no native
-   * transcript to reopen from.
+   * registry decides the engine (`harnesses/registry.ts`), from the metadata
+   * row or, without one, from what an engine has on disk. Undefined when
+   * nothing holds the session or its row is tombstoned, or when a pi session
+   * has no native transcript to reopen from.
    */
   async acquireById(id: string): Promise<HarnessDriver | undefined> {
     return harnessRegistry.acquireById(id);
@@ -707,8 +710,8 @@ class SessionHub {
 
   /**
    * Synchronous lookup of an already-resident {@link HarnessDriver} for our id,
-   * across all three backings — without loading/reopening anything from disk.
-   * Returns undefined if the session isn't currently live in memory.
+   * across both engines (`harnesses/registry.ts`), without loading or reopening
+   * anything. Undefined if the session isn't currently live in memory.
    */
   getLiveById(id: string): HarnessDriver | undefined {
     return harnessRegistry.residentById(id);
