@@ -3,10 +3,22 @@
  * view, and the neutral surface app code drives a session through.
  */
 import assert from "node:assert/strict";
-import { test } from "vitest";
-import { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, test } from "vitest";
 import type { ClaudeSdkSeam } from "./claudeSdk/sdkSeam.ts";
-import { isLiveSession, type LiveSession } from "./harness.ts";
+import type { LiveSession } from "./harness.ts";
+
+const tmp = mkdtempSync(join(tmpdir(), "live-session-test-"));
+process.env.ASSISTANT_CWD = tmp;
+process.env.DATA_DIR = join(tmp, "data");
+
+const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
+const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
+const { isLiveSession } = await import("./harness.ts");
+
+afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const idleSeam: ClaudeSdkSeam = {
   query: () => ({
@@ -40,4 +52,41 @@ test("a Claude session is driven through the neutral surface", () => {
   session.setMode("plan");
   assert.equal(session.sessionMode, "plan");
   session.dispose();
+});
+
+function fakeAgentSession(selection: {
+  model?: { provider: string; id: string };
+  thinkingLevel?: string;
+}) {
+  return {
+    sessionId: "pi-model-selection",
+    sessionName: "Named",
+    ...selection,
+    isStreaming: false,
+    sessionManager: { getBranch: () => [] },
+    subscribe: () => () => {},
+    dispose: () => {},
+  };
+}
+
+function piSession(selection: Parameters<typeof fakeAgentSession>[0]) {
+  return new PiLiveSession(
+    "assistant" as never,
+    fakeAgentSession(selection) as never,
+    {} as never,
+    () => {},
+  );
+}
+
+test("a pi session names its model and thinking level only when it has them", () => {
+  const session = piSession({
+    model: { provider: "openai-codex", id: "gpt-5" },
+    thinkingLevel: "low",
+  });
+  assert.equal(isLiveSession(session), true);
+  assert.deepEqual(session.modelSelection(), {
+    model: { provider: "openai-codex", id: "gpt-5" },
+    thinkingLevel: "low",
+  });
+  assert.deepEqual(piSession({}).modelSelection(), {});
 });

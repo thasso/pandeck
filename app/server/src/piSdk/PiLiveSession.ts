@@ -341,6 +341,8 @@ export class PiLiveSession implements LiveSession {
     readonly cwd: string = CWD,
     private mode: SessionMode = "build",
     private readonly onModeChange: (mode: SessionMode) => void = () => {},
+    /** The account the session runs on; its model resolves in that registry. */
+    readonly credentialProfileId: string | undefined = undefined,
   ) {
     this.key = session.sessionId;
     this.unsubscribe = session.subscribe((event) => this.onAgentEvent(event));

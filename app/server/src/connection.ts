@@ -4281,7 +4281,7 @@ export class Connection implements Viewer {
    * reaches `index.ts`'s `uncaughtException` guard and exits the process.
    *
    * That is not hypothetical. `PiAdapter.setModel` throws for a model the
-   * profile registry cannot resolve, inside the async `LiveSession.setModel`,
+   * profile registry cannot resolve, inside the async `LiveRuntimeSession.setModel`,
    * so picking an unavailable model in a pi session took the whole server down
    * instead of drawing "model is not available" on that session's picker.
    */
@@ -4608,7 +4608,7 @@ export class Connection implements Viewer {
     const ticket = this.claimViewRequest();
     let model = selectedModel
       ? undefined
-      : await this.resolveViewedModel(carried, credentialProfileId);
+      : await this.resolveViewedModel(carried);
     if (selectedModel) {
       const found = await findModelForProfile(
         credentialProfileId,
@@ -5008,7 +5008,7 @@ export class Connection implements Viewer {
         ? (sessionStore.get(this.viewing.sessionId)?.credentialProfileId ??
           defaultOpenAiProfileId())
         : defaultOpenAiProfileId();
-      const model = await this.resolveViewedModel(carried, credentialProfileId);
+      const model = await this.resolveViewedModel(carried);
       const live = await hub.acquireNew(kind, model, thinkingLevel, {
         credentialProfileId,
       });
@@ -6034,9 +6034,10 @@ export class Connection implements Viewer {
   private viewedModelSelection(): ViewedModelSelection {
     if (isLiveSession(this.viewing)) {
       const { model, thinkingLevel } = this.viewing.modelSelection();
+      const account = this.viewing.credentialProfileId;
       return {
         ...(model && !isClaudeSdkModel(model)
-          ? { model: { ...model, onAccount: true } }
+          ? { model: { ...model, ...(account ? { account } : {}) } }
           : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       };
@@ -6047,11 +6048,7 @@ export class Connection implements Viewer {
     return {
       ...(meta?.provider && meta.model
         ? {
-            model: {
-              provider: meta.provider,
-              id: meta.model,
-              onAccount: false,
-            },
+            model: { provider: meta.provider, id: meta.model },
           }
         : {}),
       ...(meta?.thinkingLevel
@@ -6062,17 +6059,17 @@ export class Connection implements Viewer {
 
   /**
    * The model handle a carried selection names. A resident session's model
-   * resolves on the account the new session runs on, which is the registry it
-   * came from; a stored row's resolves as it always has.
+   * resolves on the account that session runs on, the registry its own handle
+   * came from; a model that account no longer offers falls back to the
+   * default, like a stored row's. A stored row's resolves as it always has.
    */
   private async resolveViewedModel(
     selection: ViewedModelSelection,
-    credentialProfileId: string,
   ): Promise<ReturnType<typeof findModel>> {
     const model = selection.model;
     if (!model) return undefined;
-    return model.onAccount
-      ? findModelForProfile(credentialProfileId, model.provider, model.id)
+    return model.account
+      ? findModelForProfile(model.account, model.provider, model.id)
       : findModel(model.provider, model.id);
   }
 
@@ -6133,8 +6130,8 @@ export class Connection implements Viewer {
 
 /** The model a new session should carry from the viewed one, before it resolves. */
 interface ViewedModelSelection {
-  /** `onAccount`: resolve on the new session's account (a resident session's model). */
-  model?: { provider: string; id: string; onAccount: boolean };
+  /** `account`: the resident session's account, where its model resolves. */
+  model?: { provider: string; id: string; account?: string };
   thinkingLevel?: ThinkingLevel;
 }
 

@@ -121,10 +121,15 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
   readonly live: true;
   abort(): void | Promise<void>;
   setThinkingLevel(level: ThinkingLevel): void | Promise<void>;
-  /** Every resident session answers it (see {@link HarnessDriver.released}). */
+  /**
+   * Redeclared because `RuntimePromptDriver` makes it optional while
+   * `HarnessDriver` requires it; every resident session answers it.
+   */
   readonly released: boolean;
   /** Build/Plan for the NEXT turn. */
   readonly sessionMode: SessionMode;
+  /** The account the session runs on, when the engine recorded it. */
+  readonly credentialProfileId: string | undefined;
   setMode(mode: SessionMode): void;
   /**
    * The model the session runs on (as its picker provider and id) and its

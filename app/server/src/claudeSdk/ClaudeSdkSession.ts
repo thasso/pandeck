@@ -893,7 +893,7 @@ export class ClaudeSdkSession implements LiveSession {
 
   /**
    * Push fresh context/usage to viewers so the UI's context meter updates as the
-   * turn progresses and lands its final figures. Mirrors {@link LiveSession}'s
+   * turn progresses and lands its final figures. Mirrors `PiLiveSession`'s
    * `broadcastContextInfo`; throttled to ~250ms during streaming, `force` on
    * turn end. Without this the meter would only refresh on session (re)load.
    */
@@ -1248,7 +1248,7 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * Select the model. Mirrors the {@link LiveSession.setModel} surface the
+   * Select the model. Mirrors the `PiLiveSession.setModel` surface the
    * connection drives; model/thinking are locked once a turn has run (the SDK
    * fixes them at query time), so this throws after the first prompt.
    */
