@@ -6,6 +6,7 @@
  */
 import type {
   ClaudeUsageSnapshot,
+  OpenAiResetRedeemResult,
   OpenAiUsageSnapshot,
 } from "@assistant/shared/usage";
 import { fetchClaudeSdkUsage } from "../claudeSdk/usageQuery.ts";
@@ -35,6 +36,6 @@ export function redeemOpenAiResetCredit(
   profileId: string,
   creditId: string,
   options?: RedeemResetOptions,
-): ReturnType<typeof redeemOpenAiResetCreditForProfile> {
+): Promise<OpenAiResetRedeemResult> {
   return redeemOpenAiResetCreditForProfile(profileId, creditId, options);
 }
