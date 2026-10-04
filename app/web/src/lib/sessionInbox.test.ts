@@ -3222,3 +3222,46 @@ describe("the composer ledge of a chat the user put down", () => {
     }
   });
 });
+
+describe("the stall chip's content key", () => {
+  it("changes when only the direction of the debt changes", () => {
+    // Same idle rows, titles and times: the coordinator owed by its peer,
+    // then the peer waiting on the coordinator. The chip's words differ.
+    const owedByPeer = [
+      session({ id: "root", awaitingRepliesFrom: ["impl"] }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+      }),
+    ];
+    const peerWaits = [
+      session({ id: "root" }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const card = (rows: SessionListItem[]) =>
+      [
+        ...cards(buildSessionInbox(rows).needsYou),
+        ...cards(buildSessionInbox(rows).active),
+      ][0] as SessionInboxCard;
+    expect(stallLabel(card(owedByPeer).stall!)).not.toBe(
+      stallLabel(card(peerWaits).stall!),
+    );
+    expect(sessionCardKey(card(owedByPeer), NOW)).not.toBe(
+      sessionCardKey(card(peerWaits), NOW),
+    );
+    const ledge = (rows: SessionListItem[]) =>
+      spawnedSessionsKey(
+        spawnedSessionsView({ sessions: rows, coordinatorId: "root" }),
+        false,
+      );
+    expect(ledge(owedByPeer)).not.toBe(ledge(peerWaits));
+  });
+});

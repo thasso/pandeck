@@ -206,9 +206,10 @@ export function spawnTreeStall(
 
 /** What a stall chip draws, as a content key. */
 function stallKey(stall: SpawnTreeStall): string {
-  return [...stall.peers, ...stall.askers]
-    .map((peer) => `${peer.id}:${peer.title}`)
-    .join("\u001f");
+  // The two partitions apart: which one names the chip decides its wording.
+  const ids = (rows: SessionListItem[]) =>
+    rows.map((peer) => `${peer.id}:${peer.title}`).join("\u001f");
+  return `${ids(stall.peers)}\u001e${ids(stall.askers)}`;
 }
 
 /**

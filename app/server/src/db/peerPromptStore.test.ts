@@ -182,6 +182,8 @@ describe("peerPromptStore", () => {
     };
     const owedTo = (sender: string) =>
       store.outstandingRepliesBySender().get(sender);
+    /** A deadline far ahead, so no other test's expiry sweep sees it. */
+    const deadline = Date.now() + 365 * 24 * 60 * 60 * 1000;
 
     it("counts a turn that ended without the answer, until it is answered", () => {
       const c = `owed-c-${seq++}`;
@@ -265,7 +267,7 @@ describe("peerPromptStore", () => {
         recipientSessionId: p,
         prompt: "report back",
         responseRequested: true,
-        expiresAt: 5_000,
+        expiresAt: deadline,
       });
       store.claimNext(p, "d", 1000);
       store.markAdmitted(request.id);
@@ -284,14 +286,75 @@ describe("peerPromptStore", () => {
       });
       store.cancelPending(c, "test", p);
       assert.deepEqual(
-        store.outstandingRepliesBySender(4_000).get(c),
+        store.outstandingRepliesBySender(deadline - 1_000).get(c),
         [p],
         "before its deadline the lost reply is still owed",
       );
       assert.equal(
-        store.outstandingRepliesBySender(6_000).get(c),
+        store.outstandingRepliesBySender(deadline + 1_000).get(c),
         undefined,
         "after it, the request owes nothing, as an unanswered one expires",
+      );
+    });
+
+    it("takes a report recovered at boot as interrupted as delivered", () => {
+      // The process died with the report in the sender's log: recovery marks
+      // it interrupted without an admission stamp. It still reached C.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      unanswered(c, i);
+      const report = enqueueLater(i, c);
+      store.claimNext(c, "d", 1000);
+      store.applyRecoveryDecisions(
+        [{ id: report.id, toStatus: "interrupted" as const }],
+        "restart",
+        "restart",
+      );
+      assert.equal(store.getById(report.id)?.status, "interrupted");
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes a handoff recovered at boot as interrupted as delivered", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const first = unanswered(c, i);
+      const handoff = enqueueLater(i, r, first.chainId);
+      store.claimNext(r, "d", 1000);
+      store.applyRecoveryDecisions(
+        [{ id: handoff.id, toStatus: "interrupted" as const }],
+        "restart",
+        "restart",
+      );
+      send(r, c, first.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("owes nothing past an unanswered request's deadline", () => {
+      const c = `owed-c-${seq++}`;
+      const p = `owed-p-${seq++}`;
+      const chain = store.createChain(`dead-${seq++}`);
+      const m = store.enqueue({
+        conversationId: `dead-${seq++}`,
+        chainId: chain,
+        hop: store.reserveHop(chain),
+        senderSessionId: c,
+        recipientSessionId: p,
+        prompt: "report back",
+        responseRequested: true,
+        expiresAt: deadline,
+      });
+      store.claimNext(p, "d", 1000);
+      store.markAdmitted(m.id);
+      store.markCompleted(m.id);
+      assert.deepEqual(
+        store.outstandingRepliesBySender(deadline - 1_000).get(c),
+        [p],
+      );
+      // Not yet swept to `expired`, but past its deadline: nothing is owed.
+      assert.equal(
+        store.outstandingRepliesBySender(deadline + 1_000).get(c),
+        undefined,
       );
     });
 
@@ -349,11 +412,22 @@ describe("peerPromptStore", () => {
     it("seeks an index for both answer checks, never scanning the inbox", () => {
       const plan = getDb()
         .prepare(`EXPLAIN QUERY PLAN ${OUTSTANDING_REPLIES_SQL}`)
-        .all(Date.now()) as { detail: string }[];
+        .all(Date.now(), Date.now()) as { detail: string }[];
       const details = plan.map((step) => step.detail).join("\n");
-      assert.match(details, /peer_prompts_recipient_sender_seq_idx/);
-      assert.match(details, /peer_prompts_recipient_chain_seq_idx/);
-      assert.match(details, /peer_prompts_replied_by_idx/);
+      // Exact seeks: the recipient AND the sender or chain by equality, then
+      // a queue_seq range — never a recipient-only seek or a scan.
+      assert.match(
+        details,
+        /SEARCH r USING INDEX peer_prompts_recipient_sender_seq_idx \(recipient_session_id=\? AND sender_session_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH r USING INDEX peer_prompts_recipient_chain_seq_idx \(recipient_session_id=\? AND chain_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH o USING INDEX peer_prompts_replied_by_idx \(replied_by_message_id=\?\)/,
+      );
     });
 
     it("still counts a request when later traffic came from someone else", () => {

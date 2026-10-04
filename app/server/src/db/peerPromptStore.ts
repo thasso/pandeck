@@ -1072,6 +1072,7 @@ export const OUTSTANDING_REPLIES_SQL = `
     SELECT id, sender_session_id, recipient_session_id, chain_id, queue_seq
       FROM peer_prompts
      WHERE status = 'awaiting_response' AND response_requested = 1
+       AND (expires_at_ms IS NULL OR expires_at_ms > ?)
     UNION ALL
     SELECT o.id, o.sender_session_id, o.recipient_session_id, o.chain_id,
            o.queue_seq
@@ -1117,7 +1118,9 @@ export const OUTSTANDING_REPLIES_SQL = `
  * sender — cancelled or failed before admission — is still owed: `replied`
  * is written when the reply is QUEUED, not when it lands. It keeps the
  * request's own deadline: past `expires_at_ms` it owes nothing, as an
- * `awaiting_response` row would have expired. That half starts
+ * `awaiting_response` row would have expired — and an `awaiting_response`
+ * row past its deadline owes nothing either, between its deadline and the
+ * (daily) sweep that marks it expired. That half starts
  * from the few lost replies (`CROSS JOIN` keeps SQLite from driving it from
  * every replied row instead) and follows the back-link index.
  *
@@ -1151,7 +1154,7 @@ export const OUTSTANDING_REPLIES_SQL = `
  * (`RESPONSE_TTL_MS`, 30 days).
  */
 function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
-  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now) as {
+  const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now, now) as {
     sender_session_id: string;
     recipient_session_id: string;
   }[];
