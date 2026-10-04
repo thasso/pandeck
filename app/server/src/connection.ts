@@ -520,6 +520,35 @@ function sessionContextRequest(
   };
 }
 
+/** Day-session creations under way, by date, shared by every connection. */
+const dayCreations = new Map<string, Promise<LiveSession>>();
+
+/**
+ * Create `date`'s day session once however many activations ask at the same
+ * time, and bind it. Creation yields before the binding is written, so two
+ * overlapping activations would each create one, and the later binding would
+ * hide the earlier conversation from the day panel. An activation that read
+ * the binding before another's creation settled finds that session here.
+ */
+function createDaySessionOnce(
+  date: string,
+  create: () => Promise<LiveSession>,
+): Promise<LiveSession> {
+  let pending = dayCreations.get(date);
+  if (!pending) {
+    pending = (async () => {
+      const boundId = getDaySessionId(date);
+      const bound = boundId ? await hub.acquireById(boundId) : undefined;
+      if (isLiveSession(bound)) return bound;
+      const created = await create();
+      setDaySessionId(date, created.sessionId);
+      return created;
+    })().finally(() => dayCreations.delete(date));
+    dayCreations.set(date, pending);
+  }
+  return pending;
+}
+
 export class Connection implements Viewer {
   /** The session this connection is currently displaying (pi or Claude SDK). */
   private viewing: HarnessDriver | undefined;
@@ -4247,35 +4276,25 @@ export class Connection implements Viewer {
       // scan workflow). A bare open just views an existing bound session and
       // never mints an empty one.
       if (!driver && (opts.text?.trim() || opts.scan || opts.logTime)) {
-        if (useClaudeSdk) {
-          // Chat runs in-process on the Claude SDK with the assistant persona so
-          // it gets the Google Calendar/Drive/Gmail and Tasks tools.
-          driver = await createSession({
-            harness: "claude-sdk",
+        driver = await createDaySessionOnce(date, async () => {
+          const start = {
             agentType: "assistant",
-            modelId,
             thinkingLevel,
             credentialProfileId,
             title: daySessionTitle(date),
-          });
-          setDaySessionId(date, driver.sessionId);
-        } else {
+          } as const;
+          // Chat runs in-process on the Claude SDK with the assistant persona
+          // so it gets the Google Calendar/Drive/Gmail and Tasks tools.
+          if (useClaudeSdk)
+            return createSession({ harness: "claude-sdk", modelId, ...start });
           const model =
             (await findModelForProfile(
               credentialProfileId,
               provider,
               modelId,
             )) ?? undefined;
-          driver = await createSession({
-            harness: "pi",
-            agentType: "assistant",
-            model,
-            thinkingLevel,
-            credentialProfileId,
-            title: daySessionTitle(date),
-          });
-          setDaySessionId(date, driver.sessionId);
-        }
+          return createSession({ harness: "pi", model, ...start });
+        });
       }
 
       if (driver && !view) view = driver;

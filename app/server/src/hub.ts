@@ -182,9 +182,10 @@ export function broadcastCommentEventToViewers(
 /**
  * Process-global registry of open connections. Which engine holds a session is
  * the harness registry's to answer (`harnesses/registry.ts`); the remaining
- * lifecycle calls (creation, fork, rename, removal, pi images) and the merged
- * listing still delegate to {@link piStore} and {@link claudeSdkStore} until
- * they move behind it. Keeps every tab's session list in sync.
+ * lifecycle calls (fork, rename, removal, pi images) and the merged listing
+ * still delegate to {@link piStore} and {@link claudeSdkStore} until they move
+ * behind it; creation goes through `harnesses/create.ts`. Keeps every tab's
+ * session list in sync.
  */
 class SessionHub {
   private connections = new Set<Viewer>();

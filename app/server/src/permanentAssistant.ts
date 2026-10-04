@@ -169,7 +169,23 @@ export function permanentAssistantViewableId(): string | undefined {
 
 type PermanentAssistantDriver = HarnessDriver & RuntimePromptDriver;
 
-async function acquirePermanentAssistant(): Promise<PermanentAssistantDriver> {
+/** The acquisition under way, which every concurrent caller shares. */
+let acquiring: Promise<PermanentAssistantDriver> | undefined;
+
+/**
+ * The singleton's driver, acquired once however many callers ask at the same
+ * time: creation yields before the new session is bound, so two acquisitions
+ * that overlapped would each create one, and the later binding would hide the
+ * earlier conversation.
+ */
+function acquirePermanentAssistant(): Promise<PermanentAssistantDriver> {
+  acquiring ??= acquireOrCreatePermanentAssistant().finally(() => {
+    acquiring = undefined;
+  });
+  return acquiring;
+}
+
+async function acquireOrCreatePermanentAssistant(): Promise<PermanentAssistantDriver> {
   const existingId = permanentAssistantStore.sessionId();
   if (existingId) {
     const existing = await hub.acquireById(existingId);

@@ -28,6 +28,9 @@ const { projectStore } = await import("../db/projectStore.ts");
 const { worktreeIdForSession } = await import("../db/worktreeStore.ts");
 const settings = await import("../settings.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
+const piModels = await import("../piSdk/models.ts");
+const { piStore } = await import("../piSdk/piStore.ts");
+const { sessionStore } = await import("../db/sessionStore.ts");
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -252,8 +255,13 @@ async function conflictWithAgent(name: string, file: string) {
     ...real,
     claudeSdk: { ...real.claudeSdk, enabled: true },
   });
-  const agent: { cwd?: string | undefined; linkedTo?: string | undefined } = {};
+  const agent: {
+    id?: string;
+    cwd?: string | undefined;
+    linkedTo?: string | undefined;
+  } = {};
   vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id, opts) => {
+    agent.id = id;
     agent.cwd = opts?.cwd;
     agent.linkedTo = worktreeIdForSession(id);
     return { sessionId: id } as never;
@@ -264,13 +272,50 @@ async function conflictWithAgent(name: string, file: string) {
 test("a merge agent for the main checkout runs there and is linked to no worktree", async () => {
   const { record, agent } = await conflictWithAgent("agentmain", "a.md");
   await mergeWorktree(record.id, "merge");
-  assert.deepEqual(agent, { cwd: repoPath, linkedTo: undefined });
+  assert.equal(agent.cwd, repoPath);
+  assert.equal(agent.linkedTo, undefined);
+  // Nor afterwards: the edge would reopen it in the wrong directory.
+  assert.equal(worktreeIdForSession(agent.id!), undefined);
   sh(repoPath, "merge", "--abort");
 });
 
 test("a rebase merge agent runs in its worktree, linked before it exists", async () => {
   const { record, agent } = await conflictWithAgent("agentrebase", "b.md");
   await mergeWorktree(record.id, "rebase");
-  assert.deepEqual(agent, { cwd: record.path, linkedTo: record.id });
+  assert.equal(agent.cwd, record.path);
+  assert.equal(agent.linkedTo, record.id);
+  assert.equal(worktreeIdForSession(agent.id!), record.id);
+  sh(record.path, "rebase", "--abort");
+});
+
+test("a pi merge agent is recorded as pi and linked like a Claude one", async () => {
+  const { record } = await conflictWithAgent("agentpi", "c.md");
+  const real = settings.getSettings();
+  vi.mocked(settings.getSettings).mockReturnValue({
+    ...real,
+    worktrees: {
+      ...real.worktrees,
+      mergeAgent: {
+        ...real.worktrees.mergeAgent,
+        provider: "openai-codex",
+        modelId: "merge-model",
+      },
+    },
+  });
+  vi.spyOn(piModels, "findModelForProfile").mockResolvedValue({
+    provider: "openai-codex",
+    id: "merge-model",
+  } as never);
+  const acquireNew = vi.spyOn(piStore, "acquireNew").mockResolvedValue({
+    sessionId: "agent-pi",
+    sessionMode: "build",
+  } as never);
+  await mergeWorktree(record.id, "rebase");
+  const opts = acquireNew.mock.calls[0]?.[3] as { cwd?: string } | undefined;
+  assert.equal(acquireNew.mock.calls[0]?.[0], "workshop");
+  assert.equal(opts?.cwd, record.path);
+  assert.equal(worktreeIdForSession("agent-pi"), record.id);
+  assert.equal(sessionStore.get("agent-pi")?.harness, "pi");
+  assert.equal(sessionStore.get("agent-pi")?.mode, "build");
   sh(record.path, "rebase", "--abort");
 });

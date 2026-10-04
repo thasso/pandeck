@@ -76,7 +76,8 @@ Four layers, each depending only on the ones below it:
      that one step. Spawn reaches `create.ts` through a dynamic import, as it
      does `hub.ts`, because `create.ts` → the Claude store → the tool catalog →
      spawn closes a cycle; the worktree merge agent reaches it the same way it
-     reaches `hub.ts`. The hub creates nothing itself.
+     reaches `hub.ts`. The hub creates no new session itself; forks go through
+     it until step 11d.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
