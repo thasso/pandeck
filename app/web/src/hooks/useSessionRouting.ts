@@ -715,11 +715,12 @@ export function useSessionRouting({
     openPermanentAssistant,
   ]);
 
-  // Server → URL: address non-empty conversations and keep empty sessions at the
-  // new-chat URL. If a route we asked the server to load/create is still
-  // pending, leave the address bar alone until the server state catches up.
+  // Server → URL: wait for the addressed session, including while disconnected.
+  // A cached list can omit a real notification target, so absence from it is
+  // never evidence that the previously viewed session is the load result.
   useEffect(() => {
     if (
+      !connected ||
       route.name === "permanentAssistant" ||
       route.name === "settings" ||
       route.name === "tasks" ||
@@ -760,12 +761,7 @@ export function useSessionRouting({
     const key = routeKey(route);
     const matchesServer = routeMatchesServer(route, currentId, hasMessages);
     if (pending.current === key) {
-      const pendingUnknownSession =
-        route.name === "session" &&
-        hasMessages &&
-        !!currentId &&
-        !sessions.some((session) => session.id === route.id);
-      if (!matchesServer && !pendingUnknownSession) return;
+      if (!matchesServer) return;
       pending.current = null;
     }
 
@@ -789,7 +785,7 @@ export function useSessionRouting({
       setRoute({ name: "new" });
       applied.current = "new";
     }
-  }, [currentId, hasMessages, hydrated, route, sessions]);
+  }, [connected, currentId, hasMessages, hydrated, route, sessions]);
 
   const navigate = useCallback((path: string) => {
     // Any explicit navigation cancels a still-armed staged advance. Callers that
@@ -834,9 +830,8 @@ export function useSessionRouting({
 
   // App calls this when the user sends the first prompt from a staging route,
   // for BOTH harnesses (pi mints the id server-side; claude-sdk keeps the staged
-  // client id — but that id is not in the session list until the server creates
-  // it, so navigating to it directly would trip the pending-unknown-session
-  // fallback and canonicalize the URL back to the previously viewed session).
+  // client id). Staging waits for the first-send result rather than loading an
+  // id that the server has not created yet.
   // It arms the one-shot URL advance in the Server → URL effect above and
   // snapshots every session id known at the send moment (sidebar rows plus the
   // currently viewed id), so the advance can distinguish the session the send

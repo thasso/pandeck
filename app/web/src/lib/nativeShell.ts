@@ -429,15 +429,65 @@ export async function notifyWindowReady(
 }
 
 /**
- * Subscribe to open requests from outside the page. Returns an unsubscribe, and
- * a no-op one in a browser.
- *
- * Resolves asynchronously (the bridge is a promise), so a request that lands in
- * the gap — most importantly the one that LAUNCHED the app — is not delivered
- * here at all. {@link takePendingNativeOpenUrl} is that half.
+ * Subscribe, then drain outside open requests for this window. The event only
+ * wakes the drain; the shell keeps the newest target until navigation is
+ * acknowledged. Older installed shells deliver live targets in the event.
  */
 export function onNativeOpenUrl(handler: (target: string) => void): () => void {
-  return listenNative(OPEN_URL_EVENT, handler);
+  const listen = window.__TAURI__?.event?.listen;
+  if (!isNativeShell() || !listen) return () => {};
+  let stop: (() => void) | null = null;
+  let stopped = false;
+  let registered = false;
+  let draining = false;
+  let requested = true;
+  let wakeTarget: string | null = null;
+
+  const drain = async () => {
+    if (stopped || !registered || draining) return;
+    draining = true;
+    try {
+      while (requested && !stopped) {
+        requested = false;
+        const fallback = wakeTarget;
+        wakeTarget = null;
+        const pending = await pendingNativeOpenUrl();
+        if (!pending || stopped) continue;
+        // A modern empty slot means this wake-up was already handled. Only
+        // older shells need the event payload, since they never park live taps.
+        const target =
+          pending.target ?? (!pending.acknowledge ? fallback : null);
+        if (!target) continue;
+        handler(target);
+        if (pending.acknowledge) {
+          await acknowledgeNativeOpenUrl(target);
+        }
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  void listen(OPEN_URL_EVENT, (message) => {
+    if (typeof message.payload !== "string" || stopped) return;
+    wakeTarget = message.payload;
+    requested = true;
+    void drain();
+  }).then(
+    (unlisten) => {
+      if (stopped) {
+        unlisten();
+        return;
+      }
+      stop = unlisten;
+      registered = true;
+      void drain();
+    },
+    () => {},
+  );
+  return () => {
+    stopped = true;
+    stop?.();
+  };
 }
 
 /**
@@ -471,17 +521,29 @@ function listenNative(
   };
 }
 
-/**
- * The open request that arrived before this page could listen, if any. Taking it
- * clears it in the shell, so a reload does not send the user back somewhere they
- * have since navigated away from.
- */
-export async function takePendingNativeOpenUrl(): Promise<string | null> {
-  if (!isNativeShell()) return null;
+type NativeOpenUrlReply = { target: string | null } | string | null;
+
+async function pendingNativeOpenUrl(): Promise<{
+  target: string | null;
+  acknowledge: boolean;
+} | null> {
   try {
-    return (await invokeNative<string | null>("take_pending_open_url")) ?? null;
+    const reply = await invokeNative<NativeOpenUrlReply>(
+      "take_pending_open_url",
+    );
+    if (typeof reply === "string" || reply === null)
+      return { target: reply, acknowledge: false };
+    return { target: reply.target, acknowledge: true };
   } catch {
     return null;
+  }
+}
+
+async function acknowledgeNativeOpenUrl(target: string): Promise<void> {
+  try {
+    await invokeNative("take_pending_open_url", { acknowledgedTarget: target });
+  } catch {
+    // Retained by the shell if acknowledgement fails; a later drain retries it.
   }
 }
 

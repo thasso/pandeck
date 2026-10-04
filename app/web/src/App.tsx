@@ -78,7 +78,6 @@ import {
   notifyWindowReady,
   onNativeOpenUrl,
   ownsScreenEdgeGestures,
-  takePendingNativeOpenUrl,
 } from "./lib/nativeShell.ts";
 import { pathFromOpenTarget } from "./lib/openTarget.ts";
 import { PerfHud } from "./components/PerfHud.tsx";
@@ -1192,20 +1191,15 @@ function AppContent() {
    * route is `lib/openTarget.ts`, which DROPS anything it does not recognise —
    * any program on the machine can hand us a `pa://` URL.
    *
-   * The pending drain is the other half, and not an optimisation: a link that
-   * LAUNCHES the app fires long before this effect can subscribe, so the shell
-   * parks it and hands it over when the first page asks.
+   * The subscription owns its pending drain: the shell parks every target, and
+   * the page takes it only after its listener has finished registering.
    */
   useEffect(() => {
     const open = (target: string) => {
       const path = pathFromOpenTarget(target);
       if (path) navigate(path);
     };
-    const stop = onNativeOpenUrl(open);
-    void takePendingNativeOpenUrl().then((target) => {
-      if (target) open(target);
-    });
-    return stop;
+    return onNativeOpenUrl(open);
   }, [navigate]);
   /**
    * A native shell window is created hidden, so this is what reveals it — and

@@ -31,6 +31,7 @@ mod ios;
 mod menu;
 mod notify;
 mod openurl;
+mod openurl_pending;
 mod origins;
 mod panics;
 mod port_forward;
@@ -974,7 +975,10 @@ fn track_window(window: &WebviewWindow) {
         }
         // Labels are never reused, so the readiness list would otherwise grow for
         // the life of the process.
-        tauri::WindowEvent::Destroyed => ready::forget(&label),
+        tauri::WindowEvent::Destroyed => {
+            ready::forget(&label);
+            openurl::forget_window(&label);
+        }
         _ => {}
     });
 }
