@@ -6,7 +6,7 @@
  *
  * `setModel` and `setReasoning` are `void | PromiseLike<void>` seams: the
  * claude-sdk adapter answers synchronously, the pi adapter through an async
- * `LiveSession`. A bare try/catch around them therefore caught only half the
+ * `PiLiveSession`. A bare try/catch around them therefore caught only half the
  * refusals, and the half it missed was not merely lost — an unhandled rejection
  * reaches `index.ts`'s `uncaughtException` guard, which exits the process. So
  * picking a model the pi profile registry cannot resolve took every live
@@ -41,8 +41,9 @@ function makeConnection(view: Record<string, unknown>) {
     Connection as unknown as new (ws: unknown) => Record<string, unknown>
   )(fakeWs);
   conn.runtimeView = view;
-  // Only `sessionId` is read, to target the refusal at the right session.
-  conn.viewing = { sessionId: SESSION_ID };
+  // A resident session, so nothing opens a harness for it; `sessionId` targets
+  // the refusal at the right session.
+  conn.viewing = { sessionId: SESSION_ID, live: true };
   return { conn, sent };
 }
 
@@ -61,7 +62,7 @@ const SHAPES: Array<{
   make: (message: string) => () => unknown;
 }> = [
   {
-    name: "a rejected promise (the pi adapter's async LiveSession)",
+    name: "a rejected promise (the pi adapter's async PiLiveSession)",
     make: (message) => () => Promise.reject(new Error(message)),
   },
   {
