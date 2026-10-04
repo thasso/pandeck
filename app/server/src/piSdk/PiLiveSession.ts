@@ -2,7 +2,7 @@
  * The pi-backed live session: one long-lived pi agent run decoupled from any
  * socket, with its event mapping, synthetic tool turns, accept flows, and
  * snapshot/state projections. Extracted from hub.ts; the few hub callbacks it
- * needs are inverted behind {@link PiSessionHost}, so this module must never
+ * needs are inverted behind {@link HarnessHost}, so this module must never
  * import hub.ts.
  */
 import type {
@@ -244,13 +244,6 @@ function attachmentDisplay(a: PromptAttachment): DisplayAttachment {
 }
 
 /**
- * The hub-side callbacks a {@link PiLiveSession} needs (`HarnessHost`, shared
- * with the Claude store): session-list broadcasting, dev-reload gating and
- * browser runtimes, keeping this module free of any hub import.
- */
-export type PiSessionHost = HarnessHost;
-
-/**
  * One long-lived agent run, decoupled from any socket. Multiple {@link Viewer}s
  * (browser tabs) can attach; events are broadcast to all of them, and an
  * atomic {@link snapshot} lets a (re)connecting viewer catch up with no data
@@ -318,7 +311,7 @@ export class PiLiveSession implements LiveSession {
   constructor(
     readonly kind: AgentType,
     readonly session: AgentSession,
-    private readonly host: PiSessionHost,
+    private readonly host: HarnessHost,
     private readonly onEvict: (key: string) => void,
     private initialNotices: Array<{
       severity: NoticeSeverity;

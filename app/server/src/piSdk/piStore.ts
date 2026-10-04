@@ -3,7 +3,7 @@
  * `claudeSdk/claudeSdkStore.ts`: a singleton store the hub delegates to. Owns
  * the live-session map, session creation/reopen/fork, eviction, and the pi
  * halves of id-only lookup, rename, image resolution, and session listing.
- * The hub's behaviour arrives as the {@link PiSessionHost} via
+ * The hub's behaviour arrives as the {@link HarnessHost} via
  * {@link PiSessionStore.setHost} (`harnesses/registry.ts`); this module must
  * never import hub.ts.
  */
@@ -65,7 +65,8 @@ import {
   type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { PiLiveSession, type PiSessionHost } from "./PiLiveSession.ts";
+import { PiLiveSession } from "./PiLiveSession.ts";
+import type { HarnessHost } from "../harness.ts";
 import { defaultOpenAiProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
@@ -176,7 +177,7 @@ class PiSessionStore {
   private toolRuntimes = new Map<string, PiToolActivation>();
   /** Live policy read by the built-in/bridge active-set merge. */
   private sessionModes = new Map<string, SessionMode>();
-  private host: PiSessionHost | undefined;
+  private host: HarnessHost | undefined;
 
   /**
    * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
@@ -184,11 +185,11 @@ class PiSessionStore {
    * (`harnessRegistry.setHost`), so the host inverts the session→hub calls and
    * this module never imports hub.ts.
    */
-  setHost(host: PiSessionHost): void {
+  setHost(host: HarnessHost): void {
     this.host = host;
   }
 
-  private requireHost(): PiSessionHost {
+  private requireHost(): HarnessHost {
     if (!this.host)
       throw new Error(
         "PiSessionStore host is not wired; the hub must call setHost() first.",

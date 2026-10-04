@@ -1,13 +1,13 @@
 /**
  * `harnessRegistry`: which engine holds a session, and how both stores reach
- * the hub. Routing an id that has to be opened from disk is covered end to end
+ * the hub. Opening a pi session its metadata row names is covered end to end
  * by `sessionResolver.test.ts`.
  *   pnpm --filter @assistant/server test src/harnesses/registry.test.ts
  */
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, afterEach, test, vi } from "vitest";
 import type { ServerMessage } from "@assistant/shared";
 
@@ -20,6 +20,14 @@ const { hub } = await import("../hub.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { PiSessionDeletedError, piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
+const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
+
+/** A pi transcript on disk for `id`, with no metadata row. */
+function piTranscript(id: string): void {
+  const file = canonicalPiSessionPath(id);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, "");
+}
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -185,6 +193,37 @@ test("a session without a row is opened by the engine that has it on disk", asyn
   assert.equal(piOpen.mock.calls.length, 0, "no pi transcript to reopen");
 });
 
+test("a pi transcript without a row reopens as a developer session", async () => {
+  vi.spyOn(piStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(false);
+  const piOpen = vi
+    .spyOn(piStore, "acquireByRecordId")
+    .mockResolvedValue(resident("pi-rowless") as never);
+  piTranscript("pi-rowless");
+
+  assert.ok(await harnessRegistry.acquireById("pi-rowless"));
+  assert.deepEqual(piOpen.mock.calls, [["pi-rowless", "developer"]]);
+});
+
+test("a Claude record is preferred over a pi transcript for a rowless id", async () => {
+  vi.spyOn(piStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "getForDrive").mockReturnValue(undefined);
+  vi.spyOn(claudeSdkStore, "exists").mockReturnValue(true);
+  const claudeOpen = vi
+    .spyOn(claudeSdkStore, "acquire")
+    .mockReturnValue(resident("both-rowless") as never);
+  const piOpen = vi.spyOn(piStore, "acquireByRecordId");
+  piTranscript("both-rowless");
+
+  await harnessRegistry.acquireById("both-rowless");
+  assert.deepEqual(
+    claudeOpen.mock.calls.map(([id]) => id),
+    ["both-rowless"],
+  );
+  assert.equal(piOpen.mock.calls.length, 0);
+});
+
 test("a resident session is driven as it is, with a full idle grace", async () => {
   const pi = resident("pi-live");
   const getForDrive = vi
@@ -198,9 +237,14 @@ test("a resident session is driven as it is, with a full idle grace", async () =
 
 test("both stores reach the hub through one host", () => {
   const calls: string[] = [];
-  const setPiHost = vi.spyOn(piStore, "setHost");
-  const setOnChange = vi.spyOn(claudeSdkStore, "setOnChange");
-  const setProvider = vi.spyOn(claudeSdkStore, "setBrowserRuntimesProvider");
+  // Captured, not applied: the hub's own host stays installed.
+  const setPiHost = vi.spyOn(piStore, "setHost").mockImplementation(() => {});
+  const setOnChange = vi
+    .spyOn(claudeSdkStore, "setOnChange")
+    .mockImplementation(() => {});
+  const setProvider = vi
+    .spyOn(claudeSdkStore, "setBrowserRuntimesProvider")
+    .mockImplementation(() => {});
   const host = {
     broadcastSessions: async () => {
       calls.push("broadcastSessions");

@@ -1,7 +1,7 @@
 # pi SDK harness
 
 - No static import of `hub.ts` anywhere here — hub behaviour arrives via
-  `piStore.setHost(...)`/`PiSessionHost` injection.
+  `piStore.setHost(...)`/`HarnessHost` injection.
 - Pi tools always come from the direct adapter over `toolActivation.ts` (the
   session MCP server serves Claude and external consumers only). The full tool
   universe registers up front — pi cannot add DEFINITIONS mid-session — and

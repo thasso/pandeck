@@ -57,10 +57,19 @@ const sessions: Record<Harness, HarnessSessions> = {
 };
 
 /**
- * Pi first, as the session list and every fan-out have always run. An id
- * belongs to one engine, so the order decides nothing else.
+ * Every engine, pi first as the session list and every fan-out have always
+ * run; derived from the entries, so a new engine cannot be skipped.
  */
-const HARNESS_ORDER: readonly Harness[] = ["pi", "claude-sdk"];
+const HARNESS_ORDER = Object.keys(sessions) as Harness[];
+
+/**
+ * Who opens a session without a metadata row: a Claude record first, as it
+ * always has been, then the rest. An id is on one engine's disk only.
+ */
+const ROWLESS_ORDER: readonly Harness[] = [
+  "claude-sdk",
+  ...HARNESS_ORDER.filter((harness) => harness !== "claude-sdk"),
+];
 
 /** The resident session for our id, from memory only. */
 function residentInMemory(id: string): LiveSession | undefined {
@@ -127,7 +136,7 @@ export const harnessRegistry = {
     }
     const record = sessionStore.get(id);
     if (record) return sessions[record.harness].open(id, record.agentType);
-    const holder = (["claude-sdk", "pi"] as const).find((harness) =>
+    const holder = ROWLESS_ORDER.find((harness) =>
       sessions[harness].storedWithoutRow(id),
     );
     return holder ? sessions[holder].open(id, "developer") : undefined;
