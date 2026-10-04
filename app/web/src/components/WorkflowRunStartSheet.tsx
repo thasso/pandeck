@@ -10,23 +10,24 @@ import {
   X,
 } from "lucide-react";
 import {
+  type AccountModelOption,
+  accountProviderForModelProvider,
   applyWorkflowRunLimits,
   clampThinkingLevelForModel,
   CLAUDE_SDK_PROVIDER,
+  type CodeDeliveryWorkflowConfig,
   defaultWorkflowRunLimits,
   modelKey,
   normalizeWorkflowRunLimits,
   supportedThinkingLevelsForModel,
+  type TaskSummary,
+  type ThinkingLevel,
   WORKFLOW_CI_DEFAULTS,
   WORKFLOW_PROMPT_OVERRIDE_MAX_CHARS,
   WORKFLOW_ROLE_FAMILY_MAX_CHARS,
   WORKFLOW_ROLE_NOTES_MAX_CHARS,
   WORKFLOW_ROLE_SET_BOUNDS,
   WORKFLOW_RUN_LIMIT_BOUNDS,
-  type AccountModelOption,
-  type CodeDeliveryWorkflowConfig,
-  type TaskSummary,
-  type ThinkingLevel,
   type WorkflowCandidateRole,
   type WorkflowRoleCandidate,
   type WorkflowRoleConfig,
@@ -294,8 +295,7 @@ function accountsOf(models: readonly AccountModelOption[]): RuntimeAccount[] {
     accounts.set(model.credentialProfileId, {
       id: model.credentialProfileId,
       name: model.accountName,
-      provider:
-        model.provider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex",
+      provider: accountProviderForModelProvider(model.provider),
     });
   }
   return [...accounts.values()];

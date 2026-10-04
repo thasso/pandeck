@@ -21,16 +21,17 @@ import {
   SendHorizontal,
 } from "lucide-react";
 import {
+  accountProviderForModelProvider,
+  type AgentQuestionResponse,
   type AgentType,
-  CLAUDE_SDK_PROVIDER,
-  claudeSdkModelOption,
   clampThinkingLevelForModel,
+  claudeSdkModelOption,
+  type Harness,
+  harnessForAccountProvider,
+  harnessForModelProvider,
   isClaudeSdkModel,
   isCodingAgentType,
   modelKey,
-  UNLABELED_SESSION_TITLE,
-  type AgentQuestionResponse,
-  type Harness,
   type ModelOption,
   type PromptAttachment,
   type PullRequestCheckoutOutcome,
@@ -40,6 +41,7 @@ import {
   type SessionState,
   type TaskStatus,
   type ThinkingLevel,
+  UNLABELED_SESSION_TITLE,
   type WorktreeChangeFile,
   type WorktreeChangesResponse,
   type WorktreeComment,
@@ -1804,9 +1806,7 @@ function AppContent() {
             // Claude SDK model with a hardcoded "pi" harness would send the first
             // prompt down the pi path, where findModel("claude-sdk", …) fails with
             // "model is not available".
-            harness: (isClaudeSdkModel(defaultNewSessionModel)
-              ? "claude-sdk"
-              : "pi") as Harness,
+            harness: harnessForModelProvider(defaultNewSessionModel?.provider),
             agentType: "assistant" as AgentType,
             provider: defaultNewSessionModel?.provider,
             modelId: defaultNewSessionModel?.id,
@@ -4142,8 +4142,7 @@ function AppContent() {
         // Keep the new-session profile aligned even when this was an existing
         // session's model picker: otherwise lastModelKey can point at a model
         // the separately remembered profile filters out on the next new chat.
-        const profileProvider =
-          provider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex";
+        const profileProvider = accountProviderForModelProvider(provider);
         const explicitProfileId = explicitProfileForNextModel.current;
         explicitProfileForNextModel.current = null;
         const selectedProfile =
@@ -4164,11 +4163,9 @@ function AppContent() {
         // Remember this explicit pick as the default for future new chats. The
         // profile sync effect is the sole persistence writer for its selection.
         update({ lastModelKey: modelKey({ provider, id }) });
-        // Provider implies the harness: claude-sdk→claude-sdk, anything else→pi.
-        // The agentType comes from the top-left agent picker, applied to every
-        // harness.
-        const harness: Harness =
-          provider === CLAUDE_SDK_PROVIDER ? "claude-sdk" : "pi";
+        // Provider implies the harness. The agentType comes from the top-left
+        // agent picker, applied to every harness.
+        const harness = harnessForModelProvider(provider);
         if (isNewChatRoute && !runtimeHasStarted) {
           startStagedSession({
             // Keep the staged identity across a harness switch too: it keys the
@@ -5955,8 +5952,7 @@ function AppContent() {
                   runtimeActions.setModel(model.provider, model.id);
                 } else if (profile && isNewChatRoute && !runtimeHasStarted) {
                   startStagedSession({
-                    harness:
-                      profile.provider === "claude" ? "claude-sdk" : "pi",
+                    harness: harnessForAccountProvider(profile.provider),
                     agentType: agentTypeForPicker,
                     thinkingLevel: "off",
                     // Restage: switching WHO runs the session keeps its mode.

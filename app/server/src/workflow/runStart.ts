@@ -23,6 +23,7 @@
  * the checkout; the executors of later steps act within that authorization.
  */
 import {
+  accountProviderForModelProvider,
   CLAUDE_SDK_MODELS,
   CLAUDE_SDK_PROVIDER,
   isTerminalWorkflowRunLifecycle,
@@ -45,10 +46,8 @@ import {
   type WorkflowRunStartPhase,
 } from "@assistant/shared";
 import {
-  defaultClaudeProfileId,
-  defaultOpenAiProfileId,
+  automaticProfileIdFor,
   enabledCredentialProfileById,
-  type CredentialProfileProvider,
 } from "../credentialProfiles.ts";
 import {
   attachRunWorktree,
@@ -399,13 +398,9 @@ async function resolveRoleConfig(
     );
 
   const isClaudeSdk = provider === CLAUDE_SDK_PROVIDER;
-  const family: CredentialProfileProvider = isClaudeSdk
-    ? "claude"
-    : "openai-codex";
+  const family = accountProviderForModelProvider(provider);
   const requestedProfileId = config.credentialProfileId?.trim();
-  const profileId =
-    requestedProfileId ??
-    (isClaudeSdk ? defaultClaudeProfileId() : defaultOpenAiProfileId());
+  const profileId = requestedProfileId ?? automaticProfileIdFor(family);
   const profile = enabledCredentialProfileById(profileId);
   if (!profile)
     throw new Error(

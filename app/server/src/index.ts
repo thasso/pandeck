@@ -17,7 +17,7 @@ import type {
   SpeechTranscribeResponse,
   TimelineCacheDescriptor,
 } from "@assistant/shared";
-import { normalizeGithubIssueRefs } from "@assistant/shared";
+import { HARNESSES, normalizeGithubIssueRefs } from "@assistant/shared";
 import type {
   PortForwardGrantRequest,
   PortForwardGrantRevokeRequest,
@@ -38,6 +38,7 @@ import { getCalendarEvents } from "./calendarService.ts";
 import { CLAUDE_SDK_MODELS } from "./claudeSdk/modelSettings.ts";
 import { redeemOpenAiResetCreditForProfile } from "./piSdk/openaiUsageQuery.ts";
 import {
+  automaticProfileIdFor,
   createCredentialProfile,
   credentialProfileById,
   defaultClaudeProfileId,
@@ -2067,9 +2068,7 @@ server.listen(PORT, HOST, () => {
     const session = sessionStore.get(sessionId);
     if (!session) return null;
     if (session.credentialProfileId) return session.credentialProfileId;
-    return session.harness === "claude-sdk"
-      ? defaultClaudeProfileId()
-      : defaultOpenAiProfileId();
+    return automaticProfileIdFor(HARNESSES[session.harness].accountProvider);
   };
   // Declarative Web Push is driven by a real normalized run completion, not a
   // generic idle transition or synthetic host command.

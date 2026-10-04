@@ -1,8 +1,8 @@
 import {
   type AgentType,
   clampThinkingLevelForModel,
-  isClaudeSdkModel,
   type Harness,
+  harnessForModelProvider,
   type ModelOption,
   type PromptAttachment,
   type SessionMode,
@@ -164,7 +164,7 @@ export function newSessionRuntimeDefaults(
   thinkingLevel: ThinkingLevel,
 ): NewSessionRuntimeDefaults {
   return {
-    harness: isClaudeSdkModel(model) ? "claude-sdk" : "pi",
+    harness: harnessForModelProvider(model?.provider),
     ...(model?.provider !== undefined ? { provider: model?.provider } : {}),
     ...(model?.id !== undefined ? { modelId: model?.id } : {}),
     thinkingLevel: clampThinkingLevelForModel(model, thinkingLevel),
@@ -235,7 +235,7 @@ export function firstPromptRuntimeSelection(
     Pick<SessionState, "model" | "thinkingLevel" | "mode"> | null | undefined,
 ): NewSessionRuntimeDefaults {
   return {
-    harness: isClaudeSdkModel(session?.model) ? "claude-sdk" : "pi",
+    harness: harnessForModelProvider(session?.model?.provider),
     ...(session?.model?.provider !== undefined
       ? { provider: session?.model?.provider }
       : {}),

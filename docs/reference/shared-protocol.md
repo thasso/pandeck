@@ -101,12 +101,13 @@ vocabulary, display projection, and normalized session model types.
   range clamps to the nearest bound, non-numeric falls back to the default).
   Every value is read once at admission and frozen onto the row, so an edit
   governs LATER admissions only and reshapes nothing already running.
-  `backgroundWorkBackendsForHarness`/`harnessSupportsBackgroundWorkBackend` are
-  the capability predicate beside them: Claude background work runs inside the
-  retained query that issued it (`claude-query`), pi background work is
-  supervised by PA itself (`host-process`), and neither runtime can hold the
-  other's — so an admission naming the wrong one is a mismatch, not a
-  preference. Widening a harness to a second backend is a deliberate act.
+  `backgroundWorkBackendsForHarness`/`harnessSupportsBackgroundWorkBackend`
+  (`harnesses.ts`, reading the `HARNESSES` table) are the capability predicate
+  beside them: Claude background work runs inside the retained query that issued
+  it (`claude-query`), pi background work is supervised by PA itself
+  (`host-process`), and neither runtime can hold the other's — so an admission
+  naming the wrong one is a mismatch, not a preference. Widening a harness to a
+  second backend is a deliberate act.
   `stopBackgroundWork`/`stopAllBackgroundWork` are the HUMAN Stop requests
   ([Task-486](pa://task/486)); the server resolves the owner from the durable
   row and calls the supervisor's domain service directly, never the model-facing
