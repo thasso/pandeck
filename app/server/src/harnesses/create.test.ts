@@ -53,40 +53,28 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     id: "claude-new",
     agentType: "developer",
     modelId: "opus",
+    thinkingLevel: "high",
+    mode: "plan",
     worktree: { id: "wt-1", path: "/work/tree" },
     credentialProfileId: "profile-1",
     promptEvidence: evidence,
-    skills: ["alpha"],
     additionalSystemPrompt: "Be brief.",
     title: "Fix the build",
   });
 
-  assert.deepEqual(order, [
-    "link",
-    'acquire:conditions=true:skills=["alpha"]',
-    "title:Fix the build",
-  ]);
+  assert.equal(order[0], "link");
+  // Its current skills (none in this library) are frozen before it exists.
+  assert.equal(order[1], "acquire:conditions=true:skills=[]");
+  assert.equal(order[2], "title:Fix the build");
   assert.deepEqual(acquire.mock.calls[0]?.[1], {
     agentType: "developer",
     credentialProfileId: "profile-1",
     modelId: "opus",
+    thinkingLevel: "high",
     cwd: "/work/tree",
     additionalSystemPrompt: "Be brief.",
+    mode: "plan",
   });
-});
-
-test("a Claude session's current skills are resolved and frozen before it exists", async () => {
-  const order: string[] = [];
-  claudeStore(order);
-  await createSession({
-    harness: "claude-sdk",
-    id: "claude-current-skills",
-    agentType: "developer",
-    credentialProfileId: "profile-1",
-    skills: true,
-  });
-  assert.equal(order.length, 1);
-  assert.match(order[0]!, /:skills=\[/, "frozen before the store acquired");
 });
 
 test("a named Claude id is checked against the disk too; a minted one is not", async () => {
@@ -168,7 +156,6 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
     worktree: { id: "wt-1", path: "/work/tree" },
     credentialProfileId: "profile-2",
     promptEvidence: evidence,
-    skills: true,
     purpose: "draft",
     title: "Plan the release",
   });
@@ -210,4 +197,34 @@ test("a session in a bare directory runs there and is linked to no worktree", as
     "/main/checkout",
   );
   assert.equal(link.mock.calls.length, 0);
+});
+
+test("a worktree whose checkout is not live yet is linked, and the session runs in the app CWD", async () => {
+  const links: string[] = [];
+  vi.spyOn(worktreeStore, "linkSessionToWorktree").mockImplementation(
+    (sessionId, worktreeId) => void links.push(`${sessionId}->${worktreeId}`),
+  );
+  const acquire = claudeStore([]);
+  const acquireNew = vi
+    .spyOn(piStore, "acquireNew")
+    .mockResolvedValue({ sessionId: "pi-pending", rename() {} } as never);
+  await createSession({
+    harness: "claude-sdk",
+    agentType: "developer",
+    id: "claude-pending",
+    worktree: { id: "wt-pending" },
+    credentialProfileId: "profile-1",
+  });
+  await createSession({
+    harness: "pi",
+    agentType: "developer",
+    worktree: { id: "wt-pending" },
+    credentialProfileId: "profile-2",
+  });
+  assert.deepEqual(links, [
+    "claude-pending->wt-pending",
+    "pi-pending->wt-pending",
+  ]);
+  assert.ok(!("cwd" in (acquire.mock.calls[0]?.[1] ?? {})));
+  assert.ok(!("cwd" in ((acquireNew.mock.calls[0]?.[3] as object) ?? {})));
 });

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
 import {
   REVIEW_REPORT_CONVENTION,
   REVIEW_RESPONSE_CONVENTION,
@@ -45,6 +45,9 @@ const recipe = await import("./codeDeliveryRecipe.ts");
 const agentExecutor = await import("./agentExecutor.ts");
 const { SessionBusyError } = await import("../session/runtime/index.ts");
 const { closeDb } = await import("../db/index.ts");
+const { createSession } = await import("../harnesses/create.ts");
+const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
+const { piStore } = await import("../piSdk/piStore.ts");
 
 afterAll(() => {
   closeDb();
@@ -90,30 +93,44 @@ function driver(id: string, harness: "pi" | "claude-sdk" = "pi") {
   } as unknown as RuntimePromptDriver;
 }
 
+// Engine stand-ins behind the real `createSession`, so the executor's spec
+// goes through the same creation sequence a real session does.
+vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id, opts) => {
+  // The edge must exist before Claude acquisition resolves cwd.
+  assert.equal(worktrees.worktreeIdForSession(id), "wt-test");
+  sessionStore.upsert({
+    id,
+    harness: "claude-sdk",
+    agentType: opts?.agentType ?? "developer",
+    ...(opts?.credentialProfileId
+      ? { credentialProfileId: opts.credentialProfileId }
+      : {}),
+  });
+  return {
+    ...driver(id, "claude-sdk"),
+    setTitle: (title: string) => createdTitles.push(title),
+  } as never;
+});
+vi.spyOn(piStore, "acquireNew").mockImplementation(
+  async (agentType, _model, _thinkingLevel, opts) => {
+    createdAgentTypes.push(agentType);
+    // The app CWD when the run's checkout is not live, as pi defaults it.
+    createdCwds.push(opts?.cwd ?? tmp);
+    createdEvidence.push(opts?.promptEvidence ?? { hasAttachments: false });
+    return {
+      ...driver(`pi-${++nextSession}`),
+      sessionMode: "build",
+      rename: (title: string) => createdTitles.push(title),
+    } as never;
+  },
+);
+
 function deps(): WorkflowAgentExecutorDeps {
   return {
     newSessionId: () => `claude-${++nextSession}`,
     acquireById: async (id) => (available.has(id) ? driver(id) : undefined),
-    acquireClaudeSdk: ({ id, credentialProfileId, title }) => {
-      // The edge must exist before Claude acquisition resolves cwd.
-      assert.equal(worktrees.worktreeIdForSession(id), "wt-test");
-      createdTitles.push(title);
-      sessionStore.upsert({
-        id,
-        harness: "claude-sdk",
-        agentType: "developer",
-        credentialProfileId,
-      });
-      return driver(id, "claude-sdk");
-    },
     findPiModel: async (_profile, provider, id) => ({ provider, id }) as never,
-    acquirePi: async (input) => {
-      createdAgentTypes.push(input.agentType);
-      createdCwds.push(input.cwd);
-      createdEvidence.push(input.promptEvidence);
-      createdTitles.push(input.title);
-      return driver(`pi-${++nextSession}`);
-    },
+    create: createSession,
     prompt: async (live, text, options) => {
       prompts.push({
         sessionId: live.sessionId,

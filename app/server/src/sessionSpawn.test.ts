@@ -79,6 +79,9 @@ const { getSettings, updateSettings } = await import("./settings.ts");
 const { listCredentialProfiles } = await import("./credentialProfiles.ts");
 const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
+const { createSession } = await import("./harnesses/create.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -165,16 +168,45 @@ beforeEach(() => {
   createFails = undefined;
   deliverFails = false;
   let counter = 0;
+  const standIn = (sessionId: string) =>
+    ({ sessionId, setTitle() {}, rename() {} }) as never;
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id: string) =>
+    standIn(id),
+  );
+  vi.spyOn(piStore, "acquireNew").mockImplementation(async () =>
+    standIn(`pi-session-${(counter += 1)}`),
+  );
   setSessionSpawnDepsForTests({
     newSessionId: () => `claude-session-${(counter += 1)}`,
-    createClaude: async (input) => {
-      if (createFails === input.title) throw new Error("creation exploded");
-      recorded.claude.push({ ...input });
-    },
-    createPi: async (input) => {
-      if (createFails === input.title) throw new Error("creation exploded");
-      recorded.pi.push({ ...input });
-      return `pi-session-${(counter += 1)}`;
+    findPiModel: async (_profile, provider, modelId) =>
+      ({ provider, id: modelId }) as never,
+    create: async (spec) => {
+      if (createFails === spec.title) throw new Error("creation exploded");
+      const cwd = spec.worktree?.path ?? spec.cwd;
+      const started = {
+        thinkingLevel: spec.thinkingLevel,
+        agentType: spec.agentType,
+        ...(cwd ? { cwd } : {}),
+        credentialProfileId: spec.credentialProfileId,
+        title: spec.title,
+      };
+      if (spec.harness === "claude-sdk")
+        recorded.claude.push({
+          id: spec.id,
+          modelId: spec.modelId,
+          ...started,
+        });
+      else {
+        const model = spec.model as unknown as { provider: string; id: string };
+        recorded.pi.push({
+          provider: model.provider,
+          modelId: model.id,
+          ...started,
+          promptEvidence: spec.promptEvidence,
+        });
+      }
+      // The real creation sequence (link, freeze, title) on stand-in engines.
+      return createSession(spec);
     },
     deliver: async (input) => {
       // Provenance is durable BEFORE the opening prompt is delivered, and the

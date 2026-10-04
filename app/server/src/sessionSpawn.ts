@@ -42,7 +42,6 @@ import {
   enabledCredentialProfileById,
   automaticProfileIdFor,
 } from "./credentialProfiles.ts";
-import { linkSessionToWorktree } from "./db/worktreeStore.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { errorText } from "./errors.ts";
 import { getProject } from "./projectRegistry.ts";
@@ -57,11 +56,8 @@ import {
 } from "./peerSpawnRuntimes.ts";
 import { registerApprovalExecutor } from "./pendingApprovals.ts";
 import { sendPeerPrompt } from "./peerPrompt.ts";
-import {
-  sessionPromptConditions,
-  type SessionPromptEvidence,
-} from "./promptConditions.ts";
-import { sessionSkills } from "./sessionSkills.ts";
+import type { LiveSession } from "./harness.ts";
+import type { NewSession } from "./harnesses/create.ts";
 import {
   applySessionContext,
   resolveSessionContext,
@@ -595,28 +591,20 @@ export async function prepareSpawnApproval(
 
 /* -------------------------------- execution ------------------------------- */
 
+/** A pi model handle on the session's account, as creation takes it. */
+type PiSessionModel = Extract<NewSession, { harness: "pi" }>["model"];
+
 /** Injectable creation/delivery seams; validation and linking stay real. */
 export interface SessionSpawnDeps {
   newSessionId(): string;
-  createClaude(input: {
-    id: string;
-    modelId: string;
-    thinkingLevel: ThinkingLevel;
-    agentType: SpawnAgentType;
-    cwd?: string;
-    credentialProfileId: string;
-    title: string;
-  }): Promise<void>;
-  createPi(input: {
-    provider: string;
-    modelId: string;
-    thinkingLevel: ThinkingLevel;
-    agentType: SpawnAgentType;
-    cwd?: string;
-    credentialProfileId: string;
-    promptEvidence: SessionPromptEvidence;
-    title: string;
-  }): Promise<string>;
+  /** The pi model a row names, on its account; undefined when it is gone. */
+  findPiModel(
+    credentialProfileId: string,
+    provider: string,
+    modelId: string,
+  ): Promise<PiSessionModel | undefined>;
+  /** Create and register the session (`harnesses/create.ts`). */
+  create(spec: NewSession): Promise<LiveSession>;
   deliver(input: {
     senderSessionId: string;
     targetSessionId: string;
@@ -639,47 +627,11 @@ async function harnessHub() {
 
 const REAL_DEPS: SessionSpawnDeps = {
   newSessionId: randomUUID,
-  createClaude: async (input) => {
-    const session = (await harnessHub()).acquireClaudeSdk(
-      input.id,
-      input.modelId,
-      input.thinkingLevel,
-      input.agentType,
-      input.cwd,
-      undefined,
-      input.credentialProfileId,
-    );
-    // Before the first prompt: `setTitle` also marks auto-naming done, so the
-    // spawner's title is the one the sidebar keeps.
-    session.setTitle(input.title);
-  },
-  createPi: async (input) => {
-    const model = await findModelForProfile(
-      input.credentialProfileId,
-      input.provider,
-      input.modelId,
-    );
-    if (!model)
-      throw new Error(
-        `${input.provider}/${input.modelId} is no longer available on this account.`,
-      );
-    const live = await (
-      await harnessHub()
-    ).acquireNew(input.agentType, model, input.thinkingLevel, {
-      ...(input.cwd ? { cwd: input.cwd } : {}),
-      credentialProfileId: input.credentialProfileId,
-      promptEvidence: input.promptEvidence,
-    });
-    sessionStore.upsert({
-      id: live.sessionId,
-      harness: "pi",
-      agentType: input.agentType,
-      credentialProfileId: input.credentialProfileId,
-    });
-    // A stored title makes `shouldAutoNamePiSession` false on the first prompt.
-    live.rename(input.title);
-    return live.sessionId;
-  },
+  findPiModel: findModelForProfile,
+  // Dynamic for the same reason as `harnessHub`: creation reaches the Claude
+  // store, whose tool catalog pulls this module in.
+  create: async (spec) =>
+    (await import("./harnesses/create.ts")).createSession(spec),
   deliver: async (input) => {
     await sendPeerPrompt({
       senderSessionId: input.senderSessionId,
@@ -738,7 +690,6 @@ async function spawnOne(
     throw new Error(
       `Task ${item.taskId} was deleted since this was proposed — nothing was created for "${item.title}".`,
     );
-  const cwd = worktree?.path;
   // Resolved before creation, applied after: the same rule and the same pairing
   // of frozen evidence to attachments every other trigger uses
   // (`sessionContext.ts`). The card's own Project is passed, never re-derived
@@ -776,38 +727,38 @@ async function spawnOne(
     if (runtime.accountName) item.accountName = runtime.accountName;
   }
 
-  let sessionId: string;
+  // What the session starts with, whichever engine runs it: creation links
+  // its worktree, freezes its prompt conditions and skills before the first
+  // query, and titles it, which also stops it being auto-named.
+  const start = {
+    agentType: item.agentType,
+    thinkingLevel: item.thinkingLevel,
+    credentialProfileId: item.credentialProfileId,
+    promptEvidence: evidence,
+    title: item.title,
+    ...(worktree ? { worktree: { id: worktree.id, path: worktree.path } } : {}),
+  };
+  let spec: NewSession;
   if (item.provider === CLAUDE_SDK_PROVIDER) {
-    sessionId = deps.newSessionId();
-    // Link and freeze BEFORE acquiring: the id is ours, so the edge is in place
-    // when the store resolves the session cwd, and the prompt conditions are
-    // frozen before the first query builds the system prompt.
-    if (worktree) linkSessionToWorktree(sessionId, worktree.id);
-    sessionPromptConditions(sessionId, item.agentType, evidence);
-    await sessionSkills(sessionId, item.agentType);
-    await deps.createClaude({
-      id: sessionId,
+    spec = {
+      harness: "claude-sdk",
+      id: deps.newSessionId(),
       modelId: item.modelId,
-      thinkingLevel: item.thinkingLevel,
-      agentType: item.agentType,
-      ...(cwd ? { cwd } : {}),
-      credentialProfileId: item.credentialProfileId,
-      title: item.title,
-    });
+      ...start,
+    };
   } else {
-    sessionId = await deps.createPi({
-      provider: item.provider,
-      modelId: item.modelId,
-      thinkingLevel: item.thinkingLevel,
-      agentType: item.agentType,
-      ...(cwd ? { cwd } : {}),
-      credentialProfileId: item.credentialProfileId,
-      promptEvidence: evidence,
-      title: item.title,
-    });
-    await sessionSkills(sessionId, item.agentType);
-    if (worktree) linkSessionToWorktree(sessionId, worktree.id);
+    const model = await deps.findPiModel(
+      item.credentialProfileId,
+      item.provider,
+      item.modelId,
+    );
+    if (!model)
+      throw new Error(
+        `${item.provider}/${item.modelId} is no longer available on this account.`,
+      );
+    spec = { harness: "pi", model, ...start };
   }
+  const sessionId = (await deps.create(spec)).sessionId;
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
   item.resultSessionId = sessionId;
