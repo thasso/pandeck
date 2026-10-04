@@ -319,3 +319,29 @@ test("an unreadable unrelated file never breaks the connection listener", async 
     if (hadFile) renameSync(saved, path);
   }
 });
+
+test("a Slack connection card resolves once both tokens are stored", async () => {
+  const { saveSettings } = await import("./settingsService.ts");
+  await saveSettings({ slack: { disconnect: true } });
+  const card = createApproval({
+    sessionId: "s-slack",
+    kind: "settingsInput",
+    title: "Connect Slack workspace connection",
+    body: {
+      kind: "settingsInput",
+      path: "slack.connection",
+      label: "Slack workspace connection",
+      section: "slack",
+      mode: "connect",
+      wasConfigured: false,
+    },
+  });
+  // Half a connection does not satisfy it.
+  await saveSettings({ slack: { userToken: "xoxp-fixture" } });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(approvalForId(card.id)?.status, "pending");
+  await saveSettings({ slack: { botToken: "xoxb-fixture" } });
+  await vi.waitFor(() =>
+    assert.equal(approvalForId(card.id)?.status, "executed"),
+  );
+});

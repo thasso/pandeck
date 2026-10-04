@@ -3319,7 +3319,7 @@ function SlackSection({
   const [enabled, setEnabled] = useState(slack.enabled);
   const [oauthStartedAt, setOauthStartedAt] = useState<number | null>(null);
   const oauthWindow = useRef<Window | null>(null);
-  const connected = slack.userTokenConfigured && slack.botTokenConfigured;
+  const connected = slack.connected;
 
   useEffect(() => setEnabled(slack.enabled), [slack.enabled]);
   const checkedOnOpen = useRef(false);

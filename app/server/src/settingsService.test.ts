@@ -180,6 +180,10 @@ describe("settingsPatchForWrites", () => {
       clearToken: true,
     });
     assert.deepEqual(patch.google, { clearTokens: true });
+    assert.deepEqual(
+      settingsPatchForWrites([{ path: "slack.connection", value: null }]).slack,
+      { disconnect: true },
+    );
   });
 
   test("refuses what cannot be written", () => {

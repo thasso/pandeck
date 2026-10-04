@@ -633,6 +633,14 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "slack.botTokenConfigured",
     "clearBotToken",
   ),
+  oauth(
+    "slack.connection",
+    "slack",
+    "Slack workspace connection",
+    "slack.connected",
+    "disconnect",
+    "/api/slack/oauth/start",
+  ),
   readonly(
     "slack.oauthClientConfigured",
     "slack",
