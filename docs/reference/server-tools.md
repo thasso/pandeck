@@ -618,8 +618,8 @@ persona toolsets.
   Stop requires the target's durable spawn edge to name the caller and remain
   `coordinator`-owned. Its optional `clearQueue` cancels every waiting row for
   that owned child before the runtime abort, so the idle hook sees an empty
-  queue. A direct human takeover revokes stop authority, and neither operation
-  archives or deletes a session.
+  queue. The user's explicit Take over revokes stop authority (Hand back
+  restores it), and neither operation archives or deletes a session.
 - `workflow/sessionSubmitResultTool.ts` owns `session_submit_result` (coding
   personas, catalog group `workflow`, shared and deferred; assignment prompts
   explicitly direct discovery through tool search). It resolves the caller's one

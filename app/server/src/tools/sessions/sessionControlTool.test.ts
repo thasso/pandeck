@@ -161,7 +161,7 @@ describe("session_control tool", () => {
 
     const child = seed("Taken over child");
     sessionStore.linkSpawned(caller, child);
-    sessionStore.markSpawnedTakenOver(child);
+    sessionStore.setSpawnedOwnership(child, "taken-over");
     await assert.rejects(
       () =>
         tool().execute(

@@ -1192,7 +1192,7 @@ interface DbSessionLinkRow {
 interface SpawnProvenance {
   parentSessionId: string;
   ownership: SpawnOwnership;
-  /** When the first accepted direct human prompt took the child over. */
+  /** When the user explicitly took the child over. */
   takenOverAt?: number;
 }
 
@@ -1200,7 +1200,7 @@ interface SpawnProvenance {
  * Ownership as stored on the `spawned` edge's `metadata_json`.
  *
  * Written only by {@link linkSpawned} (at creation) and
- * {@link markSpawnedTakenOver}; anything else — an absent, unparseable, or
+ * {@link setSpawnedOwnership}; anything else — an absent, unparseable, or
  * unrecognized value — fails closed to `unknown` rather than claiming the
  * coordinator still owns a child we know nothing about.
  */
@@ -1298,18 +1298,20 @@ function linkSpawned(
 }
 
 /**
- * Record that the user personally took over a spawned child.
+ * Set who owns a spawned child — the user (`taken-over`) or its coordinator —
+ * on the user's EXPLICIT word ([Task-637](pa://task/637)). Messaging a peer
+ * is not that word: a poke leaves its coordinator in charge.
  *
- * Monotonic and idempotent: the FIRST qualifying prompt stores the timestamp and
- * every later one is a no-op, so the returned boolean is exactly "ownership
- * transitioned now" — the one condition that justifies a session-list
- * broadcast. An `unknown` edge transitions too: a direct human prompt is
- * evidence about ownership that missing creation metadata is not. A session
- * with no spawn edge is not a spawned child and returns false.
+ * Idempotent, so the returned boolean is exactly "ownership changed now" —
+ * the one condition that justifies a session-list broadcast. Taking over again
+ * keeps the first takeover's timestamp. An `unknown` edge may be set either
+ * way: the user's decision is evidence that missing creation metadata is not.
+ * A session with no spawn edge is not a spawned child and returns false.
  */
-function markSpawnedTakenOver(
+function setSpawnedOwnership(
   childSessionId: string,
-  takenOverAt = Date.now(),
+  ownership: "taken-over" | "coordinator",
+  at = Date.now(),
 ): boolean {
   const rows = getDb()
     .prepare(
@@ -1320,7 +1322,7 @@ function markSpawnedTakenOver(
     .all(childSessionId) as unknown as DbSessionLinkRow[];
   const row = rows[0];
   if (!row) return false;
-  if (parseSpawnOwnership(row.metadata_json).ownership === "taken-over")
+  if (parseSpawnOwnership(row.metadata_json).ownership === ownership)
     return false;
   getDb()
     .prepare(
@@ -1329,7 +1331,11 @@ function markSpawnedTakenOver(
         WHERE parent_session_id = ? AND child_session_id = ? AND relation_type = 'spawned'`,
     )
     .run(
-      JSON.stringify({ ownership: "taken-over", takenOverAt }),
+      JSON.stringify(
+        ownership === "taken-over"
+          ? { ownership, takenOverAt: at }
+          : { ownership },
+      ),
       row.parent_session_id,
       childSessionId,
     );
@@ -1639,7 +1645,7 @@ export const sessionStore = {
   getSkills,
   getUsageTotals,
   linkSpawned,
-  markSpawnedTakenOver,
+  setSpawnedOwnership,
   spawnedParentsByChildIds,
   recordUsageTurn,
   replaceUsage,

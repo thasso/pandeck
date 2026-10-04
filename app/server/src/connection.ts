@@ -206,6 +206,7 @@ import {
   updateQueuedPrompt,
 } from "./promptQueue.ts";
 import { settleSessionWithPeers } from "./sessionActivity.ts";
+import { setSpawnOwnership } from "./spawnOwnership.ts";
 import {
   CONTEXT_ONLY_SLASH_COMMANDS,
   hostSlashCommandRunner,
@@ -956,6 +957,8 @@ export class Connection implements Viewer {
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
       case "renameSession":
         return this.onRenameSession(msg.id, msg.title);
+      case "setSpawnOwnership":
+        return this.onSetSpawnOwnership(msg.id, msg.ownership);
       case "acknowledgeMissingWorktree":
         return this.onAcknowledgeMissingWorktree(msg.id);
       case "calendarDayActivate":
@@ -4707,6 +4710,32 @@ export class Connection implements Viewer {
    * disappeared. Re-broadcast the session state and list so the banner clears
    * and `worktreeMissing` drops everywhere, not just in this browser.
    */
+  /**
+   * Take a spawned peer over, or hand it back to its coordinator, on the
+   * user's explicit word (`spawnOwnership.ts`). A session with no spawn edge
+   * has no owner to set, which is a refusal the user should see; a request
+   * that changes nothing broadcasts nothing.
+   */
+  private async onSetSpawnOwnership(
+    id: string,
+    ownership: "taken-over" | "coordinator",
+  ): Promise<void> {
+    const ref = this.resolveSessionRef(id);
+    if (ref && !this.guardSessionRef(ref)) return;
+    if (ownership !== "taken-over" && ownership !== "coordinator") return;
+    const changed = setSpawnOwnership(id, ownership);
+    if (changed === undefined) {
+      this.send({
+        type: "error",
+        message: "Only a session another session spawned can be taken over.",
+      });
+      return;
+    }
+    if (!changed) return;
+    if (this.viewing?.sessionId === id) this.viewing.broadcastState();
+    await hub.broadcastSessions();
+  }
+
   private async onAcknowledgeMissingWorktree(id: string): Promise<void> {
     const ref = this.resolveSessionRef(id);
     if (ref && !this.guardSessionRef(ref)) return;

@@ -730,12 +730,15 @@ alone. Top to bottom, for the current main-pane object:
    fork/draft lineage). New peer sessions created by `session_spawn` retain
    durable parentage here: the child shows **Spawned by** and its coordinator
    shows **Spawned sessions**, with each row opening the related Session. A
-   child the user has prompted directly is marked **Taken over** on that row,
-   ahead of its running/model/thinking detail and read from `spawnOwnership`,
-   never from a title or a role word; a coordinator-owned or untracked child
-   carries no marker. The inspector LISTS this relation; the Sessions inbox is
-   what folds it into one card (above). A group may bound its first page (a
-   session's Tasks shows five) and reveal the rest on demand.
+   child the user has explicitly taken over is marked **Taken over** on that
+   row, ahead of its running/model/thinking detail and read from
+   `spawnOwnership`, never from a title or a role word; a coordinator-owned or
+   untracked child carries no marker. A spawned session's own panel offers
+   **Take over** — the ONE way ownership moves, since messaging a peer is a poke
+   that leaves its coordinator in charge — and, once taken, **Hand back**,
+   naming the coordinator it returns to. The inspector LISTS this relation; the
+   Sessions inbox is what folds it into one card (above). A group may bound its
+   first page (a session's Tasks shows five) and reveal the rest on demand.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

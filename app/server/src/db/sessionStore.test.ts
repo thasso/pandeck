@@ -131,7 +131,7 @@ test("SQLite session store persists and batch-reads one spawned parent per child
   getDb().prepare("DELETE FROM session_index WHERE id = ?").run(otherParent);
 });
 
-test("SQLite session store records spawn takeover monotonically", () => {
+test("SQLite session store sets spawn ownership on the user's word", () => {
   const suffix = `${Date.now()}-${Math.random()}`;
   const parent = `own-parent-${suffix}`;
   const child = `own-child-${suffix}`;
@@ -155,22 +155,38 @@ test("SQLite session store records spawn takeover monotonically", () => {
     ownership: "coordinator",
   });
 
-  // The first qualifying prompt transitions and stamps; later ones do not.
-  assert.equal(sessionStore.markSpawnedTakenOver(child, 500), true);
+  // Taking over transitions and stamps; taking over again does not.
+  assert.equal(
+    sessionStore.setSpawnedOwnership(child, "taken-over", 500),
+    true,
+  );
   assert.deepEqual(ownershipOf(child), {
     parentSessionId: parent,
     ownership: "taken-over",
     takenOverAt: 500,
   });
   assert.equal(
-    sessionStore.markSpawnedTakenOver(child, 900),
+    sessionStore.setSpawnedOwnership(child, "taken-over", 900),
     false,
-    "a later prompt reports no transition, so nothing is broadcast",
+    "a repeated takeover reports no transition, so nothing is broadcast",
   );
   assert.equal(
     ownershipOf(child)?.takenOverAt,
     500,
     "the first takeover timestamp is preserved",
+  );
+
+  // Handing back returns the child to its coordinator; repeating it is no
+  // transition, and taking over again stamps afresh.
+  assert.equal(sessionStore.setSpawnedOwnership(child, "coordinator"), true);
+  assert.deepEqual(ownershipOf(child), {
+    parentSessionId: parent,
+    ownership: "coordinator",
+  });
+  assert.equal(sessionStore.setSpawnedOwnership(child, "coordinator"), false);
+  assert.equal(
+    sessionStore.setSpawnedOwnership(child, "taken-over", 500),
+    true,
   );
 
   // Re-linking the same pair is idempotent and cannot erase the takeover.
@@ -200,25 +216,31 @@ test("SQLite session store records spawn takeover monotonically", () => {
   assert.equal(ownershipOf(malformed)?.ownership, "unknown");
 
   // A taken-over marker without a finite timestamp is malformed too. It must
-  // remain repairable by the first qualifying prompt.
+  // remain repairable by an explicit takeover.
   setMetadata(malformed, JSON.stringify({ ownership: "taken-over" }));
   assert.equal(ownershipOf(malformed)?.ownership, "unknown");
   setMetadata(malformed, '{"ownership":"taken-over","takenOverAt":1e999}');
   assert.equal(ownershipOf(malformed)?.ownership, "unknown");
-  assert.equal(sessionStore.markSpawnedTakenOver(malformed, 700), true);
+  assert.equal(
+    sessionStore.setSpawnedOwnership(malformed, "taken-over", 700),
+    true,
+  );
   assert.deepEqual(ownershipOf(malformed), {
     parentSessionId: parent,
     ownership: "taken-over",
     takenOverAt: 700,
   });
 
-  // An unknown edge still transitions: a direct human prompt is evidence that
+  // An unknown edge still transitions: the user's decision is evidence that
   // missing creation metadata is not.
-  assert.equal(sessionStore.markSpawnedTakenOver(legacy, 800), true);
+  assert.equal(
+    sessionStore.setSpawnedOwnership(legacy, "taken-over", 800),
+    true,
+  );
   assert.equal(ownershipOf(legacy)?.ownership, "taken-over");
 
   // A session that was never spawned has no ownership to move.
-  assert.equal(sessionStore.markSpawnedTakenOver(plain), false);
+  assert.equal(sessionStore.setSpawnedOwnership(plain, "taken-over"), false);
   assert.equal(ownershipOf(plain), undefined);
 
   for (const id of [parent, child, legacy, malformed, plain])

@@ -909,6 +909,14 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
   renameSession: fields({ id: STRING, title: STRING }),
+  setSpawnOwnership: fields({
+    id: STRING,
+    ownership: {
+      check: (value: unknown) =>
+        value === "taken-over" || value === "coordinator",
+      kind: '"taken-over" or "coordinator"',
+    },
+  }),
   acknowledgeMissingWorktree: fields({ id: STRING }),
   calendarDayActivate: fields(
     { date: STRING },

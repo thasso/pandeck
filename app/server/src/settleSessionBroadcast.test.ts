@@ -140,7 +140,7 @@ test("settling a coordinator settles the peers it still coordinates", async () =
   sessionStore.linkSpawned(coordinator, peer);
   sessionStore.linkSpawned(peer, grandchild);
   sessionStore.linkSpawned(coordinator, takenOver);
-  sessionStore.markSpawnedTakenOver(takenOver);
+  sessionStore.setSpawnedOwnership(takenOver, "taken-over");
   assert.equal(sessionStore.recordSessionOutcome(coordinator, "completed"), 1);
   assert.equal(sessionStore.recordSessionOutcome(takenOver, "completed"), 1);
 
