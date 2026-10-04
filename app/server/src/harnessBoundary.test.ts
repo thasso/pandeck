@@ -73,7 +73,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
   "connection.ts": 13,
-  "hub.ts": 3,
   "promptInventory.ts": 4,
   "session/planHint.ts": 1,
   "sessionAudit.ts": 4,

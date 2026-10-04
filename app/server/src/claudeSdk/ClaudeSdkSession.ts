@@ -863,7 +863,7 @@ export class ClaudeSdkSession implements LiveSession {
       );
   }
 
-  private broadcast(message: Parameters<Viewer["send"]>[0]): void {
+  broadcast(message: Parameters<Viewer["send"]>[0]): void {
     this.residency.broadcast(message);
   }
 
