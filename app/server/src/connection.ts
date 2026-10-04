@@ -1513,9 +1513,11 @@ export class Connection implements Viewer {
 
   /**
    * A session's first send: it creates the session and prompts it, for either
-   * engine. The flow is one; the session's engine answers only what differs
-   * (`harnesses/firstSend.ts`): whether it takes the send, what it resolves
-   * before a worktree is provisioned, and how it brings the session live. The
+   * engine. The flow is one, the persona guard included; the session's engine
+   * answers only what differs (`harnesses/firstSend.ts`): whether it is
+   * switched off, whether the send's id is the session's and may be taken,
+   * which persona gate applies, the account, what it resolves before a
+   * worktree is provisioned, and how it brings the session live. The
    * session comes into existence with its first prompt, so model, thinking and
    * mode are fixed exactly when the conversation starts.
    */
@@ -1535,8 +1537,8 @@ export class Connection implements Viewer {
     }
     if (!this.guardFirstSendPersona(msg.agentType, engine.personaGate)) return;
     const admitted = engine.account(msg);
-    if ("message" in admitted) {
-      this.refuseFirstSend(msg, admitted);
+    if ("refusal" in admitted) {
+      this.refuseFirstSend(msg, admitted.refusal);
       return;
     }
     // The client is already on this session's surface: the send commits this
@@ -1545,9 +1547,9 @@ export class Connection implements Viewer {
     const ticket = this.claimViewRequest(
       engine.takesClientId ? msg.id : undefined,
     );
-    const create = await engine.prepare(msg, admitted.profileId);
-    if (typeof create !== "function") {
-      this.refuseFirstSend(msg, create);
+    const prepared = await engine.prepare(msg, admitted.profileId);
+    if ("refusal" in prepared) {
+      this.refuseFirstSend(msg, prepared.refusal);
       return;
     }
     const staged = await this.resolveWorktreeContext(msg.worktreeId);
@@ -1565,7 +1567,7 @@ export class Connection implements Viewer {
     const firstSendContext = resolveSessionContext(
       sessionContextRequest(msg, worktree),
     );
-    const created = await create({
+    const created = await prepared.create({
       worktree,
       evidence: sessionContextEvidence(firstSendContext, {
         hasAttachments: Boolean(msg.attachments?.length),

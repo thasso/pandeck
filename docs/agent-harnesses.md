@@ -55,10 +55,15 @@ Four layers, each depending only on the ones below it:
      before a worktree is provisioned (`prepare`, pi's model), and how it brings
      the session live (pi mints its id and freezes the prompt evidence inside
      creation; Claude takes the client's id, links the worktree and freezes
-     first). Step 11 starts by moving that creation into a registry-level
-     `create` reaching the hub through `HarnessHost`, so spawn and workflow stop
-     copying the Claude sequence and this module keeps only admission and
-     preparation.
+     first). Until then `firstSend.ts` imports `hub.ts`, a layer above it. Step
+     11 starts by moving that creation into a registry-level `create` reaching
+     the hub through `HarnessHost`, which removes that import and keeps this
+     module to admission and preparation. Every other caller that builds a
+     Claude session by hand moves onto it too: spawn, workflow, the
+     review-comment new session and day session in `connection.ts`, the worktree
+     merge agent and the permanent assistant. All of them mint their ids
+     server-side, which is what lets `hub.acquireClaudeSdk`'s backstop skip the
+     disk; `create` keeps that a stated precondition.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the

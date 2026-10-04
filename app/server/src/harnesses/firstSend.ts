@@ -2,9 +2,12 @@
  * What a session's first send asks of its engine (`docs/agent-harnesses.md`
  * step 10). `Connection.handleFirstSend` runs one flow for both engines: the
  * view claim, the worktree, the session context, viewing the new session, its
- * genesis card, the context links and the prompt. The engine answers only what
- * differs: whether it takes the send at all, what it resolves before a
- * worktree can be provisioned, and how it brings the session live.
+ * genesis card, the context links and the prompt, and the persona guard, which
+ * stays there. The engine answers only what differs: whether it is switched
+ * off, whether the client's id becomes the session's and may be taken, which
+ * persona gate applies, the account, what it resolves before a worktree can be
+ * provisioned, and how it brings the session live. Until step 11's registry
+ * `create`, the creation here reaches `hub.ts`, a layer above this one.
  */
 import type { ClientMessage, Harness, TaskSessionRef } from "@assistant/shared";
 import {
@@ -71,12 +74,16 @@ interface FirstSendEngine {
   /** Whether the send's id may be the session's; asked before the persona. */
   admitId(req: FirstSendRequest): FirstSendRefusal | undefined;
   /** The account the session runs on, or why the send names none it may use. */
-  account(req: FirstSendRequest): FirstSendRefusal | { profileId: string };
+  account(
+    req: FirstSendRequest,
+  ): { refusal: FirstSendRefusal } | { profileId: string };
   /** What has to be resolved before a worktree can be provisioned for it. */
   prepare(
     req: FirstSendRequest,
     profileId: string,
-  ): Promise<FirstSendRefusal | CreateFirstSendSession>;
+  ): Promise<
+    { refusal: FirstSendRefusal } | { create: CreateFirstSendSession }
+  >;
 }
 
 /** A Claude send names its id, so one another engine holds is refused. */
@@ -101,7 +108,9 @@ const engines: Record<Harness, FirstSendEngine> = {
       const profileId = req.credentialProfileId ?? defaultOpenAiProfileId();
       if (enabledCredentialProfileById(profileId)?.provider !== "openai-codex")
         return {
-          message: "Select an OpenAI credential profile for this pi session.",
+          refusal: {
+            message: "Select an OpenAI credential profile for this pi session.",
+          },
         };
       return { profileId };
     },
@@ -117,10 +126,12 @@ const engines: Record<Harness, FirstSendEngine> = {
         );
         if (!model)
           return {
-            message: `Model ${req.modelProvider}/${req.modelId} is not available.`,
+            refusal: {
+              message: `Model ${req.modelProvider}/${req.modelId} is not available.`,
+            },
           };
       }
-      return async ({ worktree, evidence }) => {
+      const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
         const live = await hub.acquireNew(
           req.agentType,
           model,
@@ -158,6 +169,7 @@ const engines: Record<Harness, FirstSendEngine> = {
           },
         };
       };
+      return { create };
     },
   },
   "claude-sdk": {
@@ -173,12 +185,14 @@ const engines: Record<Harness, FirstSendEngine> = {
         enabledCredentialProfileById(profileId)?.provider !== "claude"
       )
         return {
-          message: "Select a Claude credential profile for this session.",
+          refusal: {
+            message: "Select a Claude credential profile for this session.",
+          },
         };
       return { profileId };
     },
     async prepare(req, profileId) {
-      return async ({ worktree, evidence }) => {
+      const create: CreateFirstSendSession = async ({ worktree, evidence }) => {
         // Everything the writes below need is resolved first: from the
         // ownership check to the session's registration nothing awaits, so no
         // other engine can take the id in between, and a refusal comes before
@@ -217,6 +231,7 @@ const engines: Record<Harness, FirstSendEngine> = {
           },
         };
       };
+      return { create };
     },
   },
 };
