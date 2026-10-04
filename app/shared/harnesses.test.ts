@@ -54,8 +54,9 @@ test("only a harness with one picker provider names it", () => {
 test("every harness owns at least one background-work backend", () => {
   for (const id of HARNESS_IDS) {
     expect(backgroundWorkBackendsForHarness(id).length).toBeGreaterThan(0);
-    expect(backgroundWorkBackendsForHarness(id)).toBe(
-      HARNESSES[id].backgroundWorkBackends,
-    );
   }
+  expect(backgroundWorkBackendsForHarness("pi")).toEqual(["host-process"]);
+  expect(backgroundWorkBackendsForHarness("claude-sdk")).toEqual([
+    "claude-query",
+  ]);
 });

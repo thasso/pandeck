@@ -267,17 +267,13 @@ test("runtime prompt architecture boundaries do not gain new bypasses", () => {
   );
 });
 
-/**
- * Helper runs are reached from tool modules and most of the server, so the
- * entry point must not load the pi SDK (~0.75s) before a pi run needs it:
- * `piSdk/oneShot.ts` loads it on first use (`docs/agent-harnesses.md`).
- */
-test("runOneShot loads no engine SDK until a run needs it", () => {
+/** Every module and package `entry` reaches through value imports. */
+function staticReach(entry: string): { modules: string[]; packages: string[] } {
   const VALUE_IMPORT =
     /^\s*(?:import|export)\s+(?!type\b)(?:[^;]*?\s+from\s+)?["']([^"']+)["']/gms;
   const seen = new Set<string>();
   const packages = new Set<string>();
-  const queue = [join(SRC_ROOT, "harnesses", "oneShot.ts")];
+  const queue = [join(SRC_ROOT, entry)];
   while (queue.length) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
@@ -288,24 +284,44 @@ test("runOneShot loads no engine SDK until a run needs it", () => {
       else packages.add(specifier);
     }
   }
-  const modules = [...seen].map((file) => relative(SRC_ROOT, file));
-  assert.ok(
-    modules.includes("piSdk/oneShot.ts"),
-    "the walk reaches the runner",
-  );
-  assert.deepEqual(
-    modules.filter((rel) => rel === "piSdk/models.ts"),
-    [],
-    "piSdk/models.ts loads the pi SDK at import time",
-  );
-  assert.deepEqual(
-    [...packages].filter(
+  return {
+    modules: [...seen].map((file) => relative(SRC_ROOT, file)),
+    packages: [...packages],
+  };
+}
+
+function engineLoads(reach: { modules: string[]; packages: string[] }) {
+  return [
+    // piSdk/models.ts loads the pi SDK at import time.
+    ...reach.modules.filter((rel) => rel === "piSdk/models.ts"),
+    ...reach.packages.filter(
       (name) =>
         name.startsWith("@earendil-works/") ||
         name === "@anthropic-ai/claude-agent-sdk",
     ),
-    [],
+  ];
+}
+
+/**
+ * Helper runs are reached from tool modules and most of the server, so the
+ * entry point must not load the pi SDK (~0.75s) before a pi run needs it:
+ * `piSdk/oneShot.ts` loads it on first use (`docs/agent-harnesses.md`).
+ */
+test("runOneShot loads no engine SDK until a run needs it", () => {
+  const reach = staticReach("harnesses/oneShot.ts");
+  assert.ok(
+    reach.modules.includes("piSdk/oneShot.ts"),
+    "the walk reaches the runner",
   );
+  assert.deepEqual(engineLoads(reach), []);
+});
+
+/**
+ * Session-list rows name a Claude model through the curated list, which must
+ * stay cheap: `harnesses/models.ts` reaches pi's registry, this module may not.
+ */
+test("curated model options load no engine SDK", () => {
+  assert.deepEqual(engineLoads(staticReach("harnesses/curatedModels.ts")), []);
 });
 
 function sourceFiles(dir: string): string[] {

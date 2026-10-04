@@ -29,7 +29,7 @@ import {
 } from "@assistant/shared/usage";
 import { listCredentialProfiles } from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
-import { redeemOpenAiResetCreditForProfile } from "./piSdk/openaiUsageQuery.ts";
+import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
 import {
   peekUsageSnapshot,
   readUsageSnapshot,
@@ -128,7 +128,7 @@ const realDeps: AutoRedeemDeps = {
       force,
     })) as OpenAiUsageSnapshot,
   redeem: (profileId, creditId, redeemRequestId) =>
-    redeemOpenAiResetCreditForProfile(profileId, creditId, {
+    redeemOpenAiResetCredit(profileId, creditId, {
       requireApplicable: false,
       redeemRequestId,
     }),

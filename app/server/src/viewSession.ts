@@ -42,11 +42,7 @@ import type {
   HostCompactionOutcome,
 } from "./hostSlashCommands.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
-import {
-  claudeSdkModelOption,
-  knownClaudeSdkModelAlias,
-} from "./claudeSdk/modelSettings.ts";
-import { findModel, toModelOption } from "./piSdk/models.ts";
+import { storedSessionModelOption } from "./harnesses/models.ts";
 import { toolExposureForSession } from "./piSdk/toolActivation.ts";
 import { peerPromptThreadsFor } from "./peerPrompt.ts";
 import { promptQueueField } from "./promptQueue.ts";
@@ -216,15 +212,11 @@ export class ViewSession implements HarnessDriver {
    * column is the credential kind (`claude`), not the picker's provider id.
    */
   private modelOption(): ModelOption | undefined {
-    const { provider, model } = this.meta;
-    if (!model) return undefined;
-    if (this.harness === "claude-sdk") {
-      const alias = knownClaudeSdkModelAlias(model);
-      return alias ? claudeSdkModelOption(alias) : undefined;
-    }
-    if (!provider) return undefined;
-    const pi = findModel(provider, model);
-    return pi ? toModelOption(pi) : undefined;
+    return storedSessionModelOption(
+      this.harness,
+      this.meta.provider,
+      this.meta.model,
+    );
   }
 
   private originTask(): ReturnType<typeof findOriginTask> {

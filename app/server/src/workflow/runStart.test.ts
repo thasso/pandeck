@@ -499,16 +499,40 @@ test("a model the account does not offer is refused", async () => {
   );
 });
 
+test("a thinking level the picker offers is accepted", async () => {
+  // The server's list lets opus/sonnet/haiku run with thinking off.
+  const run = await startCodeDeliveryRun({
+    taskId: makeTask("wf-proj"),
+    config: {
+      ...config,
+      roles: {
+        ...config.roles,
+        implementer: [
+          { ...config.roles.implementer[0]!, thinkingLevel: "off" },
+        ],
+      },
+    },
+    limits: { maxIterations: 3, maxReviewPasses: 1 },
+    actor: USER,
+  });
+  assert.ok(run.id);
+});
+
 test("a thinking level the model does not accept is refused", async () => {
   await assertRefused(
     makeTask("wf-proj"),
     {
       ...config,
-      // Claude SDK models accept low…xhigh; "off" is not among them.
+      // Fable accepts low…xhigh only; "off" is not among them (the account's
+      // offered list, the same one the sheet's picker shows, decides).
       roles: {
         ...config.roles,
         implementer: [
-          { ...config.roles.implementer[0]!, thinkingLevel: "off" },
+          {
+            ...config.roles.implementer[0]!,
+            modelId: "fable",
+            thinkingLevel: "off",
+          },
         ],
       },
     },
