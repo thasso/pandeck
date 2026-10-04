@@ -71,6 +71,30 @@ export function setCredentialProfileDeletedHandler(
   credentialProfileDeletedHandler = handler;
 }
 
+const credentialProfileChangeListeners = new Set<(id: string) => void>();
+
+/**
+ * Hear about every change to an account: created, renamed, enabled or
+ * disabled, deleted, or its login state moved (a login that finished clears
+ * it). Settings-input sign-in cards resolve from this ([Task-729](pa://task/729)).
+ */
+export function subscribeCredentialProfileChanges(
+  listener: (id: string) => void,
+): () => void {
+  credentialProfileChangeListeners.add(listener);
+  return () => credentialProfileChangeListeners.delete(listener);
+}
+
+function credentialProfileChanged(id: string): void {
+  for (const listener of credentialProfileChangeListeners) {
+    try {
+      listener(id);
+    } catch (err) {
+      console.warn("[credential-profiles] change listener failed:", err);
+    }
+  }
+}
+
 /** Subscribe another lifecycle owner that must cancel profile-scoped work before private files are removed. */
 export function subscribeCredentialProfileDeleted(
   listener: (id: string) => void,
@@ -468,6 +492,7 @@ export function createCredentialProfile(input: {
   writeRegistry(profiles);
   if (profile.provider === "openai-codex") piAgentDir(profile.id);
   else claudeConfigDir(profile.id);
+  credentialProfileChanged(profile.id);
   return summary(profile);
 }
 
@@ -481,6 +506,7 @@ export function setCredentialProfileEnabled(
   const profile = { ...profiles[index]!, enabled, updatedAt: Date.now() };
   profiles[index] = profile;
   writeRegistry(profiles);
+  credentialProfileChanged(id);
   return summary(profile);
 }
 
@@ -498,6 +524,7 @@ export function renameCredentialProfile(
   const profile = { ...profiles[index]!, name, updatedAt: Date.now() };
   profiles[index] = profile;
   writeRegistry(profiles);
+  credentialProfileChanged(id);
   return summary(profile);
 }
 
@@ -521,6 +548,7 @@ export function deleteCredentialProfile(id: string): void {
   credentialProfileDeletedHandler?.(id);
   for (const listener of credentialProfileDeletedListeners) listener(id);
   rmSync(profileRoot(id), { recursive: true, force: true });
+  credentialProfileChanged(id);
 }
 
 export function setCredentialProfileLoginState(
@@ -546,11 +574,21 @@ export function setCredentialProfileLoginState(
         }
       : {}),
   });
+  credentialProfileChanged(id);
 }
 
 /** Clear terminal login state once provider-owned credentials are on disk. */
 export function clearCredentialProfileLoginState(id: string): void {
   transient.delete(id);
+  credentialProfileChanged(id);
+}
+
+/** One account as the Settings page shows it, with its current status. */
+export function credentialProfileSummaryById(
+  id: string,
+): CredentialProfileSummary | undefined {
+  const profile = credentialProfileById(id);
+  return profile ? summary(profile) : undefined;
 }
 
 export function credentialProfileById(

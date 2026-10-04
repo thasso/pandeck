@@ -9,6 +9,10 @@ import {
   type SettingDescriptor,
 } from "@assistant/shared/settingsRegistry";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
+import {
+  credentialProfileSummaryById,
+  subscribeCredentialProfileChanges,
+} from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
 import {
   approvalsForSession,
@@ -94,9 +98,26 @@ async function testOutcome(body: SettingsInputApprovalBody): Promise<string> {
   }
 }
 
+/** Whether a sign-in card's account exists, is enabled and has credentials. */
+function accountReady(body: SettingsInputApprovalBody): boolean {
+  const account = body.account
+    ? credentialProfileSummaryById(body.account.id)
+    : undefined;
+  return Boolean(account?.enabled && account.status === "ready");
+}
+
 registerApprovalExecutor("settingsInput", {
   async prepare(card, edits) {
     const body = bodyOf(card);
+    if (body.mode === "signIn") {
+      if (!body.account || !credentialProfileSummaryById(body.account.id))
+        throw new Error(`${body.label} no longer exists.`);
+      if (!accountReady(body))
+        throw new Error(
+          `${body.label} is not signed in yet. Sign in from the card; it updates by itself.`,
+        );
+      return body;
+    }
     const descriptor = descriptorOf(body);
     if (body.mode === "connect") {
       if (!settingIsSet(descriptor))
@@ -117,6 +138,8 @@ registerApprovalExecutor("settingsInput", {
 
   async execute(card) {
     const body = bodyOf(card);
+    if (body.mode === "signIn")
+      return { resultSummary: `${body.label}: signed in.` };
     if (body.mode === "connect")
       return {
         resultSummary: `${body.label}: connected.${await testOutcome(body)}`,
@@ -191,6 +214,93 @@ async function resolveConnectedCards(
     }
   }
 }
+
+/** How often waiting sign-in cards are re-checked; see {@link watchSignInCards}. */
+let signInReconcileMs = 3_000;
+let signInTimer: ReturnType<typeof setInterval> | undefined;
+/** Cards a resolution is already under way for, so two paths never race one. */
+const resolvingCards = new Set<string>();
+
+function pendingSignInCards(): ApprovalCard[] {
+  const cards: ApprovalCard[] = [];
+  for (const sessionId of pendingApprovalSessionIds())
+    for (const card of approvalsForSession(sessionId))
+      if (
+        card.status === "pending" &&
+        card.body.kind === "settingsInput" &&
+        card.body.mode === "signIn"
+      )
+        cards.push(card);
+  return cards;
+}
+
+/**
+ * Approve every waiting sign-in card whose account is now enabled and signed
+ * in, and hand the outcome to its session. Stops the watch once no card waits.
+ */
+async function reconcileSignInCards(): Promise<void> {
+  const waiting = pendingSignInCards();
+  if (waiting.length === 0 && signInTimer) {
+    clearInterval(signInTimer);
+    signInTimer = undefined;
+  }
+  for (const card of waiting) {
+    if (resolvingCards.has(card.id)) continue;
+    if (!accountReady(card.body as SettingsInputApprovalBody)) continue;
+    resolvingCards.add(card.id);
+    try {
+      const { outcomePrompt } = await resolveApproval(card.id, "approved");
+      if (outcomePrompt)
+        await deliverAgentHandoff({
+          sessionId: card.sessionId,
+          text: outcomePrompt,
+          origin: { kind: "system", source: "approval-decision" },
+        });
+    } catch (err) {
+      console.warn(
+        `[settings] a signed-in account did not resolve card ${card.id}:`,
+        redactSecrets(errorText(err)),
+      );
+    } finally {
+      resolvingCards.delete(card.id);
+    }
+  }
+}
+
+function reconcileSoon(): void {
+  reconcileSignInCards().catch((err: unknown) =>
+    console.warn(
+      "[settings] could not check sign-in cards:",
+      redactSecrets(errorText(err)),
+    ),
+  );
+}
+
+/**
+ * Check waiting sign-in cards now and every few seconds while any waits.
+ *
+ * Account change events cover most sign-ins, but an OpenAI login counts as
+ * done as soon as its credential file changes, before the SDK's post-login
+ * refresh settles, and nothing announces that file. The watch also picks up
+ * cards that were waiting when the server restarted (`index.ts` calls this at
+ * boot). It costs one read of the pending cards per tick and stops itself.
+ */
+export function watchSignInCards(): void {
+  reconcileSoon();
+  if (signInTimer) return;
+  signInTimer = setInterval(reconcileSoon, signInReconcileMs);
+  signInTimer.unref?.();
+}
+
+export function setSignInReconcileIntervalForTests(ms: number): void {
+  signInReconcileMs = ms;
+  if (signInTimer) {
+    clearInterval(signInTimer);
+    signInTimer = undefined;
+  }
+}
+
+subscribeCredentialProfileChanges(() => reconcileSoon());
 
 onSettingsChanged(({ sections }) => {
   resolveConnectedCards(sections).catch((err: unknown) =>

@@ -96,6 +96,7 @@ import {
   announceSettingsWritten,
   setModelProviderSync,
 } from "./settingsService.ts";
+import { watchSignInCards } from "./settingsInput.ts";
 import {
   startSlackShortcutIntake,
   stopSlackShortcutIntake,
@@ -2192,6 +2193,7 @@ server.listen(PORT, HOST, () => {
   bootStep("agent-handoff recovery", () => recoverAgentHandoffsOnBoot());
   bootStep("prompt-queue drain", () => drainPromptQueuesOnBoot());
   bootStep("peer-prompt drain", () => drainAllQueuedOnBoot());
+  bootStep("settings sign-in cards", () => watchSignInCards());
   bootStep("peer-prompt retention", () => runPeerPromptRetention());
   void sweepMainWorktreeCommentRetention().catch((err) =>
     console.warn(

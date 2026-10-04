@@ -113,9 +113,9 @@ export const SETTINGS_OUTSIDE_REGISTRY: Partial<
 > = {
   about: "Build and server information; nothing to set.",
   "claude-sdk":
-    "Claude accounts are credential profiles (/api/credential-profiles), signed in through a login flow.",
+    "Claude accounts are credential profiles: list and manage them with accounts_read and accounts_update, sign them in with accounts_sign_in.",
   openai:
-    "OpenAI accounts are credential profiles (/api/credential-profiles), signed in through a login flow.",
+    "OpenAI accounts are credential profiles: list and manage them with accounts_read and accounts_update, sign them in with accounts_sign_in.",
   memory:
     "Memory cards themselves are managed with the memory tools, not settings.",
   notifications:

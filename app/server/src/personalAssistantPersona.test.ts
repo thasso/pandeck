@@ -53,6 +53,9 @@ test("personal-assistant is a real persona with the Assistant toolset plus setti
       "settings_read",
       "settings_update",
       "settings_request_input",
+      "accounts_read",
+      "accounts_update",
+      "accounts_sign_in",
     ].sort(),
     "personal-assistant is the assistant toolset plus the settings tools",
   );

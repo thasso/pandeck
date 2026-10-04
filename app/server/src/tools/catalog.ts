@@ -154,6 +154,9 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   settings_read: "none",
   settings_update: "local",
   settings_request_input: "local",
+  accounts_read: "none",
+  accounts_update: "local",
+  accounts_sign_in: "local",
   task_read: "none",
   task_manage: "local",
   list_attachments: "none",
@@ -761,9 +764,9 @@ function settingsToolGroup(): UnclassifiedToolGroup {
     id: "settings",
     label: "Settings",
     description:
-      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow; ask the user for a secret or an account connection through a card.",
+      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow; ask the user for a secret or an account connection through a card; manage and sign in the Claude and OpenAI accounts models run on.",
     searchHint:
-      "settings configuration configure preferences enable disable integration model account token api key connect",
+      "settings configuration configure preferences enable disable integration model account token api key connect credential profile login sign in",
     loading: "deferred",
     family: "shared",
     tools: settingsTools,

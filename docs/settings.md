@@ -132,8 +132,9 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   the assistant's own profile, the result says the user's next message starts a
   fresh Personal Assistant session.
 
-`settings_update` is a `local` side effect, so Plan mode keeps only
-`settings_read`.
+`settings_update`, `settings_request_input`, `accounts_update` and
+`accounts_sign_in` are `local` side effects, so Plan mode keeps only
+`settings_read` and `accounts_read`.
 
 Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
@@ -206,5 +207,38 @@ or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
 
 The card has no grant key, so "approve for session" never covers it. Asking
 again for the same setting supersedes the earlier card. Claude and OpenAI
-account logins are credential profiles with their own login flows and are not
-covered yet.
+accounts sign in through the same card in `signIn` mode (see Accounts).
+
+## Accounts
+
+The Claude and OpenAI accounts models run on are credential profiles
+(`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
+The Personal Assistant reaches them through three tools in the same `settings`
+group, which call the functions the Settings page's `/api/credential-profiles`
+routes call:
+
+- `accounts_read`: each account's id, name, provider, enabled state and sign-in
+  status, the settings that pin it, how many sessions are bound to it, and
+  whether it takes its provider's unpinned work. A login in progress never shows
+  its device code or link here.
+- `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
+  default account or one a session is bound to, as the page does, and unpins the
+  account from every setting through `clearProfilePins`.
+- `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
+  (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
+  browser an OpenAI account starts its device login and shows the link and code
+  there; a Claude account opens the official CLI login terminal. The card cannot
+  be approved before the account is ready. `credentialProfiles.ts` announces
+  every account change (`subscribeCredentialProfileChanges`: created, renamed,
+  enabled, deleted, login state moved), and a sign-in card for an account that
+  is now enabled and signed in is approved and its outcome handed to the
+  session. An OpenAI login counts as done once its credential file changes,
+  which nothing announces, so `watchSignInCards` also re-checks waiting sign-in
+  cards every few seconds while any waits, and once at boot for cards a restart
+  left waiting. An account that is already signed in gets no card: the tool
+  reports it, since a new login would satisfy a card with the old credential
+  before the new one exists.
+- An account's raw login error is the provider's text and can quote a device
+  code, link or token, so the tools never return it: an account in `error`
+  status carries a server-written note pointing at its Settings page, which
+  shows the error to the user.
