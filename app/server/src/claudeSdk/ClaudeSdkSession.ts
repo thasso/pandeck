@@ -32,15 +32,11 @@ import { join } from "node:path";
 import type {
   AgentType,
   BrowserRuntimeInfo,
-  CommitDisplay,
-  CompactionDisplay,
-  ContextClearDisplay,
   ContextInfo,
   DisplayMessage,
   Harness,
   ModelOption,
   PromptAttachment,
-  PushDisplay,
   SessionForkOrigin,
   SessionMode,
   SessionNamingSettings,
@@ -49,7 +45,6 @@ import type {
   SessionToolExposure,
   SessionToolLoadEvent,
   ThinkingLevel,
-  WorktreeProvisionDisplay,
 } from "@assistant/shared";
 import {
   CLAUDE_SDK_PROVIDER,
@@ -124,6 +119,16 @@ import {
 } from "../tools/core/questionTool.ts";
 import type { LiveSession, Viewer } from "../harness.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
+import {
+  discardHostCommandTurn,
+  finishHostCommandCard,
+  finishHostCommandTool,
+  hostCommandTurn,
+  openHostCommandTurn,
+  updateHostCommandTool,
+  type HostCommandResult,
+  type HostCommandTurnTarget,
+} from "../sessionKit/hostCommandTurn.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -2718,6 +2723,15 @@ export class ClaudeSdkSession implements LiveSession {
   // the same host surface every harness exposes, so the dispatch in connection.ts
   // is harness-independent.
 
+  /** Where this session's host-command turns are shown (`sessionKit/hostCommandTurn.ts`). */
+  private get hostCommandTarget(): HostCommandTurnTarget {
+    return {
+      sessionId: this.id,
+      broadcast: (message) => this.broadcast(message),
+      adapterEvents: this.adapterEvents,
+    };
+  }
+
   /** Open a synthetic assistant turn carrying a single in-progress tool block. */
   beginSyntheticTool(
     name: string,
@@ -2732,50 +2746,20 @@ export class ClaudeSdkSession implements LiveSession {
     this.turnCounter += 1;
     this.running = true;
     this.syntheticTurn = true;
-    this.liveTurnId = `cssyn-${this.turnCounter}`;
+    const assistantId = `cssyn-${this.turnCounter}`;
     const toolId = `slash-${Date.now()}-${this.turnCounter}`;
-    this.liveTurn = {
-      id: this.liveTurnId,
-      role: "assistant",
-      blocks: [
-        {
-          kind: "tool",
-          toolId,
-          name,
-          args,
-          output: "Starting…",
-          isError: false,
-          done: false,
-        },
-      ],
-      streaming: true,
-    };
+    this.liveTurnId = assistantId;
+    this.liveTurn = hostCommandTurn(assistantId, toolId, name, args);
     this.updatedAt = Date.now();
-    this.broadcast({
-      type: "assistantStart",
-      sessionId: this.id,
-      id: this.liveTurnId,
-    });
-    this.adapterEvents.messageStarted(this.liveTurnId);
-    this.broadcast({
-      type: "toolStart",
-      sessionId: this.id,
-      id: this.liveTurnId,
+    openHostCommandTurn(
+      this.hostCommandTarget,
+      this.liveTurn,
       toolId,
       name,
       args,
-    });
-    this.adapterEvents.toolStarted(toolId, name, args);
-    this.broadcast({
-      type: "toolUpdate",
-      sessionId: this.id,
-      id: this.liveTurnId,
-      toolId,
-      output: "Starting…",
-    });
-    this.adapterEvents.toolUpdated(toolId, "Starting…");
+    );
     this.broadcastState();
-    return { assistantId: this.liveTurnId, toolId };
+    return { assistantId, toolId };
   }
 
   /** Stream progress text into the in-flight synthetic tool block. */
@@ -2783,15 +2767,12 @@ export class ClaudeSdkSession implements LiveSession {
     if (!this.liveTurn || !this.liveTurnId) return;
     const block = this.liveTurn.blocks.find((b) => b.kind === "tool");
     if (!block || block.kind !== "tool") return;
-    block.output = output;
-    this.broadcast({
-      type: "toolUpdate",
-      sessionId: this.id,
-      id: this.liveTurnId,
-      toolId: block.toolId,
+    updateHostCommandTool(
+      this.hostCommandTarget,
+      this.liveTurn,
+      block.toolId,
       output,
-    });
-    this.adapterEvents.toolUpdated(block.toolId, output);
+    );
   }
 
   /** Minimal session context the commit workflow needs (normalized-timeline duck). */
@@ -2803,192 +2784,39 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   discardSyntheticTool(): void {
-    const assistantId = this.liveTurnId;
-    if (!this.liveTurn || !assistantId) return;
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.hostCommandDiscarded();
+    if (!this.liveTurn || !this.liveTurnId) return;
+    discardHostCommandTurn(this.hostCommandTarget, this.liveTurn);
     this.discardSyntheticTurn();
   }
 
   /** Finish a synthetic tool turn with plain tool output. */
   finishSyntheticTool(toolId: string, output: string, isError = false): void {
     const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    const block = turn.blocks.find(
-      (b) => b.kind === "tool" && b.toolId === toolId,
-    );
-    if (block && block.kind === "tool") {
-      block.output = output;
-      block.isError = isError;
-      block.done = true;
-    }
-    turn.streaming = false;
-    const toolEnd = {
-      type: "toolEnd" as const,
-      sessionId: this.id,
-      id: assistantId,
+    if (!turn || !this.liveTurnId) return;
+    finishHostCommandTool(
+      this.hostCommandTarget,
+      turn,
       toolId,
       output,
       isError,
-    };
-    this.broadcast(toolEnd);
-    this.adapterEvents.toolCompleted(toolEnd);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-      ...(isError ? { error: output } : {}),
-    });
-    this.adapterEvents.messageCompleted(assistantId, {
-      ...(isError ? { errorMessage: output } : {}),
-    });
+    );
     this.commitSyntheticTurn(turn);
   }
 
   /**
-   * Finish a synthetic `/commit` turn with a rich commit card (the same
-   * `{ kind: "commit" }` block pi workshop emits), so the result is visible
-   * regardless of the chat's "show tools" setting.
+   * Finish a synthetic turn with a rich host-command card (the same blocks pi
+   * emits), so the result is visible regardless of the chat's "show tools"
+   * setting; the card is the turn's durable entry.
    */
-  finishSyntheticCommit(commit: CommitDisplay): void {
+  finishSyntheticCard(result: HostCommandResult): void {
     const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    turn.blocks = [{ kind: "commit", commit }];
-    turn.streaming = false;
-    const envelope = {
-      type: "commitResult" as const,
-      sessionId: this.id,
-      id: assistantId,
-      commit,
-    };
-    this.broadcast(envelope);
-    const card: HostCommandCard = { kind: "commit", id: assistantId, commit };
-    this.adapterEvents.hostCommandCard("commit", card, envelope);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.commitSyntheticTurn(turn, { name: "commit", card });
-  }
-
-  /** Finish a synthetic `/push` turn with a rich push-result card (mirrors {@link finishSyntheticCommit}). */
-  finishSyntheticPush(push: PushDisplay): void {
-    const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    turn.blocks = [{ kind: "push", push }];
-    turn.streaming = false;
-    const envelope = {
-      type: "pushResult" as const,
-      sessionId: this.id,
-      id: assistantId,
-      push,
-    };
-    this.broadcast(envelope);
-    const card: HostCommandCard = { kind: "push", id: assistantId, push };
-    this.adapterEvents.hostCommandCard("push", card, envelope);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.commitSyntheticTurn(turn, { name: "push", card });
-  }
-
-  /** Finish a synthetic turn with the worktree-provisioning genesis card. */
-  finishSyntheticWorktreeProvision(provision: WorktreeProvisionDisplay): void {
-    const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    turn.blocks = [{ kind: "worktreeProvision", provision }];
-    turn.streaming = false;
-    const envelope = {
-      type: "worktreeProvisionResult" as const,
-      sessionId: this.id,
-      id: assistantId,
-      provision,
-    };
-    this.broadcast(envelope);
-    const card: HostCommandCard = {
-      kind: "worktreeProvision",
-      id: assistantId,
-      provision,
-    };
-    this.adapterEvents.hostCommandCard("worktree", card, envelope);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.commitSyntheticTurn(turn, { name: "worktree", card });
-  }
-
-  /** Finish a synthetic `/compact` turn with a rich compaction card. */
-  finishSyntheticCompaction(compaction: CompactionDisplay): void {
-    const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    turn.blocks = [{ kind: "compaction", compaction }];
-    turn.streaming = false;
-    const envelope = {
-      type: "compactionResult" as const,
-      sessionId: this.id,
-      id: assistantId,
-      compaction,
-    };
-    this.broadcast(envelope);
-    const card: HostCommandCard = {
-      kind: "compaction",
-      id: assistantId,
-      compaction,
-    };
-    this.adapterEvents.hostCommandCard("compaction", card, envelope);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.commitSyntheticTurn(turn, { name: "compaction", card });
-  }
-
-  /** Finish a synthetic `/clear` turn with the context boundary card. */
-  finishSyntheticContextClear(contextClear: ContextClearDisplay): void {
-    const turn = this.liveTurn;
-    const assistantId = this.liveTurnId;
-    if (!turn || !assistantId) return;
-    turn.blocks = [{ kind: "contextClear", contextClear }];
-    turn.streaming = false;
-    const envelope = {
-      type: "contextClearResult" as const,
-      sessionId: this.id,
-      id: assistantId,
-      contextClear,
-    };
-    this.broadcast(envelope);
-    const card: HostCommandCard = {
-      kind: "contextClear",
-      id: assistantId,
-      contextClear,
-    };
-    this.adapterEvents.hostCommandCard("contextClear", card, envelope);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.id,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.commitSyntheticTurn(turn, { name: "contextClear", card });
+    if (!turn || !this.liveTurnId) return;
+    const hostCommand = finishHostCommandCard(
+      this.hostCommandTarget,
+      turn,
+      result,
+    );
+    this.commitSyntheticTurn(turn, hostCommand);
   }
 
   /**

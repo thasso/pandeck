@@ -787,12 +787,15 @@ test("the cut stops at the turn's own tool results, not at later cards", async (
   await sessionRuntime.prompt("fork-cards", "read the file");
   // A host-command card lands after the turn, with no further prompt.
   parent.beginSyntheticTool("commit", {});
-  parent.finishSyntheticCommit({
-    subject: "a commit",
-    body: "",
-    sha: "abc1234",
-    files: [],
-  } as never);
+  parent.finishSyntheticCard({
+    kind: "commit",
+    commit: {
+      subject: "a commit",
+      body: "",
+      sha: "abc1234",
+      files: [],
+    } as never,
+  });
 
   const timeline = sessionRuntime.get("fork-cards")!.clientTimeline();
   const assistant = timeline.find(

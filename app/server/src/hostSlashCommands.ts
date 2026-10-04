@@ -1,12 +1,9 @@
 import type {
   AgentType,
-  CommitDisplay,
-  CompactionDisplay,
-  ContextClearDisplay,
-  PushDisplay,
   SessionMode,
   WorktreeProvisionDisplay,
 } from "@assistant/shared";
+import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
 import { parseCommitArgs, parsePrArgs } from "./slashCommands.ts";
 import {
   type CommitWorkflowResult,
@@ -88,16 +85,12 @@ export interface SyntheticToolHost {
   finishSyntheticTool(toolId: string, output: string, isError?: boolean): void;
   /** Drop a normal skipped phase without persisting its wrapper tool turn. */
   discardSyntheticTool(): void;
-  /** Finish the synthetic turn with a rich commit card + refresh workspace state. */
-  finishSyntheticCommit(commit: CommitDisplay): void;
-  /** Finish the synthetic turn with a rich push-result card. */
-  finishSyntheticPush(push: PushDisplay): void;
-  /** Finish the synthetic turn with a rich compaction card. */
-  finishSyntheticCompaction(compaction: CompactionDisplay): void;
-  /** Finish the synthetic turn with the context-cleared boundary card. */
-  finishSyntheticContextClear(contextClear: ContextClearDisplay): void;
-  /** Finish the synthetic turn with the worktree-provisioning genesis card. */
-  finishSyntheticWorktreeProvision(provision: WorktreeProvisionDisplay): void;
+  /**
+   * Finish the synthetic turn with a rich host-command card (commit, push,
+   * compaction, context clear, worktree provisioning), which replaces its tool
+   * block and is the turn's durable entry.
+   */
+  finishSyntheticCard(result: HostCommandResult): void;
   /**
    * Compact this session's context, keeping recent history — the one genuinely
    * harness-specific step of `/compact`. pi calls its `AgentSession.compact`;
@@ -182,7 +175,10 @@ export async function runCommitForHost(
       commandText,
       onProgress: (message) => host.updateSyntheticTool(message),
     });
-    host.finishSyntheticCommit(toCommitDisplay(result));
+    host.finishSyntheticCard({
+      kind: "commit",
+      commit: toCommitDisplay(result),
+    });
   } catch (err) {
     host.finishSyntheticTool(
       toolId,
@@ -218,7 +214,7 @@ export async function runPushForHost(
       ...(args.branch !== undefined ? { branch: args.branch } : {}),
       onProgress: (message) => host.updateSyntheticTool(message),
     });
-    host.finishSyntheticPush(toPushDisplay(result));
+    host.finishSyntheticCard({ kind: "push", push: toPushDisplay(result) });
   } catch (err) {
     host.finishSyntheticTool(
       toolId,
@@ -267,11 +263,17 @@ export async function runPrForHost(
           activeToolId = undefined;
         },
         finishCommit(result) {
-          host.finishSyntheticCommit(toCommitDisplay(result));
+          host.finishSyntheticCard({
+            kind: "commit",
+            commit: toCommitDisplay(result),
+          });
           activeToolId = undefined;
         },
         finishPush(result) {
-          host.finishSyntheticPush(toPushDisplay(result));
+          host.finishSyntheticCard({
+            kind: "push",
+            push: toPushDisplay(result),
+          });
           activeToolId = undefined;
         },
         // The rich pull-request card lives in the store (`pullRequestCards.ts`),
@@ -361,15 +363,18 @@ export async function runCompactForHost(
       return;
     }
     resetMemorySessionContext(host.sessionId);
-    host.finishSyntheticCompaction({
-      summary: result.summary,
-      tokensBefore: result.tokensBefore,
-      ...(result.tokensAfter !== undefined
-        ? { tokensAfter: result.tokensAfter }
-        : {}),
-      ...(result.firstKeptEntryId
-        ? { firstKeptEntryId: result.firstKeptEntryId }
-        : {}),
+    host.finishSyntheticCard({
+      kind: "compaction",
+      compaction: {
+        summary: result.summary,
+        tokensBefore: result.tokensBefore,
+        ...(result.tokensAfter !== undefined
+          ? { tokensAfter: result.tokensAfter }
+          : {}),
+        ...(result.firstKeptEntryId
+          ? { firstKeptEntryId: result.firstKeptEntryId }
+          : {}),
+      },
     });
   } catch (err) {
     host.finishSyntheticTool(
@@ -406,11 +411,13 @@ export async function runClearForHost(host: SyntheticToolHost): Promise<void> {
       return;
     }
     resetMemorySessionContext(host.sessionId);
-    host.finishSyntheticContextClear(
-      result.tokensBefore !== undefined
-        ? { tokensBefore: result.tokensBefore }
-        : {},
-    );
+    host.finishSyntheticCard({
+      kind: "contextClear",
+      contextClear:
+        result.tokensBefore !== undefined
+          ? { tokensBefore: result.tokensBefore }
+          : {},
+    });
   } catch (err) {
     host.finishSyntheticTool(
       toolId,
@@ -441,7 +448,7 @@ export function recordWorktreeProvisionForHost(
       branch: provision.branch,
       baseBranch: provision.baseBranch,
     });
-    host.finishSyntheticWorktreeProvision(provision);
+    host.finishSyntheticCard({ kind: "worktreeProvision", provision });
   } catch {
     // The worktree exists and the session runs in it; a missing card is cosmetic.
   }

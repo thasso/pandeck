@@ -105,7 +105,10 @@ test("pi /clear renders the boundary card as one synthetic turn", async () => {
   });
   const outcome = await h.live.clearContext();
   assert.equal(outcome.kind, "cleared");
-  h.live.finishSyntheticContextClear({ tokensBefore: 24_000 });
+  h.live.finishSyntheticCard({
+    kind: "contextClear",
+    contextClear: { tokensBefore: 24_000 },
+  });
   const types = h.seen.map((m) => m.type);
   assert.ok(
     types.includes("contextClearResult"),

@@ -71,8 +71,9 @@ SDK option construction, stream/message mapping, persistence, and tests.
   observed on that stream, whichever turn it belongs to, so the worst case is
   one sacrificed prompted turn, not a stuck session.
 - Host-driven turns set `syntheticTurn` and leave rendered teardown to their
-  `finishSynthetic*` path. Stop uses `interrupt()` when a retained process must
-  survive and `close()` only for process teardown; both paths are idempotent.
+  `finishSynthetic*` path (`finishSyntheticTool`, `finishSyntheticCard`). Stop
+  uses `interrupt()` when a retained process must survive and `close()` only for
+  process teardown; both paths are idempotent.
 - `backgroundWorkBackend.ts` implements the `claude-query` backend port with
   owner/epoch-local maps. `PreToolUse` reserves background Bash and every
   Monitor call through `admitBackgroundWork` by `tool_use_id`, reading the

@@ -25,6 +25,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorktreeProvisionDisplay } from "@assistant/shared";
+import type { HostCommandResult } from "./sessionKit/hostCommandTurn.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "first-send-provision-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -282,10 +283,9 @@ test("the first send provisions, records the genesis card, then runs the turn", 
         order.push("card:begin");
         return { assistantId: "a1", toolId: "t1" };
       },
-      finishSyntheticWorktreeProvision: (
-        provision: WorktreeProvisionDisplay,
-      ) => {
-        order.push(`card:${provision.state}`);
+      finishSyntheticCard: (result: HostCommandResult) => {
+        if (result.kind === "worktreeProvision")
+          order.push(`card:${result.provision.state}`);
       },
     };
   };

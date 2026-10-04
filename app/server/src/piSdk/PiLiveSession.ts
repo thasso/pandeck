@@ -13,10 +13,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type {
   AgentType,
-  CommitDisplay,
-  CompactionDisplay,
-  ContextClearDisplay,
-  PushDisplay,
   DisplayAttachment,
   DisplayBlock,
   ContextInfo,
@@ -32,7 +28,6 @@ import type {
   SessionSkillInvocation,
   SessionState,
   ThinkingLevel,
-  WorktreeProvisionDisplay,
 } from "@assistant/shared";
 import { isCodingAgentType, UNLABELED_SESSION_TITLE } from "@assistant/shared";
 import {
@@ -73,6 +68,16 @@ import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import type { LiveSession, Viewer } from "../harness.ts";
 import { SessionResidency } from "../sessionKit/residency.ts";
+import {
+  discardHostCommandTurn,
+  finishHostCommandCard,
+  finishHostCommandTool,
+  hostCommandTurn,
+  openHostCommandTurn,
+  updateHostCommandTool,
+  type HostCommandResult,
+  type HostCommandTurnTarget,
+} from "../sessionKit/hostCommandTurn.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -105,11 +110,7 @@ import {
   fallbackSessionTitle,
   generateSessionTitle,
 } from "../sessionNaming.ts";
-import {
-  acceptCommitDryRun,
-  formatCommitWorkflowResult,
-  toCommitDisplay,
-} from "../commitWorkflow.ts";
+import { acceptCommitDryRun, toCommitDisplay } from "../commitWorkflow.ts";
 import { isForkAutoRenamePending, readForkOrigin } from "./forkOrigin.ts";
 import {
   prepareToolsForUserTurn,
@@ -951,6 +952,15 @@ export class PiLiveSession implements LiveSession {
 
   /* -------------------------------- commands ------------------------------- */
 
+  /** Where this session's host-command turns are shown (`sessionKit/hostCommandTurn.ts`). */
+  private get hostCommandTarget(): HostCommandTurnTarget {
+    return {
+      sessionId: this.session.sessionId,
+      broadcast: (message) => this.broadcast(message),
+      adapterEvents: this.adapterEvents,
+    };
+  }
+
   /**
    * Open a host-driven ("synthetic") assistant turn carrying one in-progress tool
    * block — the shared primitive behind every slash command. The matching
@@ -966,54 +976,31 @@ export class PiLiveSession implements LiveSession {
         "Cannot run a slash command while the agent is streaming.",
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
+    return this.openSyntheticTurn("slash", name, args);
+  }
 
+  /** Start a synthetic turn the caller has already cleared to run. */
+  private openSyntheticTurn(
+    toolIdPrefix: string,
+    name: string,
+    args: unknown,
+  ): { assistantId: string; toolId: string } {
     this.residency.cancel();
     this.running = true;
     this.host.noteRunStarted();
     const assistantId = `a${++this.idCounter}`;
-    const toolId = `slash-${Date.now()}-${this.idCounter}`;
+    const toolId = `${toolIdPrefix}-${Date.now()}-${this.idCounter}`;
     this.currentAssistantId = assistantId;
     this.syntheticToolId = toolId;
-    this.liveTurn = {
-      id: assistantId,
-      role: "assistant",
-      blocks: [
-        {
-          kind: "tool",
-          toolId,
-          name,
-          args,
-          output: "Starting…",
-          isError: false,
-          done: false,
-        },
-      ],
-      streaming: true,
-    };
+    this.liveTurn = hostCommandTurn(assistantId, toolId, name, args);
     this.updatedAt = Date.now();
-    this.broadcast({
-      type: "assistantStart",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageStarted(assistantId);
-    this.broadcast({
-      type: "toolStart",
-      sessionId: this.session.sessionId,
-      id: assistantId,
+    openHostCommandTurn(
+      this.hostCommandTarget,
+      this.liveTurn,
       toolId,
       name,
       args,
-    });
-    this.adapterEvents.toolStarted(toolId, name, args);
-    this.broadcast({
-      type: "toolUpdate",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      toolId,
-      output: "Starting…",
-    });
-    this.adapterEvents.toolUpdated(toolId, "Starting…");
+    );
     this.broadcastState();
     this.broadcastContextInfo(true);
     void this.host.broadcastSessions();
@@ -1021,181 +1008,37 @@ export class PiLiveSession implements LiveSession {
   }
 
   updateSyntheticTool(output: string): void {
-    const id = this.currentAssistantId;
     const toolId = this.syntheticToolId;
-    if (!id || !toolId || !this.liveTurn) return;
-    updateTool(this.liveTurn.blocks, toolId, { output });
-    this.broadcast({
-      type: "toolUpdate",
-      sessionId: this.session.sessionId,
-      id,
+    if (!this.currentAssistantId || !toolId || !this.liveTurn) return;
+    updateHostCommandTool(
+      this.hostCommandTarget,
+      this.liveTurn,
       toolId,
       output,
-    });
-    this.adapterEvents.toolUpdated(toolId, output);
+    );
   }
 
   discardSyntheticTool(): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.hostCommandDiscarded();
+    if (!this.currentAssistantId || !this.liveTurn) return;
+    discardHostCommandTurn(this.hostCommandTarget, this.liveTurn);
     this.endSyntheticTurn();
   }
 
   finishSyntheticTool(toolId: string, output: string, isError = false): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    updateTool(this.liveTurn.blocks, toolId, { output, isError, done: true });
-    const toolEnd = {
-      type: "toolEnd" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
+    if (!this.currentAssistantId || !this.liveTurn) return;
+    finishHostCommandTool(
+      this.hostCommandTarget,
+      this.liveTurn,
       toolId,
       output,
       isError,
-    };
-    this.broadcast(toolEnd);
-    this.adapterEvents.toolCompleted(toolEnd);
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      ...(isError ? { error: output } : {}),
-    });
-    this.adapterEvents.messageCompleted(assistantId, {
-      ...(isError ? { errorMessage: output } : {}),
-    });
+    );
     this.endSyntheticTurn();
   }
 
-  finishSyntheticCommit(commit: CommitDisplay): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.liveTurn.blocks = [{ kind: "commit", commit }];
-    const envelope = {
-      type: "commitResult" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      commit,
-    };
-    this.broadcast(envelope);
-    this.adapterEvents.hostCommandCard(
-      "commit",
-      { kind: "commit", id: assistantId, commit },
-      envelope,
-    );
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    // The working tree changed (or was inspected); refresh the workspace badge.
-    this.endSyntheticTurn();
-  }
-
-  finishSyntheticPush(push: PushDisplay): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.liveTurn.blocks = [{ kind: "push", push }];
-    const envelope = {
-      type: "pushResult" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      push,
-    };
-    this.broadcast(envelope);
-    this.adapterEvents.hostCommandCard(
-      "push",
-      { kind: "push", id: assistantId, push },
-      envelope,
-    );
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.endSyntheticTurn();
-  }
-
-  finishSyntheticWorktreeProvision(provision: WorktreeProvisionDisplay): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.liveTurn.blocks = [{ kind: "worktreeProvision", provision }];
-    const envelope = {
-      type: "worktreeProvisionResult" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      provision,
-    };
-    this.broadcast(envelope);
-    this.adapterEvents.hostCommandCard(
-      "worktree",
-      { kind: "worktreeProvision", id: assistantId, provision },
-      envelope,
-    );
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.endSyntheticTurn();
-  }
-
-  finishSyntheticContextClear(contextClear: ContextClearDisplay): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.liveTurn.blocks = [{ kind: "contextClear", contextClear }];
-    const envelope = {
-      type: "contextClearResult" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      contextClear,
-    };
-    this.broadcast(envelope);
-    this.adapterEvents.hostCommandCard(
-      "contextClear",
-      { kind: "contextClear", id: assistantId, contextClear },
-      envelope,
-    );
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
-    this.endSyntheticTurn();
-  }
-
-  finishSyntheticCompaction(compaction: CompactionDisplay): void {
-    const assistantId = this.currentAssistantId;
-    if (!assistantId || !this.liveTurn) return;
-    this.liveTurn.blocks = [{ kind: "compaction", compaction }];
-    const envelope = {
-      type: "compactionResult" as const,
-      sessionId: this.session.sessionId,
-      id: assistantId,
-      compaction,
-    };
-    this.broadcast(envelope);
-    this.adapterEvents.hostCommandCard(
-      "compaction",
-      { kind: "compaction", id: assistantId, compaction },
-      envelope,
-    );
-    this.broadcast({
-      type: "assistantEnd",
-      sessionId: this.session.sessionId,
-      id: assistantId,
-    });
-    this.adapterEvents.messageCompleted(assistantId);
+  finishSyntheticCard(result: HostCommandResult): void {
+    if (!this.currentAssistantId || !this.liveTurn) return;
+    finishHostCommandCard(this.hostCommandTarget, this.liveTurn, result);
     this.endSyntheticTurn();
   }
 
@@ -1224,56 +1067,20 @@ export class PiLiveSession implements LiveSession {
     return { sessionManager: this.session.sessionManager, cwd: this.cwd };
   }
 
+  /**
+   * Accept a `/commit` dry run as a synthetic turn: progress streams into its
+   * tool block and the commit card ends it, or the failure does. The turn's
+   * teardown refreshes the state the commit changed.
+   */
   async acceptCommitDryRun(entryId: string): Promise<void> {
     if (this.running)
       throw new Error(
         "Cannot accept a commit dry run while the agent is streaming.",
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
-    this.residency.cancel();
-    this.running = true;
-    this.host.noteRunStarted();
-    this.currentAssistantId = `a${++this.idCounter}`;
-    this.syntheticToolId = `accept-${Date.now()}-${this.idCounter}`;
-    this.liveTurn = {
-      id: this.currentAssistantId,
-      role: "assistant",
-      blocks: [
-        {
-          kind: "tool",
-          toolId: this.syntheticToolId,
-          name: "/commit accept",
-          args: { entryId },
-          output: "Starting…",
-          isError: false,
-          done: false,
-        },
-      ],
-      streaming: true,
-    };
-    this.updatedAt = Date.now();
-    this.broadcast({
-      type: "assistantStart",
-      sessionId: this.session.sessionId,
-      id: this.currentAssistantId,
-    });
-    this.adapterEvents.messageStarted(this.currentAssistantId);
-    this.broadcast({
-      type: "toolStart",
-      sessionId: this.session.sessionId,
-      id: this.currentAssistantId,
-      toolId: this.syntheticToolId,
-      name: "/commit accept",
-      args: { entryId },
-    });
-    this.adapterEvents.toolStarted(this.syntheticToolId, "/commit accept", {
+    const { toolId } = this.openSyntheticTurn("accept", "/commit accept", {
       entryId,
     });
-    this.broadcastState();
-    void this.host.broadcastSessions();
-
-    let output = "";
-    let isError = false;
     try {
       const result = await acceptCommitDryRun({
         session: this.session,
@@ -1281,73 +1088,13 @@ export class PiLiveSession implements LiveSession {
         cwd: this.cwd,
         onProgress: (message) => this.updateSyntheticTool(message),
       });
-      output = formatCommitWorkflowResult(result);
-      const commit = toCommitDisplay(result);
-      if (this.liveTurn) this.liveTurn.blocks = [{ kind: "commit", commit }];
-      if (this.currentAssistantId) {
-        const envelope = {
-          type: "commitResult" as const,
-          sessionId: this.session.sessionId,
-          id: this.currentAssistantId,
-          commit,
-        };
-        this.broadcast(envelope);
-        this.adapterEvents.hostCommandCard(
-          "commit",
-          { kind: "commit", id: this.currentAssistantId, commit },
-          envelope,
-        );
-      }
-      if (isCodingAgentType(this.kind) && result.status === "committed") {
-        this.broadcastState();
-      }
+      this.finishSyntheticCard({
+        kind: "commit",
+        commit: toCommitDisplay(result),
+      });
     } catch (err) {
-      isError = true;
-      output = errorText(err);
+      this.finishSyntheticTool(toolId, errorText(err), true);
     }
-
-    const assistantId = this.currentAssistantId;
-    const toolId = this.syntheticToolId;
-    if (assistantId && toolId && this.liveTurn) {
-      if (isError) {
-        updateTool(this.liveTurn.blocks, toolId, {
-          output,
-          isError,
-          done: true,
-        });
-        const toolEnd = {
-          type: "toolEnd" as const,
-          sessionId: this.session.sessionId,
-          id: assistantId,
-          toolId,
-          output,
-          isError,
-        };
-        this.broadcast(toolEnd);
-        this.adapterEvents.toolCompleted(toolEnd);
-      }
-      this.broadcast({
-        type: "assistantEnd",
-        sessionId: this.session.sessionId,
-        id: assistantId,
-        ...(isError ? { error: output } : {}),
-      });
-      this.adapterEvents.messageCompleted(assistantId, {
-        ...(isError ? { errorMessage: output } : {}),
-      });
-    }
-
-    this.running = false;
-    this.currentAssistantId = undefined;
-    this.syntheticToolId = undefined;
-    this.liveTurn = undefined;
-    this.updatedAt = Date.now();
-    this.broadcastState();
-    this.broadcastContextInfo(true);
-    if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
-    this.residency.arm();
-    void this.host.broadcastSessions();
-    this.host.checkPendingReload();
   }
 
   createRuntimeAdapter(): PromptableAdapter {

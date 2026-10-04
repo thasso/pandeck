@@ -22,7 +22,8 @@ and headless one-shot utility runs.
   NOT here: every host-driven command runs through `../hostSlashCommands.ts`
   against the shared `SyntheticToolHost` surface, to which this class
   contributes `compactContext` (pi's `AgentSession.compact`, which never
-  declines) and the `finishSynthetic*` renderers. It talks to the hub only
+  declines) and the turn methods over `../sessionKit/hostCommandTurn.ts`; its
+  `/commit accept` flow runs as one of those turns. It talks to the hub only
   through the injected `PiSessionHost`. Prompt attachments are persisted +
   turned into model content through the shared `promptAttachments.ts` builder
   (images as content blocks; other files persisted to `sessionAttachments` and

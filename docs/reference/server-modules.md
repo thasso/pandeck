@@ -159,7 +159,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   redeem). `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock
-  that lets the owning store release an unviewed, idle session).
+  that lets the owning store release an unviewed, idle session) and
+  `hostCommandTurn.ts` (the emission of a synthetic host-command turn and its
+  card, `HostCommandResult`).
 - `agentTypes.ts` owns the persona registry (`AGENT_TYPES`): system prompts and
   the per-persona `AgentTool` toolsets, independent of harness. Toolset
   COMPOSITION lives in the tool catalog (`tools/catalog.ts`): persona toolsets
@@ -218,7 +220,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   bare-lease behavior. It resolves a missing upstream for both implicit and
   explicit remote first-push forms and renders a durable push-result card
   (`PushDisplay`) through the same synthetic-host-command path as `/commit`
-  (`finishSyntheticPush` on both harnesses → `command.result` timeline entry).
+  (`finishSyntheticCard` on both harnesses → `command.result` timeline entry).
   `prWorkflow.ts` composes those workflows for `/pr`: clean and up-to-date
   phases stay silent, a blocked commit stops the chain, and the final phase
   resolves `gitHosting.ts` directly from the repo so unregistered checkouts work

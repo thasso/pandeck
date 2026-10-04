@@ -266,19 +266,7 @@ export class ViewSession implements HarnessDriver {
   discardSyntheticTool(): never {
     this.refuse();
   }
-  finishSyntheticCommit(): never {
-    this.refuse();
-  }
-  finishSyntheticPush(): never {
-    this.refuse();
-  }
-  finishSyntheticCompaction(): never {
-    this.refuse();
-  }
-  finishSyntheticContextClear(): never {
-    this.refuse();
-  }
-  finishSyntheticWorktreeProvision(): never {
+  finishSyntheticCard(): never {
     this.refuse();
   }
   compactContext(): Promise<HostCompactionOutcome> {
