@@ -1,8 +1,9 @@
 /**
  * The pi harness's idle release waits out a prompt already on its way in: a
  * prompt admitted at the door (awaiting its skills, memory and so on before it
- * runs) keeps the session resident, an acquisition restarts the clock, and an
- * instance released anyway is refused at the door rather than bound again.
+ * runs) keeps the session resident, as does a run, an acquisition restarts the
+ * clock, and an instance released anyway is refused at the door rather than
+ * bound again.
  *
  * Run through Vitest: `pnpm --filter @assistant/server test src/piSdk/piIdleEviction.test.ts`
  */
@@ -89,6 +90,22 @@ test("an acquisition restarts the clock", () => {
   assert.equal(live.released, false);
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS);
   assert.equal(live.released, true);
+});
+
+test("a run outlasting the clock keeps the session, which gets a full grace after it", () => {
+  const { sessionId, live, evicted } = idleSession();
+  const { toolId } = live.beginSyntheticTool("/commit", {});
+  // An acquisition mid-run starts the clock; running out mid-run releases nothing.
+  live.armIdleIfUnviewed();
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 3);
+  assert.equal(live.released, false);
+
+  live.finishSyntheticTool(toolId, "done");
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS - 1);
+  assert.equal(live.released, false);
+  vi.advanceTimersByTime(1);
+  assert.equal(live.released, true);
+  assert.deepEqual(evicted, [sessionId]);
 });
 
 test("a released pi session is refused at the door, and nothing is bound", () => {
