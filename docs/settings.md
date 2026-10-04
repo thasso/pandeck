@@ -182,9 +182,11 @@ and a stored credential must do the same in its store.
 The Google and Tempo token refreshes, which every tool and test go through,
 store a refreshed token only while the stored refresh token is still the one the
 request used. A refresh that returns after a disconnect therefore cannot
-reconnect the account. A refresh is not cancelled mid-request: the provider may
-already have rotated the refresh token, and dropping the answer would lose the
-grant.
+reconnect the account. The Tempo OAuth callback likewise stores its grant onto
+the settings as they are when the token arrives, and only while its pending
+state is still stored, so a disconnect or API move saved meanwhile stands. A
+refresh is not cancelled mid-request: the provider may already have rotated the
+refresh token, and dropping the answer would lose the grant.
 
 Settings-file read errors never quote the file: a `JSON.parse` failure reads
 "the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the

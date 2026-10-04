@@ -190,6 +190,48 @@ test("moving the API to another host disconnects Tempo", () => {
   assert.equal(moved.apiBaseUrl, "https://evil.test/4");
 });
 
+test("a callback that finishes after the API moved does not reconnect or revert the save", async () => {
+  writeTempoFile({ enabled: true, apiBaseUrl: "https://api.tempo.io/4" });
+  const state = new URL(
+    createTempoOAuthStartUrl("https://pa.example.net"),
+  ).searchParams.get("state")!;
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let requested!: () => void;
+  const tokenRequested = new Promise<void>((resolve) => (requested = resolve));
+  globalThis.fetch = vi.fn(async () => {
+    requested();
+    await released;
+    return new Response(
+      JSON.stringify({
+        access_token: "at-late",
+        refresh_token: "rt-late",
+        expires_in: 3600,
+      }),
+      { status: 200 },
+    );
+  }) as unknown as typeof fetch;
+
+  const callback = handleTempoOAuthCallback(
+    new URLSearchParams({ code: "c", state }),
+    "https://pa.example.net",
+  );
+  await tokenRequested;
+  updateTempoSettings({
+    apiBaseUrl: "https://new.example.net/4",
+    enabled: false,
+  });
+  release();
+  const result = await callback;
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /changed while connecting/);
+  const settings = getTempoSettings();
+  assert.equal(settings.refreshTokenConfigured, false);
+  assert.equal(settings.apiBaseUrl, "https://new.example.net/4");
+  assert.equal(settings.enabled, false);
+});
+
 test("a refresh that finishes after a disconnect does not reconnect", async () => {
   writeTempoFile({
     enabled: true,

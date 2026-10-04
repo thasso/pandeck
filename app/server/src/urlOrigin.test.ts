@@ -30,4 +30,6 @@ test("an empty or unparsable URL matches only itself", () => {
   assert.equal(sameOrigin("not a url", "not a url"), true);
   assert.equal(sameOrigin("not a url", "also not"), false);
   assert.equal(sameOrigin("file:///a", "file:///b"), false);
+  assert.equal(sameOrigin("file:///a", "file:///a"), false);
+  assert.equal(sameOrigin("data:text/plain,x", "data:text/plain,x"), false);
 });
