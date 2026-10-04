@@ -177,20 +177,22 @@ export function spawnTreeStall(
   scope: readonly SessionListItem[],
   byId: ReadonlyMap<string, SessionListItem>,
 ): SpawnTreeStall | undefined {
-  const rootId = scope[0]?.id;
+  const root = scope[0];
+  // A peer the user put down — archived or settled — owes nothing here.
+  const owes = (peer: SessionListItem | undefined): peer is SessionListItem =>
+    Boolean(peer && !peer.archived && !isShelvedSession(peer));
   const owed = new Map<string, SessionListItem>();
   const askers = new Map<string, SessionListItem>();
   for (const session of scope)
     for (const id of session.awaitingRepliesFrom ?? []) {
       // Waiting on the root: the card would name itself, so it names who
       // waits instead.
-      if (id === rootId) {
-        if (session.id !== rootId) askers.set(session.id, session);
+      if (id === root?.id) {
+        if (session.id !== id && owes(root)) askers.set(session.id, session);
         continue;
       }
       const peer = byId.get(id);
-      // A peer the user put down — archived or settled — owes nothing here.
-      if (peer && !peer.archived && !isShelvedSession(peer)) owed.set(id, peer);
+      if (owes(peer)) owed.set(id, peer);
     }
   if (owed.size === 0 && askers.size === 0) return undefined;
   const peers = [...owed.values()];

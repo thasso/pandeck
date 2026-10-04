@@ -1662,15 +1662,19 @@ export interface SessionListItem {
    * running turn.
    */
   interruptedRun?: { at: number };
-  /** True while peer-prompt work is queued behind this session's next turn. */
+  /**
+   * True while peer-prompt work is on its way into this session — queued
+   * behind its next turn, mid-delivery, or waiting out a retry backoff.
+   */
   queuedWork?: boolean;
   /**
    * The peers that still owe this session a reply, by session id: it asked
    * (`responseRequested`), their turn ended without the answer, and nothing
-   * from them — nor from a peer they handed the work to, on that handoff's chain — has reached it since. A request
-   * still being delivered is not listed. Omitted when none. What makes
-   * a quiet tree STALLED rather than done: nothing is moving, and someone
-   * still owes an answer (the Sessions inbox's `spawnTreeStall`).
+   * from them — nor from a peer they handed the work to, on that handoff's
+   * chain — has reached it since. A request still being delivered is not
+   * listed. Omitted when none. What makes a quiet tree STALLED rather than
+   * done: nothing is moving, and someone still owes an answer (the Sessions
+   * inbox's `spawnTreeStall`).
    */
   awaitingRepliesFrom?: string[];
   /**

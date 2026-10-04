@@ -50,3 +50,58 @@ test("a session row lists the peers it awaits a reply from", async () => {
     for (const id of [coordinator, reviewer]) sessionStore.remove(id);
   }
 });
+
+test("a report still being delivered or retried keeps the row's queued work", async () => {
+  const stamp = `${Date.now()}-${Math.random()}`;
+  const coordinator = `retry-root-${stamp}`;
+  const implementer = `retry-impl-${stamp}`;
+  for (const id of [coordinator, implementer])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+      messageCount: 2,
+    });
+  const chainId = peerPromptStore.createChain(`chain-${stamp}`);
+  const request = peerPromptStore.enqueue({
+    conversationId: `conv-${stamp}`,
+    chainId,
+    hop: peerPromptStore.reserveHop(chainId),
+    senderSessionId: coordinator,
+    recipientSessionId: implementer,
+    prompt: "build this",
+    responseRequested: true,
+  });
+  peerPromptStore.claimNext(implementer, "drainer", 1_000);
+  peerPromptStore.markAdmitted(request.id);
+  peerPromptStore.markCompleted(request.id);
+  // The report travels uncorrelated, on a fresh chain (a user prompt closed
+  // the old one), so it marks nothing replied until it lands.
+  const freshChain = peerPromptStore.createChain(`fresh-${stamp}`);
+  const report = peerPromptStore.enqueue({
+    conversationId: `conv-${stamp}`,
+    chainId: freshChain,
+    hop: peerPromptStore.reserveHop(freshChain),
+    senderSessionId: implementer,
+    recipientSessionId: coordinator,
+    prompt: "done",
+    responseRequested: false,
+  });
+  const row = async (id: string) =>
+    (await listSessions([], () => Date.now())).find((item) => item.id === id);
+  try {
+    peerPromptStore.claimNext(coordinator, "drainer", 1_000);
+    // Mid-delivery, then waiting out a retry backoff: still owed, but the
+    // answer is coming, which the row says as queued work.
+    for (const step of ["dispatching", "retrying"]) {
+      if (step === "retrying")
+        peerPromptStore.markRetryable(report.id, "transient", 160_000);
+      const listed = await row(coordinator);
+      assert.deepEqual(listed?.awaitingRepliesFrom, [implementer], step);
+      assert.equal(listed?.queuedWork, true, step);
+    }
+  } finally {
+    for (const id of [coordinator, implementer]) sessionStore.remove(id);
+  }
+});

@@ -100,8 +100,10 @@ rather than by history. A request already marked `replied` whose correlated
 reply was cancelled or failed before delivery stays owed; that half starts from
 the lost replies and follows the `replied_by_message_id` back-link
 (`0066_peer_prompt_replied_by_index.sql`). `peerPromptStore.test.ts` pins the
-plan. Measured on a copy of the production database (7,539 peer prompts, 16
-senders owed): 0.24 ms median.
+plan. Any delivered message from the owed peer counts as a handoff, so a peer
+that only asked a sibling something on their shared chain is cleared by that
+sibling's own report — the same rows as a real forward. Measured on a copy of
+the production database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
 
 ## What was not done, and why
 

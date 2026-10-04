@@ -238,6 +238,19 @@ describe("peerPromptStore", () => {
       assert.deepEqual(owedTo(c), [a]);
     });
 
+    it("takes a sibling's report once the owed peer messaged it (not modelled)", () => {
+      // A only asks B a question on C's chain, then B reports its own work to
+      // C. The rows match a real A → B → C forward, so A's debt clears too.
+      const c = `owed-c-${seq++}`;
+      const a = `owed-a-${seq++}`;
+      const b = `owed-b-${seq++}`;
+      const first = unanswered(c, a);
+      unanswered(c, b, first.chainId);
+      send(a, b, first.chainId);
+      send(b, c, first.chainId);
+      assert.equal(owedTo(c), undefined);
+    });
+
     it("takes no undelivered handoff as passing the work on", () => {
       // C asks I and R on one chain; I's handoff to R never lands, then R
       // reports to C. Nothing reached C on I's behalf.

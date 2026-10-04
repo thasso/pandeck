@@ -3198,6 +3198,28 @@ describe("a tree waiting on its own coordinator", () => {
     const ledge = spawnedSessionsView({ sessions, coordinatorId: "root" });
     expect(stallLabel(ledge.stall!)).toBe("“Implementer” awaits a reply");
   });
+
+  it("raises nothing once the user settled that coordinator, though a live peer keeps the card", () => {
+    const sessions = [
+      session({ id: "root", title: "Coordinator", settledAt: NOW - 1_000 }),
+      session({
+        id: "impl",
+        title: "Implementer",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        awaitingRepliesFrom: ["root"],
+      }),
+    ];
+    const view = buildSessionInbox(sessions);
+    const card = [...cards(view.needsYou), ...cards(view.active)].find(
+      (c) => c.session.id === "root",
+    );
+    expect(card, "the live peer keeps the card").toBeDefined();
+    expect(card?.stall).toBe(undefined);
+    expect(spawnedSessionsView({ sessions, coordinatorId: "root" }).stall).toBe(
+      undefined,
+    );
+  });
 });
 
 describe("the composer ledge of a chat the user put down", () => {

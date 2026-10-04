@@ -937,6 +937,22 @@ function queuedRecipientIds(): string[] {
 }
 
 /**
+ * Distinct recipient ids with peer prompts still on their way in: queued,
+ * mid-delivery (`dispatching`), or waiting out a retry backoff
+ * (`retryable_failed`). The session list's `queuedWork` — a reply still being
+ * delivered is coming without a poke, so a quiet tree is not stalled on it.
+ */
+function pendingDeliveryRecipientIds(): string[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT DISTINCT recipient_session_id FROM peer_prompts WHERE status IN ('queued', 'dispatching', 'retryable_failed')",
+      )
+      .all() as { recipient_session_id: string }[]
+  ).map((r) => r.recipient_session_id);
+}
+
+/**
  * The rows that still owe their sender a "this never finished" notice: a reply
  * was requested, the process died under the delivered turn, and nobody has been
  * told yet. Ordered oldest-first so one notice reads as a timeline.
@@ -1135,8 +1151,9 @@ export const OUTSTANDING_REPLIES_SQL = `
  *   HANDOFF's chain. The handoff's chain, not the request's: a user prompt
  *   to the coordinator or the owed peer closes their chains, so the handoff
  *   and the report that follows it travel on a fresh one. And only from a
- *   session the owed peer handed to: peers spawned in one turn share a chain,
- *   and one reviewer's reply must not answer for the reviewer beside it.
+ *   session the owed peer sent to: peers spawned in one turn share a chain,
+ *   and one reviewer's reply must not answer for the reviewer beside it that
+ *   never talked to it.
  *
  * Each question is its own NOT EXISTS, each answered by index seeks: the
  * owed peer's own word by (recipient, sender, queue_seq) from
@@ -1152,7 +1169,11 @@ export const OUTSTANDING_REPLIES_SQL = `
  * between, closing its chains), a forward of two or more hops (owed peer → X
  * → Y → sender), and a sender that releases a peer with a plain message
  * ("stand down") — each stays owed until the user settles or archives that
- * peer, or the request expires (`RESPONSE_TTL_MS`, 30 days).
+ * peer, or the request expires (`RESPONSE_TTL_MS`, 30 days). The other way
+ * round, any delivered message from the owed peer counts as a handoff: once it
+ * asked a sibling something on their shared chain, the sibling's own report
+ * clears it too — the same traffic as a real forward, so SQL cannot tell them
+ * apart, and the tree reads as done though the owed peer never answered.
  */
 function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
   const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now, now) as {
@@ -1520,6 +1541,7 @@ export const peerPromptStore = {
   // reads
   getById,
   queuedRecipientIds,
+  pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
   senderIdsOwingNotice,
   listPendingForRecipient,

@@ -325,15 +325,16 @@ function awaitingRepliesBySender(): Map<string, string[]> {
 }
 
 /**
- * Sessions with work queued behind their next turn (two queries): peer prompts,
- * and the card outcomes a mid-turn session could not be told about yet
- * (`agentHandoffs.ts`). Both are the same fact to a reader — something is
+ * Sessions with work queued behind their next turn (two queries): peer prompts
+ * still being delivered or retried, and the card outcomes a mid-turn session
+ * could not be told about yet (`agentHandoffs.ts`). Both are the same fact to a reader — something is
  * waiting for this session to finish — so they share the row's one flag.
  */
 function queuedWorkRecipients(): Set<string> {
   const queued = new Set<string>();
   try {
-    for (const id of peerPromptStore.queuedRecipientIds()) queued.add(id);
+    for (const id of peerPromptStore.pendingDeliveryRecipientIds())
+      queued.add(id);
   } catch (err) {
     console.warn("Failed to read queued peer prompts for session list:", err);
   }
