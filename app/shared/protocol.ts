@@ -1134,6 +1134,8 @@ export interface SlackSettings {
   oauthClientConfigured: boolean;
   userTokenConfigured: boolean;
   botTokenConfigured: boolean;
+  /** The workspace is connected: OAuth stores the user and bot tokens together. */
+  connected: boolean;
   huddlesEnabled: boolean;
   clientTokenConfigured: boolean;
   clientCookieConfigured: boolean;
@@ -1142,6 +1144,8 @@ export interface SlackSettings {
 /** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */
 export interface SlackSettingsPatch {
   enabled?: boolean;
+  /** Disconnect the workspace: clears the user and bot tokens OAuth stored. */
+  disconnect?: boolean;
   userToken?: string;
   botToken?: string;
   huddlesEnabled?: boolean;

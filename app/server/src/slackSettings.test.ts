@@ -70,6 +70,7 @@ test("browser settings expose only end-user connection flags", () => {
     "botTokenConfigured",
     "clientCookieConfigured",
     "clientTokenConfigured",
+    "connected",
     "enabled",
     "huddlesEnabled",
     "oauthClientConfigured",
@@ -242,4 +243,15 @@ test("normal Slack health checks never call the browser Huddle API", async () =>
 
   assert.ok(urls.length >= 3);
   assert.ok(urls.every((url) => !url.includes("huddles.history")));
+});
+
+test("connected needs both OAuth tokens, and disconnect clears both", () => {
+  updateSlackSettings({ userToken: "xoxp-fixture", clearBotToken: true });
+  assert.equal(getSlackSettings().connected, false);
+  updateSlackSettings({ botToken: "xoxb-fixture" });
+  assert.equal(getSlackSettings().connected, true);
+  const settings = updateSlackSettings({ disconnect: true });
+  assert.equal(settings.connected, false);
+  assert.equal(settings.userTokenConfigured, false);
+  assert.equal(settings.botTokenConfigured, false);
 });

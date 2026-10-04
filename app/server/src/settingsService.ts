@@ -111,6 +111,7 @@ export const INTEGRATION_PATCH_FIELDS: {
   google: { enabled: true, clearTokens: true, gmailMinutesLabelName: true },
   slack: {
     enabled: true,
+    disconnect: true,
     userToken: true,
     botToken: true,
     huddlesEnabled: true,

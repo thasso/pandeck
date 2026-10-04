@@ -199,7 +199,10 @@ or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
   connected; when the OAuth callback announces its section, every pending
   connection card it satisfied is approved and its outcome handed to the
   session. A connection the deployment has no OAuth client for is refused when
-  asked for.
+  asked for. Google (`google.connection`), Tempo (`tempo.connection`) and Slack
+  (`slack.connection`) connect this way. Slack's OAuth stores a user and a bot
+  token together, so its projection reports `slack.connected` only when both are
+  present, and its `disconnect` patch flag clears both.
 
 The card has no grant key, so "approve for session" never covers it. Asking
 again for the same setting supersedes the earlier card. Claude and OpenAI

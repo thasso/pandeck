@@ -298,6 +298,7 @@ const defaultSettings: AppSettings = {
     oauthClientConfigured: false,
     userTokenConfigured: false,
     botTokenConfigured: false,
+    connected: false,
     huddlesEnabled: false,
     clientTokenConfigured: false,
     clientCookieConfigured: false,

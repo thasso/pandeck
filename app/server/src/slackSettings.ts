@@ -237,6 +237,7 @@ function publicSettings(
     ),
     userTokenConfigured: Boolean(settings.userToken),
     botTokenConfigured: Boolean(settings.botToken),
+    connected: Boolean(settings.userToken && settings.botToken),
     huddlesEnabled: huddles.enabled,
     clientTokenConfigured: Boolean(effectiveClientToken),
     clientCookieConfigured: Boolean(effectiveClientCookie),
@@ -281,19 +282,17 @@ export function getSlackHuddleCapabilitySettings(): Pick<
 
 export function updateSlackSettings(patch: SlackSettingsPatch): SlackSettings {
   const current = readPrivate();
+  const clearUser = patch.clearUserToken || patch.disconnect;
+  const clearBot = patch.clearBotToken || patch.disconnect;
   const next: Required<typeof DEFAULTS> = {
     ...current,
     enabled: patch.enabled ?? current.enabled,
-    userToken: patch.clearUserToken
-      ? ""
-      : patch.userToken?.trim() || current.userToken,
-    botToken: patch.clearBotToken
-      ? ""
-      : patch.botToken?.trim() || current.botToken,
-    accountUserId: patch.clearUserToken ? "" : current.accountUserId,
-    botUserId: patch.clearBotToken ? "" : current.botUserId,
-    grantedUserScopes: patch.clearUserToken ? "" : current.grantedUserScopes,
-    grantedBotScopes: patch.clearBotToken ? "" : current.grantedBotScopes,
+    userToken: clearUser ? "" : patch.userToken?.trim() || current.userToken,
+    botToken: clearBot ? "" : patch.botToken?.trim() || current.botToken,
+    accountUserId: clearUser ? "" : current.accountUserId,
+    botUserId: clearBot ? "" : current.botUserId,
+    grantedUserScopes: clearUser ? "" : current.grantedUserScopes,
+    grantedBotScopes: clearBot ? "" : current.grantedBotScopes,
     oauthState: current.oauthState,
     oauthStateCreatedAt: current.oauthStateCreatedAt,
   };
