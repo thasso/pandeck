@@ -22,6 +22,7 @@ import {
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
 import { sessionSkillPreset, sessionSkills } from "../sessionSkills.ts";
+import { worktreePathIfPresent } from "../worktrees/sessionCwd.ts";
 import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { harnessRegistry } from "./registry.ts";
 
@@ -49,8 +50,8 @@ type PiModel = Parameters<typeof piStore.acquireNew>[1];
  * linked at creation (the durable cwd every reopen follows), or in a bare
  * directory with no edge (a merge agent in the main checkout); the app CWD
  * when neither is given. One or the other, so the two cannot disagree. A
- * worktree without a path is linked but its checkout is not live yet: the
- * session runs in the app CWD until it is.
+ * worktree given without its path runs where its edge resolves, as a reopen
+ * would: in its checkout when that is live, else in the app CWD.
  */
 type SessionPlace =
   | {
@@ -108,7 +109,11 @@ export type NewSession =
  * current library skills are frozen before its first query.
  */
 export async function createSession(spec: NewSession): Promise<LiveSession> {
-  const cwd = spec.worktree?.path ?? spec.cwd;
+  // Resolved here for both engines alike: Claude's store would read a
+  // pathless worktree from its edge, but pi's never looks.
+  const cwd = spec.worktree
+    ? (spec.worktree.path ?? worktreePathIfPresent(spec.worktree.id))
+    : spec.cwd;
   if (spec.harness === "claude-sdk") {
     const id = spec.id ?? randomUUID();
     // Resolved first: from the ownership check below to the session's

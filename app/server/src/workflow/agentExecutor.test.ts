@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, test, vi } from "vitest";
@@ -25,6 +25,7 @@ import {
 
 const tmp = mkdtempSync(join(tmpdir(), "workflow-agent-executor-"));
 const workflowWorktreePath = join(tmp, "workflow-worktree");
+mkdirSync(workflowWorktreePath);
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
 
@@ -48,6 +49,7 @@ const { closeDb } = await import("../db/index.ts");
 const { createSession } = await import("../harnesses/create.ts");
 const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { piStore } = await import("../piSdk/piStore.ts");
+const skillResolver = await import("../skills/skillResolver.ts");
 
 afterAll(() => {
   closeDb();
@@ -64,7 +66,7 @@ let prompts: Array<{
 let rejectPrompt: Error | undefined;
 let available = new Set<string>();
 let createdAgentTypes: string[];
-let createdCwds: string[];
+let createdCwds: Array<string | undefined>;
 let createdEvidence: SessionPromptEvidence[];
 let createdTitles: string[];
 let busySessions = new Set<string>();
@@ -114,8 +116,8 @@ vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id, opts) => {
 vi.spyOn(piStore, "acquireNew").mockImplementation(
   async (agentType, _model, _thinkingLevel, opts) => {
     createdAgentTypes.push(agentType);
-    // The app CWD when the run's checkout is not live, as pi defaults it.
-    createdCwds.push(opts?.cwd ?? tmp);
+    // Absent when the run's checkout is not live: pi defaults to the app CWD.
+    createdCwds.push(opts?.cwd);
     createdEvidence.push(opts?.promptEvidence ?? { hasAttachments: false });
     return {
       ...driver(`pi-${++nextSession}`),
@@ -362,7 +364,7 @@ test("a coordinator falls back to CWD when its run worktree was removed", async 
     actor: ACTOR,
   });
 
-  assert.deepEqual(createdCwds, [tmp]);
+  assert.deepEqual(createdCwds, [undefined], "the app CWD, not a dead path");
 });
 
 test("the coordinator is a constrained Task-context session in the run worktree", async () => {
@@ -388,6 +390,7 @@ test("the coordinator is a constrained Task-context session in the run worktree"
   const started = store.getStep(plan.id)!;
   assert.equal(started.status, "running");
   assert.deepEqual(createdAgentTypes, ["workflow-coordinator"]);
+  assert.deepEqual(createdCwds, [workflowWorktreePath]);
   assert.equal(
     sessionStore.getSkills(started.executor!.id),
     undefined,
@@ -513,6 +516,7 @@ test("the review decision reuses the coordinator's session and carries the evide
 });
 
 test("fresh dispatch creates and binds a deterministically named session with worktree and Task context", async () => {
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValueOnce(["alpha"]);
   const { run, task } = createRun({
     promptOverride: "Prefer focused tests.",
     taskTitle: "Add the workflow widget",
@@ -533,7 +537,7 @@ test("fresh dispatch creates and binds a deterministically named session with wo
   assert.equal(started.executor?.id, "pi-1");
   assert.equal(
     sessionStore.getSkills("pi-1"),
-    "[]",
+    '["alpha"]',
     "the pi workflow creation path freezes skills before prompting",
   );
   assert.equal(worktrees.worktreeIdForSession("pi-1"), "wt-test");
@@ -1055,6 +1059,7 @@ test("a prompt failure still ends and announces the run when the session owes de
 });
 
 test("Claude is named and links its worktree before acquire while prompt rejection fails the step", async () => {
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValueOnce(["alpha"]);
   const { run, task } = createRun({
     provider: "claude-sdk",
     taskTitle: "Add the workflow widget",
@@ -1087,7 +1092,7 @@ test("Claude is named and links its worktree before acquire while prompt rejecti
   assert.equal(worktrees.worktreeIdForSession("claude-1"), "wt-test");
   assert.equal(
     sessionStore.getSkills("claude-1"),
-    "[]",
+    '["alpha"]',
     "the Claude workflow creation path freezes skills before acquire",
   );
   assert.deepEqual(createdTitles, [

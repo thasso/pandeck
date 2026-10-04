@@ -64,22 +64,23 @@ Four layers, each depending only on the ones below it:
      title) and keeps its own admission and model resolution. It calls the
      stores directly, never `hub.ts`. Every session it creates has its current
      library skills frozen before its first query, whichever engine runs it. A
-     worktree without a path is linked at creation while its checkout is not
-     live yet, and the session runs in the app CWD until it is (a workflow
-     coordinator planning a recovery). A Claude session's id is checked against
-     every other holder right before its registration, with nothing awaited in
-     between: with the disk scan for an id the caller names (a client's, or
-     spawn's and the workflow's minted ones), from memory and the row for one it
-     mints itself. A Claude id that already holds a session reopens it: its
-     stored settings win, while the worktree link and title still apply. Callers
-     keep resolving a pi model handle themselves (`NewSession.model`), so each
-     still branches on the engine for that one step. Spawn reaches `create.ts`
-     through a dynamic import, as it does `hub.ts`, because `create.ts` → the
-     Claude store → the tool catalog → spawn closes a cycle. Step 11c moves the
-     rest onto it — the review-comment new session, day session, new session and
-     draft in `connection.ts`, the worktree merge agent and the permanent
-     assistant — and retires `hub.acquireClaudeSdk` and `hub.acquireNew`. That
-     freezes skills on their Claude sessions too, which they do not do today.
+     worktree named without its path runs where its edge resolves, the same for
+     both engines and as a reopen would: in its checkout when that is live, else
+     in the app CWD (a workflow coordinator planning a recovery). A Claude
+     session's id is checked against every other holder right before its
+     registration, with nothing awaited in between: with the disk scan for an id
+     the caller names (a client's, or spawn's and the workflow's minted ones),
+     from memory and the row for one it mints itself. A Claude id that already
+     holds a session reopens it: its stored settings win, while the worktree
+     link and title still apply. Callers keep resolving a pi model handle
+     themselves (`NewSession.model`), so each still branches on the engine for
+     that one step. Spawn reaches `create.ts` through a dynamic import, as it
+     does `hub.ts`, because `create.ts` → the Claude store → the tool catalog →
+     spawn closes a cycle. Step 11c moves the rest onto it — the review-comment
+     new session, day session, new session and draft in `connection.ts`, the
+     worktree merge agent and the permanent assistant — and retires
+     `hub.acquireClaudeSdk` and `hub.acquireNew`. Their Claude sessions then
+     freeze skills at creation, not at the first prompt's backstop.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the

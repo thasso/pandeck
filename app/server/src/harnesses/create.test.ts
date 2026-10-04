@@ -19,9 +19,15 @@ const { piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const worktreeStore = await import("../db/worktreeStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
+const skillResolver = await import("../skills/skillResolver.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
+
+/** A library whose current skills are `alpha`, so a freeze is told from the empty fallback. */
+function libraryHasAlpha() {
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValue(["alpha"]);
+}
 
 const evidence = { hasAttachments: false };
 
@@ -47,6 +53,7 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
     order.push("link");
   });
   const acquire = claudeStore(order);
+  libraryHasAlpha();
 
   await createSession({
     harness: "claude-sdk",
@@ -63,8 +70,8 @@ test("a Claude session is linked and frozen before it exists, then titled", asyn
   });
 
   assert.equal(order[0], "link");
-  // Its current skills (none in this library) are frozen before it exists.
-  assert.equal(order[1], "acquire:conditions=true:skills=[]");
+  // Its current skills are frozen before it exists.
+  assert.equal(order[1], 'acquire:conditions=true:skills=["alpha"]');
   assert.equal(order[2], "title:Fix the build");
   assert.deepEqual(acquire.mock.calls[0]?.[1], {
     agentType: "developer",
@@ -147,6 +154,7 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
   vi.spyOn(worktreeStore, "linkSessionToWorktree").mockImplementation(() => {
     order.push(`link:skills=${sessionStore.getSkills("pi-new") ?? "none"}`);
   });
+  libraryHasAlpha();
 
   await createSession({
     harness: "pi",
@@ -161,7 +169,7 @@ test("a pi session is created first, then recorded, frozen, linked and titled", 
   });
 
   assert.equal(order[0], "create");
-  assert.match(order[1]!, /^link:skills=\[/, "skills frozen before the link");
+  assert.equal(order[1], 'link:skills=["alpha"]', "frozen before the link");
   assert.equal(order[2], "title:Plan the release");
   assert.deepEqual(acquireNew.mock.calls[0], [
     "developer",
@@ -199,7 +207,7 @@ test("a session in a bare directory runs there and is linked to no worktree", as
   assert.equal(link.mock.calls.length, 0);
 });
 
-test("a worktree whose checkout is not live yet is linked, and the session runs in the app CWD", async () => {
+test("a worktree named without its path, not live yet, is linked and runs in the app CWD", async () => {
   const links: string[] = [];
   vi.spyOn(worktreeStore, "linkSessionToWorktree").mockImplementation(
     (sessionId, worktreeId) => void links.push(`${sessionId}->${worktreeId}`),
@@ -227,4 +235,48 @@ test("a worktree whose checkout is not live yet is linked, and the session runs 
   ]);
   assert.ok(!("cwd" in (acquire.mock.calls[0]?.[1] ?? {})));
   assert.ok(!("cwd" in ((acquireNew.mock.calls[0]?.[3] as object) ?? {})));
+});
+
+test("a worktree named without its path runs in its live checkout on both engines", async () => {
+  const path = join(tmp, "live-checkout");
+  mkdirSync(path);
+  worktreeStore.insertWorktree({
+    id: "wt-live",
+    projectId: "project",
+    mainRepoRoot: tmp,
+    path,
+    branch: "live",
+    baseBranch: "main",
+    baseCommit: "base",
+    status: "active",
+    mergeStateJson: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    removedAt: null,
+  });
+  const acquire = claudeStore([]);
+  const acquireNew = vi
+    .spyOn(piStore, "acquireNew")
+    .mockResolvedValue({ sessionId: "pi-live", rename() {} } as never);
+  await createSession({
+    harness: "claude-sdk",
+    agentType: "developer",
+    id: "claude-live",
+    worktree: { id: "wt-live" },
+    credentialProfileId: "profile-1",
+  });
+  await createSession({
+    harness: "pi",
+    agentType: "developer",
+    worktree: { id: "wt-live" },
+    credentialProfileId: "profile-2",
+  });
+  assert.equal(
+    (acquire.mock.calls[0]?.[1] as { cwd?: string } | undefined)?.cwd,
+    path,
+  );
+  assert.equal(
+    (acquireNew.mock.calls[0]?.[3] as { cwd?: string } | undefined)?.cwd,
+    path,
+  );
 });

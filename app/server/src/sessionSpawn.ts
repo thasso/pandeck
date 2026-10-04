@@ -594,7 +594,7 @@ export async function prepareSpawnApproval(
 /** A pi model handle on the session's account, as creation takes it. */
 type PiSessionModel = Extract<NewSession, { harness: "pi" }>["model"];
 
-/** Injectable creation/delivery seams; validation and linking stay real. */
+/** Injectable creation/delivery seams; validation stays real, and creation is `createSession`'s. */
 export interface SessionSpawnDeps {
   newSessionId(): string;
   /** The pi model a row names, on its account; undefined when it is gone. */

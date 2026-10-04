@@ -205,7 +205,6 @@ async function dispatchWorkflowAgentStep(
       step,
       role,
       config,
-      worktree?.status === "active" ? worktree.path : undefined,
       sessionContextEvidence(startContext),
       deps,
     );
@@ -384,8 +383,6 @@ async function createRoleSession(
   step: WorkflowStepRow,
   role: WorkflowAgentRole,
   config: WorkflowRoleConfig & { credentialProfileId: string },
-  /** The run's checkout, once it is live; the app CWD until then. */
-  checkoutPath: string | undefined,
   /** Frozen from the SAME resolution the first assignment's context comes from. */
   promptEvidence: SessionPromptEvidence,
   deps: WorkflowAgentExecutorDeps,
@@ -396,18 +393,11 @@ async function createRoleSession(
     credentialProfileId: config.credentialProfileId,
     promptEvidence,
     title: workflowSessionTitle(run, step, role),
-    // Every workflow role executes in the run's checkout when provisioned. A
-    // coordinator may open the recovery plan before that checkout is live: it
-    // runs in the app CWD, linked already when the run has its worktree and
-    // otherwise backfilled by attachRunWorktree once one is created.
-    ...(run.worktreeId
-      ? {
-          worktree: {
-            id: run.worktreeId,
-            ...(checkoutPath !== undefined ? { path: checkoutPath } : {}),
-          },
-        }
-      : {}),
+    // Every workflow role executes in the run's checkout once it is live, and
+    // in the app CWD before then: a coordinator may open the recovery plan
+    // first. A run without a worktree yet gets its edge backfilled by
+    // attachRunWorktree once one is created.
+    ...(run.worktreeId ? { worktree: { id: run.worktreeId } } : {}),
   } as const;
   if (config.provider === CLAUDE_SDK_PROVIDER)
     return deps.create({

@@ -38,7 +38,7 @@ export type SessionWorktreeEdge =
  * Resolve a worktree id to its path, or undefined when it no longer exists.
  * A synthetic `main:<projectId>` id resolves to the project's main checkout.
  */
-function worktreePathIfPresent(worktreeId: string): string | undefined {
+export function worktreePathIfPresent(worktreeId: string): string | undefined {
   if (isMainWorktreeId(worktreeId)) {
     const path = mainCheckoutPathForProject(
       projectIdFromMainWorktreeId(worktreeId),
