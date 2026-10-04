@@ -75,7 +75,11 @@ import { testForgejoSettings } from "./forgejoSettings.ts";
 import { testGithubSettings } from "./githubSettings.ts";
 import { testGoogleSettings } from "./googleSettings.ts";
 import { getSettings } from "./settings.ts";
-import { saveSettings, type SettingsChange } from "./settingsService.ts";
+import {
+  announceSettingsWritten,
+  saveSettings,
+  type SettingsChange,
+} from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
 import { testSlackHuddleSettings, testSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings } from "./tempoSettings.ts";
@@ -86,7 +90,6 @@ import {
   findModelForProfile,
   listModels,
   refreshModels,
-  syncConfiguredModelProviders,
 } from "./piSdk/models.ts";
 import { hub } from "./hub.ts";
 import { PiLiveSession } from "./piSdk/PiLiveSession.ts";
@@ -4041,7 +4044,8 @@ export class Connection implements Viewer {
     try {
       await saveSettings({ openAiCompatible: patch });
       const status = await testOpenAiCompatibleSettings();
-      syncConfiguredModelProviders();
+      // A test stores the models it discovered: every client hears about them.
+      await announceSettingsWritten(["openAiCompatible"]);
       this.send({
         type: "openAiCompatibleStatus",
         status,
@@ -4059,7 +4063,8 @@ export class Connection implements Viewer {
   private async onTestOpenAiCompatibleSettings(): Promise<void> {
     try {
       const status = await testOpenAiCompatibleSettings();
-      syncConfiguredModelProviders();
+      // A test stores the models it discovered: every client hears about them.
+      await announceSettingsWritten(["openAiCompatible"]);
       this.send({
         type: "openAiCompatibleStatus",
         status,

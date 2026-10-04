@@ -91,6 +91,7 @@ import { jiraIssueUrl, resolveJiraIssueInfos } from "./jiraClient.ts";
 import { resolveGithubLinkedIssues } from "./githubLinkedIssues.ts";
 import { getGithubConfigIfAvailable } from "./githubSettings.ts";
 import { slackSocketMode } from "./slackSocketMode.ts";
+import { announceSettingsWritten } from "./settingsService.ts";
 import {
   startSlackShortcutIntake,
   stopSlackShortcutIntake,
@@ -1503,6 +1504,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
+      if (result.ok) await announceOAuthConnection("google");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -1533,7 +1535,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
-      if (result.ok) slackSocketMode.reconcile();
+      if (result.ok) await announceOAuthConnection("slack");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -1564,6 +1566,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
+      if (result.ok) await announceOAuthConnection("tempo");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -2440,6 +2443,19 @@ function readJsonBody<T>(req: IncomingMessage): Promise<T> {
     });
     req.on("error", reject);
   });
+}
+
+/**
+ * An OAuth callback stores its tokens inside the integration module, so run
+ * that section's effects and tell open Settings pages. The connection itself
+ * succeeded either way; a failed effect is only logged.
+ */
+async function announceOAuthConnection(
+  section: "google" | "slack" | "tempo",
+): Promise<void> {
+  await announceSettingsWritten([section]).catch((err: unknown) =>
+    console.warn(`[${section}] after connecting:`, errorText(err)),
+  );
 }
 
 function oauthHtml(

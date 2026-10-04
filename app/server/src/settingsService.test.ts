@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
-import { describe, test } from "vitest";
+import { existsSync, mkdirSync, renameSync, rmdirSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, test, vi } from "vitest";
 import {
   SETTINGS_REGISTRY,
   settingDescriptor,
 } from "@assistant/shared/settingsRegistry";
+import type {
+  AppSettings,
+  DayScanIdentities,
+  ServerMessage,
+} from "@assistant/shared";
+import { DATA_DIR } from "./config.ts";
+import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { getSettings } from "./settings.ts";
+import { listSettingsModelSlots } from "./settingsModelSlots.ts";
 import {
+  announceSettingsWritten,
   INTEGRATION_PATCH_FIELDS,
   onSettingsChanged,
   saveSettings,
@@ -34,9 +45,30 @@ function valueAt(root: unknown, path: string): unknown {
     );
 }
 
+/**
+ * Current settings with every optional field filled in, since defaults leave
+ * them out. Account pins are the slots' only optional field and
+ * `listSettingsModelSlots` is tested to list every slot; the identities are
+ * typed `Required`, so a new one is a type error until it is added here.
+ */
+function populatedSettings(): AppSettings {
+  const settings = structuredClone(getSettings());
+  for (const { slot } of listSettingsModelSlots(settings))
+    slot.credentialProfileId = "cp_fixture";
+  const identities: Required<DayScanIdentities> = {
+    googleEmail: "me@example.com",
+    jiraAccountId: "jira-account",
+    jiraEmail: "me@example.com",
+    githubLogin: "me",
+    tempoAccountId: "tempo-account",
+  };
+  settings.dayScan.identities = identities;
+  return settings;
+}
+
 describe("registry coverage", () => {
   test("every leaf the Settings page receives has a descriptor", () => {
-    const settings = getSettings();
+    const settings = populatedSettings();
     const covered = (leaf: string) =>
       SETTINGS_REGISTRY.some(
         (d) =>
@@ -53,7 +85,7 @@ describe("registry coverage", () => {
   });
 
   test("every descriptor points at something real", () => {
-    const settings = getSettings();
+    const settings = populatedSettings();
     for (const d of SETTINGS_REGISTRY) {
       const [section = "", ...rest] = d.path.split(".");
       const integration = Object.hasOwn(INTEGRATION_PATCH_FIELDS, section)
@@ -75,10 +107,7 @@ describe("registry coverage", () => {
         continue;
       }
       if (d.access === "secret") continue;
-      const parent = d.optional
-        ? d.path.split(".").slice(0, -1).join(".")
-        : d.path;
-      assert.notEqual(valueAt(settings, parent), undefined, d.path);
+      assert.notEqual(valueAt(settings, d.path), undefined, d.path);
     }
   });
 
@@ -163,9 +192,99 @@ describe("settingsPatchForWrites", () => {
     refuse("worktrees.defaultMergeStrategy", "octopus", /must be one of/);
     refuse("peerSpawnRuntimes", "oops", /peerSpawnRuntimes must be an array/);
   });
+
+  test("a malformed vocabulary is refused before it can erase the current one", async () => {
+    const vocabulary = [{ from: "pan deck", to: "Pandeck" }];
+    await saveSettings(
+      settingsPatchForWrites([
+        { path: "speechToText.vocabulary", value: vocabulary },
+      ]),
+    );
+    const refuse = (value: unknown, pattern: RegExp) =>
+      assert.throws(
+        () =>
+          settingsPatchForWrites([{ path: "speechToText.vocabulary", value }]),
+        pattern,
+      );
+    refuse("not an array", /vocabulary must be an array/);
+    refuse([{ from: "a", to: 1 }], /vocabulary\[0\]\.to must be a string/);
+    refuse(["a"], /vocabulary\[0\] must be an object/);
+    refuse(
+      Array.from({ length: 201 }, () => ({ from: "a", to: "b" })),
+      /at most 200 entries/,
+    );
+    assert.deepEqual(getSettings().speechToText.vocabulary, vocabulary);
+  });
 });
 
 describe("saveSettings", () => {
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    while (cleanups.length) cleanups.pop()?.();
+  });
+
+  test("a failing effect or listener skips nothing after it", async () => {
+    cleanups.push(
+      subscribeIntegrationToolChanges(() => {
+        throw new Error("subscriber failure");
+      }),
+    );
+    cleanups.push(
+      onSettingsChanged(() => {
+        throw new Error("listener failure");
+      }),
+    );
+    const heard: SettingsChange[] = [];
+    cleanups.push(onSettingsChanged((change) => heard.push(change)));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    cleanups.push(() => vi.restoreAllMocks());
+
+    await assert.rejects(
+      saveSettings({ brave: { enabled: true } }),
+      /Settings saved, but updating session tools failed: subscriber failure/,
+    );
+    assert.equal(getSettings().brave.enabled, true);
+    assert.deepEqual(heard, [{ sections: ["brave"] }]);
+  });
+
+  test("a failed write throws its own error after announcing what landed", async () => {
+    const appearance = getSettings().appearance;
+    const heard: SettingsChange[] = [];
+    cleanups.push(onSettingsChanged((change) => heard.push(change)));
+    // A directory where the Brave file belongs makes every full read throw.
+    // Whatever file was there is moved aside and put back afterwards.
+    const bravePath = join(DATA_DIR, "settings", "brave.json");
+    const saved = `${bravePath}.test-saved`;
+    const hadFile = existsSync(bravePath);
+    if (hadFile) renameSync(bravePath, saved);
+    mkdirSync(bravePath, { recursive: true });
+    try {
+      await assert.rejects(
+        saveSettings({
+          appearance: { ...appearance, separatorAtTurnEnd: false },
+          brave: { enabled: true },
+        }),
+        (err: Error) =>
+          !err.message.startsWith("Settings saved") &&
+          /Brave config/.test(err.message),
+      );
+    } finally {
+      rmdirSync(bravePath);
+      if (hadFile) renameSync(saved, bravePath);
+    }
+    // `updateSettings` persisted appearance, then threw re-reading the broken
+    // Brave file, so the Brave writer never ran: appearance alone is announced.
+    assert.deepEqual(heard, [{ sections: ["appearance"] }]);
+    assert.equal(getSettings().appearance.separatorAtTurnEnd, false);
+  });
+
+  test("announcing a write made elsewhere reaches every listener", async () => {
+    const heard: SettingsChange[] = [];
+    cleanups.push(onSettingsChanged((change) => heard.push(change)));
+    await announceSettingsWritten(["openAiCompatible"]);
+    assert.deepEqual(heard, [{ sections: ["openAiCompatible"] }]);
+  });
+
   test("persists, then tells every listener which sections changed", async () => {
     const heard: SettingsChange[] = [];
     const stop = onSettingsChanged((change) => heard.push(change));
@@ -205,4 +324,55 @@ test("a write reaches every connected viewer, not only the writer", async () => 
     [{ sections: ["browserTools"] }],
     [{ sections: ["browserTools"] }],
   ]);
+});
+
+test("models a connection test discovers reach every client", async () => {
+  const { hub } = await import("./hub.ts");
+  const { Connection } = await import("./connection.ts");
+  await saveSettings({
+    openAiCompatible: { enabled: true, baseUrl: "http://models.invalid/v1" },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = vi.fn(
+    async () =>
+      new Response(JSON.stringify({ data: [{ id: "new-model" }] }), {
+        status: 200,
+      }),
+  ) as typeof fetch;
+  const sent: ServerMessage[][] = [[], []];
+  const connections = sent.map((messages) => {
+    const connection = new Connection({
+      OPEN: 1,
+      readyState: 1,
+      send: (raw: string) => messages.push(JSON.parse(raw) as ServerMessage),
+    } as unknown as ConstructorParameters<typeof Connection>[0]);
+    hub.register(connection);
+    return connection;
+  });
+  try {
+    await connections[0]!.handle({ type: "testOpenAiCompatibleSettings" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const connection of connections) connection.dispose();
+  }
+  const [tester = [], other = []] = sent;
+  const otherSettings = other.filter((m) => m.type === "settings").at(-1);
+  assert.ok(
+    otherSettings?.type === "settings",
+    "the other client got settings",
+  );
+  assert.deepEqual(
+    otherSettings.settings.openAiCompatible.models.map((m) => m.id),
+    ["new-model"],
+  );
+  assert.ok(
+    other.some((m) => m.type === "models"),
+    "and a fresh model list",
+  );
+  // The test result itself answers only the client that asked.
+  assert.ok(tester.some((m) => m.type === "openAiCompatibleStatus"));
+  assert.equal(
+    other.some((m) => m.type === "openAiCompatibleStatus"),
+    false,
+  );
 });

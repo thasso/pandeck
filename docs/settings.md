@@ -24,9 +24,9 @@ assistant can set too, and secrets stay out of its context
   - `oauth`: connected through a browser flow. Only `null` (disconnect, via
     `clearWith`) can be written.
 - `value`: the kind and bounds a write must have. A `json` value (a model list,
-  the peer runtime roster, skill toggles) is written whole and checked by
-  `appSettingsPatchError` in `validateClientMessage.ts`, the same check the
-  socket message gets.
+  the peer runtime roster, skill toggles, the dictation vocabulary) is written
+  whole and checked by `appSettingsPatchError` in `validateClientMessage.ts`,
+  the same check the socket message gets.
 - `optional`: writing `""` removes the field, for example an account pin back to
   automatic.
 
@@ -45,7 +45,9 @@ Three tests keep the registry complete:
 - `app/server/src/settingsService.test.ts`: every leaf of `getSettings()` is
   covered by a descriptor (directly, under a `json` or `readonly` subtree, or as
   a secret's `configuredBy` flag); every descriptor points at a real value or
-  patch field; every integration patch field is written by some descriptor.
+  patch field; every integration patch field is written by some descriptor. The
+  leaves are read with every optional field filled in (an account pin on every
+  slot, all day-scan identities), since defaults leave them out.
   `INTEGRATION_PATCH_FIELDS` lists the patch fields, so adding one to a
   `*SettingsPatch` type is a type error until it is listed there.
 - `app/server/src/architecture.test.ts`: no module outside `settingsService.ts`
@@ -75,8 +77,20 @@ URL), plus `models` after a `claudeSdk` or `openAiCompatible` write and
 `speechToTextStatus` after a `speechToText` write. The writer gets its echo the
 same way as everyone else, before the request's `mutationSettled`.
 
-If a write fails partway, the sections already written still run their effects
-and are announced, then the error is thrown.
+Each effect and each listener runs on its own, so one failure never skips the
+rest or the announcement. A section counts as written once its writer has run,
+even if the writer then threw, because a writer may persist before it fails.
+When a write fails, the sections it reached still run their effects and are
+announced, and then the write's own error is thrown. When every write lands but
+an effect fails, the error says the settings were saved and names what failed.
+Listener failures are only logged. A save reads full settings only when it
+touches `permanentAssistant`, so one unreadable integration file never blocks
+saving an unrelated section.
+
+`announceSettingsWritten(sections)` covers settings a module persists on its
+own: an OpenAI-compatible connection test stores the models it discovered, and
+the Google, Slack and Tempo OAuth callbacks store tokens. It runs the same
+effects and pushes the same per-connection update.
 
 `settingsPatchForWrites(writes)` turns path-addressed writes (`{ path, value }`)
 into such a patch. It checks each against its descriptor, copies the rest of the
@@ -85,3 +99,4 @@ read-only settings, bad values and non-null OAuth writes.
 
 The connection-test messages (`saveAndTest*`, `test*`) still answer only the
 client that asked: a test result is that client's request, not shared state.
+What a test persists, such as discovered models, reaches every client.

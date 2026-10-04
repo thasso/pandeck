@@ -345,7 +345,13 @@ class SessionHub {
     // Settings carry per-connection URLs (OAuth redirect URIs), so each client
     // builds its own copy instead of receiving one shared message.
     onSettingsChanged((change) => {
-      for (const viewer of this.connections) viewer.settingsChanged?.(change);
+      for (const viewer of this.connections) {
+        try {
+          viewer.settingsChanged?.(change);
+        } catch (err) {
+          console.warn("[settings] push to a client failed:", errorText(err));
+        }
+      }
     });
     subscribeHarnessOpened((sessionId) => this.sessionHarnessOpened(sessionId));
   }

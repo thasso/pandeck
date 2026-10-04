@@ -159,8 +159,10 @@ const ASSISTANT_PROFILE_FIELDS = [
 
 /**
  * Persist `patch`, run what each written section needs, then tell every
- * listener. Throws when a write fails; sections already written still run
- * their side effects and are announced, so clients never show stale values.
+ * listener. Sections written before a failing write still run their effects
+ * and are announced, so clients never show stale values; the write's own error
+ * is what then throws. When every write lands but an effect fails, the throw
+ * says the settings were saved and names what failed.
  */
 export async function saveSettings(patch: SettingsPatch): Promise<AppSettings> {
   const appPatch: Partial<AppSettings> = {};
@@ -170,66 +172,119 @@ export async function saveSettings(patch: SettingsPatch): Promise<AppSettings> {
     if (isIntegrationKey(key)) integrationKeys.push(key);
     else Object.assign(appPatch, { [key]: patch[key] });
   }
-  const assistantBefore = getSettings().permanentAssistant;
+  // Read only when needed: a full read touches every integration's file, and
+  // one unreadable file must not block saving an unrelated section.
+  const assistantBefore = appPatch.permanentAssistant
+    ? getSettings().permanentAssistant
+    : undefined;
+  // A section counts once its writer has run, even if it then threw: a writer
+  // may persist before it fails (`updateSettings` re-reads everything after
+  // writing), and announcing an unchanged section costs only a fresh copy.
   const written: (keyof AppSettings)[] = [];
+  let writeFailed = false;
+  let writeError: unknown;
   try {
     if (Object.keys(appPatch).length > 0) {
-      updateSettings(appPatch);
       written.push(...(Object.keys(appPatch) as (keyof AppSettings)[]));
+      updateSettings(appPatch);
     }
     for (const key of integrationKeys) {
+      written.push(key);
       const write = INTEGRATION_WRITERS[key] as (patch: unknown) => unknown;
       write(patch[key]);
-      written.push(key);
     }
-  } finally {
-    if (written.length > 0) await afterWrite(written, assistantBefore);
+  } catch (err) {
+    writeFailed = true;
+    writeError = err;
   }
+  const effectFailures =
+    written.length > 0 ? await settingsWritten(written, assistantBefore) : [];
+  if (writeFailed) throw writeError;
+  if (effectFailures.length > 0)
+    throw new Error(`Settings saved, but ${effectFailures.join("; ")}`);
   return getSettings();
 }
 
-async function afterWrite(
+/**
+ * Run the effects of, and announce, sections a module persisted on its own: a
+ * connection test that stores discovered models, an OAuth callback that stores
+ * tokens. Throws, after announcing, when an effect fails.
+ */
+export async function announceSettingsWritten(
   sections: (keyof AppSettings)[],
-  assistantBefore: AppSettings["permanentAssistant"],
 ): Promise<void> {
+  const failures = await settingsWritten(sections);
+  if (failures.length > 0) throw new Error(failures.join("; "));
+}
+
+/**
+ * Each effect runs on its own, so one failure never skips the rest or the
+ * announcement. Returns what failed. Listener failures are logged: they belong
+ * to the client being told, not to the caller that wrote.
+ */
+async function settingsWritten(
+  sections: (keyof AppSettings)[],
+  assistantBefore?: AppSettings["permanentAssistant"],
+): Promise<string[]> {
+  const failures: string[] = [];
+  const effect = async (name: string, run: () => unknown): Promise<void> => {
+    try {
+      await run();
+    } catch (err) {
+      failures.push(`${name} failed: ${errorText(err)}`);
+    }
+  };
   const wrote = (key: keyof AppSettings) => sections.includes(key);
-  const settings = getSettings();
-  if (
-    wrote("permanentAssistant") &&
-    ASSISTANT_PROFILE_FIELDS.some(
-      (field) => assistantBefore[field] !== settings.permanentAssistant[field],
-    )
-  ) {
-    const { rotatePermanentAssistantSession } =
-      await import("./permanentAssistant.ts");
-    await rotatePermanentAssistantSession();
-  }
+  if (assistantBefore && wrote("permanentAssistant"))
+    await effect("restarting the Personal Assistant", async () => {
+      const after = getSettings().permanentAssistant;
+      if (
+        !ASSISTANT_PROFILE_FIELDS.some(
+          (field) => assistantBefore[field] !== after[field],
+        )
+      )
+        return;
+      const { rotatePermanentAssistantSession } =
+        await import("./permanentAssistant.ts");
+      await rotatePermanentAssistantSession();
+    });
   // The schedule fires in the profile timezone, so a zone change re-arms it.
-  if (wrote("dayScan") || wrote("profile")) {
-    const { reconcileDayScanSchedule } = await import("./dayScan/schedule.ts");
-    reconcileDayScanSchedule();
-  }
-  if (wrote("slack")) {
-    const { slackSocketMode } = await import("./slackSocketMode.ts");
-    slackSocketMode.reconcile();
-  }
-  if (wrote("github")) {
-    const { reconcilePackageProxy } =
-      await import("./packageProxy/packageProxy.ts");
-    await reconcilePackageProxy().catch((err: unknown) =>
-      console.warn("[package-proxy] reconcile failed:", errorText(err)),
-    );
-  }
-  if (wrote("openAiCompatible")) {
-    const { syncConfiguredModelProviders } = await import("./piSdk/models.ts");
-    syncConfiguredModelProviders();
-  }
+  if (wrote("dayScan") || wrote("profile"))
+    await effect("re-arming the day scan", async () => {
+      const { reconcileDayScanSchedule } =
+        await import("./dayScan/schedule.ts");
+      reconcileDayScanSchedule();
+    });
+  if (wrote("slack"))
+    await effect("reconnecting Slack", async () => {
+      const { slackSocketMode } = await import("./slackSocketMode.ts");
+      slackSocketMode.reconcile();
+    });
+  if (wrote("github"))
+    await effect("reconciling the package proxy", async () => {
+      const { reconcilePackageProxy } =
+        await import("./packageProxy/packageProxy.ts");
+      await reconcilePackageProxy();
+    });
+  if (wrote("openAiCompatible"))
+    await effect("syncing model providers", async () => {
+      const { syncConfiguredModelProviders } =
+        await import("./piSdk/models.ts");
+      syncConfiguredModelProviders();
+    });
   // OpenAI-compatible models reach sessions through the model list, not tools.
   if (
     sections.some((key) => isIntegrationKey(key) && key !== "openAiCompatible")
   )
-    notifyIntegrationToolsChanged();
-  for (const listener of listeners) listener({ sections });
+    await effect("updating session tools", notifyIntegrationToolsChanged);
+  for (const listener of listeners) {
+    try {
+      listener({ sections });
+    } catch (err) {
+      console.warn("[settings] change listener failed:", errorText(err));
+    }
+  }
+  return failures;
 }
 
 /** One path-addressed write, as an agent states it. */
