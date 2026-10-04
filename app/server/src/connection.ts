@@ -109,7 +109,6 @@ import {
   ensureRuntimeSessionWithRuntime as ensureRuntimeSession,
   promptRuntimeSession,
   promptRuntimeSessionAndCaptureText,
-  type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
@@ -2934,7 +2933,7 @@ export class Connection implements Viewer {
       });
       if (!prompt) throw new Error("Those comments are no longer available.");
 
-      let driver: (RuntimePromptDriver & HarnessDriver) | undefined;
+      let driver: LiveSession | undefined;
       if (target.kind === "existing") {
         // The socket is untrusted: only sessions actually linked to THIS
         // worktree may receive its comments (the review tools resolve the
@@ -4391,7 +4390,7 @@ export class Connection implements Viewer {
       // transcript (`viewSession.ts`), which is what embedding the day chat did
       // on every calendar navigation.
       const driving = Boolean(opts.text?.trim() || opts.scan || opts.logTime);
-      let driver: (RuntimePromptDriver & HarnessDriver) | undefined;
+      let driver: LiveSession | undefined;
       let view: HarnessDriver | undefined;
       if (boundId) {
         if (!driving) view = hub.viewById(boundId);
@@ -4498,7 +4497,7 @@ export class Connection implements Viewer {
    */
   private async runDayScanWithProgress(
     date: string,
-    driver: (RuntimePromptDriver & HarnessDriver) | null,
+    driver: LiveSession | null,
   ): Promise<void> {
     beginDayScanProgress(date, driver?.sessionId ?? null);
     const store = new KnowledgeBaseStore();
@@ -5743,9 +5742,7 @@ export class Connection implements Viewer {
    * its backing could not be reopened. Callers must treat that as a refusal
    * rather than prompting something else.
    */
-  private async ensureViewingDriver(): Promise<
-    (RuntimePromptDriver & HarnessDriver) | undefined
-  > {
+  private async ensureViewingDriver(): Promise<LiveSession | undefined> {
     const viewing = this.viewing;
     if (!viewing) return undefined;
     const ready = this.asRuntimePromptDriver(viewing);
@@ -5767,7 +5764,7 @@ export class Connection implements Viewer {
    */
   private async openHarnessFor(
     sessionId: string,
-  ): Promise<(RuntimePromptDriver & HarnessDriver) | undefined> {
+  ): Promise<LiveSession | undefined> {
     const live = await hub.acquireById(sessionId);
     const driver = live ? this.asRuntimePromptDriver(live) : undefined;
     // The RUNTIME session has to take the harness too, not just this view: the

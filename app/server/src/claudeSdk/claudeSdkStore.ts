@@ -201,7 +201,7 @@ class ClaudeSdkSessionStore {
     });
     session.onChange = () => this.onChange();
     session.onPersist = () => this.persist(session);
-    session.onEvict = () => this.evictIdle(session);
+    session.holdBy(() => this.evictIdle(session));
     session.browserRuntimesFor = (sessionId) =>
       this.browserRuntimesFor(sessionId);
     if (loaded) this.logs.set(id, loaded.cursor);
@@ -346,7 +346,7 @@ class ClaudeSdkSessionStore {
       });
       session.onChange = () => this.onChange();
       session.onPersist = () => this.persist(session);
-      session.onEvict = () => this.evictIdle(session);
+      session.holdBy(() => this.evictIdle(session));
       session.browserRuntimesFor = (sessionId) =>
         this.browserRuntimesFor(sessionId);
       // A fork INHERITS its parent's scope, and claims it before the live map

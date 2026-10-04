@@ -8,7 +8,7 @@ import type { ServerMessage } from "@assistant/shared";
 import { HARNESS_IDLE_EVICT_MS, type Viewer } from "../harness.ts";
 
 export class SessionResidency {
-  readonly viewers = new Set<Viewer>();
+  private readonly attached = new Set<Viewer>();
   /**
    * Release the session from memory, answering whether it went. Unset — a
    * session no store holds — keeps the clock from ever running.
@@ -23,18 +23,27 @@ export class SessionResidency {
    */
   constructor(private readonly isIdle: () => boolean) {}
 
+  get viewers(): ReadonlySet<Viewer> {
+    return this.attached;
+  }
+
   addViewer(viewer: Viewer): void {
     this.cancel();
-    this.viewers.add(viewer);
+    this.attached.add(viewer);
   }
 
   removeViewer(viewer: Viewer): void {
-    this.viewers.delete(viewer);
+    this.attached.delete(viewer);
     this.arm();
   }
 
+  /** Forget every viewer, without restarting the clock. */
+  clearViewers(): void {
+    this.attached.clear();
+  }
+
   broadcast(message: ServerMessage): void {
-    for (const viewer of this.viewers) viewer.send(message);
+    for (const viewer of this.attached) viewer.send(message);
   }
 
   /**
@@ -45,10 +54,10 @@ export class SessionResidency {
    */
   arm(): void {
     this.cancel();
-    if (!this.release || this.closed || this.viewers.size > 0) return;
+    if (!this.release || this.closed || this.attached.size > 0) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      if (this.closed || this.viewers.size > 0) return;
+      if (this.closed || this.attached.size > 0) return;
       if (!this.isIdle() || !this.release?.()) this.arm();
     }, HARNESS_IDLE_EVICT_MS);
     this.timer.unref?.();
@@ -60,7 +69,11 @@ export class SessionResidency {
     this.timer = undefined;
   }
 
-  /** The session is disposed: the clock never runs again. */
+  /**
+   * The session is disposed: the clock never runs again. A late `arm` (a viewer
+   * leaving a released session) must not release it a second time, which would
+   * let its store drop a reopened successor held under the same key.
+   */
   close(): void {
     this.closed = true;
     this.cancel();

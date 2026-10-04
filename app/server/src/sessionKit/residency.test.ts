@@ -35,8 +35,25 @@ test("an unviewed idle session is released once, after the full grace", () => {
   assert.equal(released.length, 0);
   vi.advanceTimersByTime(1);
   assert.equal(released.length, 1);
-  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 3);
-  assert.equal(released.length, 1, "a closed residency never runs again");
+});
+
+test("a closed residency never runs its clock again", () => {
+  vi.useFakeTimers();
+  const { r, released } = residency({});
+  const v = viewer();
+  r.addViewer(v);
+  r.close();
+  // A late acquisition, or a viewer leaving the released session.
+  r.arm();
+  r.removeViewer(v);
+  assert.equal(vi.getTimerCount(), 0);
+
+  // Closing also stops a clock already running.
+  const pending = residency({});
+  pending.r.arm();
+  pending.r.close();
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+  assert.deepEqual([released.length, pending.released.length], [0, 0]);
 });
 
 test("no clock runs while no store holds the session", () => {

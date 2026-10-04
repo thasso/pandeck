@@ -473,8 +473,9 @@ export class PiLiveSession implements LiveSession {
   }
 
   /**
-   * Put a session nobody views and nothing runs under the same idle clock a
-   * viewer's departure would: the store calls this when it registers a session,
+   * Start the idle clock if nobody views the session, as a viewer's departure
+   * would; a run in progress when it runs out restarts it rather than releasing
+   * the session. The store calls this when it registers a session,
    * so one acquired for a load that was superseded (or a socket that closed)
    * before it could be viewed is evicted like any other idle session instead
    * of staying resident for the process lifetime. It calls it again on every

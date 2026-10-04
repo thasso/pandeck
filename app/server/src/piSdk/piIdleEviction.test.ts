@@ -95,7 +95,8 @@ test("an acquisition restarts the clock", () => {
 test("a run outlasting the clock keeps the session, which gets a full grace after it", () => {
   const { sessionId, live, evicted } = idleSession();
   const { toolId } = live.beginSyntheticTool("/commit", {});
-  // An acquisition mid-run starts the clock; running out mid-run releases nothing.
+  // An acquisition mid-run starts the clock, which finds the session busy and
+  // releases nothing; the run's end restarts a full grace.
   live.armIdleIfUnviewed();
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 3);
   assert.equal(live.released, false);

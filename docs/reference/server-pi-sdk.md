@@ -17,7 +17,8 @@ and headless one-shot utility runs.
 
 - `PiLiveSession.ts` owns the pi session class: pi stream consumption, synthetic
   tool turns, accept-mutation flows, runtime-adapter creation (raw prompting
-  stays private), tool-group binding, idle eviction. Slash-command dispatch is
+  stays private), tool-group binding, and when it is idle and how it is released
+  (the clock itself is `../sessionKit/residency.ts`). Slash-command dispatch is
   NOT here: every host-driven command runs through `../hostSlashCommands.ts`
   against the shared `SyntheticToolHost` surface, to which this class
   contributes `compactContext` (pi's `AgentSession.compact`, which never

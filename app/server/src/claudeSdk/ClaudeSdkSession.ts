@@ -699,13 +699,11 @@ export class ClaudeSdkSession implements LiveSession {
   /** Ask the store to persist this session's record. */
   onPersist: () => void = () => {};
   /**
-   * Ask the store to release this idle session from memory; answers whether it
-   * did. Unset (a session no store holds) means the idle clock never runs.
+   * The store now holds this session: `release` lets it go from memory when
+   * idle, answering whether it did. Until then (a session no store holds) the
+   * idle clock never runs.
    */
-  get onEvict(): (() => boolean) | undefined {
-    return this.residency.release;
-  }
-  set onEvict(release: (() => boolean) | undefined) {
+  holdBy(release: () => boolean): void {
     this.residency.release = release;
   }
   /** Set once disposed: nothing may drive this instance again. */
@@ -3984,7 +3982,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.unsubscribeApprovals();
     this.unsubscribeTaskChoices();
     this.adapterEvents.clear();
-    this.residency.viewers.clear();
+    this.residency.clearViewers();
   }
 }
 
