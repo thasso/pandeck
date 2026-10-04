@@ -11,8 +11,10 @@ import {
   createPiToolActivation,
   loadedToolNamesFromMessages,
   mergedActiveToolNames,
+  toolExposureForSession,
   UNUSED_TOOL_PRUNE_IDLE_MS,
 } from "./toolActivation.ts";
+import { sessionToolExposure } from "../tools/sessionToolExposure.ts";
 import {
   loadPiPromptBuilder,
   piBuiltinPromptTools,
@@ -590,4 +592,32 @@ test("find_tools still discovers app tools by capability", async () => {
   } finally {
     activation.dispose();
   }
+});
+
+test("a stale activation disposed after its replacement leaves the replacement registered", () => {
+  const sessionId = `activation-replaced-${Date.now()}`;
+  const activationFor = () =>
+    createPiToolActivation({
+      sessionId,
+      agentType: "assistant",
+      agentTools: agentToolsFor("assistant"),
+      eagerToolNames: eagerToolNamesFor("assistant"),
+      deferToolLoading: true,
+      applyActiveToolNames: () => {},
+    });
+  const stale = activationFor();
+  const replacement = activationFor();
+  try {
+    stale.dispose();
+    // Both readers still answer from the replacement, and agree.
+    assert.ok(toolExposureForSession(sessionId));
+    assert.deepEqual(
+      sessionToolExposure(sessionId),
+      toolExposureForSession(sessionId),
+    );
+  } finally {
+    replacement.dispose();
+  }
+  assert.equal(toolExposureForSession(sessionId), undefined);
+  assert.equal(sessionToolExposure(sessionId), undefined);
 });

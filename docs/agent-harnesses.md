@@ -49,8 +49,12 @@ Four layers, each depending only on the ones below it:
      while a delete's harness-neutral cleanup runs in one flow for both, each
      step best-effort once the row is tombstoned. That cleanup deletes the
      session's tool-output artifacts whichever engine held it, so a fork's links
-     into its deleted parent's artifacts stop resolving. `hub.ts` still builds
-     the merged session list from each store.
+     into its deleted parent's artifacts stop resolving. The merged session list
+     across both stores is `harnesses/sessionList.ts`'s; the hub only decides
+     when it is rebuilt and who hears it. Two pi-only operations sit on the
+     registry too: reopening by transcript file (`reopenTranscript`, a
+     post-reload continuation) and an image from a transcript
+     (`transcriptImage`).
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context
@@ -133,11 +137,15 @@ Four layers, each depending only on the ones below it:
    - `harnesses/availability.ts` says whether an existing session may be opened
      now (`existingSessionRefusal`): a Claude session waits on the Claude SDK
      setting, a pi session on its persona's availability.
-   - `harnesses/toolExposure.ts` and `harnesses/piSession.ts` are pass-throughs
-     to the two pi modules app code still needs, pending a per-harness seam: the
-     session view asks pi's tool exposure for every session (a Claude session
-     has none recorded), and a commit dry run names the pi session types it is
-     recorded on. Step 12c replaces the first with a seam each engine answers.
+   - `harnesses/handoffSession.ts` (`handoffEngine`) is what a review handoff
+     asks of the engine it opens a new session on: whether the persona needs the
+     existing-session guard, and the account and model checks before
+     `createSession`.
+   - A session's tool exposure for the Tools inspector is read from
+     `tools/sessionToolExposure.ts`, which the engine that runs the session
+     registers into; the reader never learns which engine answered.
+     `harnesses/piSession.ts` is a type-only pass-through: a commit dry run
+     names the pi session types it is recorded on.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -206,7 +214,7 @@ table when a later step needs them.
 | 11d  | Fork, delete and rename through the registry                                  | landed |
 | 12a  | Model resolution and engine boot through `harnesses/`                         | landed |
 | 12b  | Session storage, availability and connection lookups through `harnesses/`     | landed |
-| 12c  | Hub list and pi lookups, a tool-exposure seam, the review-handoff branch      | open   |
+| 12c  | Hub list and pi lookups, a tool-exposure seam, the review-handoff branch      | landed |
 | 12d  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order

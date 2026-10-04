@@ -41,6 +41,7 @@ import type { AgentTool } from "../mcp/tool.ts";
 import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
 import { createFindToolsTool } from "../tools/findTools.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
+import { registerSessionToolExposure } from "../tools/sessionToolExposure.ts";
 import {
   buildToolExposure,
   toolDefinitionChars,
@@ -234,11 +235,18 @@ export function createPiToolActivation(
       });
     },
     dispose() {
-      activations.delete(config.sessionId);
+      // A stale activation disposed after its replacement registered must not
+      // take the replacement's entry with it.
+      if (activations.get(config.sessionId) === activation)
+        activations.delete(config.sessionId);
+      unregisterExposure();
       unsubscribeIntegrations();
     },
   };
   activations.set(config.sessionId, activation);
+  const unregisterExposure = registerSessionToolExposure(config.sessionId, () =>
+    activation.exposure(),
+  );
   return activation;
 }
 

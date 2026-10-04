@@ -301,6 +301,27 @@ export const harnessRegistry = {
     return sessions[harness].unopenable(id);
   },
 
+  /**
+   * Reopen a session from pi's transcript `file`, reusing it when it is already
+   * resident: what a post-reload continuation names. Only pi reopens by file.
+   */
+  reopenTranscript(agentType: AgentType, file: string): Promise<LiveSession> {
+    return piStore.acquireExisting(agentType, file);
+  },
+
+  /**
+   * An image a session's transcript carries, as raw bytes, from its live branch
+   * or a cold reopen. Only pi keeps images in its transcript.
+   */
+  transcriptImage(
+    agentType: AgentType,
+    sessionId: string,
+    entryId: string,
+    imageIndex: number,
+  ): Promise<{ data: Buffer; mimeType: string } | undefined> {
+    return piStore.resolvePiImage(agentType, sessionId, entryId, imageIndex);
+  },
+
   /** The resident session that owns a browser runtime, as its listing shows it. */
   browserRuntimeOwner(sessionId: string): BrowserRuntimeOwner | undefined {
     const session = residentInMemory(sessionId);

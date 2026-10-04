@@ -1,8 +1,6 @@
 import type {
-  AgentType,
   BackgroundWorkItemSummary,
   BroadcastTopic,
-  DisplayMessage,
   ServerMessage,
   StateEvent,
   ProjectSummary,
@@ -15,10 +13,6 @@ import {
   listSessions,
   type SessionListOptions,
 } from "./sessions.ts";
-import { sessionStore } from "./db/sessionStore.ts";
-import { pendingApprovalSessionIds } from "./pendingApprovals.ts";
-import { choosingTaskSessionIds } from "./pullRequestCards.ts";
-import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { subscribeHarnessOpened } from "./session/runtimePrompt.ts";
@@ -35,9 +29,8 @@ import {
   subscribeBrowserRuntimeChanges,
   type PostReloadContinuation,
 } from "./mcp/toolGroups/registry.ts";
-import type { PiLiveSession } from "./piSdk/PiLiveSession.ts";
-import { piStore } from "./piSdk/piStore.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
 import { setKnowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
@@ -100,7 +93,6 @@ const BACKGROUND_WORK_BROADCAST_DEBOUNCE_MS = 25;
  * sustained churn coalesces to at most ~4 rebuilds/second.
  */
 const SESSION_BROADCAST_SUSTAINED_MS = 250;
-const SESSION_LIST_SLOW_MS = 50;
 /**
  * Above this many changed rows, resend the whole list instead of row updates:
  * the delta stops saving anything, and the full list is the shape that also
@@ -376,14 +368,6 @@ class SessionHub {
     return ids;
   }
 
-  get(key: string): PiLiveSession | undefined {
-    return piStore.get(key);
-  }
-
-  snapshotFor(sessionId: string): DisplayMessage[] | undefined {
-    return piStore.get(sessionId)?.snapshot();
-  }
-
   browserRuntimesFor(currentSessionId: string) {
     return listBrowserRuntimes(currentSessionId, (sessionId) =>
       harnessRegistry.browserRuntimeOwner(sessionId),
@@ -394,76 +378,11 @@ class SessionHub {
     return consumePostReloadContinuation();
   }
 
-  /**
-   * The live session for `file`, reusing one already running if present. See
-   * {@link piStore.acquireExisting} for the id-guard semantics.
-   */
-  async acquireExisting(
-    kind: AgentType,
-    file: string,
-    expectedId?: string,
-  ): Promise<PiLiveSession> {
-    return piStore.acquireExisting(kind, file, expectedId);
-  }
-
-  /** The merged session list: pi sessions plus in-process Claude SDK sessions. */
+  /** The merged session list across both engines (`harnesses/sessionList.ts`). */
   private async mergedSessions(
     opts: SessionListOptions = {},
   ): Promise<Awaited<ReturnType<typeof listSessions>>> {
-    const startedAt = Date.now();
-    const live = piStore.listInfo();
-    const merged = await listSessions(live, sessionStore.getReadAt, opts);
-    const byId = new Map(merged.map((session, index) => [session.id, index]));
-    // One query each against the approval and pull-request-card tables for the
-    // whole merge, never one per SDK row (`sessions.ts`'s one-pass contract).
-    const approvals = pendingApprovalSessionIds();
-    const taskChoices = choosingTaskSessionIds();
-    // In-process SDK sessions are a live source like the pi store: they carry
-    // no scope of their own, so the persisted classification decides whether
-    // they may appear at all.
-    const onlyIds = opts.onlyIds;
-    const sdkSessions = claudeSdkStore
-      .list()
-      .filter((sdk) => !onlyIds || onlyIds.has(sdk.id));
-    const sdkAllowed = sessionStore.liveDefaultScopeGate(
-      sdkSessions.map((sdk) => sdk.id),
-      { includeArchived: Boolean(opts.includeArchived) },
-    );
-    for (const sdk of sdkSessions) {
-      const sdkKey = sdk.id;
-      if (!sdkAllowed(sdkKey)) continue;
-      const item = sdk.listItem(
-        sessionStore.getReadAt(sdkKey),
-        approvals,
-        taskChoices,
-      );
-      // Match the pi projection: acquiring a runtime claims metadata but does
-      // not create a conversation. Claude prompts persist + invalidate at user
-      // entry acceptance, so a real first turn appears immediately.
-      if (item.messageCount === 0) continue;
-      item.isStreaming =
-        sessionRuntime.isRunning(sdkKey) || Boolean(item.isStreaming);
-      if (sessionStore.isArchived(sdkKey)) item.archived = true;
-      if (item.archived && !opts.includeArchived) continue;
-      const idx = byId.get(item.id);
-      if (idx === undefined) {
-        byId.set(item.id, merged.length);
-        merged.push(item);
-      } else {
-        merged[idx] = { ...merged[idx], ...item };
-      }
-    }
-    merged.sort((a, b) => b.updatedAt - a.updatedAt);
-    const elapsed = Date.now() - startedAt;
-    if (
-      elapsed > SESSION_LIST_SLOW_MS &&
-      process.env.NODE_ENV !== "production"
-    ) {
-      console.debug(
-        `[perf] session list generated in ${elapsed}ms (${merged.length} sessions)`,
-      );
-    }
-    return merged;
+    return mergedSessionList(opts);
   }
 
   /**
@@ -1251,18 +1170,6 @@ class SessionHub {
     // The response is already shown; let the client render it and the banner
     // before the socket drops and it reconnects to the respawned server.
     setTimeout(() => process.exit(0), RELOAD_GRACE_MS);
-  }
-
-  /* ----------------------------- image serving ----------------------------- */
-
-  /** Resolve a pi session image to raw bytes (live branch or cold reopen). */
-  async resolvePiImage(
-    kind: AgentType,
-    sessionId: string,
-    entryId: string,
-    imageIndex: number,
-  ): Promise<{ data: Buffer; mimeType: string } | undefined> {
-    return piStore.resolvePiImage(kind, sessionId, entryId, imageIndex);
   }
 }
 

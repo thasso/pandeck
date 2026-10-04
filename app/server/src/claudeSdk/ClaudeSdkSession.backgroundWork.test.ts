@@ -920,7 +920,6 @@ test("a peer turn is not swallowed when a denied provider result never arrives",
   setHubForTests({
     getLiveById: (id) => (id === session.id ? session : undefined),
     acquireById: async (id) => (id === session.id ? session : undefined),
-    get: () => undefined,
     broadcastPeerPromptCardUpdate: () => undefined,
   });
   const chainId = peerPromptStore.createChain();

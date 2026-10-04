@@ -92,7 +92,6 @@ const { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub } =
         if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
         return fakeDrivers.get(id);
       },
-      get: (id: string) => fakeDrivers.get(id),
       broadcastSessions: () => {
         listBroadcasts.count += 1;
       },
@@ -721,6 +720,42 @@ describe("peer prompt engine", () => {
       listBroadcasts.count > listsBefore,
       "a cancel outside any turn still reaches the session list",
     );
+  });
+
+  it("refreshes both participants' resident state on a transition, whichever engine runs them", async () => {
+    const sender = `S-refresh-${n++}`;
+    const recipient = `r-refresh-${n++}`;
+    const refreshed: string[] = [];
+    // A Claude sender and a pi recipient: the refresh asks the resident
+    // session by id, never one engine's store.
+    for (const [id, harness] of [
+      [sender, "claude-sdk"],
+      [recipient, "pi"],
+    ] as const)
+      fakeDrivers.set(id, {
+        id,
+        key: id,
+        sessionId: id,
+        harness,
+        broadcastState: () => refreshed.push(id),
+      });
+    const chainId = peerPromptStore.createChain();
+    peerPromptStore.enqueue({
+      conversationId: "refresh",
+      chainId,
+      hop: peerPromptStore.reserveHop(chainId),
+      senderSessionId: sender,
+      recipientSessionId: recipient,
+      prompt: "q",
+      responseRequested: true,
+    });
+    cancelQueuedPeerPrompts({
+      senderSessionId: sender,
+      recipientSessionId: recipient,
+      reason: "test",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(refreshed.sort(), [recipient, sender].sort());
   });
 
   it("runPeerPromptRetention appends an audited transition and broadcasts for each expired row", async () => {

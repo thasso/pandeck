@@ -103,7 +103,6 @@ export function setPeerPromptAutoDeliverForTests(enabled: boolean): void {
 export interface PeerPromptHub {
   getLiveById(id: string): RuntimePromptDriver | undefined;
   acquireById(id: string): Promise<RuntimePromptDriver | undefined>;
-  get(id: string): { broadcastState(): void } | undefined;
   /** Rebuild the session list; optional so a test hub need not stub it. */
   broadcastSessions?(): Promise<void> | void;
   broadcastPeerPromptCardUpdate(
@@ -1413,7 +1412,7 @@ async function broadcastParticipants(batch: PeerPromptRecord[]): Promise<void> {
       ids.add(m.senderSessionId);
       ids.add(m.recipientSessionId);
     }
-    for (const id of ids) hub.get(id)?.broadcastState();
+    for (const id of ids) hub.getLiveById(id)?.broadcastState();
     // The session LIST reads peer prompts too (`queuedWork`, the replies a
     // session still awaits), and a transition outside any turn — a cancel, a
     // retry that gave up — moves no other row; debounced, so a burst is one.
