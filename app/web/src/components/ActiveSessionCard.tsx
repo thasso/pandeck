@@ -38,7 +38,7 @@ import {
   backgroundActivityChip,
   backgroundActivityText,
 } from "../lib/backgroundWork.ts";
-import type { RowDensity } from "../lib/rowDensity.ts";
+import { CARD_OUTER_ROW, type RowDensity } from "../lib/rowDensity.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
@@ -76,12 +76,9 @@ const GUTTER_FLOOR: Record<RowDensity, string> = {
 /** Settle and the actions flip, inline at the end of the status row. */
 const INLINE_ACTION =
   "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
-// The negative margin takes each size back to the status row's 20px, so a
-// larger touch target never makes the row under the title taller than the
-// one above it.
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
   tight: "size-6 -my-0.5",
-  comfortable: "size-8 -my-1.5",
+  comfortable: "size-8 -my-0.5",
 };
 
 /**
@@ -390,7 +387,9 @@ function ActiveSessionCardImpl({
                 identify the objects. The time closes the row outside that
                 area. The row is as tall as the live-state row below the
                 title, so the title sits centred between the two. */}
-            <div className="flex h-5 min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint">
+            <div
+              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+            >
               <div
                 ref={metaRowRef}
                 className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
@@ -447,7 +446,9 @@ function ActiveSessionCardImpl({
                 makes this row permanent. Every changing signal stays on this
                 one line, so activity can change without changing the card's
                 geometry. Fixed badges survive; prose yields and clips. */}
-            <div className="flex min-h-5 min-w-0 items-center gap-1.5 text-micro">
+            <div
+              className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+            >
               {/* Signals show whole or not at all: the area is one line tall,
                   and whatever does not fit wraps onto a hidden second line. DOM
                   order is the drop order, so the peer that needs you outlasts

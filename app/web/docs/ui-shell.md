@@ -273,14 +273,15 @@ overflow line is made `inert`, so keyboard focus never lands on what is not
 shown. Queued work is the one sentence still shown, beside an Idle card's empty
 slot. The expanded peer rows show type icon, state icon, title, its running
 background jobs, its own peers' count when it coordinates any, and time, with
-Idle as a neutral badge. The card's first row is as tall as its third, so the
-title sits centred between them in both densities. The card stays in the working
-set until Settle acknowledges the cursor; its presence there already states that
-it is unsettled. Every object is opened from exactly one target: Project from
-its front text item, Worktree and Task from the back action face. Their front
-metadata remains context, not a duplicate target. A latest failed outcome stays
-visibly **Failed** after reading, even if a later run start cleared its error
-record.
+Idle as a neutral badge. The card's first and third rows are as tall as the
+inline actions take in that density (20px on the rail, 28px on a phone), so the
+title sits centred between them and no action's touch target reaches into the
+title row (`CARD_OUTER_ROW`). The card stays in the working set until Settle
+acknowledges the cursor; its presence there already states that it is unsettled.
+Every object is opened from exactly one target: Project from its front text
+item, Worktree and Task from the back action face. Their front metadata remains
+context, not a duplicate target. A latest failed outcome stays visibly
+**Failed** after reading, even if a later run start cleared its error record.
 
 A settled session runs its next turn from the Settled shelf and comes back when
 that turn produces a user-facing result. Reading it here or in another tab
