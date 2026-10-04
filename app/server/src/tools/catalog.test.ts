@@ -489,7 +489,14 @@ describe("tool catalog", () => {
     assert.equal(group.gate, undefined);
     assert.deepEqual(
       group.tools.map((tool) => tool.name),
-      ["settings_read", "settings_update", "settings_request_input"],
+      [
+        "settings_read",
+        "settings_update",
+        "settings_request_input",
+        "accounts_read",
+        "accounts_update",
+        "accounts_sign_in",
+      ],
     );
     for (const persona of [
       "assistant",
@@ -513,6 +520,9 @@ describe("tool catalog", () => {
     assert.ok(plan.has("settings_read"));
     assert.ok(!plan.has("settings_update"));
     assert.ok(!plan.has("settings_request_input"));
+    assert.ok(plan.has("accounts_read"));
+    assert.ok(!plan.has("accounts_update"));
+    assert.ok(!plan.has("accounts_sign_in"));
   });
 
   test("developer excludes the app-dev-box-only workshop tools", () => {
@@ -549,6 +559,9 @@ describe("tool catalog", () => {
         "settings_read",
         "settings_update",
         "settings_request_input",
+        "accounts_read",
+        "accounts_update",
+        "accounts_sign_in",
       ].sort(),
     );
     const workshop = new Set(

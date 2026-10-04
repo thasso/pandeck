@@ -1,4 +1,8 @@
-import type { AppSettings, SettingsInputApprovalBody } from "@assistant/shared";
+import type {
+  AppSettings,
+  CredentialProfileSummary,
+  SettingsInputApprovalBody,
+} from "@assistant/shared";
 import {
   SETTINGS_OUTSIDE_REGISTRY,
   SETTINGS_REGISTRY,
@@ -9,6 +13,17 @@ import {
   type SettingValueSpec,
   type SettingsSectionId,
 } from "@assistant/shared/settingsRegistry";
+import {
+  createCredentialProfile,
+  credentialProfileSummaryById,
+  deleteCredentialProfile,
+  renameCredentialProfile,
+  setCredentialProfileEnabled,
+} from "../../credentialProfiles.ts";
+import {
+  clearProfilePins,
+  listCredentialProfilesWithUsage,
+} from "../../credentialProfileUsage.ts";
 import { errorText } from "../../errors.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import {
@@ -397,8 +412,206 @@ const settingsRequestInputTool = defineAgentTool<SettingsRequestInputParams>({
     }, true),
 });
 
+/* ------------------------------- accounts -------------------------------- */
+
+// The Claude and OpenAI accounts (credential profiles) the model slots and
+// sessions run on. They live outside the settings registry, in their own
+// store; these tools reach them through the same functions the Settings page's
+// account routes use. No device code or token ever appears here: an account
+// reports only its status, and signing in happens in a card.
+
+const PROVIDERS = ["claude", "openai-codex"] as const;
+
+/** An account as an agent sees it. */
+function accountEntry(profile: CredentialProfileSummary) {
+  const usage = profile.usage;
+  return {
+    id: profile.id,
+    name: profile.name,
+    provider: profile.provider,
+    enabled: profile.enabled,
+    status: profile.status,
+    ...(profile.error ? { error: profile.error } : {}),
+    ...(usage
+      ? {
+          pinnedBy: usage.pinnedSlots.map((slot) => slot.key),
+          boundSessions: usage.boundSessionCount,
+          ...(usage.automaticForProvider
+            ? { automaticFor: usage.automaticForProvider }
+            : {}),
+        }
+      : {}),
+  };
+}
+
+function accountOf(id: unknown): CredentialProfileSummary {
+  if (typeof id !== "string") throw new Error("id must be a string.");
+  const profile = credentialProfileSummaryById(id);
+  if (!profile) throw new Error(`No account ${id}. accounts_read lists them.`);
+  return profile;
+}
+
+const accountsReadTool = defineAgentTool<Record<string, unknown>>({
+  name: "accounts_read",
+  label: "Read Accounts",
+  description:
+    "List the Claude and OpenAI accounts models run on: id, name, provider, whether it is enabled, its sign-in status, which settings pin it, how many sessions are bound to it, and whether it takes the provider's unpinned work. Model slots name an account by id (credentialProfileId).",
+  parameters: { type: "object", additionalProperties: false, properties: {} },
+  execute: (raw) =>
+    scrubbed(async () => {
+      if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+      rejectUnknownKeys(raw, [], "accounts_read");
+      return { accounts: listCredentialProfilesWithUsage().map(accountEntry) };
+    }),
+});
+
+const accountsUpdateTool = defineAgentTool<Record<string, unknown>>({
+  name: "accounts_update",
+  label: "Update Accounts",
+  description:
+    "Create, rename, enable or disable, or delete a Claude or OpenAI account. A new account starts signed out: ask the user to sign it in with accounts_sign_in. Deleting signs it out for good and unpins it from every setting; an account a session is still bound to, or a default account, cannot be deleted.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["operation"],
+    properties: {
+      operation: {
+        type: "string",
+        enum: ["create", "rename", "enable", "disable", "delete"],
+      },
+      id: {
+        type: "string",
+        description: "The account, for every operation but create.",
+      },
+      name: { type: "string", description: "For create and rename." },
+      provider: {
+        type: "string",
+        enum: [...PROVIDERS],
+        description: "For create.",
+      },
+    },
+  },
+  execute: (raw) =>
+    scrubbed(async () => {
+      if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+      rejectUnknownKeys(
+        raw,
+        ["operation", "id", "name", "provider"],
+        "accounts_update",
+      );
+      switch (raw.operation) {
+        case "create": {
+          if (!PROVIDERS.includes(raw.provider as (typeof PROVIDERS)[number]))
+            throw new Error(`provider must be one of ${PROVIDERS.join(", ")}.`);
+          if (typeof raw.name !== "string")
+            throw new Error("name must be a string.");
+          const created = createCredentialProfile({
+            name: raw.name,
+            provider: raw.provider as (typeof PROVIDERS)[number],
+          });
+          return { created: accountEntry(created) };
+        }
+        case "rename":
+          if (typeof raw.name !== "string")
+            throw new Error("name must be a string.");
+          return {
+            updated: accountEntry(
+              renameCredentialProfile(accountOf(raw.id).id, raw.name),
+            ),
+          };
+        case "enable":
+        case "disable":
+          return {
+            updated: accountEntry(
+              setCredentialProfileEnabled(
+                accountOf(raw.id).id,
+                raw.operation === "enable",
+              ),
+            ),
+          };
+        case "delete": {
+          const { id } = accountOf(raw.id);
+          deleteCredentialProfile(id);
+          const unpinned = await clearProfilePins(id);
+          return {
+            deleted: id,
+            ...(unpinned.length > 0
+              ? { unpinned: unpinned.map((slot) => slot.key) }
+              : {}),
+          };
+        }
+        default:
+          throw new Error(
+            "operation must be create, rename, enable, disable or delete.",
+          );
+      }
+    }),
+});
+
+const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
+  name: "accounts_sign_in",
+  label: "Request Account Sign-in",
+  description:
+    "Ask the user to sign a Claude or OpenAI account in, through a card in the chat that runs the provider's own login. The login never passes through you. Your turn ends; the outcome arrives when the account is signed in or the user dismisses the card.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["id"],
+    properties: {
+      id: { type: "string", description: "The account, from accounts_read." },
+      reason: {
+        type: "string",
+        maxLength: MAX_REASON_CHARS,
+        description: "Why it needs signing in, shown on the card.",
+      },
+    },
+  },
+  execute: (raw, ctx) =>
+    scrubbed(async () => {
+      if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+      rejectUnknownKeys(raw, ["id", "reason"], "accounts_sign_in");
+      const account = accountOf(raw.id);
+      if (!account.enabled)
+        throw new Error(
+          `${account.name} is disabled; enable it with accounts_update first.`,
+        );
+      if (raw.reason !== undefined && typeof raw.reason !== "string")
+        throw new Error("reason must be a string.");
+      const reason = raw.reason?.trim().slice(0, MAX_REASON_CHARS);
+      const path = `accounts.${account.id}`;
+      const body: SettingsInputApprovalBody = {
+        kind: "settingsInput",
+        path,
+        label: account.name,
+        section: account.provider === "claude" ? "claude-sdk" : "openai",
+        mode: "signIn",
+        account: { id: account.id, provider: account.provider },
+        ...(reason ? { reason } : {}),
+        wasConfigured: account.status === "ready",
+      };
+      const card = createApproval({
+        sessionId: ctx.session.sessionId,
+        kind: "settingsInput",
+        title: `Sign in ${account.name}`,
+        summary:
+          account.provider === "claude" ? "Claude account" : "OpenAI account",
+        sourceToolCallId: ctx.toolCallId,
+        body,
+        supersedes: (earlier) =>
+          earlier.body.kind === "settingsInput" && earlier.body.path === path,
+      });
+      return {
+        requested: account.id,
+        note: `Waiting for the user to sign in. ${approvalCardReference(card)}`,
+      };
+    }, true),
+});
+
 export const settingsTools = [
   settingsReadTool,
   settingsUpdateTool,
   settingsRequestInputTool,
+  accountsReadTool,
+  accountsUpdateTool,
+  accountsSignInTool,
 ];

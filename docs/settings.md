@@ -208,3 +208,28 @@ The card has no grant key, so "approve for session" never covers it. Asking
 again for the same setting supersedes the earlier card. Claude and OpenAI
 account logins are credential profiles with their own login flows and are not
 covered yet.
+
+## Accounts
+
+The Claude and OpenAI accounts models run on are credential profiles
+(`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
+The Personal Assistant reaches them through three tools in the same `settings`
+group, which call the functions the Settings page's `/api/credential-profiles`
+routes call:
+
+- `accounts_read`: each account's id, name, provider, enabled state and sign-in
+  status, the settings that pin it, how many sessions are bound to it, and
+  whether it takes its provider's unpinned work. A login in progress never shows
+  its device code or link here.
+- `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
+  default account or one a session is bound to, as the page does, and unpins the
+  account from every setting through `clearProfilePins`.
+- `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
+  (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
+  browser an OpenAI account starts its device login and shows the link and code
+  there; a Claude account opens the official CLI login terminal. The card cannot
+  be approved before the account is ready. `credentialProfiles.ts` announces
+  every account change (`subscribeCredentialProfileChanges`: created, renamed,
+  enabled, deleted, login state moved), and a sign-in card for an account that
+  is now enabled and signed in is approved and its outcome handed to the
+  session.

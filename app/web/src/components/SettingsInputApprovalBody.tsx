@@ -10,12 +10,20 @@
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "settingsInput"`, in
  *   place of the generic Approve/Reject footer.
  */
-import { useState } from "react";
-import { ExternalLink, Save, XCircle } from "lucide-react";
-import type { SettingsInputApprovalBody as SettingsInputBodyData } from "@assistant/shared";
+import { useEffect, useState } from "react";
+import { ExternalLink, LogIn, Save, XCircle } from "lucide-react";
+import type {
+  CredentialProfileSummary,
+  SettingsInputApprovalBody as SettingsInputBodyData,
+} from "@assistant/shared";
 import { settingDescriptor } from "@assistant/shared/settingsRegistry";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
-import { Spinner } from "./ui/load.tsx";
+import {
+  fetchCredentialProfiles,
+  startOpenAiProfileLogin,
+} from "../lib/credentialProfiles.ts";
+import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
+import { ErrorNote, Spinner } from "./ui/load.tsx";
 
 type Busy = "submit" | "dismiss" | null;
 
@@ -147,6 +155,108 @@ function ConnectControls(props: ControlProps) {
   );
 }
 
+/** How often a waiting sign-in card re-reads its account, as the Settings page does. */
+const SIGN_IN_POLL_MS = 2500;
+
+/**
+ * Signing a Claude or OpenAI account in. OpenAI's device login shows its link
+ * and code here; Claude's runs in the official CLI login terminal. The card
+ * re-reads the account while it waits; the server resolves the card once the
+ * account is signed in.
+ */
+function SignInControls(props: ControlProps) {
+  const { body, active } = props;
+  const accountId = body.account?.id;
+  const [account, setAccount] = useState<CredentialProfileSummary | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!accountId) return;
+    let stopped = false;
+    const read = () =>
+      fetchCredentialProfiles()
+        .then((profiles) => {
+          if (stopped) return;
+          setAccount(profiles.find((p) => p.id === accountId) ?? null);
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (!stopped)
+            setError(err instanceof Error ? err.message : String(err));
+        });
+    void read();
+    const timer = window.setInterval(() => void read(), SIGN_IN_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [accountId]);
+
+  const signIn = () => {
+    if (!account) return;
+    if (account.provider === "claude") {
+      setTerminalOpen(true);
+      return;
+    }
+    startOpenAiProfileLogin(account.id).catch((err: unknown) =>
+      setError(err instanceof Error ? err.message : String(err)),
+    );
+  };
+
+  const verification = account?.setup?.verificationUri;
+  const code = account?.setup?.userCode;
+  return (
+    <>
+      {verification && code ? (
+        <div className="space-y-1 text-caption text-fg">
+          <div>
+            Open{" "}
+            <a
+              href={verification}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:underline"
+            >
+              {verification}
+            </a>{" "}
+            and enter this code:
+          </div>
+          <div className="font-mono text-body font-semibold tracking-wider">
+            {code}
+          </div>
+        </div>
+      ) : (
+        <div className="text-caption text-faint">
+          {account?.status === "connecting"
+            ? "Sign-in in progress. This card updates once the account is signed in."
+            : "Runs the provider's own sign-in. The assistant never sees it."}
+        </div>
+      )}
+      {error && <ErrorNote message={error} />}
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <DismissButton {...props} />
+        <button
+          type="button"
+          onClick={signIn}
+          disabled={!active || !account}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+        >
+          <LogIn size={12} />
+          {account?.status === "connecting" ? "Sign in again" : "Sign in"}
+        </button>
+      </div>
+      {terminalOpen && account && (
+        <ClaudeLoginTerminal
+          profile={account}
+          onFinished={() => setTerminalOpen(false)}
+          onClose={() => setTerminalOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 export function SettingsInputApprovalBody({
   body,
   active,
@@ -168,6 +278,8 @@ export function SettingsInputApprovalBody({
       {waiting &&
         (body.mode === "secret" ? (
           <SecretControls {...controls} onSubmit={onSubmit} />
+        ) : body.mode === "signIn" ? (
+          <SignInControls {...controls} />
         ) : (
           <ConnectControls {...controls} />
         ))}

@@ -3236,13 +3236,19 @@ export type ProjectCreateRepository =
  */
 export interface SettingsInputApprovalBody {
   kind: "settingsInput";
-  /** Registry path of a `secret` or `oauth` setting, e.g. `github.token`. */
+  /**
+   * Registry path of a `secret` or `oauth` setting, e.g. `github.token`, or
+   * `accounts.<id>` for an account sign-in.
+   */
   path: string;
   /** The setting's label, e.g. "Personal access token". */
   label: string;
   /** The Settings page section it belongs to. */
   section: SettingsSectionId;
-  mode: "secret" | "connect";
+  /** `signIn`: sign in a Claude or OpenAI account (a credential profile). */
+  mode: "secret" | "connect" | "signIn";
+  /** The account a `signIn` card signs in. */
+  account?: { id: string; provider: CredentialProfileProvider };
   /** Why the assistant asks, in its words. */
   reason?: string;
   /** Whether a value was already set when the card was raised. */

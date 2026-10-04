@@ -9,6 +9,10 @@ import {
   type SettingDescriptor,
 } from "@assistant/shared/settingsRegistry";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
+import {
+  credentialProfileSummaryById,
+  subscribeCredentialProfileChanges,
+} from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
 import {
   approvalsForSession,
@@ -94,9 +98,26 @@ async function testOutcome(body: SettingsInputApprovalBody): Promise<string> {
   }
 }
 
+/** Whether a sign-in card's account exists, is enabled and has credentials. */
+function accountReady(body: SettingsInputApprovalBody): boolean {
+  const account = body.account
+    ? credentialProfileSummaryById(body.account.id)
+    : undefined;
+  return Boolean(account?.enabled && account.status === "ready");
+}
+
 registerApprovalExecutor("settingsInput", {
   async prepare(card, edits) {
     const body = bodyOf(card);
+    if (body.mode === "signIn") {
+      if (!body.account || !credentialProfileSummaryById(body.account.id))
+        throw new Error(`${body.label} no longer exists.`);
+      if (!accountReady(body))
+        throw new Error(
+          `${body.label} is not signed in yet. Sign in from the card; it updates by itself.`,
+        );
+      return body;
+    }
     const descriptor = descriptorOf(body);
     if (body.mode === "connect") {
       if (!settingIsSet(descriptor))
@@ -117,6 +138,8 @@ registerApprovalExecutor("settingsInput", {
 
   async execute(card) {
     const body = bodyOf(card);
+    if (body.mode === "signIn")
+      return { resultSummary: `${body.label}: signed in.` };
     if (body.mode === "connect")
       return {
         resultSummary: `${body.label}: connected.${await testOutcome(body)}`,
@@ -191,6 +214,44 @@ async function resolveConnectedCards(
     }
   }
 }
+
+/**
+ * Approve every pending sign-in card for an account that is now ready, and
+ * hand the outcome to its session.
+ */
+async function resolveSignedInCards(accountId: string): Promise<void> {
+  for (const sessionId of pendingApprovalSessionIds())
+    for (const card of approvalsForSession(sessionId)) {
+      if (card.status !== "pending" || card.body.kind !== "settingsInput")
+        continue;
+      if (card.body.mode !== "signIn" || card.body.account?.id !== accountId)
+        continue;
+      if (!accountReady(card.body)) continue;
+      try {
+        const { outcomePrompt } = await resolveApproval(card.id, "approved");
+        if (outcomePrompt)
+          await deliverAgentHandoff({
+            sessionId: card.sessionId,
+            text: outcomePrompt,
+            origin: { kind: "system", source: "approval-decision" },
+          });
+      } catch (err) {
+        console.warn(
+          `[settings] signing in ${accountId} did not resolve its card:`,
+          redactSecrets(errorText(err)),
+        );
+      }
+    }
+}
+
+subscribeCredentialProfileChanges((accountId) => {
+  resolveSignedInCards(accountId).catch((err: unknown) =>
+    console.warn(
+      "[settings] could not check sign-in cards after an account change:",
+      redactSecrets(errorText(err)),
+    ),
+  );
+});
 
 onSettingsChanged(({ sections }) => {
   resolveConnectedCards(sections).catch((err: unknown) =>

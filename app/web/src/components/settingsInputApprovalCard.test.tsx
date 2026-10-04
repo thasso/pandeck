@@ -8,6 +8,20 @@ import type {
 } from "@assistant/shared";
 import { ApprovalCard } from "./ApprovalCard.tsx";
 
+const accountsApi = vi.hoisted(() => ({
+  fetchCredentialProfiles: vi.fn(),
+  startOpenAiProfileLogin: vi.fn(async () => {}),
+}));
+vi.mock("../lib/credentialProfiles.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/credentialProfiles.ts")>()),
+  ...accountsApi,
+}));
+vi.mock("./ClaudeLoginTerminal.tsx", () => ({
+  ClaudeLoginTerminal: ({ profile }: { profile: { name: string } }) => (
+    <div role="dialog">Claude login for {profile.name}</div>
+  ),
+}));
+
 /**
  * Settings-input cards (Task-729): the user types a secret or connects an
  * account; the value leaves only inside the approving decision.
@@ -197,4 +211,63 @@ test("a card that stops waiting drops what was typed", () => {
   expect(
     container!.querySelector<HTMLInputElement>('input[type="password"]')!.value,
   ).toBe("");
+});
+
+function signInCard(provider: "claude" | "openai-codex"): ApprovalCardData {
+  return card({
+    path: "accounts.cp_fixture",
+    label: "Work account",
+    section: provider === "claude" ? "claude-sdk" : "openai",
+    mode: "signIn",
+    account: { id: "cp_fixture", provider },
+  });
+}
+
+function account(provider: "claude" | "openai-codex", setup?: object) {
+  return {
+    id: "cp_fixture",
+    name: "Work account",
+    provider,
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+    status: setup ? "connecting" : "disconnected",
+    ...(setup ? { setup } : {}),
+  };
+}
+
+test("an OpenAI sign-in shows the device link and code, and starts the login", async () => {
+  accountsApi.fetchCredentialProfiles.mockResolvedValue([
+    account("openai-codex", {
+      path: "",
+      command: "",
+      detail: "",
+      verificationUri: "https://example.invalid/device",
+      userCode: "ABCD-1234",
+    }),
+  ]);
+  render(
+    <ApprovalCard approval={signInCard("openai-codex")} onResolve={vi.fn()} />,
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(container!.textContent).toContain("ABCD-1234");
+  expect(
+    container!.querySelector('a[href="https://example.invalid/device"]'),
+  ).not.toBeNull();
+  click("Sign in again");
+  expect(accountsApi.startOpenAiProfileLogin).toHaveBeenCalledWith(
+    "cp_fixture",
+  );
+});
+
+test("a Claude sign-in opens the official login terminal", async () => {
+  accountsApi.fetchCredentialProfiles.mockResolvedValue([account("claude")]);
+  render(<ApprovalCard approval={signInCard("claude")} onResolve={vi.fn()} />);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  click("Sign in");
+  expect(container!.textContent).toContain("Claude login for Work account");
 });
