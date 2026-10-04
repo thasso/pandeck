@@ -21,6 +21,8 @@ import type {
   WorkflowRunSummary,
 } from "@assistant/shared";
 import {
+  awaitedBackgroundCount,
+  backgroundWorkBusy,
   isDormantInSpawnTree,
   isShelvedSession,
   isTerminalWorkflowRunLifecycle,
@@ -130,11 +132,11 @@ export interface SpawnTreeStall {
 
 /**
  * Whether a session is doing anything right now: a turn, queued work,
- * working subagent runs, a background job starting or running, or a retained
- * background host.
+ * working subagent runs, or background work it waits on
+ * ({@link backgroundWorkBusy}). A declared service — a dev server, a watcher —
+ * is running but not moving: nothing is waiting for it to end.
  */
 function isMoving(session: SessionListItem): boolean {
-  const activity = session.backgroundActivity;
   const delegation = session.delegation;
   return Boolean(
     session.isStreaming ||
@@ -142,10 +144,7 @@ function isMoving(session: SessionListItem): boolean {
     // Subagent child runs work on their own after the parent's turn ends; one
     // waiting on its parent is stuck with it, not moving.
     (delegation && delegation.workingCount + delegation.startingCount > 0) ||
-    (activity &&
-      (activity.activeCount > 0 ||
-        activity.startingCount > 0 ||
-        activity.retainedHost)),
+    backgroundWorkBusy(session.backgroundActivity),
   );
 }
 
@@ -285,11 +284,16 @@ export interface SessionClusterCounts {
   /** Descendants whose agent is running a turn right now. */
   running: number;
   /**
-   * Background jobs (shell commands and monitors) the descendants own, summed
-   * over every one of them — jobs, not sessions, so one peer with three
-   * commands running counts three.
+   * Background jobs (shell commands and monitors) the descendants own and
+   * wait on, summed over every one of them — jobs, not sessions, so one peer
+   * with three commands running counts three.
    */
   jobs: number;
+  /**
+   * Background items the descendants declared services (dev servers,
+   * watchers): running, but nothing waits on them, so they are not `jobs`.
+   */
+  services: number;
   /** Descendants blocking on a human decision. */
   waiting: number;
   /** Descendants whose last run failed. */
@@ -393,7 +397,15 @@ function clusterCounts(
     total: cards.length,
     working: cards.filter((card) => card.tier === "working").length,
     running: cards.filter((card) => card.status === "running").length,
-    jobs: cards.reduce((sum, card) => sum + backgroundJobs(card.session), 0),
+    jobs: cards.reduce(
+      (sum, card) =>
+        sum + awaitedBackgroundCount(card.session.backgroundActivity),
+      0,
+    ),
+    services: cards.reduce(
+      (sum, card) => sum + (card.session.backgroundActivity?.serviceCount ?? 0),
+      0,
+    ),
     waiting: cards.filter((card) => card.tier === "needs-you").length,
     failed: cards.filter((card) => holdsFailure(card)).length,
   };
@@ -401,7 +413,15 @@ function clusterCounts(
 
 /** No sessions, nothing going on: the start of every sum below. */
 function zeroCounts(): SessionClusterCounts {
-  return { total: 0, working: 0, running: 0, jobs: 0, waiting: 0, failed: 0 };
+  return {
+    total: 0,
+    working: 0,
+    running: 0,
+    jobs: 0,
+    services: 0,
+    waiting: 0,
+    failed: 0,
+  };
 }
 
 /** `into` plus `add`, field by field, in place. */
@@ -413,6 +433,7 @@ function addCounts(
   into.working += add.working;
   into.running += add.running;
   into.jobs += add.jobs;
+  into.services += add.services;
   into.waiting += add.waiting;
   into.failed += add.failed;
   return into;
@@ -457,14 +478,10 @@ function clusterCountsKey(counts: SessionClusterCounts): string {
     counts.working,
     counts.running,
     counts.jobs,
+    counts.services,
     counts.waiting,
     counts.failed,
   ].join(",");
-}
-
-/** The background jobs one session owns right now; a retained host is none. */
-function backgroundJobs(session: SessionListItem): number {
-  return Math.max(0, session.backgroundActivity?.activeCount ?? 0);
 }
 
 /**
@@ -648,10 +665,7 @@ function tierForCard(
 ): SessionInboxTier {
   const tier = tierForStatus(status);
   if (tier !== "active") return tier;
-  const activity = session.backgroundActivity;
-  return activity && (activity.activeCount > 0 || activity.retainedHost)
-    ? "working"
-    : tier;
+  return backgroundWorkBusy(session.backgroundActivity) ? "working" : tier;
 }
 
 /** Semantic color of a status badge; the renderer maps it to the theme tokens. */
@@ -778,6 +792,9 @@ function clusterLiveParts(counts: SessionClusterCounts): string[] {
   if (counts.running > 0) parts.push(`${counts.running} running`);
   if (counts.jobs > 0)
     parts.push(`${counts.jobs} job${counts.jobs === 1 ? "" : "s"}`);
+  // Said apart from jobs, quietly: running, but no reason to wait.
+  if (counts.services > 0)
+    parts.push(`${counts.services} service${counts.services === 1 ? "" : "s"}`);
   // Busy with neither a turn nor a job — a retained background host — still
   // spins the fold, so the words must say why.
   if (parts.length === 0 && counts.working > 0)
@@ -1797,7 +1814,8 @@ function spawnedPeerKey(card: SessionInboxCard): string {
     // The row's place in the tree and what it shows beside its title.
     String(card.depth ?? ""),
     card.peers ? clusterCountsKey(card.peers) : "",
-    String(backgroundJobs(session)),
+    // The row's job count and how many of them are services.
+    `${session.backgroundActivity?.activeCount ?? 0}:${session.backgroundActivity?.serviceCount ?? 0}`,
   ].join("\u001f");
 }
 

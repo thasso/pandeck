@@ -100,7 +100,12 @@ function ClusterChildRowImpl({
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
   const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
-  const jobsText = `${jobs} background job${jobs === 1 ? "" : "s"} running`;
+  const services = session.backgroundActivity?.serviceCount ?? 0;
+  const jobsText = `${jobs} background job${jobs === 1 ? "" : "s"} running${
+    services > 0
+      ? `, ${services} of them service${services === 1 ? "" : "s"}`
+      : ""
+  }`;
   const peers = card.peers;
   // The composer ledge lists what a chat SPAWNED, owned or not, so its rows
   // claim no coordination either.

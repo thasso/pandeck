@@ -148,6 +148,34 @@ test("Claude background denial uses the authoritative permission decision shape"
   assert.deepEqual(seen, ["Monitor", "Bash"]);
 });
 
+test("an admitted Claude background launch passes its context to the model", async () => {
+  const hooks = claudeOutputPolicyHooks("session-1", {
+    preToolUse: async () => ({ allowed: true, context: "PA task bgw_1" }),
+    stop: () => undefined,
+    postCompact: () => undefined,
+  });
+  const result = await hooks.PreToolUse![0]!.hooks[0]!(
+    {
+      hook_event_name: "PreToolUse",
+      session_id: "provider-1",
+      transcript_path: "/tmp/transcript",
+      cwd: "/tmp",
+      tool_name: "Bash",
+      tool_input: { command: "pnpm dev", run_in_background: true },
+      tool_use_id: "bash-background",
+    },
+    "bash-background",
+    { signal: new AbortController().signal },
+  );
+  assert.deepEqual(result, {
+    continue: true,
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext: "PA task bgw_1",
+    },
+  });
+});
+
 test("Claude failure hook adds bounded conflict diagnostics", async () => {
   const hooks = claudeOutputPolicyHooks("session-1");
   const failure = hooks.PostToolUseFailure![0]!.hooks[0]!;

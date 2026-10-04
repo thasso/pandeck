@@ -864,6 +864,7 @@ describe("spawn clusters", () => {
     expect(topLevel(view)).toEqual(["root"]);
     const card = cards(view.needsYou)[0] as SessionInboxCard;
     expect(card.cluster?.counts).toEqual({
+      services: 0,
       total: 5,
       working: 2,
       running: 2,
@@ -953,6 +954,36 @@ describe("spawn clusters", () => {
     expect(children.map((c) => [c.session.id, c.depth])).toEqual(
       Array.from({ length: 9 }, (_, i) => [`s${i + 1}`, i + 1]),
     );
+  });
+
+  it("counts a peer's declared service apart from its jobs, and not as working", () => {
+    const view = buildSessionInbox([
+      session({ id: "root" }),
+      child("dev", "root", {
+        backgroundActivity: {
+          activeCount: 1,
+          shellCount: 1,
+          monitorCommandCount: 0,
+          monitorWebsocketCount: 0,
+          startingCount: 0,
+          stoppingCount: 0,
+          oldestStartedAt: NOW - 30_000,
+          serviceCount: 1,
+          retainedHost: true,
+        },
+      }),
+    ]);
+    const card = cards(view.active)[0] as SessionInboxCard;
+    expect(card.cluster?.counts).toMatchObject({
+      total: 1,
+      working: 0,
+      jobs: 0,
+      services: 1,
+    });
+    expect(
+      clusterLiveSummary(card.cluster?.counts as SessionClusterCounts),
+    ).toBe("1 service");
+    expect(card.cluster?.children[0]?.tier).not.toBe("working");
   });
 
   it("lists the fold as a tree: each peer under its spawner, with its own peers counted", () => {
@@ -1460,6 +1491,7 @@ describe("spawn clusters", () => {
       working: 0,
       running: 0,
       jobs: 0,
+      services: 0,
       waiting: 0,
       failed: 0,
       ...over,
@@ -1472,6 +1504,10 @@ describe("spawn clusters", () => {
       "2 sessions · 1 job",
     );
     expect(clusterLiveSummary(counts({ jobs: 0 }))).toBe("");
+    // A service is said apart from the jobs anyone waits on.
+    expect(
+      sessionClusterSummary(counts({ total: 2, jobs: 1, services: 1 })),
+    ).toBe("2 sessions · 1 job · 1 service");
     // Busy with neither a turn nor a job (a retained host): the spinner turns,
     // so the words say why.
     expect(clusterLiveSummary(counts({ working: 1 }))).toBe("1 working");
@@ -2232,6 +2268,7 @@ describe("formal Workflow Runs", () => {
       working: 0,
       running: 0,
       jobs: 0,
+      services: 0,
       waiting: 0,
       failed: 0,
       ...over,
@@ -2284,6 +2321,7 @@ describe("spawnedSessionsView", () => {
     ]);
     expect(shaped.bubbled?.session.id).toBe("asking");
     expect(shaped.counts).toEqual({
+      services: 0,
       total: 3,
       working: 1,
       running: 1,
@@ -3050,12 +3088,37 @@ describe("a stalled tree, at its edges", () => {
   it("counts a job starting, or a retained host, as work going on", () => {
     const root = row("root", { awaitingRepliesFrom: ["rev"] });
     for (const activity of [
-      { ...host, startingCount: 1 },
+      { ...host, activeCount: 1, startingCount: 1 },
       { ...host, retainedHost: true },
     ])
       expect(
         stallOf([root, row("rev", { backgroundActivity: activity })]),
       ).toBe(undefined);
+  });
+
+  it("does not take a declared service as work going on", () => {
+    // A dev server or a watcher runs on, but nobody waits for it to end: a
+    // tree holding only that is stalled, retained host and all.
+    const root = row("root", { awaitingRepliesFrom: ["rev"] });
+    const service = {
+      ...host,
+      activeCount: 1,
+      shellCount: 1,
+      serviceCount: 1,
+      retainedHost: true,
+    };
+    expect(
+      stallOf([root, row("rev", { backgroundActivity: service })]),
+    ).toEqual(["rev"]);
+    // Beside an awaited job, the tree is still busy.
+    expect(
+      stallOf([
+        root,
+        row("rev", {
+          backgroundActivity: { ...service, activeCount: 2, shellCount: 2 },
+        }),
+      ]),
+    ).toBe(undefined);
   });
 
   it("hears a grandchild that still owes its own coordinator", () => {

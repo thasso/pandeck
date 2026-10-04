@@ -263,17 +263,21 @@ export function backgroundWorkOutcomeDetail(item: {
   return outcome.length > 0 ? outcome : undefined;
 }
 
-/** What kind of work this is, in words. The backend is stated separately. */
+/**
+ * What kind of work this is, in words, and whether its owner declared it a
+ * service nobody waits on. The backend is stated separately.
+ */
 export function backgroundWorkKindLabel(
   item: BackgroundWorkItemSummary,
 ): string {
+  const service = item.intent === "service" ? " · service" : "";
   switch (item.kind) {
     case "shell":
-      return "Shell";
+      return `Shell${service}`;
     case "monitor-command":
-      return "Command monitor";
+      return `Command monitor${service}`;
     case "monitor-websocket":
-      return "WebSocket monitor";
+      return `WebSocket monitor${service}`;
   }
 }
 
@@ -421,6 +425,15 @@ export function backgroundActivityText(
       ? "1 background process running"
       : `${activity.activeCount} background processes running`,
   ];
+  const services = activity.serviceCount ?? 0;
+  if (services > 0)
+    parts.push(
+      services === activity.activeCount
+        ? services === 1
+          ? "a service"
+          : "all services"
+        : `${services} of them service${services === 1 ? "" : "s"}`,
+    );
   if (activity.startingCount > 0)
     parts.push(`${activity.startingCount} starting`);
   if (activity.stoppingCount > 0)

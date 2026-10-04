@@ -310,11 +310,15 @@ states what the tree is doing right now — agents running a turn and background
 jobs, each an icon and a number counted over every peer — because a coordinator
 that has gone quiet under its peers has no provider state of its own, and "an
 agent is busy" and "a job is still going" are different answers to whether to
-wait. They sit inside the disclosure because it is the line's first item and
-never wraps out of sight; on a narrow card its word "sessions" drops like every
-label on the line. A spinner replaces the peer glyph while any peer is working,
-and a named Answer/Approve/Pick task/Failed badge, capped so a long title
-truncates inside it, carries the peer that needs the user. The complete
+wait. Jobs count only work somebody waits on: an item its agent declared a
+service (a dev server, a watcher; `background_tasks` `set_intent`) is said
+apart, as services, in the aggregate, and neither spins the fold nor puts its
+session in the working tier — it is running, but no reason to wait. They sit
+inside the disclosure because it is the line's first item and never wraps out of
+sight; on a narrow card its word "sessions" drops like every label on the line.
+A spinner replaces the peer glyph while any peer is working, and a named
+Answer/Approve/Pick task/Failed badge, capped so a long title truncates inside
+it, carries the peer that needs the user. The complete
 running/jobs/waiting/failed aggregate stays in the card's accessible name and
 the disclosure's tooltip.
 
@@ -327,32 +331,32 @@ delivered or retried is not owed yet; one whose reply was cancelled or failed
 before it arrived still is. When a card's tree — the session and every peer
 folded under it — is owed a reply but nothing in it, nor any peer owing one, is
 moving (no turn, queued work — a reply still being delivered or retried counts —
-working subagent run, background job or retained host) or waiting on the user,
-the tree is STALLED: the card carries a warning chip, **No reply from «peer»**
-(`+N` when several owe, kept apart from the title so it never truncates), that
-opens that peer, says so in the card's spoken label, and rises to the attention
-tier. When the one owed the reply is the card's own session — a peer asked its
-coordinator, which went quiet — the chip names the peer that waits instead,
-**«peer» awaits a reply**, and opens it. It is judged over the whole tree, not
-request by request, because a coordinator often routes an implementer's report
-to a reviewer instead of to itself; while anything in the tree works, an open
-request is work in progress, not a stall. A peer that is archived, settled or
-gone owes nothing here — the user put it down; a peer the user took over still
-owes until it answers or is settled. A forwarded report on another chain than
-its handoff (the user prompted the forwarding peer in between, closing its
-chains), a forward of two or more hops, or a peer released with a plain message
-stays owed until that peer is settled or the request expires (30 days). The
-other way round, a peer that asked a sibling something on their shared chain is
-cleared by that sibling's own report, as if it had handed the work on. The
-composer ledge says the same for the chat on screen, judged over the tree that
-chat's card would fold — for a chat deep in a tree, its own subtree, so a
-coordinator still working above it does not hide its line though the top card
-shows no chip — a peer the user took over or a run's role is not this chat's
-work — and a chat that spawned no one but asked an existing session for a reply
-shows that line alone. A settled tree is on the shelf and raises nothing; one
-kept up by an unsettled peer still shows its chip. Workflow Run role sessions
-are the run's item and raise no chip of their own. A card with no chip and
-nothing moving is done.
+working subagent run, background job it waits on, or a retained host not kept up
+by services alone) or waiting on the user, the tree is STALLED: the card carries
+a warning chip, **No reply from «peer»** (`+N` when several owe, kept apart from
+the title so it never truncates), that opens that peer, says so in the card's
+spoken label, and rises to the attention tier. When the one owed the reply is
+the card's own session — a peer asked its coordinator, which went quiet — the
+chip names the peer that waits instead, **«peer» awaits a reply**, and opens it.
+It is judged over the whole tree, not request by request, because a coordinator
+often routes an implementer's report to a reviewer instead of to itself; while
+anything in the tree works, an open request is work in progress, not a stall. A
+peer that is archived, settled or gone owes nothing here — the user put it down;
+a peer the user took over still owes until it answers or is settled. A forwarded
+report on another chain than its handoff (the user prompted the forwarding peer
+in between, closing its chains), a forward of two or more hops, or a peer
+released with a plain message stays owed until that peer is settled or the
+request expires (30 days). The other way round, a peer that asked a sibling
+something on their shared chain is cleared by that sibling's own report, as if
+it had handed the work on. The composer ledge says the same for the chat on
+screen, judged over the tree that chat's card would fold — for a chat deep in a
+tree, its own subtree, so a coordinator still working above it does not hide its
+line though the top card shows no chip — a peer the user took over or a run's
+role is not this chat's work — and a chat that spawned no one but asked an
+existing session for a reply shows that line alone. A settled tree is on the
+shelf and raises nothing; one kept up by an unsettled peer still shows its chip.
+Workflow Run role sessions are the run's item and raise no chip of their own. A
+card with no chip and nothing moving is done.
 
 What the fold may never hide is the work that needs a human. A folded peer
 asking, awaiting approval, waiting on a Task choice or holding an unresolved

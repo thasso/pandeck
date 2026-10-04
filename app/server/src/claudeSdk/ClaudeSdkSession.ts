@@ -182,6 +182,7 @@ import {
 } from "../session/runtimePrompt.ts";
 import { SessionBusyError } from "../session/runtime/errors.ts";
 import { backgroundWorkSupervisor } from "../backgroundWork/supervisor.ts";
+import { backgroundWorkIntentHint } from "../backgroundWork/intent.ts";
 import {
   backgroundWorkDescription,
   backgroundWorkTitle,
@@ -2046,7 +2047,9 @@ export class ClaudeSdkSession implements LiveSession {
       toolInput: Record<string, unknown>;
       toolUseId: string;
     },
-  ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
+  ): Promise<
+    { allowed: true; context?: string } | { allowed: false; reason: string }
+  > {
     if (
       this.mode === "plan" &&
       ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(input.toolName)
@@ -2111,7 +2114,12 @@ export class ClaudeSdkSession implements LiveSession {
       }
       this.retainedEpochKey = epochKey;
       this.retainedEmptyGraceMs = admission.frozen.claudeEmptyHostGraceMs ?? 0;
-      return { allowed: true };
+      return admission.item.intent === "service"
+        ? { allowed: true }
+        : {
+            allowed: true,
+            context: backgroundWorkIntentHint(admission.item.id),
+          };
     } catch (error) {
       return {
         allowed: false,

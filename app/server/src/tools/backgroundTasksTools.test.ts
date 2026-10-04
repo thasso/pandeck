@@ -159,6 +159,44 @@ describe("background_tasks", () => {
     expect((status.item as { taskId: string }).taskId).toBe(claudeTask);
   });
 
+  test("lets the owner declare a running task a service, and only the owner", async () => {
+    const owner = makeSession();
+    const taskId = reserve(owner);
+    const declared = details(
+      await backgroundTasksTool.execute(
+        { operation: "set_intent", taskId, intent: "service" },
+        context(owner),
+      ),
+    );
+    expect((declared.item as { intent?: string }).intent).toBe("service");
+    expect(backgroundWorkStore.getItem(taskId)?.intent).toBe("service");
+    await expect(
+      backgroundTasksTool.execute(
+        { operation: "set_intent", taskId, intent: "service" },
+        context(makeSession()),
+      ),
+    ).rejects.toThrow("not owned by this session");
+    await expect(
+      backgroundTasksTool.execute(
+        { operation: "set_intent", taskId, intent: "later" as "service" },
+        context(owner),
+      ),
+    ).rejects.toThrow("intent must be awaited or service");
+    await expect(
+      backgroundTasksTool.execute(
+        { operation: "status", taskId, intent: "service" } as never,
+        context(owner),
+      ),
+    ).rejects.toThrow("intent is not accepted here");
+    backgroundWorkStore.terminalize({ itemId: taskId, state: "completed" });
+    await expect(
+      backgroundTasksTool.execute(
+        { operation: "set_intent", taskId, intent: "awaited" },
+        context(owner),
+      ),
+    ).rejects.toThrow("already finished");
+  });
+
   test("denies foreign and excluded ownership without metadata", async () => {
     const owner = makeSession();
     const foreign = makeSession();

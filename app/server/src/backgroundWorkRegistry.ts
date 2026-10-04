@@ -32,6 +32,7 @@ export function backgroundWorkItemSummaryOf(
     ...(item.command ? { command: item.command } : {}),
     ...(item.commandTruncated ? { commandTruncated: true } : {}),
     state: item.state,
+    ...(item.intent === "service" ? { intent: "service" as const } : {}),
     stopState: item.stopState,
     ...(item.stopReason ? { stopReason: item.stopReason } : {}),
     ...(item.stopAttempts > 0 ? { stopAttempts: item.stopAttempts } : {}),

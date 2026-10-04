@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   BackgroundHostState,
   BackgroundWorkBackend,
+  BackgroundWorkIntent,
   BackgroundWorkKind,
   BackgroundWorkState,
   BackgroundWorkStopState,
@@ -92,6 +93,7 @@ export interface BackgroundWorkItem {
   providerTaskId?: string;
   providerTaskType?: string;
   state: BackgroundWorkState;
+  intent: BackgroundWorkIntent;
   stopState: BackgroundWorkStopState;
   stopReason?: string;
   stopRequestedAt?: number;
@@ -293,6 +295,7 @@ interface ItemRow {
   provider_task_id: string | null;
   provider_task_type: string | null;
   state: BackgroundWorkState;
+  intent: BackgroundWorkIntent;
   stop_state: BackgroundWorkStopState;
   stop_reason: string | null;
   stop_requested_at_ms: number | null;
@@ -424,6 +427,7 @@ function itemOf(row: ItemRow): BackgroundWorkItem {
       ? { providerTaskType: row.provider_task_type }
       : {}),
     state: row.state,
+    intent: row.intent,
     stopState: row.stop_state,
     ...(row.stop_reason ? { stopReason: row.stop_reason } : {}),
     ...(row.stop_requested_at_ms !== null
@@ -1435,6 +1439,40 @@ function requestStop(
 }
 
 /**
+ * The owner declared whether it waits on a running item (`awaited`) or keeps
+ * it beside its work (`service`). Only the owner may say so, and only while the
+ * item is nonterminal: a finished item's meaning is history. Repeating the
+ * current intent writes nothing.
+ */
+function setIntent(input: {
+  itemId: string;
+  ownerSessionId: string;
+  intent: BackgroundWorkIntent;
+  now?: number;
+}): BackgroundWorkItem {
+  return mutation((touch) => {
+    const row = requireItem(input.itemId);
+    if (row.owner_session_id !== input.ownerSessionId)
+      throw new BackgroundWorkValidationError(
+        `background work item ${row.id} is not owned by this session`,
+      );
+    if (input.intent !== "awaited" && input.intent !== "service")
+      throw new BackgroundWorkValidationError(
+        "intent must be awaited or service",
+      );
+    assertNonterminal(row, "declaring its intent");
+    if (row.intent === input.intent) return () => itemOf(row);
+    getDb()
+      .prepare(
+        "UPDATE background_work_items SET intent = ?, updated_at_ms = ? WHERE id = ?",
+      )
+      .run(input.intent, input.now ?? Date.now(), row.id);
+    touch.itemIds.add(row.id);
+    return () => itemOf(requireItem(row.id));
+  });
+}
+
+/**
  * One targeted Stop attempt was made, or went unanswered. `unconfirmed` stays
  * NONTERMINAL on purpose: later evidence or a new explicit attempt may still
  * answer it, and the app never fabricates a terminal outcome it did not see.
@@ -1909,7 +1947,7 @@ function listItems(
 function activityByOwner(): Map<string, SessionBackgroundActivity> {
   const rows = getDb()
     .prepare(
-      `SELECT owner_session_id, kind, state, stop_state,
+      `SELECT owner_session_id, kind, state, stop_state, intent,
               COALESCE(started_at_ms, created_at_ms) AS since
        FROM background_work_items
        WHERE is_member = 1 AND state IN ('pending-launch', 'running')`,
@@ -1919,6 +1957,7 @@ function activityByOwner(): Map<string, SessionBackgroundActivity> {
     kind: BackgroundWorkKind;
     state: BackgroundWorkState;
     stop_state: BackgroundWorkStopState;
+    intent: BackgroundWorkIntent;
     since: number;
   }>;
   const activity = new Map<string, SessionBackgroundActivity>();
@@ -1938,6 +1977,8 @@ function activityByOwner(): Map<string, SessionBackgroundActivity> {
     else current.monitorWebsocketCount += 1;
     if (row.state === "pending-launch") current.startingCount += 1;
     if (row.stop_state !== "none") current.stoppingCount += 1;
+    if (row.intent === "service")
+      current.serviceCount = (current.serviceCount ?? 0) + 1;
     current.oldestStartedAt = Math.min(current.oldestStartedAt, row.since);
     activity.set(row.owner_session_id, current);
   }
@@ -2058,6 +2099,7 @@ export const BACKGROUND_WORK_PUBLIC_WRITE_PATHS = [
   "failLaunch",
   "requestStop",
   "recordStopAttempt",
+  "setIntent",
   "recordPlannedDrain",
   "setHostState",
   "requestHostStopAll",
@@ -2076,6 +2118,7 @@ export const backgroundWorkStore = {
   failLaunch,
   requestStop,
   recordStopAttempt,
+  setIntent,
   recordPlannedDrain,
   setHostState,
   requestHostStopAll,

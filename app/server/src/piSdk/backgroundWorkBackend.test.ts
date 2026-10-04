@@ -379,9 +379,14 @@ test("background bash returns a PA id and freezes all five PI values and the chi
   );
   // Frozen at admission: withdrawing the overlay now must not reach the item.
   setChildProcessEnvOverlay(null);
-  const details = result.details as { taskId?: string; state?: string };
+  const details = result.details as {
+    taskId?: string;
+    state?: string;
+    hint?: string;
+  };
   assert.match(details.taskId ?? "", /^bgw_/);
   assert.equal(details.state, "running");
+  assert.match(details.hint ?? "", /set_intent/);
   await completed;
   backgroundWorkSupervisor.setCompletionRecordedHandler(undefined);
   const [

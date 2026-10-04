@@ -5806,6 +5806,15 @@ export type BackgroundWorkKind =
   "shell" | "monitor-command" | "monitor-websocket";
 
 /**
+ * Whether the owner WAITS on an item (`awaited`, the default: a build, a test
+ * run, a readiness wait) or keeps it running beside its work (`service`: a dev
+ * server, a watcher). Declared by the owning agent through `background_tasks`,
+ * never inferred from the command. A service shows as running but is never
+ * read as work in progress.
+ */
+export type BackgroundWorkIntent = "awaited" | "service";
+
+/**
  * The item's legal lifecycle. `pending-launch` is reserved-but-not-executing:
  * an owner Stop that wins that race terminalizes as `not-started`, which is why
  * it is distinct from `stopped`. `lost` is what an unclean server restart
@@ -5882,6 +5891,8 @@ export interface BackgroundWorkItemSummary {
   /** True when `command` was cut at the cap. */
   commandTruncated?: boolean;
   state: BackgroundWorkState;
+  /** `service` when the owner declared it one; omitted for `awaited`. */
+  intent?: BackgroundWorkIntent;
   stopState: BackgroundWorkStopState;
   stopReason?: string;
   stopAttempts?: number;
@@ -5910,6 +5921,11 @@ export interface BackgroundWorkItemSummary {
 export interface SessionBackgroundActivity {
   /** Every nonterminal item this session owns. */
   activeCount: number;
+  /**
+   * How many of them the owner declared a `service` (dev server, watcher):
+   * running, but nothing anyone waits on. Omitted when none.
+   */
+  serviceCount?: number;
   shellCount: number;
   monitorCommandCount: number;
   monitorWebsocketCount: number;
@@ -5921,6 +5937,33 @@ export interface SessionBackgroundActivity {
   oldestStartedAt: number;
   /** True while a retained Claude host epoch is live for this owner. */
   retainedHost?: boolean;
+}
+
+/**
+ * The background items the owner WAITS on: every active one it did not
+ * declare a `service`. What "jobs" counts wherever a fold says how much is
+ * still going.
+ */
+export function awaitedBackgroundCount(
+  activity: SessionBackgroundActivity | undefined,
+): number {
+  if (!activity) return 0;
+  return Math.max(0, activity.activeCount - (activity.serviceCount ?? 0));
+}
+
+/**
+ * Whether background work keeps a session BUSY: an item it waits on, or a
+ * retained host with no items left, inside its quiet grace. A host kept alive
+ * only by services is not busy — a dev server is no reason to keep waiting.
+ */
+export function backgroundWorkBusy(
+  activity: SessionBackgroundActivity | undefined,
+): boolean {
+  if (!activity) return false;
+  return (
+    awaitedBackgroundCount(activity) > 0 ||
+    (activity.activeCount <= 0 && Boolean(activity.retainedHost))
+  );
 }
 
 /**
