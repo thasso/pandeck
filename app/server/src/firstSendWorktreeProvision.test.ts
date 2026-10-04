@@ -62,6 +62,7 @@ sh(repoPath, "add", "-A");
 sh(repoPath, "commit", "-m", "init");
 
 const { Connection } = await import("./connection.ts");
+const { hub } = await import("./hub.ts");
 const { projectStore } = await import("./db/projectStore.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const claudeProfile = createCredentialProfile({
@@ -260,38 +261,42 @@ test("the first send provisions, records the genesis card, then runs the turn", 
   const conn = new (
     Connection as unknown as new (ws: unknown) => Record<string, unknown>
   )(fakeWs) as unknown as {
-    handleClaudeSdkSend: (msg: Record<string, unknown>) => Promise<void>;
-    ensureClaudeSdkView: unknown;
+    handleFirstSend: (msg: Record<string, unknown>) => Promise<void>;
+    view: unknown;
   };
   // A real SDK session would start a query; this double only has to observe the
-  // synthetic-turn surface the genesis card is recorded through.
+  // synthetic-turn surface the genesis card is recorded through, and nothing
+  // attaches to view it.
+  conn.view = () => {};
   let viewedCwd: string | undefined;
-  conn.ensureClaudeSdkView = (
-    _ticket: number,
-    _id: string,
-    _modelId: string | undefined,
-    _thinking: string | undefined,
-    _agentType: string | undefined,
-    cwd?: string,
-  ) => {
-    viewedCwd = cwd;
-    return {
-      sessionId: "prov-session",
-      broadcastState() {},
-      contextInfo: () => ({}),
-      beginSyntheticTool: () => {
-        order.push("card:begin");
-        return { assistantId: "a1", toolId: "t1" };
-      },
-      finishSyntheticCard: (result: HostCommandResult) => {
-        if (result.kind !== "worktreeProvision")
-          throw new Error(`unexpected ${result.kind} card`);
-        order.push(`card:${result.provision.state}`);
-      },
-    };
-  };
+  vi.spyOn(hub, "acquireClaudeSdk").mockImplementation(
+    (
+      _id: string,
+      _modelId?: string,
+      _thinking?: unknown,
+      _agentType?: unknown,
+      cwd?: string,
+    ) => {
+      viewedCwd = cwd;
+      return {
+        sessionId: "prov-session",
+        broadcastState() {},
+        contextInfo: () => ({}),
+        beginSyntheticTool: () => {
+          order.push("card:begin");
+          return { assistantId: "a1", toolId: "t1" };
+        },
+        finishSyntheticCard: (result: HostCommandResult) => {
+          if (result.kind !== "worktreeProvision")
+            throw new Error(`unexpected ${result.kind} card`);
+          order.push(`card:${result.provision.state}`);
+        },
+      } as never;
+    },
+  );
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "prov-session",
     agentType: "developer",
     text: "Start on the card",
@@ -329,14 +334,14 @@ test("a blocked first send creates no session and runs no turn", async () => {
   const conn = new (
     Connection as unknown as new (ws: unknown) => Record<string, unknown>
   )(fakeWs) as unknown as {
-    handleClaudeSdkSend: (msg: Record<string, unknown>) => Promise<void>;
-    ensureClaudeSdkView: unknown;
+    handleFirstSend: (msg: Record<string, unknown>) => Promise<void>;
   };
-  conn.ensureClaudeSdkView = () => {
+  vi.spyOn(hub, "acquireClaudeSdk").mockImplementation(() => {
     throw new Error("no session may be created for a failed provision");
-  };
+  });
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "blocked-session",
     agentType: "developer",
     text: "Start on the card",

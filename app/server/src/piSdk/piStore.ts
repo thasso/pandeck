@@ -13,6 +13,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import {
+  AGENT_TYPE_IDS,
   isCodingAgentType,
   sessionModeOrDefault,
   type AgentType,
@@ -73,13 +74,7 @@ import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
 
 /** Every persona a legacy per-persona transcript directory can hold. */
-const LEGACY_KINDS: readonly AgentType[] = [
-  "assistant",
-  "developer",
-  "workshop",
-  "personal-assistant",
-  "workflow-coordinator",
-];
+const LEGACY_KINDS: readonly AgentType[] = AGENT_TYPE_IDS;
 
 /**
  * A cold open lost to a delete: the session was tombstoned while its

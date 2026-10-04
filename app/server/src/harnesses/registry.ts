@@ -139,16 +139,23 @@ export const harnessRegistry = {
 
   /**
    * The engine other than `harness` that already holds `id`: resident, on
-   * record, or on disk without a row (what {@link acquireById} would reopen);
-   * undefined when `harness` may bring it live. An id belongs to one engine: a
-   * client-supplied id is checked here before anything is created for it,
-   * which is what lets {@link residentById} answer from memory alone.
+   * record, or, without a row, on disk as anything an engine could still
+   * reopen, by id or by file; undefined when `harness` may bring it live. An
+   * id belongs to one engine: a client-supplied id is checked here before
+   * anything is created for it, which is what lets {@link residentById} answer
+   * from memory alone. `onDisk: false` skips the disk scan for an id the
+   * server minted, which no transcript can hold.
    */
-  otherHolder(id: string, harness: Harness): Harness | undefined {
+  otherHolder(
+    id: string,
+    harness: Harness,
+    { onDisk = true }: { onDisk?: boolean } = {},
+  ): Harness | undefined {
     const resident = residentElsewhere(id, harness);
     if (resident) return resident;
     const row = sessionStore.get(id);
     if (row) return row.harness !== harness ? row.harness : undefined;
+    if (!onDisk) return undefined;
     // Without a row, the disk decides as `acquireById` would: Claude's record
     // first.
     const holder = ROWLESS_ORDER.find((other) =>

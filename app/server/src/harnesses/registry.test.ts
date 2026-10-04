@@ -291,6 +291,11 @@ test("an id another engine holds, resident or on record, is named as held", () =
   // A pi transcript with no row is pi's too: acquireById would reopen it.
   piTranscript("pi-on-disk");
   assert.equal(harnessRegistry.otherHolder("pi-on-disk", "claude-sdk"), "pi");
+  // A server-minted id skips the disk: only memory and the row are asked.
+  assert.equal(
+    harnessRegistry.otherHolder("pi-on-disk", "claude-sdk", { onDisk: false }),
+    undefined,
+  );
 });
 
 test("a Claude session is never created over an id pi holds", () => {

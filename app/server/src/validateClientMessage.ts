@@ -21,6 +21,7 @@
  */
 import {
   BROADCAST_TOPICS,
+  isHarness,
   isPeerRuntimeRelativeCost,
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   PULL_REQUEST_CARD_ACTIONS,
@@ -561,6 +562,7 @@ const validateQueuePrompt: Validator = (msg) => {
 const validateHarnessSend: Validator = (msg) => {
   if (!isString(msg.id)) return "id is required and must be a string";
   if (!isString(msg.harness)) return "harness is required and must be a string";
+  if (!isHarness(msg.harness)) return "harness is not a known harness";
   if (!isString(msg.agentType))
     return "agentType is required and must be a string";
   if (!isString(msg.text)) return "text is required and must be a string";

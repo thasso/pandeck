@@ -100,7 +100,12 @@ import {
 import { randomUUID } from "node:crypto";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
 import { pickerModels } from "./harnesses/models.ts";
-import { harnessRegistry } from "./harnesses/registry.ts";
+import {
+  firstSendEngine,
+  type FirstSendRefusal,
+  type FirstSendRequest,
+  type PersonaGate,
+} from "./harnesses/firstSend.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import {
@@ -243,8 +248,6 @@ import {
   recentMemoryLoads,
 } from "./memory/memoryApi.ts";
 import { processorConfigStatus } from "./memory/memoryProcessor.ts";
-import { sessionPromptConditions } from "./promptConditions.ts";
-import { sessionSkillPreset, sessionSkills } from "./sessionSkills.ts";
 import {
   clearPendingQuestion,
   submitAgentQuestionResponse,
@@ -1173,15 +1176,7 @@ export class Connection implements Viewer {
         cancelPostReloadContinuation();
         return;
       case "harnessSend":
-        switch (msg.harness) {
-          case "claude-sdk":
-            await this.handleClaudeSdkSend(msg);
-            return;
-          case "pi":
-            await this.handlePiFirstSend(msg);
-            return;
-        }
-        return;
+        return this.handleFirstSend(msg);
       case "resolveApproval":
         return this.onResolveApproval(
           msg.approvalId,
@@ -1516,58 +1511,46 @@ export class Connection implements Viewer {
     }
   }
 
-  private async handlePiFirstSend(msg: {
-    id: string;
-    agentType: AgentType;
-    text: string;
-    attachments?: PromptAttachment[];
-    modelProvider?: string;
-    modelId?: string;
-    thinkingLevel?: ThinkingLevel;
-    mode?: SessionMode;
-    attachTaskId?: string;
-    projectId?: string;
-    knowledgeEntryId?: string;
-    worktreeId?: string;
-    createWorktreeInProjectId?: string;
-    clientRequestId?: string;
-    credentialProfileId?: string;
-  }): Promise<void> {
-    // Validate the client id even though pi will mint the durable id; this keeps
-    // the message shape constrained before any side effect.
+  /**
+   * A session's first send: it creates the session and prompts it, for either
+   * engine. The flow is one, the persona guard included; the session's engine
+   * answers only what differs (`harnesses/firstSend.ts`): whether it is
+   * switched off, whether the send's id is the session's and may be taken,
+   * which persona gate applies, the account, what it resolves before a
+   * worktree is provisioned, and how it brings the session live. The
+   * session comes into existence with its first prompt, so model, thinking and
+   * mode are fixed exactly when the conversation starts.
+   */
+  private async handleFirstSend(msg: FirstSendRequest): Promise<void> {
+    const engine = firstSendEngine(msg.harness);
+    if (engine.disabled()) return;
+    // Reject a bad id before ANY side effect, even where the engine mints the
+    // session's own: the message shape stays constrained.
     if (!isSafeId(msg.id)) {
       this.rejectBadId();
       return;
     }
-    const profileId = msg.credentialProfileId ?? defaultOpenAiProfileId();
-    if (enabledCredentialProfileById(profileId)?.provider !== "openai-codex") {
-      this.send({
-        type: "error",
-        message: "Select an OpenAI credential profile for this pi session.",
-      });
+    const heldId = engine.admitId(msg);
+    if (heldId) {
+      this.refuseFirstSend(msg, heldId);
       return;
     }
-    const kind = msg.agentType;
-    if (!this.guardKind(kind)) return;
+    if (!this.guardFirstSendPersona(msg.agentType, engine.personaGate)) return;
+    const admitted = engine.account(msg);
+    if ("refusal" in admitted) {
+      this.refuseFirstSend(msg, admitted.refusal);
+      return;
+    }
     // The client is already on this session's surface: the send commits this
     // connection to viewing it, in arrival order — claimed before the FIRST
     // await (the model lookup included), never after one.
-    const ticket = this.claimViewRequest();
-    let model: Parameters<typeof hub.acquireNew>[1] | undefined;
-    if (msg.modelProvider && msg.modelId) {
-      const found = await findModelForProfile(
-        profileId,
-        msg.modelProvider,
-        msg.modelId,
-      );
-      if (!found) {
-        this.send({
-          type: "error",
-          message: `Model ${msg.modelProvider}/${msg.modelId} is not available.`,
-        });
-        return;
-      }
-      model = found;
+    const ticket = this.claimViewRequest(
+      engine.takesClientId ? msg.id : undefined,
+    );
+    const prepared = await engine.prepare(msg, admitted.profileId);
+    if ("refusal" in prepared) {
+      this.refuseFirstSend(msg, prepared.refusal);
+      return;
     }
     const staged = await this.resolveWorktreeContext(msg.worktreeId);
     if (staged === undefined) return;
@@ -1584,28 +1567,17 @@ export class Connection implements Viewer {
     const firstSendContext = resolveSessionContext(
       sessionContextRequest(msg, worktree),
     );
-    const live = await hub.acquireNew(kind, model, msg.thinkingLevel, {
-      ...(worktree ? { cwd: worktree.path } : {}),
-      credentialProfileId: profileId,
-      // pi builds the system prompt inside creation, so the session-start
-      // evidence has to arrive with it (Task 287).
-      promptEvidence: sessionContextEvidence(firstSendContext, {
+    const created = await prepared.create({
+      worktree,
+      evidence: sessionContextEvidence(firstSendContext, {
         hasAttachments: Boolean(msg.attachments?.length),
       }),
-      ...(msg.mode ? { mode: msg.mode } : {}),
     });
-    sessionStore.upsert({
-      id: live.sessionId,
-      harness: "pi",
-      agentType: msg.agentType,
-      credentialProfileId: profileId,
-      mode: live.sessionMode,
-    });
-    await sessionSkills(live.sessionId, msg.agentType);
-    if (worktree) {
-      linkSessionToWorktree(live.sessionId, worktree.id);
-      broadcastWorktreeEdgeChange();
+    if ("refusal" in created) {
+      this.refuseFirstSend(msg, created.refusal);
+      return;
     }
+    const { live, ref } = created;
     // The prompt below runs whether or not this connection still views the
     // session: a newer navigation keeps its view, the send is not lost.
     this.viewIfCurrent(ticket, live);
@@ -1613,26 +1585,26 @@ export class Connection implements Viewer {
     // precede the session, and live + durable then render the same order.
     if (provisioned)
       recordWorktreeProvisionForHost(live, provisioned.provision);
+    // The staged Task/Project/knowledge context: its links, and what the agent
+    // sees of it.
     const attachments = msg.attachments ? [...msg.attachments] : [];
-    const started = await applySessionContext(firstSendContext, {
-      harness: "pi",
-      agentType: msg.agentType,
-      sessionId: live.sessionId,
-      ...(live.sessionFile !== undefined
-        ? { sessionFile: live.sessionFile }
-        : {}),
-    });
+    const started = await applySessionContext(firstSendContext, ref);
     attachments.push(...started.attachments);
     if (firstSendContext.kind === "task" && started.taskId) {
       this.viewing?.broadcastState();
       void hub.broadcastSessions();
     }
-    if (firstSendContext.kind === "project")
+    if (firstSendContext.kind === "project") {
+      live.broadcastState();
       this.send({
         type: "contextInfo",
         sessionId: live.sessionId,
         info: live.contextInfo(),
       });
+    }
+    // Driven through the runtime so the user entry is appended to the log. The
+    // human's own text is what the log keeps: user files AND started context
+    // both ride to the model as attachments, never spliced into the prompt.
     await promptRuntimeSession(live, msg.text, {
       ...(msg.clientRequestId !== undefined
         ? { clientRequestId: msg.clientRequestId }
@@ -1648,221 +1620,49 @@ export class Connection implements Viewer {
           : {}),
       }),
     );
-    await hub.broadcastSessions();
-  }
-
-  /* ------------------------------ claude sdk ------------------------------- */
-
-  /**
-   * In-process Claude-SDK create-on-first-prompt. The internal method `harnessSend`
-   * dispatches to for `harness: "claude-sdk"`. The first send CREATES the session
-   * (it isn't registered before then), carrying the model/thinking chosen in the
-   * picker, and builds the staged task/project/knowledge context (chips + agent
-   * context) alongside recording the back-links, matching the pi first-send path.
-   */
-  private async handleClaudeSdkSend(msg: {
-    id: string;
-    agentType: AgentType;
-    text: string;
-    attachments?: PromptAttachment[];
-    modelId?: string;
-    thinkingLevel?: ThinkingLevel;
-    mode?: SessionMode;
-    attachTaskId?: string;
-    projectId?: string;
-    knowledgeEntryId?: string;
-    worktreeId?: string;
-    createWorktreeInProjectId?: string;
-    clientRequestId?: string;
-    credentialProfileId?: string;
-  }): Promise<void> {
-    if (!getSettings().claudeSdk.enabled) return;
-    // Reject a bad session id before ANY side effect (session creation,
-    // task link, prompt).
-    if (!isSafeId(msg.id)) {
-      this.rejectBadId();
-      return;
-    }
-    // The id is client-supplied: one another engine already holds is refused
-    // before anything (worktree edge, prompt conditions) is written for it.
-    if (this.refuseHeldSessionId(msg)) return;
-    // The singleton `personal-assistant` persona is server-owned; a crafted
-    // claude-sdk harnessSend must not be able to create it (the pi paths are
-    // guarded by guardKind → isAgentAvailable, but claude-sdk workshop must stay
-    // creatable in prod, so this path can't reuse guardKind).
-    if (!isOrdinarilyCreatableAgentType(msg.agentType)) {
-      this.send({
-        type: "error",
-        message: `The "${String(msg.agentType)}" agent cannot be created.`,
-      });
-      return;
-    }
-    const profileId = msg.credentialProfileId?.trim();
-    if (
-      !profileId ||
-      enabledCredentialProfileById(profileId)?.provider !== "claude"
-    ) {
-      this.send({
-        type: "error",
-        message: "Select a Claude credential profile for this session.",
-      });
-      return;
-    }
-    // The client is already on this session's surface: the send commits this
-    // connection to viewing it, in arrival order — before the awaits below.
-    const ticket = this.claimViewRequest(msg.id);
-    const staged = await this.resolveWorktreeContext(msg.worktreeId);
-    if (staged === undefined) return;
-    // "+ New worktree": provision BEFORE creating the session, so the session is
-    // born with the right cwd. A failure ends the send here — no session, no turn.
-    const provisioned = staged
-      ? null
-      : await this.provisionFirstSendWorktree(msg);
-    if (provisioned === undefined) return;
-    const worktree = staged ?? provisioned?.worktree ?? null;
-    if (!this.guardDeveloperWorktree(msg.agentType, worktree)) return;
-    // Everything the writes below need is resolved first: from the ownership
-    // check to the session's registration nothing awaits, so no other engine
-    // can take the id in between, and a refusal comes before any write.
-    const skillPreset = await sessionSkillPreset(msg.id, msg.agentType);
-    if (this.refuseHeldSessionId(msg)) return;
-    // Link BEFORE acquire: the claude-sdk id is client-supplied, so the edge is
-    // in place when the store resolves the session cwd.
-    if (worktree) {
-      linkSessionToWorktree(msg.id, worktree.id);
-      broadcastWorktreeEdgeChange();
-    }
-    // Freeze the session-start prompt conditions BEFORE the first query builds
-    // the system prompt (Task 287): every resumed query then reproduces it. The
-    // context is resolved here too, so the evidence and the attachments applied
-    // after creation cannot disagree (`sessionContext.ts`).
-    const firstSendContext = resolveSessionContext(
-      sessionContextRequest(msg, worktree),
-    );
-    sessionPromptConditions(
-      msg.id,
-      msg.agentType,
-      sessionContextEvidence(firstSendContext, {
-        hasAttachments: Boolean(msg.attachments?.length),
-      }),
-    );
-    // With the preset, the freeze awaits nothing: it lands before the session.
-    const skillsFrozen = sessionSkills(msg.id, msg.agentType, skillPreset);
-    const sdk = this.ensureClaudeSdkView(
-      ticket,
-      msg.id,
-      msg.modelId,
-      msg.thinkingLevel,
-      msg.agentType,
-      worktree?.path,
-      profileId,
-      msg.mode,
-    );
-    await skillsFrozen;
-    // The genesis card goes in before the first prompt: the checkout really did
-    // precede the session, and live + durable then render the same order.
-    if (provisioned) recordWorktreeProvisionForHost(sdk, provisioned.provision);
-    // Build the task/project/knowledge context and record the link side-effects
-    // exactly like the pi first-send path — otherwise the staged Task/Project
-    // chip is dropped and the agent never sees the attached context.
-    const attachments = msg.attachments ? [...msg.attachments] : [];
-    const started = await applySessionContext(firstSendContext, {
-      harness: "claude-sdk",
-      agentType: msg.agentType,
-      sessionId: msg.id,
-    });
-    attachments.push(...started.attachments);
-    if (firstSendContext.kind === "task" && started.taskId) {
-      this.viewing?.broadcastState();
-      void hub.broadcastSessions();
-    }
-    if (firstSendContext.kind === "project") {
-      sdk.broadcastState();
-      this.send({
-        type: "contextInfo",
-        sessionId: sdk.sessionId,
-        info: sdk.contextInfo(),
-      });
-    }
-    // Drive the first prompt through the runtime so the user entry is appended
-    // to the log (ensureClaudeSdkView set up the runtime view). The human's own
-    // text is what the log keeps: user files AND started context both ride to
-    // the model as attachments, never spliced into the prompt.
-    await promptRuntimeSession(sdk, msg.text, {
-      ...(msg.clientRequestId !== undefined
-        ? { clientRequestId: msg.clientRequestId }
-        : {}),
-      attachments,
-    }).catch((err) =>
-      this.send({
-        type: "error",
-        message: `Failed to send prompt: ${errorText(err)}`,
-        target: { type: "session", id: sdk.id },
-        ...(msg.clientRequestId !== undefined
-          ? { failedPromptClientRequestId: msg.clientRequestId }
-          : {}),
-      }),
-    );
     // Now that the session has a turn, refresh the sidebar so it appears.
     await hub.broadcastSessions();
   }
 
   /**
-   * Refuse a Claude send whose client-supplied id another engine holds,
-   * resident, on record or on disk (`harnessRegistry.otherHolder`), as an error
-   * on that session that retires the optimistic prompt. Answers whether it
-   * refused.
+   * The persona creation guard of a first send, by the gate its engine names
+   * (`harnesses/firstSend.ts`): pi's environment availability, or, for a
+   * Claude session, only the server-owned personas refused, which a crafted
+   * send must not be able to create.
    */
-  private refuseHeldSessionId(msg: {
-    id: string;
-    clientRequestId?: string;
-  }): boolean {
-    const holder = harnessRegistry.otherHolder(msg.id, "claude-sdk");
-    if (!holder) return false;
+  private guardFirstSendPersona(
+    agentType: AgentType,
+    gate: PersonaGate,
+  ): boolean {
+    if (gate === "available") return this.guardKind(agentType);
+    if (isOrdinarilyCreatableAgentType(agentType)) return true;
     this.send({
       type: "error",
-      message: `Session ${msg.id} belongs to the ${holder} harness.`,
-      target: { type: "session", id: msg.id },
-      ...(msg.clientRequestId !== undefined
-        ? { failedPromptClientRequestId: msg.clientRequestId }
-        : {}),
+      message: `The "${String(agentType)}" agent cannot be created.`,
     });
-    return true;
+    return false;
   }
 
   /**
-   * Get the in-process Claude SDK session for `id`, creating + registering it on
-   * first use with the chosen model/thinking, and make this connection view it.
-   * Mirrors {@link ensureClaudeView}: there is no separate create step — the
-   * session comes into existence with its first prompt, so model/thinking are
-   * fixed exactly when the conversation starts. Viewing attaches the runtime
-   * transport, whose atomic snapshot swaps the optimistic placeholder for the
-   * real session.
+   * Tell the client why its first send was refused: on the session it named
+   * when the refusal is about that id, retiring the optimistic prompt.
    */
-  private ensureClaudeSdkView(
-    ticket: number,
-    id: string,
-    modelId?: string,
-    thinkingLevel?: ThinkingLevel,
-    agentType?: AgentType,
-    cwd?: string,
-    credentialProfileId?: string,
-    mode?: SessionMode,
-  ): ClaudeSdkSession {
-    const sdk = hub.acquireClaudeSdk(
-      id,
-      modelId,
-      thinkingLevel,
-      agentType,
-      cwd,
-      undefined,
-      credentialProfileId,
-      mode,
-    );
-    // The first send creates AND prompts; the prompt runs whether or not this
-    // connection still views the session (a newer navigation keeps its view).
-    this.viewIfCurrent(ticket, sdk);
-    return sdk;
+  private refuseFirstSend(
+    msg: FirstSendRequest,
+    refusal: FirstSendRefusal,
+  ): void {
+    this.send({
+      type: "error",
+      message: refusal.message,
+      ...(refusal.onSession
+        ? {
+            target: { type: "session" as const, id: msg.id },
+            ...(msg.clientRequestId !== undefined
+              ? { failedPromptClientRequestId: msg.clientRequestId }
+              : {}),
+          }
+        : {}),
+    });
   }
 
   private async maybeStartPostReloadContinuation(): Promise<void> {

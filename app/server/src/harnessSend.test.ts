@@ -72,6 +72,18 @@ test("validation", () => {
     );
   }
 
+  // Only a harness this app runs is routed; an unknown or inherited name is
+  // rejected before any handler looks it up.
+  for (const harness of ["bogus", "__proto__", "toString"]) {
+    const res = validateClientMessage(wellFormed(harness));
+    assert.equal(
+      res.ok,
+      false,
+      `harnessSend for ${harness} should be rejected`,
+    );
+  }
+  assert.equal(validateClientMessage(wellFormed("pi")).ok, true);
+
   // Wrong-kind optional field rejected.
   const badAttachments = validateClientMessage({
     ...wellFormed("claude-sdk"),
@@ -100,64 +112,38 @@ function makeConnection() {
   return { conn, sent };
 }
 
-test("dispatch: claude-sdk routes to the sdk path", async () => {
+test("dispatch: every harnessSend runs the one first-send path, for its harness", async () => {
   const { conn } = makeConnection();
-  const calls: Array<{ which: string; msg: Record<string, unknown> }> = [];
-  // Stub the private create-on-first-prompt helper so dispatch is observable
-  // without creating a real session / SDK query.
-  (conn as Record<string, unknown>).handleClaudeSdkSend = async (
+  const calls: Array<Record<string, unknown>> = [];
+  // Stub the private create-on-first-prompt flow so dispatch is observable
+  // without creating a real session.
+  (conn as Record<string, unknown>).handleFirstSend = async (
     msg: Record<string, unknown>,
   ) => {
-    calls.push({ which: "sdk", msg });
+    calls.push(msg);
   };
-
   const handle = (
     conn as unknown as { handle: (m: unknown) => Promise<void> }
   ).handle.bind(conn);
 
-  // claude-sdk → sdk path.
-  await handle({
-    type: "harnessSend",
-    id: "s1",
-    harness: "claude-sdk",
-    agentType: "workshop",
-    text: "hi",
-  });
-  assert.equal(calls.length, 1, "sdk harnessSend should dispatch once");
-  assert.equal(
-    calls[0]?.which,
-    "sdk",
-    "claude-sdk should route to the sdk path",
+  for (const [id, harness] of [
+    ["s1", "claude-sdk"],
+    ["p1", "pi"],
+  ])
+    await handle({
+      type: "harnessSend",
+      id,
+      harness,
+      agentType: "assistant",
+      text: "hi",
+    });
+  assert.deepEqual(
+    calls.map((msg) => [msg.id, msg.harness]),
+    [
+      ["s1", "claude-sdk"],
+      ["p1", "pi"],
+    ],
   );
-});
-
-test("dispatch: pi routes to the pi create-on-first-prompt path", async () => {
-  // pi harness → pi create-on-first-prompt path.
-  const { conn } = makeConnection();
-  const calls: Array<{ which: string; msg: Record<string, unknown> }> = [];
-  (conn as Record<string, unknown>).handleClaudeSdkSend = async (
-    msg: Record<string, unknown>,
-  ) => {
-    calls.push({ which: "sdk", msg });
-  };
-  (conn as Record<string, unknown>).handlePiFirstSend = async (
-    msg: Record<string, unknown>,
-  ) => {
-    calls.push({ which: "pi", msg });
-  };
-  const handle = (
-    conn as unknown as { handle: (m: unknown) => Promise<void> }
-  ).handle.bind(conn);
-
-  await handle({
-    type: "harnessSend",
-    id: "p1",
-    harness: "pi",
-    agentType: "assistant",
-    text: "hi",
-  });
-  assert.equal(calls.length, 1, "pi harnessSend should dispatch once");
-  assert.equal(calls[0]?.which, "pi", "pi should route to the pi path");
 });
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

@@ -39,7 +39,7 @@ function makeConnection() {
   conn.view = () => {};
   return {
     conn: conn as unknown as {
-      handlePiFirstSend: (message: Record<string, unknown>) => Promise<void>;
+      handleFirstSend: (message: Record<string, unknown>) => Promise<void>;
     },
     sent,
   };
@@ -67,7 +67,8 @@ test("pi first send validates and persists the selected OpenAI profile", async (
   };
   const { conn } = makeConnection();
 
-  await conn.handlePiFirstSend({
+  await conn.handleFirstSend({
+    harness: "pi",
     id: "profile-pi-session",
     agentType: "assistant",
     text: "hello",
@@ -97,7 +98,8 @@ test("pi first send freezes coding-session skills before its first prompt", asyn
   ).acquireNew = async () => ({ sessionId: "coding-pi-session" });
   const { conn } = makeConnection();
 
-  await conn.handlePiFirstSend({
+  await conn.handleFirstSend({
+    harness: "pi",
     id: "coding-pi-session",
     agentType: "developer",
     text: "inspect this repository",
@@ -126,7 +128,8 @@ test("pi first send carries and persists its starting mode", async () => {
   };
   const { conn } = makeConnection();
 
-  await conn.handlePiFirstSend({
+  await conn.handleFirstSend({
+    harness: "pi",
     id: "plan-pi-session",
     agentType: "assistant",
     text: "inspect this repository",
@@ -159,7 +162,8 @@ test("pi first send rejects a disabled profile before acquisition", async () => 
   };
   const { conn, sent } = makeConnection();
 
-  await conn.handlePiFirstSend({
+  await conn.handleFirstSend({
+    harness: "pi",
     id: "disabled-profile",
     agentType: "assistant",
     text: "hello",
@@ -191,7 +195,8 @@ test("pi first send rejects a profile from the wrong provider before acquisition
   };
   const { conn, sent } = makeConnection();
 
-  await conn.handlePiFirstSend({
+  await conn.handleFirstSend({
+    harness: "pi",
     id: "wrong-profile",
     agentType: "assistant",
     text: "hello",
