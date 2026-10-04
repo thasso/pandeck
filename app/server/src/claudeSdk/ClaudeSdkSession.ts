@@ -704,7 +704,7 @@ export class ClaudeSdkSession implements LiveSession {
    * idle clock never runs.
    */
   holdBy(release: () => boolean): void {
-    this.residency.release = release;
+    this.residency.hold(release);
   }
   /** Set once disposed: nothing may drive this instance again. */
   private disposed = false;

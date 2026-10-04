@@ -344,11 +344,12 @@ export class PiLiveSession implements LiveSession {
     readonly credentialProfileId: string | undefined = undefined,
   ) {
     this.key = session.sessionId;
-    this.residency.release = () => {
+    // Registered by its store (`track`) as soon as it is built.
+    this.residency.hold(() => {
       this.dispose();
       this.onEvict(this.key);
       return true;
-    };
+    });
     this.unsubscribe = session.subscribe((event) => this.onAgentEvent(event));
     this.unsubscribeQuestions = subscribeAgentQuestionChanges((sessionId) => {
       if (sessionId !== this.session.sessionId) return;
@@ -475,12 +476,11 @@ export class PiLiveSession implements LiveSession {
   /**
    * Start the idle clock if nobody views the session, as a viewer's departure
    * would; a run in progress when it runs out restarts it rather than releasing
-   * the session. The store calls this when it registers a session,
-   * so one acquired for a load that was superseded (or a socket that closed)
-   * before it could be viewed is evicted like any other idle session instead
-   * of staying resident for the process lifetime. It calls it again on every
-   * acquisition of a resident session, so a caller about to drive it gets a
-   * full grace.
+   * the session. The store calls this when it registers a session, so one
+   * acquired for a load that was superseded (or a socket that closed) before it
+   * could be viewed is evicted like any other idle session instead of staying
+   * resident for the process lifetime. It calls it again on every acquisition
+   * of a resident session, so a caller about to drive it gets a full grace.
    */
   armIdleIfUnviewed(): void {
     this.residency.arm();

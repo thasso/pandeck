@@ -98,6 +98,7 @@ test("a run outlasting the clock keeps the session, which gets a full grace afte
   // An acquisition mid-run starts the clock, which finds the session busy and
   // releases nothing; the run's end restarts a full grace.
   live.armIdleIfUnviewed();
+  assert.equal(vi.getTimerCount(), 1, "the clock runs mid-run");
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 3);
   assert.equal(live.released, false);
 
@@ -110,8 +111,18 @@ test("a run outlasting the clock keeps the session, which gets a full grace afte
 });
 
 test("a released pi session is refused at the door, and nothing is bound", () => {
-  const { sessionId, live, disposed } = idleSession();
+  const { sessionId, live, evicted, disposed } = idleSession();
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS);
+  assert.equal(disposed(), 1);
+  // Late arms on the released instance — an acquisition that raced the
+  // release, a viewer leaving — never release it a second time, which would
+  // drop a reopened successor from the store.
+  const viewer = { send: () => {} };
+  live.armIdleIfUnviewed();
+  live.addViewer(viewer);
+  live.removeViewer(viewer);
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+  assert.deepEqual(evicted, [sessionId]);
   assert.equal(disposed(), 1);
   assert.throws(
     () => ensureRuntimeSessionWithRuntime(sessionRuntime, live),

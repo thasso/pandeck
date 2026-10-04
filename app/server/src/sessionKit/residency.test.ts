@@ -18,12 +18,12 @@ function viewer(received: ServerMessage[] = []): Viewer {
 function residency(options: { idle?: () => boolean; keep?: () => boolean }) {
   const released: number[] = [];
   const r = new SessionResidency(options.idle ?? (() => true));
-  r.release = () => {
+  r.hold(() => {
     if (options.keep?.()) return false;
     released.push(Date.now());
     r.close();
     return true;
-  };
+  });
   return { r, released };
 }
 

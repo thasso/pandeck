@@ -13,7 +13,7 @@ export class SessionResidency {
    * Release the session from memory, answering whether it went. Unset — a
    * session no store holds — keeps the clock from ever running.
    */
-  release: (() => boolean) | undefined;
+  private release: (() => boolean) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
 
@@ -22,6 +22,11 @@ export class SessionResidency {
    *   the clock runs out; a session busy then gets a full grace again.
    */
   constructor(private readonly isIdle: () => boolean) {}
+
+  /** A store now holds the session; `release` lets it go when idle. */
+  hold(release: () => boolean): void {
+    this.release = release;
+  }
 
   get viewers(): ReadonlySet<Viewer> {
     return this.attached;
