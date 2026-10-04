@@ -911,10 +911,10 @@ persona toolsets.
 - Read/search integrations default to compact, bounded results. Keep verbose
   metadata, bodies, participant/session expansion, and rich render payloads
   opt-in; expose explicit limits with conservative defaults.
-- Helper runs go through `piSdk/oneShot.ts` / `claudeSdk/oneShot.ts`, never the
-  provider SDK directly. They are no-tool by default; a research helper may
-  receive only an explicit, bounded `AgentTool` allowlist. Never expose a
-  persona's complete toolset implicitly.
+- Helper runs go through `runOneShot` (`harnesses/oneShot.ts`), never an engine
+  runner or provider SDK directly. They are no-tool by default; a research
+  helper may receive only an explicit, bounded `AgentTool` allowlist. Never
+  expose a persona's complete toolset implicitly.
 
 ## Working notes
 

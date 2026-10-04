@@ -2378,11 +2378,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   null to decline (disabled/empty) so the caller degrades to low-text + a note.
   Pure `@anthropic-ai`-free (usable from `tools/`).
 - `pdfClaudeFallback.ts` wires that fallback seam to the Claude Agent SDK: it
-  sends the PDF as a Claude document block through `claudeSdk/oneShot.ts`
-  (`documents`), using the `pdfConversion` app settings (`fallbackEnabled`
-  master switch, model/thinkingLevel/timeout). `registerPdfClaudeFallback()` is
-  called once at startup in `index.ts`; credentials are whatever the Claude SDK
-  already uses.
+  sends the PDF as a Claude document block through `runOneShot`
+  (`harnesses/oneShot.ts`, `documents`), using the `pdfConversion` app settings
+  (`fallbackEnabled` master switch, model/thinkingLevel/timeout).
+  `registerPdfClaudeFallback()` is called once at startup in `index.ts`;
+  credentials are whatever the Claude SDK already uses.
 - `sessionAttachments.ts` owns the addressable per-session attachment store
   under `DATA_DIR/attachments/<sessionId>/`: uploaded prompt files and
   server-staged binaries (e.g. `slack_file_read` downloads), tracked in an

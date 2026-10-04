@@ -1,10 +1,8 @@
-import {
-  CLAUDE_SDK_PROVIDER,
-  type DisplayMessage,
-  type PromptRefinementSettings,
+import type {
+  DisplayMessage,
+  PromptRefinementSettings,
 } from "@assistant/shared";
-import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import { runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
 
 const REFINEMENT_SYSTEM_PROMPT = `You refine dictated or rough user prompts before they are sent to an assistant.
@@ -93,32 +91,11 @@ export async function refinePromptText({
 
   const prompt = `${contextBlock}Draft prompt to refine:\n<<<DRAFT\n${draft}\nDRAFT\n>>>\n\nReturn only the refined Markdown prompt.`;
 
-  const credentialProfileId = accountForSlot(settings);
-  // Claude SDK runs in-process with no pi model entry; route to the headless
-  // one-shot SDK runner.
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    const { text: refinedSdk } = await runClaudeSdkOneShot({
-      modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-      credentialProfileId,
-      systemPrompt: REFINEMENT_SYSTEM_PROMPT,
-      prompt,
-      timeoutMs: REFINEMENT_TIMEOUT_MS,
-      timeoutMessage: "Prompt refinement timed out.",
-    });
-    const cleaned = cleanRefinedText(refinedSdk);
-    if (!cleaned)
-      throw new Error("Prompt refinement returned an empty response.");
-    return cleaned;
-  }
-
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model) throw new Error("No model is available for prompt refinement.");
-
-  const { text: refined } = await runPiOneShot({
-    model,
-    credentialProfileId,
+  const { text: refined } = await runOneShot({
+    model: settings,
     thinkingLevel: settings.thinkingLevel,
+    credentialProfileId: accountForSlot(settings),
+    noModelMessage: "No model is available for prompt refinement.",
     systemPrompt: REFINEMENT_SYSTEM_PROMPT,
     prompt,
     timeoutMs: REFINEMENT_TIMEOUT_MS,

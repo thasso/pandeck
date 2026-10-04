@@ -102,9 +102,10 @@ SDK option construction, stream/message mapping, persistence, and tests.
   mapping.
 - `modelSettings.ts` owns the persona-free half: the harness-wide settings
   applied to every run, the curated model list with its alias normalization, and
-  the thinking-level mapping. Helper runs (`oneShot.ts`) are reached from tool
-  modules by contract, so they take this module and never `options.ts`, which
-  reads the persona registry and through it the whole tool catalog.
+  the thinking-level mapping. Helper runs (`oneShot.ts`, through `runOneShot`)
+  are reached from tool modules by contract, so they take this module and never
+  `options.ts`, which reads the persona registry and through it the whole tool
+  catalog.
 - `options.ts` owns persona system-prompt application, query option
   construction, frozen-library local-plugin qualification, and the first-line
   native output environment caps. A non-empty frozen list adds one local plugin
@@ -251,11 +252,13 @@ SDK option construction, stream/message mapping, persistence, and tests.
   loosely-typed raw response into the stable `@assistant/shared/usage`
   `ClaudeUsageSnapshot` shape. Test-seam override mirrors `oneShot.ts`'s pattern
   (`setClaudeSdkUsageSeam`).
-- `oneShot.ts` owns headless helper queries. Native tools and inherited settings
-  are always disabled; callers may optionally mount an explicit app-tool
-  allowlist over the in-process MCP server with bounded model turns. A caller
-  may also pass `documents` (e.g. a base64 PDF); the run then streams one user
-  turn carrying those content blocks plus the text prompt.
+- `oneShot.ts` owns the Claude engine half of headless helper queries, reached
+  only through `runOneShot` (`harnesses/oneShot.ts`). An error result is
+  reported as `failure`, not thrown. Native tools and inherited settings are
+  always disabled; callers may optionally mount an explicit app-tool allowlist
+  over the in-process MCP server with bounded model turns. A caller may also
+  pass `documents` (e.g. a base64 PDF); the run then streams one user turn
+  carrying those content blocks plus the text prompt.
 - Claude's native "auto-memory" is disabled GLOBALLY for every `claude-sdk`
   session — interactive (`options.ts`) and one-shot (`oneShot.ts`) — via the
   single `CLAUDE_SDK_HARNESS_SETTINGS` flag-layer `settings` object

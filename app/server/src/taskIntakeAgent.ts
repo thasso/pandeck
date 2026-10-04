@@ -1,12 +1,8 @@
-import {
-  CLAUDE_SDK_PROVIDER,
-  type TaskIntakeAgentSettings,
-} from "@assistant/shared";
+import type { TaskIntakeAgentSettings } from "@assistant/shared";
 import { assistantIntegrationTools } from "./tools/catalog.ts";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import { runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
 import type { AgentTool } from "./mcp/tool.ts";
-import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
 import { assistantProjectRegistryTools } from "./tools/core/projectRegistryTools.ts";
 import { taskToolsForKind } from "./tools/tasks/taskTools.ts";
 
@@ -108,54 +104,19 @@ export async function curateTaskIntake(
     .join("\n\n");
   const prompt = `Curate this one Task from the supplied source data.\n\n<<<TASK_CONTEXT\n${context}\nTASK_CONTEXT\n>>>`;
 
-  const credentialProfileId = accountForSlot(settings);
-  const text =
-    settings.provider === CLAUDE_SDK_PROVIDER
-      ? (
-          await runClaudeSdkOneShot({
-            modelId: settings.modelId,
-            thinkingLevel: settings.thinkingLevel,
-            credentialProfileId,
-            systemPrompt,
-            prompt,
-            timeoutMs: TIMEOUT_MS,
-            timeoutMessage: "Task intake curation timed out.",
-            tools,
-            maxTurns: 12,
-          })
-        ).text
-      : await runPiCurator(
-          systemPrompt,
-          prompt,
-          settings,
-          tools,
-          credentialProfileId,
-        );
+  const { text } = await runOneShot({
+    model: settings,
+    thinkingLevel: settings.thinkingLevel,
+    credentialProfileId: accountForSlot(settings),
+    noModelMessage: "No model is available for Task intake curation.",
+    systemPrompt,
+    prompt,
+    timeoutMs: TIMEOUT_MS,
+    timeoutMessage: "Task intake curation timed out.",
+    tools,
+    maxTurns: 12,
+  });
   return parseCuratedTask(text);
-}
-
-async function runPiCurator(
-  systemPrompt: string,
-  prompt: string,
-  settings: TaskIntakeAgentSettings,
-  tools: AgentTool[],
-  credentialProfileId: string,
-): Promise<string> {
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model)
-    throw new Error("No model is available for Task intake curation.");
-  return (
-    await runPiOneShot({
-      model,
-      credentialProfileId,
-      thinkingLevel: settings.thinkingLevel,
-      systemPrompt,
-      prompt,
-      timeoutMs: TIMEOUT_MS,
-      timeoutMessage: "Task intake curation timed out.",
-      tools,
-    })
-  ).text;
 }
 
 /** Enabled, read-only app tools wrapped in one shared per-run call budget. */

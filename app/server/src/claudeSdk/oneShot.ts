@@ -87,6 +87,11 @@ export interface RunClaudeSdkOneShotInput {
 export interface ClaudeSdkOneShotResult {
   text: string;
   usage: ClaudeUsage;
+  /**
+   * Set when the run's result was not a success (an `error*` subtype). The
+   * text is whatever the model wrote before that, possibly nothing.
+   */
+  failure?: string;
 }
 
 /** Test seam override; defaults to the real installed SDK. */
@@ -178,8 +183,8 @@ async function* documentPrompt(
 
 /**
  * Run a single Claude SDK helper query and return the assistant text + usage.
- * App tools are absent by default and explicit when supplied. Throws on timeout,
- * abort, or an error result.
+ * App tools are absent by default and explicit when supplied. Throws on timeout
+ * or abort; an error result is reported as {@link ClaudeSdkOneShotResult.failure}.
  */
 export async function runClaudeSdkOneShot(
   input: RunClaudeSdkOneShotInput,
@@ -251,6 +256,5 @@ export async function runClaudeSdkOneShot(
   }
 
   if (timedOut) throw new Error(timeoutMessage);
-  if (resultError && !text.trim()) throw new Error(resultError);
-  return { text, usage };
+  return { text, usage, ...(resultError ? { failure: resultError } : {}) };
 }

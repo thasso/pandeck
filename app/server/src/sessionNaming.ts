@@ -1,13 +1,10 @@
 import {
-  CLAUDE_SDK_PROVIDER,
   UNLABELED_SESSION_TITLE,
   type PromptAttachment,
   type SessionNamingSettings,
 } from "@assistant/shared";
-import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import { NoHelperModelError, runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
-import { sessionStore } from "./db/sessionStore.ts";
 import { deriveTitle } from "./sessions.ts";
 import { taskNamingReference, type TaskNamingReference } from "./taskNaming.ts";
 
@@ -226,85 +223,30 @@ export async function generateSessionTitle(
         "Return the session title only.",
       ].join("\n");
 
-  // Claude SDK runs in-process and has no pi model entry; route it to the
-  // headless one-shot SDK runner. Naming failures are non-fatal (return
-  // undefined so the temporary first-prompt title stays).
-  const credentialProfileId = accountForSlot(settings);
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    try {
-      const startedAt = Date.now();
-      const { text, usage } = await runClaudeSdkOneShot({
-        modelId: settings.modelId,
-        thinkingLevel: settings.thinkingLevel,
-        credentialProfileId,
-        systemPrompt: TITLE_SYSTEM_PROMPT,
-        prompt: userPrompt,
-        timeoutMs: TITLE_TIMEOUT_MS,
-        timeoutMessage: "Session title generation timed out.",
-      });
-      sessionStore.createInternalUsageSession({
+  // A failed run reaches the caller, which keeps a fallback title; an account
+  // with no usable model just yields no generated title.
+  try {
+    const { text } = await runOneShot({
+      model: settings,
+      thinkingLevel: settings.thinkingLevel,
+      credentialProfileId: accountForSlot(settings),
+      noModelMessage: "No model is available for session titles.",
+      systemPrompt: TITLE_SYSTEM_PROMPT,
+      prompt: userPrompt,
+      timeoutMs: TITLE_TIMEOUT_MS,
+      timeoutMessage: "Session title generation timed out.",
+      record: {
         purpose: "title_generation",
         title: "Session title generation",
-        harness: "claude-sdk",
-        provider: "claude",
-        model: settings.modelId,
-        thinkingLevel: settings.thinkingLevel,
         ...(options.parentSessionId !== undefined
           ? { parentSessionId: options.parentSessionId }
           : {}),
-        usage: {
-          ...(usage.inputTokens !== undefined
-            ? { inputTokens: usage.inputTokens }
-            : {}),
-          ...(usage.outputTokens !== undefined
-            ? { outputTokens: usage.outputTokens }
-            : {}),
-          ...(usage.cacheReadTokens !== undefined
-            ? { cacheReadTokens: usage.cacheReadTokens }
-            : {}),
-          ...(usage.cacheWriteTokens !== undefined
-            ? { cacheCreationTokens: usage.cacheWriteTokens }
-            : {}),
-        },
-        startedAt,
-        completedAt: Date.now(),
-      });
-      const title = sanitizeTitle(text);
-      return title
-        ? applyNamingReference(title, attached.reference)
-        : undefined;
-    } catch {
-      return undefined;
-    }
+      },
+    });
+    const title = sanitizeTitle(text);
+    return title ? applyNamingReference(title, attached.reference) : undefined;
+  } catch (err) {
+    if (err instanceof NoHelperModelError) return undefined;
+    throw err;
   }
-
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model) return undefined;
-
-  const startedAt = Date.now();
-  const { text, usage } = await runPiOneShot({
-    model,
-    credentialProfileId,
-    thinkingLevel: settings.thinkingLevel,
-    systemPrompt: TITLE_SYSTEM_PROMPT,
-    prompt: userPrompt,
-    timeoutMs: TITLE_TIMEOUT_MS,
-    timeoutMessage: "Session title generation timed out.",
-  });
-  sessionStore.createInternalUsageSession({
-    purpose: "title_generation",
-    title: "Session title generation",
-    harness: "pi",
-    provider: "pi",
-    model: model.id,
-    thinkingLevel: settings.thinkingLevel,
-    ...(options.parentSessionId !== undefined
-      ? { parentSessionId: options.parentSessionId }
-      : {}),
-    usage,
-    startedAt,
-    completedAt: Date.now(),
-  });
-  const title = sanitizeTitle(text);
-  return title ? applyNamingReference(title, attached.reference) : undefined;
 }

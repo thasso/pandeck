@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
-import {
-  CLAUDE_SDK_PROVIDER,
-  type MeetingMinutesScannerSettings,
-  type ThinkingLevel,
+import type {
+  MeetingMinutesScannerSettings,
+  ThinkingLevel,
 } from "@assistant/shared";
+import type { AgentUsage } from "@assistant/shared/session";
 import { getSettings } from "../../settings.ts";
 import {
-  runPiOneShot,
-  selectPiModelWithFallback,
-} from "../../piSdk/oneShot.ts";
+  NoHelperModelError,
+  OneShotError,
+  runOneShot,
+  type OneShotResult,
+} from "../../harnesses/oneShot.ts";
 import { accountForSlot } from "../../settingsModelSlots.ts";
 import { userDisplayName } from "../../userProfile.ts";
-import { runClaudeSdkOneShot } from "../../claudeSdk/oneShot.ts";
 import { getGoogleDriveFileTextPreview } from "./googleDriveTools.ts";
 import { getGmailThreadTextPreview } from "./googleGmailTools.ts";
 import {
@@ -380,48 +381,6 @@ async function runScannerAgent({
     "SOURCE",
   ].join("\n");
 
-  const credentialProfileId = accountForSlot(settings);
-  // Claude SDK runs in-process with no pi model entry; route to the headless
-  // one-shot SDK runner and map its usage into the scanner's usage shape.
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    const usage: Usage = {
-      provider: settings.provider,
-      modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: 0,
-    };
-    try {
-      const { text: sdkText, usage: sdkUsage } = await runClaudeSdkOneShot({
-        modelId: settings.modelId,
-        thinkingLevel: settings.thinkingLevel,
-        credentialProfileId,
-        systemPrompt: scannerSystemPrompt(userDisplayName()),
-        prompt,
-        timeoutMs: clamp(settings.timeoutMs, 10_000, 240_000),
-        timeoutMessage: "Meeting-minutes scanner timed out.",
-      });
-      usage.input = sdkUsage.inputTokens ?? 0;
-      usage.output = sdkUsage.outputTokens ?? 0;
-      usage.cacheRead = sdkUsage.cacheReadTokens ?? 0;
-      usage.cacheWrite = sdkUsage.cacheWriteTokens ?? 0;
-      usage.totalTokens = sdkUsage.totalTokens ?? usage.input + usage.output;
-      return { result: parseScannerJson(sdkText), usage };
-    } catch (err) {
-      throw new ScannerAgentRunError(
-        err instanceof Error ? err.message : String(err),
-        usage,
-      );
-    }
-  }
-
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model)
-    throw new Error("No model is available for meeting-minutes scanning.");
   const usage: Usage = {
     provider: settings.provider,
     modelId: settings.modelId,
@@ -433,31 +392,46 @@ async function runScannerAgent({
     totalTokens: 0,
     cost: 0,
   };
-  const run = await runPiOneShot({
-    model,
-    credentialProfileId,
-    thinkingLevel: settings.thinkingLevel as ThinkingLevel,
-    systemPrompt: scannerSystemPrompt(userDisplayName()),
-    prompt,
-    timeoutMs: clamp(settings.timeoutMs, 10_000, 240_000),
-    timeoutMessage: "Meeting-minutes scanner timed out.",
-  });
-  usage.input = run.usage.inputTokens ?? 0;
-  usage.output = run.usage.outputTokens ?? 0;
-  usage.cacheRead = run.usage.cacheReadTokens ?? 0;
-  usage.cacheWrite = run.usage.cacheCreationTokens ?? 0;
-  usage.totalTokens =
-    usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-  usage.cost = run.usage.costUSD ?? 0;
-  if (run.stopReason) {
-    const assistantError =
-      run.errorMessage ||
-      `Meeting-minutes scanner stopped with ${run.stopReason}.`;
+  const count = (consumed: AgentUsage) => {
+    usage.input = consumed.inputTokens ?? 0;
+    usage.output = consumed.outputTokens ?? 0;
+    usage.cacheRead = consumed.cacheReadTokens ?? 0;
+    usage.cacheWrite = consumed.cacheCreationTokens ?? 0;
+    usage.totalTokens =
+      usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    usage.cost = consumed.costUSD ?? 0;
+  };
+  const modelFailed = (message: string) =>
+    new ScannerAgentRunError(
+      `Meeting-minutes scanner model failed: ${message.trim()}`,
+      usage,
+    );
+
+  let run: OneShotResult;
+  try {
+    run = await runOneShot({
+      model: settings,
+      thinkingLevel: settings.thinkingLevel as ThinkingLevel,
+      credentialProfileId: accountForSlot(settings),
+      noModelMessage: "No model is available for meeting-minutes scanning.",
+      systemPrompt: scannerSystemPrompt(userDisplayName()),
+      prompt,
+      timeoutMs: clamp(settings.timeoutMs, 10_000, 240_000),
+      timeoutMessage: "Meeting-minutes scanner timed out.",
+    });
+  } catch (err) {
+    if (err instanceof NoHelperModelError) throw err;
+    if (err instanceof OneShotError) {
+      count(err.usage);
+      throw modelFailed(err.message);
+    }
     throw new ScannerAgentRunError(
-      `Meeting-minutes scanner model failed: ${assistantError.trim()}`,
+      err instanceof Error ? err.message : String(err),
       usage,
     );
   }
+  count(run.usage);
+  if (run.failure !== undefined) throw modelFailed(run.failure);
   try {
     return { result: parseScannerJson(run.text), usage };
   } catch (err) {

@@ -41,9 +41,12 @@ Four layers, each depending only on the ones below it:
      runtime, and the mutations (mode, model, thinking level, compact, clear,
      rename). An engine-only feature is an optional method, not an `instanceof`
      check.
-   - `runOneShot()` runs a single prompt on whichever engine a model slot names
-     and returns one result shape: text, `AgentUsage`, and a thrown error on
-     failure. It records the internal usage session itself.
+   - `runOneShot()` (`harnesses/oneShot.ts`) runs a single prompt on whichever
+     engine a model slot names and returns one result shape: text and
+     `AgentUsage`. A run that failed without writing anything throws
+     `OneShotError` (carrying its usage); one that failed after writing text
+     returns it with `failure` set, and the caller decides. It records the
+     internal usage session itself when asked.
    - The models and usage ports list and resolve models per credential profile
      and read subscription usage.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
@@ -94,7 +97,7 @@ mapping.
 | 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | landed |
 | 3    | One persona type instead of `AgentKind`/`AgentType`/`SessionAgentType`        | open   |
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | open   |
-| 5    | `runOneShot()` and its 10 callers                                             | open   |
+| 5    | `runOneShot()` and its 10 callers                                             | landed |
 | 6    | Models and usage ports                                                        | open   |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
 | 8    | Shared session kit                                                            | open   |

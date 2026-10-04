@@ -2,9 +2,9 @@
 
 - Harness specifics arrive only through the typed `ToolCallContext`, whose
   `session` identity is always populated — never duck-type or default it.
-- Helper runs go through `piSdk/oneShot.ts` or `claudeSdk/oneShot.ts` and are
-  no-tool by default: a helper may receive only an explicit bounded allowlist,
-  never a persona's whole toolset.
+- Helper runs go through `runOneShot` (`harnesses/oneShot.ts`) and are no-tool
+  by default: a helper may receive only an explicit bounded allowlist, never a
+  persona's whole toolset.
 - Rich web cards parse a JSON payload out of the tool's TEXT output, so keep
   result text byte-stable unless the web renderer changes with it.
 - Failure THROWS — never encode an error in the result content. Long-running

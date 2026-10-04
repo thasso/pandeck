@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   assert.equal(content[1].type, "text", "text prompt follows the document");
   assert.equal(content[1].text, "Transcribe");
 
-  // 4: a non-success result with no assistant text throws.
+  // 4: a non-success result is reported, not thrown.
   setClaudeSdkOneShotSeam(() =>
     Promise.resolve(
       fakeSeam([
@@ -198,16 +198,17 @@ async function main(): Promise<void> {
       ]),
     ),
   );
-  await assert.rejects(
-    () =>
-      runClaudeSdkOneShot({
-        modelId: "sonnet",
-        thinkingLevel: "off",
-        systemPrompt: "x",
-        prompt: "y",
-      }),
+  const failed = await runClaudeSdkOneShot({
+    modelId: "sonnet",
+    thinkingLevel: "off",
+    systemPrompt: "x",
+    prompt: "y",
+  });
+  assert.equal(failed.text, "");
+  assert.match(
+    failed.failure ?? "",
     /error_during_execution/,
-    "non-success empty result rejects",
+    "non-success result is reported as a failure",
   );
 
   console.log("Claude SDK one-shot test: PASS");

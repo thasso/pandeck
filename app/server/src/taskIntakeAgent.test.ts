@@ -101,7 +101,10 @@ describe("Task Intake Agent output", () => {
   test("sends configured pi model, thinking, and additive guidance behind the fixed contract", async () => {
     const model = { id: "configured-pi-model" };
     vi.mocked(selectPiModelWithFallback).mockReturnValue(model as never);
-    vi.mocked(runPiOneShot).mockResolvedValue({ text: curatedJson } as never);
+    vi.mocked(runPiOneShot).mockResolvedValue({
+      text: curatedJson,
+      usage: {},
+    } as never);
 
     const result = await curateTaskIntake(input, {
       provider: "custom-provider",
@@ -119,9 +122,6 @@ describe("Task Intake Agent output", () => {
     assert.deepEqual(vi.mocked(selectPiModelWithFallback).mock.calls[0]?.[0], {
       provider: "custom-provider",
       modelId: "curator-v1",
-      thinkingLevel: "high",
-      projectId: "personal-assistant",
-      additionalInstructions: "Prefer terse engineering titles.",
     });
     const call = vi.mocked(runPiOneShot).mock.calls[0]?.[0];
     assert.equal(call?.model, model);
@@ -146,6 +146,7 @@ describe("Task Intake Agent output", () => {
   test("sends configured Claude model, thinking, and additive guidance behind the fixed contract", async () => {
     vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
       text: curatedJson,
+      usage: {},
     } as never);
 
     await curateTaskIntake(input, {

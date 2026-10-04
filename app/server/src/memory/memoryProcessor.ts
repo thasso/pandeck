@@ -38,10 +38,9 @@ import {
   type MemoryScopeContext,
 } from "./memoryService.ts";
 import { searchMemory } from "./memorySelector.ts";
-import { runPiOneShot } from "../piSdk/oneShot.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
+import { runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
-import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
 
 /* -------------------------------- bounds --------------------------------- */
 
@@ -78,33 +77,15 @@ export interface MemoryProcessorRunner {
 
 const realRunner: MemoryProcessorRunner = {
   async run(input) {
-    if (input.provider === CLAUDE_SDK_PROVIDER) {
-      const { text } = await runClaudeSdkOneShot({
-        modelId: input.modelId,
-        thinkingLevel: input.thinkingLevel,
-        credentialProfileId: input.credentialProfileId,
-        systemPrompt: input.systemPrompt,
-        prompt: input.prompt,
-        timeoutMs: input.timeoutMs,
-        timeoutMessage: "Memory processor timed out.",
-      });
-      return { text }; // Claude one-shot does not report per-call cost here.
-    }
     // Exact configured model only (no silent fallback); processorConfigStatus
-    // gates the run so this rarely throws.
-    const model = await findModelForProfile(
-      input.credentialProfileId,
-      input.provider,
-      input.modelId,
-    );
-    if (!model)
-      throw new Error(
-        `The configured memory processor model (${input.provider}/${input.modelId}) is not available.`,
-      );
-    const { text, usage } = await runPiOneShot({
-      model,
-      credentialProfileId: input.credentialProfileId,
+    // gates the run so a missing model rarely throws. Claude reports no
+    // per-call cost.
+    const { text, usage } = await runOneShot({
+      model: { provider: input.provider, modelId: input.modelId },
       thinkingLevel: input.thinkingLevel,
+      credentialProfileId: input.credentialProfileId,
+      modelFallback: "none",
+      noModelMessage: `The configured memory processor model (${input.provider}/${input.modelId}) is not available.`,
       systemPrompt: input.systemPrompt,
       prompt: input.prompt,
       timeoutMs: input.timeoutMs,

@@ -188,10 +188,11 @@ and headless one-shot utility runs.
   `modelRuntimeForProfile` caches one runtime per selected OpenAI profile, and
   `options.ts` receives that profile id so its resource loader uses the matching
   private agent directory.
-- `oneShot.ts` owns headless no-tool one-shot runs (naming, commit, refinement,
-  summary, scanner) and shared model fallback selection. Every run is
-  account-scoped: callers pass the `credentialProfileId` their settings slot
-  resolves to (`settingsModelSlots.ts`), and the run uses THAT profile's
+- `oneShot.ts` owns the pi engine half of headless one-shot runs and shared
+  model fallback selection; app code reaches it only through `runOneShot`
+  (`harnesses/oneShot.ts`). Every run is account-scoped: callers pass the
+  `credentialProfileId` their settings slot resolves to
+  (`settingsModelSlots.ts`), and the run uses THAT profile's
   `modelRuntimeForProfile` runtime and `piAgentDir` resource loader — never a
   global `~/.pi` agent dir or the default profile's runtime.
   `selectPiModelWithFallback` resolves against the same profile's registry, so a
