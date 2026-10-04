@@ -756,7 +756,9 @@ class PiSessionStore {
    * never reused on re-acquire (and memory is freed). A runtime session this
    * harness was never bound to — a reader's detached view — is its views' to
    * release, not ours (`SessionRuntime.releaseHarness`). Only the instance the
-   * map still holds goes: a released one never drops a reopened successor.
+   * map still holds goes. A released instance's clock never runs again
+   * (`SessionResidency`), so this is a backstop: should one ever fire late, it
+   * cannot drop a reopened successor.
    */
   private onLiveSessionEvicted(key: string, ls: PiLiveSession): void {
     if (this.live.get(key) !== ls) return;

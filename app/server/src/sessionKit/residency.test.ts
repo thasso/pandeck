@@ -21,7 +21,6 @@ function residency(options: { idle?: () => boolean; keep?: () => boolean }) {
   r.hold(() => {
     if (options.keep?.()) return false;
     released.push(Date.now());
-    r.close();
     return true;
   });
   return { r, released };
@@ -35,6 +34,11 @@ test("an unviewed idle session is released once, after the full grace", () => {
   assert.equal(released.length, 0);
   vi.advanceTimersByTime(1);
   assert.equal(released.length, 1);
+
+  // Released for good, even by a release that does not close it itself.
+  r.arm();
+  r.removeViewer(viewer());
+  assert.equal(vi.getTimerCount(), 0);
 });
 
 test("a closed residency never runs its clock again", () => {

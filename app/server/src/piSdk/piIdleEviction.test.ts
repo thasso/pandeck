@@ -110,6 +110,18 @@ test("a run outlasting the clock keeps the session, which gets a full grace afte
   assert.deepEqual(evicted, [sessionId]);
 });
 
+test("a disposed pi session starts no clock on a late arm", () => {
+  const { live, evicted, disposed } = idleSession();
+  live.dispose();
+  const viewer = { send: () => {} };
+  live.armIdleIfUnviewed();
+  live.addViewer(viewer);
+  live.removeViewer(viewer);
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+  assert.deepEqual(evicted, []);
+  assert.equal(disposed(), 1);
+});
+
 test("a released pi session is refused at the door, and nothing is bound", () => {
   const { sessionId, live, evicted, disposed } = idleSession();
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS);

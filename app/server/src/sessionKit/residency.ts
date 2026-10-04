@@ -63,7 +63,9 @@ export class SessionResidency {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (this.closed || this.attached.size > 0) return;
-      if (!this.isIdle() || !this.release?.()) this.arm();
+      // Released once: whatever the release did, this clock is done.
+      if (this.isIdle() && this.release?.()) this.close();
+      else this.arm();
     }, HARNESS_IDLE_EVICT_MS);
     this.timer.unref?.();
   }
