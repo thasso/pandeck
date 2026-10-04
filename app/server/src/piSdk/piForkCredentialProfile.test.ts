@@ -28,6 +28,7 @@ interface StoreInternals {
     session: { sessionId: string; sessionFile?: string },
     _notices: unknown[],
     _cwd: string,
+    credentialProfileId: string | undefined,
   ) => { sessionId: string; sessionFile?: string };
 }
 
@@ -73,6 +74,8 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
   const originalBroadcastSessions = hub.broadcastSessions;
   let childFile: string | undefined;
   let reopenedProfileId: string | undefined;
+  // The account each registration hands the live session (`PiLiveSession`).
+  const trackedProfiles: Array<string | undefined> = [];
 
   internals.create = async (...args: unknown[]) => {
     const manager = args[1] as FakeSessionManager;
@@ -85,12 +88,15 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     reopenedProfileId = args[5] as string;
     return { session, notices: [] };
   };
-  internals.track = (_kind, session) => ({
-    sessionId: session.sessionId,
-    ...(session.sessionFile !== undefined
-      ? { sessionFile: session.sessionFile }
-      : {}),
-  });
+  internals.track = (_kind, session, _notices, _cwd, credentialProfileId) => {
+    trackedProfiles.push(credentialProfileId);
+    return {
+      sessionId: session.sessionId,
+      ...(session.sessionFile !== undefined
+        ? { sessionFile: session.sessionFile }
+        : {}),
+    };
+  };
   (
     hub as unknown as { broadcastSessions: () => Promise<void> }
   ).broadcastSessions = async () => {};
@@ -106,6 +112,7 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
     const childId = forked.sessionId;
     assert.notEqual(childId, parentId);
     assert.equal(sessionStore.get(childId)?.credentialProfileId, profile.id);
+    assert.deepEqual(trackedProfiles, [profile.id], "the live fork runs on it");
 
     // Simulate the first post-fork flush before process restart. The cold-open
     // path must recover the runtime profile from metadata, not live state.
@@ -144,6 +151,17 @@ test("a pi fork persists its inherited profile and reopens through that runtime"
       profile.id,
       "cold reopen resolves the persisted child binding",
     );
+    assert.deepEqual(
+      trackedProfiles,
+      [profile.id, profile.id],
+      "the reopened live session runs on it",
+    );
+
+    trackedProfiles.length = 0;
+    await piStore.acquireNew("assistant", undefined, undefined, {
+      credentialProfileId: profile.id,
+    });
+    assert.deepEqual(trackedProfiles, [profile.id], "a new session runs on it");
   } finally {
     internals.create = originalCreate;
     internals.track = originalTrack;

@@ -90,13 +90,17 @@ import {
   refreshModels,
 } from "./piSdk/models.ts";
 import { hub } from "./hub.ts";
-import { isLiveSession, type HarnessDriver, type Viewer } from "./harness.ts";
+import {
+  isLiveSession,
+  type HarnessDriver,
+  type LiveSession,
+  type Viewer,
+} from "./harness.ts";
 import { randomUUID } from "node:crypto";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
-import { ViewSession } from "./viewSession.ts";
 import {
   attachRuntimeView as attachRuntimeViewToTransport,
   type RuntimeBackedView,
@@ -105,7 +109,6 @@ import {
   ensureRuntimeSessionWithRuntime as ensureRuntimeSession,
   promptRuntimeSession,
   promptRuntimeSessionAndCaptureText,
-  type RuntimePromptDriver,
 } from "./session/runtimePrompt.ts";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
@@ -2930,7 +2933,7 @@ export class Connection implements Viewer {
       });
       if (!prompt) throw new Error("Those comments are no longer available.");
 
-      let driver: (RuntimePromptDriver & HarnessDriver) | undefined;
+      let driver: LiveSession | undefined;
       if (target.kind === "existing") {
         // The socket is untrusted: only sessions actually linked to THIS
         // worktree may receive its comments (the review tools resolve the
@@ -4387,7 +4390,7 @@ export class Connection implements Viewer {
       // transcript (`viewSession.ts`), which is what embedding the day chat did
       // on every calendar navigation.
       const driving = Boolean(opts.text?.trim() || opts.scan || opts.logTime);
-      let driver: (RuntimePromptDriver & HarnessDriver) | undefined;
+      let driver: LiveSession | undefined;
       let view: HarnessDriver | undefined;
       if (boundId) {
         if (!driving) view = hub.viewById(boundId);
@@ -4494,7 +4497,7 @@ export class Connection implements Viewer {
    */
   private async runDayScanWithProgress(
     date: string,
-    driver: (RuntimePromptDriver & HarnessDriver) | null,
+    driver: LiveSession | null,
   ): Promise<void> {
     beginDayScanProgress(date, driver?.sessionId ?? null);
     const store = new KnowledgeBaseStore();
@@ -4576,8 +4579,8 @@ export class Connection implements Viewer {
 
   /** Narrow a resolved driver to one that can be prompted through the runtime. */
   private asRuntimePromptDriver(
-    view: unknown,
-  ): (RuntimePromptDriver & HarnessDriver) | undefined {
+    view: HarnessDriver | undefined,
+  ): LiveSession | undefined {
     return isLiveSession(view) ? view : undefined;
   }
 
@@ -5727,7 +5730,7 @@ export class Connection implements Viewer {
 
   /**
    * The viewed session's DRIVER, opening its harness if it is only being
-   * rendered from storage ({@link ViewSession}).
+   * rendered from storage (`ViewSession`, `viewSession.ts`).
    *
    * This is the door every command that drives the viewed session goes through
    * — prompt, abort, model/thinking/mode change, fork, host slash command.
@@ -5739,14 +5742,11 @@ export class Connection implements Viewer {
    * its backing could not be reopened. Callers must treat that as a refusal
    * rather than prompting something else.
    */
-  private async ensureViewingDriver(): Promise<
-    (RuntimePromptDriver & HarnessDriver) | undefined
-  > {
+  private async ensureViewingDriver(): Promise<LiveSession | undefined> {
     const viewing = this.viewing;
     if (!viewing) return undefined;
     const ready = this.asRuntimePromptDriver(viewing);
     if (ready) return ready;
-    if (!(viewing instanceof ViewSession)) return undefined;
     return this.openHarnessFor(viewing.sessionId);
   }
 
@@ -5764,7 +5764,7 @@ export class Connection implements Viewer {
    */
   private async openHarnessFor(
     sessionId: string,
-  ): Promise<(RuntimePromptDriver & HarnessDriver) | undefined> {
+  ): Promise<LiveSession | undefined> {
     const live = await hub.acquireById(sessionId);
     const driver = live ? this.asRuntimePromptDriver(live) : undefined;
     // The RUNTIME session has to take the harness too, not just this view: the
@@ -5802,11 +5802,7 @@ export class Connection implements Viewer {
     const viewing = this.viewing;
     if (!viewing) return;
     const sessionId = viewing.sessionId;
-    if (
-      viewing instanceof ViewSession &&
-      !(await this.openHarnessFor(sessionId))
-    )
-      return;
+    if (!viewing.live && !(await this.openHarnessFor(sessionId))) return;
     const driver = this.viewing;
     if (!driver || driver.sessionId !== sessionId) return;
     await act(driver, this.runtimeView);
@@ -5834,7 +5830,7 @@ export class Connection implements Viewer {
    */
   private upgradeViewingDriver(driver: HarnessDriver): void {
     const viewing = this.viewing;
-    if (!(viewing instanceof ViewSession)) return;
+    if (!viewing || viewing.live) return;
     if (viewing.sessionId !== driver.sessionId || this.disposed) return;
     if (this.engineStateViewer)
       this.engineStateViewer.live.removeViewer(this.engineStateViewer.viewer);
@@ -5872,14 +5868,6 @@ export class Connection implements Viewer {
     this.detachRuntimeView();
     this.viewing?.removeViewer(this);
     const runtimeView = this.attachRuntimeView(live, timelineCache);
-    if (!runtimeView) {
-      this.viewing = undefined;
-      this.send({
-        type: "error",
-        message: `Unsupported session harness: ${String(live.harness)}`,
-      });
-      return;
-    }
     this.viewing = live;
     this.runtimeView = runtimeView;
     // Re-emit any approval cards for this session AFTER the atomic snapshot
@@ -5938,18 +5926,18 @@ export class Connection implements Viewer {
   }
 
   /**
-   * Build a runtime-backed view, or undefined for an unsupported harness.
+   * Build a runtime-backed view.
    *
-   * A {@link ViewSession} attaches with NO driver: the transport renders the
-   * durable log through the runtime's detached adapter, and the first thing
-   * that needs the provider upgrades the view ({@link ensureViewingDriver}).
+   * A storage-backed view (`viewSession.ts`) attaches with NO driver: the
+   * transport renders the durable log through the runtime's detached adapter,
+   * and the first thing that needs the provider upgrades the view
+   * ({@link ensureViewingDriver}).
    */
   private attachRuntimeView(
     live: HarnessDriver,
     timelineCache?: TimelineCacheDescriptor,
-  ): RuntimeBackedView | undefined {
+  ): RuntimeBackedView {
     const driver = this.asRuntimePromptDriver(live);
-    if (!driver && !(live instanceof ViewSession)) return undefined;
     const viewer = { send: (m: ServerMessage) => this.send(m) };
     this.attachEngineStateViewer(live);
     // Viewed-chat running state is runtime-owned and travels on the snapshot/event

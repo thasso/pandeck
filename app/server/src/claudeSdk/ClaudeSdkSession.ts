@@ -122,11 +122,8 @@ import {
   relinkAgentQuestionToolCallId,
   subscribeAgentQuestionChanges,
 } from "../tools/core/questionTool.ts";
-import {
-  HARNESS_IDLE_EVICT_MS,
-  type LiveSession,
-  type Viewer,
-} from "../harness.ts";
+import type { LiveSession, Viewer } from "../harness.ts";
+import { SessionResidency } from "../sessionKit/residency.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -510,7 +507,8 @@ export class ClaudeSdkSession implements LiveSession {
   /** The in-process SDK harness. */
   readonly harness: Harness = "claude-sdk";
   readonly key: string;
-  readonly viewers = new Set<Viewer>();
+  /** Viewers and the idle clock, which runs only once a store holds the session. */
+  private readonly residency = new SessionResidency(() => this.isQuiescent);
   private readonly adapterEvents = new NativeAdapterEventSource();
 
   /**
@@ -701,11 +699,13 @@ export class ClaudeSdkSession implements LiveSession {
   /** Ask the store to persist this session's record. */
   onPersist: () => void = () => {};
   /**
-   * Ask the store to release this idle session from memory; answers whether it
-   * did. Unset (a session no store holds) means the idle clock never runs.
+   * The store now holds this session: `release` lets it go from memory when
+   * idle, answering whether it did. Until then (a session no store holds) the
+   * idle clock never runs.
    */
-  onEvict: (() => boolean) | undefined;
-  private idleTimer: ReturnType<typeof setTimeout> | undefined;
+  holdBy(release: () => boolean): void {
+    this.residency.hold(release);
+  }
   /** Set once disposed: nothing may drive this instance again. */
   private disposed = false;
   /** Notify the hub that the working tree may have changed (→ refresh workspace info). */
@@ -800,14 +800,16 @@ export class ClaudeSdkSession implements LiveSession {
 
   /* --------------------------------- views --------------------------------- */
 
+  get viewers(): ReadonlySet<Viewer> {
+    return this.residency.viewers;
+  }
+
   addViewer(v: Viewer): void {
-    this.cancelIdle();
-    this.viewers.add(v);
+    this.residency.addViewer(v);
   }
 
   removeViewer(v: Viewer): void {
-    this.viewers.delete(v);
-    this.armIdle();
+    this.residency.removeViewer(v);
   }
 
   /* ------------------------------ residency ------------------------------- */
@@ -819,29 +821,7 @@ export class ClaudeSdkSession implements LiveSession {
    * grace before it can be released under them.
    */
   armIdleIfUnviewed(): void {
-    this.armIdle();
-  }
-
-  /**
-   * Release this session after {@link HARNESS_IDLE_EVICT_MS} unviewed, the same
-   * clock the pi harness runs. A session found busy then is not idle: the clock
-   * starts again rather than stopping, so work that ends without a turn
-   * boundary (a retained process exiting, a naming agent) is still collected.
-   */
-  private armIdle(): void {
-    this.cancelIdle();
-    if (!this.onEvict || this.disposed || this.viewers.size > 0) return;
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = undefined;
-      if (this.disposed || this.viewers.size > 0) return;
-      if (!this.isQuiescent || !this.onEvict?.()) this.armIdle();
-    }, HARNESS_IDLE_EVICT_MS);
-    this.idleTimer.unref?.();
-  }
-
-  private cancelIdle(): void {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = undefined;
+    this.residency.arm();
   }
 
   /**
@@ -879,7 +859,7 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   private broadcast(message: Parameters<Viewer["send"]>[0]): void {
-    for (const v of this.viewers) v.send(message);
+    this.residency.broadcast(message);
   }
 
   subscribeAdapterEvents(listener: AdapterEventListener): () => void {
@@ -2715,7 +2695,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.providerTurnRelease?.();
     this.providerTurnRelease = undefined;
     this.providerTurnEpochKey = undefined;
-    this.armIdle();
+    this.residency.arm();
     if (this.retainedEpochKey) {
       if (
         claudeBackgroundWorkBackend.stopAllWasRequested(
@@ -3256,7 +3236,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.broadcastState();
     this.onPersist();
     this.onChange();
-    this.armIdle();
+    this.residency.arm();
     if (this.retainedEpochKey)
       this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
   }
@@ -3283,7 +3263,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.broadcastState();
     this.onPersist();
     this.onChange();
-    this.armIdle();
+    this.residency.arm();
     if (this.retainedEpochKey)
       this.scheduleQuietCloseIfEmpty(this.retainedEpochKey);
   }
@@ -3982,7 +3962,7 @@ export class ClaudeSdkSession implements LiveSession {
 
   dispose(): void {
     this.disposed = true;
-    this.cancelIdle();
+    this.residency.close();
     this.abortController?.abort();
     if (this.retainedEpochKey && !backgroundWorkSupervisor.isDraining)
       backgroundWorkSupervisor.hostLost(
@@ -4002,7 +3982,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.unsubscribeApprovals();
     this.unsubscribeTaskChoices();
     this.adapterEvents.clear();
-    this.viewers.clear();
+    this.residency.clearViewers();
   }
 }
 

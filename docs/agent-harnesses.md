@@ -64,9 +64,11 @@ Four layers, each depending only on the ones below it:
      registry.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
-   shared session kit (viewer set, idle eviction, synthetic host-command turns)
-   instead of carrying a copy; the live display-block helpers already live in
-   `session/runtime/liveBlocks.ts`.
+   shared session kit (`sessionKit/`) instead of carrying a copy:
+   `SessionResidency` owns the viewer set and the idle clock, and the engine
+   says only when it is idle and how its store releases it. Synthetic
+   host-command turns join the kit next; the live display-block helpers already
+   live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
    Two pieces of the folder are still migration work: the adapter bridge
@@ -116,7 +118,8 @@ table when a later step needs them.
 | 5    | `runOneShot()` and its 10 callers                                             | landed |
 | 6    | Models and usage ports                                                        | landed |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | landed |
-| 8    | Shared session kit                                                            | open   |
+| 8a   | Shared session kit: viewers and idle clock (`SessionResidency`)               | landed |
+| 8b   | Shared session kit: synthetic host-command turns                              | open   |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |

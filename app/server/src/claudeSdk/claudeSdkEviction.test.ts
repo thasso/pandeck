@@ -80,6 +80,28 @@ function viewedTimeline(session: ClaudeSdkSession): unknown {
   return snapshot.snapshot.timeline;
 }
 
+/**
+ * Arm a released session late — an acquisition that raced the release, a
+ * viewer leaving — and count how often its clock then asks the store to
+ * release it over two graces.
+ */
+function lateReleaseAttempts(session: ClaudeSdkSession): number {
+  const evictIdle = vi.spyOn(
+    claudeSdkStore as unknown as { evictIdle: () => boolean },
+    "evictIdle",
+  );
+  try {
+    const viewer = { send: () => {} };
+    session.armIdleIfUnviewed();
+    session.addViewer(viewer);
+    session.removeViewer(viewer);
+    vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+    return evictIdle.mock.calls.length;
+  } finally {
+    evictIdle.mockRestore();
+  }
+}
+
 function resident(id: string): boolean {
   return Boolean(claudeSdkStore.get(id) && sessionRuntime.get(id));
 }
@@ -222,6 +244,11 @@ describe("idle Claude SDK sessions", () => {
     vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS);
     assert.equal(session.released, true);
 
+    // Late arms on the released instance — an acquisition that raced the
+    // release, a viewer leaving — start no clock: one would re-arm forever
+    // and keep the disposed session in memory.
+    assert.equal(lateReleaseAttempts(session), 0);
+
     assert.throws(
       () => ensureRuntimeSessionWithRuntime(sessionRuntime, session),
       /released from memory/,
@@ -231,5 +258,12 @@ describe("idle Claude SDK sessions", () => {
       session.createRuntimeAdapter().prompt("late", {}),
       /released from memory/,
     );
+  });
+
+  test("once removed, start no clock on a late arm", () => {
+    const { id, session } = acquire();
+    claudeSdkStore.remove(id);
+    assert.equal(session.released, true);
+    assert.equal(lateReleaseAttempts(session), 0);
   });
 });

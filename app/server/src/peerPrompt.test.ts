@@ -1980,7 +1980,7 @@ describe("interruption notice to the sender", () => {
     setInterruptionNoticeRetryDelayForTests(5);
     try {
       // The ONLY drain production performs. The runtime's idle hook fires inside
-      // `LiveSession.prompt`'s finally, while this drain still holds its lock, so
+      // `LiveRuntimeSession.prompt`'s finally, while this drain still holds its lock, so
       // it coalesces and starts nothing; after this returns the sender is idle
       // with an empty queue and no event left to ride.
       await drainRecipient(sender);

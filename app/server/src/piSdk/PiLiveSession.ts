@@ -71,11 +71,8 @@ import { sessionStore } from "../db/sessionStore.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
-import {
-  HARNESS_IDLE_EVICT_MS,
-  type LiveSession,
-  type Viewer,
-} from "../harness.ts";
+import type { LiveSession, Viewer } from "../harness.ts";
+import { SessionResidency } from "../sessionKit/residency.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -275,7 +272,10 @@ export interface PiSessionHost {
 export class PiLiveSession implements LiveSession {
   readonly live = true;
   readonly key: string;
-  readonly viewers = new Set<Viewer>();
+  /** Viewers and the idle clock; a prompt admitted but not yet running is activity too. */
+  private readonly residency = new SessionResidency(
+    () => !this.running && !sessionRuntime.isBusy(this.key),
+  );
   private unsubscribe: () => void;
   private unsubscribeQuestions: () => void;
   private unsubscribeApprovals: () => void = () => {};
@@ -309,7 +309,6 @@ export class PiLiveSession implements LiveSession {
    */
   private turnStartTotals: CumulativeUsageTotals | undefined;
   private idCounter = 0;
-  private idleTimer: ReturnType<typeof setTimeout> | undefined;
   /** Set once disposed: nothing may drive this instance again. */
   private disposed = false;
   private lastContextBroadcastAt = 0;
@@ -345,6 +344,12 @@ export class PiLiveSession implements LiveSession {
     readonly credentialProfileId: string | undefined = undefined,
   ) {
     this.key = session.sessionId;
+    // Registered by its store (`track`) as soon as it is built.
+    this.residency.hold(() => {
+      this.dispose();
+      this.onEvict(this.key);
+      return true;
+    });
     this.unsubscribe = session.subscribe((event) => this.onAgentEvent(event));
     this.unsubscribeQuestions = subscribeAgentQuestionChanges((sessionId) => {
       if (sessionId !== this.session.sessionId) return;
@@ -445,9 +450,12 @@ export class PiLiveSession implements LiveSession {
 
   /* --------------------------------- views --------------------------------- */
 
+  get viewers(): ReadonlySet<Viewer> {
+    return this.residency.viewers;
+  }
+
   addViewer(v: Viewer): void {
-    this.cancelIdle();
-    this.viewers.add(v);
+    this.residency.addViewer(v);
     if (this.initialNotices.length) {
       // Let the caller send ready/state/history first, then show creation diagnostics.
       setTimeout(() => this.flushInitialNotices(), 0);
@@ -462,21 +470,20 @@ export class PiLiveSession implements LiveSession {
   }
 
   removeViewer(v: Viewer): void {
-    this.viewers.delete(v);
-    this.armIdle();
+    this.residency.removeViewer(v);
   }
 
   /**
-   * Put a session nobody views and nothing runs under the same idle clock a
-   * viewer's departure would: the store calls this when it registers a session,
-   * so one acquired for a load that was superseded (or a socket that closed)
-   * before it could be viewed is evicted like any other idle session instead
-   * of staying resident for the process lifetime. It calls it again on every
-   * acquisition of a resident session, so a caller about to drive it gets a
-   * full grace.
+   * Start the idle clock if nobody views the session, as a viewer's departure
+   * would; a run in progress when it runs out restarts it rather than releasing
+   * the session. The store calls this when it registers a session, so one
+   * acquired for a load that was superseded (or a socket that closed) before it
+   * could be viewed is evicted like any other idle session instead of staying
+   * resident for the process lifetime. It calls it again on every acquisition
+   * of a resident session, so a caller about to drive it gets a full grace.
    */
   armIdleIfUnviewed(): void {
-    this.armIdle();
+    this.residency.arm();
   }
 
   /** Disposed — idled out or removed — so the prompt door refuses it. */
@@ -490,7 +497,7 @@ export class PiLiveSession implements LiveSession {
   }
 
   broadcast(message: ServerMessage): void {
-    for (const v of this.viewers) v.send(message);
+    this.residency.broadcast(message);
   }
 
   subscribeAdapterEvents(listener: AdapterEventListener): () => void {
@@ -575,7 +582,7 @@ export class PiLiveSession implements LiveSession {
     const sessionId = this.session.sessionId;
     switch (event.type) {
       case "agent_start": {
-        this.cancelIdle();
+        this.residency.cancel();
         this.running = true;
         const continuingRun =
           Boolean(this.currentAssistantId) || this.awaitingRetryContinuation;
@@ -921,7 +928,7 @@ export class PiLiveSession implements LiveSession {
         if (this.viewers.size > 0) {
           sessionStore.markRead(this.key, this.updatedAt);
         }
-        this.armIdle();
+        this.residency.arm();
         void this.host.broadcastSessions();
         // A deferred reload waits for the last run to finish — check now.
         this.host.checkPendingReload();
@@ -960,7 +967,7 @@ export class PiLiveSession implements LiveSession {
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
 
-    this.cancelIdle();
+    this.residency.cancel();
     this.running = true;
     this.host.noteRunStarted();
     const assistantId = `a${++this.idCounter}`;
@@ -1207,7 +1214,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastState();
     this.broadcastContextInfo(true);
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
-    this.armIdle();
+    this.residency.arm();
     void this.host.broadcastSessions();
     this.host.checkPendingReload();
   }
@@ -1223,7 +1230,7 @@ export class PiLiveSession implements LiveSession {
         "Cannot accept a commit dry run while the agent is streaming.",
       );
     if (this.host.isReloadQueued()) throw new Error(RELOAD_QUEUED_MESSAGE);
-    this.cancelIdle();
+    this.residency.cancel();
     this.running = true;
     this.host.noteRunStarted();
     this.currentAssistantId = `a${++this.idCounter}`;
@@ -1338,7 +1345,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastState();
     this.broadcastContextInfo(true);
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
-    this.armIdle();
+    this.residency.arm();
     void this.host.broadcastSessions();
     this.host.checkPendingReload();
   }
@@ -1484,7 +1491,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastContextInfo(true);
     const wasRunning = this.running || this.session.isStreaming;
     if (!wasRunning) {
-      this.cancelIdle();
+      this.residency.cancel();
       this.running = true;
       this.host.noteRunStarted();
     }
@@ -1553,7 +1560,7 @@ export class PiLiveSession implements LiveSession {
     this.broadcastState();
     this.broadcastContextInfo(true);
     if (this.viewers.size > 0) sessionStore.markRead(this.key, this.updatedAt);
-    this.armIdle();
+    this.residency.arm();
     void this.host.broadcastSessions();
     this.host.checkPendingReload();
   }
@@ -2077,33 +2084,9 @@ export class PiLiveSession implements LiveSession {
 
   /* ------------------------------- lifecycle ------------------------------- */
 
-  private armIdle(): void {
-    this.cancelIdle();
-    if (this.disposed || this.viewers.size > 0 || this.running) return;
-    this.idleTimer = setTimeout(() => {
-      this.idleTimer = undefined;
-      if (this.viewers.size > 0 || this.running) return;
-      // A prompt admitted at the door but not yet running is activity too, and
-      // nothing re-arms the clock if it fails before it runs: look again later.
-      if (sessionRuntime.isBusy(this.key)) {
-        this.armIdle();
-        return;
-      }
-      this.dispose();
-      this.onEvict(this.key);
-    }, HARNESS_IDLE_EVICT_MS);
-  }
-
-  private cancelIdle(): void {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = undefined;
-    }
-  }
-
   dispose(): void {
     this.disposed = true;
-    this.cancelIdle();
+    this.residency.close();
     this.unsubscribe();
     this.unsubscribeQuestions();
     this.unsubscribeApprovals();

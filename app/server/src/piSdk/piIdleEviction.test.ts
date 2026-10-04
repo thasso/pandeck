@@ -1,8 +1,9 @@
 /**
  * The pi harness's idle release waits out a prompt already on its way in: a
  * prompt admitted at the door (awaiting its skills, memory and so on before it
- * runs) keeps the session resident, an acquisition restarts the clock, and an
- * instance released anyway is refused at the door rather than bound again.
+ * runs) keeps the session resident, as does a run, an acquisition restarts the
+ * clock, and an instance released anyway is refused at the door rather than
+ * bound again.
  *
  * Run through Vitest: `pnpm --filter @assistant/server test src/piSdk/piIdleEviction.test.ts`
  */
@@ -91,9 +92,49 @@ test("an acquisition restarts the clock", () => {
   assert.equal(live.released, true);
 });
 
+test("a run outlasting the clock keeps the session, which gets a full grace after it", () => {
+  const { sessionId, live, evicted } = idleSession();
+  const { toolId } = live.beginSyntheticTool("/commit", {});
+  // An acquisition mid-run starts the clock, which finds the session busy and
+  // releases nothing; the run's end restarts a full grace.
+  live.armIdleIfUnviewed();
+  assert.equal(vi.getTimerCount(), 1, "the clock runs mid-run");
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 3);
+  assert.equal(live.released, false);
+
+  live.finishSyntheticTool(toolId, "done");
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS - 1);
+  assert.equal(live.released, false);
+  vi.advanceTimersByTime(1);
+  assert.equal(live.released, true);
+  assert.deepEqual(evicted, [sessionId]);
+});
+
+test("a disposed pi session starts no clock on a late arm", () => {
+  const { live, evicted, disposed } = idleSession();
+  live.dispose();
+  const viewer = { send: () => {} };
+  live.armIdleIfUnviewed();
+  live.addViewer(viewer);
+  live.removeViewer(viewer);
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+  assert.deepEqual(evicted, []);
+  assert.equal(disposed(), 1);
+});
+
 test("a released pi session is refused at the door, and nothing is bound", () => {
-  const { sessionId, live, disposed } = idleSession();
+  const { sessionId, live, evicted, disposed } = idleSession();
   vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS);
+  assert.equal(disposed(), 1);
+  // Late arms on the released instance — an acquisition that raced the
+  // release, a viewer leaving — never release it a second time, which would
+  // drop a reopened successor from the store.
+  const viewer = { send: () => {} };
+  live.armIdleIfUnviewed();
+  live.addViewer(viewer);
+  live.removeViewer(viewer);
+  vi.advanceTimersByTime(HARNESS_IDLE_EVICT_MS * 2);
+  assert.deepEqual(evicted, [sessionId]);
   assert.equal(disposed(), 1);
   assert.throws(
     () => ensureRuntimeSessionWithRuntime(sessionRuntime, live),

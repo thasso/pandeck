@@ -1,8 +1,8 @@
 /**
  * Harness-neutral driver contracts: the read/view surface a connection needs
- * from any backing engine ("harness"), plus the promptable extension for
- * runtime-controlled sessions and the {@link LiveSession} every resident
- * session implements. Leaf module — must not import `hub.ts`.
+ * from any backing engine ("harness"), plus {@link LiveSession}, the
+ * promptable surface every resident session implements. Leaf module — must not
+ * import `hub.ts`.
  */
 import type {
   AgentType,

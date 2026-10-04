@@ -157,6 +157,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   session model display), `curatedModels.ts` (the Claude curated options,
   loading no engine SDK) and `usage.ts` (per-account usage, OpenAI reset-credit
   redeem). `harnessBoundary.test.ts` pins what still bypasses it.
+- `sessionKit/` holds what both engine session classes compose instead of
+  copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock
+  that lets the owning store release an unviewed, idle session).
 - `agentTypes.ts` owns the persona registry (`AGENT_TYPES`): system prompts and
   the per-persona `AgentTool` toolsets, independent of harness. Toolset
   COMPOSITION lives in the tool catalog (`tools/catalog.ts`): persona toolsets
@@ -2508,7 +2511,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   than losing the only warning. A REFUSED notice schedules its own bounded
   backoff retry (`NOTICE_RETRY_MAX_ATTEMPTS`, cleared on delivery and by
   `stopPeerPromptDelivery`) because nothing else comes back for it: the runtime
-  fires its idle hook from inside `LiveSession.prompt`'s `finally`, while
+  fires its idle hook from inside `LiveRuntimeSession.prompt`'s `finally`, while
   `drainLocks` still holds that session, so the hook's own `drainRecipient`
   coalesces onto the failing drain and starts nothing. A resume/acquire failure
   schedules it too (`noteDrainTargetUnavailable`), because a notice has no

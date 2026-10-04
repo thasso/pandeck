@@ -160,17 +160,18 @@ exactly one owner.**
   stores release an idle harness after `HARNESS_IDLE_EVICT_MS` (5 min) unviewed,
   and release its runtime session with it through `releaseHarness` — which
   leaves a detached one alone, because that one is a reader's. `disposeSession`
-  is for deletes.
+  is for deletes. The clock is shared (`sessionKit/residency.ts`): a session
+  found busy when it runs out starts a new one rather than stopping, and a
+  released session never runs it again.
 - A Claude SDK session is released only when nothing lives only in it: no
   viewer, no turn, no Claude process (a retained one hosts background work), no
   compaction, Stop, provider turn, queued steer, owed follow-up or naming agent,
   no live browser runtime (disposing would close it), no runtime run and no
   prompt admitted at `runtimePrompt.ts` — and only after a final persist
   SUCCEEDED, so a session whose record could not be written stays resident
-  rather than lose what only memory holds. A session found busy when its clock
-  runs out starts a new one rather than stopping. (The pi harness goes when
-  unviewed, not running and with no prompt admitted, closing a browser runtime
-  with it, as it always has.)
+  rather than lose what only memory holds. (The pi harness goes when unviewed,
+  not running and with no prompt admitted, closing a browser runtime with it, as
+  it always has.)
 - A session read without being brought live — fork anchors, a fork's copy,
   edit-and-retry's prompt text, a jump target — has its log opened for the read
   and dropped again afterwards unless a runtime session owns it

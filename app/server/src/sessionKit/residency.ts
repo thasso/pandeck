@@ -1,0 +1,88 @@
+/**
+ * What keeps a resident harness session in memory: the viewers attached to it,
+ * and the idle clock that releases it once nobody views it and nothing runs.
+ * Both engine session classes compose one (`docs/agent-harnesses.md`); the
+ * release itself stays with the store that holds the session.
+ */
+import type { ServerMessage } from "@assistant/shared";
+import { HARNESS_IDLE_EVICT_MS, type Viewer } from "../harness.ts";
+
+export class SessionResidency {
+  private readonly attached = new Set<Viewer>();
+  /**
+   * Release the session from memory, answering whether it went. Unset — a
+   * session no store holds — keeps the clock from ever running.
+   */
+  private release: (() => boolean) | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
+
+  /**
+   * @param isIdle Nothing in flight that only this session holds. Asked when
+   *   the clock runs out; a session busy then gets a full grace again.
+   */
+  constructor(private readonly isIdle: () => boolean) {}
+
+  /** A store now holds the session; `release` lets it go when idle. */
+  hold(release: () => boolean): void {
+    this.release = release;
+  }
+
+  get viewers(): ReadonlySet<Viewer> {
+    return this.attached;
+  }
+
+  addViewer(viewer: Viewer): void {
+    this.cancel();
+    this.attached.add(viewer);
+  }
+
+  removeViewer(viewer: Viewer): void {
+    this.attached.delete(viewer);
+    this.arm();
+  }
+
+  /** Forget every viewer, without restarting the clock. */
+  clearViewers(): void {
+    this.attached.clear();
+  }
+
+  broadcast(message: ServerMessage): void {
+    for (const viewer of this.attached) viewer.send(message);
+  }
+
+  /**
+   * Start the clock if nobody views the session, restarting one that runs. A
+   * session found busy, or one its store keeps, starts the clock again rather
+   * than stopping it, so work that ends without a turn boundary is still
+   * collected.
+   */
+  arm(): void {
+    this.cancel();
+    if (!this.release || this.closed || this.attached.size > 0) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      if (this.closed || this.attached.size > 0) return;
+      // Released once: whatever the release did, this clock is done.
+      if (this.isIdle() && this.release?.()) this.close();
+      else this.arm();
+    }, HARNESS_IDLE_EVICT_MS);
+    this.timer.unref?.();
+  }
+
+  /** Stop the clock: something runs, or someone views the session. */
+  cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  /**
+   * The session is disposed: the clock never runs again. A late `arm` (a viewer
+   * leaving a released session) must not release it a second time, which would
+   * let its store drop a reopened successor held under the same key.
+   */
+  close(): void {
+    this.closed = true;
+    this.cancel();
+  }
+}

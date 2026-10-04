@@ -736,7 +736,7 @@ class PiSessionStore {
       kind,
       session,
       this.requireHost(),
-      (key) => this.onLiveSessionEvicted(key),
+      (key) => this.onLiveSessionEvicted(key, ls),
       initialNotices,
       cwd,
       this.sessionModes.get(session.sessionId) ?? "build",
@@ -755,9 +755,13 @@ class PiSessionStore {
    * session bound to it, so a stale adapter wrapping a now-disposed pi session is
    * never reused on re-acquire (and memory is freed). A runtime session this
    * harness was never bound to — a reader's detached view — is its views' to
-   * release, not ours (`SessionRuntime.releaseHarness`).
+   * release, not ours (`SessionRuntime.releaseHarness`). Only the instance the
+   * map still holds goes. A released instance's clock never runs again
+   * (`SessionResidency`), so this is a backstop: should one ever fire late, it
+   * cannot drop a reopened successor.
    */
-  private onLiveSessionEvicted(key: string): void {
+  private onLiveSessionEvicted(key: string, ls: PiLiveSession): void {
+    if (this.live.get(key) !== ls) return;
     this.live.delete(key);
     this.closeToolRuntime(key);
     this.sessionModes.delete(key);
