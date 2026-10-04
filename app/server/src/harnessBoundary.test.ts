@@ -134,16 +134,25 @@ function isNode(value: unknown): value is AstNode {
   );
 }
 
-const WRAPPERS = new Set([
+/** Wrappers that change an expression's type or grouping, never its value. */
+const TRANSPARENT_WRAPPERS = new Set([
   "ParenthesizedExpression",
   "TSAsExpression",
   "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
 ]);
 
-/** The text of a constant string literal, through parentheses and `as const`. */
-function constantString(value: unknown): string | undefined {
+function unwrap(value: unknown): unknown {
   let node = value;
-  while (isNode(node) && WRAPPERS.has(node.type)) node = node.expression;
+  while (isNode(node) && TRANSPARENT_WRAPPERS.has(node.type))
+    node = node.expression;
+  return node;
+}
+
+/** The text of a constant string literal, through any transparent wrapper. */
+function constantString(value: unknown): string | undefined {
+  let node = unwrap(value);
   if (isNode(node) && node.type === "TSLiteralType") node = node.literal;
   if (!isNode(node)) return undefined;
   if (node.type === "Literal")
@@ -204,6 +213,7 @@ function scanModule(
         break;
       case "CallExpression": {
         const callee = node.callee;
+        const receiver = isNode(callee) ? unwrap(callee.object) : undefined;
         const args = node.arguments as unknown[];
         if (
           isNode(callee) &&
@@ -216,9 +226,9 @@ function scanModule(
           callee.type === "MemberExpression" &&
           isNode(callee.property) &&
           callee.property.name === "includes" &&
-          isNode(callee.object) &&
-          callee.object.type === "ArrayExpression" &&
-          (callee.object.elements as unknown[]).some(isHarnessId)
+          isNode(receiver) &&
+          receiver.type === "ArrayExpression" &&
+          (receiver.elements as unknown[]).some(isHarnessId)
         )
           harnessComparisons++;
         break;
@@ -333,9 +343,13 @@ test("the boundary scan counts every comparison form and ignores comments and st
     'if (harness === /* engine */ "pi") {}',
     'if (harness === ("claude-sdk" as const)) {}',
     'if (["pi", "other"].includes(harness)) {}',
+    'if ((["pi", "claude-sdk"] as const).includes(harness)) {}',
+    'if ((["pi"] satisfies readonly string[]).includes(harness)) {}',
+    'if (harness === ("pi"!)) {}',
+    'if (harness === <string>"claude-sdk") {}',
     'switch (h) { case "claude-sdk": break; case "pi": break; }',
   ].join("\n");
-  assert.equal(scanModule(file, counted).harnessComparisons, 10);
+  assert.equal(scanModule(file, counted).harnessComparisons, 14);
 
   const ignored = [
     '// if (harness === "pi") {}',

@@ -101,7 +101,7 @@ mapping.
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |
-| 12   | Allowlists down to named measurement modules; rule moves into `CLAUDE.md`     | open   |
+| 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
 after 7.
