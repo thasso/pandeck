@@ -753,6 +753,56 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
 
 const BY_PATH = new Map(SETTINGS_REGISTRY.map((d) => [d.path, d]));
 
+/**
+ * The sections integrations own. Each is written through its own patch shape
+ * and save flow (`update<Integration>Settings`), never as an app section.
+ */
+export const INTEGRATION_SETTINGS_SECTIONS: readonly string[] = [
+  "jira",
+  "confluence",
+  "tempo",
+  "google",
+  "slack",
+  "openAiCompatible",
+  "brave",
+  "context7",
+  "github",
+  "forgejo",
+];
+
+/**
+ * Add a write of `value` at an app-settings `path` to `patch`. App sections
+ * are replaced whole when saved, so a leaf write carries the rest of its
+ * section from `current` (or from what `patch` already holds for it). An
+ * optional field written as `""` is removed. Shared by the server's agent
+ * write path and the Settings page.
+ */
+export function writeAppSettingAt(
+  patch: Record<string, unknown>,
+  current: object,
+  path: string,
+  value: unknown,
+): void {
+  const [section = "", ...rest] = path.split(".");
+  if (rest.length === 0) {
+    patch[section] = value;
+    return;
+  }
+  const sectionValue = (patch[section] ??= structuredClone(
+    (current as Record<string, unknown>)[section] ?? {},
+  )) as Record<string, unknown>;
+  let node = sectionValue;
+  for (const key of rest.slice(0, -1)) {
+    const next = node[key];
+    node = (
+      next && typeof next === "object" ? next : (node[key] = {})
+    ) as Record<string, unknown>;
+  }
+  const leaf = rest[rest.length - 1]!;
+  if (settingDescriptor(path)?.optional && value === "") delete node[leaf];
+  else node[leaf] = value;
+}
+
 /** The value at a dotted settings path, or undefined where the path ends. */
 export function valueAtPath(root: unknown, path: string): unknown {
   let node = root;

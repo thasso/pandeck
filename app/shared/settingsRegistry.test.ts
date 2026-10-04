@@ -6,6 +6,7 @@ import {
   settingBounds,
   settingDescriptor,
   settingValueError,
+  writeAppSettingAt,
 } from "./settingsRegistry.ts";
 
 describe("settings registry", () => {
@@ -60,5 +61,24 @@ describe("settings registry", () => {
     expect(() => settingBounds("sessionNaming.enabled")).toThrow(
       "sessionNaming.enabled is not a numeric setting",
     );
+  });
+
+  it("writes an app setting into a section patch that keeps the rest", () => {
+    const current = {
+      worktrees: { root: "/w", namingAgent: { modelId: "m" } },
+      commitAgent: { modelId: "m", credentialProfileId: "cp_1" },
+    };
+    const patch: Record<string, unknown> = {};
+    writeAppSettingAt(patch, current, "worktrees.namingAgent.modelId", "n");
+    writeAppSettingAt(patch, current, "worktrees.root", "/x");
+    writeAppSettingAt(patch, current, "commitAgent.credentialProfileId", "");
+    writeAppSettingAt(patch, current, "projectsRoot", "/p");
+    expect(patch).toEqual({
+      worktrees: { root: "/x", namingAgent: { modelId: "n" } },
+      commitAgent: { modelId: "m" },
+      projectsRoot: "/p",
+    });
+    // The current settings are never modified.
+    expect(current.worktrees.root).toBe("/w");
   });
 });
