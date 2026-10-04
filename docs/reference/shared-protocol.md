@@ -28,10 +28,10 @@ vocabulary, display projection, and normalized session model types.
   `spawnClusterMembers(sessions, runs, cards)` picks the candidates (unarchived,
   minus the roles of every run `workflowRunInWorkingSet` keeps as an item,
   `workflowRunOwnerBySession`), `spawnClusterForest(members)` folds them along
-  `coordinator`-owned edges — shelved peers never fold, the walk is capped at
-  `SPAWN_CLUSTER_MAX_DEPTH`, and a cycle is broken at its first id —
-  `spawnClusterDescendantIds(rootId, forest)` is what a card shows folded and
-  what its Settle shelves, and `spawnClusterSettleBlockedReason` is the
+  `coordinator`-owned edges — a shelved peer folds only while an unshelved
+  member folds into it, depth is unbounded, and a cycle is broken at its first
+  id — `spawnClusterDescendantIds(rootId, forest)` is what a card shows folded
+  and what its Settle shelves, and `spawnClusterSettleBlockedReason` is the
   aggregate refusal (own reason, else the first blocked descendant in forest
   order) every Settle surface disables with and the server refuses with.
   `SessionOutcomeAttention` is the durable half of that state

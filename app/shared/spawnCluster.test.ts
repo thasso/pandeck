@@ -1,7 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
   isShelvedSession,
-  SPAWN_CLUSTER_MAX_DEPTH,
   spawnClusterDescendantIds,
   spawnClusterForest,
   spawnClusterMembers,
@@ -74,9 +73,9 @@ describe("spawnClusterForest", () => {
       child("mine", "root", { spawnOwnership: "taken-over" }),
       child("unknown", "root", { spawnOwnership: "unknown" }),
       child("shelved", "root", { settledAt: 1 }),
-      // A shelved peer is still a spawner: what it spawned folds under IT,
-      // never under the root above it, so the root's Settle does not reach it.
-      child("under-shelved", "shelved"),
+      // A shelved peer whose own peers are shelved too has nothing live below
+      // it, so the whole branch stays on the shelf.
+      child("shelved-under-shelved", "shelved", { settledAt: 1 }),
       // A shelved peer that is asking is NOT on the shelf, so it folds —
       // exactly so that its question can refuse the coordinator's settle.
       child("asking", "root", { settledAt: 1, attention: "question" }),
@@ -84,28 +83,40 @@ describe("spawnClusterForest", () => {
       child("kid", "root"),
     ];
     expect(descendants("root", rows)).toEqual(["asking", "kid"]);
-    expect(descendants("shelved", rows)).toEqual(["under-shelved"]);
+    expect(descendants("shelved", rows)).toEqual([]);
     expect(roots(rows).sort()).toEqual([
       "mine",
       "orphan",
       "root",
       "shelved",
+      "shelved-under-shelved",
       "unknown",
     ]);
   });
 
-  test("stops at the depth cap, and the session at the cap roots its own cluster", () => {
-    const chain = Array.from({ length: SPAWN_CLUSTER_MAX_DEPTH + 3 }, (_, i) =>
+  test("keeps a shelved peer in the cluster while live work hangs below it", () => {
+    // `mid` was put down, but a peer it spawned later is still live: the live
+    // peer stays under its coordinator's coordinator, through `mid`, instead
+    // of surfacing as a card of its own.
+    const rows = [
+      row({ id: "root" }),
+      child("mid", "root", { settledAt: 1 }),
+      child("low", "mid", { settledAt: 1 }),
+      child("live", "low"),
+      child("done", "mid", { settledAt: 1 }),
+    ];
+    expect(descendants("root", rows)).toEqual(["mid", "low", "live"]);
+    expect(roots(rows).sort()).toEqual(["done", "root"]);
+  });
+
+  test("folds a chain of any depth into its one root", () => {
+    const chain = Array.from({ length: 12 }, (_, i) =>
       i === 0 ? row({ id: "s0" }) : child(`s${i}`, `s${i - 1}`),
     );
     expect(descendants("s0", chain)).toEqual(
-      Array.from({ length: SPAWN_CLUSTER_MAX_DEPTH }, (_, i) => `s${i + 1}`),
+      Array.from({ length: 11 }, (_, i) => `s${i + 1}`),
     );
-    const capped = `s${SPAWN_CLUSTER_MAX_DEPTH + 1}`;
-    expect(roots(chain)).toEqual(["s0", capped]);
-    expect(descendants(capped, chain)).toEqual([
-      `s${SPAWN_CLUSTER_MAX_DEPTH + 2}`,
-    ]);
+    expect(roots(chain)).toEqual(["s0"]);
   });
 
   test("breaks a cycle at its first id, and a Settle follows the same break", () => {

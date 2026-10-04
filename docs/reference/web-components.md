@@ -1628,44 +1628,45 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
 - `SpawnedSessionsLedge.tsx` is the composer's SECOND strip: what this chat
   spawned. It is the cluster card's fold in another place, and it is aligned
   with it on purpose, item for item. Collapsed it is one line —
-  `3 sessions · 2 working`, the card's own verb-less words through
-  `spawnedSessionsSummary`; while any peer is WORKING the line runs in the
-  accent with a spinner in place of the peer glyph, which matters more here than
-  on the card: the session you are typing into is usually quiet while its peers
-  run, so this strip is the only place that run is visible and a static count
-  reads as a stalled cluster. The verb the line drops lives in the toggle's
-  spoken label (`Show the sessions this chat spawned — …`; SPAWNED rather than
-  the card's "coordinated", because this projection keeps a peer the user has
-  taken over and the label may not claim a relation that has ended) — the card
-  can let its title supply it, a strip on the composer has no title to supply it
-  from. Under the line, when a peer is waiting on a human or holding a failure,
-  that peer is NAMED (`Answer in “Reviewer”`) and is a link straight to it, on a
-  line of its own so it costs height only while something needs answering and
-  the two strips' chevrons stay in one column; a bubbled FAILURE carries the
-  same dismissal the card does (`clusterBubbleDismissible` → that peer's own
-  Settle). Opened, it lists the peers as `ClusterChildRow`s — the same row the
-  Sessions inbox renders a folded peer with, so a peer looks and reads the same
-  wherever it is found — by latest activity, newest on top, NOT in the inbox's
-  tier order: the list is read as "what just happened among my peers", and the
-  tiering is already on the collapsed line as the counts and the bubble. The
-  first ten are listed and the rest fold behind a `Show N more` button at the
-  FOOT of the list (after the newest rows, where the older ones are); the host
-  answers it by lifting the cut for that session alone (`App.tsx` keys the "show
-  all" state by session id, so switching chats starts at the cut again, and
-  closing the strip forgets it). The list is capped in height and scrolls in
-  place, so showing every peer changes what is in the box, never how tall the
+  `3 sessions · 1 running · 2 jobs · 4 settled`, the card's own verb-less words
+  through `spawnedSessionsSummary`; while any peer is WORKING the line runs in
+  the accent with a spinner in place of the peer glyph, which matters more here
+  than on the card: the session you are typing into is usually quiet while its
+  peers run, so this strip is the only place that run is visible and a static
+  count reads as a stalled cluster. The verb the line drops lives in the
+  toggle's spoken label (`Show the sessions this chat spawned — …`; SPAWNED
+  rather than the card's "coordinated", because this projection keeps a peer the
+  user has taken over and the label may not claim a relation that has ended) —
+  the card can let its title supply it, a strip on the composer has no title to
+  supply it from. Under the line, when a peer is waiting on a human or holding a
+  failure, that peer is NAMED (`Answer in “Reviewer”`) and is a link straight to
+  it, on a line of its own so it costs height only while something needs
+  answering and the two strips' chevrons stay in one column; a bubbled FAILURE
+  carries the same dismissal the card does (`clusterBubbleDismissible` → that
+  peer's own Settle). Opened, it lists the peers as `ClusterChildRow`s — the
+  same row the Sessions inbox renders a folded peer with, so a peer looks and
+  reads the same wherever it is found — as a TREE of every peer at every depth,
+  each indented under the session that spawned it, siblings by latest activity,
+  newest on top, NOT in the inbox's tier order: the list is read as "what just
+  happened among my peers", and the tiering is already on the collapsed line as
+  the counts and the bubble. Settled peers are history — out of the counts and
+  the tree, behind a `Show N settled` button at the FOOT of the list; the host
+  answers it by rebuilding the view with them for that session alone (`App.tsx`
+  keys the state by session id, so switching chats starts with live peers only,
+  and closing the strip forgets it). The list is capped in height and scrolls in
+  place, so listing every peer changes what is in the box, never how tall the
   composer's shelf is. It SUBSCRIBES NOTHING: `App.tsx` derives it from the
   session list this browser already holds (`spawnedSessionsView`), mounts it
-  only for a session with peers, so the ordinary chat pays no line, and holds
-  the node on `spawnedSessionsKey` so a rebroadcast that changes nothing the
-  strip draws does not re-render the memoized composer — which is why that key
-  asks whether the strip is OPEN (`web-lib.md`). Dismissal is the ONLY lifecycle
-  action here — Archive, Delete and a peer's own Settle stay in the inbox, and
-  `ClusterChildRow` binds those keyboard shortcuts only when its host passes the
-  handlers, because a row must never appear to acknowledge or destroy something
-  its surface cannot undo. Its rows ARE tab stops (`tabbable`), which the
-  inbox's are not: there is no roving focus above them here, so without it the
-  link would be reachable by pointer alone.
+  only for a session with peers, live or settled, so the ordinary chat pays no
+  line, and holds the node on `spawnedSessionsKey` so a rebroadcast that changes
+  nothing the strip draws does not re-render the memoized composer — which is
+  why that key asks whether the strip is OPEN (`web-lib.md`). Dismissal is the
+  ONLY lifecycle action here — Archive, Delete and a peer's own Settle stay in
+  the inbox, and `ClusterChildRow` binds those keyboard shortcuts only when its
+  host passes the handlers, because a row must never appear to acknowledge or
+  destroy something its surface cannot undo. Its rows ARE tab stops
+  (`tabbable`), which the inbox's are not: there is no roving focus above them
+  here, so without it the link would be reachable by pointer alone.
 - The Sessions section's browser is an INBOX of the working set, not a history
   list: `SessionInbox.tsx` owns it (search, the labelled **Needs you** block,
   one priority-sorted list for everything else still unsettled, the compact

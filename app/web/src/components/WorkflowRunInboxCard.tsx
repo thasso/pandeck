@@ -76,10 +76,13 @@ function RunBadgeIcon({
 
 /** Settle, inline at the end of the status row like a session card's. */
 const INLINE_ACTION =
-  "-my-0.5 flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+// The negative margin takes each size back to the status row's 20px, so a
+// larger touch target never makes the row under the title taller than the
+// one above it.
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
-  tight: "size-6",
-  comfortable: "size-8",
+  tight: "size-6 -my-0.5",
+  comfortable: "size-8 -my-1.5",
 };
 
 export interface WorkflowRunInboxCardProps {
@@ -216,7 +219,7 @@ function WorkflowRunInboxCardImpl({
       <div
         className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
       >
-        <div className="flex min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint">
+        <div className="flex h-5 min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint">
           <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
             {projectKey ? (
               <span

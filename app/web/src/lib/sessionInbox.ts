@@ -91,6 +91,18 @@ export interface SessionInboxCard {
    * it is exactly the card this inbox always had.
    */
   cluster?: SessionInboxCluster;
+  /**
+   * How far below the item it is listed under this card sits: 1 for a peer
+   * its coordinator spawned directly, 2 for one of that peer's own, and so on.
+   * Set only on a row of an expanded fold, which is drawn as a tree.
+   */
+  depth?: number;
+  /**
+   * What a folded row's OWN peers are doing, when it coordinates any: the
+   * nested half of the tree, stated on the row the way the top-level card
+   * states its whole cluster.
+   */
+  peers?: SessionClusterCounts;
 }
 
 /**
@@ -104,6 +116,14 @@ export interface SessionClusterCounts {
   total: number;
   /** Descendants running a turn or busy with background work. */
   working: number;
+  /** Descendants whose agent is running a turn right now. */
+  running: number;
+  /**
+   * Background jobs (shell commands and monitors) the descendants own, summed
+   * over every one of them — jobs, not sessions, so one peer with three
+   * commands running counts three.
+   */
+  jobs: number;
   /** Descendants blocking on a human decision. */
   waiting: number;
   /** Descendants whose last run failed. */
@@ -116,8 +136,21 @@ export interface SessionClusterCounts {
  * off.
  */
 interface SessionInboxCluster {
-  /** Every folded descendant, in the same order the top-level list uses. */
+  /**
+   * Every folded descendant as a TREE in display order: each peer directly
+   * under the one that spawned it, at its {@link SessionInboxCard.depth}, and
+   * siblings in the order the top-level list uses.
+   */
   children: SessionInboxCard[];
+  /**
+   * The same tree with the coordinator's SETTLED peers put back where they
+   * were spawned: what the fold lists when the user asks for its history. A
+   * settled peer is in neither the counts nor the Settle cascade — it is on the
+   * shelf, and this is only a view of it.
+   */
+  childrenWithSettled: SessionInboxCard[];
+  /** How many settled peers {@link childrenWithSettled} adds. */
+  settledCount: number;
   counts: SessionClusterCounts;
   /**
    * The descendant that lifted this cluster's tier: a child waiting on a human
@@ -185,9 +218,16 @@ function clusterCounts(
   return {
     total: cards.length,
     working: cards.filter((card) => card.tier === "working").length,
+    running: cards.filter((card) => card.status === "running").length,
+    jobs: cards.reduce((sum, card) => sum + backgroundJobs(card.session), 0),
     waiting: cards.filter((card) => card.tier === "needs-you").length,
     failed: cards.filter((card) => holdsFailure(card)).length,
   };
+}
+
+/** The background jobs one session owns right now; a retained host is none. */
+function backgroundJobs(session: SessionListItem): number {
+  return Math.max(0, session.backgroundActivity?.activeCount ?? 0);
 }
 
 /**
@@ -466,11 +506,42 @@ export function sessionStatusDetail(
  * still says it, since a screen reader has no card to read it from.
  */
 export function sessionClusterSummary(counts: SessionClusterCounts): string {
-  const parts = [`${counts.total} session${counts.total === 1 ? "" : "s"}`];
-  if (counts.working > 0) parts.push(`${counts.working} working`);
+  return [
+    `${counts.total} session${counts.total === 1 ? "" : "s"}`,
+    ...clusterActivityParts(counts),
+  ].join(" · ");
+}
+
+/**
+ * What a fold's sessions are doing right now, as the short facts every fold
+ * states after its count: agents running a turn, background jobs, sessions
+ * waiting on the user, failures. A zero is left out rather than shown as a
+ * zero. Turns and jobs are separate facts on purpose — "an agent is busy" and
+ * "a job is still going" are different answers to whether to wait.
+ */
+function clusterActivityParts(counts: SessionClusterCounts): string[] {
+  const parts = clusterLiveParts(counts);
   if (counts.waiting > 0) parts.push(`${counts.waiting} waiting`);
   if (counts.failed > 0) parts.push(`${counts.failed} failed`);
-  return parts.join(" · ");
+  return parts;
+}
+
+/**
+ * The live half of {@link sessionClusterSummary} that a card shows on its
+ * status line next to the count: running turns and background jobs, or an
+ * empty string while neither is going. Waiting and failed are left to the
+ * bubbled peer's own named badge, which says which session it is.
+ */
+export function clusterLiveSummary(counts: SessionClusterCounts): string {
+  return clusterLiveParts(counts).join(" · ");
+}
+
+function clusterLiveParts(counts: SessionClusterCounts): string[] {
+  const parts: string[] = [];
+  if (counts.running > 0) parts.push(`${counts.running} running`);
+  if (counts.jobs > 0)
+    parts.push(`${counts.jobs} job${counts.jobs === 1 ? "" : "s"}`);
+  return parts;
 }
 
 /**
@@ -642,13 +713,10 @@ export function workflowRunPhaseLine(
  * the same rule — a zero is left out rather than shown as a zero.
  */
 export function workflowRunRolesSummary(counts: SessionClusterCounts): string {
-  const parts = [
+  return [
     `${counts.total} workflow session${counts.total === 1 ? "" : "s"}`,
-  ];
-  if (counts.working > 0) parts.push(`${counts.working} working`);
-  if (counts.waiting > 0) parts.push(`${counts.waiting} waiting`);
-  if (counts.failed > 0) parts.push(`${counts.failed} failed`);
-  return parts.join(" · ");
+    ...clusterActivityParts(counts),
+  ].join(" · ");
 }
 
 /** The run's state in words, for an assistive-technology label. */
@@ -970,6 +1038,11 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     // not, because nothing on the card would read differently — the expanded
     // child rows carry their own keys.
     card.cluster ? sessionClusterSummary(card.cluster.counts) : "",
+    // The settled-history toggle's count, which the open fold states.
+    card.cluster ? String(card.cluster.settledCount) : "",
+    // A tree row's place and its own peers, which the row draws.
+    String(card.depth ?? ""),
+    card.peers ? sessionClusterSummary(card.peers) : "",
     card.cluster?.bubbled
       ? `${card.cluster.bubbled.session.id}:${sessionClusterBubbleLabel(
           card.cluster.bubbled,
@@ -1213,12 +1286,18 @@ export function buildSessionInbox(
 
 /** The peers one session spawned, as the composer's ledge states them. */
 export interface SpawnedSessionsView {
-  /** The peers by latest activity, newest first, cut to `limit`. */
+  /**
+   * The peers as a TREE, depth-first, each under the session that spawned it,
+   * siblings by latest activity, newest first. Settled peers are listed only
+   * when the view was asked to include them, after their live siblings.
+   */
   rows: SessionInboxCard[];
-  /** Over EVERY peer, not just the listed ones. */
+  /** Over every LIVE peer at every depth; settled peers are history. */
   counts: SessionClusterCounts;
-  /** Peers past the cutoff; the Sessions inbox lists all of them. */
-  hidden: number;
+  /** Settled peers in the tree; listed only on request. */
+  settled: number;
+  /** Whether {@link rows} includes the settled peers. */
+  settledShown: boolean;
   /**
    * The peer that speaks for the set — one waiting on a human, or one holding
    * a failure. Named on the collapsed line for the same reason a cluster card
@@ -1229,17 +1308,24 @@ export interface SpawnedSessionsView {
 }
 
 /**
- * The peer sessions ONE session spawned, shaped for the composer's ledge.
+ * Every peer ONE session spawned, at every depth, shaped for the composer's
+ * ledge.
  *
  * Membership is the durable spawn edge (`spawnedBySessionId`) and nothing else
  * — no title, no role word. Unlike the inbox's fold it does NOT filter on
  * ownership: the question the ledge answers is "what did this chat start",
- * which a peer the user has since taken over is still an answer to. Archived
- * peers are out, because the user put them away.
+ * which a peer the user has since taken over is still an answer to, and so is
+ * whatever that peer started in turn. Archived peers are out, because the user
+ * put them away; a spawn cycle is walked once.
+ *
+ * SETTLED peers are history: they are left out of the counts and the tree
+ * unless `includeSettled` asks for them. A settled peer that live work hangs
+ * below still lists, so the live peer appears under the session that spawned
+ * it rather than cut loose — the same rule the inbox's fold reads.
  *
  * Every row is the card that session would be on its own ({@link inboxCard}),
  * so the ledge, the inbox and the cluster fold state the same session
- * identically. The ORDER is not the inbox's: peers are listed by latest
+ * identically. The ORDER is not the inbox's: siblings are listed by latest
  * activity alone, newest first, because the ledge is read as "what just
  * happened among my peers", and the tiering the inbox sorts by is already
  * stated on this strip's collapsed line — as the counts, and as the bubbled
@@ -1250,27 +1336,94 @@ export function spawnedSessionsView(options: {
   sessions: readonly SessionListItem[];
   /** The session whose ledge this is. */
   coordinatorId: string;
-  /** How many rows to list; the rest are counted as {@link SpawnedSessionsView.hidden}. */
-  limit?: number;
+  /** List the settled peers in the tree too. */
+  includeSettled?: boolean;
 }): SpawnedSessionsView {
-  const { sessions, coordinatorId, limit } = options;
-  const cards: SessionInboxCard[] = [];
+  const { sessions, coordinatorId } = options;
+  const includeSettled = Boolean(options.includeSettled);
+  const spawned = new Map<string, SessionListItem[]>();
   for (const session of sessions) {
-    if (session.archived) continue;
-    if (session.id === coordinatorId) continue;
-    if (session.spawnedBySessionId !== coordinatorId) continue;
-    // No `readCurrentId`: the ledge belongs to the session on screen, and a
-    // peer of it is by definition not the session being read.
-    cards.push(inboxCard(session, undefined));
+    const parentId = session.spawnedBySessionId;
+    if (session.archived || !parentId || parentId === session.id) continue;
+    const siblings = spawned.get(parentId);
+    if (siblings) siblings.push(session);
+    else spawned.set(parentId, [session]);
   }
-  cards.sort(compareSessionCards);
-  const cut = Math.max(0, limit ?? cards.length);
-  const bubbled = firstBubble(cards);
-  cards.sort(compareSessionActivity);
+
+  // Breadth-first from the coordinator: each peer is reached once, through
+  // the first spawner that leads to it, so a cycle cannot list it twice.
+  const cards = new Map<string, SessionInboxCard>();
+  const treeChildren = new Map<string, string[]>();
+  const order: string[] = [];
+  const queue = [coordinatorId];
+  const seen = new Set([coordinatorId]);
+  while (queue.length > 0) {
+    const parentId = queue.shift() as string;
+    for (const session of spawned.get(parentId) ?? []) {
+      if (seen.has(session.id)) continue;
+      seen.add(session.id);
+      // No `readCurrentId`: the ledge belongs to the session on screen, and a
+      // peer of it is by definition not the session being read.
+      cards.set(session.id, inboxCard(session, undefined));
+      const siblings = treeChildren.get(parentId);
+      if (siblings) siblings.push(session.id);
+      else treeChildren.set(parentId, [session.id]);
+      order.push(session.id);
+      queue.push(session.id);
+    }
+  }
+
+  // Live bottom-up: unshelved, or a spawner of something live.
+  const live = new Set<string>();
+  for (let index = order.length - 1; index >= 0; index -= 1) {
+    const id = order[index] as string;
+    const card = cards.get(id) as SessionInboxCard;
+    if (
+      !isShelvedSession(card.session) ||
+      (treeChildren.get(id) ?? []).some((childId) => live.has(childId))
+    )
+      live.add(id);
+  }
+  const liveBelow = (id: string): SessionInboxCard[] => {
+    const below: SessionInboxCard[] = [];
+    const pending = [...(treeChildren.get(id) ?? [])];
+    while (pending.length > 0) {
+      const childId = pending.pop() as string;
+      if (!live.has(childId)) continue;
+      below.push(cards.get(childId) as SessionInboxCard);
+      pending.push(...(treeChildren.get(childId) ?? []));
+    }
+    return below;
+  };
+
+  const rows = depthFirst(coordinatorId, (parentId, depth) => {
+    const kids = (treeChildren.get(parentId) ?? [])
+      .filter((id) => includeSettled || live.has(id))
+      .map((id) => {
+        const nested = live.has(id) ? liveBelow(id) : [];
+        return {
+          ...(cards.get(id) as SessionInboxCard),
+          depth,
+          ...(nested.length > 0 ? { peers: clusterCounts(nested) } : {}),
+        };
+      })
+      .sort(compareSessionActivity);
+    // History after what is live, among the same siblings.
+    return [
+      ...kids.filter((card) => live.has(card.session.id)),
+      ...kids.filter((card) => !live.has(card.session.id)),
+    ];
+  });
+  const liveCards = order
+    .filter((id) => live.has(id))
+    .map((id) => cards.get(id) as SessionInboxCard)
+    .sort(compareSessionCards);
+  const bubbled = firstBubble(liveCards);
   return {
-    rows: cards.slice(0, cut),
-    counts: clusterCounts(cards),
-    hidden: Math.max(0, cards.length - cut),
+    rows,
+    counts: clusterCounts(liveCards),
+    settled: order.length - live.size,
+    settledShown: includeSettled,
     ...(bubbled ? { bubbled } : {}),
   };
 }
@@ -1278,10 +1431,14 @@ export function spawnedSessionsView(options: {
 /**
  * The ledge's collapsed line: what this session is coordinating, in the
  * cluster card's own words ({@link sessionClusterSummary}) so the two surfaces
- * never call the same relation two things.
+ * never call the same relation two things, and how many settled peers sit
+ * behind it.
  */
 export function spawnedSessionsSummary(view: SpawnedSessionsView): string {
-  return sessionClusterSummary(view.counts);
+  if (view.counts.total === 0)
+    return `${view.settled} settled session${view.settled === 1 ? "" : "s"}`;
+  const summary = sessionClusterSummary(view.counts);
+  return view.settled > 0 ? `${summary} · ${view.settled} settled` : summary;
 }
 
 /**
@@ -1311,6 +1468,10 @@ function spawnedPeerKey(card: SessionInboxCard): string {
     card.status,
     sessionStatusDetail(session, card.status) ?? "",
     String(session.updatedAt),
+    // The row's place in the tree and what it shows beside its title.
+    String(card.depth ?? ""),
+    card.peers ? sessionClusterSummary(card.peers) : "",
+    String(backgroundJobs(session)),
   ].join("\u001f");
 }
 
@@ -1343,7 +1504,7 @@ export function spawnedSessionsKey(
 ): string {
   return [
     spawnedSessionsSummary(view),
-    String(view.hidden),
+    view.settledShown ? "1" : "",
     // The bubble's own facts are keyed raw as well. Its label is time-free
     // today; a bubbled peer that ever carried an elapsed one would otherwise
     // freeze, and the peers that bubble are idle, so nothing here churns.
@@ -1469,8 +1630,28 @@ function foldSpawnClusters(
   }
 
   const bubbleOf = resolveBubbles(nodes, forest);
+  const shelvedChildrenOf = new Map<string, string[]>();
+  for (const [id, node] of nodes) {
+    const { session } = node.card;
+    const parentId = session.spawnedBySessionId;
+    if (!node.settled || session.spawnOwnership !== "coordinator") continue;
+    if (!parentId || parentId === id || !nodes.has(parentId)) continue;
+    // Only a shelf row: a settled session that folds (live work below it) or
+    // roots a card of its own is already listed where it is live.
+    if (forest.parentOf.has(id) || forest.childrenOf.has(id)) continue;
+    const siblings = shelvedChildrenOf.get(parentId);
+    if (siblings) siblings.push(id);
+    else shelvedChildrenOf.set(parentId, [id]);
+  }
   const cards: SessionInboxCard[] = [];
-  const context: EmitContext = { nodes, forest, bubbleOf, cards, settledRows };
+  const context: EmitContext = {
+    nodes,
+    forest,
+    bubbleOf,
+    shelvedChildrenOf,
+    cards,
+    settledRows,
+  };
   for (const id of forest.order) {
     if (!forest.parentOf.has(id)) emitCluster(id, context);
   }
@@ -1513,6 +1694,12 @@ interface EmitContext {
   nodes: Map<string, ClusterNode>;
   forest: SpawnClusterForest;
   bubbleOf: Map<string, ClusterNode | undefined>;
+  /**
+   * Shelf rows by the session that spawned them, along `coordinator`-owned
+   * edges: the settled history a fold puts back on request. Never part of a
+   * cluster's counts or its Settle.
+   */
+  shelvedChildrenOf: Map<string, string[]>;
   /** Top-level cards, in no particular order; the caller sorts. */
   cards: SessionInboxCard[];
   /** Settled coordinators, for the shelf; the caller sorts and pages them. */
@@ -1521,39 +1708,35 @@ interface EmitContext {
 
 /**
  * Turn one root into what the browser shows: a cluster card carrying its
- * descendants, or — when the root is settled and NOTHING under it is waiting on
- * the user or has failed — a Settled shelf row whose live children are RELEASED
- * as roots of their own. Both halves serve one rule: a live session is never
- * hidden inside a row that is itself put down. A bubbled peer keeps the whole
- * cluster in the working set instead, settled coordinator and all.
+ * descendants, a card of its own, or a Settled shelf row.
+ *
+ * A root with anything folded under it is a CARD, settled or not. The forest
+ * folds only live work (a shelved peer folds only while live work hangs below
+ * it), so a settled coordinator with a folded peer still has work going on in
+ * its tree, and the top level is where that work is shown — under the session
+ * that started it rather than released as cards of its own. Only a settled
+ * root with nothing folded under it takes the shelf.
  *
  * A Settle from the cluster's own card shelves the peers with it (server-side,
- * through their current revisions — `spawnClusterDescendantIds`), so the
- * release above is for the peer that comes back on its own: one woken by a
- * later failure, or one the coordinator went on to spawn after it was put down.
+ * through their current revisions — `spawnClusterDescendantIds`), so a settled
+ * coordinator comes back here only for a peer that came back on its own (one
+ * woken by a later failure) or one it spawned after it was put down.
  */
 function emitCluster(id: string, context: EmitContext): void {
   const { nodes, forest, bubbleOf, cards, settledRows } = context;
   const node = nodes.get(id) as ClusterNode;
-  const live = forest.childrenOf.get(id) ?? [];
-  const bubbled = bubbleOf.get(id);
-  if (node.settled && !bubbled) {
-    settledRows.push(node.card.session);
-    for (const childId of live) emitCluster(childId, context);
-    return;
-  }
-
   const descendants = spawnClusterDescendantIds(id, forest)
     .map((childId) => nodes.get(childId))
     .filter((child): child is ClusterNode => child !== undefined);
   if (descendants.length === 0) {
-    cards.push(node.card);
+    if (node.settled) settledRows.push(node.card.session);
+    else cards.push(node.card);
     return;
   }
 
-  const children = descendants
-    .map((child) => child.card)
-    .sort(compareSessionCards);
+  const bubbled = bubbleOf.get(id);
+  const children = clusterTree(id, context, false);
+  const childrenWithSettled = clusterTree(id, context, true);
   cards.push({
     ...node.card,
     tier: bubbled
@@ -1561,10 +1744,86 @@ function emitCluster(id: string, context: EmitContext): void {
       : node.card.tier,
     cluster: {
       children,
-      counts: clusterCounts(children),
+      childrenWithSettled,
+      settledCount: childrenWithSettled.length - children.length,
+      counts: clusterCounts(descendants.map((child) => child.card)),
       ...(bubbled ? { bubbled: bubbled.card } : {}),
     },
   });
+}
+
+/**
+ * A root's folded descendants as the TREE the expanded fold draws: depth-first,
+ * each peer directly under the session that spawned it, siblings in inbox
+ * order. A peer that coordinates peers of its own carries their counts and is
+ * lifted by its own bubble, so a nested question sorts its branch up the same
+ * way it lifts the top-level card. With `withSettled`, the shelf rows spawned
+ * anywhere in the tree are put back under their spawners too, after the live
+ * siblings.
+ *
+ * Iterative rather than recursive: depth is unbounded, and the forest has
+ * already broken every cycle, so the `seen` guard only keeps a malformed
+ * shelf edge from listing a session twice.
+ */
+function clusterTree(
+  rootId: string,
+  context: EmitContext,
+  withSettled: boolean,
+): SessionInboxCard[] {
+  const { nodes, forest, bubbleOf, shelvedChildrenOf } = context;
+  const seen = new Set([rootId]);
+  const childrenOf = (parentId: string, depth: number): SessionInboxCard[] => {
+    const kids: SessionInboxCard[] = [];
+    for (const childId of forest.childrenOf.get(parentId) ?? []) {
+      const child = nodes.get(childId);
+      if (!child || seen.has(childId)) continue;
+      seen.add(childId);
+      const nested = spawnClusterDescendantIds(childId, forest)
+        .map((id) => nodes.get(id)?.card)
+        .filter((card): card is SessionInboxCard => card !== undefined);
+      const bubbled = bubbleOf.get(childId);
+      kids.push({
+        ...child.card,
+        depth,
+        ...(bubbled
+          ? { tier: higherTier(child.card.tier, bubbled.card.tier) }
+          : {}),
+        ...(nested.length > 0 ? { peers: clusterCounts(nested) } : {}),
+      });
+    }
+    kids.sort(compareSessionCards);
+    if (!withSettled) return kids;
+    // History after what is live, among the same siblings.
+    const settled: SessionInboxCard[] = [];
+    for (const childId of shelvedChildrenOf.get(parentId) ?? []) {
+      const child = nodes.get(childId);
+      if (!child || seen.has(childId)) continue;
+      seen.add(childId);
+      settled.push({ ...child.card, depth });
+    }
+    return [...kids, ...settled.sort(compareSessionCards)];
+  };
+  return depthFirst(rootId, childrenOf);
+}
+
+/**
+ * Depth-first, parents before children, over a children function that already
+ * orders each set of siblings — the one walk both the inbox fold and the
+ * composer ledge draw their trees with. Uses an explicit stack, so a long
+ * chain costs memory rather than call depth.
+ */
+function depthFirst(
+  rootId: string,
+  childrenOf: (parentId: string, depth: number) => SessionInboxCard[],
+): SessionInboxCard[] {
+  const rows: SessionInboxCard[] = [];
+  const stack = childrenOf(rootId, 1).reverse();
+  while (stack.length > 0) {
+    const card = stack.pop() as SessionInboxCard;
+    rows.push(card);
+    stack.push(...childrenOf(card.session.id, (card.depth ?? 1) + 1).reverse());
+  }
+  return rows;
 }
 
 /** The more urgent of two tiers. */

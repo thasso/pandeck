@@ -353,6 +353,29 @@ describe("SessionInbox clusters", () => {
     expect(rowIds()).toEqual(["root"]);
   });
 
+  it("lists the fold as a tree and its settled peers only on request", () => {
+    render([
+      session("root"),
+      peer("impl", "root"),
+      peer("rev", "impl"),
+      peer("done", "root", { settledAt: NOW - 5_000 }),
+    ]);
+    click(button("Show the 2 coordinated sessions"));
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+    // A nested peer steps in under the one that spawned it.
+    expect(row("rev").style.paddingLeft).toBe("1.5rem");
+    const toggle = () =>
+      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
+        (node) => /settled$/.test(node.textContent ?? ""),
+      ) as HTMLElement;
+    expect(toggle().textContent).toBe("Show 1 settled");
+    click(toggle());
+    expect(rowIds()).toEqual(["root", "impl", "rev", "done"]);
+    expect(toggle().textContent).toBe("Hide settled");
+    click(toggle());
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
+  });
+
   it("keeps the disclosure honest about what the click will do", () => {
     render([
       session("root", { title: "coordinator" }),

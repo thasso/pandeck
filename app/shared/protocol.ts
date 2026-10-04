@@ -1911,8 +1911,9 @@ export function workflowRunOwnerBySession(
  * on a FAILURE alone, its completion being the coordinator's to act on.
  *
  * ONE implementation for both sides: the browser partitions the inbox with it,
- * and a shelved row never folds ({@link spawnClusterForest}), so the server
- * reads the same answer when a Settle cascades to a coordinator's peers.
+ * and a shelved row folds only while live work hangs below it
+ * ({@link spawnClusterForest}), so the server reads the same answer when a
+ * Settle cascades to a coordinator's peers.
  */
 export function isShelvedSession(session: SessionListItem): boolean {
   if (session.settledAt === undefined) return false;
@@ -1923,17 +1924,6 @@ export function isShelvedSession(session: SessionListItem): boolean {
     session.awaitingInput
   );
 }
-
-/**
- * How many spawn edges the fold walks before it stops. A chain longer than
- * this does not collapse into one enormous card: the session at the cap
- * becomes a bounded root of its own cluster, so every session still belongs to
- * exactly one top-level item. Deep chains are pathological rather than
- * expected — a coordinator spawning coordinators three levels down is already
- * a workflow — and an unbounded walk over data the server does not validate as
- * acyclic is how a browser hangs on one malformed row.
- */
-export const SPAWN_CLUSTER_MAX_DEPTH = 4;
 
 /**
  * The spawn forest the Sessions inbox folds: which member each member folds
@@ -1959,16 +1949,18 @@ export interface SpawnClusterForest {
  * ownership is `coordinator` and its spawner is a member: `taken-over` is the
  * user's own session, `unknown` fails closed (`docs/agent-workflows.md`), and a
  * spawner that is archived, deleted or a run's role leaves its child standing
- * on its own. A SHELVED child ({@link isShelvedSession}) never folds either:
- * the shelf is where the user put it, and folding it would take it off — so
- * a child that is settled but asking still folds, exactly so that its question
- * can refuse its coordinator's Settle.
+ * on its own. A SHELVED child ({@link isShelvedSession}) folds only while live
+ * work hangs below it — an unshelved member folding into it, at any depth.
+ * Otherwise the shelf is where the user put it, and folding it would take it
+ * off; with live work under it, leaving it out would cut that work loose from
+ * the coordinator above, and the top level is for the sessions the user drives.
+ * A child that is settled but asking is not shelved at all, so it folds — which
+ * is how its question can refuse its coordinator's Settle.
  *
- * The walk down from every root DETACHES the two shapes that must not produce
- * one unbounded cluster: an edge past {@link SPAWN_CLUSTER_MAX_DEPTH} (the
- * child below it starts a cluster of its own) and a cycle (whichever of its
- * sessions sorts first becomes a root, deterministically). Each member is
- * assigned once, and detaching only ever turns a member into a root.
+ * Depth is unbounded: every folded descendant belongs to its root however deep
+ * the chain runs. The walk down from every root still DETACHES a cycle —
+ * whichever of its sessions sorts first becomes a root, deterministically — so
+ * every member is assigned exactly once and malformed edges cannot hang it.
  *
  * ONE forest for both sides: the browser folds its cards along it, and the
  * server settles a coordinator's descendants along it
@@ -1979,13 +1971,43 @@ export function spawnClusterForest(
   members: readonly SessionListItem[],
 ): SpawnClusterForest {
   const ids = new Set(members.map((session) => session.id));
-  const parentOf = new Map<string, string>();
-  const candidates = new Map<string, string[]>();
+  const shelved = new Set(
+    members.filter(isShelvedSession).map((session) => session.id),
+  );
+  const edgeOf = new Map<string, string>();
   for (const session of members) {
-    if (isShelvedSession(session)) continue;
     if (session.spawnOwnership !== "coordinator") continue;
     const parentId = session.spawnedBySessionId;
     if (!parentId || parentId === session.id || !ids.has(parentId)) continue;
+    edgeOf.set(session.id, parentId);
+  }
+  // A shelved member keeps its edge while an unshelved one folds into it:
+  // walk up from every live edge and mark the shelved spawners on the way. The
+  // walk stops at the first spawner that folds anyway — live, or already
+  // marked — and at a repeat, so a cycle costs one lap.
+  const liveBelow = new Set<string>();
+  for (const [childId, firstParent] of edgeOf) {
+    if (shelved.has(childId)) continue;
+    const seen = new Set([childId]);
+    let parentId: string | undefined = firstParent;
+    while (
+      parentId !== undefined &&
+      shelved.has(parentId) &&
+      !liveBelow.has(parentId) &&
+      !seen.has(parentId)
+    ) {
+      liveBelow.add(parentId);
+      seen.add(parentId);
+      parentId = edgeOf.get(parentId);
+    }
+  }
+
+  const parentOf = new Map<string, string>();
+  const candidates = new Map<string, string[]>();
+  for (const session of members) {
+    const parentId = edgeOf.get(session.id);
+    if (parentId === undefined) continue;
+    if (shelved.has(session.id) && !liveBelow.has(session.id)) continue;
     parentOf.set(session.id, parentId);
     const siblings = candidates.get(parentId);
     if (siblings) siblings.push(session.id);
@@ -1993,22 +2015,20 @@ export function spawnClusterForest(
   }
 
   const order: string[] = [];
-  const depth = new Map<string, number>();
+  const visited = new Set<string>();
   const walk = (seeds: readonly string[]) => {
     const queue: string[] = [];
     for (const id of seeds) {
-      depth.set(id, 0);
+      visited.add(id);
       order.push(id);
       queue.push(id);
     }
     while (queue.length > 0) {
       const id = queue.shift() as string;
-      const next = (depth.get(id) ?? 0) + 1;
       for (const childId of candidates.get(id) ?? []) {
-        // An entry that has since detached (cap or cycle) is no longer a child.
-        if (parentOf.get(childId) !== id || depth.has(childId)) continue;
-        if (next > SPAWN_CLUSTER_MAX_DEPTH) parentOf.delete(childId);
-        depth.set(childId, next > SPAWN_CLUSTER_MAX_DEPTH ? 0 : next);
+        // An entry that has since detached (cycle) is no longer a child.
+        if (parentOf.get(childId) !== id || visited.has(childId)) continue;
+        visited.add(childId);
         order.push(childId);
         queue.push(childId);
       }
@@ -2020,7 +2040,7 @@ export function spawnClusterForest(
   // assigns at least that one, so this terminates on any input.
   while (order.length < ids.size) {
     const stranded = [...ids]
-      .filter((id) => !depth.has(id))
+      .filter((id) => !visited.has(id))
       .sort((a, b) => (a < b ? -1 : 1));
     const first = stranded[0] as string;
     parentOf.delete(first);

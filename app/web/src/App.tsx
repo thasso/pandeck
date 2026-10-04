@@ -105,10 +105,7 @@ import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
-import {
-  SPAWNED_SESSIONS_LEDGE_LIMIT,
-  SpawnedSessionsLedge,
-} from "./components/SpawnedSessionsLedge.tsx";
+import { SpawnedSessionsLedge } from "./components/SpawnedSessionsLedge.tsx";
 import {
   sessionSettleCascade,
   spawnedSessionsKey,
@@ -919,15 +916,15 @@ function AppContent() {
   // The composer's spawned-session ledge, expanded. It subscribes nothing: the
   // peers are rows of the session list this browser already holds.
   const [spawnedLedgeOpen, setSpawnedLedgeOpen] = useState(false);
-  // The session whose ledge lists EVERY peer rather than its first ten. Keyed
-  // by session rather than a boolean so a chat switched to mid-list starts at
-  // the cut again without an effect to reset it; closing the strip forgets it.
-  const [spawnedLedgeAllFor, setSpawnedLedgeAllFor] = useState<string | null>(
-    null,
-  );
+  // The session whose ledge also lists its SETTLED peers. Keyed by session
+  // rather than a boolean so a chat switched to starts with live peers only,
+  // without an effect to reset it; closing the strip forgets it.
+  const [spawnedLedgeSettledFor, setSpawnedLedgeSettledFor] = useState<
+    string | null
+  >(null);
   const toggleSpawnedLedge = useCallback(() => {
     setSpawnedLedgeOpen((value) => {
-      if (value) setSpawnedLedgeAllFor(null);
+      if (value) setSpawnedLedgeSettledFor(null);
       return !value;
     });
   }, []);
@@ -4975,23 +4972,24 @@ function AppContent() {
   // list alone — no subscription, no server call — and absent (so the strip is
   // never mounted) for a session that spawned nothing, which is almost all of
   // them.
-  const spawnedLedgeAll =
-    ledgeSessionId !== undefined && spawnedLedgeAllFor === ledgeSessionId;
+  const spawnedLedgeSettled =
+    ledgeSessionId !== undefined && spawnedLedgeSettledFor === ledgeSessionId;
   const spawnedSessions = useMemo(
     () =>
       route.name === "session" && ledgeSessionId
         ? spawnedSessionsView({
             sessions: state.sessions,
             coordinatorId: ledgeSessionId,
-            // "Show N more" lifts the cut for this session; the projection then
-            // counts nothing as hidden, which is what removes the button.
-            ...(spawnedLedgeAll ? {} : { limit: SPAWNED_SESSIONS_LEDGE_LIMIT }),
+            includeSettled: spawnedLedgeSettled,
           })
         : undefined,
-    [route.name, ledgeSessionId, state.sessions, spawnedLedgeAll],
+    [route.name, ledgeSessionId, state.sessions, spawnedLedgeSettled],
   );
-  const showAllSpawnedSessions = useCallback(
-    () => setSpawnedLedgeAllFor(ledgeSessionId ?? null),
+  const toggleSpawnedSettled = useCallback(
+    () =>
+      setSpawnedLedgeSettledFor((current) =>
+        current === ledgeSessionId ? null : (ledgeSessionId ?? null),
+      ),
     [ledgeSessionId],
   );
   // Gated on what the strip DRAWS (`spawnedSessionsKey`), exactly as the
@@ -5008,7 +5006,7 @@ function AppContent() {
   const spawnedLedge = useMemo(
     () =>
       spawnedLedgeView &&
-      spawnedLedgeView.counts.total > 0 &&
+      (spawnedLedgeView.counts.total > 0 || spawnedLedgeView.settled > 0) &&
       ledgeSessionId ? (
         <SpawnedSessionsLedge
           sessionId={ledgeSessionId}
@@ -5016,7 +5014,7 @@ function AppContent() {
           open={spawnedLedgeOpen}
           onToggle={toggleSpawnedLedge}
           onOpenSession={openSession}
-          onShowAll={showAllSpawnedSessions}
+          onToggleSettled={toggleSpawnedSettled}
           onSettleSession={settleSession}
         />
       ) : undefined,
@@ -5026,7 +5024,7 @@ function AppContent() {
       spawnedLedgeOpen,
       toggleSpawnedLedge,
       openSession,
-      showAllSpawnedSessions,
+      toggleSpawnedSettled,
       settleSession,
     ],
   );

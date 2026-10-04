@@ -69,9 +69,9 @@ function ledge(
   over: {
     open?: boolean;
     onOpenSession?: (id: string) => void;
-    onShowAll?: () => void;
+    onToggleSettled?: () => void;
     onSettleSession?: (id: string, settled: boolean) => void;
-    limit?: number;
+    includeSettled?: boolean;
   } = {},
 ) {
   return (
@@ -80,12 +80,12 @@ function ledge(
       view={spawnedSessionsView({
         sessions,
         coordinatorId: "root",
-        ...(over.limit === undefined ? {} : { limit: over.limit }),
+        includeSettled: over.includeSettled ?? false,
       })}
       open={over.open ?? false}
       onToggle={() => {}}
       onOpenSession={over.onOpenSession ?? (() => {})}
-      onShowAll={over.onShowAll ?? (() => {})}
+      onToggleSettled={over.onToggleSettled ?? (() => {})}
       onSettleSession={over.onSettleSession ?? (() => {})}
     />
   );
@@ -99,7 +99,7 @@ describe("the composer's spawned-session ledge", () => {
         session("b"),
       ]),
     );
-    expect(markup).toContain("2 sessions · 1 working");
+    expect(markup).toContain("2 sessions · 1 running");
     // The line carries no verb, exactly as the cluster card's does not; the
     // spoken label is where "coordinates" survives, since this strip has no
     // card title above it to say whose sessions these are.
@@ -107,7 +107,7 @@ describe("the composer's spawned-session ledge", () => {
     // "spawned", not "coordinated": the projection keeps a peer the user has
     // taken over, and the label may not claim a relation that has ended.
     expect(markup).toContain(
-      "Show the sessions this chat spawned — 2 sessions · 1 working",
+      "Show the sessions this chat spawned — 2 sessions · 1 running",
     );
     expect(markup).toContain('aria-expanded="false"');
     // Collapsed is a summary, not a list.
@@ -171,7 +171,7 @@ describe("the composer's spawned-session ledge", () => {
         session("asks", { title: "Reviewer", attention: "question" }),
       ]),
     );
-    expect(markup).toContain("2 sessions · 1 working · 1 waiting");
+    expect(markup).toContain("2 sessions · 1 running · 1 waiting");
     expect(markup).toContain("Answer in “Reviewer”");
   });
 
@@ -240,66 +240,91 @@ describe("the composer's spawned-session ledge", () => {
     expect(markup).toContain("Answer in “Old question”");
   });
 
-  it("folds the peers past its cut behind a Show-more under the list", () => {
-    container = document.createElement("div");
-    document.body.append(container);
-    root = createRoot(container);
-    const many = Array.from({ length: 12 }, (_, index) =>
-      session(`peer-${index}`, { updatedAt: NOW - index * 1_000 }),
+  it("draws the peers as a tree, each under the session that spawned it", () => {
+    const markup = renderToStaticMarkup(
+      ledge(
+        [
+          session("impl", { title: "Implementer", updatedAt: NOW - 50_000 }),
+          session("rev", {
+            title: "Reviewer",
+            spawnedBySessionId: "impl",
+            updatedAt: NOW - 1_000,
+            backgroundActivity: {
+              activeCount: 2,
+              shellCount: 2,
+              monitorCommandCount: 0,
+              monitorWebsocketCount: 0,
+              startingCount: 0,
+              stoppingCount: 0,
+              oldestStartedAt: NOW - 30_000,
+            },
+          }),
+          session("other", { title: "Helper", updatedAt: NOW - 20_000 }),
+        ],
+        { open: true },
+      ),
     );
-    act(() => {
-      root?.render(ledge(many, { open: true, limit: 10 }));
-    });
-    expect(container.textContent).toContain("12 sessions");
-    expect(container.textContent).not.toContain("Sessions inbox");
-    const more = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Show 2 more"),
+    // Every depth counts, and background jobs are a fact of their own.
+    expect(markup).toContain("3 sessions · 2 jobs");
+    // Depth-first, siblings newest first: the reviewer moved most recently of
+    // all, yet it sits right under the implementer that spawned it, indented
+    // one step, and the helper that moved after the implementer leads.
+    const order = ["other", "impl", "rev"].map((id) =>
+      markup.indexOf(`data-list-row-id="${id}"`),
     );
-    expect(more).toBeDefined();
-    // The rows scroll in a capped box; the button sits UNDER that box, never
-    // inside it. Ten rows fill the box on a laptop, and a control past the
-    // fold is one the user has to know to scroll for. Showing every peer then
-    // changes what is in the box, never how tall the composer's shelf is.
-    const scrollBox = container.querySelector<HTMLElement>(
-      "[data-spawned-sessions-rows]",
-    );
-    expect(scrollBox?.className).toContain("overflow-y-auto");
-    expect(scrollBox?.querySelectorAll("[data-session-row]")).toHaveLength(10);
-    expect(more?.closest("[data-spawned-sessions-rows]")).toBeNull();
-    expect(scrollBox?.nextElementSibling).toBe(more);
-    // And it is part of the region the toggle controls.
-    expect(more?.closest("#spawned-sessions-ledge-root")).not.toBeNull();
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(markup).toContain("padding-left:1.5rem");
+    expect(markup).toContain("2 background jobs running");
+    expect(markup).toContain("coordinating 1 session · 2 jobs");
   });
 
-  it("asks the host for every peer on Show-more, and hides the button once it has them", () => {
+  it("keeps settled peers out of the line and the list until asked", () => {
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);
-    const many = Array.from({ length: 12 }, (_, index) =>
-      session(`peer-${index}`, { updatedAt: NOW - index * 1_000 }),
-    );
+    const peers = [
+      session("live"),
+      session("done-1", { settledAt: NOW - 10_000 }),
+      session("done-2", { settledAt: NOW - 10_000 }),
+    ];
     let asked = 0;
     act(() => {
       root?.render(
-        ledge(many, {
+        ledge(peers, {
           open: true,
-          limit: 10,
-          onShowAll: () => {
+          onToggleSettled: () => {
             asked++;
           },
         }),
       );
     });
-    const more = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Show 2 more"),
+    expect(container.textContent).toContain("1 session · 2 settled");
+    expect(container.querySelectorAll("[data-session-row]")).toHaveLength(1);
+    const toggle = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Show 2 settled"),
     );
-    act(() => more?.click());
+    // Under the capped scroll box, never inside it: a control past the fold
+    // is one the user has to know to scroll for.
+    const scrollBox = container.querySelector<HTMLElement>(
+      "[data-spawned-sessions-rows]",
+    );
+    expect(scrollBox?.className).toContain("overflow-y-auto");
+    expect(toggle?.closest("[data-spawned-sessions-rows]")).toBeNull();
+    expect(scrollBox?.nextElementSibling).toBe(toggle);
+    act(() => toggle?.click());
     expect(asked).toBe(1);
-    // The host answers with an uncut view; nothing is hidden, so no button.
+    // The host answers with the settled peers included.
     act(() => {
-      root?.render(ledge(many, { open: true }));
+      root?.render(ledge(peers, { open: true, includeSettled: true }));
     });
-    expect(container.querySelectorAll("[data-session-row]")).toHaveLength(12);
-    expect(container.textContent).not.toContain("Show 2 more");
+    expect(container.querySelectorAll("[data-session-row]")).toHaveLength(3);
+    expect(container.textContent).toContain("Hide settled");
+  });
+
+  it("stays on the composer when every peer is settled", () => {
+    const markup = renderToStaticMarkup(
+      ledge([session("done", { settledAt: NOW - 10_000 })]),
+    );
+    expect(markup).toContain("1 settled session");
   });
 });

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { Archive, Check, ChevronRight } from "lucide-react";
+import { isShelvedSession } from "@assistant/shared";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -207,6 +208,10 @@ export function SessionInbox({
   // state: the child rows are laid out, focused and swiped by this list, and a
   // card that unmounts on a re-tier must not take the disclosure with it.
   const [openClusters, setOpenClusters] = useState<string[]>([]);
+  // Which open clusters also list their SETTLED peers, by coordinator id. Off
+  // by default: the fold is about what is going on now, and its history is a
+  // request.
+  const [settledHistory, setSettledHistory] = useState<string[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Cards on their way out: they stay in the list, playing the exit, until the
   // settle command is actually sent — the row is the animation's subject, so it
@@ -430,11 +435,14 @@ export function SessionInbox({
   const childRows = useCallback(
     (item: SessionInboxItem): SessionInboxCard[] => {
       if (!expandedClusters.has(inboxItemId(item))) return [];
-      return item.kind === "run"
-        ? item.roles
-        : (item.card.cluster?.children ?? []);
+      if (item.kind === "run") return item.roles;
+      const cluster = item.card.cluster;
+      if (!cluster) return [];
+      return settledHistory.includes(item.card.session.id)
+        ? cluster.childrenWithSettled
+        : cluster.children;
     },
-    [expandedClusters],
+    [expandedClusters, settledHistory],
   );
 
   // ONE ticker for every visible elapsed label, not one interval per card —
@@ -656,6 +664,11 @@ export function SessionInbox({
       ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
     );
   }, []);
+  const toggleSettledHistory = useCallback((id: string) => {
+    setSettledHistory((ids) =>
+      ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
+    );
+  }, []);
   // Runs and clusters share the disclosure state, so they share its key space:
   // `inboxItemId` is what keeps a run id from colliding with a session id.
   const toggleRunRoles = useCallback(
@@ -691,30 +704,36 @@ export function SessionInbox({
     rows: SessionInboxCard[],
     relation: "coordinated" | "workflow" = "coordinated",
   ) =>
-    rows.map((child) => (
-      <ExitStage
-        key={child.session.id}
-        leaving={settling.includes(child.session.id)}
-      >
-        <SwipeRow
-          {...cardSwipe(child)}
-          onExited={() => runSwipeExit(child.session.id)}
+    rows.map((child) => {
+      // A settled peer listed as history is already down: it keeps Archive
+      // and Delete, and offers no Settle it has nothing left to acknowledge.
+      const shelved = isShelvedSession(child.session);
+      const swipe = cardSwipe(child);
+      return (
+        <ExitStage
+          key={child.session.id}
+          leaving={settling.includes(child.session.id)}
         >
-          <ClusterChildRow
-            card={child}
-            now={now}
-            density={density}
-            relation={relation}
-            active={child.session.id === currentId}
-            onOpen={onSelect}
-            onSettle={settleCard}
-            onArchive={onArchive}
-            onDelete={onDeleteSession}
-            onFocusSibling={focusSibling}
-          />
-        </SwipeRow>
-      </ExitStage>
-    ));
+          <SwipeRow
+            {...(shelved ? { left: swipe.left } : swipe)}
+            onExited={() => runSwipeExit(child.session.id)}
+          >
+            <ClusterChildRow
+              card={child}
+              now={now}
+              density={density}
+              relation={relation}
+              active={child.session.id === currentId}
+              onOpen={onSelect}
+              onSettle={shelved ? undefined : settleCard}
+              onArchive={onArchive}
+              onDelete={onDeleteSession}
+              onFocusSibling={focusSibling}
+            />
+          </SwipeRow>
+        </ExitStage>
+      );
+    });
 
   const renderRunItem = (item: WorkflowRunInboxItem) => {
     const id = inboxItemId(item);
@@ -797,6 +816,27 @@ export function SessionInbox({
                 />
               </SwipeRow>
               {renderChildRows(rows)}
+              {/* The fold's history, on request: the peers already settled,
+                  put back in the tree where they were spawned. Offered only
+                  while the fold is open and has any. */}
+              {expandedClusters.has(id) &&
+              (card.cluster?.settledCount ?? 0) > 0 ? (
+                <button
+                  type="button"
+                  aria-expanded={settledHistory.includes(id)}
+                  onClick={() => toggleSettledHistory(id)}
+                  className="flex min-h-7 w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-caption text-faint outline-none transition-colors hover:bg-raised hover:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                >
+                  <ChevronRight
+                    size={12}
+                    aria-hidden
+                    className={`shrink-0 transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
+                  />
+                  {settledHistory.includes(id)
+                    ? "Hide settled"
+                    : `Show ${card.cluster?.settledCount} settled`}
+                </button>
+              ) : null}
             </div>
           </ExitStage>
         </div>

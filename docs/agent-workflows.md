@@ -138,18 +138,18 @@ the outcome:
   The Sessions inbox is the first consumer of that edge
   ([Task-675](pa://task/675)): a coordinator and its `coordinator`-owned peers
   are one card stating bounded aggregate state, with the fold decided by the
-  edge and its ownership alone and bounded by a depth cap and a cycle guard. A
-  `taken-over` peer, an `unknown` one, and one whose spawner is archived or
-  deleted stay top-level. A folded peer waiting on a human or holding an
-  unresolved failure lifts the cluster, is named on it, opens in one action, and
-  keeps the cluster visible even while the coordinator is settled. Settling the
-  coordinator settles the folded peers with it, server-side through their
-  current outcome revisions (`spawnClusterDescendantIds` is the one membership
-  answer for both sides); a peer that is running, queued or waiting on a human
-  refuses the whole Settle in its own wording, while a peer's failure never
-  does. A coordinator-owned child's provider completion raises neither an
-  outcome revision nor an OS notification; a failure after settlement unshelves
-  it without a top-level revision so the cluster can surface it. A successful
+  edge and its ownership alone, at any depth, with a cycle guard. A `taken-over`
+  peer, an `unknown` one, and one whose spawner is archived or deleted stay
+  top-level. A folded peer waiting on a human or holding an unresolved failure
+  lifts the cluster, is named on it, opens in one action, and keeps the cluster
+  visible even while the coordinator is settled. Settling the coordinator
+  settles the folded peers with it, server-side through their current outcome
+  revisions (`spawnClusterDescendantIds` is the one membership answer for both
+  sides); a peer that is running, queued or waiting on a human refuses the whole
+  Settle in its own wording, while a peer's failure never does. A
+  coordinator-owned child's provider completion raises neither an outcome
+  revision nor an OS notification; a failure after settlement unshelves it
+  without a top-level revision so the cluster can surface it. A successful
   agent-driven coordinator wake is also intermediate while any peer reply it
   explicitly requested remains outstanding. That wake clears only the unread
   state it introduced, so the parent does not show **Done** while work is still
