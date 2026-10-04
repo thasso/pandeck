@@ -29,6 +29,7 @@ const questions = await import("./tools/core/questionTool.ts");
 const promptQueue = await import("./promptQueue.ts");
 const toolGroups = await import("./mcp/toolGroups/registry.ts");
 const { projectStore } = await import("./db/projectStore.ts");
+const { hub } = await import("./hub.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -86,10 +87,14 @@ test("a cleanup step that fails leaves the rest of the delete to run", async () 
   vi.spyOn(toolGroups, "deleteToolGroupSessionData").mockImplementation(() => {
     throw new Error("EACCES: permission denied");
   });
-  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const broadcast = vi.spyOn(hub, "broadcastSessions");
 
   await connection().onDeleteSession(id);
 
   assert.deepEqual(remove.mock.calls, [[id]]);
   assert.deepEqual(forget.mock.calls, [[id]]);
+  assert.ok(broadcast.mock.calls.length > 0, "the list still learns of it");
+  assert.equal(warn.mock.calls.length, 1);
+  assert.match(String(warn.mock.calls[0]?.[1]), /EACCES/);
 });

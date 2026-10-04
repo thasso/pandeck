@@ -159,9 +159,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   session model display), `curatedModels.ts` (the Claude curated options,
   loading no engine SDK), `usage.ts` (per-account usage, OpenAI reset-credit
   redeem), `registry.ts` (`harnessRegistry`: id routing, resident sessions,
-  store wiring), `firstSend.ts` (each engine's admission and preparation for a
-  session's first send) and `create.ts` (`createSession`: each engine's creation
-  sequence). `harnessBoundary.test.ts` pins what still bypasses it.
+  store wiring, rename and the engine half of a delete), `firstSend.ts` (each
+  engine's admission and preparation for a session's first send), `create.ts`
+  (`createSession`: each engine's creation sequence) and `fork.ts`
+  (`prepareFork`: each engine's fork cut and refusals).
+  `harnessBoundary.test.ts` pins what still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock
   that lets the owning store release an unviewed, idle session) and

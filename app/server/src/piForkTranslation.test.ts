@@ -680,33 +680,37 @@ test("a refused fork never claims the view, on either engine", async () => {
     Connection.prototype as unknown as { claimViewRequest(): unknown },
     "claimViewRequest",
   );
-  const ids = await seedPiSession("unbound-for-claims", false);
-  const { fork, sent } = makeConnection();
-
-  await fork("unbound-for-claims", ids[1]!, "at");
-  // The same session as Claude's, whose cut is refused by the same anchor.
   const real = settings.getSettings();
   const enabled = vi.spyOn(settings, "getSettings").mockReturnValue({
     ...real,
     claudeSdk: { ...real.claudeSdk, enabled: true },
   });
-  sessionStore.upsert({
-    id: "unbound-for-claims",
-    harness: "claude-sdk",
-    agentType: "developer",
-  });
-  await fork("unbound-for-claims", ids[1]!, "at");
+  try {
+    const ids = await seedPiSession("unbound-for-claims", false);
+    const { fork, sent } = makeConnection();
 
-  assert.equal(claims.mock.calls.length, 0);
-  assert.deepEqual(
-    sent.filter((message) => message.type === "error").map((m) => m.message),
-    [
-      "Failed to fork session: this message has no provider anchor to branch from.",
-      "Failed to fork session: this message has no provider anchor to branch from.",
-    ],
-  );
-  claims.mockRestore();
-  enabled.mockRestore();
+    await fork("unbound-for-claims", ids[1]!, "at");
+    // The same session as Claude's: before its first prompt there is nothing
+    // to cut at, which only the Claude engine says this way.
+    sessionStore.upsert({
+      id: "unbound-for-claims",
+      harness: "claude-sdk",
+      agentType: "developer",
+    });
+    await fork("unbound-for-claims", ids[0]!, "before");
+
+    assert.equal(claims.mock.calls.length, 0);
+    assert.deepEqual(
+      sent.filter((message) => message.type === "error").map((m) => m.message),
+      [
+        "Failed to fork session: this message has no provider anchor to branch from.",
+        "Failed to fork session: there is nothing before this prompt to branch from.",
+      ],
+    );
+  } finally {
+    claims.mockRestore();
+    enabled.mockRestore();
+  }
 });
 
 afterAll(() => {

@@ -50,7 +50,10 @@ interface HarnessSessions {
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
   /** Persist a new title, which also marks auto-naming done. */
   rename(ref: SessionRef, title: string): Promise<void>;
-  /** Dispose the session and delete what the engine stored for it. */
+  /**
+   * Dispose the session and delete what the engine stored for it: awaited for
+   * pi's transcript; Claude removes its native transcript in the background.
+   */
   remove(ref: SessionRef): Promise<void>;
 }
 
@@ -245,8 +248,8 @@ export const harnessRegistry = {
 
   /**
    * Take a deleted session out of whichever engine holds it: dispose it and
-   * delete its transcript. Everything harness-neutral about a delete is the
-   * caller's.
+   * delete what it stored (Claude's native transcript in the background).
+   * Everything harness-neutral about a delete is the caller's.
    */
   remove(ref: SessionRef & { harness: Harness }): Promise<void> {
     return sessions[ref.harness].remove(ref);

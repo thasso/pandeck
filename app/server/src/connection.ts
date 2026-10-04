@@ -5006,8 +5006,9 @@ export class Connection implements Viewer {
     this.sessionRemoved(id);
     hub.clearSessionViews(id);
     // The engine disposes its session (aborting any in-flight turn) before its
-    // first await, still in this synchronous run; deleting what it stored on
-    // disk is what is awaited, after the cleanup below.
+    // first await, still in this synchronous run. What is awaited, after the
+    // cleanup below, is pi's transcript removal; Claude deletes its record at
+    // once and its native transcript in the background.
     const removal = harnessRegistry.remove({
       harness: ref.harness,
       id,
