@@ -16,10 +16,12 @@ import { sessionStore } from "./db/sessionStore.ts";
 /**
  * What an explicit ownership command did. `unavailable` is a session the user
  * cannot act on (missing, deleted, or not in the user's scope); `not-spawned`
- * has no spawn edge, so no owner to change.
+ * has no spawn edge, so no owner to change; `coordinator-gone` is a Hand back
+ * to a coordinator that was deleted — nobody would run the peer, report its
+ * outcomes or be able to stop it.
  */
 export type SpawnOwnershipResult =
-  "changed" | "unchanged" | "unavailable" | "not-spawned";
+  "changed" | "unchanged" | "unavailable" | "not-spawned" | "coordinator-gone";
 
 /**
  * Set a spawned child's owner on the user's explicit word. A store failure
@@ -33,8 +35,15 @@ export function setSpawnOwnership(
 ): SpawnOwnershipResult {
   const meta = sessionStore.get(sessionId);
   if (!meta || meta.scope !== "user") return "unavailable";
-  if (!sessionStore.spawnedParentsByChildIds([sessionId]).has(sessionId))
-    return "not-spawned";
+  const spawn = sessionStore
+    .spawnedParentsByChildIds([sessionId])
+    .get(sessionId);
+  if (!spawn) return "not-spawned";
+  if (
+    ownership === "coordinator" &&
+    sessionStore.get(spawn.parentSessionId) === undefined
+  )
+    return "coordinator-gone";
   return sessionStore.setSpawnedOwnership(sessionId, ownership)
     ? "changed"
     : "unchanged";

@@ -770,8 +770,10 @@ export function TaskInspector({
 /**
  * The Take over / Hand back action for a spawned session, or nothing for a
  * session no other session spawned. A session the user took over offers to
- * hand it back to its coordinator; any other spawned session (coordinator-run,
- * or an `unknown` edge) offers to take it over.
+ * hand it back to its coordinator — only while that coordinator is in the
+ * list, since handing a peer to a session that is gone would leave nobody to
+ * run it; any other spawned session (coordinator-run, or an `unknown` edge)
+ * offers to take it over.
  */
 function spawnOwnershipAction(
   sessionId: string | undefined,
@@ -785,6 +787,7 @@ function spawnOwnershipAction(
     (item) => item.id === session.spawnedBySessionId,
   );
   const coordinatorTitle = coordinator?.title.trim() || undefined;
+  if (session.spawnOwnership === "taken-over" && !coordinator) return undefined;
   return session.spawnOwnership === "taken-over"
     ? [
         {

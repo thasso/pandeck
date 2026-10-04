@@ -4736,13 +4736,15 @@ export class Connection implements Viewer {
       });
       return;
     }
-    if (result === "unavailable" || result === "not-spawned") {
+    if (result !== "changed" && result !== "unchanged") {
       this.send({
         type: "error",
         message:
           result === "unavailable"
             ? "That session is not available."
-            : "Only a spawned session has an owner to change.",
+            : result === "not-spawned"
+              ? "Only a spawned session has an owner to change."
+              : "Its coordinator was deleted, so there is no one to hand it back to.",
         target,
       });
       return;

@@ -253,6 +253,29 @@ describe("SessionInspector layout", () => {
     expect(asked).toEqual(["taken-over", "coordinator"]);
   });
 
+  it("offers no Hand back when the coordinator is gone from the list", () => {
+    const markup = render({
+      ...base,
+      sessionId: "child",
+      sessions: [
+        {
+          id: "child",
+          harness: "pi" as const,
+          agentType: "assistant" as const,
+          title: "Implementer",
+          createdAt: 1,
+          updatedAt: 1,
+          messageCount: 1,
+          spawnedBySessionId: "deleted-coordinator",
+          spawnOwnership: "taken-over" as const,
+        },
+      ],
+      onSetSpawnOwnership: () => {},
+    });
+    expect(markup).not.toContain("Hand back");
+    expect(markup).not.toContain("Take over");
+  });
+
   it("offers no ownership action on a session nothing spawned", () => {
     const markup = render({
       ...base,

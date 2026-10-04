@@ -185,8 +185,13 @@ test("SQLite session store sets spawn ownership on the user's word", () => {
   });
   assert.equal(sessionStore.setSpawnedOwnership(child, "coordinator"), false);
   assert.equal(
-    sessionStore.setSpawnedOwnership(child, "taken-over", 500),
+    sessionStore.setSpawnedOwnership(child, "taken-over", 1_000),
     true,
+  );
+  assert.equal(
+    ownershipOf(child)?.takenOverAt,
+    1_000,
+    "a takeover after a hand back is a new one, with its own timestamp",
   );
 
   // Re-linking the same pair is idempotent and cannot erase the takeover.
@@ -194,7 +199,7 @@ test("SQLite session store sets spawn ownership on the user's word", () => {
   assert.deepEqual(ownershipOf(child), {
     parentSessionId: parent,
     ownership: "taken-over",
-    takenOverAt: 500,
+    takenOverAt: 1_000,
   });
 
   // A link written before ownership tracking, and one whose metadata cannot be

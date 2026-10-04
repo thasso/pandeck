@@ -283,3 +283,41 @@ test("a disabled harness does not stop the user taking a peer over", async () =>
     for (const id of [coordinator, peer]) sessionStore.remove(id);
   }
 });
+
+test("a peer cannot be handed back to a coordinator that was deleted", async () => {
+  const stamp = Date.now();
+  const coordinator = `own-cmd-gone-root-${stamp}`;
+  const peer = `own-cmd-gone-peer-${stamp}`;
+  for (const id of [coordinator, peer])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+    });
+  sessionStore.linkSpawned(coordinator, peer);
+  sessionStore.setSpawnedOwnership(peer, "taken-over");
+  sessionStore.markDeleted(coordinator);
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: peer,
+      ownership: "coordinator",
+      requestId: "r-gone",
+    } as ClientMessage);
+    const error = sent.find((message) => message.type === "error") as
+      { requestId?: string; message?: string } | undefined;
+    assert.equal(error?.requestId, "r-gone");
+    assert.match(error?.message ?? "", /coordinator was deleted/);
+    // Nobody would run it: the user keeps it.
+    assert.equal(
+      sessionStore.spawnedParentsByChildIds([peer]).get(peer)?.ownership,
+      "taken-over",
+    );
+  } finally {
+    connection.dispose();
+    for (const id of [coordinator, peer]) sessionStore.remove(id);
+  }
+});
