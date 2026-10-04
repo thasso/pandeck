@@ -1,0 +1,234 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" width="1280" height="900" data-generator="fireworks-tech-graph" data-schema-version="1" data-text-metrics="heuristic-v1" data-style-id="1" data-visual-theme="Flat Icon" data-diagram-type="architecture" data-motion-scene="" data-semantic-profile="generic" data-semantic-valid="true" data-quality-profile="standard" data-max-bends-per-edge="12" data-max-total-bends="100" data-max-route-stretch="5.0" data-max-bridged-crossings="8" data-min-node-gap="0.0" data-min-container-gutter="0.0" data-min-label-clearance="2.0" data-min-segment-length="0.0">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowB" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="arrowC" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowE" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f97316"/>
+    </marker>
+    <marker id="arrowF" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7c3aed"/>
+    </marker>
+    <marker id="arrowG" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowH" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#6b7280"/>
+    </marker>
+    <filter id="shadowSoft" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+    <filter id="shadowGlass" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#020617" flood-opacity="0.28"/>
+    </filter>
+    <style>
+    text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }
+    .title { font-size: 30px; font-weight: 700; fill: #111827; }
+    .subtitle { font-size: 14px; font-weight: 500; fill: #6b7280; }
+    .section { font-size: 13px; font-weight: 700; fill: #2563eb; letter-spacing: 1.4px; }
+    .section-sub { font-size: 12px; font-weight: 500; fill: #64748b; }
+    .node-title { font-weight: 700; fill: #111827; }
+    .node-sub { font-weight: 500; fill: #6b7280; }
+    .node-type { font-size: 12px; font-weight: 700; fill: #64748b; letter-spacing: 0.08em; }
+    .arrow-label { font-size: 12px; font-weight: 600; fill: #6b7280; }
+    .legend { font-size: 12px; font-weight: 500; fill: #6b7280; }
+    .footnote { font-size: 12px; font-weight: 500; fill: #64748b; }
+    .metric-label { font-size: 8.5px; font-weight: 700; fill: #64748b; text-transform: uppercase; }
+    .metric-value { font-size: 9.5px; font-weight: 700; fill: #111827; }
+    </style>
+  </defs>
+  <rect data-graph-role="background" width="1280.0" height="900.0" fill="#ffffff"/>
+  <text x="640.0" y="56" text-anchor="middle" class="title">Pandeck agent harnesses: target architecture</text>
+  <text x="640.0" y="82" text-anchor="middle" class="subtitle">app code talks to one harness seam; pi and Claude become two backends behind it</text>
+  <g id="app" data-graph-role="container" data-container-id="app" data-semantic-role="boundary" data-graph-bounds="40,100,1240,220">
+  <rect data-graph-role="container" x="40.0" y="100.0" width="1200.0" height="120.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="58.0" y="124.0" class="section">APP CODE</text>
+    <rect id="app-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="106" width="87.46" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="seam" data-graph-role="container" data-container-id="seam" data-semantic-role="boundary" data-graph-bounds="40,260,1240,390">
+  <rect data-graph-role="container" x="40.0" y="260.0" width="1200.0" height="130.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="58.0" y="284.0" class="section">HARNESSES/ (NEW)</text>
+    <rect id="seam-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="266" width="150.9" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="pi" data-graph-role="container" data-container-id="pi" data-semantic-role="boundary" data-graph-bounds="40,440,630,590">
+  <rect data-graph-role="container" x="40.0" y="440.0" width="590.0" height="150.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="58.0" y="464.0" class="section">PISDK/</text>
+    <rect id="pi-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="446" width="71.86" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="claude" data-graph-role="container" data-container-id="claude" data-semantic-role="boundary" data-graph-bounds="650,440,1240,590">
+  <rect data-graph-role="container" x="650.0" y="440.0" width="590.0" height="150.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="668.0" y="464.0" class="section">CLAUDESDK/</text>
+    <rect id="claude-header" data-graph-role="reserved" data-reserved-kind="container-header" x="658" y="446" width="105.4" height="30" fill="none" stroke="none"/>
+  </g>
+  <g id="runtime" data-graph-role="container" data-container-id="runtime" data-semantic-role="boundary" data-graph-bounds="40,630,1240,750">
+  <rect data-graph-role="container" x="40.0" y="630.0" width="1200.0" height="120.0" rx="16.0" fill="none" stroke="#dbe5f1" stroke-width="1.4" stroke-dasharray="6 5"/>
+  <text x="58.0" y="654.0" class="section">SESSION/ RUNTIME (UNCHANGED)</text>
+    <rect id="runtime-header" data-graph-role="reserved" data-reserved-kind="container-header" x="48" y="636" width="231.76" height="30" fill="none" stroke="none"/>
+  </g>
+  <path id="a-reg-cl" data-graph-role="edge" data-edge-id="a-reg-cl" data-source="registry" data-target="clb" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="3" data-route-stretch="1.0" data-bridges="" d="M 340,331 L 350,331 L 350,404 L 1135,404 L 1135,494" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-conn" data-graph-role="edge" data-edge-id="a-conn" data-source="conn" data-target="registry" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 220,198 L 220,298" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-spawn" data-graph-role="edge" data-edge-id="a-spawn" data-source="spawn" data-target="live" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 465,198 L 465,298" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-calls" data-graph-role="edge" data-edge-id="a-calls" data-source="callers" data-target="oneshot" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 695,198 L 695,298" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-cons" data-graph-role="edge" data-edge-id="a-cons" data-source="consumers" data-target="models" data-edge-kind="flow" data-topic-id="" data-flow="read" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 917.5,198 L 917.5,298" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowC)"/>
+  <path id="a-web" data-graph-role="edge" data-edge-id="a-web" data-source="web" data-target="desc" data-edge-kind="flow" data-topic-id="" data-flow="read" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 1127.5,198 L 1127.5,298" fill="none" stroke="#2563eb" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowC)"/>
+  <path id="a-reg-pi" data-graph-role="edge" data-edge-id="a-reg-pi" data-source="registry" data-target="pib" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 220,364 L 220,494" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-pib-store" data-graph-role="edge" data-edge-id="a-pib-store" data-source="pib" data-target="pistore" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 295,526 L 312,526" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-pistore-live" data-graph-role="edge" data-edge-id="a-pistore-live" data-source="pistore" data-target="pilive" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 452,526 L 466,526" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-clb-store" data-graph-role="edge" data-edge-id="a-clb-store" data-source="clb" data-target="clstore" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 1050,526 L 1020,526" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-clstore-live" data-graph-role="edge" data-edge-id="a-clstore-live" data-source="clstore" data-target="cllive" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 860,526 L 840,526" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-door-rt" data-graph-role="edge" data-edge-id="a-door-rt" data-source="door" data-target="rt" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 260,696 L 300,696" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-rt-contract" data-graph-role="edge" data-edge-id="a-rt-contract" data-source="rt" data-target="contract" data-edge-kind="flow" data-topic-id="" data-flow="control" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="0" data-route-stretch="1.0" data-bridges="" d="M 500,696 L 545,696" fill="none" stroke="#7c3aed" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+  <path id="a-cl-ev" data-graph-role="edge" data-edge-id="a-cl-ev" data-source="cllive" data-target="contract" data-edge-kind="flow" data-topic-id="" data-flow="data" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="1" data-route-stretch="1.0" data-bridges="" d="M 755,558 L 755,696 L 735,696" fill="none" stroke="#f97316" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowE)"/>
+  <path id="a-pi-ev" data-graph-role="edge" data-edge-id="a-pi-ev" data-source="pilive" data-target="contract" data-edge-kind="flow" data-topic-id="" data-flow="data" data-motion-role="" data-motion-stage="" data-motion-order="" data-protocol="" data-via="" data-critical-path-id="" data-critical-hop="" data-critical-hops="" data-critical="false" data-bends="2" data-route-stretch="1.0" data-bridges="" d="M 541,558 L 541,578.4 L 640,578.4 L 640,666" fill="none" stroke="#f97316" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowE)"/>
+  <g id="node-conn" data-graph-role="node" data-node-id="conn" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="100,138,340,198">
+  <rect x="100.0" y="138.0" width="240.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="connection.ts · hub.ts" data-text-max-width="216.0" x="220.0" y="168.0" text-anchor="middle" class="node-title" font-size="17.33">connection.ts · hub.ts</text>
+  <text data-text-role="subtitle" data-full-text="WS commands, session lifecycle" data-text-max-width="216.0" x="220.0" y="190.0" text-anchor="middle" class="node-sub" font-size="12">WS commands, session lifecycle</text>
+  </g>
+  <g id="node-spawn" data-graph-role="node" data-node-id="spawn" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="360,138,570,198">
+  <rect x="360.0" y="138.0" width="210.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="sessionSpawn · workflow" data-text-max-width="186.0" x="465.0" y="168.0" text-anchor="middle" class="node-title" font-size="13.91">sessionSpawn · workflow</text>
+  <text data-text-role="subtitle" data-full-text="peers, Workflow Runs" data-text-max-width="186.0" x="465.0" y="190.0" text-anchor="middle" class="node-sub" font-size="12">peers, Workflow Runs</text>
+  </g>
+  <g id="node-callers" data-graph-role="node" data-node-id="callers" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="590,138,800,198">
+  <rect x="590.0" y="138.0" width="210.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="11 one-shot callers" data-text-max-width="186.0" x="695.0" y="168.0" text-anchor="middle" class="node-title" font-size="17.11">11 one-shot callers</text>
+  <text data-text-role="subtitle" data-full-text="naming · commit · PR · memory" data-text-max-width="186.0" x="695.0" y="190.0" text-anchor="middle" class="node-sub" font-size="11.49">naming · commit · PR · memory</text>
+  </g>
+  <g id="node-consumers" data-graph-role="node" data-node-id="consumers" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="820,138,1015,198">
+  <rect x="820.0" y="138.0" width="195.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="Model and usage readers" data-text-max-width="171.0" x="917.5" y="168.0" text-anchor="middle" class="node-title" font-size="12.5">Model and usage readers</text>
+  <text data-text-role="subtitle" data-full-text="pickers · usage page" data-text-max-width="171.0" x="917.5" y="190.0" text-anchor="middle" class="node-sub" font-size="12">pickers · usage page</text>
+  </g>
+  <g id="node-web" data-graph-role="node" data-node-id="web" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="1035,138,1220,198">
+  <rect x="1035.0" y="138.0" width="185.0" height="60.0" rx="10.0" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="web/ client" data-text-max-width="161.0" x="1127.5" y="168.0" text-anchor="middle" class="node-title" font-size="18">web/ client</text>
+  <text data-text-role="subtitle" data-full-text="runtime picker" data-text-max-width="161.0" x="1127.5" y="190.0" text-anchor="middle" class="node-sub" font-size="12">runtime picker</text>
+  </g>
+  <g id="node-registry" data-graph-role="node" data-node-id="registry" data-semantic-role="double_rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="100,298,340,364">
+  <rect x="100.0" y="298.0" width="240.0" height="66.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="2.0"/>
+  <rect x="106.0" y="304.0" width="228.0" height="54.0" rx="7.0" fill="none" stroke="#8b5cf6" stroke-width="1.2" opacity="0.65"/>
+  <text data-text-role="title" data-full-text="HarnessRegistry" data-text-max-width="208.0" x="220.0" y="331.0" text-anchor="middle" class="node-title" font-size="18">HarnessRegistry</text>
+  <text data-text-role="subtitle" data-full-text="acquire · create · fork · remove" data-text-max-width="208.0" x="220.0" y="353.0" text-anchor="middle" class="node-sub" font-size="11.34">acquire · create · fork · remove</text>
+  </g>
+  <g id="node-live" data-graph-role="node" data-node-id="live" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="360,298,570,364">
+  <rect x="360.0" y="298.0" width="210.0" height="66.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="LiveSession" data-text-max-width="186.0" x="465.0" y="331.0" text-anchor="middle" class="node-title" font-size="18">LiveSession</text>
+  <text data-text-role="subtitle" data-full-text="one driver interface" data-text-max-width="186.0" x="465.0" y="353.0" text-anchor="middle" class="node-sub" font-size="12">one driver interface</text>
+  </g>
+  <g id="node-oneshot" data-graph-role="node" data-node-id="oneshot" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="590,298,800,364">
+  <rect x="590.0" y="298.0" width="210.0" height="66.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="runOneShot()" data-text-max-width="186.0" x="695.0" y="331.0" text-anchor="middle" class="node-title" font-size="18">runOneShot()</text>
+  <text data-text-role="subtitle" data-full-text="normalized usage + errors" data-text-max-width="186.0" x="695.0" y="353.0" text-anchor="middle" class="node-sub" font-size="12">normalized usage + errors</text>
+  </g>
+  <g id="node-models" data-graph-role="node" data-node-id="models" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="820,298,1015,364">
+  <rect x="820.0" y="298.0" width="195.0" height="66.0" rx="10.0" fill="#faf5ff" stroke="#8b5cf6" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="Models · Usage ports" data-text-max-width="171.0" x="917.5" y="331.0" text-anchor="middle" class="node-title" font-size="14.49">Models · Usage ports</text>
+  <text data-text-role="subtitle" data-full-text="list · resolve · quota" data-text-max-width="171.0" x="917.5" y="353.0" text-anchor="middle" class="node-sub" font-size="12">list · resolve · quota</text>
+  </g>
+  <g id="node-desc" data-graph-role="node" data-node-id="desc" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="1035,298,1220,364">
+  <rect x="1035.0" y="298.0" width="185.0" height="66.0" rx="10.0" fill="#fff7ed" stroke="#f97316" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="HARNESSES" data-text-max-width="161.0" x="1127.5" y="331.0" text-anchor="middle" class="node-title" font-size="18">HARNESSES</text>
+  <text data-text-role="subtitle" data-full-text="shared/ descriptor" data-text-max-width="161.0" x="1127.5" y="353.0" text-anchor="middle" class="node-sub" font-size="12">shared/ descriptor</text>
+  </g>
+  <g id="node-pib" data-graph-role="node" data-node-id="pib" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="145,494,295,558">
+  <rect x="145.0" y="494.0" width="150.0" height="64.0" rx="10.0" fill="#ecfdf5" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="piBackend" data-text-max-width="126.0" x="220.0" y="526.0" text-anchor="middle" class="node-title" font-size="18">piBackend</text>
+  <text data-text-role="subtitle" data-full-text="HarnessBackend" data-text-max-width="126.0" x="220.0" y="548.0" text-anchor="middle" class="node-sub" font-size="12">HarnessBackend</text>
+  </g>
+  <g id="node-pistore" data-graph-role="node" data-node-id="pistore" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="312,494,452,558">
+  <rect x="312.0" y="494.0" width="140.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="piStore" data-text-max-width="116.0" x="382.0" y="526.0" text-anchor="middle" class="node-title" font-size="18">piStore</text>
+  <text data-text-role="subtitle" data-full-text="@earendil-works/*" data-text-max-width="116.0" x="382.0" y="548.0" text-anchor="middle" class="node-sub" font-size="11.21">@earendil-works/*</text>
+  </g>
+  <g id="node-pilive" data-graph-role="node" data-node-id="pilive" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="466,494,616,558">
+  <rect x="466.0" y="494.0" width="150.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="PiLiveSession" data-text-max-width="126.0" x="541.0" y="526.0" text-anchor="middle" class="node-title" font-size="17.25">PiLiveSession</text>
+  <text data-text-role="subtitle" data-full-text="LiveSession impl" data-text-max-width="126.0" x="541.0" y="548.0" text-anchor="middle" class="node-sub" font-size="12">LiveSession impl</text>
+  </g>
+  <g id="node-cllive" data-graph-role="node" data-node-id="cllive" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="670,494,840,558">
+  <rect x="670.0" y="494.0" width="170.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="ClaudeSdkSession" data-text-max-width="146.0" x="755.0" y="526.0" text-anchor="middle" class="node-title" font-size="15.43">ClaudeSdkSession</text>
+  <text data-text-role="subtitle" data-full-text="LiveSession impl" data-text-max-width="146.0" x="755.0" y="548.0" text-anchor="middle" class="node-sub" font-size="12">LiveSession impl</text>
+  </g>
+  <g id="node-clstore" data-graph-role="node" data-node-id="clstore" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="860,494,1020,558">
+  <rect x="860.0" y="494.0" width="160.0" height="64.0" rx="10.0" fill="#ffffff" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="claudeSdkStore" data-text-max-width="136.0" x="940.0" y="526.0" text-anchor="middle" class="node-title" font-size="16.02">claudeSdkStore</text>
+  <text data-text-role="subtitle" data-full-text="claude-agent-sdk" data-text-max-width="136.0" x="940.0" y="548.0" text-anchor="middle" class="node-sub" font-size="12">claude-agent-sdk</text>
+  </g>
+  <g id="node-clb" data-graph-role="node" data-node-id="clb" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="1050,494,1220,558">
+  <rect x="1050.0" y="494.0" width="170.0" height="64.0" rx="10.0" fill="#ecfdf5" stroke="#10b981" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="claudeBackend" data-text-max-width="146.0" x="1135.0" y="526.0" text-anchor="middle" class="node-title" font-size="18">claudeBackend</text>
+  <text data-text-role="subtitle" data-full-text="HarnessBackend" data-text-max-width="146.0" x="1135.0" y="548.0" text-anchor="middle" class="node-sub" font-size="12">HarnessBackend</text>
+  </g>
+  <g id="node-door" data-graph-role="node" data-node-id="door" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="60,666,260,726">
+  <rect x="60.0" y="666.0" width="200.0" height="60.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="runtimePrompt.ts" data-text-max-width="176.0" x="160.0" y="696.0" text-anchor="middle" class="node-title" font-size="18">runtimePrompt.ts</text>
+  <text data-text-role="subtitle" data-full-text="the one prompt door" data-text-max-width="176.0" x="160.0" y="718.0" text-anchor="middle" class="node-sub" font-size="12">the one prompt door</text>
+  </g>
+  <g id="node-rt" data-graph-role="node" data-node-id="rt" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="300,666,500,726">
+  <rect x="300.0" y="666.0" width="200.0" height="60.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="runtime · log · transport" data-text-max-width="176.0" x="400.0" y="696.0" text-anchor="middle" class="node-title" font-size="12.43">runtime · log · transport</text>
+  <text data-text-role="subtitle" data-full-text="durable log, wire events" data-text-max-width="176.0" x="400.0" y="718.0" text-anchor="middle" class="node-sub" font-size="12">durable log, wire events</text>
+  </g>
+  <g id="node-contract" data-graph-role="node" data-node-id="contract" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="545,666,735,726">
+  <rect x="545.0" y="666.0" width="190.0" height="60.0" rx="10.0" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="PromptableAdapter" data-text-max-width="166.0" x="640.0" y="696.0" text-anchor="middle" class="node-title" font-size="16.01">PromptableAdapter</text>
+  <text data-text-role="subtitle" data-full-text="AdapterEvent stream" data-text-max-width="166.0" x="640.0" y="718.0" text-anchor="middle" class="node-sub" font-size="12">AdapterEvent stream</text>
+  </g>
+  <g id="node-kit" data-graph-role="node" data-node-id="kit" data-semantic-role="rect" data-motion-role="" data-motion-stage="" data-motion-order="" data-parent="" data-deployment-id="" data-topic-id="" data-span-id="" data-station-order="" data-status="" data-start-ms="" data-duration-ms="" data-parent-span="" data-graph-bounds="1020,666,1220,726">
+  <rect x="1020.0" y="666.0" width="200.0" height="60.0" rx="10.0" fill="#fff7ed" stroke="#f97316" stroke-width="1.8"/>
+  <text data-text-role="title" data-full-text="SessionHost kit (new)" data-text-max-width="176.0" x="1120.0" y="696.0" text-anchor="middle" class="node-title" font-size="14.52">SessionHost kit (new)</text>
+  <text data-text-role="subtitle" data-full-text="shared by both sessions" data-text-max-width="176.0" x="1120.0" y="718.0" text-anchor="middle" class="node-sub" font-size="12">shared by both sessions</text>
+  </g>
+  <g id="a-conn-label" data-graph-role="label" data-owner="a-conn" data-graph-bounds="157.4,234,217,254">
+  <rect x="157.4" y="234.0" width="59.599999999999994" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="187.2" y="248.0" text-anchor="middle" class="arrow-label">acquire</text>
+  </g>
+  <g id="a-spawn-label" data-graph-role="label" data-owner="a-spawn" data-graph-bounds="416.32,234,462,254">
+  <rect x="416.32" y="234.0" width="45.68" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="439.16" y="248.0" text-anchor="middle" class="arrow-label">drive</text>
+  </g>
+  <g id="a-calls-label" data-graph-role="label" data-owner="a-calls" data-graph-bounds="655,234,691,254">
+  <rect x="655.0" y="234.0" width="36.0" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="673.0" y="248.0" text-anchor="middle" class="arrow-label">run</text>
+  </g>
+  <g id="a-cons-label" data-graph-role="label" data-owner="a-cons" data-graph-bounds="872.66,234,914.5,254">
+  <rect x="872.66" y="234.0" width="41.839999999999996" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="893.58" y="248.0" text-anchor="middle" class="arrow-label">read</text>
+  </g>
+  <g id="a-web-label" data-graph-role="label" data-owner="a-web" data-graph-bounds="1082.66,234,1124.5,254">
+  <rect x="1082.66" y="234.0" width="41.839999999999996" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="1103.58" y="248.0" text-anchor="middle" class="arrow-label">read</text>
+  </g>
+  <g id="a-reg-pi-label" data-graph-role="label" data-owner="a-reg-pi" data-graph-bounds="150.44,415,217,435">
+  <rect x="150.44" y="415.0" width="66.56" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="183.72" y="429.0" text-anchor="middle" class="arrow-label">dispatch</text>
+  </g>
+  <g id="a-door-rt-label" data-graph-role="label" data-owner="a-door-rt" data-graph-bounds="252.12,730,307.88,750">
+  <rect x="252.12" y="730.0" width="55.76" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="280.0" y="744.0" text-anchor="middle" class="arrow-label">prompt</text>
+  </g>
+  <g id="a-pi-ev-label" data-graph-role="label" data-owner="a-pi-ev" data-graph-bounds="541.74,565.4,639.26,585.4">
+  <rect x="541.74" y="565.4" width="97.52" height="20" rx="6" fill="#ffffff" opacity="0.94"/>
+  <text x="590.5" y="579.4" text-anchor="middle" class="arrow-label">AdapterEvent</text>
+  </g>
+  <g id="legend" data-graph-role="legend">
+    <rect id="legend-zone" data-graph-role="reserved" data-reserved-kind="legend" x="38" y="778" width="446.96" height="46" rx="10" fill="none" stroke="none"/>
+    <line data-graph-role="decoration" x1="48.0" y1="792.0" x2="78.0" y2="792.0" stroke="#7c3aed" stroke-width="2.4" marker-end="url(#arrowA)"/>
+    <text data-graph-role="decoration" x="88.0" y="796.0" class="legend">calls / dispatch</text>
+    <line data-graph-role="decoration" x1="212.72" y1="792.0" x2="242.72" y2="792.0" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowC)"/>
+    <text data-graph-role="decoration" x="252.72" y="796.0" class="legend">reads</text>
+    <line data-graph-role="decoration" x1="315.52" y1="792.0" x2="345.52" y2="792.0" stroke="#f97316" stroke-width="2.4" marker-end="url(#arrowE)"/>
+    <text data-graph-role="decoration" x="355.52" y="796.0" class="legend">normalized events</text>
+  </g>
+  <g id="footer" data-graph-role="reserved" data-graph-bounds="48,834,839,850">
+  <text x="48.0" y="846.0" class="footnote">Blue: app code. Purple: new seam. Orange: new shared pieces. Green: engine code, the only place SDK imports live.</text>
+  </g>
+</svg>
