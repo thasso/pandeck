@@ -172,6 +172,7 @@ export function SpawnedSessionsLedge({
                 card={card}
                 now={now}
                 active={false}
+                relation="spawned"
                 tabbable
                 onOpen={onOpenSession}
               />

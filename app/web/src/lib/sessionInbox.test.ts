@@ -2751,6 +2751,35 @@ describe("peer trees without a depth cap", () => {
   });
 });
 
+describe("an expanded peer row", () => {
+  it("redraws when the age it draws moves, though a running card's key holds", () => {
+    const running = (updatedAt: number): SessionInboxCard =>
+      allCardsOf(
+        buildSessionInbox([
+          session({ id: "root" }),
+          session({
+            id: "kid",
+            spawnedBySessionId: "root",
+            spawnOwnership: "coordinator",
+            isStreaming: true,
+            runStartedAt: NOW - 120_000,
+            updatedAt,
+          }),
+        ]),
+      )[0]?.cluster?.children[0] as SessionInboxCard;
+    const before = running(NOW - 60_000);
+    const after = running(NOW);
+    // The card key reads the elapsed run, which did not move.
+    expect(sessionCardKey(before, NOW)).toBe(sessionCardKey(after, NOW));
+    expect(
+      sameClusterChildProps(
+        { card: before, now: NOW },
+        { card: after, now: NOW },
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("a settled peer set running again", () => {
   const rows = [
     session({ id: "root" }),
@@ -2783,3 +2812,7 @@ describe("a settled peer set running again", () => {
     expect(ledge.settled).toBe(0);
   });
 });
+
+function allCardsOf(view: ReturnType<typeof buildSessionInbox>) {
+  return [...cards(view.needsYou), ...cards(view.active)];
+}

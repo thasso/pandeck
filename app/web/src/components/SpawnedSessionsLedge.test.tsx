@@ -182,7 +182,9 @@ describe("the composer's spawned-session ledge", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("Session a");
     expect(markup).toContain("Session b");
-    expect(markup).toContain("Open coordinated");
+    // "spawned", like the strip's own label: a row may be a peer the user
+    // took over.
+    expect(markup).toContain("Open spawned");
     // The strip owns no lifecycle action; those stay in the Sessions inbox.
     expect(markup).not.toContain("Settle");
     expect(markup).not.toContain("Archive");
@@ -275,7 +277,7 @@ describe("the composer's spawned-session ledge", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(markup).toContain("padding-left:1.5rem");
     expect(markup).toContain("2 background jobs running");
-    expect(markup).toContain("coordinating 1 session · 2 jobs");
+    expect(markup).toContain("spawned 1 session · 2 jobs");
   });
 
   it("keeps settled peers out of the line and the list until asked", () => {

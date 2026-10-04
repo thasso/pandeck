@@ -331,14 +331,15 @@ into a row that is itself put down; only a settled coordinator with nothing
 folded under it takes the shelf. The same rule holds inside the tree: a settled
 peer folds only while live work hangs below it, so a live peer it spawned stays
 under the coordinator above instead of surfacing as a card of its own. A settled
-peer its coordinator sets running again — a turn, or background jobs — is live
-work itself: it runs from the shelf raising no outcome, so it folds, counts as
-running and refuses the coordinator's Settle like any running peer, and returns
-to history when it goes quiet (`isDormantInSpawnTree`). A settled session kept
-up that way shows no failure: the server withholds `settledAt` from a row whose
-latest outcome is open, so a shelved row's stored error is one the user already
-acknowledged, and it neither counts nor bubbles. Settled peers are otherwise
-history: out of the counts, the Settle cascade and the tree.
+peer its coordinator sets going again — a turn, or background jobs — is live
+work itself: it runs from the shelf raising no outcome, so it folds, counts
+under running (a turn) or jobs (background work), refuses the coordinator's
+Settle in its own wording like any busy peer, and returns to history when it
+goes quiet (`isDormantInSpawnTree`). A settled session kept up that way shows no
+failure: the server withholds `settledAt` from a row whose latest outcome is
+open, so a shelved row's stored error is one the user already acknowledged, and
+it neither counts nor bubbles. Settled peers are otherwise history: out of the
+counts, the Settle cascade and the tree.
 
 Settle on a session settles it AND the peers it still coordinates, in one
 command: its own `session:<id>` outcome revision is acknowledged through the

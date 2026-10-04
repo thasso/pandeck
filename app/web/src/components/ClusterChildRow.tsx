@@ -24,10 +24,11 @@ export interface ClusterChildRowProps {
   /**
    * How this row is related to the item above it, for the spoken label: peers
    * of a spawn cluster are `coordinated`, a Workflow Run's own sessions are
-   * `workflow`. The row is otherwise identical, and the word is the only place
-   * the two folds differ.
+   * `workflow`, and the composer ledge's peers — owned or taken over — are
+   * `spawned`. The row is otherwise identical, and the word is the only place
+   * the surfaces differ.
    */
-  relation?: "coordinated" | "workflow";
+  relation?: "coordinated" | "workflow" | "spawned";
   /**
    * A tab stop of its own. The inbox says no: its rows are reached by arrow
    * key from the item above them, and a second stop per folded peer would put
@@ -101,7 +102,11 @@ function ClusterChildRowImpl({
   const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
   const jobsText = `${jobs} background job${jobs === 1 ? "" : "s"} running`;
   const peers = card.peers;
-  const peersText = peers ? `coordinating ${sessionClusterSummary(peers)}` : "";
+  // The composer ledge lists what a chat SPAWNED, owned or not, so its rows
+  // claim no coordination either.
+  const peersText = peers
+    ? `${relation === "spawned" ? "spawned" : "coordinating"} ${sessionClusterSummary(peers)}`
+    : "";
   // Each level steps in by the row's own leading inset; past six levels the
   // step stops, so a deep chain keeps room for its titles.
   const indent = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);

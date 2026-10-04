@@ -378,6 +378,37 @@ describe("SessionInbox clusters", () => {
     expect(rowIds()).toEqual(["root", "impl", "rev"]);
   });
 
+  it("offers no Settle on a settled peer listed as history, by key or by swipe", () => {
+    vi.useFakeTimers();
+    const settled: Array<[string, boolean]> = [];
+    render(
+      [
+        session("root"),
+        peer("live", "root"),
+        peer("done", "root", { settledAt: NOW - 5_000 }),
+      ],
+      { onSettle: (id, value) => void settled.push([id, value]) },
+    );
+    click(button("Show the 1 coordinated session"));
+    click(
+      [...view!.container.querySelectorAll<HTMLElement>("button")].find(
+        (node) => node.textContent === "Show 1 settled",
+      ) as HTMLElement,
+    );
+    const history = row("history:done");
+    act(() => {
+      history.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", bubbles: true }),
+      );
+    });
+    act(() => void vi.advanceTimersByTime(1_000));
+    swipeRight("history:done");
+    expect(settled).toEqual([]);
+    // A live row in the same fold still settles.
+    swipeRight("live");
+    expect(settled).toEqual([["live", true]]);
+  });
+
   it("keeps the disclosure honest about what the click will do", () => {
     render([
       session("root", { title: "coordinator" }),

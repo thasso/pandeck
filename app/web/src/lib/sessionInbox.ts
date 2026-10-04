@@ -1175,7 +1175,10 @@ export function sameSessionCardProps<
 
 /**
  * The same contract for the compact row an EXPANDED cluster child is rendered
- * as: it shows no relations, so it keys on the card alone. Separate from
+ * as: it shows no relations, so it keys on the card alone — plus the one fact
+ * the row draws that the card does not: its age off `updatedAt`. A card keys a
+ * RUNNING session's elapsed run instead, so a peer still running whose
+ * `updatedAt` moved would otherwise keep a stale age. Separate from
  * {@link sameSessionCardProps} rather than sharing its body, deliberately —
  * one comparator serving two prop shapes is how a prop stops being compared.
  */
@@ -1189,7 +1192,10 @@ export function sameClusterChildProps<
     if (!Object.is(prev[key as keyof P], next[key as keyof P])) return false;
   }
   return (
-    sessionCardKey(prev.card, prev.now) === sessionCardKey(next.card, next.now)
+    sessionCardKey(prev.card, prev.now) ===
+      sessionCardKey(next.card, next.now) &&
+    relativeAge(prev.card.session.updatedAt, prev.now) ===
+      relativeAge(next.card.session.updatedAt, next.now)
   );
 }
 
