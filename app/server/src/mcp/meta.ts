@@ -1,7 +1,8 @@
 /**
  * MCP `_meta` key contract between the session tool server and its clients.
- * `pa/*` keys serve the pi bridge in `piSdk/mcpToolBridge.ts`; `anthropic/*`
- * keys are read by the Claude Agent SDK's native tool search. Everything
+ * `pa/*` keys serve external MCP clients (the pi harness runs tools through
+ * `piSdk/agentToolAdapter.ts` and reads none of them); `anthropic/*` keys are
+ * read by the Claude Agent SDK's native tool search. Everything
  * beyond the plain MCP tool surface rides under these keys so the wire stays
  * standard MCP.
  */
@@ -27,8 +28,8 @@ export const PI_EXTRAS_META_KEY = "pa/pi";
 
 /**
  * tools/list `_meta` key: whether the tool is currently active for the session.
- * Only meaningful in `listMode: "all"` (the pi bridge registers every tool up
- * front — pi cannot add tools mid-session — and toggles the active set).
+ * Only meaningful in `listMode: "all"`, for a client that registers every tool
+ * up front and toggles the active set.
  */
 export const ACTIVE_META_KEY = "pa/active";
 

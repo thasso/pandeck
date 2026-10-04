@@ -36,7 +36,6 @@ import type {
   CompactionDisplay,
   ContextClearDisplay,
   ContextInfo,
-  DisplayBlock,
   DisplayMessage,
   Harness,
   ModelOption,
@@ -135,6 +134,11 @@ import {
   type ClaudeSdkAdapterDriver,
 } from "../session/adapters/claudeSdk.ts";
 import type { PromptableAdapter } from "../session/adapters/contract.ts";
+import {
+  appendText,
+  estimateTokens,
+  updateTool,
+} from "../session/host/liveBlocks.ts";
 import {
   NativeAdapterEventSource,
   perTurnUsage,
@@ -256,32 +260,6 @@ function createClaudeTaskOutputTemp(): ClaudeTaskOutputTemp {
 }
 
 /* ----------------------------- block helpers ----------------------------- */
-// Copied (not exported from hub) per the module contract.
-
-function appendText(
-  blocks: DisplayBlock[],
-  kind: "text" | "thinking",
-  delta: string,
-): void {
-  const last = blocks[blocks.length - 1];
-  if (last && last.kind === kind) last.text += delta;
-  else blocks.push({ kind, text: delta });
-}
-
-function updateTool(
-  blocks: DisplayBlock[],
-  toolId: string,
-  patch: Partial<Extract<DisplayBlock, { kind: "tool" }>>,
-): void {
-  for (const b of blocks)
-    if (b.kind === "tool" && b.toolId === toolId) Object.assign(b, patch);
-}
-
-/** Fast, provider-agnostic live token estimate (mirrors the pi harness). */
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  return Math.max(1, Math.ceil(text.length / 4));
-}
 
 function textFromContent(content: readonly AgentContentBlock[]): string {
   return content

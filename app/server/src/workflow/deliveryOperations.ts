@@ -1,5 +1,4 @@
 import {
-  kindFromHarnessAgentType,
   WORKFLOW_CI_BOUNDS,
   WORKFLOW_CI_DEFAULTS,
   type Patch,
@@ -463,7 +462,7 @@ async function ensureDraftCard(
     const session = dependencies.session(context);
     const result = await dependencies.beginCard({
       repoRoot: worktree.path,
-      sessionKind: kindFromHarnessAgentType(session.harness, session.agentType),
+      sessionKind: session.agentType,
       sessionId: session.id,
       args: {
         draft: true,
@@ -591,10 +590,7 @@ async function publishPullRequest(
       const session = publicationSession(context);
       const result = await dependencies.beginCard({
         repoRoot: worktree.path,
-        sessionKind: kindFromHarnessAgentType(
-          session.harness,
-          session.agentType,
-        ),
+        sessionKind: session.agentType,
         sessionId: session.id,
         args: {
           draft: false,

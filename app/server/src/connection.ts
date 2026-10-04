@@ -4,7 +4,6 @@ import {
   WORKTREE_MISSING_BLOCKED_REASON,
   backgroundWorkBlockedReason,
   slashCommandApplies,
-  kindFromHarnessAgentType,
   isOrdinarilyCreatableAgentType,
   CLAUDE_SDK_PROVIDER,
   SESSION_MODES,
@@ -1545,7 +1544,7 @@ export class Connection implements Viewer {
       });
       return;
     }
-    const kind = kindFromHarnessAgentType("pi", msg.agentType);
+    const kind = msg.agentType;
     if (!this.guardKind(kind)) return;
     // The client is already on this session's surface: the send commits this
     // connection to viewing it, in arrival order — claimed before the FIRST
@@ -2979,7 +2978,7 @@ export class Connection implements Viewer {
             target.mode,
           );
         } else {
-          const kind = kindFromHarnessAgentType("pi", target.agentType);
+          const kind = target.agentType;
           if (!this.guardKind(kind)) return;
           const profileId =
             target.credentialProfileId ?? defaultOpenAiProfileId();
@@ -4650,9 +4649,9 @@ export class Connection implements Viewer {
     mode?: SessionMode,
     worktreeId?: string,
   ): Promise<void> {
-    // newSession is the pi bootstrap only: derive the pi kind from the agentType.
-    // Claude harnesses are created on first prompt via harnessSend, never here.
-    const kind = kindFromHarnessAgentType("pi", agentType);
+    // newSession is the pi bootstrap only. Claude harnesses are created on
+    // first prompt via harnessSend, never here.
+    const kind = agentType;
     if (!this.guardKind(kind)) return;
     // Carry the current model/thinking level into the fresh session (pi only),
     // unless the client is explicitly creating a fresh runtime with a picked
@@ -5598,7 +5597,7 @@ export class Connection implements Viewer {
   /**
    * Resolve OUR session id to the `{harness, kind, file?}` ref used by the
    * per-kind handlers. The metadata store is the id-only routing source; its
-   * {@link Harness} + {@link AgentType} derive the kind. For pi, the log path is
+   * agentType is the kind. For pi, the log path is
    * derived from the canonical id for delete/fork operations. Falls back to a
    * currently-resident live driver so a not-yet-persisted session (e.g. a pi
    * bootstrap before its first prompt) still resolves.
@@ -5608,10 +5607,7 @@ export class Connection implements Viewer {
   ): { harness: Harness; kind: AgentKind; file?: string } | undefined {
     const record = sessionStore.get(id);
     if (record) {
-      const kind = kindFromHarnessAgentType(
-        record.harness,
-        record.agentType as SessionAgentType,
-      );
+      const kind = record.agentType as SessionAgentType;
       return {
         harness: record.harness,
         kind,

@@ -1,8 +1,9 @@
 /**
  * The generic per-session MCP server exposing the app's own {@link AgentTool}s
- * to ANY harness. The Claude SDK mounts `server` in-process (`mcpServers.pa`,
- * type "sdk"); the pi harness consumes it through the MCP client bridge in
- * `piSdk/mcpToolBridge.ts`.
+ * over MCP. The Claude SDK mounts `server` in-process (`mcpServers.pa`, type
+ * "sdk"); external MCP clients may connect too. The pi harness does not use it:
+ * it runs the same tools through the direct adapter in
+ * `piSdk/agentToolAdapter.ts`.
  *
  * Wire contract beyond plain MCP (all under `_meta`, see ./meta.ts):
  *  - request `_meta["pa/toolCallId"]`: caller-supplied tool-call id (falls back
@@ -42,8 +43,8 @@ export interface SessionToolServerConfig {
   /**
    * "active" — tools/list returns only currently-usable tools (Claude refreshes
    * its list on tools/list_changed). "all" — list every tool with an
-   * `_meta["pa/active"]` flag: pi cannot register tools mid-session, so its
-   * bridge registers the full universe up front and toggles the active set.
+   * `_meta["pa/active"]` flag, for a client that registers the full universe up
+   * front and toggles the active set. No in-repo caller uses "all" today.
    */
   listMode: "active" | "all";
   /** Resolve the toolset fresh on every list/call (catalog + integration-gate state). */

@@ -1,9 +1,10 @@
 /**
  * The app's own, harness-neutral tool interface. Every domain tool (see
  * `src/tools/`) is an {@link AgentTool}; the per-session MCP server exposes them
- * to any harness. Nothing in this folder may import the pi or Claude SDKs — the
- * pi harness consumes these tools through its MCP client bridge (`piSdk/`), the
- * Claude harness by mounting the server in-process (`claudeSdk/`).
+ * over MCP. Nothing in this folder may import the pi or Claude SDKs — the pi
+ * harness runs these tools through its direct adapter
+ * (`piSdk/agentToolAdapter.ts`), the Claude harness by mounting the server
+ * in-process (`claudeSdk/`).
  */
 import type { AgentKind, Harness } from "@assistant/shared";
 

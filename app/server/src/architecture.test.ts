@@ -11,8 +11,8 @@
  *
  * Import boundaries: the pi SDK is owned by `piSdk/` and the Claude Agent SDK
  * by `claudeSdk/`; the harness-neutral tool layer (`mcp/`, `tools/`) must
- * import neither — pi consumes tools through the MCP client bridge, Claude by
- * mounting the session tool server.
+ * import neither — pi runs tools through its direct adapter, Claude by mounting
+ * the session tool server.
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -80,7 +80,7 @@ test("harness SDK imports stay inside their harness folders", () => {
     const source = readFileSync(file, "utf8");
 
     // The pi SDK is only imported under piSdk/ (session lifecycle, options,
-    // models, one-shot runs, and the MCP→pi tool bridge live there).
+    // models, one-shot runs, and the AgentTool→pi adapter live there).
     if (!rel.startsWith("piSdk/") && /from\s+"@earendil-works\//.test(source)) {
       piViolations.push(`${rel}: import the pi SDK only under piSdk/`);
     }

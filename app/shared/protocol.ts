@@ -143,17 +143,8 @@ export function isAgentKind(value: string): value is AgentKind {
 }
 
 /**
- * Which agent a Claude SDK session emulates — set from the context it was
- * launched in. `assistant` gets the restricted assistant toolset (dedicated MCP
- * tools, no Bash/Write/Edit); `workshop` gets the full code-editing toolset.
- * Persisted with the session and fixed at its first prompt.
- */
-export type ClaudeFlavor = "assistant" | "workshop";
-
-/**
- * Which engine actually runs a session. Mirrors the server-side `Harness` type
- * (see `sessionRegistry.ts`); duplicated here so wire messages can carry it
- * without the shared package importing from the server.
+ * Which engine actually runs a session (`docs/agent-harnesses.md`). Persisted
+ * on the session row and fixed for the session's lifetime.
  */
 export type Harness = "pi" | "claude-sdk";
 
@@ -205,23 +196,6 @@ export function isOrdinarilyCreatableAgentType(
     agentType === "workshop" ||
     agentType === "developer"
   );
-}
-
-/**
- * Derive the internal {@link AgentKind} from the clean {@link Harness} +
- * {@link SessionAgentType} pair. Now that `AgentKind` is persona-only, the kind
- * IS the agentType regardless of harness; the harness argument is accepted for
- * call-site symmetry but does not affect the result.
- *
- *   pi/claude-sdk + assistant → "assistant"
- *   pi/claude-sdk + workshop  → "workshop"
- *   pi/claude-sdk + developer → "developer"
- */
-export function kindFromHarnessAgentType(
-  _harness: Harness,
-  agentType: SessionAgentType,
-): AgentKind {
-  return agentType;
 }
 
 /**
@@ -6637,8 +6611,7 @@ export type ClientMessage =
   | { type: "refreshModels"; requestId: string }
   /**
    * Create a fresh pi session of the given {@link SessionAgentType} (the bootstrap
-   * landing). The server derives the pi kind via `kindFromHarnessAgentType("pi",
-   * agentType)`. Claude harnesses are NOT created here — they use `harnessSend` on
+   * landing). Claude harnesses are NOT created here — they use `harnessSend` on
    * the first prompt. `harness` is advisory routing metadata;
    * `model`/`thinkingLevel`/`mode` seed the fresh pi session.
    */
