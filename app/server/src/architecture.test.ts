@@ -386,3 +386,31 @@ test("Task mutations carry no full-collection payload", () => {
     );
   }
 });
+
+/**
+ * Settings writes go through `settingsService.saveSettings`
+ * ([Task-729](pa://task/729)), which runs each section's side effects and
+ * pushes the result to every client. A direct call to a section writer skips
+ * both: the change lands on disk while open Settings pages and live sessions
+ * keep the old values. Tests may still seed settings directly: `sourceFiles`
+ * skips `*.test.ts`.
+ */
+test("settings are written only through the settings service", () => {
+  const writer = /\bupdate(?:[A-Z][A-Za-z0-9]*)?Settings\s*\(/g;
+  const offenders: string[] = [];
+  for (const path of sourceFiles(SRC_ROOT)) {
+    const file = relative(SRC_ROOT, path);
+    if (file === "settingsService.ts") continue;
+    // Comments may name a writer; only code calls one.
+    const source = readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    for (const match of source.matchAll(writer)) {
+      // A writer's own definition is not a call.
+      const before = source.slice(Math.max(0, match.index - 16), match.index);
+      if (/function\s+$/.test(before)) continue;
+      offenders.push(`${file}: ${match[0]}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});

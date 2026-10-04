@@ -273,6 +273,9 @@ test("the Background processes card round-trips through updateSettings", async (
   });
   const sent: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(sent));
+  // The echo reaches every registered connection, the writer included.
+  hub.register(connection);
+  cleanups.push(() => hub.unregister(connection));
 
   // Both ends of every range, exactly what the card's inputs offer.
   for (const card of [

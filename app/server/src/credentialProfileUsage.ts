@@ -17,7 +17,8 @@ import {
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
 import { sessionStore } from "./db/sessionStore.ts";
-import { getSettings, updateSettings } from "./settings.ts";
+import { getSettings } from "./settings.ts";
+import { saveSettings } from "./settingsService.ts";
 import {
   pinnedSlotsForProfile,
   stripProfilePins,
@@ -71,15 +72,16 @@ export function listCredentialProfilesWithUsage(): CredentialProfileSummary[] {
  * fall back to automatic anyway, and refusing would make an account
  * undeletable until every slot had been repointed by hand.
  */
-export function clearProfilePins(
+export async function clearProfilePins(
   profileId: string,
-): CredentialProfileSlotUsage[] {
+): Promise<CredentialProfileSlotUsage[]> {
   const settings = getSettings();
   const cleared = pinnedSlotsForProfile(settings, profileId);
   if (cleared.length === 0) return [];
   // Only the sections that actually carry a pin are rewritten; each is passed
-  // through the ordinary settings patch path so normalization still applies.
-  updateSettings(
+  // through the ordinary settings write path so normalization still applies
+  // and open Settings pages see the change.
+  await saveSettings(
     stripProfilePins(
       {
         permanentAssistant: settings.permanentAssistant,

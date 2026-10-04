@@ -54,6 +54,7 @@ import { setAppNotificationBroadcaster } from "./webPush.ts";
 import { defaultClaudeProfileId } from "./credentialProfiles.ts";
 import { setCalendarScanBroadcaster } from "./dayScan/scanProgress.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
+import { onSettingsChanged } from "./settingsService.ts";
 import {
   projectRevisionIndex,
   projectSummaryFor,
@@ -340,6 +341,11 @@ class SessionHub {
     setUsageBroadcaster({
       broadcast: (msg) => this.broadcastTopic("usage", msg),
       hasClients: () => this.connections.size > 0,
+    });
+    // Settings carry per-connection URLs (OAuth redirect URIs), so each client
+    // builds its own copy instead of receiving one shared message.
+    onSettingsChanged((change) => {
+      for (const viewer of this.connections) viewer.settingsChanged?.(change);
     });
     subscribeHarnessOpened((sessionId) => this.sessionHarnessOpened(sessionId));
   }

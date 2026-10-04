@@ -45,6 +45,8 @@ export interface Viewer {
   wantsComments?(target: import("@assistant/shared").CommentTarget): boolean;
   /** Whether this viewer is live-watching this worktree (`watchWorktree`). */
   wantsWorktree?(worktreeId: string): boolean;
+  /** Settings were written (by any client or agent); send this viewer its fresh copy. */
+  settingsChanged?(change: import("./settingsService.ts").SettingsChange): void;
   /**
    * The session is being deleted: detach from it if it is on show, and let no
    * load of it still in flight attach. Called for every viewer BEFORE the

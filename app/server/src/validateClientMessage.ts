@@ -487,8 +487,11 @@ function validatePeerSpawnRuntimes(value: unknown): string | null {
   return null;
 }
 
-const validateUpdateSettings: Validator = (msg) => {
-  const patch = msg.patch;
+/**
+ * Why an `AppSettings` patch must not reach `updateSettings`, or null. Shared
+ * by the socket message and the agent write path (`settingsService.ts`).
+ */
+export function appSettingsPatchError(patch: unknown): string | null {
   if (!isPlainObject(patch)) return "patch must be an object";
   for (const [name, validate] of Object.entries(SETTINGS_SECTIONS)) {
     if (!hasOwn(patch, name) || patch[name] === undefined) continue;
@@ -512,7 +515,10 @@ const validateUpdateSettings: Validator = (msg) => {
   )
     return "patch.sessionPeerPromptMaxHops must be a finite number";
   return null;
-};
+}
+
+const validateUpdateSettings: Validator = (msg) =>
+  appSettingsPatchError(msg.patch);
 
 /* --------------------------- bespoke validators ----------------------------- */
 

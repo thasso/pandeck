@@ -12,7 +12,17 @@ import {
   type AgentQuestionResponse,
   type BroadcastTopic,
   type AppSettings,
+  type BraveSettingsPatch,
   type ClientMessage,
+  type ConfluenceSettingsPatch,
+  type Context7SettingsPatch,
+  type ForgejoSettingsPatch,
+  type GithubSettingsPatch,
+  type GoogleSettingsPatch,
+  type JiraSettingsPatch,
+  type OpenAiCompatibleSettingsPatch,
+  type SlackSettingsPatch,
+  type TempoSettingsPatch,
   type PromptQueueCommand,
   type CodeDeliveryWorkflowConfig,
   type CommentTarget,
@@ -58,37 +68,19 @@ import {
   isAgentAvailable,
   isAgentSessionAvailable,
 } from "./agents.ts";
-import { testBraveSettings, updateBraveSettings } from "./braveSettings.ts";
-import {
-  testOpenAiCompatibleSettings,
-  updateOpenAiCompatibleSettings,
-} from "./openAiCompatibleSettings.ts";
-import {
-  testContext7Settings,
-  updateContext7Settings,
-} from "./context7Settings.ts";
-import {
-  testForgejoSettings,
-  updateForgejoSettings,
-} from "./forgejoSettings.ts";
-import { testGithubSettings, updateGithubSettings } from "./githubSettings.ts";
-import { reconcilePackageProxy } from "./packageProxy/packageProxy.ts";
-import { testGoogleSettings, updateGoogleSettings } from "./googleSettings.ts";
-import { getSettings, updateSettings } from "./settings.ts";
+import { testBraveSettings } from "./braveSettings.ts";
+import { testOpenAiCompatibleSettings } from "./openAiCompatibleSettings.ts";
+import { testContext7Settings } from "./context7Settings.ts";
+import { testForgejoSettings } from "./forgejoSettings.ts";
+import { testGithubSettings } from "./githubSettings.ts";
+import { testGoogleSettings } from "./googleSettings.ts";
+import { getSettings } from "./settings.ts";
+import { saveSettings, type SettingsChange } from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
-import { notifyIntegrationToolsChanged } from "./integrationToolChanges.ts";
-import {
-  testSlackHuddleSettings,
-  testSlackSettings,
-  updateSlackSettings,
-} from "./slackSettings.ts";
-import { slackSocketMode } from "./slackSocketMode.ts";
-import { testTempoSettings, updateTempoSettings } from "./tempoSettings.ts";
-import {
-  testConfluenceSettings,
-  updateConfluenceSettings,
-} from "./confluenceSettings.ts";
-import { testJiraSettings, updateJiraSettings } from "./jiraSettings.ts";
+import { testSlackHuddleSettings, testSlackSettings } from "./slackSettings.ts";
+import { testTempoSettings } from "./tempoSettings.ts";
+import { testConfluenceSettings } from "./confluenceSettings.ts";
+import { testJiraSettings } from "./jiraSettings.ts";
 import {
   findModel,
   findModelForProfile,
@@ -330,7 +322,6 @@ import {
   isPermanentAssistantSession,
   permanentAssistantSessionId,
   permanentAssistantViewableId,
-  rotatePermanentAssistantSession,
   sessionListHiddenProbe,
   subscribePermanentAssistant,
 } from "./permanentAssistant.ts";
@@ -3739,41 +3730,9 @@ export class Connection implements Viewer {
 
   private async onUpdateSettings(patch: Partial<AppSettings>): Promise<void> {
     try {
-      // Apply on the client only once it's safely on disk.
-      const beforeProfile = getSettings().permanentAssistant;
-      const settings = updateSettings(patch);
-      if (patch.permanentAssistant) {
-        const afterProfile = settings.permanentAssistant;
-        if (
-          beforeProfile.name !== afterProfile.name ||
-          beforeProfile.provider !== afterProfile.provider ||
-          beforeProfile.modelId !== afterProfile.modelId ||
-          beforeProfile.thinkingLevel !== afterProfile.thinkingLevel ||
-          beforeProfile.additionalInstructions !==
-            afterProfile.additionalInstructions
-        ) {
-          await rotatePermanentAssistantSession();
-        }
-      }
-      // The schedule fires in the profile timezone, so a zone change re-arms it.
-      if (patch.dayScan !== undefined || patch.profile !== undefined) {
-        const { reconcileDayScanSchedule } =
-          await import("./dayScan/schedule.ts");
-        reconcileDayScanSchedule();
-      }
-      this.send({ type: "settings", settings: this.settings() });
-      if (patch.claudeSdk !== undefined)
-        this.send({ type: "models", models: clientModels(settings) });
-      // Availability depends on the settings just saved (`modelId` selects among
-      // installed models), so recompute it — otherwise the Settings health line
-      // and the mic button's reason keep reporting the pre-save answer until the
-      // next reconnect.
-      if (patch.speechToText !== undefined) {
-        this.send({
-          type: "speechToTextStatus",
-          status: describeSttAvailability(settings.speechToText),
-        });
-      }
+      // Every client, this one included, receives the result through
+      // `settingsChanged` once it is safely on disk.
+      await saveSettings(patch);
     } catch (err) {
       this.send({
         type: "error",
@@ -3782,13 +3741,29 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateJiraSettings(
-    patch: Parameters<typeof updateJiraSettings>[0],
-  ): void {
+  /** Any settings write, from any client or agent, lands here for every connection. */
+  settingsChanged(change: SettingsChange): void {
+    const settings = this.settings();
+    this.send({ type: "settings", settings });
+    if (
+      change.sections.includes("claudeSdk") ||
+      change.sections.includes("openAiCompatible")
+    )
+      this.send({ type: "models", models: clientModels(settings) });
+    // Availability depends on the settings just saved (`modelId` selects among
+    // installed models), so recompute it — otherwise the Settings health line
+    // and the mic button's reason keep reporting the pre-save answer until the
+    // next reconnect.
+    if (change.sections.includes("speechToText"))
+      this.send({
+        type: "speechToTextStatus",
+        status: describeSttAvailability(settings.speechToText),
+      });
+  }
+
+  private async onUpdateJiraSettings(patch: JiraSettingsPatch): Promise<void> {
     try {
-      updateJiraSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: this.settings() });
+      await saveSettings({ jira: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -3798,11 +3773,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestJiraSettings(
-    patch: Parameters<typeof updateJiraSettings>[0],
+    patch: JiraSettingsPatch,
   ): Promise<void> {
     try {
-      updateJiraSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ jira: patch });
       this.send({
         type: "jiraStatus",
         status: await testJiraSettings(),
@@ -3831,13 +3805,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateConfluenceSettings(
-    patch: Parameters<typeof updateConfluenceSettings>[0],
-  ): void {
+  private async onUpdateConfluenceSettings(
+    patch: ConfluenceSettingsPatch,
+  ): Promise<void> {
     try {
-      updateConfluenceSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: this.settings() });
+      await saveSettings({ confluence: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -3847,11 +3819,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestConfluenceSettings(
-    patch: Parameters<typeof updateConfluenceSettings>[0],
+    patch: ConfluenceSettingsPatch,
   ): Promise<void> {
     try {
-      updateConfluenceSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ confluence: patch });
       this.send({
         type: "confluenceStatus",
         status: await testConfluenceSettings(),
@@ -3880,13 +3851,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateTempoSettings(
-    patch: Parameters<typeof updateTempoSettings>[0],
-  ): void {
+  private async onUpdateTempoSettings(
+    patch: TempoSettingsPatch,
+  ): Promise<void> {
     try {
-      updateTempoSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: this.settings() });
+      await saveSettings({ tempo: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -3896,11 +3865,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestTempoSettings(
-    patch: Parameters<typeof updateTempoSettings>[0],
+    patch: TempoSettingsPatch,
   ): Promise<void> {
     try {
-      updateTempoSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ tempo: patch });
       this.send({
         type: "tempoStatus",
         status: await testTempoSettings(),
@@ -3929,13 +3897,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateGoogleSettings(
-    patch: Parameters<typeof updateGoogleSettings>[0],
-  ): void {
+  private async onUpdateGoogleSettings(
+    patch: GoogleSettingsPatch,
+  ): Promise<void> {
     try {
-      updateGoogleSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: this.settings() });
+      await saveSettings({ google: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -3945,11 +3911,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestGoogleSettings(
-    patch: Parameters<typeof updateGoogleSettings>[0],
+    patch: GoogleSettingsPatch,
   ): Promise<void> {
     try {
-      updateGoogleSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ google: patch });
       this.send({
         type: "googleStatus",
         status: await testGoogleSettings(),
@@ -3978,14 +3943,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateSlackSettings(
-    patch: Parameters<typeof updateSlackSettings>[0],
-  ): void {
+  private async onUpdateSlackSettings(
+    patch: SlackSettingsPatch,
+  ): Promise<void> {
     try {
-      updateSlackSettings(patch);
-      slackSocketMode.reconcile();
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: getSettings() });
+      await saveSettings({ slack: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -3995,12 +3957,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestSlackSettings(
-    patch: Parameters<typeof updateSlackSettings>[0],
+    patch: SlackSettingsPatch,
   ): Promise<void> {
     try {
-      updateSlackSettings(patch);
-      slackSocketMode.reconcile();
-      notifyIntegrationToolsChanged();
+      await saveSettings({ slack: patch });
       this.send({
         type: "slackStatus",
         status: await testSlackSettings(),
@@ -4030,11 +3990,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestSlackHuddleSettings(
-    patch: Parameters<typeof updateSlackSettings>[0],
+    patch: SlackSettingsPatch,
   ): Promise<void> {
     try {
-      updateSlackSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ slack: patch });
       this.send({
         type: "slackHuddleStatus",
         status: await testSlackHuddleSettings(),
@@ -4063,14 +4022,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateOpenAiCompatibleSettings(
-    patch: Parameters<typeof updateOpenAiCompatibleSettings>[0],
-  ): void {
+  private async onUpdateOpenAiCompatibleSettings(
+    patch: OpenAiCompatibleSettingsPatch,
+  ): Promise<void> {
     try {
-      updateOpenAiCompatibleSettings(patch);
-      syncConfiguredModelProviders();
-      this.send({ type: "settings", settings: getSettings() });
-      this.send({ type: "models", models: clientModels() });
+      await saveSettings({ openAiCompatible: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -4080,10 +4036,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestOpenAiCompatibleSettings(
-    patch: Parameters<typeof updateOpenAiCompatibleSettings>[0],
+    patch: OpenAiCompatibleSettingsPatch,
   ): Promise<void> {
     try {
-      updateOpenAiCompatibleSettings(patch);
+      await saveSettings({ openAiCompatible: patch });
       const status = await testOpenAiCompatibleSettings();
       syncConfiguredModelProviders();
       this.send({
@@ -4118,13 +4074,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateBraveSettings(
-    patch: Parameters<typeof updateBraveSettings>[0],
-  ): void {
+  private async onUpdateBraveSettings(
+    patch: BraveSettingsPatch,
+  ): Promise<void> {
     try {
-      updateBraveSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: getSettings() });
+      await saveSettings({ brave: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -4134,11 +4088,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestBraveSettings(
-    patch: Parameters<typeof updateBraveSettings>[0],
+    patch: BraveSettingsPatch,
   ): Promise<void> {
     try {
-      updateBraveSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ brave: patch });
       const status = await testBraveSettings();
       this.send({ type: "braveStatus", status, settings: getSettings() });
     } catch (err) {
@@ -4161,13 +4114,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateContext7Settings(
-    patch: Parameters<typeof updateContext7Settings>[0],
-  ): void {
+  private async onUpdateContext7Settings(
+    patch: Context7SettingsPatch,
+  ): Promise<void> {
     try {
-      updateContext7Settings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: getSettings() });
+      await saveSettings({ context7: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -4177,11 +4128,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestContext7Settings(
-    patch: Parameters<typeof updateContext7Settings>[0],
+    patch: Context7SettingsPatch,
   ): Promise<void> {
     try {
-      updateContext7Settings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ context7: patch });
       const status = await testContext7Settings();
       this.send({ type: "context7Status", status, settings: getSettings() });
     } catch (err) {
@@ -4204,16 +4154,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateGithubSettings(
-    patch: Parameters<typeof updateGithubSettings>[0],
-  ): void {
+  private async onUpdateGithubSettings(
+    patch: GithubSettingsPatch,
+  ): Promise<void> {
     try {
-      updateGithubSettings(patch);
-      notifyIntegrationToolsChanged();
-      void reconcilePackageProxy().catch((err: unknown) =>
-        console.warn("[package-proxy] reconcile failed:", errorText(err)),
-      );
-      this.send({ type: "settings", settings: getSettings() });
+      await saveSettings({ github: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -4223,13 +4168,12 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestGithubSettings(
-    patch: Parameters<typeof updateGithubSettings>[0],
+    patch: GithubSettingsPatch,
   ): Promise<void> {
     try {
-      updateGithubSettings(patch);
-      notifyIntegrationToolsChanged();
-      // Settle the proxy BEFORE testing so the status line reports its real state.
-      await reconcilePackageProxy();
+      // Saving settles the package proxy first, so the status line reports its
+      // real state.
+      await saveSettings({ github: patch });
       const status = await testGithubSettings();
       this.send({ type: "githubStatus", status, settings: getSettings() });
     } catch (err) {
@@ -4252,13 +4196,11 @@ export class Connection implements Viewer {
     }
   }
 
-  private onUpdateForgejoSettings(
-    patch: Parameters<typeof updateForgejoSettings>[0],
-  ): void {
+  private async onUpdateForgejoSettings(
+    patch: ForgejoSettingsPatch,
+  ): Promise<void> {
     try {
-      updateForgejoSettings(patch);
-      notifyIntegrationToolsChanged();
-      this.send({ type: "settings", settings: getSettings() });
+      await saveSettings({ forgejo: patch });
     } catch (err) {
       this.send({
         type: "error",
@@ -4268,11 +4210,10 @@ export class Connection implements Viewer {
   }
 
   private async onSaveAndTestForgejoSettings(
-    patch: Parameters<typeof updateForgejoSettings>[0],
+    patch: ForgejoSettingsPatch,
   ): Promise<void> {
     try {
-      updateForgejoSettings(patch);
-      notifyIntegrationToolsChanged();
+      await saveSettings({ forgejo: patch });
       const status = await testForgejoSettings();
       this.send({ type: "forgejoStatus", status, settings: getSettings() });
     } catch (err) {
