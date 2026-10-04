@@ -312,6 +312,22 @@ export async function openNativePortForwardUrl(url: string): Promise<void> {
   await invokeNative<void>("open_port_forward_url", { url: link.localUrl });
 }
 
+/** Open Google consent through the shell's foreign-navigation guard. */
+export function openNativeGoogleConsent(url: string): void {
+  const target = new URL(url);
+  if (
+    !isNativeShell() ||
+    target.origin !== "https://accounts.google.com" ||
+    target.pathname !== "/o/oauth2/v2/auth" ||
+    target.username ||
+    target.password
+  )
+    throw new Error("Not an allowed Google consent URL.");
+  // The guard opens foreign URLs in the system browser and cancels navigation,
+  // leaving this page intact. No popup or user-activation allowance is needed.
+  location.assign(target.href);
+}
+
 /** Open one validated token-free file grant in the OS default browser. */
 export async function openNativeServedFile(url: string): Promise<void> {
   const serverOrigin = serverHttpOrigin();
