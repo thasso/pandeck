@@ -34,8 +34,11 @@ import {
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   MAX_PEER_SPAWN_RUNTIMES,
   MAX_SESSION_PEER_PROMPT_MAX_HOPS,
+  MAX_WORKTREE_REMOTE_FETCH_MINUTES,
   MEMORY_LEARNING_MODES,
+  MEMORY_SETTINGS_LIMITS,
   MIN_SESSION_PEER_PROMPT_MAX_HOPS,
+  SPEECH_TO_TEXT_LIMITS,
   THINKING_LEVELS,
   clampInt,
   clampNumber,
@@ -149,22 +152,22 @@ function normalizeSpeechToTextSettings(
       typeof settings?.modelId === "string" ? settings.modelId.trim() : "",
     numThreads: clampInt(
       settings?.numThreads,
-      1,
-      32,
+      SPEECH_TO_TEXT_LIMITS.numThreads.min,
+      SPEECH_TO_TEXT_LIMITS.numThreads.max,
       DEFAULT_SPEECH_TO_TEXT_SETTINGS.numThreads,
     ),
     // 0 keeps the ~2 GB recognizer resident for good; the cap avoids a "forever"
     // that is really just a very long leak.
     idleShutdownSeconds: clampInt(
       settings?.idleShutdownSeconds,
-      0,
-      24 * 3600,
+      SPEECH_TO_TEXT_LIMITS.idleShutdownSeconds.min,
+      SPEECH_TO_TEXT_LIMITS.idleShutdownSeconds.max,
       DEFAULT_SPEECH_TO_TEXT_SETTINGS.idleShutdownSeconds,
     ),
     maxUtteranceSeconds: clampInt(
       settings?.maxUtteranceSeconds,
-      5,
-      300,
+      SPEECH_TO_TEXT_LIMITS.maxUtteranceSeconds.min,
+      SPEECH_TO_TEXT_LIMITS.maxUtteranceSeconds.max,
       DEFAULT_SPEECH_TO_TEXT_SETTINGS.maxUtteranceSeconds,
     ),
     vocabulary: vocabulary
@@ -174,7 +177,7 @@ function normalizeSpeechToTextSettings(
       )
       .map((entry) => ({ from: entry.from.trim(), to: entry.to.trim() }))
       .filter((entry) => entry.from.length > 0)
-      .slice(0, 200),
+      .slice(0, SPEECH_TO_TEXT_LIMITS.vocabularyEntries),
   };
 }
 
@@ -288,16 +291,6 @@ const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
   maxCostPerDayUsd: 1,
 };
 
-// Hard bounds on the configurable memory limits. The global ceilings are
-// configurable but can never be raised without bound, and a learning mode can
-// never bypass them (they are enforced by the processor, not the mode).
-const MEMORY_LIMITS = {
-  maxCards: { min: 1, max: 32 },
-  maxRenderedChars: { min: 200, max: 8_000 },
-  maxCallsPerHour: { min: 0, max: 240 },
-  maxCostPerDayUsd: { min: 0, max: 50 },
-} as const;
-
 function normalizeMemorySettings(
   settings: Partial<MemorySettings> | undefined,
 ): MemorySettings {
@@ -314,14 +307,14 @@ function normalizeMemorySettings(
     maintenanceEnabled: s.maintenanceEnabled !== false,
     maxCards: clampInt(
       s.maxCards,
-      MEMORY_LIMITS.maxCards.min,
-      MEMORY_LIMITS.maxCards.max,
+      MEMORY_SETTINGS_LIMITS.maxCards.min,
+      MEMORY_SETTINGS_LIMITS.maxCards.max,
       DEFAULT_MEMORY_SETTINGS.maxCards,
     ),
     maxRenderedChars: clampInt(
       s.maxRenderedChars,
-      MEMORY_LIMITS.maxRenderedChars.min,
-      MEMORY_LIMITS.maxRenderedChars.max,
+      MEMORY_SETTINGS_LIMITS.maxRenderedChars.min,
+      MEMORY_SETTINGS_LIMITS.maxRenderedChars.max,
       DEFAULT_MEMORY_SETTINGS.maxRenderedChars,
     ),
     processor: {
@@ -342,14 +335,14 @@ function normalizeMemorySettings(
     },
     maxCallsPerHour: clampInt(
       s.maxCallsPerHour,
-      MEMORY_LIMITS.maxCallsPerHour.min,
-      MEMORY_LIMITS.maxCallsPerHour.max,
+      MEMORY_SETTINGS_LIMITS.maxCallsPerHour.min,
+      MEMORY_SETTINGS_LIMITS.maxCallsPerHour.max,
       DEFAULT_MEMORY_SETTINGS.maxCallsPerHour,
     ),
     maxCostPerDayUsd: clampNumber(
       s.maxCostPerDayUsd,
-      MEMORY_LIMITS.maxCostPerDayUsd.min,
-      MEMORY_LIMITS.maxCostPerDayUsd.max,
+      MEMORY_SETTINGS_LIMITS.maxCostPerDayUsd.min,
+      MEMORY_SETTINGS_LIMITS.maxCostPerDayUsd.max,
       DEFAULT_MEMORY_SETTINGS.maxCostPerDayUsd,
     ),
   };
@@ -439,8 +432,6 @@ const DEFAULT_WORKTREE_SETTINGS: WorktreeSettings = {
   remoteFetchMinutes: 10,
 };
 
-const MAX_REMOTE_FETCH_MINUTES = 24 * 60;
-
 function normalizeRemoteFetchMinutes(value: unknown): number {
   if (
     typeof value !== "number" ||
@@ -449,7 +440,7 @@ function normalizeRemoteFetchMinutes(value: unknown): number {
     value < 0
   )
     return DEFAULT_WORKTREE_SETTINGS.remoteFetchMinutes;
-  return Math.min(value, MAX_REMOTE_FETCH_MINUTES);
+  return Math.min(value, MAX_WORKTREE_REMOTE_FETCH_MINUTES);
 }
 
 function normalizeWorktreeSettings(

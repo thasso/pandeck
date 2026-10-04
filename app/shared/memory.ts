@@ -216,6 +216,18 @@ export interface MemorySettings {
   maxCostPerDayUsd: number;
 }
 
+/**
+ * Hard bounds on the configurable memory limits. The global ceilings are
+ * configurable but can never be raised without bound, and a learning mode can
+ * never bypass them (they are enforced by the processor, not the mode).
+ */
+export const MEMORY_SETTINGS_LIMITS = {
+  maxCards: { min: 1, max: 32 },
+  maxRenderedChars: { min: 200, max: 8_000 },
+  maxCallsPerHour: { min: 0, max: 240 },
+  maxCostPerDayUsd: { min: 0, max: 50 },
+} as const;
+
 /* ------------------------------ browser API ------------------------------ */
 
 /** Filter for a bounded memory list/search request. */
