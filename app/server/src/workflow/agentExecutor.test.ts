@@ -380,7 +380,9 @@ test("a coordinator falls back to CWD when its run worktree was removed", async 
   assert.deepEqual(createdCwds, [undefined], "the app CWD, not a dead path");
 });
 
-test("a role whose active worktree lost its folder runs in the app CWD, still linked", async () => {
+test("a role whose active worktree lost its folder is created in the app CWD, still linked", async () => {
+  // The link is what lets the missing-worktree gate refuse a coding role's
+  // real prompt; the stubbed `prompt` here never reaches that gate.
   const { run } = createRun();
   const step = appendAgent(run.id, {
     role: "implementer",

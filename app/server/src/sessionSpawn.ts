@@ -590,8 +590,6 @@ export async function prepareSpawnApproval(
 
 /* -------------------------------- execution ------------------------------- */
 
-/** A pi model handle on the session's account, as creation takes it. */
-
 /**
  * Injectable creation/delivery seams; validation stays real, and creation is
  * `createSession`'s.
