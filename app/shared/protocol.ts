@@ -11,6 +11,7 @@ import type {
   TimelineCacheDescriptor,
 } from "./runtimeEvents.ts";
 import type { BuildInfo } from "./buildInfo.ts";
+import { CLAUDE_SDK_PROVIDER, type Harness } from "./harnesses.ts";
 import type { TurnStatsSeed } from "./turnStats.ts";
 import type { AgentStopReason, AgentUsage } from "./session/content.ts";
 import type { PromptOrigin } from "./session/origin.ts";
@@ -67,6 +68,7 @@ export * from "./comments.ts";
 export * from "./thinkingLevels.ts";
 export * from "./peerRuntimes.ts";
 export * from "./approvalGrants.ts";
+export * from "./harnesses.ts";
 export { SESSION_TIMELINE_PROJECTION_VERSION } from "./runtimeEvents.ts";
 export type { TimelineCacheDescriptor } from "./runtimeEvents.ts";
 export type { TurnStatsSeed } from "./turnStats.ts";
@@ -137,12 +139,6 @@ export type AgentType = (typeof AGENT_TYPE_IDS)[number];
 export function isAgentType(value: string): value is AgentType {
   return (AGENT_TYPE_IDS as readonly string[]).includes(value);
 }
-
-/**
- * Which engine actually runs a session (`docs/agent-harnesses.md`). Persisted
- * on the session row and fixed for the session's lifetime.
- */
-export type Harness = "pi" | "claude-sdk";
 
 /** The stable key of the permanent singleton Personal Assistant persona. */
 export const PERSONAL_ASSISTANT_AGENT_TYPE = "personal-assistant" as const;
@@ -385,8 +381,6 @@ export type ClaudeLoginServerMessage =
   | { type: "status"; status: ClaudeLoginTerminalStatus; error?: string };
 export type ClaudeLoginClientMessage =
   { type: "input"; data: string } | { type: "cancel" };
-
-export const CLAUDE_SDK_PROVIDER = "claude-sdk";
 
 /**
  * Claude SDK picker models — the in-process Claude Agent SDK offered as an
@@ -5685,30 +5679,6 @@ export type BackgroundWorkBackend = "claude-query" | "host-process";
 
 /** How much of a command line the registry row keeps; the rest is cut. */
 export const BACKGROUND_WORK_COMMAND_MAX_CHARS = 4_096;
-
-/**
- * Which background-work backend a session on this HARNESS may own, as a
- * capability rather than a persona or engine name. Claude background work
- * executes inside the retained query that issued it and is addressed through
- * that vendor's task controls; pi background work is supervised by PA itself.
- * Neither can run the other's work, so an admission whose backend is not in
- * this list is a mismatch, not a preference.
- *
- * Widening a harness to a second backend is a deliberate act: it means that
- * runtime really can supervise both, and the admission service will then let it.
- */
-export function backgroundWorkBackendsForHarness(
-  harness: Harness,
-): readonly BackgroundWorkBackend[] {
-  return harness === "claude-sdk" ? ["claude-query"] : ["host-process"];
-}
-
-export function harnessSupportsBackgroundWorkBackend(
-  harness: Harness,
-  backend: BackgroundWorkBackend,
-): boolean {
-  return backgroundWorkBackendsForHarness(harness).includes(backend);
-}
 
 /** What the item does. Both monitor kinds may outlive the provider turn. */
 export type BackgroundWorkKind =

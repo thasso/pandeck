@@ -22,23 +22,25 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
-  CLAUDE_SDK_PROVIDER,
-  THINKING_LEVELS,
-  supportedThinkingLevelsForModel,
+  accountProviderForModelProvider,
   type ApprovalBody,
   type ApprovalCard,
   type ApprovalResolutionEdits,
+  CLAUDE_SDK_PROVIDER,
+  HARNESSES,
+  harnessForModelProvider,
   type ModelOption,
   type SessionSpawnApprovalBody,
   type SessionSpawnApprovalItem,
   type SessionSpawnResolutionEdits,
+  supportedThinkingLevelsForModel,
+  THINKING_LEVELS,
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
   credentialProfileById,
   enabledCredentialProfileById,
   automaticProfileIdFor,
-  type CredentialProfileProvider,
 } from "./credentialProfiles.ts";
 import { linkSessionToWorktree } from "./db/worktreeStore.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
@@ -100,10 +102,6 @@ export class SpawnProposalError extends Error {}
 
 /* --------------------------- runtime resolution --------------------------- */
 
-function accountProviderFor(provider: string): CredentialProfileProvider {
-  return provider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex";
-}
-
 interface ResolvedRuntime {
   provider: string;
   modelId: string;
@@ -132,8 +130,7 @@ function fallbackRuntimeOf(
   meta: SessionMeta | undefined,
 ): SpawnFallbackRuntime | undefined {
   if (!meta?.model) return undefined;
-  const provider =
-    meta.harness === "claude-sdk" ? CLAUDE_SDK_PROVIDER : meta.provider;
+  const provider = HARNESSES[meta.harness].modelProvider ?? meta.provider;
   if (!provider) return undefined;
   return {
     provider,
@@ -194,7 +191,7 @@ function candidateProfiles(
   provider: string,
   preferredProfileId: string | undefined,
 ): string[] {
-  const family = accountProviderFor(provider);
+  const family = accountProviderForModelProvider(provider);
   const ids: string[] = [];
   if (
     preferredProfileId &&
@@ -549,7 +546,7 @@ async function settledItem(
     throw new Error(
       `The account for "${item.title}" is not enabled — pick another one, or skip that row.`,
     );
-  if (profile.provider !== accountProviderFor(item.provider))
+  if (profile.provider !== accountProviderForModelProvider(item.provider))
     throw new Error(
       `"${profile.name}" cannot run ${item.provider} models — pick a matching account for "${item.title}".`,
     );
@@ -814,7 +811,7 @@ async function spawnOne(
   // From here the session is real: claim it on the result row immediately so
   // any later metadata, context, or delivery failure still reports the child.
   item.resultSessionId = sessionId;
-  const harness = item.provider === CLAUDE_SDK_PROVIDER ? "claude-sdk" : "pi";
+  const harness = harnessForModelProvider(item.provider);
   // Both real creation paths already write metadata. This merge is also the
   // explicit ordering gate for injected adapters and future harnesses: the
   // foreign-keyed spawn edge is written only after the child row exists, and

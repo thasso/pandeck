@@ -103,9 +103,7 @@ export function ProviderAccountRow({
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
               <ProviderIcon
-                provider={
-                  account.provider === "claude" ? "claude-sdk" : "openai-codex"
-                }
+                provider={account.provider}
                 title={providerLabel}
                 size={16}
                 className={

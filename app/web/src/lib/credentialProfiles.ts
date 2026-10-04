@@ -6,7 +6,7 @@ import type {
   CredentialProfileSummary,
   ModelOption,
 } from "@assistant/shared";
-import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
+import { accountProviderForModelProvider } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "./serverOrigin.ts";
 
 /**
@@ -44,8 +44,7 @@ export function accountPinWarning(
   const pinned = slot.credentialProfileId;
   if (!pinned) return undefined;
   const profile = profiles.find((item) => item.id === pinned);
-  const wanted =
-    slot.provider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex";
+  const wanted = accountProviderForModelProvider(slot.provider);
   const fallback = profiles.find(
     (item) => item.provider === wanted && item.enabled,
   );

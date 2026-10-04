@@ -391,9 +391,7 @@ export function UsageOverviewCard({
     <div className="rounded-xl border border-line bg-panel p-3.5">
       <div className="flex items-center gap-2">
         <ProviderIcon
-          provider={
-            profile.provider === "claude" ? "claude-sdk" : "openai-codex"
-          }
+          provider={profile.provider}
           size={15}
           className="shrink-0 text-accent"
         />

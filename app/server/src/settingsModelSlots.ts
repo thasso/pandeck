@@ -10,17 +10,16 @@
  * Deliberately pure: every function takes the settings object, so `settings.ts`
  * can import the write-time sanitizer without an import cycle.
  */
-import type {
-  AppSettings,
-  CredentialProfilePin,
-  CredentialProfileSlotUsage,
+import {
+  accountProviderForModelProvider,
+  type AppSettings,
+  type CredentialProfilePin,
+  type CredentialProfileSlotUsage,
 } from "@assistant/shared";
-import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
 import {
   credentialProfileById,
   defaultClaudeProfileId,
   defaultOpenAiProfileId,
-  type CredentialProfileProvider,
 } from "./credentialProfiles.ts";
 
 /** The model reference carried by every slot. */
@@ -32,13 +31,6 @@ export type SettingsModelSlot = CredentialProfilePin & {
 /** One enumerated slot: where it lives, what to call it, and its current value. */
 export interface SettingsModelSlotRef extends CredentialProfileSlotUsage {
   slot: SettingsModelSlot;
-}
-
-/** Which account family can run a model of this picker provider. */
-function accountProviderForModel(
-  modelProvider: string,
-): CredentialProfileProvider {
-  return modelProvider === CLAUDE_SDK_PROVIDER ? "claude" : "openai-codex";
 }
 
 /** Every model slot in the current settings, in Settings display order. */
@@ -142,7 +134,7 @@ export interface SlotAccountResolution {
 export function resolveSlotAccount(
   slot: SettingsModelSlot,
 ): SlotAccountResolution {
-  const wanted = accountProviderForModel(slot.provider);
+  const wanted = accountProviderForModelProvider(slot.provider);
   const automatic = () =>
     wanted === "claude" ? defaultClaudeProfileId() : defaultOpenAiProfileId();
   const pinned = slot.credentialProfileId?.trim();
@@ -191,7 +183,10 @@ function sanitizeSlotPin<
   }
   const profile = credentialProfileById(pinned);
   const provider = typeof value.provider === "string" ? value.provider : "";
-  if (profile && profile.provider === accountProviderForModel(provider)) {
+  if (
+    profile &&
+    profile.provider === accountProviderForModelProvider(provider)
+  ) {
     return { ...value, credentialProfileId: pinned };
   }
   const { credentialProfileId: _dropped, ...rest } = value;

@@ -62,10 +62,13 @@ Four layers, each depending only on the ones below it:
    `session/adapters/claudeSdk.ts` imports the engine's `modelSettings.ts`, and
    `session/planHint.ts` branches on a harness id. Both are pinned below.
 
-`HARNESSES` in `app/shared/` is the one table that maps a harness to its account
-provider, model provider, label and capabilities (fork, steering,
-background-work backends). Server and web read it instead of repeating the
-mapping.
+`HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
+its account provider, its model-picker provider (Claude only; pi models keep
+their upstream provider) and its capabilities, today the background-work
+backends it may own. `harnessForModelProvider`, `harnessForAccountProvider` and
+`accountProviderForModelProvider` translate between the three names; server and
+web call them instead of repeating the mapping. Further capabilities join the
+table when a later step needs them.
 
 ## Rules
 
@@ -98,7 +101,7 @@ mapping.
 | 1    | This contract and the boundary ratchet                                        | landed |
 | 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | landed |
 | 3    | One persona type (`AgentType` in `shared/`) replaces three identical unions   | landed |
-| 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | open   |
+| 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | landed |
 | 5    | `runOneShot()` and its 10 callers                                             | landed |
 | 6    | Models and usage ports                                                        | open   |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |

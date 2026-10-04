@@ -96,7 +96,6 @@ const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
   "session/planHint.ts": 1,
   "sessionAudit.ts": 4,
   "sessionAuditSources.ts": 1,
-  "sessionSpawn.ts": 1,
   "sessions.ts": 2,
   "taskOverhead.ts": 4,
   "tools/backgroundTasksTools.ts": 1,
