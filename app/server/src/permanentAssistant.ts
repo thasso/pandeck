@@ -178,11 +178,12 @@ export async function permanentAssistantSessionId(): Promise<string> {
  * repair. Opening it is then a read (`hub.viewById`), which is what keeps the
  * Assistant appearing at once instead of after its transcript is parsed.
  *
- * Undefined means the slow path is required: no binding yet, no record, or a
+ * Undefined means the slow path is required: no binding yet, no record, a
  * legacy binding to an ordinary session that {@link acquirePermanentAssistant}
- * has to abandon and replace.
+ * has to abandon and replace, or a rotation still abandoning the bound one.
  */
 export function permanentAssistantViewableId(): string | undefined {
+  if (rotation) return undefined;
   const id = permanentAssistantStore.sessionId();
   if (!id) return undefined;
   return sessionStore.get(id)?.agentType === "personal-assistant"
@@ -212,7 +213,12 @@ function acquirePermanentAssistant(): Promise<PermanentAssistantDriver> {
   if (acquiring?.generation === generation) return acquiring.promise;
   const mine = generation;
   const promise = (async () => {
-    await rotation;
+    // A failed rotation is reported where it was asked for; it does not fail
+    // the acquisitions that waited for it.
+    await rotation?.catch(() => {});
+    // Another rotation began meanwhile: this generation is already retired,
+    // so join the current one rather than create a session nothing binds.
+    if (mine !== generation) return acquirePermanentAssistant();
     return acquireOrCreatePermanentAssistant(mine);
   })().finally(() => {
     if (acquiring?.promise === promise) acquiring = undefined;

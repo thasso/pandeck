@@ -22,8 +22,12 @@ writeFileSync(
 );
 
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
-const { permanentAssistantSessionId, rotatePermanentAssistantSession } =
-  await import("./permanentAssistant.ts");
+const {
+  permanentAssistantSessionId,
+  permanentAssistantViewableId,
+  rotatePermanentAssistantSession,
+} = await import("./permanentAssistant.ts");
+const { sessionStore } = await import("./db/sessionStore.ts");
 const create = await import("./harnesses/create.ts");
 const { permanentAssistantStore } =
   await import("./db/permanentAssistantStore.ts");
@@ -163,6 +167,8 @@ test("overlapping rotations never clear the singleton bound after them", async (
     .mockReturnValueOnce(flush.promise)
     .mockResolvedValue(undefined);
 
+  const flushes = vi.mocked(memoryScheduler.flushBeforeReset);
+
   const first = rotatePermanentAssistantSession();
   const second = rotatePermanentAssistantSession();
   const id = permanentAssistantSessionId();
@@ -172,4 +178,59 @@ test("overlapping rotations never clear the singleton bound after them", async (
 
   assert.equal(await id, "assistant-1");
   assert.equal(permanentAssistantStore.sessionId(), "assistant-1");
+  // The second rotation waited for the first: it found nothing left to
+  // abandon, so the old singleton was flushed once, and reset after it.
+  assert.deepEqual(flushes.mock.calls, [["old"]]);
+});
+
+test("an acquisition caught between two rotations creates only the current singleton", async () => {
+  const created = assistantCreations();
+  boundOld();
+  const flush = held();
+  vi.spyOn(memoryScheduler, "flushBeforeReset")
+    .mockReturnValueOnce(flush.promise)
+    .mockResolvedValue(undefined);
+
+  const first = rotatePermanentAssistantSession();
+  const id = permanentAssistantSessionId();
+  const second = rotatePermanentAssistantSession();
+  flush.release();
+  await Promise.all([first, second]);
+
+  assert.equal(await id, "assistant-1");
+  assert.equal(permanentAssistantStore.sessionId(), "assistant-1");
+  assert.deepEqual(created, ["assistant-1"]);
+});
+
+test("a failed rotation does not fail the acquisitions that waited for it", async () => {
+  assistantCreations();
+  boundOld();
+  vi.spyOn(memoryScheduler, "flushBeforeReset").mockRejectedValue(
+    new Error("flush failed"),
+  );
+
+  const rotating = rotatePermanentAssistantSession();
+  const id = permanentAssistantSessionId();
+
+  await assert.rejects(rotating, /flush failed/);
+  // Nothing was abandoned, so the bound singleton still answers.
+  assert.equal(await id, "old");
+});
+
+test("the singleton is not opened from storage while a rotation abandons it", async () => {
+  boundOld();
+  sessionStore.upsert({
+    id: "old",
+    harness: "claude-sdk",
+    agentType: "personal-assistant",
+  });
+  const flush = held();
+  vi.spyOn(memoryScheduler, "flushBeforeReset").mockReturnValue(flush.promise);
+  assert.equal(permanentAssistantViewableId(), "old");
+
+  const rotating = rotatePermanentAssistantSession();
+  assert.equal(permanentAssistantViewableId(), undefined);
+  flush.release();
+  await rotating;
+  assert.equal(permanentAssistantViewableId(), undefined);
 });

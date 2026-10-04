@@ -26,8 +26,8 @@ const { Connection } = await import("./connection.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const runtimePrompt = await import("./session/runtimePrompt.ts");
-const { daySessionTitle, getDaySessionId, setDaySessionId } =
-  await import("./calendarDaySessions.ts");
+const daySessions = await import("./calendarDaySessions.ts");
+const { daySessionTitle, getDaySessionId, setDaySessionId } = daySessions;
 const { hub } = await import("./hub.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -125,4 +125,31 @@ test("an activation that finds a stale binding late keeps the day's new session"
   const bound = getDaySessionId(date);
   assert.ok(bound && created.has(bound));
   assert.deepEqual(prompted, [bound, bound]);
+});
+
+test("a binding whose look-up fails inside the shared creation is treated as stale", async () => {
+  const { acquire, created } = claudeCreations();
+  vi.spyOn(runtimePrompt, "promptRuntimeSession").mockResolvedValue();
+  const date = "2026-10-07";
+  // The activation finds the day unbound; by the time the shared creation
+  // rechecks, a binding has appeared whose session cannot be opened.
+  vi.spyOn(daySessions, "getDaySessionId")
+    .mockReturnValueOnce(null)
+    .mockReturnValueOnce("broken-day-session");
+  vi.spyOn(hub, "acquireById").mockImplementation(async (id: string) => {
+    if (id === "broken-day-session") throw new Error("transcript unreadable");
+    return created.get(id);
+  });
+
+  const sent: ServerMessage[] = [];
+  await activate(date, sent);
+
+  assert.deepEqual(
+    sent.filter((message) => message.type === "error"),
+    [],
+  );
+  assert.equal(acquire.mock.calls.length, 1);
+  vi.mocked(daySessions.getDaySessionId).mockRestore();
+  const bound = getDaySessionId(date);
+  assert.ok(bound && created.has(bound));
 });
