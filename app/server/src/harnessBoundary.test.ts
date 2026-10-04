@@ -36,29 +36,20 @@ const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
   "commitWorkflow.ts": ["piSdk/index.ts"],
-  "connection.ts": ["claudeSdk/claudeSdkStore.ts", "piSdk/models.ts"],
+  "connection.ts": ["claudeSdk/claudeSdkStore.ts"],
   "hub.ts": [
     "claudeSdk/claudeSdkStore.ts",
     "piSdk/PiLiveSession.ts",
     "piSdk/piStore.ts",
   ],
-  "index.ts": ["piSdk/models.ts", "piSdk/toolBinaries.ts"],
-  "permanentAssistant.ts": ["piSdk/oneShot.ts"],
   "promptBudgets.ts": ["piSdk/piPromptMeasure.ts"],
   "promptInventory.ts": [
     "claudeSdk/options.ts",
     "piSdk/backgroundWorkToolDefinitions.ts",
     "piSdk/piPromptMeasure.ts",
   ],
-  "session/adapters/claudeSdk.ts": ["claudeSdk/modelSettings.ts"],
-  "sessionSpawn.ts": ["piSdk/models.ts"],
   "taskOverhead.ts": ["claudeSdk/claudeSdkRecords.ts"],
   "viewSession.ts": ["piSdk/toolActivation.ts"],
-  "workflow/agentExecutor.ts": ["piSdk/models.ts"],
-  "worktrees/worktreeMerge.ts": [
-    "claudeSdk/modelSettings.ts",
-    "piSdk/models.ts",
-  ],
 };
 
 /**

@@ -45,7 +45,7 @@ import {
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { errorText } from "./errors.ts";
 import { getProject } from "./projectRegistry.ts";
-import { findModelForProfile } from "./piSdk/models.ts";
+import { piModelForAccount } from "./harnesses/models.ts";
 import {
   admitDirectPeerTurns,
   modelsForProfile,
@@ -626,7 +626,7 @@ async function harnessHub() {
 
 const REAL_DEPS: SessionSpawnDeps = {
   newSessionId: randomUUID,
-  findPiModel: findModelForProfile,
+  findPiModel: piModelForAccount,
   // Dynamic for the same reason as `harnessHub`: creation reaches the Claude
   // store, whose tool catalog pulls this module in.
   create: async (spec) =>
