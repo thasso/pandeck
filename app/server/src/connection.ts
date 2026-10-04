@@ -31,6 +31,7 @@ import {
   MAX_OPEN_COMMENT_TARGETS,
   type Harness,
   type MessageTarget,
+  type SettableSpawnOwnership,
   messageTargetForComment,
   type WorktreeMergeStrategy,
   type WorktreeProvisionDisplay,
@@ -209,6 +210,10 @@ import {
   updateQueuedPrompt,
 } from "./promptQueue.ts";
 import { settleSessionWithPeers } from "./sessionActivity.ts";
+import {
+  setSpawnOwnership,
+  type SpawnOwnershipResult,
+} from "./spawnOwnership.ts";
 import {
   CONTEXT_ONLY_SLASH_COMMANDS,
   hostSlashCommandRunner,
@@ -959,6 +964,8 @@ export class Connection implements Viewer {
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
       case "renameSession":
         return this.onRenameSession(msg.id, msg.title);
+      case "setSpawnOwnership":
+        return this.onSetSpawnOwnership(msg.id, msg.ownership);
       case "acknowledgeMissingWorktree":
         return this.onAcknowledgeMissingWorktree(msg.id);
       case "calendarDayActivate":
@@ -4703,6 +4710,50 @@ export class Connection implements Viewer {
       message: `${WORKTREE_MISSING_BLOCKED_REASON} Acknowledge the banner to run it there anyway.`,
     });
     return false;
+  }
+
+  /**
+   * Take a spawned peer over, or hand it back to its coordinator, on the
+   * user's explicit word (`spawnOwnership.ts`). Every refusal — a session the
+   * user cannot act on, one with no spawn edge, any store failure, including
+   * the first read — is an error targeted at the session, so the browser
+   * recovers its optimistic change; a request that changes nothing broadcasts
+   * nothing. It changes metadata only and never starts the agent, so the
+   * harness/persona availability guard of run-starting commands does not
+   * apply: a disabled harness must not stop the user taking a peer over.
+   */
+  private async onSetSpawnOwnership(
+    id: string,
+    ownership: SettableSpawnOwnership,
+  ): Promise<void> {
+    const target: MessageTarget = { type: "session", id };
+    let result: SpawnOwnershipResult;
+    try {
+      result = setSpawnOwnership(id, ownership);
+    } catch (err) {
+      console.warn(`[spawn] failed to set ownership of ${id}:`, errorText(err));
+      this.send({
+        type: "error",
+        message: "Could not change who runs this session. Try again.",
+        target,
+      });
+      return;
+    }
+    if (result !== "changed" && result !== "unchanged") {
+      this.send({
+        type: "error",
+        message:
+          result === "unavailable"
+            ? "That session is not available."
+            : result === "not-spawned"
+              ? "Only a spawned session has an owner to change."
+              : "Its coordinator was deleted, so there is no one to hand it back to.",
+        target,
+      });
+      return;
+    }
+    if (result === "unchanged") return;
+    await hub.broadcastSessions();
   }
 
   /**

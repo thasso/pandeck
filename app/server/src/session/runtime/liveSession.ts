@@ -80,28 +80,19 @@ export interface RuntimePromptOptions extends PromptOptions {
   peerMessageIds?: string[];
 }
 
-/** What a human-origin prompt was, for consumers that treat kinds differently. */
-export interface HumanPromptSignal {
-  /**
-   * A durable-but-not-rendered prompt (rebuild/fork provenance). It still resets
-   * peer chains, but it is not the user speaking, so it is no evidence of the
-   * user taking a session over.
-   */
-  hidden: boolean;
-}
-
 /**
- * Notified when a human-origin prompt is appended to a session, so peer-prompt
- * loop chains can reset (Task 105) and a spawned child can record that the user
- * took it over (Task 637). Fires only after the durable user entry exists, and
- * only for the seam BOTH harnesses prompt through — a rejected or deduplicated
- * send appends nothing and never reaches it. Registered at boot; kept as a seam
- * so the runtime layer does not depend on the peer-prompt engine.
+ * Notified when a human-origin prompt — visible or hidden provenance — is
+ * appended to a session, so peer-prompt loop chains can reset (Task 105).
+ * No prompt changes who owns a spawned session: taking one over is the user's
+ * explicit command (`spawnOwnership.ts`). Fires only after the durable user
+ * entry exists, and only for the seam BOTH harnesses prompt through — a
+ * rejected or deduplicated send appends nothing and never reaches it.
+ * Registered at boot; kept as a seam so the runtime layer does not depend on
+ * the peer-prompt engine.
  */
-let humanPromptHook:
-  ((sessionId: string, signal: HumanPromptSignal) => void) | undefined;
+let humanPromptHook: ((sessionId: string) => void) | undefined;
 export function setHumanPromptHook(
-  fn: ((sessionId: string, signal: HumanPromptSignal) => void) | undefined,
+  fn: ((sessionId: string) => void) | undefined,
 ): void {
   humanPromptHook = fn;
 }
@@ -598,12 +589,11 @@ export class LiveRuntimeSession {
         entry: projectForClient(userRaw),
         ...(clientRequestId ? { clientRequestId } : {}),
       });
-    // A real human turn resets peer-prompt loop chains for this session, and a
-    // VISIBLE one is also the user taking a spawned child over.
+    // A real human turn resets peer-prompt loop chains for this session. It
+    // never changes who owns a spawned session.
     const promptOrigin = origin ?? { kind: "human" as const };
     this.noteTurnOrigin(promptOrigin, options.hidden === true);
-    if (promptOrigin.kind === "human")
-      humanPromptHook?.(this.sessionId, { hidden: options.hidden === true });
+    if (promptOrigin.kind === "human") humanPromptHook?.(this.sessionId);
     return userRaw.id;
   }
 

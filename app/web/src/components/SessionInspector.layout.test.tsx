@@ -200,4 +200,88 @@ describe("SessionInspector layout", () => {
     expect(host.textContent).not.toContain("Second 6");
     expect(host.textContent).toContain("Show 2 more");
   });
+
+  it("offers Take over on a coordinator-run peer and Hand back once taken", () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { host, root };
+    const row = (
+      id: string,
+      title: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      id,
+      harness: "pi" as const,
+      agentType: "assistant" as const,
+      title,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 1,
+      ...extra,
+    });
+    const asked: string[] = [];
+    const panel = (ownership: "coordinator" | "taken-over") => (
+      <SessionInspector
+        {...base}
+        sessionId="child"
+        sessions={[
+          row("coordinator", "Coordinator"),
+          row("child", "Implementer", {
+            spawnedBySessionId: "coordinator",
+            spawnOwnership: ownership,
+          }),
+        ]}
+        onSetSpawnOwnership={(value) => asked.push(value)}
+      />
+    );
+    const action = (label: string) =>
+      [...host.querySelectorAll("button")].find((button) =>
+        button.textContent?.startsWith(label),
+      );
+
+    // A poke never moves ownership, so taking over is offered explicitly.
+    act(() => root.render(panel("coordinator")));
+    expect(action("Hand back")).toBeUndefined();
+    act(() => action("Take over")!.click());
+
+    // Once taken, the action hands it back and names who gets it.
+    act(() => root.render(panel("taken-over")));
+    expect(action("Take over")).toBeUndefined();
+    expect(action("Hand back")!.textContent).toContain("Coordinator");
+    act(() => action("Hand back")!.click());
+    expect(asked).toEqual(["taken-over", "coordinator"]);
+  });
+
+  it("offers no Hand back when the coordinator is gone from the list", () => {
+    const markup = render({
+      ...base,
+      sessionId: "child",
+      sessions: [
+        {
+          id: "child",
+          harness: "pi" as const,
+          agentType: "assistant" as const,
+          title: "Implementer",
+          createdAt: 1,
+          updatedAt: 1,
+          messageCount: 1,
+          spawnedBySessionId: "deleted-coordinator",
+          spawnOwnership: "taken-over" as const,
+        },
+      ],
+      onSetSpawnOwnership: () => {},
+    });
+    expect(markup).not.toContain("Hand back");
+    expect(markup).not.toContain("Take over");
+  });
+
+  it("offers no ownership action on a session nothing spawned", () => {
+    const markup = render({
+      ...base,
+      onSetSpawnOwnership: () => {},
+    });
+    expect(markup).not.toContain("Take over");
+    expect(markup).not.toContain("Hand back");
+  });
 });

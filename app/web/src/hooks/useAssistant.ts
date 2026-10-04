@@ -33,6 +33,7 @@ import {
 } from "../lib/peerPromptCardOverrides.ts";
 import type {
   AgentInfo,
+  SettableSpawnOwnership,
   AgentQuestionResponse,
   AppSettings,
   CalendarDayScanProgress,
@@ -1776,6 +1777,12 @@ type Action =
       sessionId: string;
       title: string;
       now: number;
+    }
+  /** Take over a spawned peer, or hand it back to its coordinator. */
+  | {
+      kind: "optimisticSpawnOwnership";
+      sessionId: string;
+      ownership: SettableSpawnOwnership;
     }
   /**
    * A Settle on a session: the row itself, plus — when settling — the peers it
@@ -4509,6 +4516,17 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       error: null,
     };
   }
+  if (action.kind === "optimisticSpawnOwnership") {
+    return {
+      ...state,
+      sessions: state.sessions.map((session) =>
+        session.id === action.sessionId && session.spawnedBySessionId
+          ? { ...session, spawnOwnership: action.ownership }
+          : session,
+      ),
+      error: null,
+    };
+  }
   if (action.kind === "optimisticSessionSettle") {
     let sessions = applyOptimisticSessionSettle(
       state.sessions,
@@ -6210,6 +6228,13 @@ export interface AssistantActions {
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
   renameSession: (id: string, title: string) => void;
+  /**
+   * Take a spawned peer over, or hand it back to the coordinator that spawned
+   * it — the user's explicit word on ownership; messaging a peer never moves
+   * it. Optimistic, like a Settle: the inbox re-folds at once, and a refusal
+   * (carrying this requestId) triggers the recovery refetch.
+   */
+  setSpawnOwnership: (id: string, ownership: SettableSpawnOwnership) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the
@@ -8249,6 +8274,18 @@ export function useAssistant({
           ownerSessionId,
           requestId: createClientId(),
         });
+      },
+      setSpawnOwnership: (id, ownership) => {
+        const requestId = trackMutation(
+          { topic: "sessions", objectIds: [id] },
+          refetchSessions,
+        );
+        dispatch({
+          kind: "optimisticSpawnOwnership",
+          sessionId: id,
+          ownership,
+        });
+        send({ type: "setSpawnOwnership", id, ownership, requestId });
       },
       renameSession: (id, title) => {
         const trimmed = title.trim();

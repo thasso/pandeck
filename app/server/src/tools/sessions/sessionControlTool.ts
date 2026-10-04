@@ -4,7 +4,7 @@
  *
  * The two operations share one target and one authority boundary. A sender may
  * retract only its own not-yet-dispatched messages. A coordinator may abort only
- * a child whose durable spawn edge still says `coordinator`; direct human
+ * a child whose durable spawn edge still says `coordinator`; the user's explicit
  * takeover revokes that authority.
  */
 import { sessionStore } from "../../db/sessionStore.ts";

@@ -1577,14 +1577,18 @@ export interface SubagentDelegationSummary {
 /**
  * Who currently owns an agent-spawned peer session.
  *
- * `coordinator` is a spawn whose ownership has been tracked since creation and
- * that the user has not personally prompted; `taken-over` records that the user
- * sent it a direct, visible prompt and now owns it; `unknown` is the fail-closed
+ * `coordinator` is a spawn whose ownership has been tracked since creation (or
+ * that the user handed back) and that the coordinator runs — messaging it does
+ * not change that; `taken-over` records that the user explicitly took it over
+ * (`setSpawnOwnership`) and now owns it; `unknown` is the fail-closed
  * value for a spawn edge created before ownership tracking, or whose stored
  * metadata cannot be classified. `unknown` is NOT coordinator-owned: a consumer
  * that hides coordinator-owned children must keep an unknown one reachable.
  */
 export type SpawnOwnership = "coordinator" | "taken-over" | "unknown";
+
+/** What the user may set a spawned session's owner to: never `unknown`. */
+export type SettableSpawnOwnership = Exclude<SpawnOwnership, "unknown">;
 
 /**
  * Whether this SESSION belongs directly to the user rather than to its
@@ -6788,6 +6792,20 @@ export type ClientMessage =
       requestId?: string;
     }
   | { type: "renameSession"; id: string; title: string; requestId?: string }
+  /**
+   * Take a spawned peer session over (`taken-over`), or hand it back to the
+   * coordinator that spawned it (`coordinator`) — the user's EXPLICIT word on
+   * {@link SpawnOwnership}; messaging a peer never moves it. Refused for a
+   * session with no spawn edge. Taking over revokes the coordinator's
+   * `session_control` over the peer and stands it apart from the
+   * coordinator's inbox fold; handing back restores both.
+   */
+  | {
+      type: "setSpawnOwnership";
+      id: string;
+      ownership: SettableSpawnOwnership;
+      requestId?: string;
+    }
   /**
    * Acknowledge that this session's worktree is gone and it may run in the app
    * working directory anyway. Clears `worktreeMissing` for exactly the worktree

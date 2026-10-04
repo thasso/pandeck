@@ -304,7 +304,7 @@ test("only a directly owned session raises top-level attention", async () => {
       sessionStore.linkSpawned(parentId, childId),
     "taken-over": (parentId, childId) => {
       sessionStore.linkSpawned(parentId, childId);
-      sessionStore.markSpawnedTakenOver(childId);
+      sessionStore.setSpawnedOwnership(childId, "taken-over");
     },
     // An edge from before ownership tracking: no metadata to classify.
     unknown: (parentId, childId) => {

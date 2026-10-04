@@ -36,6 +36,8 @@ import {
   SendHorizontal,
   SlidersHorizontal,
   Trash2,
+  Undo2,
+  UserCheck,
   Workflow,
 } from "lucide-react";
 import {
@@ -45,6 +47,7 @@ import {
   type PullRequestInventoryItem,
   type SessionForkOrigin,
   type SessionListItem,
+  type SettableSpawnOwnership,
   type TaskBackRef,
   type TaskStatus,
   type TaskSummary,
@@ -568,7 +571,7 @@ export function sessionRelationGroups(args: {
       ...(spawnedSessions.length > 0
         ? { summary: `${spawnedSessions.length}` }
         : {}),
-      // "Taken over" marks a child the user has personally prompted, so a
+      // "Taken over" marks a child the user has explicitly taken over, so a
       // coordinator's delegates stay distinguishable from the ones the user now
       // drives. Only that state is labelled: an untracked (`unknown`) edge is
       // not evidence of anything.
@@ -765,6 +768,50 @@ export function TaskInspector({
 }
 
 /**
+ * The Take over / Hand back action for a spawned session, or nothing for a
+ * session no other session spawned. A session the user took over offers to
+ * hand it back to its coordinator — only while that coordinator is in the
+ * list, since handing a peer to a session that is gone would leave nobody to
+ * run it; any other spawned session (coordinator-run, or an `unknown` edge)
+ * offers to take it over.
+ */
+function spawnOwnershipAction(
+  sessionId: string | undefined,
+  sessions: SessionListItem[],
+  onSet: ((ownership: SettableSpawnOwnership) => void) | undefined,
+): InspectorAction[] | undefined {
+  if (!onSet || !sessionId) return undefined;
+  const session = sessions.find((item) => item.id === sessionId);
+  if (!session?.spawnedBySessionId) return undefined;
+  const coordinator = sessions.find(
+    (item) => item.id === session.spawnedBySessionId,
+  );
+  const coordinatorTitle = coordinator?.title.trim() || undefined;
+  if (session.spawnOwnership === "taken-over" && !coordinator) return undefined;
+  return session.spawnOwnership === "taken-over"
+    ? [
+        {
+          key: "hand-back",
+          icon: <Undo2 size={14} />,
+          // The coordinator's title is part of the label, not a hint: a hint
+          // does not shrink, and a long title would crush "Hand back" itself.
+          label: coordinatorTitle
+            ? `Hand back to ${coordinatorTitle}`
+            : "Hand back",
+          onRun: () => onSet("coordinator"),
+        },
+      ]
+    : [
+        {
+          key: "take-over",
+          icon: <UserCheck size={14} />,
+          label: "Take over",
+          onRun: () => onSet("taken-over"),
+        },
+      ];
+}
+
+/**
  * @component SessionInspector
  * @purpose Right-sidebar inspector for the Session open in the main pane:
  * summary, related objects (workspace, a unified task tree, durable spawn and
@@ -796,6 +843,7 @@ export function SessionInspector({
   onDelete,
   onOpenWorktreeChanges,
   onReviewWork,
+  onSetSpawnOwnership,
   view,
   children,
 }: {
@@ -852,6 +900,13 @@ export function SessionInspector({
    * way to put a second agent on a live working tree.
    */
   onReviewWork?: (() => void) | undefined;
+  /**
+   * Take this spawned session over, or hand it back to the coordinator that
+   * spawned it. Offered only for a session with a spawn edge; messaging a
+   * peer never moves ownership, so this is the one way it changes.
+   */
+  onSetSpawnOwnership?:
+    ((ownership: SettableSpawnOwnership) => void) | undefined;
   /**
    * Transcript view toggles, rendered as a **View** section. Passed only where
    * this inspector is the session's control centre (the mobile object dock);
@@ -912,6 +967,9 @@ export function SessionInspector({
           },
         ]
       : []),
+    // Who runs a spawned session is the user's explicit decision: a message
+    // is a poke, and the coordinator stays in charge until the user takes over.
+    ...(spawnOwnershipAction(sessionId, sessions, onSetSpawnOwnership) ?? []),
     // The worktree glyph, not a diff one: this leaves the session for that
     // worktree's screen, and an action's icon should say where it lands.
     ...(onOpenWorktreeChanges

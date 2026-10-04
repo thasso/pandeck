@@ -117,15 +117,22 @@ the outcome:
   as `SessionListItem.spawnOwnership`:
 
   - `coordinator` — created by `session_spawn` with ownership tracked from the
-    start, and the user has not intervened. Written before the opening peer
-    prompt is delivered, so a child is never briefly unclassified.
-  - `taken-over` — the user sent this child a direct, VISIBLE human prompt. The
-    first such prompt records the state and one timestamp; ownership never moves
-    back, and later prompts rewrite nothing. Opening, reading, routing, peer
-    prompts, agent/system continuations, hidden prompts, a rejected send and a
-    deduplicated `clientRequestId` are all not takeover — the transition happens
-    at the runtime seam both harnesses prompt through, only once the durable
-    human user entry exists.
+    start (or handed back by the user), and the coordinator runs it. Written
+    before the opening peer prompt is delivered, so a child is never briefly
+    unclassified. MESSAGING the child does not change this: the user pokes
+    stalled peers all the time, and a poke leaves the coordinator in charge. The
+    poked turn ends like any turn of a coordinator-owned peer — no top-level
+    outcome or notification of its own; the user reads its answer in the peer
+    itself or, while the coordinator is present, under its fold (a failure still
+    surfaces there).
+  - `taken-over` — the user EXPLICITLY took this child over: the Session
+    inspector's **Take over** action (`setSpawnOwnership`). It records the state
+    and one timestamp; taking over a child already taken over rewrites nothing.
+    **Hand back** returns the child to `coordinator`, and a later Take over
+    stamps afresh — but not to a coordinator that was deleted, since nobody
+    would then run the peer. Only a non-deleted, user-scope session with a spawn
+    edge can be set; anything else is refused. Edges marked before this rule,
+    when any visible human prompt took a child over, keep their state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`
@@ -133,7 +140,7 @@ the outcome:
 
   Re-linking the same coordinator/child pair is idempotent and cannot reset a
   takeover. The session list is broadcast only when ownership actually
-  transitions.
+  transitions. A session with no spawn edge cannot be taken over.
 
   The Sessions inbox is the first consumer of that edge
   ([Task-675](pa://task/675)): a coordinator and its `coordinator`-owned peers
@@ -162,11 +169,12 @@ the outcome:
   session may cancel its own `queued` or `retryable_failed` peer prompts to a
   target, but it cannot retract a prompt once dispatch starts. A coordinator may
   stop a child only while the spawn edge remains `coordinator`-owned; takeover
-  revokes that authority. `stop` may clear the child's whole waiting queue
-  before aborting the active turn, which prevents the running-to-idle hook from
-  immediately starting the next queued prompt. Clearing another session's
-  messages is allowed only through that owned-child stop operation. Stopping
-  leaves the ordinary session and its transcript intact.
+  revokes that authority and handing back restores it. `stop` may clear the
+  child's whole waiting queue before aborting the active turn, which prevents
+  the running-to-idle hook from immediately starting the next queued prompt.
+  Clearing another session's messages is allowed only through that owned-child
+  stop operation. Stopping leaves the ordinary session and its transcript
+  intact.
 
   ONE automatic signal exists, and only one. When the server RESTARTS while a
   delivered peer turn is still running, the sender of a prompt that asked for a

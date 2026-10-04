@@ -37,6 +37,7 @@ import {
   type PullRequestCheckoutOutcome,
   type PullRequestInventoryItem,
   type SessionListItem,
+  type SettableSpawnOwnership,
   type SessionMode,
   type SessionState,
   type TaskStatus,
@@ -6471,6 +6472,14 @@ function AppContent() {
               const error = startReviewSessionForSession();
               if (error) showToast(error);
             }
+          : undefined
+      }
+      // Taking a spawned peer over is explicit: messaging it is a poke and
+      // leaves its coordinator in charge.
+      onSetSpawnOwnership={
+        displaySessionListItem?.spawnedBySessionId
+          ? (ownership: SettableSpawnOwnership) =>
+              actions.setSpawnOwnership(displaySessionListItem.id, ownership)
           : undefined
       }
       view={

@@ -224,7 +224,6 @@ import {
   subscribeSessionRunCompleted,
   subscribeSessionToolCompleted,
 } from "./session/runtime/liveSession.ts";
-import { humanPromptHandler } from "./spawnOwnership.ts";
 import { notifySessionTurnCompleted } from "./webPush.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
@@ -2146,10 +2145,9 @@ server.listen(PORT, HOST, () => {
       void backgroundCompletionDelivery.requestDrain(sessionId),
   });
   setHumanPromptHook(
-    humanPromptHandler({
-      closeChains: closeChainsForHumanPrompt,
-      broadcastSessions: () => void hub.broadcastSessions(),
-    }),
+    // Every human prompt closes its session's peer chains. No prompt changes
+    // who owns a spawned session: that is the explicit Take over command.
+    closeChainsForHumanPrompt,
   );
   // A card outcome the user decided while this session was mid-turn takes the
   // edge FIRST: it is the one thing waiting here that the agent may be

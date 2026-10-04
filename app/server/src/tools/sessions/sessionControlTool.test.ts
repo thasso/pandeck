@@ -161,7 +161,7 @@ describe("session_control tool", () => {
 
     const child = seed("Taken over child");
     sessionStore.linkSpawned(caller, child);
-    sessionStore.markSpawnedTakenOver(child);
+    sessionStore.setSpawnedOwnership(child, "taken-over");
     await assert.rejects(
       () =>
         tool().execute(
@@ -170,5 +170,32 @@ describe("session_control tool", () => {
         ),
       /no longer owned by the current session/,
     );
+  });
+
+  it("gets its stop authority back when the user hands the child back", async () => {
+    const caller = seed("Caller");
+    const child = seed("Handed back child");
+    sessionStore.linkSpawned(caller, child);
+    let aborts = 0;
+    setSessionControlRuntimeForTests({
+      isRunning: (sessionId) => sessionId === child,
+      abort: () => {
+        aborts += 1;
+      },
+    });
+    const stop = () =>
+      tool().execute(
+        { operation: "stop", targetSessionId: child },
+        context(caller),
+      );
+
+    await stop();
+    assert.equal(aborts, 1, "a coordinator stops the child it owns");
+    sessionStore.setSpawnedOwnership(child, "taken-over");
+    await assert.rejects(stop, /no longer owned by the current session/);
+    assert.equal(aborts, 1);
+    sessionStore.setSpawnedOwnership(child, "coordinator");
+    await stop();
+    assert.equal(aborts, 2, "handing back restores the coordinator's stop");
   });
 });

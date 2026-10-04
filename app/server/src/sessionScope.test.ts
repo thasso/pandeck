@@ -265,7 +265,7 @@ test("the session list projects stored spawn provenance in one batch", async () 
     "an untracked legacy edge fails closed rather than claiming coordinator ownership",
   );
 
-  sessionStore.markSpawnedTakenOver(child, 1234);
+  sessionStore.setSpawnedOwnership(child, "taken-over", 1234);
   sessions = await listed();
   assert.equal(sessions.get(child)?.spawnedBySessionId, parent);
   assert.equal(sessions.get(child)?.spawnOwnership, "taken-over");
