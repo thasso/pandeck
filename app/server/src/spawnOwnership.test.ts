@@ -145,16 +145,16 @@ test("a human prompt to a session that was never spawned resets its chains", asy
 
 test("the explicit command takes a child over and hands it back", () => {
   const target = child("explicit");
-  assert.equal(setSpawnOwnership(target, "taken-over"), true);
+  assert.equal(setSpawnOwnership(target, "taken-over"), "changed");
   assert.equal(ownershipOf(target), "taken-over");
   assert.equal(
     setSpawnOwnership(target, "taken-over"),
-    false,
+    "unchanged",
     "no change, so nothing to broadcast",
   );
-  assert.equal(setSpawnOwnership(target, "coordinator"), true);
+  assert.equal(setSpawnOwnership(target, "coordinator"), "changed");
   assert.equal(ownershipOf(target), "coordinator");
   // A session with no spawn edge has no owner to set.
   const plain = child("explicit-plain", { spawned: false });
-  assert.equal(setSpawnOwnership(plain, "taken-over"), undefined);
+  assert.equal(setSpawnOwnership(plain, "taken-over"), "not-spawned");
 });

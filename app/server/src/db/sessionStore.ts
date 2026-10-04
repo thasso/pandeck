@@ -26,6 +26,7 @@ import {
   type SessionOutcomeAttention,
   type SessionOutcomeKind,
   type SessionScope,
+  type SettableSpawnOwnership,
   type SpawnOwnership,
 } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
@@ -1192,7 +1193,10 @@ interface DbSessionLinkRow {
 interface SpawnProvenance {
   parentSessionId: string;
   ownership: SpawnOwnership;
-  /** When the user explicitly took the child over. */
+  /**
+   * When the child was taken over: the user's explicit Take over, or — on an
+   * edge marked before that rule — the visible prompt that marked it.
+   */
   takenOverAt?: number;
 }
 
@@ -1303,14 +1307,16 @@ function linkSpawned(
  * is not that word: a poke leaves its coordinator in charge.
  *
  * Idempotent, so the returned boolean is exactly "ownership changed now" —
- * the one condition that justifies a session-list broadcast. Taking over again
- * keeps the first takeover's timestamp. An `unknown` edge may be set either
+ * the one condition that justifies a session-list broadcast. Taking over a
+ * child that is already taken over keeps its timestamp; after a Hand back, the
+ * next Take over stamps afresh. An `unknown` edge may be set either
  * way: the user's decision is evidence that missing creation metadata is not.
- * A session with no spawn edge is not a spawned child and returns false.
+ * A session with no spawn edge is not a spawned child and returns false
+ * (`spawnOwnership.setSpawnOwnership` reports that case as `not-spawned`).
  */
 function setSpawnedOwnership(
   childSessionId: string,
-  ownership: "taken-over" | "coordinator",
+  ownership: SettableSpawnOwnership,
   at = Date.now(),
 ): boolean {
   const rows = getDb()

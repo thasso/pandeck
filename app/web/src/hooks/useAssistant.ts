@@ -33,6 +33,7 @@ import {
 } from "../lib/peerPromptCardOverrides.ts";
 import type {
   AgentInfo,
+  SettableSpawnOwnership,
   AgentQuestionResponse,
   AppSettings,
   CalendarDayScanProgress,
@@ -1781,7 +1782,7 @@ type Action =
   | {
       kind: "optimisticSpawnOwnership";
       sessionId: string;
-      ownership: "taken-over" | "coordinator";
+      ownership: SettableSpawnOwnership;
     }
   /**
    * A Settle on a session: the row itself, plus — when settling — the peers it
@@ -6233,10 +6234,7 @@ export interface AssistantActions {
    * it. Optimistic, like a Settle: the inbox re-folds at once, and a refusal
    * (carrying this requestId) triggers the recovery refetch.
    */
-  setSpawnOwnership: (
-    id: string,
-    ownership: "taken-over" | "coordinator",
-  ) => void;
+  setSpawnOwnership: (id: string, ownership: SettableSpawnOwnership) => void;
   /**
    * Stop one background item, or everything one session owns, under HUMAN
    * authorization. The server calls the supervisor's Stop service directly; the

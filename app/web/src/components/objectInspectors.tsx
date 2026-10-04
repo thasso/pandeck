@@ -47,6 +47,7 @@ import {
   type PullRequestInventoryItem,
   type SessionForkOrigin,
   type SessionListItem,
+  type SettableSpawnOwnership,
   type TaskBackRef,
   type TaskStatus,
   type TaskSummary,
@@ -767,15 +768,6 @@ export function TaskInspector({
 }
 
 /**
- * @component SessionInspector
- * @purpose Right-sidebar inspector for the Session open in the main pane:
- * summary, related objects (workspace, a unified task tree, durable spawn and
- * fork lineage, staged draft context), session actions, and feature content via children
- * (SessionContextSections).
- * @useWhen The main pane shows a session or the new-session landing.
- * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
- */
-/**
  * The Take over / Hand back action for a spawned session, or nothing for a
  * session no other session spawned. A session the user took over offers to
  * hand it back to its coordinator; any other spawned session (coordinator-run,
@@ -784,7 +776,7 @@ export function TaskInspector({
 function spawnOwnershipAction(
   sessionId: string | undefined,
   sessions: SessionListItem[],
-  onSet: ((ownership: "taken-over" | "coordinator") => void) | undefined,
+  onSet: ((ownership: SettableSpawnOwnership) => void) | undefined,
 ): InspectorAction[] | undefined {
   if (!onSet || !sessionId) return undefined;
   const session = sessions.find((item) => item.id === sessionId);
@@ -798,9 +790,12 @@ function spawnOwnershipAction(
         {
           key: "hand-back",
           icon: <Undo2 size={14} />,
-          label: "Hand back",
+          // The coordinator's title is part of the label, not a hint: a hint
+          // does not shrink, and a long title would crush "Hand back" itself.
+          label: coordinatorTitle
+            ? `Hand back to ${coordinatorTitle}`
+            : "Hand back",
           onRun: () => onSet("coordinator"),
-          ...(coordinatorTitle ? { hint: coordinatorTitle } : {}),
         },
       ]
     : [
@@ -813,6 +808,15 @@ function spawnOwnershipAction(
       ];
 }
 
+/**
+ * @component SessionInspector
+ * @purpose Right-sidebar inspector for the Session open in the main pane:
+ * summary, related objects (workspace, a unified task tree, durable spawn and
+ * fork lineage, staged draft context), session actions, and feature content via children
+ * (SessionContextSections).
+ * @useWhen The main pane shows a session or the new-session landing.
+ * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
+ */
 export function SessionInspector({
   sessionId,
   originTask,
@@ -899,7 +903,7 @@ export function SessionInspector({
    * peer never moves ownership, so this is the one way it changes.
    */
   onSetSpawnOwnership?:
-    ((ownership: "taken-over" | "coordinator") => void) | undefined;
+    ((ownership: SettableSpawnOwnership) => void) | undefined;
   /**
    * Transcript view toggles, rendered as a **View** section. Passed only where
    * this inspector is the session's control centre (the mobile object dock);

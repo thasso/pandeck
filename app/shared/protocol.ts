@@ -1587,6 +1587,9 @@ export interface SubagentDelegationSummary {
  */
 export type SpawnOwnership = "coordinator" | "taken-over" | "unknown";
 
+/** What the user may set a spawned session's owner to: never `unknown`. */
+export type SettableSpawnOwnership = Exclude<SpawnOwnership, "unknown">;
+
 /**
  * Whether this SESSION belongs directly to the user rather than to its
  * coordinator. This is the first gate for an outcome attention event.
@@ -6800,7 +6803,7 @@ export type ClientMessage =
   | {
       type: "setSpawnOwnership";
       id: string;
-      ownership: "taken-over" | "coordinator";
+      ownership: SettableSpawnOwnership;
       requestId?: string;
     }
   /**

@@ -37,6 +37,7 @@ import {
   type PullRequestCheckoutOutcome,
   type PullRequestInventoryItem,
   type SessionListItem,
+  type SettableSpawnOwnership,
   type SessionMode,
   type SessionState,
   type TaskStatus,
@@ -6465,20 +6466,20 @@ function AppContent() {
       }
       // Mirrors the composer's /review guards: something to review, and never
       // while the agent is streaming (a second agent on a live working tree).
-      // Taking a spawned peer over is explicit: messaging it is a poke and
-      // leaves its coordinator in charge.
-      onSetSpawnOwnership={
-        displaySessionListItem?.spawnedBySessionId
-          ? (ownership: "taken-over" | "coordinator") =>
-              actions.setSpawnOwnership(displaySessionListItem.id, ownership)
-          : undefined
-      }
       onReviewWork={
         displayHasUserPrompt && !displayStreaming
           ? () => {
               const error = startReviewSessionForSession();
               if (error) showToast(error);
             }
+          : undefined
+      }
+      // Taking a spawned peer over is explicit: messaging it is a poke and
+      // leaves its coordinator in charge.
+      onSetSpawnOwnership={
+        displaySessionListItem?.spawnedBySessionId
+          ? (ownership: SettableSpawnOwnership) =>
+              actions.setSpawnOwnership(displaySessionListItem.id, ownership)
           : undefined
       }
       view={

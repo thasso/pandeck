@@ -122,13 +122,15 @@ the outcome:
     unclassified. MESSAGING the child does not change this: the user pokes
     stalled peers all the time, and a poke leaves the coordinator in charge. The
     poked turn ends like any turn of a coordinator-owned peer — no top-level
-    outcome or notification of its own; its result reaches the user through the
-    coordinator (a failure still surfaces in the fold).
+    outcome or notification of its own; the user reads its answer in the peer
+    itself or under the coordinator's fold (a failure still surfaces there).
   - `taken-over` — the user EXPLICITLY took this child over: the Session
     inspector's **Take over** action (`setSpawnOwnership`). It records the state
-    and one timestamp, and taking over again rewrites nothing. **Hand back**
-    returns the child to `coordinator`. Edges marked before this rule, when any
-    visible human prompt took a child over, keep their state.
+    and one timestamp; taking over a child already taken over rewrites nothing.
+    **Hand back** returns the child to `coordinator`, and a later Take over
+    stamps afresh. Only a live, user-scope session with a spawn edge can be set;
+    anything else is refused. Edges marked before this rule, when any visible
+    human prompt took a child over, keep their state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`

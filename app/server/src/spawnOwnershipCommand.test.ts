@@ -14,6 +14,7 @@ import type {
 import { Connection } from "./connection.ts";
 import { hub } from "./hub.ts";
 import { sessionStore } from "./db/sessionStore.ts";
+import { validateClientMessage } from "./validateClientMessage.ts";
 
 /** Minimal open socket: `Connection` only reads `readyState`/`OPEN` and sends. */
 function fakeSocket(sent: ServerMessage[]) {
@@ -58,7 +59,8 @@ test("taking over and handing back move ownership and reach every tab", async ()
   const clicked: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(clicked));
   const otherTab: ServerMessage[] = [];
-  hub.register({ send: (message: ServerMessage) => otherTab.push(message) });
+  const viewer = { send: (message: ServerMessage) => otherTab.push(message) };
+  hub.register(viewer);
   const send = (id: string, ownership: "taken-over" | "coordinator") =>
     connection.handle({
       type: "setSpawnOwnership",
@@ -74,6 +76,13 @@ test("taking over and handing back move ownership and reach every tab", async ()
     await send(peer, "coordinator");
     await hub.flushPendingBroadcastsForTests();
     assert.equal(rowFor(otherTab, peer)?.spawnOwnership, "coordinator");
+
+    // Repeating the current ownership changes nothing, so it broadcasts
+    // nothing.
+    otherTab.length = 0;
+    await send(peer, "coordinator");
+    await hub.flushPendingBroadcastsForTests();
+    assert.equal(rowFor(otherTab, peer), undefined);
     assert.equal(
       clicked.some((message) => message.type === "error"),
       false,
@@ -89,7 +98,121 @@ test("taking over and handing back move ownership and reach every tab", async ()
       ),
     );
   } finally {
+    hub.unregister(viewer as never);
     connection.dispose();
     for (const id of [coordinator, peer, plain]) sessionStore.remove(id);
+  }
+});
+
+test("the command is validated at the wire", () => {
+  for (const ownership of ["taken-over", "coordinator"])
+    assert.equal(
+      validateClientMessage({ type: "setSpawnOwnership", id: "s", ownership })
+        .ok,
+      true,
+    );
+  for (const bad of [
+    { type: "setSpawnOwnership", id: "s", ownership: "unknown" },
+    { type: "setSpawnOwnership", id: "s" },
+    { type: "setSpawnOwnership", id: 7, ownership: "taken-over" },
+    { type: "setSpawnOwnership", ownership: "taken-over" },
+  ])
+    assert.equal(validateClientMessage(bad).ok, false, JSON.stringify(bad));
+});
+
+test("a session the user cannot act on is refused, and nothing is written", async () => {
+  const stamp = Date.now();
+  const coordinator = `own-cmd-scope-root-${stamp}`;
+  const internal = `own-cmd-internal-${stamp}`;
+  const deleted = `own-cmd-deleted-${stamp}`;
+  sessionStore.upsert({
+    id: coordinator,
+    harness: "pi",
+    agentType: "assistant",
+    title: coordinator,
+  });
+  sessionStore.upsert({
+    id: internal,
+    harness: "pi",
+    agentType: "assistant",
+    title: internal,
+    scope: "internal",
+  });
+  sessionStore.upsert({
+    id: deleted,
+    harness: "pi",
+    agentType: "assistant",
+    title: deleted,
+  });
+  for (const id of [internal, deleted])
+    sessionStore.linkSpawned(coordinator, id);
+  sessionStore.markDeleted(deleted);
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  try {
+    for (const id of [internal, deleted]) {
+      await connection.handle({
+        type: "setSpawnOwnership",
+        id,
+        ownership: "taken-over",
+        requestId: `r-${id}`,
+      } as ClientMessage);
+      const error = sent.find(
+        (message) =>
+          message.type === "error" &&
+          (message as { requestId?: string }).requestId === `r-${id}`,
+      );
+      assert.ok(error, `${id} is refused with a correlated error`);
+      assert.equal(
+        sessionStore.spawnedParentsByChildIds([id]).get(id)?.ownership,
+        "coordinator",
+        `${id}'s edge is untouched`,
+      );
+    }
+  } finally {
+    connection.dispose();
+    for (const id of [coordinator, internal, deleted]) sessionStore.remove(id);
+  }
+});
+
+test("a store failure is an error the browser recovers from, not a no-op", async () => {
+  const stamp = Date.now();
+  const coordinator = `own-cmd-fail-root-${stamp}`;
+  const peer = `own-cmd-fail-peer-${stamp}`;
+  for (const id of [coordinator, peer])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+    });
+  sessionStore.linkSpawned(coordinator, peer);
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  const original = sessionStore.setSpawnedOwnership;
+  sessionStore.setSpawnedOwnership = () => {
+    throw new Error("disk full");
+  };
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: peer,
+      ownership: "taken-over",
+      requestId: "r-fail",
+    } as ClientMessage);
+    const error = sent.find((message) => message.type === "error") as
+      | { requestId?: string; target?: { type: string; id?: string } }
+      | undefined;
+    assert.equal(error?.requestId, "r-fail");
+    assert.deepEqual(error?.target, { type: "session", id: peer });
+    assert.equal(
+      sent.some((message) => message.type === "mutationSettled"),
+      false,
+      "a failed command is not settled as a success",
+    );
+  } finally {
+    sessionStore.setSpawnedOwnership = original;
+    connection.dispose();
+    for (const id of [coordinator, peer]) sessionStore.remove(id);
   }
 });

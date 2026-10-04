@@ -31,6 +31,7 @@ import {
   MAX_OPEN_COMMENT_TARGETS,
   type Harness,
   type MessageTarget,
+  type SettableSpawnOwnership,
   messageTargetForComment,
   type WorktreeMergeStrategy,
   type WorktreeProvisionDisplay,
@@ -206,7 +207,10 @@ import {
   updateQueuedPrompt,
 } from "./promptQueue.ts";
 import { settleSessionWithPeers } from "./sessionActivity.ts";
-import { setSpawnOwnership } from "./spawnOwnership.ts";
+import {
+  setSpawnOwnership,
+  type SpawnOwnershipResult,
+} from "./spawnOwnership.ts";
 import {
   CONTEXT_ONLY_SLASH_COMMANDS,
   hostSlashCommandRunner,
@@ -4706,36 +4710,52 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The user accepted running a session in the app CWD after its worktree
-   * disappeared. Re-broadcast the session state and list so the banner clears
-   * and `worktreeMissing` drops everywhere, not just in this browser.
-   */
-  /**
    * Take a spawned peer over, or hand it back to its coordinator, on the
-   * user's explicit word (`spawnOwnership.ts`). A session with no spawn edge
-   * has no owner to set, which is a refusal the user should see; a request
-   * that changes nothing broadcasts nothing.
+   * user's explicit word (`spawnOwnership.ts`). Every refusal — a session the
+   * user cannot act on, one with no spawn edge, a store failure — is an error
+   * targeted at the session, so the browser recovers its optimistic change; a
+   * request that changes nothing broadcasts nothing.
    */
   private async onSetSpawnOwnership(
     id: string,
-    ownership: "taken-over" | "coordinator",
+    ownership: SettableSpawnOwnership,
   ): Promise<void> {
     const ref = this.resolveSessionRef(id);
     if (ref && !this.guardSessionRef(ref)) return;
-    if (ownership !== "taken-over" && ownership !== "coordinator") return;
-    const changed = setSpawnOwnership(id, ownership);
-    if (changed === undefined) {
+    const target: MessageTarget = { type: "session", id };
+    let result: SpawnOwnershipResult;
+    try {
+      result = setSpawnOwnership(id, ownership);
+    } catch (err) {
+      console.warn(`[spawn] failed to set ownership of ${id}:`, errorText(err));
       this.send({
         type: "error",
-        message: "Only a session another session spawned can be taken over.",
+        message: "Could not change who runs this session. Try again.",
+        target,
       });
       return;
     }
-    if (!changed) return;
+    if (result === "unavailable" || result === "not-spawned") {
+      this.send({
+        type: "error",
+        message:
+          result === "unavailable"
+            ? "That session is not available."
+            : "Only a spawned session has an owner to change.",
+        target,
+      });
+      return;
+    }
+    if (result === "unchanged") return;
     if (this.viewing?.sessionId === id) this.viewing.broadcastState();
     await hub.broadcastSessions();
   }
 
+  /**
+   * The user accepted running a session in the app CWD after its worktree
+   * disappeared. Re-broadcast the session state and list so the banner clears
+   * and `worktreeMissing` drops everywhere, not just in this browser.
+   */
   private async onAcknowledgeMissingWorktree(id: string): Promise<void> {
     const ref = this.resolveSessionRef(id);
     if (ref && !this.guardSessionRef(ref)) return;

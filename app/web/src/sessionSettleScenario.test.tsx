@@ -582,4 +582,44 @@ describe("taking a peer over", () => {
     expect(current("s-2").spawnOwnership).toBe("coordinator");
     expect(topLevel()).toEqual(["s-1"]);
   });
+
+  it("recovers the authoritative owner when the server refuses", async () => {
+    const rows = [
+      row({ id: "s-1", title: "Coordinator" }),
+      row({
+        id: "s-2",
+        title: "Peer",
+        spawnedBySessionId: "s-1",
+        spawnOwnership: "coordinator" as const,
+      }),
+    ];
+    const socket = await bootAll(rows);
+    await act(async () => actions!.setSpawnOwnership("s-2", "taken-over"));
+    expect(current("s-2").spawnOwnership).toBe("taken-over");
+    const command = socket.sent.find(
+      (msg) => msg.type === "setSpawnOwnership",
+    ) as { requestId: string };
+    expect(command.requestId).toBeDefined();
+
+    // The refusal carries the command's id, so that exact change is
+    // recovered: the list is re-read and its answer replaces the guess.
+    const listsBefore = socket.sent.filter(
+      (msg) => msg.type === "listSessions",
+    ).length;
+    await act(async () => {
+      socket.receive({
+        type: "error",
+        message: "Could not change who runs this session. Try again.",
+        requestId: command.requestId,
+        target: { type: "session", id: "s-2" },
+      });
+    });
+    expect(
+      socket.sent.filter((msg) => msg.type === "listSessions").length,
+    ).toBeGreaterThan(listsBefore);
+    await act(async () => {
+      socket.receive({ type: "sessions", sessions: rows });
+    });
+    expect(current("s-2").spawnOwnership).toBe("coordinator");
+  });
 });

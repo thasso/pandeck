@@ -10,30 +10,34 @@
  * inbox folds coordinator-owned children under their coordinator and must
  * never fold away a session the user has taken.
  */
+import type { SettableSpawnOwnership } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
-import { errorText } from "./errors.ts";
-import type { HumanPromptSignal } from "./session/runtime/liveSession.ts";
 
 /**
- * Set a spawned child's owner on the user's explicit word, returning whether
- * ownership actually moved — the one condition that justifies a session-list
- * broadcast — or `undefined` when the session has no spawn edge to set.
+ * What an explicit ownership command did. `unavailable` is a session the user
+ * cannot act on (missing, deleted, or not in the user's scope); `not-spawned`
+ * has no spawn edge, so no owner to change.
+ */
+export type SpawnOwnershipResult =
+  "changed" | "unchanged" | "unavailable" | "not-spawned";
+
+/**
+ * Set a spawned child's owner on the user's explicit word. A store failure
+ * THROWS rather than reading as "unchanged": the caller reports it, so the
+ * browser's optimistic change is recovered instead of standing over a write
+ * that never happened.
  */
 export function setSpawnOwnership(
   sessionId: string,
-  ownership: "taken-over" | "coordinator",
-): boolean | undefined {
+  ownership: SettableSpawnOwnership,
+): SpawnOwnershipResult {
+  const meta = sessionStore.get(sessionId);
+  if (!meta || meta.scope !== "user") return "unavailable";
   if (!sessionStore.spawnedParentsByChildIds([sessionId]).has(sessionId))
-    return undefined;
-  try {
-    return sessionStore.setSpawnedOwnership(sessionId, ownership);
-  } catch (err) {
-    console.warn(
-      `[spawn] failed to set ownership of ${sessionId}:`,
-      errorText(err),
-    );
-    return false;
-  }
+    return "not-spawned";
+  return sessionStore.setSpawnedOwnership(sessionId, ownership)
+    ? "changed"
+    : "unchanged";
 }
 
 /**
@@ -43,6 +47,6 @@ export function setSpawnOwnership(
  */
 export function humanPromptHandler(deps: {
   closeChains: (sessionId: string) => void;
-}): (sessionId: string, signal: HumanPromptSignal) => void {
+}): (sessionId: string) => void {
   return (sessionId) => deps.closeChains(sessionId);
 }
