@@ -4,7 +4,7 @@ import type {
   CredentialProfileSummary,
   ModelOption,
   ProjectRecord,
-  SessionAgentType,
+  AgentType,
   SessionMode,
   ThinkingLevel,
   WorktreeRecord,
@@ -65,8 +65,8 @@ function render(
     models?: ModelOption[];
     thinkingLevel?: ThinkingLevel;
     loaded?: boolean;
-    agentTypes?: SessionAgentType[];
-    agentType?: SessionAgentType;
+    agentTypes?: AgentType[];
+    agentType?: AgentType;
     projects?: ProjectRecord[];
     projectsLoaded?: boolean;
     selectedProjectId?: string | null;

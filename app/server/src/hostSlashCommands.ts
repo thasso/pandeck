@@ -1,5 +1,5 @@
 import type {
-  AgentKind,
+  AgentType,
   CommitDisplay,
   CompactionDisplay,
   ContextClearDisplay,
@@ -67,7 +67,7 @@ export type HostClearOutcome =
  * usable as a host.
  */
 export interface SyntheticToolHost {
-  readonly kind: AgentKind;
+  readonly kind: AgentType;
   readonly sessionId: string;
   /**
    * Build/Plan for the session, when the harness has the mode axis. Plan is the

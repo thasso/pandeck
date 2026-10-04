@@ -29,7 +29,7 @@
  * session. For the permanent Personal Assistant that means its singleton picks
  * up newly enabled integrations when its conversation is rotated.
  */
-import type { AgentType } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getProject } from "./projectRegistry.ts";
 import { currentIntegrationToolGates } from "./tools/toolPolicy.ts";

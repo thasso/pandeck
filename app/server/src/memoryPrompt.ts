@@ -5,7 +5,7 @@
  * description and schema prose. Automatic capture remains the primary
  * continuity path — do NOT tell agents to search or write memory every turn.
  */
-import type { AgentType } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 
 /**
  * `canWriteMemory` is the session's frozen `memoryWrite` condition (Task 287);

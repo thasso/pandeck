@@ -1,7 +1,7 @@
 import {
   isCodingAgentType,
   isSafeSkillName,
-  type SessionAgentType,
+  type AgentType,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getSettings } from "./settings.ts";
@@ -67,7 +67,7 @@ function frozenSessionSkills(sessionId: string): string[] | undefined {
  */
 export function activeSkillsForSession(
   sessionId: string,
-  agentType: SessionAgentType,
+  agentType: AgentType,
 ): string[] | undefined {
   return isCodingAgentType(agentType)
     ? (frozenSessionSkills(sessionId) ?? [])
@@ -84,7 +84,7 @@ export function activeSkillsForSession(
  */
 export async function sessionSkills(
   sessionId: string,
-  agentType: SessionAgentType,
+  agentType: AgentType,
   preset?: readonly string[],
   deps: SessionSkillsDeps = REAL_DEPS,
 ): Promise<string[]> {

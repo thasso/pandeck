@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentKind, Harness, ServerMessage } from "@assistant/shared";
+import type { AgentType, Harness, ServerMessage } from "@assistant/shared";
 import { afterAll, test } from "vitest";
 
 const cwd = mkdtempSync(join(tmpdir(), "workflow-coordinator-availability-"));
@@ -34,7 +34,7 @@ function makeConnection() {
 function sessionGuard(connection: InstanceType<typeof Connection>) {
   return (
     connection as unknown as {
-      guardSessionRef(ref: { harness: Harness; kind: AgentKind }): boolean;
+      guardSessionRef(ref: { harness: Harness; kind: AgentType }): boolean;
     }
   ).guardSessionRef.bind(connection);
 }

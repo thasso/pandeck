@@ -10,7 +10,7 @@ import {
   supportedThinkingLevelsForModel,
   type ModelOption,
   type ProjectRecord,
-  type SessionAgentType,
+  type AgentType,
   type SessionListItem,
   type SessionMode,
   type TaskSummary,
@@ -156,9 +156,9 @@ export function NewSessionQuickStart({
    */
   usageIndicators?: UsageIndicator[] | null;
   /** Available personas for the top agent row (hidden when <2). */
-  agentTypes: SessionAgentType[];
-  selectedAgentType: SessionAgentType;
-  onSelectAgentType: (agentType: SessionAgentType) => void;
+  agentTypes: AgentType[];
+  selectedAgentType: AgentType;
+  onSelectAgentType: (agentType: AgentType) => void;
   /**
    * Build/Plan for the staged session, or undefined where the persona has no
    * mode axis. It shares the agent row: mode is a one-session choice the landing

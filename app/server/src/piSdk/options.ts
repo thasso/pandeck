@@ -7,7 +7,7 @@
  */
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
-import type { AgentKind } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 import {
   CHAT_SESSION_DIR,
   CWD,
@@ -17,7 +17,7 @@ import {
   WORKFLOW_COORDINATOR_SESSION_DIR,
   WORKSHOP_SESSION_DIR,
 } from "../config.ts";
-import { AGENT_TYPES, type AgentType } from "../agentTypes.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
 import type { PromptConditions } from "../promptConditions.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
@@ -239,7 +239,7 @@ async function buildPiOptions(
 }
 
 /** Where each agent kind's pi sessions are stored on disk. */
-const SESSION_DIRS: Record<AgentKind, string> = {
+const SESSION_DIRS: Record<AgentType, string> = {
   assistant: CHAT_SESSION_DIR,
   "personal-assistant": PERSONAL_ASSISTANT_SESSION_DIR,
   workshop: WORKSHOP_SESSION_DIR,
@@ -248,6 +248,6 @@ const SESSION_DIRS: Record<AgentKind, string> = {
 };
 
 /** Absolute session store directory for an agent kind. */
-export function sessionDirFor(kind: AgentKind): string {
+export function sessionDirFor(kind: AgentType): string {
   return SESSION_DIRS[kind];
 }

@@ -8,7 +8,7 @@ import type {
   KnowledgeEntryCard,
   ModelOption,
   PushDisplay,
-  SessionAgentType,
+  AgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -56,7 +56,7 @@ export interface ToolRenderContext {
   /** Ephemeral transcript target for the rendered tool-result body. */
   commentTarget?: { entryId: string; blockIndex: number };
   onCreateDraftSession?: (
-    agentType: SessionAgentType,
+    agentType: AgentType,
     draftText: string,
     notice?: string,
   ) => void;

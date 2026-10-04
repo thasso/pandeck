@@ -50,7 +50,8 @@
  */
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_TYPES, type AgentType } from "./agentTypes.ts";
+import { AGENT_TYPES } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import {
   claudeSdkSystemPrompt,
   CLAUDE_SDK_NATIVE_TOOLS,

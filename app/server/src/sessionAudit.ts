@@ -57,9 +57,9 @@
  * `basis`.
  */
 import { statSync } from "node:fs";
-import { isAgentKind } from "@assistant/shared";
+import { isAgentType } from "@assistant/shared";
 import type { PromptConditions } from "./promptConditions.ts";
-import type { AgentType } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { FIND_TOOLS_NAME, MCP_SERVER_NAME } from "./mcp/names.ts";
 import { personaPromptInventory } from "./promptAssets.ts";
 import { forEachJsonlLine } from "./tools/sessions/sessionInspection.ts";
@@ -1235,7 +1235,7 @@ function definitionChars(tool: {
 }
 
 function isKnownAgentType(value: string): value is AgentType {
-  return isAgentKind(value);
+  return isAgentType(value);
 }
 
 function buildToolActivity(

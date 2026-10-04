@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, test } from "vitest";
-import type { SessionAgentType, SessionTaskProgress } from "@assistant/shared";
+import type { AgentType, SessionTaskProgress } from "@assistant/shared";
 import { closeDb } from "./db/index.ts";
 import { removeLink } from "./db/links.ts";
 import { projectStore } from "./db/projectStore.ts";
@@ -38,7 +38,7 @@ afterAll(() => rmSync(liveDir, { recursive: true, force: true }));
 let n = 0;
 const unique = (label: string) => `list-memo-${label}-${Date.now()}-${n++}`;
 
-function seed(agentType: SessionAgentType = "developer"): string {
+function seed(agentType: AgentType = "developer"): string {
   const id = unique("session");
   sessionStore.upsert({
     id,

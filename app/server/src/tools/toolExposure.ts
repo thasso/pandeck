@@ -11,8 +11,8 @@ import type {
   SessionToolExposure,
   SessionToolExposureTool,
   SessionToolLoadEvent,
+  AgentType,
 } from "@assistant/shared";
-import type { AgentType } from "../agentTypes.ts";
 import { toolGroupsFor } from "./catalog.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
 

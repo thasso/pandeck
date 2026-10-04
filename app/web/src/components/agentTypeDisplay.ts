@@ -1,5 +1,5 @@
 import { MessageSquare, Terminal, Wrench, type LucideIcon } from "lucide-react";
-import type { SessionAgentType } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 
 /**
  * Per-persona display registry (label, icon, tone, description): the ONE place
@@ -11,7 +11,7 @@ import type { SessionAgentType } from "@assistant/shared";
  * render an agent icon without pulling the composer into its chunk.
  */
 export const AGENT_TYPE_DISPLAY: Record<
-  SessionAgentType,
+  AgentType,
   {
     label: string;
     Icon: LucideIcon;

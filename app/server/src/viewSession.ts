@@ -23,7 +23,7 @@
  * construction, so nothing reaches this path while it runs.
  */
 import type {
-  AgentKind,
+  AgentType,
   ContextInfo,
   DisplayMessage,
   Harness,
@@ -33,7 +33,6 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
-import type { AgentType } from "./agentTypes.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
@@ -70,7 +69,7 @@ import { getPendingPostReloadContinuation } from "./mcp/toolGroups/registry.ts";
 import { sessionWorktreeMissing } from "./worktrees/sessionCwd.ts";
 
 /** Persona for a stored session, defaulting the way the pi store's reopen does. */
-function kindOf(meta: SessionMeta): AgentKind {
+function kindOf(meta: SessionMeta): AgentType {
   switch (meta.agentType) {
     case "workshop":
     case "developer":
@@ -83,7 +82,7 @@ function kindOf(meta: SessionMeta): AgentKind {
 }
 
 export class ViewSession implements HarnessDriver {
-  readonly kind: AgentKind;
+  readonly kind: AgentType;
   readonly harness: Harness;
   readonly agentType: AgentType;
   readonly id: string;

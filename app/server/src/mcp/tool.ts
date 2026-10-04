@@ -6,7 +6,7 @@
  * (`piSdk/agentToolAdapter.ts`), the Claude harness by mounting the server
  * in-process (`claudeSdk/`).
  */
-import type { AgentKind, Harness } from "@assistant/shared";
+import type { AgentType, Harness } from "@assistant/shared";
 
 /** Content returned to the model. Structurally identical in MCP and pi. */
 type ToolContentBlock =
@@ -45,7 +45,7 @@ export interface ToolSessionManager {
 export interface ToolSession {
   sessionId: string;
   harness: Harness;
-  agentType: AgentKind;
+  agentType: AgentType;
   sessionFile?: string;
   title?: string;
   cwd?: string;

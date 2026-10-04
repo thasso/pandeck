@@ -17,7 +17,7 @@ import {
   type MemoryTemporal,
   type MemoryTemporalMode,
 } from "./memory.ts";
-import type { SessionAgentType } from "./protocol.ts";
+import type { AgentType } from "./protocol.ts";
 
 /** A validation failure with a machine-usable field path and message. */
 export interface MemoryValidationError {
@@ -133,7 +133,7 @@ export function validateMemoryScope(
     ) {
       return fail("scope.persona", "persona must be a known persona key");
     }
-    scope.persona = persona as SessionAgentType;
+    scope.persona = persona as AgentType;
   }
   return { ok: true, value: scope };
 }

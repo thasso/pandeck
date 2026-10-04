@@ -1,15 +1,10 @@
 import { existsSync } from "node:fs";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type {
-  AgentKind,
-  Harness,
-  SessionAgentType,
-  SessionForkOrigin,
-} from "@assistant/shared";
+import type { AgentType, Harness, SessionForkOrigin } from "@assistant/shared";
 import { readSessionHeaderId } from "./sessionOpen.ts";
 
 function piForkOrigin(
-  kind: AgentKind,
+  kind: AgentType,
   origin: Omit<SessionForkOrigin, "harness" | "agentType">,
 ): SessionForkOrigin {
   return { ...origin, harness: "pi", agentType: kind };
@@ -25,7 +20,7 @@ type ForkEntryLike = {
 };
 
 export function readForkOrigin(
-  kind: AgentKind,
+  kind: AgentType,
   sm: SessionManager,
 ): SessionForkOrigin | undefined {
   // Every entry, not the current BRANCH: where a session came from is a fact
@@ -87,7 +82,7 @@ function isHarness(value: unknown): value is Harness {
   return value === "pi" || value === "claude-sdk";
 }
 
-function isAgentType(value: unknown): value is SessionAgentType {
+function isAgentType(value: unknown): value is AgentType {
   return (
     value === "assistant" ||
     value === "workshop" ||

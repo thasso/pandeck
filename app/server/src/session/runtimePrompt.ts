@@ -10,7 +10,7 @@ import type {
   ContextInfo,
   Harness,
   PromptAttachment,
-  SessionAgentType,
+  AgentType,
   SessionMode,
 } from "@assistant/shared";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
@@ -35,7 +35,7 @@ export interface RuntimePromptDriver {
   readonly key: string;
   readonly sessionId: string;
   readonly harness: Harness;
-  readonly agentType: SessionAgentType;
+  readonly agentType: AgentType;
   readonly sessionFile: string | undefined;
   readonly isRunning: boolean;
   readonly canSteer: boolean;

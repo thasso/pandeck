@@ -1,5 +1,5 @@
 import type {
-  AgentKind,
+  AgentType,
   PullRequestCard,
   TaskSummary,
 } from "@assistant/shared";
@@ -67,7 +67,7 @@ export interface PrWorkflowPresenter {
 export interface PrWorkflowOptions {
   cwd?: string;
   sessionManager: unknown;
-  sessionKind: AgentKind;
+  sessionKind: AgentType;
   sessionId: string;
   args: PrWorkflowArgs;
   commandText: string;
@@ -87,7 +87,7 @@ interface TrustedPullRequestTarget {
 
 export interface BeginPullRequestCardInput {
   repoRoot: string;
-  sessionKind: AgentKind;
+  sessionKind: AgentType;
   sessionId: string;
   args: PrWorkflowArgs;
   /** Anchors a slash-command or managed-tool card at its owning tool call. */
@@ -203,7 +203,7 @@ export function orderedPullRequestTaskIds(
 
 /** Candidate Tasks for a `/pr` command, in session-first order, deduped. */
 function pullRequestTaskCandidates(
-  sessionKind: AgentKind,
+  sessionKind: AgentType,
   sessionId: string,
 ): TaskSummary[] {
   const sessionTaskIds = listSessionTasks(sessionKind, sessionId).map(

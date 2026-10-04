@@ -24,7 +24,7 @@ import type {
   MemoryLearningMode,
   MemoryScope,
   MemoryTemporal,
-  SessionAgentType,
+  AgentType,
 } from "@assistant/shared";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { dataOf, isEmpty, isInitialLoad, isPending } from "../lib/loadState.ts";
@@ -39,7 +39,7 @@ import {
 } from "../lib/timezone.ts";
 import { AgentModelFields } from "./AgentModelFields.tsx";
 
-const PERSONA_OPTIONS: { id: SessionAgentType; label: string }[] = [
+const PERSONA_OPTIONS: { id: AgentType; label: string }[] = [
   { id: "assistant", label: "Assistant" },
   { id: "personal-assistant", label: "Personal Assistant" },
   { id: "developer", label: "Developer" },
@@ -248,7 +248,7 @@ function MemoryManager({
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [activeNow, setActiveNow] = useState(false);
   const [projectId, setProjectId] = useState("");
-  const [persona, setPersona] = useState<SessionAgentType | "">("");
+  const [persona, setPersona] = useState<AgentType | "">("");
   const [kinds, setKinds] = useState<MemoryKind[]>([]);
   const [offset, setOffset] = useState(0);
 
@@ -326,7 +326,7 @@ function MemoryManager({
         </select>
         <select
           value={persona}
-          onChange={(e) => setPersona(e.target.value as SessionAgentType | "")}
+          onChange={(e) => setPersona(e.target.value as AgentType | "")}
           className="rounded-lg border border-line bg-surface px-2 py-1.5 text-caption"
           aria-label="Persona"
         >
@@ -472,7 +472,7 @@ function MemoryRow({
   const [draftProjectId, setDraftProjectId] = useState(
     card.scope.projectId ?? "",
   );
-  const [draftPersona, setDraftPersona] = useState<SessionAgentType | "">(
+  const [draftPersona, setDraftPersona] = useState<AgentType | "">(
     card.scope.persona ?? "",
   );
   const [draftTemporal, setDraftTemporal] = useState<MemoryTemporal>(
@@ -598,7 +598,7 @@ function MemoryRow({
               <select
                 value={draftPersona}
                 onChange={(e) =>
-                  setDraftPersona(e.target.value as SessionAgentType | "")
+                  setDraftPersona(e.target.value as AgentType | "")
                 }
                 className="rounded-md border border-line bg-panel px-2 py-1 text-caption"
                 aria-label="Persona scope"

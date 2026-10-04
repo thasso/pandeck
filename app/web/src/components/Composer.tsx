@@ -44,7 +44,7 @@ import {
   type ModelOption,
   type Harness,
   type PromptAttachment,
-  type SessionAgentType,
+  type AgentType,
   type SpeechToTextStatus,
   type SessionMode,
   type SessionState,
@@ -260,9 +260,9 @@ interface Props {
   /** Mobile: a finished transcript from the host's recorder, inserted at the remembered caret. */
   transcript?: { spoken: string; token: number } | null;
   /** Pre-session agent type shown in the top-left agent picker (before first message). */
-  selectedAgentType?: SessionAgentType | undefined;
-  availableAgentTypes?: SessionAgentType[] | undefined;
-  onAgentTypeChange?: ((agentType: SessionAgentType) => void) | undefined;
+  selectedAgentType?: AgentType | undefined;
+  availableAgentTypes?: AgentType[] | undefined;
+  onAgentTypeChange?: ((agentType: AgentType) => void) | undefined;
   /**
    * Persist the draft text browser-locally under this key: restored on mount
    * and key change, cleared on send. Give each composer instance its own key.
@@ -660,9 +660,9 @@ function RuntimeSettingsPanel({
   thinkingLocked?: boolean;
   // Present only for a fresh, unprompted session — the agent type is fixed once
   // the first prompt is sent.
-  agentType?: SessionAgentType | undefined;
-  availableAgentTypes?: SessionAgentType[] | undefined;
-  onAgentTypeChange?: ((agentType: SessionAgentType) => void) | undefined;
+  agentType?: AgentType | undefined;
+  availableAgentTypes?: AgentType[] | undefined;
+  onAgentTypeChange?: ((agentType: AgentType) => void) | undefined;
   /** Build/Plan; absent when the session has no mode axis. */
   mode?: SessionMode | undefined;
 }) {
@@ -760,9 +760,9 @@ function AgentTypeSelector({
   availableAgentTypes,
   onChange,
 }: {
-  agentType: SessionAgentType;
-  availableAgentTypes: SessionAgentType[];
-  onChange: (agentType: SessionAgentType) => void;
+  agentType: AgentType;
+  availableAgentTypes: AgentType[];
+  onChange: (agentType: AgentType) => void;
 }) {
   const current = AGENT_TYPE_DISPLAY[agentType];
   const label = current.label;
@@ -827,7 +827,7 @@ interface SlashState {
 function slashState(
   text: string,
   commands: SlashCommandInfo[],
-  agentType: SessionAgentType | undefined,
+  agentType: AgentType | undefined,
   harness: Harness | undefined,
 ): SlashState {
   if (!text.startsWith("/") || text.startsWith("//") || text.includes("\n")) {
@@ -884,7 +884,7 @@ export function resolveSlashSubmit(
   value: string,
   commands: SlashCommandInfo[],
   context: {
-    agentType?: SessionAgentType;
+    agentType?: AgentType;
     harness?: Harness;
     streaming: boolean;
     attachmentCount: number;

@@ -11,9 +11,8 @@
  * task-dependencies. Ids surface as stringified integers ("42").
  */
 import type {
-  AgentKind,
+  AgentType,
   Harness,
-  SessionAgentType,
   StateDigestEntry,
   StateEvent,
   TaskBackRef,
@@ -59,7 +58,7 @@ export interface TaskListFilter {
   scheduled?: "past" | "today" | "tomorrow" | "upcoming" | "unplanned";
   /** Only Tasks still waiting in the Inbox (never processed by the user). */
   untriaged?: boolean;
-  session?: { kind: AgentKind; sessionId: string };
+  session?: { kind: AgentType; sessionId: string };
   query?: string;
 }
 
@@ -394,14 +393,14 @@ function sessionTaskSummaries(sessionId: string): TaskSummary[] {
 }
 
 export function listSessionTasks(
-  _kind: AgentKind,
+  _kind: AgentType,
   sessionId: string,
 ): TaskSummary[] {
   return sessionTaskSummaries(sessionId);
 }
 
 export function listRelatedGlobalTasks(
-  _kind: AgentKind,
+  _kind: AgentType,
   sessionId: string,
 ): TaskSummary[] {
   return sessionTaskSummaries(sessionId).filter(
@@ -779,7 +778,7 @@ export function reorderTasks(
 
 interface SessionEdgeMeta {
   harness?: Harness;
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   sessionFile?: string;
   origin?: TaskSessionOrigin;
   attachedAt?: number;

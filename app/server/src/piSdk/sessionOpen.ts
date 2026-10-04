@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { AgentKind } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 import { CWD } from "../config.ts";
 import { sessionDirFor } from "./options.ts";
 
@@ -60,7 +60,7 @@ export function readSessionHeaderId(file: string): string | undefined {
  * valid metadata row and app log while their native transcript remains here.
  */
 export function findLegacySessionFile(
-  kind: AgentKind,
+  kind: AgentType,
   sessionId: string,
 ): string | undefined {
   const dir = sessionDirFor(kind);
@@ -102,7 +102,7 @@ const RETRY_DELAY_MS = 50;
  * Cannot patch the SDK (node_modules, pinned 0.79.1); all guards are at call sites.
  */
 export async function openExistingSession(
-  kind: AgentKind,
+  kind: AgentType,
   file: string,
   opts?: { expectedId?: string; retries?: number; cwd?: string },
 ): Promise<SessionManager> {

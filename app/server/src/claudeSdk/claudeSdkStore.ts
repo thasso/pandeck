@@ -14,9 +14,9 @@ import {
   type BrowserRuntimeInfo,
   type SessionForkOrigin,
   type SessionScope,
+  type AgentType,
 } from "@assistant/shared";
 import { CWD, DATA_DIR } from "../config.ts";
-import type { AgentType } from "../agentTypes.ts";
 import { ClaudeSdkSession } from "./ClaudeSdkSession.ts";
 import { buildRealClaudeSdkSeam, type ClaudeSdkSeam } from "./sdkSeam.ts";
 import { sessionRuntime } from "../session/runtimeInstance.ts";

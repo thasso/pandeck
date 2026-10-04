@@ -12,7 +12,7 @@ import type {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
-  AgentKind,
+  AgentType,
   CommitDisplay,
   CompactionDisplay,
   ContextClearDisplay,
@@ -71,7 +71,6 @@ import { sessionStore } from "../db/sessionStore.ts";
 import { activeSkillsForSession } from "../sessionSkills.ts";
 import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
-import type { AgentType } from "../agentTypes.ts";
 import {
   HARNESS_IDLE_EVICT_MS,
   type PromptableDriver,
@@ -329,7 +328,7 @@ export class PiLiveSession implements PromptableDriver {
   updatedAt = 0;
 
   constructor(
-    readonly kind: AgentKind,
+    readonly kind: AgentType,
     readonly session: AgentSession,
     private readonly host: PiSessionHost,
     private readonly onEvict: (key: string) => void,

@@ -31,8 +31,8 @@ import type {
   SessionMode,
   SessionToolExposure,
   SessionToolLoadEvent,
+  AgentType,
 } from "@assistant/shared";
-import type { AgentType } from "../agentTypes.ts";
 import {
   integrationGatedActiveToolNames,
   modeGatedActiveToolNames,

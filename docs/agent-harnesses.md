@@ -97,7 +97,7 @@ mapping.
 | ---- | ----------------------------------------------------------------------------- | ------ |
 | 1    | This contract and the boundary ratchet                                        | landed |
 | 2    | Remove leftovers: identity helpers, unused types, stale comments, copied code | landed |
-| 3    | One persona type instead of `AgentKind`/`AgentType`/`SessionAgentType`        | open   |
+| 3    | One persona type (`AgentType` in `shared/`) replaces three identical unions   | landed |
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | open   |
 | 5    | `runOneShot()` and its 10 callers                                             | landed |
 | 6    | Models and usage ports                                                        | open   |

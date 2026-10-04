@@ -29,7 +29,8 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { DATA_DIR } from "../config.ts";
-import { AGENT_TYPES, type AgentType } from "../agentTypes.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import {
   integrationGatedActiveToolNames,
   eagerToolNamesFor,

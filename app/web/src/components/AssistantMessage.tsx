@@ -17,7 +17,7 @@ import type {
   DisplayBlock,
   DisplayMessage,
   ModelOption,
-  SessionAgentType,
+  AgentType,
   TaskStatus,
   ThinkingLevel,
 } from "@assistant/shared";
@@ -103,11 +103,7 @@ interface Props {
   view: TranscriptViewPrefs;
   onAcceptCommitDryRun?: ((entryId: string) => void) | undefined;
   onCreateDraftSession?:
-    | ((
-        agentType: SessionAgentType,
-        draftText: string,
-        notice?: string,
-      ) => void)
+    | ((agentType: AgentType, draftText: string, notice?: string) => void)
     | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
   onOpenWorktree?: ((worktreeId: string) => void) | undefined;

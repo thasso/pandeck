@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "vitest";
-import type { AgentType } from "../agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
   agentToolsFor,

@@ -21,7 +21,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type {
-  AgentKind,
+  AgentType,
   BrowserRuntimeInfo,
   PendingPostReloadContinuation,
   ToolGroupId,
@@ -187,7 +187,7 @@ export function cancelPostReloadContinuation(): void {
 
 export interface PostReloadContinuation {
   id: string;
-  kind: AgentKind;
+  kind: AgentType;
   sessionId: string;
   sessionFile: string;
   message: string;
@@ -197,7 +197,7 @@ export interface PostReloadContinuation {
 
 function queuePostReloadContinuation(options: {
   sessionId: string;
-  kind: AgentKind;
+  kind: AgentType;
   sessionFile: string | undefined;
   message: string;
   reason?: string;

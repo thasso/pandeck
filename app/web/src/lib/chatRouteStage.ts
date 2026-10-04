@@ -1,4 +1,4 @@
-import type { SessionAgentType } from "@assistant/shared";
+import type { AgentType } from "@assistant/shared";
 
 /** The chat-bearing routes, as far as staging is concerned. */
 interface ChatRoute {
@@ -12,7 +12,7 @@ export interface ChatRouteStageInput {
   /** The session currently in view, if any. */
   viewedSessionId: string | null;
   /** That session's persona — how the Assistant singleton is recognized. */
-  viewedAgentType: SessionAgentType | undefined;
+  viewedAgentType: AgentType | undefined;
   /** A client-staged session renders optimistically and is never "pending". */
   hasOptimisticSession: boolean;
   /** The viewed session is right but its transcript has not arrived yet. */

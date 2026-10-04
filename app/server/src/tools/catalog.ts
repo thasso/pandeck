@@ -23,6 +23,7 @@ import {
   type ToolSideEffects,
 } from "../mcp/tool.ts";
 import {
+  type AgentType,
   isPersonalAssistantAgentType,
   type SessionMode,
 } from "@assistant/shared";
@@ -31,7 +32,6 @@ import {
   isPlanModeToolAllowed,
   type IntegrationToolGates,
 } from "./toolPolicy.ts";
-import type { AgentType } from "../agentTypes.ts";
 import type { AuditToolInventory } from "../sessionAudit.ts";
 // Type-only: the conditions are computed from `toolPolicy.ts`'s gates, one
 // layer below this module, so this stays a shape reference and no more.

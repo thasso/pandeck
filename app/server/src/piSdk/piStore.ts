@@ -14,7 +14,7 @@ import {
 import {
   isCodingAgentType,
   sessionModeOrDefault,
-  type AgentKind,
+  type AgentType,
   type NoticeSeverity,
   type SessionMode,
   type SessionScope,
@@ -115,7 +115,7 @@ function sessionManagerCwd(sm: SessionManager): string | undefined {
  * the {@link ToolSession} contract.
  */
 function piToolSession(
-  kind: AgentKind,
+  kind: AgentType,
   sm: SessionManager,
   cwd: string,
 ): ToolSession {
@@ -216,7 +216,7 @@ class PiSessionStore {
 
   /** A fresh session for `kind`, carrying over the caller's model/thinking level. */
   async acquireNew(
-    kind: AgentKind,
+    kind: AgentType,
     model?: AgentSession["model"],
     thinkingLevel?: ThinkingLevel,
     opts?: {
@@ -286,7 +286,7 @@ class PiSessionStore {
    * callers fall back to a fresh session instead of prompting the wrong one.
    */
   async acquireExisting(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     expectedId?: string,
   ): Promise<PiLiveSession> {
@@ -378,7 +378,7 @@ class PiSessionStore {
     id: string,
     agentType: string | undefined,
   ): Promise<PiLiveSession | undefined> {
-    const kind: AgentKind =
+    const kind: AgentType =
       agentType === "workshop"
         ? "workshop"
         : agentType === "developer"
@@ -427,7 +427,7 @@ class PiSessionStore {
    * id, matching what the claude-sdk fork stores.
    */
   async forkSession(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     nativeEntryId: string,
     position: "before" | "at",
@@ -522,7 +522,7 @@ class PiSessionStore {
   }
 
   private async create(
-    kind: AgentKind,
+    kind: AgentType,
     sm: SessionManager,
     model?: AgentSession["model"],
     thinkingLevel?: ThinkingLevel,
@@ -704,7 +704,7 @@ class PiSessionStore {
   }
 
   private track(
-    kind: AgentKind,
+    kind: AgentType,
     session: AgentSession,
     initialNotices: Array<{ severity: NoticeSeverity; message: string }> = [],
     cwd: string = CWD,
@@ -798,7 +798,7 @@ class PiSessionStore {
    * the new name appended to its transcript. The caller re-broadcasts the list.
    */
   async renameSession(
-    kind: AgentKind,
+    kind: AgentType,
     file: string,
     id: string,
     title: string,
@@ -827,7 +827,7 @@ class PiSessionStore {
    * otherwise stop resolving the moment the session's context was cleared.
    */
   async resolvePiImage(
-    kind: AgentKind,
+    kind: AgentType,
     sessionId: string,
     entryId: string,
     imageIndex: number,

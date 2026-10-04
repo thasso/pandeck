@@ -30,7 +30,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
-  AgentKind,
+  AgentType,
   BrowserRuntimeInfo,
   CommitDisplay,
   CompactionDisplay,
@@ -86,7 +86,6 @@ import {
   type ImageContentLike,
 } from "../promptAttachments.ts";
 import { removeAgentTempTree } from "../agentTempTree.ts";
-import type { AgentType } from "../agentTypes.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import {
   integrationGatedActiveToolNames,
@@ -498,11 +497,11 @@ export interface ClaudeSdkSessionDeps {
 
 export class ClaudeSdkSession {
   /**
-   * The persona this session runs as. `AgentKind` is persona-only now, so this
+   * The persona this session runs as. `AgentType` is persona-only now, so this
    * mirrors {@link agentType} (a claude-sdk session may be `assistant` or
    * `workshop`); the {@link harness} is what marks it as claude-sdk.
    */
-  readonly kind: AgentKind;
+  readonly kind: AgentType;
   /** The in-process SDK harness. */
   readonly harness: Harness = "claude-sdk";
   readonly key: string;

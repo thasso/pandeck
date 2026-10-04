@@ -5,7 +5,8 @@
  * one pulls in {@link ../agentTypes.ts} and therefore joins the import cycle
  * rooted there, which `names.ts` must not.
  */
-import { AGENT_TYPES, type AgentType } from "../agentTypes.ts";
+import { AGENT_TYPES } from "../agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { externalToolName } from "./names.ts";
 
 /** External `mcp__pa__*` names of the toolset a persona exposes to a session. */

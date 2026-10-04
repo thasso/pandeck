@@ -1,5 +1,5 @@
 import { ExternalLink, FileText, Hammer } from "lucide-react";
-import type { DisplayBlock, SessionAgentType } from "@assistant/shared";
+import type { DisplayBlock, AgentType } from "@assistant/shared";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -36,11 +36,7 @@ export function WorkshopDraftHandoffToolCard({
 }: {
   block: ToolBlock;
   onCreateDraftSession?:
-    | ((
-        agentType: SessionAgentType,
-        draftText: string,
-        notice?: string,
-      ) => void)
+    | ((agentType: AgentType, draftText: string, notice?: string) => void)
     | undefined;
 }) {
   const payload = parseJson(block.output) as WorkshopDraftHandoffPayload | null;

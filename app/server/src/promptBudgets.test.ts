@@ -30,7 +30,8 @@ import {
   renderSizeSnapshot,
   type PromptBudgetsConfig,
 } from "./promptBudgets.ts";
-import { AGENT_TYPES, type AgentType } from "./agentTypes.ts";
+import { AGENT_TYPES } from "./agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import {
   INVENTORY_HARNESSES,
   REPO_ROOT,

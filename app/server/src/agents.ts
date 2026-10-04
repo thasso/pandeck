@@ -1,4 +1,4 @@
-import type { AgentInfo, AgentKind } from "@assistant/shared";
+import type { AgentInfo, AgentType } from "@assistant/shared";
 import { personaPromptText, type PromptAssetOptions } from "./promptAssets.ts";
 import { IS_PROD } from "./config.ts";
 
@@ -9,13 +9,13 @@ import { IS_PROD } from "./config.ts";
  * option/session-dir construction lives in {@link ./piSdk/options.ts}.
  */
 interface AgentDef {
-  kind: AgentKind;
+  kind: AgentType;
   label: string;
   /** Only offered in local dev mode (the app-modifying Workshop agent). */
   devOnly: boolean;
 }
 
-const AGENTS: Record<AgentKind, AgentDef> = {
+const AGENTS: Record<AgentType, AgentDef> = {
   assistant: {
     kind: "assistant",
     label: "Assistant",
@@ -93,7 +93,7 @@ export function workflowCoordinatorSystemPromptText(
  * Server-owned personas are loadable even though ordinary creation excludes
  * them; only environment-gated personas (Workshop in production) are refused.
  */
-export function isAgentSessionAvailable(kind: AgentKind): boolean {
+export function isAgentSessionAvailable(kind: AgentType): boolean {
   const def = AGENTS[kind];
   if (!def) return false;
   return !def.devOnly || !IS_PROD;
@@ -105,7 +105,7 @@ export function isAgentSessionAvailable(kind: AgentKind): boolean {
  * `workflow-coordinator` sessions are created only by their dedicated acquisition
  * paths, so every generic client creation path guarded by this rejects them.
  */
-export function isAgentAvailable(kind: AgentKind): boolean {
+export function isAgentAvailable(kind: AgentType): boolean {
   if (kind === "personal-assistant" || kind === "workflow-coordinator")
     return false;
   return isAgentSessionAvailable(kind);

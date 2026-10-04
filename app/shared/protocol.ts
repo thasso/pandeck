@@ -111,23 +111,18 @@ export function applyPatch<T extends object>(base: T, patch: Patch<T>): T {
 }
 
 /**
- * SERVER-INTERNAL agent persona. `assistant` is the restricted personal
- * assistant; `workshop` is the full app-modifying agent. This is the persona
- * ONLY — it is independent of the {@link Harness} that runs it, so it is now
- * identical to {@link SessionAgentType} (a session on the `pi` or `claude-sdk`
- * harness can be either persona).
+ * Which persona a session presents: its system prompt and toolset. Independent
+ * of the {@link Harness} that runs it — every persona runs on either engine —
+ * and fixed for the session's lifetime. The one persona type for the wire, the
+ * server and the web client.
  *
- * This is NOT a wire/identity field: session messages, state, and refs carry the
- * orthogonal `{harness, agentType}` pair instead. `AgentKind` survives only as a
- * server-internal alias (the agent registry / `sessionDirFor` genuinely key on a
- * single persona). The client never reads or sends it.
- *
- * `personal-assistant` is the permanent singleton Personal Assistant persona. It
- * is server-owned: it can never be created through an ordinary client command or
- * persona picker (see {@link isOrdinarilyCreatableAgentType}), only through the
- * singleton acquisition path.
+ * `personal-assistant` is the permanent singleton Personal Assistant persona and
+ * `workflow-coordinator` drives Workflow Runs. Both are server-owned: they can
+ * never be created through an ordinary client command or persona picker (see
+ * {@link isOrdinarilyCreatableAgentType}), only through their dedicated
+ * acquisition paths.
  */
-export const AGENT_KINDS = [
+export const AGENT_TYPE_IDS = [
   "assistant",
   "workshop",
   "developer",
@@ -135,11 +130,11 @@ export const AGENT_KINDS = [
   "workflow-coordinator",
 ] as const;
 
-export type AgentKind = (typeof AGENT_KINDS)[number];
+export type AgentType = (typeof AGENT_TYPE_IDS)[number];
 
 /** Whether an arbitrary string names a persona (a value read off a record). */
-export function isAgentKind(value: string): value is AgentKind {
-  return (AGENT_KINDS as readonly string[]).includes(value);
+export function isAgentType(value: string): value is AgentType {
+  return (AGENT_TYPE_IDS as readonly string[]).includes(value);
 }
 
 /**
@@ -148,28 +143,12 @@ export function isAgentKind(value: string): value is AgentKind {
  */
 export type Harness = "pi" | "claude-sdk";
 
-/**
- * Which assistant persona/toolset a session emulates, independent of its
- * {@link Harness}. Mirrors the server-side `AgentType` (see `agentTypes.ts`).
- *
- * `personal-assistant` is the singleton Personal Assistant persona. A session
- * row/state can report it (both harnesses persist and restore it), but it is
- * never selectable in ordinary session creation — see
- * {@link isOrdinarilyCreatableAgentType}.
- */
-export type SessionAgentType =
-  | "assistant"
-  | "workshop"
-  | "developer"
-  | "personal-assistant"
-  | "workflow-coordinator";
-
 /** The stable key of the permanent singleton Personal Assistant persona. */
 export const PERSONAL_ASSISTANT_AGENT_TYPE = "personal-assistant" as const;
 
 /** Whether a persona is the singleton Personal Assistant (server-owned). */
 export function isPersonalAssistantAgentType(
-  agentType: SessionAgentType | AgentKind | undefined,
+  agentType: AgentType | undefined,
 ): boolean {
   return agentType === PERSONAL_ASSISTANT_AGENT_TYPE;
 }
@@ -181,7 +160,7 @@ export function isPersonalAssistantAgentType(
  * paths, so a crafted client payload supplying either key must be rejected
  * before any session side effect.
  */
-export const ORDINARILY_CREATABLE_AGENT_TYPES: readonly SessionAgentType[] = [
+export const ORDINARILY_CREATABLE_AGENT_TYPES: readonly AgentType[] = [
   "assistant",
   "workshop",
   "developer",
@@ -190,7 +169,7 @@ export const ORDINARILY_CREATABLE_AGENT_TYPES: readonly SessionAgentType[] = [
 /** Whether a client may ordinarily create a session with this persona key. */
 export function isOrdinarilyCreatableAgentType(
   agentType: string | undefined,
-): agentType is SessionAgentType {
+): agentType is AgentType {
   return (
     agentType === "assistant" ||
     agentType === "workshop" ||
@@ -204,19 +183,17 @@ export function isOrdinarilyCreatableAgentType(
  * none of that. Use this instead of comparing to `"workshop"` directly so the
  * Developer persona is never accidentally excluded.
  */
-export function isCodingAgentType(
-  agentType: SessionAgentType | AgentKind | undefined,
-): boolean {
+export function isCodingAgentType(agentType: AgentType | undefined): boolean {
   return agentType === "workshop" || agentType === "developer";
 }
 
 /**
  * A selectable agent type, as advertised by the server and shown in the
  * Composer's agent-type picker (dev-only ones are omitted in prod). Keyed by the
- * clean {@link SessionAgentType}, independent of harness.
+ * clean {@link AgentType}, independent of harness.
  */
 export interface AgentInfo {
-  agentType: SessionAgentType;
+  agentType: AgentType;
   label: string;
   /** True for agents only offered in dev mode (informational; the server already filters). */
   devOnly?: boolean;
@@ -1000,7 +977,7 @@ export interface PromptRefineRequest {
   text: string;
   sessionId?: string;
   /** Which persona/toolset the refinement should tailor itself to. */
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   includeContext?: boolean;
 }
 
@@ -1399,7 +1376,7 @@ export interface BrowserRuntimeInfo {
   sessionId: string;
   sessionFile?: string;
   sessionTitle?: string;
-  agentKind: AgentKind;
+  agentKind: AgentType;
   agentStatus: "running" | "idle" | "not-live";
   connectedToCurrentSession: boolean;
   pid?: number;
@@ -1477,8 +1454,8 @@ export interface SlashCommandInfo {
   name: string;
   description: string;
   usage: string;
-  /** Which agent personas this command applies to (keyed by {@link SessionAgentType}). */
-  agentTypes: SessionAgentType[];
+  /** Which agent personas this command applies to (keyed by {@link AgentType}). */
+  agentTypes: AgentType[];
   /**
    * Which harnesses can run this command. Omitted = every harness (the command
    * is harness-independent, e.g. /commit, /compact and /clear). Set this only
@@ -1506,7 +1483,7 @@ export interface SlashCommandInfo {
  */
 export function slashCommandApplies(
   cmd: SlashCommandInfo,
-  agentType: SessionAgentType | undefined,
+  agentType: AgentType | undefined,
   harness: Harness | undefined,
 ): boolean {
   if (agentType && !cmd.agentTypes.includes(agentType)) return false;
@@ -1643,7 +1620,7 @@ export interface SessionListItem {
   /** Which engine runs this session (pi / claude-sdk). */
   harness: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
-  agentType: SessionAgentType;
+  agentType: AgentType;
   title: string;
   /** True while the dedicated naming agent is generating this session's title. */
   titleGenerationPending?: boolean;
@@ -2278,7 +2255,7 @@ export interface TaskSessionRef {
   /** Which engine runs this session (pi / claude-sdk). */
   harness?: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   sessionId: string;
   sessionFile?: string;
   /** Defaults to `reference` when absent. */
@@ -2342,7 +2319,7 @@ export interface TaskStatusSuggestion {
 export interface TaskSource {
   createdBy: TaskCreatedBy;
   /** Which persona/toolset created this Task, when an agent did. */
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   /** The session that created it, for tracing an arrival back to its run. */
   sessionId?: string;
 }
@@ -4032,7 +4009,7 @@ export interface SessionForkOrigin {
   /** Which engine runs the parent session (pi / claude-sdk). */
   harness?: Harness;
   /** Which persona/toolset the parent session emulates, independent of harness. */
-  agentType?: SessionAgentType;
+  agentType?: AgentType;
   /**
    * The parent's provider-native transcript path. pi-only: a claude-sdk fork
    * identifies its parent by session id alone, so consumers must fall back to
@@ -4058,7 +4035,7 @@ export interface SessionState {
   /** Which engine runs this session (pi / claude-sdk). */
   harness: Harness;
   /** Which persona/toolset this session emulates, independent of harness. */
-  agentType: SessionAgentType;
+  agentType: AgentType;
   /** If this session was forked, the source session/message for UI back-links. */
   forkOrigin?: SessionForkOrigin;
   model?: ModelOption;
@@ -6621,14 +6598,14 @@ export type ClientMessage =
    */
   | { type: "refreshModels"; requestId: string }
   /**
-   * Create a fresh pi session of the given {@link SessionAgentType} (the bootstrap
+   * Create a fresh pi session of the given {@link AgentType} (the bootstrap
    * landing). Claude harnesses are NOT created here — they use `harnessSend` on
    * the first prompt. `harness` is advisory routing metadata;
    * `model`/`thinkingLevel`/`mode` seed the fresh pi session.
    */
   | {
       type: "newSession";
-      agentType: SessionAgentType;
+      agentType: AgentType;
       harness?: Harness;
       model?: { provider: string; id: string };
       thinkingLevel?: ThinkingLevel;
@@ -6738,7 +6715,7 @@ export type ClientMessage =
   /** Create a fresh pi session of the given agent type and pre-fill the composer with an editable draft without submitting it. */
   | {
       type: "createDraftSession";
-      agentType: SessionAgentType;
+      agentType: AgentType;
       draftText: string;
       notice?: string;
     }
@@ -6967,7 +6944,7 @@ export type ClientMessage =
       type: "harnessSend";
       id: string;
       harness: Harness;
-      agentType: SessionAgentType;
+      agentType: AgentType;
       text: string;
       attachments?: PromptAttachment[];
       modelProvider?: string;
@@ -7147,7 +7124,7 @@ export type ClientMessage =
         | {
             kind: "new";
             harness: Harness;
-            agentType?: SessionAgentType;
+            agentType?: AgentType;
             modelProvider?: string;
             modelId?: string;
             thinkingLevel?: ThinkingLevel;

@@ -8,7 +8,7 @@
  */
 import { defineAgentTool, jsonResult, type AgentTool } from "../mcp/tool.ts";
 import { FIND_TOOLS_NAME } from "../mcp/names.ts";
-import type { AgentType } from "../agentTypes.ts";
+import type { AgentType } from "@assistant/shared";
 import { toolGroupsFor, type ToolGroup } from "./catalog.ts";
 
 const FIND_TOOLS_DEFAULT_LIMIT = 4;
