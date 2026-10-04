@@ -1,7 +1,6 @@
-import { CLAUDE_SDK_PROVIDER, type ThinkingLevel } from "@assistant/shared";
+import type { ThinkingLevel } from "@assistant/shared";
 import { getSettings } from "../settings.ts";
-import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
-import { runPiOneShot, selectPiModelWithFallback } from "../piSdk/oneShot.ts";
+import { runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
 import { kbReadAssetTool } from "../tools/knowledge/knowledgeBaseTools.ts";
 import { setDaySynthesizer } from "./synthesisRunner.ts";
@@ -36,37 +35,20 @@ function stripJson(raw: string): string {
 /** Run the configured day-session model over a prompt, returning raw text. Provider-agnostic. */
 async function runSynthesisModel(prompt: string): Promise<string> {
   const settings = getSettings().calendarDaySession;
-  const credentialProfileId = accountForSlot(settings);
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    const { text } = await runClaudeSdkOneShot({
-      modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-      credentialProfileId,
-      systemPrompt: SYSTEM_PROMPT,
-      prompt,
-      tools: [kbReadAssetTool],
-      maxTurns: 12,
-      timeoutMs: TIMEOUT_MS,
-      timeoutMessage: "Day synthesis timed out.",
-    });
-    return text;
-  }
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model) throw new Error("No model is available for day synthesis.");
-  const run = await runPiOneShot({
-    model,
-    credentialProfileId,
+  const run = await runOneShot({
+    model: settings,
     thinkingLevel: settings.thinkingLevel as ThinkingLevel,
+    credentialProfileId: accountForSlot(settings),
+    noModelMessage: "No model is available for day synthesis.",
     systemPrompt: SYSTEM_PROMPT,
     prompt,
     tools: [kbReadAssetTool],
+    maxTurns: 12,
     timeoutMs: TIMEOUT_MS,
     timeoutMessage: "Day synthesis timed out.",
   });
-  if (run.stopReason)
-    throw new Error(
-      run.errorMessage || `Day synthesis stopped with ${run.stopReason}.`,
-    );
+  // Partial output from a failed run is not a synthesis.
+  if (run.failure !== undefined) throw new Error(run.failure);
   return run.text;
 }
 

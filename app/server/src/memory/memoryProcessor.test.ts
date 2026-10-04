@@ -326,6 +326,29 @@ test("daily cost ceiling blocks further calls once exhausted", async () => {
   );
 });
 
+test("a billed run that failed without text still counts against the daily ceiling", async () => {
+  const { OneShotError } = await import("../harnesses/oneShot.ts");
+  proc.setMemoryProcessorRunnerForTests({
+    run: async () => {
+      throw new OneShotError("model aborted", { costUSD: 0.5 });
+    },
+  });
+  const results: (string | undefined)[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    const obs = enqueue(`f${i}`, { turn: `f${i}` });
+    claim(obs);
+    results.push(
+      (await proc.runMemoryProcessor(claimAgain(obs.id), { trigger: "batch" }))
+        .reason,
+    );
+  }
+  assert.deepEqual(
+    results,
+    ["error", "error", "budget-cost", "budget-cost"],
+    "two $0.50 failures exhaust the $1 ceiling",
+  );
+});
+
 test("recoverable provider failure keeps the observation retryable within bounded attempts", async () => {
   proc.setMemoryProcessorRunnerForTests(throwingRunner());
   const obs = enqueue("something", { turn: "retry-1" });

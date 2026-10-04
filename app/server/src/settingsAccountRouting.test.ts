@@ -61,6 +61,7 @@ test("a Claude helper agent authenticates as its pinned account", async () => {
   });
   vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
     text: commitJson,
+    usage: {},
   } as never);
 
   await generateCommitMessageJson("diff", {
@@ -84,6 +85,7 @@ test("a disabled pin degrades to the automatic account instead of failing the ru
   setCredentialProfileEnabled(claude.id, false);
   vi.mocked(runClaudeSdkOneShot).mockResolvedValue({
     text: commitJson,
+    usage: {},
   } as never);
 
   await generateCommitMessageJson("diff", {
@@ -107,7 +109,10 @@ test("a pi helper agent resolves its model IN the account it will run on", async
   vi.mocked(selectPiModelWithFallback).mockResolvedValue({
     id: "gpt-4.1",
   } as never);
-  vi.mocked(runPiOneShot).mockResolvedValue({ text: "refined" } as never);
+  vi.mocked(runPiOneShot).mockResolvedValue({
+    text: "refined",
+    usage: {},
+  } as never);
 
   await refinePromptText({
     text: "make this better",
@@ -135,7 +140,10 @@ test("an unpinned agent follows the automatic account", async () => {
   vi.mocked(selectPiModelWithFallback).mockResolvedValue({
     id: "gpt-4.1",
   } as never);
-  vi.mocked(runPiOneShot).mockResolvedValue({ text: "refined" } as never);
+  vi.mocked(runPiOneShot).mockResolvedValue({
+    text: "refined",
+    usage: {},
+  } as never);
 
   await refinePromptText({
     text: "make this better",
@@ -149,5 +157,30 @@ test("an unpinned agent follows the automatic account", async () => {
   assert.equal(
     vi.mocked(runPiOneShot).mock.calls[0]?.[0]?.credentialProfileId,
     "default",
+  );
+});
+
+test("a refinement cut short by an error does not replace the draft", async () => {
+  vi.mocked(selectPiModelWithFallback).mockResolvedValue({
+    id: "gpt-4.1",
+  } as never);
+  vi.mocked(runPiOneShot).mockResolvedValue({
+    text: "partial refin",
+    usage: {},
+    stopReason: "aborted",
+    errorMessage: "aborted by provider",
+  } as never);
+
+  await assert.rejects(
+    () =>
+      refinePromptText({
+        text: "make this better",
+        settings: {
+          provider: "github-copilot",
+          modelId: "gpt-4.1",
+          thinkingLevel: "off",
+        },
+      }),
+    /aborted by provider/,
   );
 });

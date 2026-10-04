@@ -38,10 +38,9 @@ import {
   type MemoryScopeContext,
 } from "./memoryService.ts";
 import { searchMemory } from "./memorySelector.ts";
-import { runPiOneShot } from "../piSdk/oneShot.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
+import { OneShotError, runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
-import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
 
 /* -------------------------------- bounds --------------------------------- */
 
@@ -78,47 +77,44 @@ export interface MemoryProcessorRunner {
 
 const realRunner: MemoryProcessorRunner = {
   async run(input) {
-    if (input.provider === CLAUDE_SDK_PROVIDER) {
-      const { text } = await runClaudeSdkOneShot({
-        modelId: input.modelId,
-        thinkingLevel: input.thinkingLevel,
-        credentialProfileId: input.credentialProfileId,
-        systemPrompt: input.systemPrompt,
-        prompt: input.prompt,
-        timeoutMs: input.timeoutMs,
-        timeoutMessage: "Memory processor timed out.",
-      });
-      return { text }; // Claude one-shot does not report per-call cost here.
-    }
     // Exact configured model only (no silent fallback); processorConfigStatus
-    // gates the run so this rarely throws.
-    const model = await findModelForProfile(
-      input.credentialProfileId,
-      input.provider,
-      input.modelId,
-    );
-    if (!model)
-      throw new Error(
-        `The configured memory processor model (${input.provider}/${input.modelId}) is not available.`,
-      );
-    const { text, usage } = await runPiOneShot({
-      model,
-      credentialProfileId: input.credentialProfileId,
+    // gates the run so a missing model rarely throws. The Claude runner does
+    // not read the run's reported cost, so Claude runs are not counted.
+    const { text, usage } = await runOneShot({
+      model: { provider: input.provider, modelId: input.modelId },
       thinkingLevel: input.thinkingLevel,
+      credentialProfileId: input.credentialProfileId,
+      modelFallback: "none",
+      noModelMessage: `The configured memory processor model (${input.provider}/${input.modelId}) is not available.`,
       systemPrompt: input.systemPrompt,
       prompt: input.prompt,
       timeoutMs: input.timeoutMs,
       timeoutMessage: "Memory processor timed out.",
     });
-    const cost = usage.costUSD;
-    return {
-      text,
-      ...(cost !== undefined && cost > 0
-        ? { costMicrosUsd: Math.round(cost * 1_000_000) }
-        : {}),
-    };
+    const costMicrosUsd = costMicros(usage.costUSD);
+    return { text, ...(costMicrosUsd !== undefined ? { costMicrosUsd } : {}) };
   },
 };
+
+/** A reported USD cost in micro-USD; undefined when unpriced or zero. */
+function costMicros(costUSD: number | undefined): number | undefined {
+  return costUSD !== undefined && costUSD > 0
+    ? Math.round(costUSD * 1_000_000)
+    : undefined;
+}
+
+/**
+ * Close a run whose model call threw. A run that failed after billing still
+ * counts against the daily ceiling; a timeout or engine exception reported
+ * nothing to count.
+ */
+function reconcileFailedRun(runId: number, err: unknown): void {
+  const costMicrosUsd =
+    err instanceof OneShotError ? costMicros(err.usage.costUSD) : undefined;
+  memoryProcessorStore.reconcile(runId, "error", clock(), {
+    ...(costMicrosUsd !== undefined ? { costMicrosUsd } : {}),
+  });
+}
 
 let runner: MemoryProcessorRunner = realRunner;
 export function setMemoryProcessorRunnerForTests(
@@ -779,7 +775,7 @@ export async function runMemoryProcessor(
       timeoutMs: DEFAULT_TIMEOUT_MS,
     });
   } catch (err) {
-    memoryProcessorStore.reconcile(runId, "error", clock());
+    reconcileFailedRun(runId, err);
     // Recoverable: release for a bounded retry, else give up on this batch.
     for (const obs of observations) {
       if (obs.attempts >= MAX_ATTEMPTS)
@@ -958,7 +954,7 @@ export async function runConsolidation(): Promise<ProcessorOutcome> {
       timeoutMs: DEFAULT_TIMEOUT_MS,
     });
   } catch (err) {
-    memoryProcessorStore.reconcile(runId, "error", clock());
+    reconcileFailedRun(runId, err);
     return {
       ran: true,
       reason: "error",

@@ -1,7 +1,6 @@
-import { CLAUDE_SDK_PROVIDER, type PrAgentSettings } from "@assistant/shared";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import type { PrAgentSettings } from "@assistant/shared";
+import { runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
-import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
 import { MAX_PULL_REQUEST_TITLE_CHARS } from "./pullRequestTitle.ts";
 
 const PR_SYSTEM_PROMPT = `You are a dedicated pull-request writer.
@@ -119,28 +118,11 @@ export async function generatePullRequestJson(
   prompt: string,
   settings: PrAgentSettings,
 ): Promise<PrAgentResult> {
-  const credentialProfileId = accountForSlot(settings);
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    const { text } = await runClaudeSdkOneShot({
-      modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-      credentialProfileId,
-      systemPrompt: PR_SYSTEM_PROMPT,
-      prompt,
-      timeoutMs: PR_TIMEOUT_MS,
-      timeoutMessage: "Pull-request generation timed out.",
-    });
-    return parsePrAgentJson(text);
-  }
-
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model)
-    throw new Error("No model is available for the pull-request agent.");
-
-  const { text } = await runPiOneShot({
-    model,
-    credentialProfileId,
+  const { text } = await runOneShot({
+    model: settings,
     thinkingLevel: settings.thinkingLevel,
+    credentialProfileId: accountForSlot(settings),
+    noModelMessage: "No model is available for the pull-request agent.",
     systemPrompt: PR_SYSTEM_PROMPT,
     prompt,
     timeoutMs: PR_TIMEOUT_MS,

@@ -186,7 +186,7 @@ async function main(): Promise<void> {
   assert.equal(content[1].type, "text", "text prompt follows the document");
   assert.equal(content[1].text, "Transcribe");
 
-  // 4: a non-success result with no assistant text throws.
+  // 4: a non-success result is reported, not thrown.
   setClaudeSdkOneShotSeam(() =>
     Promise.resolve(
       fakeSeam([
@@ -198,16 +198,17 @@ async function main(): Promise<void> {
       ]),
     ),
   );
-  await assert.rejects(
-    () =>
-      runClaudeSdkOneShot({
-        modelId: "sonnet",
-        thinkingLevel: "off",
-        systemPrompt: "x",
-        prompt: "y",
-      }),
+  const failed = await runClaudeSdkOneShot({
+    modelId: "sonnet",
+    thinkingLevel: "off",
+    systemPrompt: "x",
+    prompt: "y",
+  });
+  assert.equal(failed.text, "");
+  assert.match(
+    failed.failure ?? "",
     /error_during_execution/,
-    "non-success empty result rejects",
+    "non-success result is reported as a failure",
   );
 
   console.log("Claude SDK one-shot test: PASS");
@@ -215,4 +216,56 @@ async function main(): Promise<void> {
 
 test("runs Claude SDK one-shot prompts through a fake seam", async () => {
   await main();
+});
+
+test("an API failure is reported as the failure, never as model text", async () => {
+  const run = (messages: ClaudeSdkMessage[]) => {
+    setClaudeSdkOneShotSeam(() => Promise.resolve(fakeSeam(messages)));
+    return runClaudeSdkOneShot({
+      modelId: "sonnet",
+      thinkingLevel: "off",
+      systemPrompt: "x",
+      prompt: "y",
+    });
+  };
+
+  // The CLI's synthetic assistant message carries the provider's wording.
+  const spendLimit = await run([
+    {
+      type: "assistant",
+      uuid: "a1",
+      session_id: "s1",
+      error: "billing_error",
+      message: {
+        id: "m1",
+        model: "<synthetic>",
+        content: [
+          { type: "text", text: "You've hit your org's monthly spend limit" },
+        ],
+      },
+    } as unknown as ClaudeSdkMessage,
+    {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 402,
+      session_id: "s1",
+      result: "You've hit your org's monthly spend limit",
+    } as unknown as ClaudeSdkMessage,
+  ]);
+  assert.equal(spendLimit.text, "");
+  assert.equal(spendLimit.failure, "You've hit your org's monthly spend limit");
+
+  // A result-only API failure still fails, named by its status.
+  const rateLimited = await run([
+    {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      api_error_status: 429,
+      session_id: "s2",
+    } as unknown as ClaudeSdkMessage,
+  ]);
+  assert.equal(rateLimited.text, "");
+  assert.equal(rateLimited.failure, "Claude SDK run ended with: HTTP 429");
 });

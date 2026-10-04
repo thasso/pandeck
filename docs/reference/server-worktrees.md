@@ -682,8 +682,8 @@ a synthetic record (never a DB row).
   persisted.
 - Naming must never block creation: every naming failure falls back to a
   timestamp suffix.
-- Do not import agent SDKs directly; one-shot runs go through
-  `../piSdk/oneShot.ts` / `../claudeSdk/oneShot.ts`.
+- Do not import agent SDKs directly; one-shot runs go through `runOneShot`
+  (`../harnesses/oneShot.ts`).
 
 ## Verification commands
 

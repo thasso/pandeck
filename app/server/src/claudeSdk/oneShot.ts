@@ -1,11 +1,9 @@
 /**
  * Headless one-shot run against the in-process Claude Agent SDK.
  *
- * This is the Claude-SDK counterpart to pi's `createAgentSession({ noTools:"all" })`
- * pattern used by the lightweight helper agents (session naming, commit message,
- * prompt refinement, local-agent summary, meeting-minutes scanner). Those agents
- * are provider-neutral by design — when their configured provider is the Claude
- * SDK (`claude-sdk`), they route here instead of pi.
+ * The Claude engine half of `runOneShot` (`harnesses/oneShot.ts`), which routes
+ * a helper run here when its configured provider is the Claude SDK
+ * (`claude-sdk`) and is the only caller.
  *
  * It runs a single `query()` with no native file/shell tools, no project/user
  * setting sources (so CLAUDE.md / user settings can't leak in), and optionally
@@ -27,9 +25,11 @@ import {
 } from "../mcp/sessionToolServer.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
+  assistantProviderError,
   type AssistantBlock,
   mapAssistantBlocks,
   mapResultEpochUsage,
+  resultProviderError,
   type ClaudeUsage,
 } from "./messageMapper.ts";
 import {
@@ -87,6 +87,11 @@ export interface RunClaudeSdkOneShotInput {
 export interface ClaudeSdkOneShotResult {
   text: string;
   usage: ClaudeUsage;
+  /**
+   * Set when the run's result was not a success (an `error*` subtype). The
+   * text is whatever the model wrote before that, possibly nothing.
+   */
+  failure?: string;
 }
 
 /** Test seam override; defaults to the real installed SDK. */
@@ -178,8 +183,8 @@ async function* documentPrompt(
 
 /**
  * Run a single Claude SDK helper query and return the assistant text + usage.
- * App tools are absent by default and explicit when supplied. Throws on timeout,
- * abort, or an error result.
+ * App tools are absent by default and explicit when supplied. Throws on timeout
+ * or abort; an error result is reported as {@link ClaudeSdkOneShotResult.failure}.
  */
 export async function runClaudeSdkOneShot(
   input: RunClaudeSdkOneShotInput,
@@ -230,16 +235,24 @@ export async function runClaudeSdkOneShot(
     });
     for await (const message of query) {
       if (message.type === "assistant") {
+        // An API failure arrives as a synthetic assistant message whose text
+        // is the provider's wording, never model output.
+        const providerError = assistantProviderError(message);
+        if (providerError) {
+          resultError ??=
+            providerError.text || `Claude API error: ${providerError.kind}`;
+          continue;
+        }
         for (const block of mapAssistantBlocks(message) as AssistantBlock[]) {
           if (block.type === "text") text += block.text;
         }
       } else if (message.type === "result") {
         // A one-shot query runs once, so the epoch running total IS this run.
         usage = mapResultEpochUsage(message);
-        const subtype = (message as { subtype?: string }).subtype;
-        if (subtype && subtype !== "success") {
-          resultError = `Claude SDK run ended with: ${subtype}`;
-        }
+        const failed = resultProviderError(message);
+        if (failed)
+          resultError ??=
+            failed.text || `Claude SDK run ended with: ${failed.reason}`;
       }
     }
   } catch (err) {
@@ -251,6 +264,5 @@ export async function runClaudeSdkOneShot(
   }
 
   if (timedOut) throw new Error(timeoutMessage);
-  if (resultError && !text.trim()) throw new Error(resultError);
-  return { text, usage };
+  return { text, usage, ...(resultError ? { failure: resultError } : {}) };
 }

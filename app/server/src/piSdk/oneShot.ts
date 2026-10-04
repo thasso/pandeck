@@ -1,10 +1,11 @@
 /**
  * Headless one-shot run against a pi agent session.
  *
- * This is the pi counterpart to `claudeSdk/oneShot.ts`, shared by the
- * lightweight helper agents (session naming, commit message, prompt
- * refinement, local-agent summary). It builds a locked-down resource loader
- * (no extensions/skills/prompt-templates/context files, custom system
+ * The pi engine half of `runOneShot` (`harnesses/oneShot.ts`), the only caller
+ * of `runPiOneShot` and `findPiModelExact`. `selectPiModelWithFallback` also
+ * serves `permanentAssistant.ts` until model selection moves behind the models
+ * port (`docs/agent-harnesses.md`, step 6). It builds a locked-down resource
+ * loader (no extensions/skills/prompt-templates/context files, custom system
  * prompt), runs a single prompt against an in-memory session, optionally
  * exposing an explicit app-tool allowlist through the direct AgentTool
  * adapter, accumulates the streamed assistant text, races a timeout, and
@@ -18,8 +19,8 @@ import type { AgentTool } from "../mcp/tool.ts";
 import type { findModel } from "./models.ts";
 
 // pi's SDK, the model registry and the tool adapter load on the first run:
-// importing them costs ~0.75s, and the helper agents that import this module
-// (commit messages, naming, memory, minutes) are reached from most of the
+// importing them costs ~0.75s, and `harnesses/oneShot.ts` is reached through
+// the helper agents (commit messages, naming, memory, minutes) from most of the
 // server long before any of them runs.
 async function loadPi() {
   const { DefaultResourceLoader, SessionManager, createAgentSession } =
@@ -72,6 +73,16 @@ export async function selectPiModelWithFallback(
     available.find((m) => !m.reasoning && m.input.includes("text")) ??
     available[0]
   );
+}
+
+/** The configured model if the account offers it; never a fallback. */
+export async function findPiModelExact(
+  settings: { provider: string; modelId: string },
+  credentialProfileId: string,
+): Promise<PiRegistryModel | undefined> {
+  const { modelRegistryForProfile } = await loadPi();
+  const registry = await modelRegistryForProfile(credentialProfileId);
+  return registry.find(settings.provider, settings.modelId);
 }
 
 export interface PiOneShotOptions {

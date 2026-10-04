@@ -1,9 +1,5 @@
-import {
-  CLAUDE_SDK_PROVIDER,
-  type CommitAgentSettings,
-} from "@assistant/shared";
-import { runPiOneShot, selectPiModelWithFallback } from "./piSdk/oneShot.ts";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import type { CommitAgentSettings } from "@assistant/shared";
+import { runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
 
 const COMMIT_SYSTEM_PROMPT = `You are a dedicated commit-message generator and safety reviewer.
@@ -190,30 +186,11 @@ export async function generateCommitMessageJson(
   prompt: string,
   settings: CommitAgentSettings,
 ): Promise<CommitAgentResult> {
-  // Claude SDK runs in-process with no pi model entry; route to the headless
-  // one-shot SDK runner and parse the same JSON contract.
-  const credentialProfileId = accountForSlot(settings);
-  if (settings.provider === CLAUDE_SDK_PROVIDER) {
-    const { text } = await runClaudeSdkOneShot({
-      modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel,
-      credentialProfileId,
-      systemPrompt: COMMIT_SYSTEM_PROMPT,
-      prompt,
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      timeoutMessage: "Commit message generation timed out.",
-    });
-    return parseCommitAgentJson(text);
-  }
-
-  const model = await selectPiModelWithFallback(settings, credentialProfileId);
-  if (!model)
-    throw new Error("No model is available for the commit-message agent.");
-
-  const { text } = await runPiOneShot({
-    model,
-    credentialProfileId,
+  const { text } = await runOneShot({
+    model: settings,
     thinkingLevel: settings.thinkingLevel,
+    credentialProfileId: accountForSlot(settings),
+    noModelMessage: "No model is available for the commit-message agent.",
     systemPrompt: COMMIT_SYSTEM_PROMPT,
     prompt,
     timeoutMs: COMMIT_TIMEOUT_MS,

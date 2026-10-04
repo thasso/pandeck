@@ -6,7 +6,8 @@
  * already configured with (subscription or API key). Registered once at startup.
  */
 import { Buffer } from "node:buffer";
-import { runClaudeSdkOneShot } from "./claudeSdk/oneShot.ts";
+import { CLAUDE_SDK_PROVIDER } from "@assistant/shared";
+import { runOneShot } from "./harnesses/oneShot.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
 import { PDF_MIME, setPdfClaudeFallback } from "./documentConversion.ts";
 import { getSettings } from "./settings.ts";
@@ -27,8 +28,8 @@ export function registerPdfClaudeFallback(): void {
   setPdfClaudeFallback(async ({ bytes }) => {
     const settings = getSettings().pdfConversion;
     if (!settings.fallbackEnabled) return null;
-    const { text } = await runClaudeSdkOneShot({
-      modelId: settings.modelId,
+    const { text, failure } = await runOneShot({
+      model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
       credentialProfileId: accountForSlot(settings),
       systemPrompt: SYSTEM_PROMPT,
@@ -42,6 +43,8 @@ export function registerPdfClaudeFallback(): void {
       timeoutMs: settings.timeoutMs,
       timeoutMessage: "PDF Claude fallback timed out.",
     });
+    // A transcript cut short by an error must not stand in for the document.
+    if (failure !== undefined) throw new Error(failure);
     const markdown = text.trim();
     return markdown ? { markdown } : null;
   });

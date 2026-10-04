@@ -35,7 +35,6 @@ const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
  * `src/`. Delete an entry in the change that removes the import.
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
-  "commitAgent.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "commitWorkflow.ts": ["piSdk/index.ts"],
   "connection.ts": [
     "claudeSdk/ClaudeSdkSession.ts",
@@ -44,7 +43,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "piSdk/PiLiveSession.ts",
     "piSdk/models.ts",
   ],
-  "dayScan/synthesisModel.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "hub.ts": [
     "claudeSdk/ClaudeSdkSession.ts",
     "claudeSdk/claudeSdkStore.ts",
@@ -58,33 +56,20 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "piSdk/openaiUsageQuery.ts",
     "piSdk/toolBinaries.ts",
   ],
-  "memory/memoryProcessor.ts": [
-    "claudeSdk/oneShot.ts",
-    "piSdk/models.ts",
-    "piSdk/oneShot.ts",
-  ],
+  "memory/memoryProcessor.ts": ["piSdk/models.ts"],
   "openaiResetAutoRedeem.ts": ["piSdk/openaiUsageQuery.ts"],
-  "pdfClaudeFallback.ts": ["claudeSdk/oneShot.ts"],
   "peerSpawnRuntimes.ts": ["claudeSdk/modelSettings.ts", "piSdk/models.ts"],
   "permanentAssistant.ts": ["piSdk/oneShot.ts"],
-  "prAgent.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "promptBudgets.ts": ["piSdk/piPromptMeasure.ts"],
   "promptInventory.ts": [
     "claudeSdk/options.ts",
     "piSdk/backgroundWorkToolDefinitions.ts",
     "piSdk/piPromptMeasure.ts",
   ],
-  "promptRefinement.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "session/adapters/claudeSdk.ts": ["claudeSdk/modelSettings.ts"],
-  "sessionNaming.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "sessionSpawn.ts": ["piSdk/models.ts"],
   "sessions.ts": ["claudeSdk/modelSettings.ts"],
-  "taskIntakeAgent.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
   "taskOverhead.ts": ["claudeSdk/claudeSdkRecords.ts"],
-  "tools/google/meetingMinutesScannerTools.ts": [
-    "claudeSdk/oneShot.ts",
-    "piSdk/oneShot.ts",
-  ],
   "usageCache.ts": ["claudeSdk/usageQuery.ts", "piSdk/openaiUsageQuery.ts"],
   "viewSession.ts": [
     "claudeSdk/modelSettings.ts",
@@ -97,7 +82,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "claudeSdk/modelSettings.ts",
     "piSdk/models.ts",
   ],
-  "worktrees/worktreeNaming.ts": ["claudeSdk/oneShot.ts", "piSdk/oneShot.ts"],
 };
 
 /**

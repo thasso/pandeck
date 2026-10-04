@@ -4,14 +4,9 @@
  * the result becomes the branch and worktree folder suffix. Naming must never
  * block creation, so every failure falls back to a timestamp-based suffix.
  */
-import {
-  CLAUDE_SDK_PROVIDER,
-  type WorktreeNamingSettings,
-} from "@assistant/shared";
-import { runPiOneShot, selectPiModelWithFallback } from "../piSdk/oneShot.ts";
-import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
+import type { WorktreeNamingSettings } from "@assistant/shared";
+import { runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
-import { sessionStore } from "../db/sessionStore.ts";
 import { taskNamingReference, type TaskNamingSource } from "../taskNaming.ts";
 
 const NAMING_SYSTEM_PROMPT = `You name git branches for isolated work checkouts (git worktrees).
@@ -84,71 +79,17 @@ export async function generateWorktreeSuffix(
     ? `Context for the work this checkout is for:\n<<<\n${context.trim().slice(0, 4000)}\n>>>\n\nReturn the identifier only.`
     : "No context available. Invent one short memorable word. Return the identifier only.";
 
-  const credentialProfileId = accountForSlot(settings);
   try {
-    if (settings.provider === CLAUDE_SDK_PROVIDER) {
-      const startedAt = Date.now();
-      const { text, usage } = await runClaudeSdkOneShot({
-        modelId: settings.modelId,
-        thinkingLevel: settings.thinkingLevel,
-        credentialProfileId,
-        systemPrompt: NAMING_SYSTEM_PROMPT,
-        prompt: userPrompt,
-        timeoutMs: NAMING_TIMEOUT_MS,
-        timeoutMessage: "Worktree name generation timed out.",
-      });
-      sessionStore.createInternalUsageSession({
-        purpose: "worktree_naming",
-        title: "Worktree name generation",
-        harness: "claude-sdk",
-        provider: "claude",
-        model: settings.modelId,
-        thinkingLevel: settings.thinkingLevel,
-        usage: {
-          ...(usage.inputTokens !== undefined
-            ? { inputTokens: usage.inputTokens }
-            : {}),
-          ...(usage.outputTokens !== undefined
-            ? { outputTokens: usage.outputTokens }
-            : {}),
-          ...(usage.cacheReadTokens !== undefined
-            ? { cacheReadTokens: usage.cacheReadTokens }
-            : {}),
-          ...(usage.cacheWriteTokens !== undefined
-            ? { cacheCreationTokens: usage.cacheWriteTokens }
-            : {}),
-        },
-        startedAt,
-        completedAt: Date.now(),
-      });
-      return sanitizeWorktreeSuffix(text) ?? fallbackWorktreeSuffix();
-    }
-
-    const model = await selectPiModelWithFallback(
-      settings,
-      credentialProfileId,
-    );
-    if (!model) return fallbackWorktreeSuffix();
-    const startedAt = Date.now();
-    const { text, usage } = await runPiOneShot({
-      model,
-      credentialProfileId,
+    const { text } = await runOneShot({
+      model: settings,
       thinkingLevel: settings.thinkingLevel,
+      credentialProfileId: accountForSlot(settings),
+      noModelMessage: "No model is available for worktree naming.",
       systemPrompt: NAMING_SYSTEM_PROMPT,
       prompt: userPrompt,
       timeoutMs: NAMING_TIMEOUT_MS,
       timeoutMessage: "Worktree name generation timed out.",
-    });
-    sessionStore.createInternalUsageSession({
-      purpose: "worktree_naming",
-      title: "Worktree name generation",
-      harness: "pi",
-      provider: "pi",
-      model: model.id,
-      thinkingLevel: settings.thinkingLevel,
-      usage,
-      startedAt,
-      completedAt: Date.now(),
+      record: { purpose: "worktree_naming", title: "Worktree name generation" },
     });
     return sanitizeWorktreeSuffix(text) ?? fallbackWorktreeSuffix();
   } catch {

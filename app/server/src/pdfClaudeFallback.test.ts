@@ -25,6 +25,7 @@ const CLAUDE_DEFAULTS = {
 function fakeSeam(
   text: string,
   state: { called: boolean; params?: ClaudeQueryParams },
+  resultSubtype = "success",
 ): ClaudeSdkSeam {
   return {
     query(params: ClaudeQueryParams) {
@@ -44,7 +45,7 @@ function fakeSeam(
         } as unknown as ClaudeSdkMessage,
         {
           type: "result",
-          subtype: "success",
+          subtype: resultSubtype,
           session_id: "s1",
           usage: { input_tokens: 10, output_tokens: 5 },
           total_cost_usd: 0.001,
@@ -94,6 +95,23 @@ describe("registerPdfClaudeFallback", () => {
     const doc = streamed[0]!.message.content[0];
     assert.equal(doc.type, "document");
     assert.equal(doc.source.media_type, "application/pdf");
+  });
+
+  test("rejects a transcript cut short by an error result", async () => {
+    updateSettings({
+      pdfConversion: { fallbackEnabled: true, ...CLAUDE_DEFAULTS },
+    });
+    const state = { called: false };
+    setClaudeSdkOneShotSeam(() =>
+      Promise.resolve(fakeSeam("# Partial", state, "error_max_turns")),
+    );
+    registerPdfClaudeFallback();
+
+    await assert.rejects(
+      () => convertPdfToMarkdown({ bytes: buildTestPdf({ pages: 2 }) }),
+      /error_max_turns/,
+    );
+    assert.equal(state.called, true);
   });
 
   test("declines (no Claude call) when the fallback is disabled in settings", async () => {
