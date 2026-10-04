@@ -412,7 +412,9 @@ const SECTION_TESTS: Partial<
   "slack-huddles": () => testSlackHuddleSettings(),
   "openai-compatible": async (signal) => {
     const status = await testOpenAiCompatibleSettings(signal);
-    await announceSettingsWritten(["openAiCompatible"]);
+    // Models are stored only by a discovery that succeeded; a failed,
+    // cancelled or overtaken one stored nothing, so there is nothing to tell.
+    if (status.ok) await announceSettingsWritten(["openAiCompatible"]);
     return status;
   },
   "web-search": testBraveSettings,

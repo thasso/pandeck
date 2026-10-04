@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, test, vi } from "vitest";
 import { getSettings } from "../../settings.ts";
-import { saveSettings } from "../../settingsService.ts";
+import {
+  onSettingsChanged,
+  saveSettings,
+  type SettingsChange,
+} from "../../settingsService.ts";
 import { settingsTools } from "./settingsTools.ts";
 
 const [settingsRead, settingsUpdate] = settingsTools;
@@ -362,6 +366,8 @@ describe("a cancelled or overtaken test changes nothing", () => {
     });
     const { fetch, release } = gatedFetch({ data: [{ id: "late-model" }] });
     vi.stubGlobal("fetch", fetch);
+    const heard: SettingsChange[] = [];
+    const stopListening = onSettingsChanged((change) => heard.push(change));
     const controller = new AbortController();
     const pending = settingsUpdate!.execute({ test: ["openai-compatible"] }, {
       signal: controller.signal,
@@ -369,6 +375,10 @@ describe("a cancelled or overtaken test changes nothing", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     controller.abort();
     await assert.rejects(pending, /cancelled/);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stopListening();
+    // Nothing was stored, so nothing was announced.
+    assert.deepEqual(heard, []);
     await saveSettings({ openAiCompatible: { enabled: false } });
     release();
     await new Promise((resolve) => setTimeout(resolve, 10));
