@@ -136,10 +136,12 @@ test("a binding whose look-up fails inside the shared creation is treated as sta
   vi.spyOn(daySessions, "getDaySessionId")
     .mockReturnValueOnce(null)
     .mockReturnValueOnce("broken-day-session");
-  vi.spyOn(hub, "acquireById").mockImplementation(async (id: string) => {
-    if (id === "broken-day-session") throw new Error("transcript unreadable");
-    return created.get(id);
-  });
+  const lookup = vi
+    .spyOn(hub, "acquireById")
+    .mockImplementation(async (id: string) => {
+      if (id === "broken-day-session") throw new Error("transcript unreadable");
+      return created.get(id);
+    });
 
   const sent: ServerMessage[] = [];
   await activate(date, sent);
@@ -149,7 +151,8 @@ test("a binding whose look-up fails inside the shared creation is treated as sta
     [],
   );
   assert.equal(acquire.mock.calls.length, 1);
-  vi.mocked(daySessions.getDaySessionId).mockRestore();
+  // The shared creation did look the broken binding up.
+  assert.ok(lookup.mock.calls.some(([id]) => id === "broken-day-session"));
   const bound = getDaySessionId(date);
   assert.ok(bound && created.has(bound));
 });

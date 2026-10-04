@@ -205,6 +205,11 @@ test("an acquisition caught between two rotations creates only the current singl
 test("a failed rotation does not fail the acquisitions that waited for it", async () => {
   assistantCreations();
   boundOld();
+  sessionStore.upsert({
+    id: "old",
+    harness: "claude-sdk",
+    agentType: "personal-assistant",
+  });
   vi.spyOn(memoryScheduler, "flushBeforeReset").mockRejectedValue(
     new Error("flush failed"),
   );
@@ -213,6 +218,8 @@ test("a failed rotation does not fail the acquisitions that waited for it", asyn
   const id = permanentAssistantSessionId();
 
   await assert.rejects(rotating, /flush failed/);
+  // Settled, if failed: the singleton opens from storage again.
+  assert.equal(permanentAssistantViewableId(), "old");
   // Nothing was abandoned, so the bound singleton still answers.
   assert.equal(await id, "old");
 });
