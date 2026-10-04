@@ -95,6 +95,61 @@ export function orderWorktreesByActivity(
   return [...worktrees].sort((a, b) => lastActivity(b) - lastActivity(a));
 }
 
+/** One worktree card in the "Start in a worktree" row. */
+function WorktreeCard({
+  worktree,
+  selected,
+  dot,
+  projectName,
+  onSelect,
+}: {
+  worktree: WorktreeRecord;
+  selected: boolean;
+  dot: string;
+  projectName: string;
+  onSelect: () => void;
+}) {
+  const label = worktree.isMain ? "main checkout" : worktree.branch;
+  const WorktreeIcon = worktree.isMain ? House : GitBranch;
+  return (
+    <button
+      type="button"
+      role="option"
+      aria-selected={selected}
+      data-quick-selected={selected || undefined}
+      title={selected ? `Remove worktree ${label}` : `Start in ${label}`}
+      onClick={onSelect}
+      className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+        selected
+          ? "border-accent/40 bg-accent-soft"
+          : "border-line bg-panel hover:border-line-strong hover:bg-raised"
+      }`}
+    >
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <WorktreeIcon
+          size={13}
+          className={selected ? "shrink-0 text-accent" : "shrink-0 text-muted"}
+        />
+        <span
+          className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
+        >
+          {label}
+        </span>
+      </span>
+      <span className="flex w-full min-w-0 items-center gap-1.5">
+        <span
+          className="size-2 shrink-0 rounded-full"
+          style={{ backgroundColor: dot }}
+          aria-hidden
+        />
+        <span className="min-w-0 truncate text-caption text-faint">
+          {projectName}
+        </span>
+      </span>
+    </button>
+  );
+}
+
 /**
  * @component NewSessionQuickStart
  * @purpose One-tap staging on the new-session landing: horizontally
@@ -212,10 +267,25 @@ export function NewSessionQuickStart({
   const activeWorktrees = worktrees
     .filter((w) => !w.removedAt)
     .filter((w) => !selectedProjectId || w.projectId === selectedProjectId);
+  // Pinned order: "+ New worktree" (when a project is staged), then main
+  // checkouts, a divider, then the rest in their activity order.
+  const mainWorktrees = activeWorktrees.filter((w) => w.isMain);
+  const otherWorktrees = activeWorktrees.filter((w) => !w.isMain);
+  const showNewWorktreeCard = Boolean(selectedProjectId);
+  const showWorktreeDivider =
+    (showNewWorktreeCard || mainWorktrees.length > 0) &&
+    otherWorktrees.length > 0;
   const activeProjects = projects.filter((p) => p.status !== "archived");
   const projectName = (projectId: string) =>
     projects.find((p) => p.id === projectId)?.name ??
     projectId.replace(/[-_]/g, " ");
+  const worktreeDot = (projectId: string) => {
+    const color = projects.find((p) => p.id === projectId)?.color;
+    return projectColor({
+      id: projectId,
+      ...(color !== undefined ? { color } : {}),
+    }).dot;
+  };
 
   const thinkingLevels = supportedThinkingLevelsForModel(selectedModel);
   const orderedCredentialProfiles =
@@ -344,60 +414,6 @@ export function NewSessionQuickStart({
               </span>
             </EmptyBox>
           ) : null}
-          {activeWorktrees.map((worktree) => {
-            const selected = worktree.id === selectedWorktreeId;
-            const colorValue = projects.find(
-              (p) => p.id === worktree.projectId,
-            )?.color;
-            const dot = projectColor({
-              id: worktree.projectId,
-              ...(colorValue !== undefined ? { color: colorValue } : {}),
-            }).dot;
-            const label = worktree.isMain ? "main checkout" : worktree.branch;
-            const WorktreeIcon = worktree.isMain ? House : GitBranch;
-            return (
-              <button
-                key={worktree.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                data-quick-selected={selected || undefined}
-                title={
-                  selected ? `Remove worktree ${label}` : `Start in ${label}`
-                }
-                onClick={() => onSelectWorktree(selected ? null : worktree.id)}
-                className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                  selected
-                    ? "border-accent/40 bg-accent-soft"
-                    : "border-line bg-panel hover:border-line-strong hover:bg-raised"
-                }`}
-              >
-                <span className="flex w-full min-w-0 items-center gap-1.5">
-                  <WorktreeIcon
-                    size={13}
-                    className={
-                      selected ? "shrink-0 text-accent" : "shrink-0 text-muted"
-                    }
-                  />
-                  <span
-                    className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
-                  >
-                    {label}
-                  </span>
-                </span>
-                <span className="flex w-full min-w-0 items-center gap-1.5">
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: dot }}
-                    aria-hidden
-                  />
-                  <span className="min-w-0 truncate text-caption text-faint">
-                    {projectName(worktree.projectId)}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
           {selectedProjectId ? (
             <button
               type="button"
@@ -436,6 +452,40 @@ export function NewSessionQuickStart({
               </span>
             </button>
           ) : null}
+          {mainWorktrees.map((worktree) => (
+            <WorktreeCard
+              key={worktree.id}
+              worktree={worktree}
+              selected={worktree.id === selectedWorktreeId}
+              dot={worktreeDot(worktree.projectId)}
+              projectName={projectName(worktree.projectId)}
+              onSelect={() =>
+                onSelectWorktree(
+                  worktree.id === selectedWorktreeId ? null : worktree.id,
+                )
+              }
+            />
+          ))}
+          {showWorktreeDivider ? (
+            <div
+              aria-hidden
+              className="my-1 w-px shrink-0 self-stretch bg-line"
+            />
+          ) : null}
+          {otherWorktrees.map((worktree) => (
+            <WorktreeCard
+              key={worktree.id}
+              worktree={worktree}
+              selected={worktree.id === selectedWorktreeId}
+              dot={worktreeDot(worktree.projectId)}
+              projectName={projectName(worktree.projectId)}
+              onSelect={() =>
+                onSelectWorktree(
+                  worktree.id === selectedWorktreeId ? null : worktree.id,
+                )
+              }
+            />
+          ))}
           {activeWorktrees.length > 0 &&
           totalActiveWorktrees > activeWorktrees.length ? (
             <button
