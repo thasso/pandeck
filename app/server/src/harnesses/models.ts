@@ -11,10 +11,7 @@ import type {
   ModelOption,
 } from "@assistant/shared";
 import { harnessForModelProvider } from "@assistant/shared";
-import {
-  CLAUDE_SDK_MODELS,
-  knownClaudeSdkModelAlias,
-} from "../claudeSdk/modelSettings.ts";
+import { CLAUDE_SDK_MODELS } from "../claudeSdk/modelSettings.ts";
 import { curatedModelOption } from "./curatedModels.ts";
 import {
   findModel,
@@ -58,8 +55,8 @@ export async function accountOffersModel(
   modelId: string,
 ): Promise<boolean> {
   if (harnessForModelProvider(provider) === "claude-sdk")
-    return (
-      getSettings().claudeSdk.enabled && !!knownClaudeSdkModelAlias(modelId)
+    return claudeModels(getSettings()).some(
+      (model) => model.provider === provider && model.id === modelId,
     );
   return !!(await findModelForProfile(profileId, provider, modelId));
 }

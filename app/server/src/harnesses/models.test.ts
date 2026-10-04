@@ -88,6 +88,9 @@ test("a pi registry failure reaches the caller", async () => {
 test("an account offers exactly the model it can run", async () => {
   assert.equal(await accountOffersModel("c1", "claude-sdk", "opus"), true);
   assert.equal(await accountOffersModel("c1", "claude-sdk", "gpt-4"), false);
+  // Exact ids only: display normalization never widens what an account offers.
+  for (const id of ["claude-sonnet-5", "not-a-sonnet-model", "OPUS"])
+    assert.equal(await accountOffersModel("c1", "claude-sdk", id), false, id);
   claudeEnabled = false;
   assert.equal(await accountOffersModel("c1", "claude-sdk", "opus"), false);
 
