@@ -5,5 +5,5 @@
  * reading as busy.
  */
 export function backgroundWorkIntentHint(taskId: string): string {
-  return `PA background task ${taskId} counts as work you are waiting on. If nobody waits on it (a dev server, a watcher), call background_tasks with operation set_intent, taskId ${taskId} and intent service.`;
+  return `PA background task ${taskId} counts as work you are waiting on. If nobody waits on it (a dev server, a watcher), call the background_tasks tool (find it with tool search if it is deferred) with operation set_intent, taskId ${taskId} and intent service.`;
 }
