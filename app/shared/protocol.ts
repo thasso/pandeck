@@ -1926,6 +1926,22 @@ export function isShelvedSession(session: SessionListItem): boolean {
 }
 
 /**
+ * Whether a session is HISTORY in a spawn tree: put down
+ * ({@link isShelvedSession}) and doing nothing now — no turn running, no
+ * background job. A shelved session runs its next turn from the shelf, so
+ * "shelved" alone would hide a peer its coordinator just set going again. ONE
+ * predicate for the inbox's fold ({@link spawnClusterForest}), the composer
+ * ledge and the server's Settle cascade, so the three agree on what is live.
+ */
+export function isDormantInSpawnTree(session: SessionListItem): boolean {
+  return (
+    isShelvedSession(session) &&
+    !session.isStreaming &&
+    (session.backgroundActivity?.activeCount ?? 0) <= 0
+  );
+}
+
+/**
  * The spawn forest the Sessions inbox folds: which member each member folds
  * into, once that edge is eligible AND bounded. Every member ends up in exactly
  * one cluster, and a member with no parent is the root of its own.
@@ -1949,11 +1965,16 @@ export interface SpawnClusterForest {
  * ownership is `coordinator` and its spawner is a member: `taken-over` is the
  * user's own session, `unknown` fails closed (`docs/agent-workflows.md`), and a
  * spawner that is archived, deleted or a run's role leaves its child standing
- * on its own. A SHELVED child ({@link isShelvedSession}) folds only while live
- * work hangs below it — an unshelved member folding into it, at any depth.
+ * on its own. A DORMANT child ({@link isDormantInSpawnTree}: shelved, and
+ * neither running a turn nor holding background jobs) folds only while live
+ * work hangs below it — a non-dormant member folding into it, at any depth.
  * Otherwise the shelf is where the user put it, and folding it would take it
  * off; with live work under it, leaving it out would cut that work loose from
  * the coordinator above, and the top level is for the sessions the user drives.
+ * A shelved peer its coordinator set running again is live work itself: it
+ * runs from the shelf, raising no outcome, and folding it is what keeps that
+ * run visible and lets it refuse its coordinator's Settle like any running
+ * peer.
  * A child that is settled but asking is not shelved at all, so it folds — which
  * is how its question can refuse its coordinator's Settle.
  *
@@ -1961,6 +1982,9 @@ export interface SpawnClusterForest {
  * the chain runs. The walk down from every root still DETACHES a cycle —
  * whichever of its sessions sorts first becomes a root, deterministically — so
  * every member is assigned exactly once and malformed edges cannot hang it.
+ * (Liveness below is read before that break, so a dormant member caught in a
+ * cycle with a live one may fold with nothing live under it — harmless, and
+ * only on edges no real spawn produces.)
  *
  * ONE forest for both sides: the browser folds its cards along it, and the
  * server settles a coordinator's descendants along it
@@ -1972,7 +1996,7 @@ export function spawnClusterForest(
 ): SpawnClusterForest {
   const ids = new Set(members.map((session) => session.id));
   const shelved = new Set(
-    members.filter(isShelvedSession).map((session) => session.id),
+    members.filter(isDormantInSpawnTree).map((session) => session.id),
   );
   const edgeOf = new Map<string, string>();
   for (const session of members) {

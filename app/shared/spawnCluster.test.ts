@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  isDormantInSpawnTree,
   isShelvedSession,
   spawnClusterDescendantIds,
   spawnClusterForest,
@@ -108,6 +109,29 @@ describe("spawnClusterForest", () => {
     ];
     expect(descendants("root", rows)).toEqual(["mid", "low", "live"]);
     expect(roots(rows).sort()).toEqual(["done", "root"]);
+  });
+
+  test("folds a settled peer that is running or holds jobs: it is live work", () => {
+    const rows = [
+      row({ id: "root" }),
+      child("rerun", "root", { settledAt: 1, isStreaming: true }),
+      child("jobs", "root", {
+        settledAt: 1,
+        backgroundActivity: {
+          activeCount: 1,
+          shellCount: 1,
+          monitorCommandCount: 0,
+          monitorWebsocketCount: 0,
+          startingCount: 0,
+          stoppingCount: 0,
+          oldestStartedAt: 1,
+        },
+      }),
+      child("dormant", "root", { settledAt: 1 }),
+    ];
+    expect(descendants("root", rows)).toEqual(["rerun", "jobs"]);
+    expect(isDormantInSpawnTree(rows[1] as SessionListItem)).toBe(false);
+    expect(isDormantInSpawnTree(rows[3] as SessionListItem)).toBe(true);
   });
 
   test("folds a chain of any depth into its one root", () => {

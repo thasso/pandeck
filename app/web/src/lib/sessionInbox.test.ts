@@ -2750,3 +2750,36 @@ describe("peer trees without a depth cap", () => {
     expect(fresh.cluster?.bubbled?.session.id).toBe("mid");
   });
 });
+
+describe("a settled peer set running again", () => {
+  const rows = [
+    session({ id: "root" }),
+    session({
+      id: "kid",
+      spawnedBySessionId: "root",
+      spawnOwnership: "coordinator",
+      settledAt: NOW - 10_000,
+      isStreaming: true,
+      runStartedAt: NOW - 5_000,
+    }),
+  ];
+
+  it("is live work in the fold, and refuses the coordinator's Settle", () => {
+    const view = buildSessionInbox(rows);
+    const card = cards(view.active)[0] as SessionInboxCard;
+    expect(card.cluster?.children.map((c) => c.session.id)).toEqual(["kid"]);
+    expect(card.cluster?.counts.running).toBe(1);
+    expect(card.settleBlocked).toBe("it is still running.");
+    expect(view.settled).toEqual([]);
+  });
+
+  it("is live work on the composer ledge", () => {
+    const ledge = spawnedSessionsView({
+      sessions: rows,
+      coordinatorId: "root",
+    });
+    expect(ledge.rows.map((c) => c.session.id)).toEqual(["kid"]);
+    expect(ledge.counts).toMatchObject({ total: 1, running: 1 });
+    expect(ledge.settled).toBe(0);
+  });
+});

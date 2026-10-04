@@ -703,11 +703,14 @@ export function SessionInbox({
   const renderChildRows = (
     rows: SessionInboxCard[],
     relation: "coordinated" | "workflow" = "coordinated",
+    live?: ReadonlySet<string>,
   ) =>
     rows.map((child) => {
       // A settled peer listed as history is already down: it keeps Archive
       // and Delete, and offers no Settle it has nothing left to acknowledge.
       const shelved = isShelvedSession(child.session);
+      // History rows are on the Settled shelf too, under the session id.
+      const history = live !== undefined && !live.has(child.session.id);
       const swipe = cardSwipe(child);
       return (
         <ExitStage
@@ -724,6 +727,7 @@ export function SessionInbox({
               density={density}
               relation={relation}
               active={child.session.id === currentId}
+              {...(history ? { listRowId: `history:${child.session.id}` } : {})}
               onOpen={onSelect}
               onSettle={shelved ? undefined : settleCard}
               onArchive={onArchive}
@@ -815,7 +819,13 @@ export function SessionInbox({
                   onFocusSibling={focusSibling}
                 />
               </SwipeRow>
-              {renderChildRows(rows)}
+              {renderChildRows(
+                rows,
+                "coordinated",
+                card.cluster && settledHistory.includes(id)
+                  ? new Set(card.cluster.children.map((c) => c.session.id))
+                  : undefined,
+              )}
               {/* The fold's history, on request: the peers already settled,
                   put back in the tree where they were spawned. Offered only
                   while the fold is open and has any. */}

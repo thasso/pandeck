@@ -370,7 +370,9 @@ describe("SessionInbox clusters", () => {
       ) as HTMLElement;
     expect(toggle().textContent).toBe("Show 1 settled");
     click(toggle());
-    expect(rowIds()).toEqual(["root", "impl", "rev", "done"]);
+    // The history row is on the Settled shelf too, so it lists under its own
+    // id there and a prefixed one here.
+    expect(rowIds()).toEqual(["root", "impl", "rev", "history:done"]);
     expect(toggle().textContent).toBe("Hide settled");
     click(toggle());
     expect(rowIds()).toEqual(["root", "impl", "rev"]);

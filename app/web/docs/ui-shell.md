@@ -331,10 +331,14 @@ into a row that is itself put down; only a settled coordinator with nothing
 folded under it takes the shelf. The same rule holds inside the tree: a settled
 peer folds only while live work hangs below it, so a live peer it spawned stays
 under the coordinator above instead of surfacing as a card of its own. A settled
-session kept up that way shows no failure: the server withholds `settledAt` from
-a row whose latest outcome is open, so a shelved row's stored error is one the
-user already acknowledged, and it neither counts nor bubbles. Settled peers are
-otherwise history: out of the counts, the Settle cascade and the tree.
+peer its coordinator sets running again — a turn, or background jobs — is live
+work itself: it runs from the shelf raising no outcome, so it folds, counts as
+running and refuses the coordinator's Settle like any running peer, and returns
+to history when it goes quiet (`isDormantInSpawnTree`). A settled session kept
+up that way shows no failure: the server withholds `settledAt` from a row whose
+latest outcome is open, so a shelved row's stored error is one the user already
+acknowledged, and it neither counts nor bubbles. Settled peers are otherwise
+history: out of the counts, the Settle cascade and the tree.
 
 Settle on a session settles it AND the peers it still coordinates, in one
 command: its own `session:<id>` outcome revision is acknowledged through the
@@ -383,7 +387,10 @@ cluster's single row. Listed that way, folded peers are ordinary rows of the
 browser: focusable, swipeable, and openable. When the coordinator's tree also
 holds settled peers, the open fold ends in a "Show N settled" row that puts them
 back in the tree where they were spawned, after their live siblings; they stay
-on the Settled shelf, offer no Settle, and count for nothing on the card.
+on the Settled shelf (listed here under a prefixed row id, so the two rows never
+share one), offer no Settle, and count for nothing on the card. A session whose
+peers are ALL settled has no fold at all: the card is about live work, and that
+history is on the Settled shelf and in the session's own composer ledge.
 
 A formal **Workflow Run** is one Sessions inbox item too
 ([Task-676](pa://task/676)). Every live run — active or paused — is a card of

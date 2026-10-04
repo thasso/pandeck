@@ -36,6 +36,13 @@ export interface ClusterChildRowProps {
    * link is reachable by pointer alone.
    */
   tabbable?: boolean;
+  /**
+   * The row's `data-list-row-id`, when it must differ from the session id: a
+   * settled peer listed as a fold's history is ALSO a row of the Settled
+   * shelf, and two rows with one id would send a scroll restore to the wrong
+   * one.
+   */
+  listRowId?: string;
   /** Every callback takes the id it acts on, so the memo below survives. */
   onOpen: (sessionId: string) => void;
   /**
@@ -77,6 +84,7 @@ function ClusterChildRowImpl({
   density = "tight",
   relation = "coordinated",
   tabbable = false,
+  listRowId,
   onOpen,
   onSettle,
   onArchive,
@@ -101,7 +109,7 @@ function ClusterChildRowImpl({
   return (
     <div
       data-session-row
-      data-list-row-id={session.id}
+      data-list-row-id={listRowId ?? session.id}
       data-session-row-active={active ? "true" : undefined}
       role="button"
       tabIndex={tabbable ? 0 : -1}

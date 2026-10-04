@@ -21,6 +21,7 @@ import type {
   WorkflowRunSummary,
 } from "@assistant/shared";
 import {
+  isDormantInSpawnTree,
   isShelvedSession,
   isTerminalWorkflowRunLifecycle,
   pendingSessionOutcome,
@@ -1473,13 +1474,14 @@ export function spawnedSessionsView(options: {
     }
   }
 
-  // Live bottom-up: unshelved, or a spawner of something live.
+  // Live bottom-up: not dormant (a settled peer running again is live), or a
+  // spawner of something live — the forest's own rule, without ownership.
   const live = new Set<string>();
   for (let index = order.length - 1; index >= 0; index -= 1) {
     const id = order[index] as string;
     const card = cards.get(id) as SessionInboxCard;
     if (
-      !isShelvedSession(card.session) ||
+      !isDormantInSpawnTree(card.session) ||
       (treeChildren.get(id) ?? []).some((childId) => live.has(childId))
     )
       live.add(id);
