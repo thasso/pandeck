@@ -1,7 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import {
   Activity,
-  Hourglass,
   Archive,
   ArrowUp,
   ArchiveRestore,
@@ -10,6 +9,7 @@ import {
   ClipboardList,
   FolderKanban,
   GitBranch,
+  Hourglass,
   MoreVertical,
   Pencil,
   Play,

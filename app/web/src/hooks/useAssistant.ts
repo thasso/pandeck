@@ -1116,6 +1116,9 @@ function normalizeCachedSessions(
         attention: _attention,
         queuedWork: _queuedWork,
         delegation: _delegation,
+        // Who still owes a reply is live too: kept alone, it would read a
+        // tree whose peers were working as stalled until the first list.
+        awaitingRepliesFrom: _awaitingRepliesFrom,
         ...rest
       } = session;
       return { ...rest, isStreaming: false };

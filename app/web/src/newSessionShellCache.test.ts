@@ -145,3 +145,37 @@ it("never paints a cached Personal Assistant singleton in the session list", () 
   expect(hydrated.hydrationSource).toBe("cache");
   expect(hydrated.sessions.map((session) => session.id)).toEqual([ordinary.id]);
 });
+
+it("drops who still owes a reply from cached rows, like every live fact", () => {
+  const defaults = createInitialState();
+  const owed: SessionListItem = {
+    id: "coordinator",
+    harness: "pi",
+    agentType: "assistant",
+    title: "Coordinator",
+    createdAt: 1,
+    updatedAt: 2,
+    messageCount: 3,
+    awaitingRepliesFrom: ["reviewer"],
+  };
+  window.localStorage.setItem(
+    "assistant.appShellCache.v1",
+    JSON.stringify({
+      version: 1,
+      savedAt: Date.now(),
+      models: [],
+      agents: [],
+      // Cached while the reviewer was still working: restored alone, the
+      // debt would read as a stalled tree until the first list arrives.
+      sessions: [owed],
+      settings: defaults.settings,
+      slashCommands: [],
+      taskList: null,
+      projectList: null,
+      worktrees: [],
+    }),
+  );
+
+  const hydrated = createInitialState();
+  expect(hydrated.sessions[0]?.awaitingRepliesFrom).toBe(undefined);
+});

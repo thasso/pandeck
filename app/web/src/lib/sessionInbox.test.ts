@@ -3031,6 +3031,22 @@ describe("a stalled tree, at its edges", () => {
     );
   });
 
+  it("counts working subagent runs as work, but not one waiting on its parent", () => {
+    const root = row("root", { awaitingRepliesFrom: ["rev"] });
+    const delegation = (working: number, awaiting: number) => ({
+      activeCount: working + awaiting,
+      startingCount: 0,
+      workingCount: working,
+      awaitingParentCount: awaiting,
+    });
+    expect(stallOf([root, row("rev", { delegation: delegation(1, 0) })])).toBe(
+      undefined,
+    );
+    expect(
+      stallOf([root, row("rev", { delegation: delegation(0, 1) })]),
+    ).toEqual(["rev"]);
+  });
+
   it("counts a job starting, or a retained host, as work going on", () => {
     const root = row("root", { awaitingRepliesFrom: ["rev"] });
     for (const activity of [

@@ -126,14 +126,19 @@ export interface SpawnTreeStall {
 }
 
 /**
- * Whether a session is doing anything right now: a turn, queued work, a
- * background job starting or running, or a retained background host.
+ * Whether a session is doing anything right now: a turn, queued work,
+ * working subagent runs, a background job starting or running, or a retained
+ * background host.
  */
 function isMoving(session: SessionListItem): boolean {
   const activity = session.backgroundActivity;
+  const delegation = session.delegation;
   return Boolean(
     session.isStreaming ||
     session.queuedWork ||
+    // Subagent child runs work on their own after the parent's turn ends; one
+    // waiting on its parent is stuck with it, not moving.
+    (delegation && delegation.workingCount + delegation.startingCount > 0) ||
     (activity &&
       (activity.activeCount > 0 ||
         activity.startingCount > 0 ||

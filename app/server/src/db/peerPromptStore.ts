@@ -1099,6 +1099,7 @@ export const OUTSTANDING_REPLIES_SQL = `
                 SELECT 1 FROM peer_prompts f
                  WHERE f.chain_id = o.chain_id
                    AND f.sender_session_id = o.recipient_session_id
+                   AND f.recipient_session_id = r.sender_session_id
                    AND f.queue_seq > o.queue_seq
                    AND f.queue_seq < r.queue_seq)
          )
@@ -1125,18 +1126,24 @@ export const OUTSTANDING_REPLIES_SQL = `
  *   open. A LATER prompt that REACHED the sender (durably admitted — a report
  *   cancelled or failed before delivery answers nothing) from the owed peer
  *   counts as the answer, and so does one on the request's own chain (which a
- *   forward keeps) — but only once the owed peer itself has acted on that
- *   chain since the request: peers spawned in one turn share a chain, and one
- *   reviewer's reply must not answer for the reviewer beside it.
+ *   forward keeps) — but only from a session the owed peer itself handed the
+ *   work to on that chain since the request: peers spawned in one turn share a
+ *   chain, and one reviewer's reply must not answer for the reviewer beside it,
+ *   even when that reviewer delegated elsewhere on the same chain.
  *
- * Each question is its own NOT EXISTS so each seeks an index
- * (`0065_peer_prompt_reply_lookup.sql`, `0066_peer_prompt_replied_by_index.sql`) instead of scanning everything the
- * sender ever received; `peerPromptStore.test.ts` pins the plan.
+ * Each question is its own NOT EXISTS so each is one exact index seek on
+ * (recipient, sender or chain, queue_seq) — `0065_peer_prompt_reply_lookup.sql`
+ * (whose header overstates the gain: the earlier probes already seeked the
+ * sender/chain indexes, reading the owed peer's later sends or the chain) —
+ * and the lost-reply half follows `0066_peer_prompt_replied_by_index.sql`;
+ * `peerPromptStore.test.ts` pins the plan.
  *
  * Not modelled: a report that reaches the sender on a fresh chain through a
  * third peer (a poke closes the poked peer's chains, so its forward starts a
- * new one), and a sender that releases a peer with a plain message ("stand
- * down") — both stay owed until the user settles or archives that peer.
+ * new one), a forward of two or more hops (owed peer → X → Y → sender), and a
+ * sender that releases a peer with a plain message ("stand down") — each stays
+ * owed until the user settles or archives that peer, or the request expires
+ * (`RESPONSE_TTL_MS`, 30 days).
  */
 function outstandingRepliesBySender(): Map<string, string[]> {
   const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all() as {

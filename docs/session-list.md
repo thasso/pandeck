@@ -86,14 +86,18 @@ Each rebuild also reads who still owes each session a reply
 `awaitingRepliesFrom`): one read over the `awaiting_response` rows, each tested
 by two `NOT EXISTS` probes — "a later admitted prompt from the owed peer" and "a
 later admitted prompt on the request's chain after the owed peer acted on it".
-Each probe seeks its own index (`0065_peer_prompt_reply_lookup.sql`); a single
-probe with `OR` could only seek the recipient and scanned everything the sender
-ever received, which grows with history rather than with what is owed. A request
-already marked `replied` whose correlated reply was cancelled or failed before
-delivery stays owed; that half starts from the lost replies and follows the
-`replied_by_message_id` back-link (`0066_peer_prompt_replied_by_index.sql`).
-`peerPromptStore.test.ts` pins the plan. Measured on a copy of the production
-database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
+Each probe is one exact seek on (recipient, sender or chain, `queue_seq`) from
+`0065_peer_prompt_reply_lookup.sql`. An earlier single probe joined by `OR`
+could seek only the recipient and scanned everything the sender ever received;
+split, the probes would also seek the older sender and chain indexes, reading
+the owed peer's later sends or the whole chain, so 0065's header overstates the
+gain. The exact seek is what keeps the cost bounded by what is owed rather than
+by history. A request already marked `replied` whose correlated reply was
+cancelled or failed before delivery stays owed; that half starts from the lost
+replies and follows the `replied_by_message_id` back-link
+(`0066_peer_prompt_replied_by_index.sql`). `peerPromptStore.test.ts` pins the
+plan. Measured on a copy of the production database (7,539 peer prompts, 16
+senders owed): 0.24 ms median.
 
 ## What was not done, and why
 

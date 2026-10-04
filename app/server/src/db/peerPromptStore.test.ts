@@ -223,6 +223,19 @@ describe("peerPromptStore", () => {
       assert.deepEqual(owedTo(c), [opus], "Opus never answered");
     });
 
+    it("does not take a sibling's reply for a peer that delegated elsewhere", () => {
+      // A and B share C's chain; A hands work to helper H on it, and B
+      // reports to C. Nothing from A reached C.
+      const c = `owed-c-${seq++}`;
+      const a = `owed-a-${seq++}`;
+      const b = `owed-b-${seq++}`;
+      const first = unanswered(c, a);
+      unanswered(c, b, first.chainId);
+      send(a, `owed-helper-${seq++}`, first.chainId);
+      send(b, c, first.chainId);
+      assert.deepEqual(owedTo(c), [a]);
+    });
+
     it("takes any later word from the owed peer as the answer", () => {
       // After a poke (which closes the peer's chains) or a re-ask, the peer's
       // report arrives on a different chain and marks nothing.
