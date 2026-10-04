@@ -90,7 +90,6 @@ export function createClaudeSessionToolServer(
   return createSessionToolServer({
     sessionId: source.id,
     harness: "claude-sdk",
-    listMode: "active",
     tools: () => AGENT_TYPES[source.agentType].tools(),
     activeToolNames: () => {
       const tools = AGENT_TYPES[source.agentType].tools();

@@ -201,7 +201,6 @@ export async function runClaudeSdkOneShot(
     ? createSessionToolServer({
         sessionId,
         harness: "claude-sdk",
-        listMode: "active",
         tools: () => input.tools ?? [],
         session: () => ({
           sessionId,

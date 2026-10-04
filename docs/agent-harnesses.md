@@ -5,9 +5,8 @@ or `claude-sdk` (`@anthropic-ai/claude-agent-sdk`). This document is the
 contract for how app code reaches a harness, and the migration that moves the
 server from two hand-wired engines to one seam with two backends behind it.
 
-The migration lands as a series of small pull requests. Until the last one
-lands, the "Target" section describes where the code is going, and "Status" says
-what already holds.
+The migration landed as a series of small pull requests: the "Target" section
+describes the architecture they produced, and "Status" records the steps.
 
 ## Vocabulary
 
@@ -172,22 +171,30 @@ table when a later step needs them.
 ## Rules
 
 - Outside `piSdk/`, `claudeSdk/`, `harnesses/` and `test/`, a module reaches an
-  engine folder only through `harnesses/`. `harnessBoundary.test.ts` pins every
-  remaining exception by module and fails on a new one.
+  engine folder only through `harnesses/`.
 - App code does not compare a harness id against a literal. It reads a
-  capability from `HARNESSES` or asks the backend. The same test pins the
-  remaining comparisons per file: `==`/`===`/`!=`/`!==` with a harness-id
-  literal on either side, a `case` with one, and `.includes()` on an array
-  literal holding one.
+  capability from `HARNESSES`, asks the backend, or looks the engine up in a
+  table keyed by harness. A comparison is `==`/`===`/`!=`/`!==` with a
+  harness-id literal on either side, a `case` with one, or `.includes()` on an
+  array literal holding one.
+- The one exception to both is the measurement modules (`promptBudgets.ts`,
+  `promptInventory.ts`, `sessionAudit.ts`, `sessionAuditSources.ts`,
+  `taskOverhead.ts`): they measure what each engine actually sends or spends, so
+  naming the engine is their job. `harnessBoundary.test.ts` names them
+  (`MEASUREMENT_MODULES`), pins exactly what each still imports and compares,
+  and fails on any other module that appears. App code names what it imports
+  with a string literal so the scan sees every reach; `parcelWatcher.ts`, which
+  loads its native addon by a computed path, is the one pinned exception.
 - The test parses every non-test `.ts` module under `app/server/src` (and fails
   if a source with another extension appears there), so comments and unrelated
   strings never count. It does not cover the web client, which reaches no engine
   and reads the shared `HARNESSES` helpers, or scripts outside the server source
   such as `scripts/bun-runtime-probe.mjs`, which imports `piSdk/models.ts` on
   purpose to probe the packaged runtime.
-- The allowlists in that test only shrink. A change that removes an engine
-  import or a comparison deletes its entry in the same change; the test fails on
-  a stale entry so the list cannot drift above reality.
+- The pins in that test only shrink. A change that removes an engine import or a
+  comparison deletes its entry in the same change, and a measurement module that
+  needs neither any more leaves `MEASUREMENT_MODULES`; the test fails on a stale
+  entry so the lists cannot drift above reality.
 - Unchanged by this migration: SDK packages stay inside their folders
   (`architecture.test.ts`), app prompts go through `runtimePrompt.ts`, app tools
   come from `tools/catalog.ts`, and background work goes through the ports in
@@ -215,10 +222,10 @@ table when a later step needs them.
 | 12a  | Model resolution and engine boot through `harnesses/`                         | landed |
 | 12b  | Session storage, availability and connection lookups through `harnesses/`     | landed |
 | 12c  | Hub list and pi lookups, a tool-exposure seam, the review-handoff branch      | landed |
-| 12d  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
+| 12d  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | landed |
 
-Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
-after 7.
+Every step has landed; the rules above keep the boundary where the migration
+left it.
 
 An id belongs to one engine, enforced in three places. Each store refuses to
 register an id the other holds resident (`setHeldElsewhere`, wired by the

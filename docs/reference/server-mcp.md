@@ -21,10 +21,9 @@ tools). The pi harness consumes AgentTools directly via
   `jsonResult`, `uniqueAgentTools`, the shared Plan denial message).
 - `meta.ts` owns the MCP `_meta` key contract: `pa/*` keys that no in-repo
   client sends or reads, honoured for a possible external MCP client
-  (`pa/toolCallId`, `pa/terminate`, `pa/details`, `pa/pi`, `pa/active`) and
-  `anthropic/*` keys for the Claude SDK's native tool search
-  (`anthropic/alwaysLoad` on eager-tier tools, `anthropic/searchHint` from
-  `AgentTool.searchHint`).
+  (`pa/toolCallId`, `pa/terminate`, `pa/details`, `pa/pi`) and `anthropic/*`
+  keys for the Claude SDK's native tool search (`anthropic/alwaysLoad` on
+  eager-tier tools, `anthropic/searchHint` from `AgentTool.searchHint`).
 - `names.ts` owns the `pa` server name and external `mcp__pa__*` tool-name
   mapping. It imports nothing, deliberately: `MCP_SERVER_NAME` is read at module
   top level by other modules, so joining the import cycle rooted at
@@ -110,11 +109,11 @@ tools). The pi harness consumes AgentTools directly via
   `waitFor` (`text`, and `timeMs` as a sleep, not a text timeout) maps onto
   `browser_wait_for` for an app slower than the budget — an unmet condition is
   surfaced as the error instead of a settled tree.
-- `listMode: "active"` (Claude) lists only usable tools; `listMode: "all"` lists
-  everything with `_meta["pa/active"]` flags (formerly the pi mode; kept for
-  inspection/external use). `_meta["pa/pi"]` now carries `executionMode` alone:
-  pi reads the AgentTool directly, and the prompt-extras fields that used to
-  ride there are deleted ([Task-282](pa://task/282)). It is kept because
+- `tools/list` lists only the tools usable right now; a client refreshes its
+  list on `tools/list_changed`, and a call to an inactive tool is refused by the
+  same active-set check. `_meta["pa/pi"]` now carries `executionMode` alone: pi
+  reads the AgentTool directly, and the prompt-extras fields that used to ride
+  there are deleted ([Task-282](pa://task/282)). It is kept because
   `executionMode` is not part of the MCP tool surface and an external client
   still needs it to know a tool must not run in parallel.
 - Tools throw on failure; the server maps thrown errors to `isError` results.

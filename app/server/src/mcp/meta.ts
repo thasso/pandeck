@@ -27,13 +27,6 @@ export const DETAILS_META_KEY = "pa/details";
 export const PI_EXTRAS_META_KEY = "pa/pi";
 
 /**
- * tools/list `_meta` key: whether the tool is currently active for the session.
- * Only meaningful in `listMode: "all"`, for a client that registers every tool
- * up front and toggles the active set.
- */
-export const ACTIVE_META_KEY = "pa/active";
-
-/**
  * Shape stored under {@link PI_EXTRAS_META_KEY} in a listed tool's `_meta`.
  *
  * Task-282 deleted the prompt-extras fields that used to ride here; the key is
