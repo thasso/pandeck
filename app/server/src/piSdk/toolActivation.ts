@@ -235,7 +235,10 @@ export function createPiToolActivation(
       });
     },
     dispose() {
-      activations.delete(config.sessionId);
+      // A stale activation disposed after its replacement registered must not
+      // take the replacement's entry with it.
+      if (activations.get(config.sessionId) === activation)
+        activations.delete(config.sessionId);
       unregisterExposure();
       unsubscribeIntegrations();
     },

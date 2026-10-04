@@ -16,7 +16,12 @@ process.env.DATA_DIR = join(tmp, "data");
 const { handoffEngine } = await import("./handoffSession.ts");
 const create = await import("./create.ts");
 const settings = await import("../settings.ts");
-const { createCredentialProfile } = await import("../credentialProfiles.ts");
+const {
+  createCredentialProfile,
+  defaultClaudeProfileId,
+  defaultOpenAiProfileId,
+} = await import("../credentialProfiles.ts");
+const models = await import("./models.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -117,4 +122,54 @@ test("a pi handoff is refused on another account or for a model it lacks", async
     /Model openai-codex\/no-such-model is not available\./,
   );
   assert.equal(created.mock.calls.length, 0);
+});
+
+test("a pi handoff runs on the resolved model, on the account's default when none is named", async () => {
+  const model = { provider: "openai-codex", id: "gpt-test" };
+  const lookup = vi
+    .spyOn(models, "piModelForAccount")
+    .mockResolvedValue(model as never);
+  const created = vi
+    .spyOn(create, "createSession")
+    .mockResolvedValue({ sessionId: "pi-handoff" } as never);
+  await handoffEngine("pi").create(
+    {
+      agentType: "developer",
+      modelProvider: "openai-codex",
+      modelId: "gpt-test",
+      thinkingLevel: "low",
+    },
+    worktree,
+  );
+  const profileId = defaultOpenAiProfileId();
+  assert.deepEqual(lookup.mock.calls[0], [
+    profileId,
+    "openai-codex",
+    "gpt-test",
+  ]);
+  assert.deepEqual(created.mock.calls[0]?.[0], {
+    harness: "pi",
+    agentType: "developer",
+    model,
+    thinkingLevel: "low",
+    mode: undefined,
+    worktree,
+    credentialProfileId: profileId,
+  });
+});
+
+test("a Claude handoff without a named account runs on the default Claude one", async () => {
+  claudeEnabled(true);
+  const created = vi
+    .spyOn(create, "createSession")
+    .mockResolvedValue({ sessionId: "claude-default" } as never);
+  await handoffEngine("claude-sdk").create(
+    { agentType: "assistant" },
+    worktree,
+  );
+  assert.equal(
+    (created.mock.calls[0]?.[0] as { credentialProfileId?: string } | undefined)
+      ?.credentialProfileId,
+    defaultClaudeProfileId(),
+  );
 });
