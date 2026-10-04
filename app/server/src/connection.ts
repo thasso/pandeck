@@ -6,6 +6,7 @@ import {
   slashCommandApplies,
   isOrdinarilyCreatableAgentType,
   CLAUDE_SDK_PROVIDER,
+  isClaudeSdkModel,
   SESSION_MODES,
   projectSummaryOf,
   type AgentType,
@@ -89,10 +90,9 @@ import {
   refreshModels,
 } from "./piSdk/models.ts";
 import { hub } from "./hub.ts";
-import { PiLiveSession } from "./piSdk/PiLiveSession.ts";
-import type { HarnessDriver, Viewer } from "./harness.ts";
+import { isLiveSession, type HarnessDriver, type Viewer } from "./harness.ts";
 import { randomUUID } from "node:crypto";
-import { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
+import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -473,9 +473,10 @@ export function isRunStartingMessage(msg: ClientMessage): boolean {
 }
 
 /**
- * One WebSocket connection: a thin *view* onto a {@link PiLiveSession} owned by
- * the {@link hub}. Switching, closing or reconnecting only attaches/detaches —
- * the underlying agent run lives on in the hub, so no in-flight work is lost.
+ * One WebSocket connection: a thin *view* onto a `LiveSession` (`harness.ts`)
+ * owned by the {@link hub}. Switching, closing or reconnecting only
+ * attaches/detaches — the underlying agent run lives on in the hub, so no
+ * in-flight work is lost.
  */
 interface InitialSessionRoute {
   /** OUR session id from a deep link `/sessions/<id>`. */
@@ -3664,19 +3665,19 @@ export class Connection implements Viewer {
   }
 
   private async onAcceptCommitDryRun(entryId: string): Promise<void> {
-    // The dry-run card is accepted INTO the pi session, so it needs the harness.
+    // The dry-run card is accepted INTO the session, so it needs the harness;
+    // only pi produces dry-run cards.
     return this.withViewedSession(async (driver) => {
       // Named from the driver this ran against, not from `this.viewing`: the
       // accept runs a commit, which is long enough for the user to switch
       // sessions underneath it, and the failure belongs to THIS session.
-      const live = driver instanceof PiLiveSession ? driver : undefined;
-      if (!live) return;
+      if (!isLiveSession(driver) || !driver.acceptCommitDryRun) return;
       try {
-        await live.acceptCommitDryRun(entryId);
+        await driver.acceptCommitDryRun(entryId);
       } catch (err) {
         this.send({
           type: "error",
-          target: { type: "session" as const, id: live.sessionId },
+          target: { type: "session" as const, id: driver.sessionId },
           message: `Failed to accept dry-run commit: ${errorText(err)}`,
         });
       }
@@ -4323,10 +4324,7 @@ export class Connection implements Viewer {
     }
     // Mode is the next turn's tool policy, which only the harness can hold.
     return this.withViewedSession((driver) => {
-      const session =
-        driver instanceof ClaudeSdkSession || driver instanceof PiLiveSession
-          ? driver
-          : undefined;
+      const session = isLiveSession(driver) ? driver : undefined;
       if (!session) return;
       try {
         session.setMode(mode);
@@ -4580,9 +4578,7 @@ export class Connection implements Viewer {
   private asRuntimePromptDriver(
     view: unknown,
   ): (RuntimePromptDriver & HarnessDriver) | undefined {
-    return view instanceof PiLiveSession || view instanceof ClaudeSdkSession
-      ? view
-      : undefined;
+    return isLiveSession(view) ? view : undefined;
   }
 
   private async onNewSession(
@@ -4602,7 +4598,6 @@ export class Connection implements Viewer {
     // briefly mutating whichever older session is still active while routing
     // catches up.
     const carried = this.viewedModelSelection();
-    let model = carried.model;
     let thinkingLevel = carried.thinkingLevel;
     const credentialProfileId =
       sessionStore.get(this.viewing?.sessionId ?? "")?.credentialProfileId ??
@@ -4611,6 +4606,9 @@ export class Connection implements Viewer {
     // claimed before the FIRST await (the model lookup and the worktree
     // resolution included), never after one.
     const ticket = this.claimViewRequest();
+    let model = selectedModel
+      ? undefined
+      : await this.resolveViewedModel(carried, credentialProfileId);
     if (selectedModel) {
       const found = await findModelForProfile(
         credentialProfileId,
@@ -5005,12 +5003,12 @@ export class Connection implements Viewer {
     const ticket = this.claimViewRequest();
     try {
       const carried = this.viewedModelSelection();
-      const model = carried.model;
       const thinkingLevel = carried.thinkingLevel;
       const credentialProfileId = this.viewing
         ? (sessionStore.get(this.viewing.sessionId)?.credentialProfileId ??
           defaultOpenAiProfileId())
         : defaultOpenAiProfileId();
+      const model = await this.resolveViewedModel(carried, credentialProfileId);
       const live = await hub.acquireNew(kind, model, thinkingLevel, {
         credentialProfileId,
       });
@@ -6022,48 +6020,60 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The currently-viewed session iff it is a pi {@link PiLiveSession}. Used by
-   * handlers that need the underlying pi AgentSession; harness-neutral handlers
-   * operate on `this.viewing` instead.
-   */
-  private liveViewing(): PiLiveSession | undefined {
-    return this.viewing instanceof PiLiveSession ? this.viewing : undefined;
-  }
-
-  /**
    * Model + thinking level a session created from this view should start with.
    *
-   * Read off the live pi session when one is open, and off the viewed session's
-   * metadata row otherwise: a session opened for READING has no harness to ask
-   * (`viewSession.ts`), and falling back to the app default there would silently
-   * change which model the next new session runs on — a regression the reader
-   * would only notice after the first turn.
+   * Read off the resident session when one is open, and off the viewed
+   * session's metadata row otherwise: a session opened for READING has no
+   * harness to ask (`viewSession.ts`), and falling back to the app default
+   * there would silently change which model the next new session runs on — a
+   * regression the reader would only notice after the first turn. Only a pi
+   * model is carried, since the new session runs on pi. Synchronous, so a
+   * caller can read it before claiming its view; {@link resolveViewedModel}
+   * turns it into a model handle afterwards.
    */
-  private viewedModelSelection(): {
-    model?: ReturnType<typeof findModel>;
-    thinkingLevel?: ThinkingLevel;
-  } {
-    const live = this.liveViewing();
-    if (live)
+  private viewedModelSelection(): ViewedModelSelection {
+    if (isLiveSession(this.viewing)) {
+      const { model, thinkingLevel } = this.viewing.modelSelection();
       return {
-        ...(live.session.model ? { model: live.session.model } : {}),
-        ...(live.session.thinkingLevel
-          ? { thinkingLevel: live.session.thinkingLevel as ThinkingLevel }
+        ...(model && !isClaudeSdkModel(model)
+          ? { model: { ...model, onAccount: true } }
           : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
       };
+    }
     const meta = this.viewing
       ? sessionStore.get(this.viewing.sessionId)
       : undefined;
-    const model =
-      meta?.provider && meta.model
-        ? findModel(meta.provider, meta.model)
-        : undefined;
     return {
-      ...(model ? { model } : {}),
+      ...(meta?.provider && meta.model
+        ? {
+            model: {
+              provider: meta.provider,
+              id: meta.model,
+              onAccount: false,
+            },
+          }
+        : {}),
       ...(meta?.thinkingLevel
         ? { thinkingLevel: meta.thinkingLevel as ThinkingLevel }
         : {}),
     };
+  }
+
+  /**
+   * The model handle a carried selection names. A resident session's model
+   * resolves on the account the new session runs on, which is the registry it
+   * came from; a stored row's resolves as it always has.
+   */
+  private async resolveViewedModel(
+    selection: ViewedModelSelection,
+    credentialProfileId: string,
+  ): Promise<ReturnType<typeof findModel>> {
+    const model = selection.model;
+    if (!model) return undefined;
+    return model.onAccount
+      ? findModelForProfile(credentialProfileId, model.provider, model.id)
+      : findModel(model.provider, model.id);
   }
 
   /* --------------------------------- viewer -------------------------------- */
@@ -6119,6 +6129,13 @@ export class Connection implements Viewer {
       removeWorktreeViewer(worktreeId);
     this.watchedWorktrees.clear();
   }
+}
+
+/** The model a new session should carry from the viewed one, before it resolves. */
+interface ViewedModelSelection {
+  /** `onAccount`: resolve on the new session's account (a resident session's model). */
+  model?: { provider: string; id: string; onAccount: boolean };
+  thinkingLevel?: ThinkingLevel;
 }
 
 function readySettings(settings: AppSettings): Partial<AppSettings> {

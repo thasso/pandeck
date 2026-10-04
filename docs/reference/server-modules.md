@@ -149,7 +149,8 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `claudeSdk/`; hub methods delegate to their stores. Git state lives with
   worktrees (`worktrees/`), not the hub.
 - `harness.ts` owns the harness-neutral driver interfaces (`Viewer`,
-  `HarnessDriver`, `PromptableDriver`) shared by both harnesses.
+  `HarnessDriver`, `LiveSession` with its `isLiveSession` guard) shared by both
+  harnesses.
 - `harnesses/` is the seam between app code and the two engines
   (`docs/agent-harnesses.md`): `oneShot.ts` (`runOneShot`, every helper run),
   `models.ts` (picker and per-account model lists, exact availability, stored

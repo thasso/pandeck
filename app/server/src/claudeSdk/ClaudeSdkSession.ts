@@ -52,6 +52,7 @@ import type {
   WorktreeProvisionDisplay,
 } from "@assistant/shared";
 import {
+  CLAUDE_SDK_PROVIDER,
   isCodingAgentType,
   sessionModeOrDefault,
   UNLABELED_SESSION_TITLE,
@@ -121,7 +122,11 @@ import {
   relinkAgentQuestionToolCallId,
   subscribeAgentQuestionChanges,
 } from "../tools/core/questionTool.ts";
-import { HARNESS_IDLE_EVICT_MS, type Viewer } from "../harness.ts";
+import {
+  HARNESS_IDLE_EVICT_MS,
+  type LiveSession,
+  type Viewer,
+} from "../harness.ts";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
@@ -495,7 +500,8 @@ export interface ClaudeSdkSessionDeps {
   processCloseTimeoutMs?: number;
 }
 
-export class ClaudeSdkSession {
+export class ClaudeSdkSession implements LiveSession {
+  readonly live = true;
   /**
    * The persona this session runs as: the same value as {@link agentType}. The
    * {@link harness} is what marks it as claude-sdk.
@@ -1291,6 +1297,16 @@ export class ClaudeSdkSession {
       return;
     }
     this.configure(undefined, thinkingLevel);
+  }
+
+  modelSelection(): {
+    model?: { provider: string; id: string };
+    thinkingLevel?: ThinkingLevel;
+  } {
+    return {
+      model: { provider: CLAUDE_SDK_PROVIDER, id: this.modelId },
+      thinkingLevel: this.thinkingLevel,
+    };
   }
 
   get sessionMode(): SessionMode {

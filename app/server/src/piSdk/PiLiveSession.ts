@@ -73,7 +73,7 @@ import { worktreeIdForSession } from "../db/worktreeStore.ts";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
 import {
   HARNESS_IDLE_EVICT_MS,
-  type PromptableDriver,
+  type LiveSession,
   type Viewer,
 } from "../harness.ts";
 import type {
@@ -272,7 +272,8 @@ export interface PiSessionHost {
  * loss. The underlying {@link AgentSession} keeps running across detach so a run
  * survives a tab close or reconnect.
  */
-export class PiLiveSession implements PromptableDriver {
+export class PiLiveSession implements LiveSession {
+  readonly live = true;
   readonly key: string;
   readonly viewers = new Set<Viewer>();
   private unsubscribe: () => void;
@@ -1676,6 +1677,19 @@ export class PiLiveSession implements PromptableDriver {
     this.session.setThinkingLevel(level);
     this.broadcastState();
     this.broadcastContextInfo(true);
+  }
+
+  modelSelection(): {
+    model?: { provider: string; id: string };
+    thinkingLevel?: ThinkingLevel;
+  } {
+    const model = this.session.model;
+    return {
+      ...(model ? { model: { provider: model.provider, id: model.id } } : {}),
+      ...(this.session.thinkingLevel
+        ? { thinkingLevel: this.session.thinkingLevel as ThinkingLevel }
+        : {}),
+    };
   }
 
   get sessionMode(): SessionMode {
