@@ -158,7 +158,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `models.ts` (picker and per-account model lists, exact availability, stored
   session model display, pi model handles for creation), `curatedModels.ts` (the
   Claude curated options and aliases, loading no engine SDK), `boot.ts` (engine
-  runtime setup the server boot starts), `usage.ts` (per-account usage, OpenAI
+  runtime setup the server boot starts), `storage.ts` (where each engine keeps a
+  session on disk, from paths alone), `availability.ts` (whether an existing
+  session may be opened now), `toolExposure.ts` and `piSession.ts` (pi's tool
+  exposure and session types), `usage.ts` (per-account usage, OpenAI
   reset-credit redeem), `registry.ts` (`harnessRegistry`: id routing, resident
   sessions, store wiring, rename and the engine half of a delete),
   `firstSend.ts` (each engine's admission and preparation for a session's first
