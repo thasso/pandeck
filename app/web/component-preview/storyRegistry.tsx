@@ -37,6 +37,21 @@ import {
   Running as QueueRunning,
   type PromptQueueStoryProps,
 } from "./stories/PromptQueue.stories.tsx";
+import {
+  ChatActivityStory,
+  Desktop as ActivityDesktop,
+  Expanded as ActivityExpanded,
+  Phone as ActivityPhone,
+  PhoneExpanded as ActivityPhoneExpanded,
+} from "./stories/ChatActivity.stories.tsx";
+import {
+  ChatActivityTranscript,
+  Desktop as TranscriptDesktop,
+  Expanded as TranscriptExpanded,
+  Phone as TranscriptPhone,
+  PhoneExpanded as TranscriptPhoneExpanded,
+  NarrowLargeText as TranscriptNarrowLargeText,
+} from "./stories/ChatActivityTranscript.stories.tsx";
 import type { StoryPreviewId } from "./storyCatalog.ts";
 
 function argsOf(story: {
@@ -73,6 +88,31 @@ function queueArgsOf(story: {
 }
 
 const storyRenderers: Record<StoryPreviewId, () => ReactElement> = {
+  "chat-activity-transcript--narrow-large-text": () => (
+    <ChatActivityTranscript {...TranscriptNarrowLargeText.args} />
+  ),
+  "chat-activity-transcript--desktop": () => (
+    <ChatActivityTranscript {...TranscriptDesktop.args} />
+  ),
+  "chat-activity-transcript--expanded": () => (
+    <ChatActivityTranscript {...TranscriptExpanded.args} />
+  ),
+  "chat-activity-transcript--phone": () => (
+    <ChatActivityTranscript {...TranscriptPhone.args} />
+  ),
+  "chat-activity-transcript--phone-expanded": () => (
+    <ChatActivityTranscript {...TranscriptPhoneExpanded.args} />
+  ),
+  "chat-activity--desktop": () => (
+    <ChatActivityStory {...ActivityDesktop.args} />
+  ),
+  "chat-activity--expanded": () => (
+    <ChatActivityStory {...ActivityExpanded.args} />
+  ),
+  "chat-activity--phone": () => <ChatActivityStory {...ActivityPhone.args} />,
+  "chat-activity--phone-expanded": () => (
+    <ChatActivityStory {...ActivityPhoneExpanded.args} />
+  ),
   "prompt-queue--running": () => (
     <PromptQueueStory {...queueArgsOf(QueueRunning)} />
   ),

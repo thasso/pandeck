@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DisplayBlock,
   PeerPromptCard as PeerPromptCardType,
@@ -9,6 +11,38 @@ import type {
 import { PeerPromptCardView } from "./PeerPromptCard.tsx";
 import { PeerPromptsSection } from "./SessionContextSections.tsx";
 import { renderToolBlock, toolBlockIsVisible } from "./tools/registry.tsx";
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+let container: HTMLDivElement;
+let root: Root;
+
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+function renderCard(
+  card: PeerPromptCardType,
+  props: Omit<Parameters<typeof PeerPromptCardView>[0], "card"> = {},
+) {
+  act(() => root.render(<PeerPromptCardView card={card} {...props} />));
+  return container.querySelector<HTMLButtonElement>("button[aria-controls]")!;
+}
+
+function expandCard() {
+  act(() =>
+    container
+      .querySelector<HTMLButtonElement>("button[aria-controls]")!
+      .click(),
+  );
+}
 
 describe("PeerPromptCardView", () => {
   it("renders a sent card with recipient, task, and state", () => {
@@ -23,11 +57,25 @@ describe("PeerPromptCardView", () => {
       state: "awaiting_response",
     };
     const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
-    expect(html).toContain("Peer prompt to");
+    expect(html).toContain("To");
+    expect(html).not.toContain("Peer prompt to");
+    expect(html).toContain("lucide-arrow-up-right");
     expect(html).toContain("Reviewer");
     expect(html).toContain("please review");
     expect(html).toContain("Awaiting response");
-    expect(html).toContain("Fix bug");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("Fix bug");
+    expect(html).not.toContain("Response requested");
+    const toggle = renderCard(card, { actions: <button>Copy message</button> });
+    expect(container.textContent).not.toContain("Copy message");
+    act(() => toggle.click());
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("Task: Fix bug");
+    expect(container.textContent).toContain("Response requested");
+    expect(container.textContent).toContain("Copy message");
+    act(() => toggle.click());
+    expect(container.textContent).not.toContain("Task: Fix bug");
+    expect(container.textContent).not.toContain("Copy message");
   });
 
   it("renders a received card with sender and no ids", () => {
@@ -40,11 +88,31 @@ describe("PeerPromptCardView", () => {
       state: "delivered",
     };
     const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
-    expect(html).toContain("Peer prompt from");
+    expect(html).toContain("From");
+    expect(html).not.toContain("Peer prompt from");
+    expect(html).toContain("lucide-arrow-down-left");
     expect(html).toContain("Planner");
     expect(html).toContain("Delivered");
     // No peerSessionId on this (older) card: the party is plain text, not a link.
     expect(html).not.toContain("/sessions/");
+  });
+
+  it("shows the full peer title wrapped on expansion", () => {
+    const senderTitle =
+      "Review session for the very long deployment incident investigation";
+    const toggle = renderCard({
+      direction: "received",
+      messageKey: "full-title",
+      senderTitle,
+      message: "Review this change",
+      responseRequested: false,
+      state: "delivered",
+    });
+    act(() => toggle.click());
+    const body = document.getElementById(toggle.getAttribute("aria-controls")!);
+    expect(body?.querySelector("p.break-words")?.textContent).toBe(
+      `From ${senderTitle}`,
+    );
   });
 
   it("renders the message as Markdown", () => {
@@ -56,9 +124,14 @@ describe("PeerPromptCardView", () => {
       responseRequested: false,
       state: "delivered",
     };
-    const html = renderToStaticMarkup(<PeerPromptCardView card={card} />);
-    expect(html).toContain("<strong>P1</strong>");
-    expect(html).toContain("<li>one</li>");
+    const toggle = renderCard(card);
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.querySelector("li")).toBeNull();
+    expect(container.textContent).not.toContain("**P1**");
+    expect(toggle.getAttribute("aria-label")).not.toContain("\n");
+    act(() => toggle.click());
+    expect(container.querySelector("strong")?.textContent).toBe("P1");
+    expect(container.querySelector("li")?.textContent).toBe("one");
   });
 
   it("links each direction's other party to its session", () => {
@@ -87,7 +160,102 @@ describe("PeerPromptCardView", () => {
     expect(received).toContain(">Planner</a>");
   });
 
-  it("renders a failure reason behind a details disclosure, and distinct non-Failed states", () => {
+  it("navigates the peer independently without expanding the message", () => {
+    const onOpenSession = vi.fn();
+    const toggle = renderCard(
+      {
+        direction: "received",
+        messageKey: "navigation",
+        senderTitle: "Reviewer",
+        peerSessionId: "peer / encoded",
+        message: "please review",
+        responseRequested: false,
+        state: "delivered",
+      },
+      { onOpenSession },
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("/sessions/peer%20%2F%20encoded");
+    expect(toggle.contains(link)).toBe(false);
+    act(() => link.click());
+    expect(onOpenSession).toHaveBeenCalledWith("peer / encoded");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it.each(["ctrlKey", "metaKey", "shiftKey", "altKey"])(
+    "leaves %s peer navigation to the browser",
+    (modifier) => {
+      const onOpenSession = vi.fn();
+      const toggle = renderCard(
+        {
+          direction: "sent",
+          messageKey: "native-navigation",
+          senderTitle: "Planner",
+          recipientTitle: "Reviewer",
+          peerSessionId: "peer-1",
+          message: "please review",
+          responseRequested: false,
+          state: "delivered",
+        },
+        { onOpenSession },
+      );
+      let preventedByRow = true;
+      document.body.addEventListener(
+        "click",
+        (event) => {
+          preventedByRow = event.defaultPrevented;
+          event.preventDefault();
+        },
+        { once: true },
+      );
+      act(() => {
+        container.querySelector("a")!.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            cancelable: true,
+            [modifier]: true,
+          }),
+        );
+      });
+      expect(onOpenSession).not.toHaveBeenCalled();
+      expect(preventedByRow).toBe(false);
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    },
+  );
+
+  it.each([
+    ["retrying", "Retrying", "lucide-refresh-cw", "text-warning"],
+    ["interrupted", "Interrupted", "lucide-triangle-alert", "text-warning"],
+    ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted"],
+    ["expired", "Expired", "lucide-clock-alert", "text-warning"],
+    ["failed", "Failed", "lucide-circle-x", "text-danger"],
+  ] as const)(
+    "keeps %s visible and distinct from success while collapsed",
+    (state, label, icon, tone) => {
+      const toggle = renderCard({
+        direction: "sent",
+        messageKey: "state",
+        senderTitle: "Planner",
+        message: "hi",
+        responseRequested: false,
+        state,
+        failureReason: "Session unavailable",
+      });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(toggle.getAttribute("aria-label")).toContain(label);
+      expect(container.textContent).toContain(label);
+      expect(container.querySelector(`.${icon}`)).not.toBeNull();
+      expect(container.querySelector(".lucide-circle-check")).toBeNull();
+      expect(
+        container
+          .querySelector(`.${icon}`)
+          ?.parentElement?.classList.contains(tone),
+      ).toBe(true);
+      expect(container.textContent).not.toContain("Session unavailable");
+    },
+  );
+
+  it("reveals the failure reason on the first expansion, with distinct non-Failed states", () => {
     const retrying: PeerPromptCardType = {
       direction: "sent",
       messageKey: "k3",
@@ -100,8 +268,12 @@ describe("PeerPromptCardView", () => {
     const html = renderToStaticMarkup(<PeerPromptCardView card={retrying} />);
     expect(html).toContain("Retrying");
     expect(html).not.toContain(">Failed<");
-    expect(html).toContain("boom");
-    expect(html).toContain("<details");
+    expect(html).not.toContain("boom");
+    expect(html).not.toContain("<details");
+    renderCard(retrying);
+    expandCard();
+    expect(container.querySelector("p.text-danger")?.textContent).toBe("boom");
+    expect(container.querySelector("details")).toBeNull();
   });
 });
 
@@ -212,10 +384,16 @@ describe("PeerPromptCardView on a card from another build", () => {
       responseRequested: true,
     } as unknown as PeerPromptCardType;
     const html = renderToStaticMarkup(<PeerPromptCardView card={broken} />);
-    expect(html).toContain("Peer prompt from");
+    expect(html).toContain("From");
     expect(html).toContain("another session");
-    expect(html).toContain("Response requested");
+    expect(html).not.toContain("Response requested");
     expect(html).not.toContain("from_the_future");
+    renderCard(broken);
+    expandCard();
+    expect(container.textContent).toContain("Response requested");
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("details")).toBeNull();
+    expect(container.textContent).not.toContain("Task:");
     expect(html).not.toContain("Task:");
     expect(html).not.toContain("<details");
     // A non-string id is not a link: no href, and nothing to hand onOpenSession.

@@ -1,128 +1,114 @@
-import { Bot } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Check,
+  CheckCheck,
+  CircleCheck,
+  CircleSlash,
+  CircleX,
+  Clock3,
+  ClockAlert,
+  MessageCircle,
+  MessagesSquare,
+  RefreshCw,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import type { PeerPromptCard, PeerPromptState } from "@assistant/shared";
+import { activityPreview } from "../lib/activityPreview.ts";
 import { isPeerPromptState } from "../lib/peerPromptCard.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
+import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import { Markdown } from "./Markdown.tsx";
-import { DASHED_EDGE } from "./ui/load.tsx";
 
-const STATE_LABEL: Record<PeerPromptState, string> = {
-  queued: "Queued",
-  delivered: "Delivered",
-  acknowledged: "Acknowledged",
-  completed: "Completed",
-  awaiting_response: "Awaiting response",
-  replied: "Replied",
-  retrying: "Retrying",
-  interrupted: "Interrupted",
-  cancelled: "Cancelled",
-  expired: "Expired",
-  failed: "Failed",
+const STATE_MARK: Record<
+  PeerPromptState,
+  {
+    label: string;
+    icon: LucideIcon;
+    attention?: boolean;
+    tone?: "muted" | "warning" | "danger";
+  }
+> = {
+  queued: { label: "Queued", icon: Clock3 },
+  delivered: { label: "Delivered", icon: Check },
+  acknowledged: { label: "Acknowledged", icon: CheckCheck },
+  completed: { label: "Completed", icon: CircleCheck },
+  awaiting_response: { label: "Awaiting response", icon: MessageCircle },
+  replied: { label: "Replied", icon: MessagesSquare },
+  retrying: {
+    label: "Retrying",
+    icon: RefreshCw,
+    attention: true,
+    tone: "warning",
+  },
+  interrupted: {
+    label: "Interrupted",
+    icon: TriangleAlert,
+    attention: true,
+    tone: "warning",
+  },
+  cancelled: {
+    label: "Cancelled",
+    icon: CircleSlash,
+    attention: true,
+    tone: "muted",
+  },
+  expired: {
+    label: "Expired",
+    icon: ClockAlert,
+    attention: true,
+    tone: "warning",
+  },
+  failed: { label: "Failed", icon: CircleX, attention: true },
 };
 
-/**
- * The other party, as an in-app link to its session when the card carries one
- * (older cards do not). A real `<a href>` so the ordinary browser gestures —
- * middle-click, cmd/ctrl-click, "open in new tab" — keep working.
- *
- * The id is validated HERE, not by the caller: this is what builds the href and
- * what calls `onOpenSession`, so a non-string on a durable card written by
- * another build would otherwise reach both as `/sessions/%5Bobject%20Object%5D`.
- */
-function PeerSessionLink({
-  title,
-  sessionId: rawSessionId,
-  onOpenSession,
-}: {
-  title: string;
-  sessionId?: string | undefined;
-  onOpenSession?: ((id: string) => void) | undefined;
-}) {
-  const sessionId =
-    typeof rawSessionId === "string" && rawSessionId ? rawSessionId : undefined;
-  if (!sessionId) return <span>{title}</span>;
-  return (
-    <a
-      href={sessionPath(sessionId)}
-      title={`${title} — ${sessionId}`}
-      className="underline decoration-dotted underline-offset-2 hover:decoration-solid"
-      onClick={(event) => {
-        if (
-          !onOpenSession ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        )
-          return;
-        event.preventDefault();
-        onOpenSession(sessionId);
-      }}
-    >
-      {title}
-    </a>
-  );
-}
-
-/**
- * Sanitized peer-prompt card. Rendered as the sender's tool result
- * (`direction: "sent"`) and the recipient's transcript block
- * (`direction: "received"`), so both halves of a peer conversation read the
- * same way in either transcript. The message is agent-authored Markdown; the
- * card shows no other ids, paths, reply syntax, or envelope.
- *
- * Total by construction: the tool-result path validates its payload first
- * (`lib/peerPromptCard.ts`), and the fields below are still read defensively so
- * a durable card written by an older build cannot throw a transcript row.
- */
+/** Both halves of a peer exchange, collapsed until the reader opens the message. */
 export function PeerPromptCardView({
   card,
   onOpenSession,
+  actions,
 }: {
   card: PeerPromptCard;
   onOpenSession?: ((id: string) => void) | undefined;
+  actions?: ReactNode;
 }) {
+  const sent = card.direction === "sent";
+  const prefix = sent ? "To" : "From";
+  const rawTitle = sent ? card.recipientTitle : card.senderTitle;
   const title =
-    card.direction === "sent" ? card.recipientTitle : card.senderTitle;
-  const peer = (
-    <PeerSessionLink
-      title={typeof title === "string" && title ? title : "another session"}
-      sessionId={card.peerSessionId}
-      onOpenSession={onOpenSession}
-    />
-  );
-  const stateLabel = isPeerPromptState(card.state)
-    ? STATE_LABEL[card.state]
+    typeof rawTitle === "string" && rawTitle ? rawTitle : "another session";
+  // Persisted cards from another build are still data. Only a usable string
+  // may reach the URL builder or the navigation callback.
+  const sessionId =
+    typeof card.peerSessionId === "string" && card.peerSessionId
+      ? card.peerSessionId
+      : undefined;
+  const message = typeof card.message === "string" ? card.message : "";
+  const status = isPeerPromptState(card.state)
+    ? STATE_MARK[card.state]
     : undefined;
   return (
-    <section
-      className={`min-w-0 max-w-[80%] rounded-2xl rounded-br-md border ${DASHED_EDGE} border-accent/30 bg-accent-soft px-3.5 py-2 text-body text-fg shadow-sm`}
+    <ChatActivityRow
+      icon={sent ? ArrowUpRight : ArrowDownLeft}
+      prefix={prefix}
+      title={title}
+      {...(sessionId ? { href: sessionPath(sessionId) } : {})}
+      onOpenSource={
+        sessionId && onOpenSession ? () => onOpenSession(sessionId) : undefined
+      }
+      preview={activityPreview(message)}
+      {...(status ? { status } : {})}
     >
-      <div className="mb-1 flex items-center gap-1.5 text-micro font-medium text-accent">
-        <Bot size={11} />
-        <span className="min-w-0 truncate">
-          {card.direction === "sent" ? (
-            <>Peer prompt to {peer}</>
-          ) : (
-            <>Peer prompt from {peer}</>
-          )}
-        </span>
-        {stateLabel ? (
-          <span className="ml-auto shrink-0 rounded-full bg-accent/10 px-1.5 py-0.5 text-micro uppercase tracking-wide">
-            {stateLabel}
-          </span>
-        ) : null}
-      </div>
-      <Markdown
-        text={typeof card.message === "string" ? card.message : ""}
-        onOpenSession={onOpenSession}
-      />
+      <p className="mb-1 break-words text-caption text-muted">
+        {prefix} {title}
+      </p>
+      <Markdown text={message} onOpenSession={onOpenSession} />
       {typeof card.failureReason === "string" && card.failureReason ? (
-        <details className="mt-1 text-micro">
-          <summary className="cursor-pointer text-muted">Details</summary>
-          <p className="mt-0.5 whitespace-pre-wrap break-words text-danger">
-            {card.failureReason}
-          </p>
-        </details>
+        <p className="mt-1 whitespace-pre-wrap break-words text-caption text-danger">
+          {card.failureReason}
+        </p>
       ) : null}
       <div className="mt-1 flex flex-wrap gap-x-2 text-micro text-muted">
         {typeof card.taskTitle === "string" && card.taskTitle ? (
@@ -130,6 +116,7 @@ export function PeerPromptCardView({
         ) : null}
         {card.responseRequested ? <span>Response requested</span> : null}
       </div>
-    </section>
+      {actions}
+    </ChatActivityRow>
   );
 }

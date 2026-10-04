@@ -38,6 +38,7 @@ import type {
 } from "@assistant/shared";
 import type { LazyBlockKind, LiveBodyKey } from "@assistant/shared/session";
 import type { ClientTimelineEntry } from "@assistant/shared/runtime";
+import { peerPromptCardOf } from "@assistant/shared/toolCards";
 import {
   AssistantMessage,
   canRenderAssistantMessage,
@@ -55,7 +56,9 @@ import {
 } from "@assistant/shared/turnStats";
 import { PeerPromptCardView } from "./PeerPromptCard.tsx";
 import { BackgroundWorkPromptCard } from "./BackgroundWorkPromptCard.tsx";
-import { DASHED_EDGE, Spinner } from "./ui/load.tsx";
+import { Spinner } from "./ui/load.tsx";
+import { ChatActivityRow } from "./ChatActivityRow.tsx";
+import { activityPreview } from "../lib/activityPreview.ts";
 import { ProgressIndicator } from "./ProgressIndicator.tsx";
 import {
   Markdown,
@@ -376,8 +379,35 @@ function AttachmentChip({
 }
 
 function messagePlainText(message: DisplayMessage): string {
+  const origin = message.promptOrigin;
+  if (
+    origin?.kind === "system" &&
+    origin.presentation?.kind === "background-work"
+  ) {
+    // Copy the browser presentation, never the model-only delivery envelope.
+    return origin.presentation.updates
+      .map((update) =>
+        [
+          ...new Set(
+            [
+              update.label,
+              update.status,
+              update.command,
+              update.outcomeSummary,
+            ].filter(Boolean),
+          ),
+        ].join("\n"),
+      )
+      .join("\n\n");
+  }
   return message.blocks
-    .map((b) => (b.kind === "text" ? b.text : ""))
+    .map((b) =>
+      b.kind === "text"
+        ? b.text
+        : b.kind === "peerPrompt"
+          ? b.peerPrompt.message
+          : "",
+    )
     .filter(Boolean)
     .join("\n");
 }
@@ -554,31 +584,103 @@ const UserMessage = memo(function UserMessage({
       : undefined;
   if (backgroundWorkPresentation) {
     return (
-      <div className="group/message flex flex-col items-end">
+      <div className="group/message min-w-0">
         <BackgroundWorkPromptCard
           presentation={backgroundWorkPresentation}
           onOpenBackgroundWork={onOpenBackgroundWork}
-        />
-        <MessageActionsBar
-          message={message}
-          align="right"
-          onForkMessage={onForkMessage}
+          actions={
+            <MessageActionsBar
+              message={message}
+              align="left"
+              onForkMessage={onForkMessage}
+            />
+          }
         />
       </div>
     );
   }
   if (peerPromptBlock && peerPromptBlock.kind === "peerPrompt") {
     return (
-      <div className="group/message flex flex-col items-end">
+      <div className="group/message min-w-0">
         <PeerPromptCardView
           card={peerPromptBlock.peerPrompt}
           onOpenSession={onOpenSession}
+          actions={
+            <MessageActionsBar
+              message={message}
+              align="left"
+              onForkMessage={onForkMessage}
+            />
+          }
         />
-        <MessageActionsBar
-          message={message}
-          align="right"
-          onForkMessage={onForkMessage}
+      </div>
+    );
+  }
+  const body = message.blocks.map((block, blockIndex) => {
+    if (block.kind === "text")
+      return (
+        <div
+          key={blockIndex}
+          {...(chatCommentable
+            ? {
+                "data-chat-comment-target": "",
+                "data-chat-entry-id": message.id,
+                "data-chat-block-index": blockIndex,
+                "data-chat-render-block-index": blockIndex,
+              }
+            : {})}
+        >
+          <Markdown
+            text={block.text}
+            sessionReferences={sessionReferences}
+            changedFiles={changedFiles}
+            paObjectReferences={paObjectReferences}
+            onOpenSession={onOpenSession}
+            onOpenChangedFile={onOpenChangedFile}
+            onOpenPaObject={onOpenPaObject}
+          />
+        </div>
+      );
+    if (block.kind === "attachment")
+      return (
+        <AttachmentChip
+          key={block.attachment.id}
+          attachment={block.attachment}
+          onOpenTask={onOpenTask}
         />
+      );
+    return null;
+  });
+  const actions = (
+    <MessageActionsBar
+      message={message}
+      align={isHumanPrompt ? "right" : "left"}
+      onForkMessage={onForkMessage}
+      onCommentMessage={onCommentMessage}
+      onResendPrompt={onResendPrompt}
+    />
+  );
+  if (!isHumanPrompt) {
+    const preview =
+      activityPreview(messagePlainText(message)) ||
+      (message.blocks.some((block) => block.kind === "attachment")
+        ? "Attachments"
+        : "No message text");
+    return (
+      <div className="group/message min-w-0">
+        <ChatActivityRow icon={Bot} title={originLabel} preview={preview}>
+          <p className="mb-2 break-words text-caption text-muted">
+            {originLabel}
+          </p>
+          {message.promptDelivery ? (
+            <PromptDeliveryNote delivery={message.promptDelivery} />
+          ) : null}
+          {body}
+          {actions}
+        </ChatActivityRow>
+        {promptQueueState ? (
+          <PromptQueueCondition state={promptQueueState} />
+        ) : null}
       </div>
     );
   }
@@ -587,65 +689,13 @@ const UserMessage = memo(function UserMessage({
       {message.promptDelivery ? (
         <PromptDeliveryNote delivery={message.promptDelivery} />
       ) : null}
-      {!isHumanPrompt && (
-        <div className="mb-1 mr-1 inline-flex max-w-[80%] items-center gap-1.5 rounded-full border border-accent/20 bg-accent-soft px-2 py-0.5 text-micro font-medium text-accent">
-          <Bot size={11} />
-          <span>{originLabel}</span>
-        </div>
-      )}
-      <div
-        className={
-          isHumanPrompt
-            ? "min-w-0 max-w-[80%] rounded-2xl rounded-br-md bg-user px-3.5 py-2 text-body text-fg"
-            : `min-w-0 max-w-[80%] rounded-2xl rounded-br-md border ${DASHED_EDGE} border-accent/30 bg-accent-soft px-3.5 py-2 text-body text-fg shadow-sm`
-        }
-      >
-        {message.blocks.map((block, blockIndex) => {
-          if (block.kind === "text")
-            return (
-              <div
-                key={blockIndex}
-                {...(chatCommentable
-                  ? {
-                      "data-chat-comment-target": "",
-                      "data-chat-entry-id": message.id,
-                      "data-chat-block-index": blockIndex,
-                      "data-chat-render-block-index": blockIndex,
-                    }
-                  : {})}
-              >
-                <Markdown
-                  text={block.text}
-                  sessionReferences={sessionReferences}
-                  changedFiles={changedFiles}
-                  paObjectReferences={paObjectReferences}
-                  onOpenSession={onOpenSession}
-                  onOpenChangedFile={onOpenChangedFile}
-                  onOpenPaObject={onOpenPaObject}
-                />
-              </div>
-            );
-          if (block.kind === "attachment")
-            return (
-              <AttachmentChip
-                key={block.attachment.id}
-                attachment={block.attachment}
-                onOpenTask={onOpenTask}
-              />
-            );
-          return null;
-        })}
+      <div className="min-w-0 max-w-[80%] rounded-2xl rounded-br-md bg-user px-3.5 py-2 text-body text-fg">
+        {body}
       </div>
       {promptQueueState ? (
         <PromptQueueCondition state={promptQueueState} />
       ) : null}
-      <MessageActionsBar
-        message={message}
-        align="right"
-        onForkMessage={onForkMessage}
-        onCommentMessage={onCommentMessage}
-        onResendPrompt={onResendPrompt}
-      />
+      {actions}
     </div>
   );
 });
@@ -965,6 +1015,25 @@ interface MessageRowProps {
   onCommentMessage?: ((messageId: string) => void) | undefined;
 }
 
+// Evaluated inside the memoized row, never by the whole-timeline projection.
+function isSideActivityMessage(message: DisplayMessage): boolean {
+  if (message.error) return false;
+  if (message.role === "user") {
+    return Boolean(
+      (message.promptOrigin && message.promptOrigin.kind !== "human") ||
+      message.blocks.some((block) => block.kind === "peerPrompt"),
+    );
+  }
+  return (
+    message.blocks.length > 0 &&
+    message.blocks.every(
+      (block) =>
+        block.kind === "compaction" ||
+        (block.kind === "tool" && peerPromptCardOf(block) !== null),
+    )
+  );
+}
+
 const MessageRow = memo(function MessageRow({
   message,
   focusKey,
@@ -1039,6 +1108,7 @@ const MessageRow = memo(function MessageRow({
       ref={setRowRef}
       data-message-id={message.id}
       data-role={message.role}
+      data-side-activity={isSideActivityMessage(message) || undefined}
       className="transcript-row"
     >
       {message.role === "user" ? (
