@@ -93,8 +93,10 @@ import {
 } from "./harness.ts";
 import { randomUUID } from "node:crypto";
 import { createSession, type PiModel } from "./harnesses/create.ts";
+import { existingSessionRefusal } from "./harnesses/availability.ts";
 import { prepareFork } from "./harnesses/fork.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
+import { sessionRefFile } from "./harnesses/storage.ts";
 import {
   pickerModels,
   piModel,
@@ -107,7 +109,6 @@ import {
   type FirstSendRequest,
   type PersonaGate,
 } from "./harnesses/firstSend.ts";
-import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import {
   attachRuntimeView as attachRuntimeViewToTransport,
@@ -188,7 +189,6 @@ import {
 } from "./workflow/engine.ts";
 import { deleteCancelledWorkflowRun } from "./workflow/runCleanup.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
-import { canonicalPiSessionPath } from "./sessionStorage.ts";
 import {
   applySessionContext,
   resolveSessionContext,
@@ -737,10 +737,8 @@ export class Connection implements Viewer {
       // on the initial load we stay silent and simply fall through, so inline the
       // predicate instead.
       const gated =
-        (ref?.harness === "claude-sdk" && !getSettings().claudeSdk.enabled) ||
-        (ref !== undefined &&
-          ref.harness !== "claude-sdk" &&
-          !isAgentSessionAvailable(ref.kind));
+        ref !== undefined &&
+        existingSessionRefusal(ref.harness, ref.kind) !== undefined;
       if (!gated) {
         const view = hub.viewById(route.sessionId);
         // Deep-linked too: the read mark waits for the dwell (armed in `init`
@@ -5296,7 +5294,7 @@ export class Connection implements Viewer {
       return {
         harness: record.harness,
         kind,
-        file: record.harness === "pi" ? canonicalPiSessionPath(id) : id,
+        file: sessionRefFile(record.harness, id),
       };
     }
     const live = hub.getLiveById(id);
@@ -5306,18 +5304,18 @@ export class Connection implements Viewer {
         kind: live.kind,
         ...(live.sessionFile !== undefined ? { file: live.sessionFile } : {}),
       };
-    // Back-compat for Claude-SDK records that predate the id registry or lost
-    // their best-effort registry metadata. The SDK store can prove the persisted
-    // session exists, so load/delete/archive should not silently no-op.
-    if (claudeSdkStore.exists(id))
-      return { harness: "claude-sdk", kind: "workshop", file: id };
-    // Recovery path for pi transcripts whose metadata row was lost/rejected
-    // before the DB accepted developer sessions. Treat them as developer coding
-    // sessions so id-only deep links can reopen the native transcript.
-    const piFile = canonicalPiSessionPath(id);
-    if (existsSync(piFile))
-      return { harness: "pi", kind: "developer", file: piFile };
-    return undefined;
+    // A session an engine has on disk without a row: a Claude record that
+    // predates the id registry or lost its metadata, or a pi transcript whose
+    // row was rejected before the DB accepted developer sessions. Its engine
+    // can prove it exists, so load/delete/archive must not silently no-op.
+    const rowless = harnessRegistry.rowlessRef(id);
+    return rowless
+      ? {
+          harness: rowless.harness,
+          kind: rowless.agentType,
+          file: rowless.file,
+        }
+      : undefined;
   }
 
   /**
@@ -5333,13 +5331,11 @@ export class Connection implements Viewer {
     id: string,
     ref: { harness: Harness } | undefined,
   ): Extract<ServerMessage, { type: "error" }> | undefined {
-    if (ref?.harness !== "claude-sdk") return undefined;
+    if (!ref) return undefined;
     let reason: string | undefined;
     try {
-      if (!claudeSdkStore.exists(id)) return undefined;
-      reason =
-        claudeSdkStore.unreadableRecord(id) ??
-        "it has no session metadata to show it from.";
+      reason = harnessRegistry.unopenableReason(ref.harness, id);
+      if (reason === undefined) return undefined;
     } catch (err) {
       reason = (err as Error).message;
     }
@@ -5379,15 +5375,10 @@ export class Connection implements Viewer {
    * ordinary client creation rejects them.
    */
   private guardSessionRef(ref: { harness: Harness; kind: AgentType }): boolean {
-    if (ref.harness === "claude-sdk") {
-      if (getSettings().claudeSdk.enabled) return true;
-      this.send({
-        type: "error",
-        message: "Claude SDK is disabled in settings.",
-      });
-      return false;
-    }
-    return this.guardExistingKind(ref.kind);
+    const refusal = existingSessionRefusal(ref.harness, ref.kind);
+    if (!refusal) return true;
+    this.send({ type: "error", message: refusal });
+    return false;
   }
 
   /**

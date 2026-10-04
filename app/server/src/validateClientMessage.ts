@@ -835,7 +835,7 @@ const validateAttachComments: Validator = (msg) => {
     return checkOptionalFields(session, { additionalPrompt: STRING });
   }
   if (session.kind === "new") {
-    if (session.harness !== "pi" && session.harness !== "claude-sdk")
+    if (!isString(session.harness) || !isHarness(session.harness))
       return "session.harness must be 'pi' or 'claude-sdk'";
     const optional = checkOptionalFields(session, {
       agentType: STRING,

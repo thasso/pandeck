@@ -31,6 +31,7 @@ import { sessionRunStartedAt } from "./sessionActivity.ts";
 import { worktreeIdBySession } from "./db/worktreeStore.ts";
 import { worktreeMissingProbe } from "./worktrees/sessionCwd.ts";
 import { objectRefsBySession } from "./db/sessionObjectStore.ts";
+import { sessionRefFile } from "./harnesses/storage.ts";
 import { canonicalPiSessionPath } from "./sessionStorage.ts";
 
 export const SESSION_TITLE_MAX_CHARS = 80;
@@ -446,7 +447,7 @@ export async function listSessions(
     sessions.push({
       id: row.id,
       scope: row.scope,
-      file: row.harness === "pi" ? canonicalPiSessionPath(row.id) : row.id,
+      file: sessionRefFile(row.harness, row.id),
       harness: row.harness,
       agentType: row.agentType,
       title: l?.title ?? row.title,

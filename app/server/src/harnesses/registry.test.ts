@@ -471,3 +471,44 @@ test("a Claude session without a record is not renamed into existence", async ()
   );
   assert.equal(acquire.mock.calls.length, 0);
 });
+
+test("a rowless session is named by the engine that would open it", () => {
+  piTranscript("rowless-pi");
+  assert.deepEqual(harnessRegistry.rowlessRef("rowless-pi"), {
+    harness: "pi",
+    agentType: "developer",
+    file: canonicalPiSessionPath("rowless-pi"),
+  });
+  // A Claude record outranks a pi transcript, as it does for acquireById.
+  vi.spyOn(claudeSdkStore, "exists").mockImplementation(
+    (id) => id === "rowless-pi",
+  );
+  assert.deepEqual(harnessRegistry.rowlessRef("rowless-pi"), {
+    harness: "claude-sdk",
+    agentType: "workshop",
+    file: "rowless-pi",
+  });
+  assert.equal(harnessRegistry.rowlessRef("rowless-nowhere"), undefined);
+});
+
+test("only a Claude record that cannot be read is reported unopenable", () => {
+  vi.spyOn(claudeSdkStore, "exists").mockImplementation(
+    (id) => id !== "claude-gone",
+  );
+  vi.spyOn(claudeSdkStore, "unreadableRecord").mockImplementation((id) =>
+    id === "claude-broken" ? "its metadata is corrupt." : undefined,
+  );
+  assert.equal(
+    harnessRegistry.unopenableReason("claude-sdk", "claude-broken"),
+    "its metadata is corrupt.",
+  );
+  assert.equal(
+    harnessRegistry.unopenableReason("claude-sdk", "claude-empty"),
+    "it has no session metadata to show it from.",
+  );
+  assert.equal(
+    harnessRegistry.unopenableReason("claude-sdk", "claude-gone"),
+    undefined,
+  );
+  assert.equal(harnessRegistry.unopenableReason("pi", "pi-any"), undefined);
+});

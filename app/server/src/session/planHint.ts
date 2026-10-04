@@ -28,20 +28,22 @@ import type { Harness, SessionMode } from "@assistant/shared";
  */
 const sessionsLastPromptedInPlan = new Set<string>();
 
-/** The Plan reminder sent on every Plan turn. Claude gets the short form. */
-export function planModeHint(harness: Harness): string {
-  if (harness === "claude-sdk")
-    return [
-      "<session-mode>",
-      "Plan mode: investigate and propose, change nothing on disk. The file-writing",
-      "tools are gone and the shell is not a way around them — no `>`/`>>` redirects,",
-      "no `sed -i`, `tee`, `patch`, `git checkout`/`git apply`, no command that writes",
-      "build or test artifacts. Reading, searching, `git log`, `rg` and the app tools",
-      "are all fine. You may create and organize durable Tasks with `task_manage`; do not",
-      "change repository or product files. Deliver the plan as your reply.",
-      "</session-mode>",
-    ].join("\n");
-  return [
+/**
+ * The Plan reminder sent on every Plan turn, by the engine that runs it: Claude
+ * gets the short form.
+ */
+const PLAN_MODE_HINTS: Record<Harness, string> = {
+  "claude-sdk": [
+    "<session-mode>",
+    "Plan mode: investigate and propose, change nothing on disk. The file-writing",
+    "tools are gone and the shell is not a way around them — no `>`/`>>` redirects,",
+    "no `sed -i`, `tee`, `patch`, `git checkout`/`git apply`, no command that writes",
+    "build or test artifacts. Reading, searching, `git log`, `rg` and the app tools",
+    "are all fine. You may create and organize durable Tasks with `task_manage`; do not",
+    "change repository or product files. Deliver the plan as your reply.",
+    "</session-mode>",
+  ].join("\n"),
+  pi: [
     "<session-mode>",
     "Plan mode: investigate and propose, change nothing on disk.",
     "",
@@ -56,7 +58,12 @@ export function planModeHint(harness: Harness): string {
     "- Deliver the plan as your reply; the user switches the session back to Build when",
     "  it is time to implement it.",
     "</session-mode>",
-  ].join("\n");
+  ].join("\n"),
+};
+
+/** The Plan reminder sent on every Plan turn. */
+export function planModeHint(harness: Harness): string {
+  return PLAN_MODE_HINTS[harness];
 }
 
 /** The single line that retires the Plan lines still sitting in the transcript. */

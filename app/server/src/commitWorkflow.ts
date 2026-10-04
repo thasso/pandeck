@@ -10,7 +10,7 @@ import {
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
-import type { AgentSession, SessionManager } from "./piSdk/index.ts";
+import type { AgentSession, SessionManager } from "./harnesses/piSession.ts";
 import type { ToolSessionManager } from "./mcp/tool.ts";
 import type {
   AgentType,

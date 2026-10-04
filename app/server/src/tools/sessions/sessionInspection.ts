@@ -9,13 +9,9 @@
  * inspection sources. The hub is consulted only to overlay live/running state.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { DATA_DIR } from "../../config.ts";
+import { storedSessionState } from "../../harnesses/storage.ts";
 import { sessionStore, type SessionMeta } from "../../db/sessionStore.ts";
-import {
-  canonicalSessionLogPath,
-  canonicalPiSessionPath,
-} from "../../sessionStorage.ts";
+import { canonicalSessionLogPath } from "../../sessionStorage.ts";
 import { splitAttachmentManifest } from "../../serialize.ts";
 import { errorText } from "../../errors.ts";
 
@@ -112,10 +108,6 @@ export function cleanSessionId(value: unknown, name = "sessionId"): string {
   return text;
 }
 
-function claudeSdkStatePath(id: string): string {
-  return join(DATA_DIR, "claude-sdk", `${id}.json`);
-}
-
 /**
  * Resolve a copied session id to inspectable metadata (never reads log
  * content), or throw a {@link SessionInspectionError} for deleted/internal/
@@ -201,14 +193,10 @@ export function resumableState(
   runtime: RuntimeState,
 ): { resumable: boolean; reason?: string } {
   if (runtime !== "not_loaded") return { resumable: true };
-  if (meta.harness === "claude-sdk") {
-    return existsSync(claudeSdkStatePath(meta.id))
-      ? { resumable: true }
-      : { resumable: false, reason: "no Claude SDK state on disk" };
-  }
-  return existsSync(canonicalPiSessionPath(meta.id))
+  const stored = storedSessionState(meta.harness, meta.id);
+  return stored.stored
     ? { resumable: true }
-    : { resumable: false, reason: "no pi transcript on disk" };
+    : { resumable: false, reason: stored.reason };
 }
 
 /**
