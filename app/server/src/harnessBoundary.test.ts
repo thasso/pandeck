@@ -3,10 +3,11 @@
  *
  * App code reaches the engine folders (`piSdk/`, `claudeSdk/`) only through
  * `harnesses/`, and branches on capabilities rather than on a harness id. The
- * code is migrating towards that, so the two lists below pin every exception
- * that still exists. Both checks are exact: a new exception fails, and so does
- * an entry the code no longer needs, which keeps the lists shrinking with the
- * migration instead of drifting above reality.
+ * only exceptions are the measurement modules, which measure what each engine
+ * actually sends or spends; the two lists below pin exactly what each of them
+ * still reaches, and nothing else may appear in either. Both checks are exact:
+ * a new exception fails, and so does an entry the code no longer needs, so the
+ * lists can only shrink.
  *
  * Scope: every non-test `.ts` module under `app/server/src` outside the exempt
  * folders, parsed into a syntax tree (oxc) so comments and unrelated strings
@@ -31,7 +32,20 @@ const ENGINE_FOLDER = /^(?:piSdk|claudeSdk)\//;
 const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
 
 /**
- * Every engine module each app module still imports, as a path under
+ * The measurement modules: prompt budgets and inventory, task overhead and the
+ * session audit measure what each engine actually sends or spends, so naming
+ * the engine is their job. They are the only modules the lists below may name.
+ */
+const MEASUREMENT_MODULES = new Set([
+  "promptBudgets.ts",
+  "promptInventory.ts",
+  "sessionAudit.ts",
+  "sessionAuditSources.ts",
+  "taskOverhead.ts",
+]);
+
+/**
+ * Every engine module each measurement module still imports, as a path under
  * `src/`. Delete an entry in the change that removes the import.
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
@@ -45,8 +59,8 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
 };
 
 /**
- * How many harness-id comparisons each app module still makes. Lower the
- * number (or delete the entry) in the change that removes one.
+ * How many harness-id comparisons each measurement module still makes. Lower
+ * the number (or delete the entry) in the change that removes one.
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
   "promptInventory.ts": 4,
@@ -219,6 +233,18 @@ test("app code compares harness ids only where pinned", () => {
     actual,
     HARNESS_LITERAL_EXCEPTIONS,
     "Harness-id comparisons changed. Branch on a capability instead of adding one; lower or delete the entry in HARNESS_LITERAL_EXCEPTIONS when removing one (docs/agent-harnesses.md).",
+  );
+});
+
+test("only the measurement modules may reach an engine, and each still does", () => {
+  const listed = new Set([
+    ...Object.keys(ENGINE_IMPORT_EXCEPTIONS),
+    ...Object.keys(HARNESS_LITERAL_EXCEPTIONS),
+  ]);
+  assert.deepEqual(
+    [...listed].sort(),
+    [...MEASUREMENT_MODULES].sort(),
+    "Only a measurement module may import an engine or compare a harness id; everything else goes through harnesses/. A measurement module that no longer needs either leaves MEASUREMENT_MODULES (docs/agent-harnesses.md).",
   );
 });
 

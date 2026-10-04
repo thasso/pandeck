@@ -14,8 +14,7 @@
  *  - result `_meta["pa/terminate"]`: the tool's stop-after-this-batch flag;
  *  - result `_meta["pa/details"]`: the tool's `details` (never
  *    `structuredContent` — see {@link toCallToolResult});
- *  - listed tool `_meta["pa/pi"]`: the tool's `executionMode`, and
- *    `_meta["pa/active"]`: active flag in `listMode: "all"`.
+ *  - listed tool `_meta["pa/pi"]`: the tool's `executionMode`.
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
@@ -27,7 +26,6 @@ import type { Harness } from "@assistant/shared";
 import { subscribeIntegrationToolChanges } from "../integrationToolChanges.ts";
 import type { AgentTool, ToolResult, ToolSession } from "./tool.ts";
 import {
-  ACTIVE_META_KEY,
   ANTHROPIC_ALWAYS_LOAD_META_KEY,
   ANTHROPIC_SEARCH_HINT_META_KEY,
   DETAILS_META_KEY,
@@ -40,13 +38,6 @@ import {
 export interface SessionToolServerConfig {
   sessionId: string;
   harness: Harness;
-  /**
-   * "active" — tools/list returns only currently-usable tools (Claude refreshes
-   * its list on tools/list_changed). "all" — list every tool with an
-   * `_meta["pa/active"]` flag, for a client that registers the full universe up
-   * front and toggles the active set. No production caller uses "all" today.
-   */
-  listMode: "active" | "all";
   /** Resolve the toolset fresh on every list/call (catalog + integration-gate state). */
   tools(): AgentTool[];
   /** Currently-active tool names; null/undefined = every listed tool is active. */
@@ -116,9 +107,9 @@ export function createSessionToolServer(
     const active = config.activeToolNames?.() ?? null;
     const eager = config.eagerToolNames?.() ?? null;
     const isActive = (tool: AgentTool) => !active || active.has(tool.name);
-    const listed = config
-      .tools()
-      .filter((tool) => config.listMode === "all" || isActive(tool));
+    // Only the currently usable tools: a client refreshes its list on
+    // tools/list_changed rather than toggling a registered universe.
+    const listed = config.tools().filter(isActive);
     return {
       tools: listed.map((tool) => {
         const extras: PiToolExtrasMeta = {
@@ -138,7 +129,6 @@ export function createSessionToolServer(
           },
           _meta: {
             [PI_EXTRAS_META_KEY]: extras,
-            [ACTIVE_META_KEY]: isActive(tool),
             ...(eager?.has(tool.name)
               ? { [ANTHROPIC_ALWAYS_LOAD_META_KEY]: true }
               : {}),

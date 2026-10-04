@@ -6,7 +6,7 @@
  *
  * Part 1 drives a synthetic toolset over an in-memory transport pair with a
  * real MCP `Client` and proves the wire contract: list metadata (`pa/pi`
- * extras, `pa/active`), toolCallId via `_meta`, progress notifications carrying
+ * extras), toolCallId via `_meta`, progress notifications carrying
  * JSON-encoded partial results, details → `_meta` (never structuredContent),
  * terminate → `_meta`, active-set enforcement, and error mapping. It also
  * covers a proxied tool whose whole answer is text ([Task-439](pa://task/439)).
@@ -149,7 +149,6 @@ test("session tool server wire contract", async () => {
   const server = createSessionToolServer({
     sessionId: "sess-1",
     harness: "pi",
-    listMode: "all",
     tools: () => tools,
     activeToolNames: () => active,
     eagerToolNames: () => new Set(["probe"]),
@@ -161,28 +160,20 @@ test("session tool server wire contract", async () => {
   });
   const client = await connect(server);
   try {
-    // tools/list in "all" mode: every tool listed, activity flagged, extras ride _meta.
+    // tools/list: only the active tools are listed, extras ride _meta.
     const listed = (await client.listTools()) as ToolListResult;
     assert.deepEqual(listed.tools.map((t) => t.name).sort(), [
       "boom",
-      "inactive_probe",
       "list_details",
       "probe",
     ]);
     const probe = listed.tools.find((t) => t.name === "probe")!;
     assert.equal(probe.title, "Probe");
-    assert.equal(probe._meta?.["pa/active"], true);
     // pa/pi carries executionMode only: Task-282 deleted the prompt extras
     // that used to ride here (and that the Claude CLI ignored anyway).
     assert.deepEqual(probe._meta?.["pa/pi"], {
       executionMode: "sequential",
     });
-    assert.equal(
-      listed.tools.find((t) => t.name === "inactive_probe")!._meta?.[
-        "pa/active"
-      ],
-      false,
-    );
 
     // Claude tool-search metadata: eager tools are marked alwaysLoad, search
     // hints ride anthropic/searchHint, deferred tools carry neither by default.
@@ -279,7 +270,6 @@ test("a proxied tool's text-only answer survives the wire", async () => {
   const server = createSessionToolServer({
     sessionId: ID,
     harness: "claude-sdk",
-    listMode: "active",
     tools: () => [snapshotTool, consoleTool],
     session: () => ({
       sessionId: ID,
@@ -336,7 +326,6 @@ test("notifyToolsChanged is safe before the server is connected", async () => {
   const server = createSessionToolServer({
     sessionId: "unconnected",
     harness: "pi",
-    listMode: "all",
     tools: () => [],
     session: () => ({
       sessionId: "unconnected",
@@ -375,9 +364,9 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
     const externalNames = listed.tools
       .map((t) => externalToolName(t.name))
       .sort();
-    // listMode "active": every catalog tool the persona's integration gates
-    // allow is listed — browser tool groups are ordinary ungated/gated catalog
-    // groups now, no separate per-session enable step.
+    // Every catalog tool the persona's integration gates allow is active, so
+    // listed — browser tool groups are ordinary ungated/gated catalog groups
+    // now, no separate per-session enable step.
     const workshopTools = AGENT_TYPES.workshop.tools();
     const expected = [
       ...integrationGatedActiveToolNames(
@@ -612,7 +601,6 @@ test("a deferred activation leaves the Claude first-request surface byte-identic
       const server = createSessionToolServer({
         sessionId: `prefix-${agentType}`,
         harness: "claude-sdk",
-        listMode: "active",
         tools: () => tools,
         activeToolNames: () => active,
         eagerToolNames: () => eager,

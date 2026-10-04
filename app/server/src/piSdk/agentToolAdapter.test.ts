@@ -284,7 +284,6 @@ test("pi and MCP list the same descriptions for every tool", async () => {
   const toolServer = createSessionToolServer({
     sessionId: SESSION.sessionId,
     harness: "claude-sdk",
-    listMode: "active",
     tools: () => tools,
     session: () => ({ ...SESSION, harness: "claude-sdk" }),
   });

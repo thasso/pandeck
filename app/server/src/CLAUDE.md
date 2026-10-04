@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=4000 reason="Thirteen dense contracts, each guarding a shipped defect or a migration in flight. The credential rule pins tokens to their URL origin. The newest pins the harness boundary so no new engine reach slips past the agent-harness migration. Two older ones: the view rule (opening a session parsed its provider transcript first — 1.7s on one 51 MB pi file) and the spawn rule (every git process forked this 1.3 GB server, freezing all connections); one careless await or spawn brings either back." task=agent-harnesses date=2026-10-04 -->
+<!-- instruction-budget: bytes=4000 reason="Thirteen dense contracts, each guarding a shipped defect or a migration in flight. The credential rule pins tokens to their URL origin. The newest closes the harness boundary to all but the measurement modules. Two older ones: the view rule (opening a session parsed its provider transcript first — 1.7s on one 51 MB pi file) and the spawn rule (every git process forked this 1.3 GB server, freezing all connections); one careless await or spawn brings either back." task=agent-harnesses date=2026-10-04 -->
 
 # Server modules
 
@@ -14,11 +14,11 @@
 - `@earendil-works/*` is imported only under `piSdk/`,
   `@anthropic-ai/claude-agent-sdk` only under `claudeSdk/`, and neither under
   `mcp/` or `tools/`. App-level prompts go through `runtimePrompt.ts`, not a raw
-  engine call. `architecture.test.ts` guards both. No new import of `piSdk/` or
-  `claudeSdk/` and no new harness-id comparison elsewhere (`harnesses/` and
-  `test/` aside): `harnessBoundary.test.ts` pins the rest, which only shrink
-  (`docs/agent-harnesses.md`). A user decision handed to an EXISTING session
-  (card outcome, question answer, review handoff) goes through
+  engine call. `architecture.test.ts` guards both. App code reaches `piSdk/` and
+  `claudeSdk/` only through `harnesses/` and branches on capabilities, never on
+  a harness id; the measurement modules `harnessBoundary.test.ts` names are the
+  one exception (`docs/agent-harnesses.md`). A user decision handed to an
+  EXISTING session (card outcome, question answer, review handoff) goes through
   `agentHandoffs.ts`, which queues it when that session is mid-turn instead of
   losing it.
 - Harness and persona are separate axes: branch on the shared capability
