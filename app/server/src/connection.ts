@@ -4266,7 +4266,10 @@ export class Connection implements Viewer {
           // Asked of the ACQUIRE, not of the storage-backed view: a legacy
           // binding with a transcript but no metadata row is reopenable, and
           // treating it as stale would drop a day the user still has.
-          if (!driver) clearDaySession(date);
+          // Only the binding this activation read: another one may have
+          // replaced it meanwhile with the day's new session.
+          if (!driver && getDaySessionId(date) === boundId)
+            clearDaySession(date);
           view = driver;
         }
       }

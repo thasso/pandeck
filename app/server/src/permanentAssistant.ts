@@ -133,6 +133,20 @@ export function stopPermanentAssistant(): void {
  * conversation intact but with no UI path back to it.
  */
 export async function rotatePermanentAssistantSession(): Promise<void> {
+  // Synchronously, before anything yields: an acquisition already under way
+  // belongs to the old profile and may no longer bind, and one asked for from
+  // here on waits for the old singleton to be abandoned first.
+  generation += 1;
+  const run = abandonPermanentAssistant();
+  rotation = run;
+  try {
+    await run;
+  } finally {
+    if (rotation === run) rotation = undefined;
+  }
+}
+
+async function abandonPermanentAssistant(): Promise<void> {
   const previous = permanentAssistantStore.sessionId();
   if (previous) {
     // AWAIT the pending-observation flush and reset the memory snapshot for the
@@ -169,26 +183,46 @@ export function permanentAssistantViewableId(): string | undefined {
 
 type PermanentAssistantDriver = HarnessDriver & RuntimePromptDriver;
 
+/** Bumped by every rotation: an acquisition from an older one never binds. */
+let generation = 0;
+/** The rotation abandoning the old singleton, while it runs. */
+let rotation: Promise<void> | undefined;
 /** The acquisition under way, which every concurrent caller shares. */
-let acquiring: Promise<PermanentAssistantDriver> | undefined;
+let acquiring:
+  | { generation: number; promise: Promise<PermanentAssistantDriver> }
+  | undefined;
 
 /**
  * The singleton's driver, acquired once however many callers ask at the same
  * time: creation yields before the new session is bound, so two acquisitions
  * that overlapped would each create one, and the later binding would hide the
- * earlier conversation.
+ * earlier conversation. A rotation meanwhile retires the shared acquisition:
+ * what it was creating belongs to the old profile.
  */
 function acquirePermanentAssistant(): Promise<PermanentAssistantDriver> {
-  acquiring ??= acquireOrCreatePermanentAssistant().finally(() => {
-    acquiring = undefined;
+  if (acquiring?.generation === generation) return acquiring.promise;
+  const mine = generation;
+  const promise = (async () => {
+    await rotation;
+    return acquireOrCreatePermanentAssistant(mine);
+  })().finally(() => {
+    if (acquiring?.promise === promise) acquiring = undefined;
   });
-  return acquiring;
+  acquiring = { generation: mine, promise };
+  return promise;
 }
 
-async function acquireOrCreatePermanentAssistant(): Promise<PermanentAssistantDriver> {
+async function acquireOrCreatePermanentAssistant(
+  mine: number,
+): Promise<PermanentAssistantDriver> {
+  // Whatever this finds or creates after a rotation is the old profile's: the
+  // current generation's acquisition answers instead, and an unbound session
+  // created here stays behind as empty history.
+  const rotated = () => mine !== generation;
   const existingId = permanentAssistantStore.sessionId();
   if (existingId) {
     const existing = await hub.acquireById(existingId);
+    if (rotated()) return acquirePermanentAssistant();
     // Reuse the bound singleton only when it is a real `personal-assistant`
     // session. A legacy binding to an ordinary `assistant` session (created
     // before this persona existed) is abandoned WITHOUT deleting it: the old
@@ -231,6 +265,7 @@ async function acquireOrCreatePermanentAssistant(): Promise<PermanentAssistantDr
       credentialProfileId,
     });
   }
+  if (rotated()) return acquirePermanentAssistant();
   permanentAssistantStore.setSessionId(driver.id);
   return driver;
 }

@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, test, vi } from "vitest";
+import { afterAll, afterEach, test, vi } from "vitest";
 
 const tmp = mkdtempSync(join(tmpdir(), "permanent-assistant-acquire-"));
 process.env.ASSISTANT_CWD = tmp;
@@ -22,7 +22,9 @@ writeFileSync(
 );
 
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
-const { permanentAssistantSessionId } = await import("./permanentAssistant.ts");
+const { permanentAssistantSessionId, rotatePermanentAssistantSession } =
+  await import("./permanentAssistant.ts");
+const create = await import("./harnesses/create.ts");
 const { permanentAssistantStore } =
   await import("./db/permanentAssistantStore.ts");
 const { getSettings } = await import("./settings.ts");
@@ -30,6 +32,10 @@ const { permanentAssistantProfileInstructions } =
   await import("./permanentAssistantProfile.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+afterEach(() => {
+  vi.restoreAllMocks();
+  permanentAssistantStore.clearSessionId();
+});
 
 test("concurrent callers share one new singleton, and it is the one bound", async () => {
   const acquire = vi
@@ -53,4 +59,30 @@ test("concurrent callers share one new singleton, and it is the one bound", asyn
       getSettings().permanentAssistant,
     ),
   });
+});
+
+test("a rotation retires a creation under way: the new profile's singleton is bound", async () => {
+  let finishOld!: () => void;
+  const created: string[] = [];
+  vi.spyOn(create, "createSession").mockImplementation(async () => {
+    const id = `assistant-${created.length + 1}`;
+    created.push(id);
+    // The first creation is still under way when the profile rotates.
+    if (created.length === 1)
+      await new Promise<void>((resolve) => (finishOld = resolve));
+    return { id, sessionId: id } as never;
+  });
+
+  const old = permanentAssistantSessionId();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await rotatePermanentAssistantSession();
+  const current = permanentAssistantSessionId();
+  finishOld();
+
+  assert.equal(await current, "assistant-2");
+  // The old caller is answered by the current singleton too, not by the one
+  // its retired creation made.
+  assert.equal(await old, "assistant-2");
+  assert.equal(permanentAssistantStore.sessionId(), "assistant-2");
+  assert.deepEqual(created, ["assistant-1", "assistant-2"]);
 });

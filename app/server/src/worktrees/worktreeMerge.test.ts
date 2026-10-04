@@ -66,6 +66,9 @@ const recordMergeUpdate = (msg: ServerMessage) => {
   if (msg.type === "worktreeMergeUpdate")
     mergeUpdates.push({ worktreeId: msg.worktreeId, phase: msg.phase });
 };
+// Loaded first: the hub installs its own worktree broadcaster when it starts,
+// which the merge-agent tests below would otherwise do mid-file.
+await import("../hub.ts");
 setWorktreeBroadcaster({
   broadcast: recordMergeUpdate,
   broadcastWorktree: (_id, msg) => recordMergeUpdate(msg),
@@ -277,6 +280,7 @@ test("a merge agent for the main checkout runs there and is linked to no worktre
   // Nor afterwards: the edge would reopen it in the wrong directory.
   assert.equal(worktreeIdForSession(agent.id!), undefined);
   sh(repoPath, "merge", "--abort");
+  updateWorktree(record.id, { mergeStateJson: null });
 });
 
 test("a rebase merge agent runs in its worktree, linked before it exists", async () => {
@@ -286,6 +290,7 @@ test("a rebase merge agent runs in its worktree, linked before it exists", async
   assert.equal(agent.linkedTo, record.id);
   assert.equal(worktreeIdForSession(agent.id!), record.id);
   sh(record.path, "rebase", "--abort");
+  updateWorktree(record.id, { mergeStateJson: null });
 });
 
 test("a pi merge agent is recorded as pi and linked like a Claude one", async () => {
@@ -318,4 +323,5 @@ test("a pi merge agent is recorded as pi and linked like a Claude one", async ()
   assert.equal(sessionStore.get("agent-pi")?.harness, "pi");
   assert.equal(sessionStore.get("agent-pi")?.mode, "build");
   sh(record.path, "rebase", "--abort");
+  updateWorktree(record.id, { mergeStateJson: null });
 });
