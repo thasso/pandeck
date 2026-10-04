@@ -26,6 +26,7 @@ import { atlassianFetch } from "./atlassian/atlassianFetch.ts";
 import { CONFLUENCE_HOST, DATA_DIR } from "./config.ts";
 import type { ConfluenceApiConfig } from "./atlassian/confluenceClient.ts";
 import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 const CONFLUENCE_SETTINGS_PATH = join(DATA_DIR, "settings", "confluence.json");
 
@@ -42,7 +43,7 @@ function readPrivate(): Required<ConfluenceSettingsFile> {
     return { enabled: Boolean(parsed?.enabled) };
   } catch (err) {
     throw new Error(
-      `Failed to read Confluence settings at ${CONFLUENCE_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Confluence settings at ${CONFLUENCE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

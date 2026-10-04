@@ -39,6 +39,11 @@ only binding rules; everything else lives here.
   distinction, temporal semantics, selection and sticky-snapshot delivery,
   cadence/settings/safety ceilings, tool and prompt rules, observability, known
   limitations, and the reset boundary.
+- `settings.md` — the settings registry (one descriptor per setting the Settings
+  page shows, with value/readonly/secret/oauth access), the tests that keep it
+  complete, and the one write path: `saveSettings`, its per-section side
+  effects, and the per-connection push that keeps every client current; and the
+  Personal Assistant's `settings_read`/`settings_update` tools.
 - `user-profile.md` — who the app works for: the profile display name and the
   one timezone every user-local day and time resolves in, its host fallback,
   use-time resolution, and where the name appears.

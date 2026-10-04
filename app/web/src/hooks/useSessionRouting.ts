@@ -10,6 +10,10 @@ import {
   type DocumentLineAnchor,
 } from "@assistant/shared/documentTargets";
 import {
+  SETTINGS_SECTION_IDS,
+  type SettingsSectionId,
+} from "@assistant/shared/settingsRegistry";
+import {
   resolveInternalDocumentTarget,
   sameDocumentIdentity,
 } from "../lib/documentTargets.ts";
@@ -57,44 +61,8 @@ import {
  * navigating (deep link, sidebar click, back/forward) loads the addressed session
  * by id; the server creating or switching sessions updates the address bar.
  */
-export const SETTINGS_SECTION_IDS = [
-  "appearance",
-  "profile",
-  "about",
-  "models",
-  "claude-sdk",
-  "openai",
-  "openai-compatible",
-  "personal-assistant",
-  "memory",
-  "naming",
-  "refinement",
-  "dictation",
-  "notifications",
-  "worktrees",
-  "skills",
-  "peer-runtimes",
-  "background-processes",
-  "port-forwarding",
-  "commit",
-  "pull-request",
-  "task-intake",
-  "day-scan",
-  "minutes-scanner",
-  "pdf-conversion",
-  "browserTools",
-  "google",
-  "slack",
-  "slack-huddles",
-  "jira",
-  "confluence",
-  "tempo",
-  "github",
-  "forgejo",
-  "web-search",
-  "context7",
-] as const;
-export type SettingsSection = (typeof SETTINGS_SECTION_IDS)[number];
+export { SETTINGS_SECTION_IDS };
+export type SettingsSection = SettingsSectionId;
 
 export type WorktreeView = "changes" | "files";
 

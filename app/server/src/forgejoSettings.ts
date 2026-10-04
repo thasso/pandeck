@@ -26,6 +26,8 @@ import {
   forgejoRequest,
   normalizeForgejoBaseUrl,
 } from "./forgejoClient.ts";
+import { fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const FORGEJO_SETTINGS_PATH = join(DATA_DIR, "settings", "forgejo.json");
 
@@ -78,7 +80,7 @@ function readPrivate(): StoredForgejoSettings {
     ));
   } catch (err) {
     throw new Error(
-      `Failed to read Forgejo settings at ${FORGEJO_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Forgejo settings at ${FORGEJO_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -159,7 +161,9 @@ export function getForgejoToolConfig(): ForgejoApiConfig {
 }
 
 /** Validate the saved config with a `/version` probe plus an authenticated `/user` call when a token is set. */
-export async function testForgejoSettings(): Promise<ForgejoConnectionStatus> {
+export async function testForgejoSettings(
+  signal?: AbortSignal,
+): Promise<ForgejoConnectionStatus> {
   const settings = readPrivate();
   const checkedAt = Date.now();
   if (!settings.enabled)
@@ -180,7 +184,7 @@ export async function testForgejoSettings(): Promise<ForgejoConnectionStatus> {
       "GET",
       "/version",
       {
-        signal: AbortSignal.timeout(15_000),
+        signal: deadlineSignal(15_000, signal),
       },
     );
     const version = versionRes.data?.version;
@@ -199,7 +203,7 @@ export async function testForgejoSettings(): Promise<ForgejoConnectionStatus> {
       "GET",
       "/user",
       {
-        signal: AbortSignal.timeout(15_000),
+        signal: deadlineSignal(15_000, signal),
       },
     );
     const login = userRes.data?.login ?? userRes.data?.username;

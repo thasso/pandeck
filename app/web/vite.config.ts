@@ -139,6 +139,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/portForwarding": fileURLToPath(
           new URL("../shared/portForwarding.ts", import.meta.url),
         ),
+        "@assistant/shared/settingsRegistry": fileURLToPath(
+          new URL("../shared/settingsRegistry.ts", import.meta.url),
+        ),
         "@assistant/shared/toolCards": fileURLToPath(
           new URL("../shared/toolCards.ts", import.meta.url),
         ),

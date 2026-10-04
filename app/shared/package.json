@@ -19,6 +19,7 @@
     "./documentTargets": "./documentTargets.ts",
     "./toolCards": "./toolCards.ts",
     "./portForwarding": "./portForwarding.ts",
+    "./settingsRegistry": "./settingsRegistry.ts",
     "./zonedTime": "./zonedTime.ts"
   },
   "types": "./protocol.ts",

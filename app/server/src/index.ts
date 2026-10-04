@@ -60,6 +60,7 @@ import {
   listModelsForProfile,
   modelRuntimeForProfile,
   startOpenAiProfileLogin,
+  syncConfiguredModelProviders,
   warmCredentialProfileModelRuntimes,
 } from "./piSdk/models.ts";
 import { linkPiToolBinaries } from "./piSdk/toolBinaries.ts";
@@ -91,6 +92,10 @@ import { jiraIssueUrl, resolveJiraIssueInfos } from "./jiraClient.ts";
 import { resolveGithubLinkedIssues } from "./githubLinkedIssues.ts";
 import { getGithubConfigIfAvailable } from "./githubSettings.ts";
 import { slackSocketMode } from "./slackSocketMode.ts";
+import {
+  announceSettingsWritten,
+  setModelProviderSync,
+} from "./settingsService.ts";
 import {
   startSlackShortcutIntake,
   stopSlackShortcutIntake,
@@ -907,7 +912,7 @@ async function handleRequest(
         // no stale account id survives in the persisted settings. Cleared only
         // after the delete succeeds — it still refuses while sessions are bound.
         deleteCredentialProfile(profileId);
-        const clearedSlots = clearProfilePins(profileId);
+        const clearedSlots = await clearProfilePins(profileId);
         res.writeHead(200, corsJsonHeaders(req));
         res.end(JSON.stringify({ ok: true, clearedSlots }));
         return;
@@ -1503,6 +1508,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
+      if (result.ok) await announceOAuthConnection("google");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -1533,7 +1539,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
-      if (result.ok) slackSocketMode.reconcile();
+      if (result.ok) await announceOAuthConnection("slack");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -1564,6 +1570,7 @@ async function handleRequest(
         requestUrl.searchParams,
         requestPublicBaseUrl(req),
       );
+      if (result.ok) await announceOAuthConnection("tempo");
       res.writeHead(result.ok ? 200 : 400, {
         "content-type": "text/html; charset=utf-8",
       });
@@ -1956,6 +1963,10 @@ verifyRequiredHostTools();
 // pi's grep/find resolve rg/fd on every call and fork this server to probe PATH
 // unless its bin dir already holds them; link the host's copies there once.
 linkPiToolBinaries();
+
+// Before any request can write settings: an OpenAI-compatible write must
+// re-register the configured providers with the engine.
+setModelProviderSync(syncConfiguredModelProviders);
 
 server.listen(PORT, HOST, () => {
   const displayHost = HOST === "0.0.0.0" || HOST === "::" ? "localhost" : HOST;
@@ -2440,6 +2451,19 @@ function readJsonBody<T>(req: IncomingMessage): Promise<T> {
     });
     req.on("error", reject);
   });
+}
+
+/**
+ * An OAuth callback stores its tokens inside the integration module, so run
+ * that section's effects and tell open Settings pages. The connection itself
+ * succeeded either way; a failed effect is only logged.
+ */
+async function announceOAuthConnection(
+  section: "google" | "slack" | "tempo",
+): Promise<void> {
+  await announceSettingsWritten([section]).catch((err: unknown) =>
+    console.warn(`[${section}] after connecting:`, errorText(err)),
+  );
 }
 
 function oauthHtml(

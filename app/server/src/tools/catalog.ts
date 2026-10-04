@@ -22,7 +22,10 @@ import {
   type AgentTool,
   type ToolSideEffects,
 } from "../mcp/tool.ts";
-import type { SessionMode } from "@assistant/shared";
+import {
+  isPersonalAssistantAgentType,
+  type SessionMode,
+} from "@assistant/shared";
 import {
   currentIntegrationToolGates,
   isPlanModeToolAllowed,
@@ -49,6 +52,7 @@ import { showFilesTool } from "./core/showFilesTool.ts";
 import { assistantProjectRegistryTools } from "./core/projectRegistryTools.ts";
 import { projectCreateTool } from "./core/projectCreateTool.ts";
 import { assistantTimeTools } from "./core/timeTools.ts";
+import { settingsTools } from "./settings/settingsTools.ts";
 import {
   githubActivityTools,
   githubCiTools,
@@ -147,6 +151,8 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   ask_questions: "none",
   memory_search: "none",
   memory_manage: "local",
+  settings_read: "none",
+  settings_update: "local",
   task_read: "none",
   task_manage: "local",
   list_attachments: "none",
@@ -744,6 +750,25 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
   ];
 }
 
+/**
+ * The Settings page as tools ([Task-729](pa://task/729)), for the Personal
+ * Assistant only: it is the user's own assistant, the one that should be able
+ * to configure the app for them.
+ */
+function settingsToolGroup(): UnclassifiedToolGroup {
+  return {
+    id: "settings",
+    label: "Settings",
+    description:
+      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow.",
+    searchHint:
+      "settings configuration configure preferences enable disable integration model account",
+    loading: "deferred",
+    family: "shared",
+    tools: settingsTools,
+  };
+}
+
 /** Extra groups for the coding personas (workshop/developer). */
 function codingToolGroups(): UnclassifiedToolGroup[] {
   return [
@@ -944,6 +969,7 @@ export function toolGroupsFor(agentType: AgentType): ToolGroup[] {
     ...(agentType === "workshop" || agentType === "developer"
       ? codingToolGroups()
       : []),
+    ...(isPersonalAssistantAgentType(agentType) ? [settingsToolGroup()] : []),
   ];
   const personaGroups =
     agentType !== "developer"

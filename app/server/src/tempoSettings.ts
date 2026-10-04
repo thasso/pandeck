@@ -23,7 +23,8 @@ import {
 import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
 import { jiraGet } from "./jiraClient.ts";
-import { errorText } from "./errors.ts";
+import { errorText, fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const TEMPO_SETTINGS_PATH = join(DATA_DIR, "settings", "tempo.json");
 const TEMPO_OAUTH_CALLBACK_PATH = "/api/tempo/oauth/callback";
@@ -145,7 +146,7 @@ function readPrivate(): StoredTempoSettings {
     return normalizeStored(parsed ?? undefined);
   } catch (err) {
     throw new Error(
-      `Failed to read Tempo settings at ${TEMPO_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Tempo settings at ${TEMPO_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -284,6 +285,9 @@ async function ensureTempoAccessToken(
     );
   }
   const fresh = readPrivate();
+  // Disconnected, or refreshed by another request, while this one was out:
+  // writing back would reconnect or roll back the stored grant.
+  if (fresh.refreshToken !== settings.refreshToken) return token.access_token;
   fresh.accessToken = token.access_token;
   fresh.accessTokenExpiresAt = Date.now() + token.expires_in * 1000;
   if (token.refresh_token) fresh.refreshToken = token.refresh_token;
@@ -403,6 +407,7 @@ async function tempoTokenRequest(
       Accept: "application/json",
     },
     body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(15_000),
   });
   const json = (await res.json().catch(() => ({}))) as TempoTokenResponse;
   if (!res.ok)
@@ -441,7 +446,9 @@ export async function resolveTempoAuthorAccountId(
   return me.accountId;
 }
 
-export async function testTempoSettings(): Promise<TempoConnectionStatus> {
+export async function testTempoSettings(
+  signal?: AbortSignal,
+): Promise<TempoConnectionStatus> {
   const settings = readPrivate();
   const checkedAt = Date.now();
   if (!tempoOAuthClient().configured) {
@@ -490,6 +497,7 @@ export async function testTempoSettings(): Promise<TempoConnectionStatus> {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
+    signal: deadlineSignal(15_000, signal),
   });
   if (!res.ok) {
     return {

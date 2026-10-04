@@ -25,6 +25,7 @@ import {
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   PULL_REQUEST_CARD_ACTIONS,
   PULL_REQUEST_MERGE_METHODS,
+  SPEECH_TO_TEXT_LIMITS,
   WORKFLOW_ROLE_SET_BOUNDS,
   type BroadcastTopic,
   type ClientMessage,
@@ -355,6 +356,7 @@ const SETTINGS_SECTIONS: Record<string, SectionValidator> = {
     additionalInstructions: STRING,
   }),
   browserTools: section({ headed: BOOLEAN, rawMcpEnabled: BOOLEAN }),
+  speechToText: validateSpeechToTextSection,
   worktrees: validateWorktreesSection,
   memory: validateMemorySection,
   skills: validateSkillToggles,
@@ -378,6 +380,37 @@ function validateSkillToggles(value: Record<string, unknown>): string | null {
   for (const [name, state] of Object.entries(value))
     if (state !== "on" && state !== "off")
       return `${name} must be "on" or "off"`;
+  return null;
+}
+
+/**
+ * Deep check for dictation. The vocabulary is replaced whole and its
+ * normalizer answers a non-array with an empty list, so an unchecked malformed
+ * patch would silently delete every correction the user added.
+ */
+function validateSpeechToTextSection(
+  value: Record<string, unknown>,
+): string | null {
+  const flat = checkOptionalFields(value, {
+    enabled: BOOLEAN,
+    modelId: STRING,
+    numThreads: NUMBER,
+    idleShutdownSeconds: NUMBER,
+    maxUtteranceSeconds: NUMBER,
+  });
+  if (flat) return flat;
+  if (!hasOwn(value, "vocabulary") || value.vocabulary === undefined)
+    return null;
+  const vocabulary = value.vocabulary;
+  if (!Array.isArray(vocabulary)) return "vocabulary must be an array";
+  if (vocabulary.length > SPEECH_TO_TEXT_LIMITS.vocabularyEntries)
+    return `vocabulary must have at most ${SPEECH_TO_TEXT_LIMITS.vocabularyEntries} entries`;
+  for (let i = 0; i < vocabulary.length; i += 1) {
+    const entry: unknown = vocabulary[i];
+    if (!isPlainObject(entry)) return `vocabulary[${i}] must be an object`;
+    const reason = checkRequiredFields(entry, { from: STRING, to: STRING });
+    if (reason) return `vocabulary[${i}].${reason}`;
+  }
   return null;
 }
 
@@ -487,8 +520,11 @@ function validatePeerSpawnRuntimes(value: unknown): string | null {
   return null;
 }
 
-const validateUpdateSettings: Validator = (msg) => {
-  const patch = msg.patch;
+/**
+ * Why an `AppSettings` patch must not reach `updateSettings`, or null. Shared
+ * by the socket message and the agent write path (`settingsService.ts`).
+ */
+export function appSettingsPatchError(patch: unknown): string | null {
   if (!isPlainObject(patch)) return "patch must be an object";
   for (const [name, validate] of Object.entries(SETTINGS_SECTIONS)) {
     if (!hasOwn(patch, name) || patch[name] === undefined) continue;
@@ -512,7 +548,10 @@ const validateUpdateSettings: Validator = (msg) => {
   )
     return "patch.sessionPeerPromptMaxHops must be a finite number";
   return null;
-};
+}
+
+const validateUpdateSettings: Validator = (msg) =>
+  appSettingsPatchError(msg.patch);
 
 /* --------------------------- bespoke validators ----------------------------- */
 

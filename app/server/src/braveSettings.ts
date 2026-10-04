@@ -20,6 +20,8 @@ import type {
   BraveSettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const BRAVE_SETTINGS_DIR = join(DATA_DIR, "settings");
 const BRAVE_CONFIG_PATH = join(BRAVE_SETTINGS_DIR, "brave.json");
@@ -39,7 +41,7 @@ function readFile(): BraveConfigFile {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read Brave config at ${BRAVE_CONFIG_PATH}: ${String(err)}`,
+      `Failed to read Brave config at ${BRAVE_CONFIG_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -110,7 +112,9 @@ export function getBraveToolConfig(): { apiKey: string } {
 }
 
 /** Validate the saved key with a minimal live query. */
-export async function testBraveSettings(): Promise<BraveConnectionStatus> {
+export async function testBraveSettings(
+  signal?: AbortSignal,
+): Promise<BraveConnectionStatus> {
   const config = normalizeConfig(readFile());
   const checkedAt = Date.now();
   if (!config.enabled) {
@@ -132,7 +136,7 @@ export async function testBraveSettings(): Promise<BraveConnectionStatus> {
       "Accept-Encoding": "gzip",
       "X-Subscription-Token": config.apiKey,
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: deadlineSignal(15_000, signal),
   });
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).slice(0, 300);

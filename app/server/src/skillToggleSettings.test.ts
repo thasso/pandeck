@@ -19,6 +19,7 @@ import {
   type SkillToggles,
 } from "@assistant/shared";
 import { Connection } from "./connection.ts";
+import { hub } from "./hub.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 
@@ -141,6 +142,8 @@ test("the settings echo carries what was persisted, not what was sent", async ()
     readyState: 1,
     send: (raw: string) => sent.push(JSON.parse(raw) as ServerMessage),
   } as unknown as ConstructorParameters<typeof Connection>[0]);
+  // The echo reaches every registered connection, the writer included.
+  hub.register(connection);
 
   updateSettings({ skills: {} });
   await connection.handle({

@@ -190,7 +190,7 @@ test("only valid pins are persisted", () => {
   );
 });
 
-test("account usage reports pinned slots, and deleting an account clears them", () => {
+test("account usage reports pinned slots, and deleting an account clears them", async () => {
   const openai = createCredentialProfile({
     name: "Second OpenAI",
     provider: "openai-codex",
@@ -243,7 +243,7 @@ test("account usage reports pinned slots, and deleting an account clears them", 
     "disabling the default moves unpinned work to the next enabled account",
   );
 
-  const cleared = clearProfilePins(openai.id);
+  const cleared = await clearProfilePins(openai.id);
   assert.deepEqual(cleared.map((slot) => slot.key).sort(), [
     "commitAgent",
     "worktrees.namingAgent",

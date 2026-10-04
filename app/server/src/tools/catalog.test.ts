@@ -480,6 +480,40 @@ describe("tool catalog", () => {
       );
   });
 
+  test("settings tools are a deferred group for the Personal Assistant only", () => {
+    const group = toolGroupsFor("personal-assistant").find(
+      ({ id }) => id === "settings",
+    );
+    assert.ok(group, "personal-assistant exposes the settings group");
+    assert.equal(group.loading, "deferred");
+    assert.equal(group.gate, undefined);
+    assert.deepEqual(
+      group.tools.map((tool) => tool.name),
+      ["settings_read", "settings_update"],
+    );
+    for (const persona of [
+      "assistant",
+      "workshop",
+      "developer",
+      "workflow-coordinator",
+    ] as const)
+      assert.ok(
+        !agentToolsFor(persona).some((tool) =>
+          tool.name.startsWith("settings_"),
+        ),
+        `${persona} must not expose settings tools`,
+      );
+    // Plan mode keeps the read and drops the write.
+    const tools = agentToolsFor("personal-assistant");
+    const plan = modeGatedActiveToolNames(
+      "plan",
+      tools,
+      new Set(tools.map((tool) => tool.name)),
+    );
+    assert.ok(plan.has("settings_read"));
+    assert.ok(!plan.has("settings_update"));
+  });
+
   test("developer excludes the app-dev-box-only workshop tools", () => {
     const developer = new Set(
       agentToolsFor("developer").map((tool) => tool.name),
@@ -506,7 +540,11 @@ describe("tool catalog", () => {
     const permanent = agentToolsFor("personal-assistant")
       .map((tool) => tool.name)
       .sort();
-    assert.deepEqual(permanent, assistant);
+    // The Personal Assistant alone also gets the settings tools.
+    assert.deepEqual(
+      permanent,
+      [...assistant, "settings_read", "settings_update"].sort(),
+    );
     const workshop = new Set(
       agentToolsFor("workshop").map((tool) => tool.name),
     );

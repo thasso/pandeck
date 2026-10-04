@@ -31,12 +31,13 @@ import { sessionDirFor } from "./piSdk/options.ts";
 import { PERSONAL_ASSISTANT_SESSION_DIR } from "./config.ts";
 import { assertPromptRules } from "./test/promptRules.ts";
 
-test("personal-assistant is a real persona in the registry with the ordinary Assistant toolset", () => {
+test("personal-assistant is a real persona with the Assistant toolset plus settings", () => {
   const def = AGENT_TYPES["personal-assistant"];
   assert.ok(def, "AGENT_TYPES has a personal-assistant entry");
   assert.equal(def.label, "Personal Assistant");
   assert.equal(def.agentType, "personal-assistant");
-  // Shares the ordinary Assistant's integration-tool universe.
+  // The ordinary Assistant's universe, plus the settings tools that only the
+  // user's own assistant gets.
   const paNames = def
     .tools()
     .map((t) => t.name)
@@ -47,8 +48,8 @@ test("personal-assistant is a real persona in the registry with the ordinary Ass
     .sort();
   assert.deepEqual(
     paNames,
-    asstNames,
-    "personal-assistant shares the assistant integration tool universe",
+    [...asstNames, "settings_read", "settings_update"].sort(),
+    "personal-assistant is the assistant toolset plus the settings tools",
   );
 });
 

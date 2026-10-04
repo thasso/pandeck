@@ -719,6 +719,14 @@ export interface SpeechToTextSettings {
  * state, not user settings: the model lives in the Nix store and PR preview
  * instances intentionally ship without it.
  */
+/** Bounds the server clamps dictation settings to; 0 idle seconds keeps the recognizer resident. */
+export const SPEECH_TO_TEXT_LIMITS = {
+  numThreads: { min: 1, max: 32 },
+  idleShutdownSeconds: { min: 0, max: 24 * 3600 },
+  maxUtteranceSeconds: { min: 5, max: 300 },
+  vocabularyEntries: 200,
+} as const;
+
 export interface SpeechToTextStatus {
   /** True when both a recognizer binary and a complete model directory were found. */
   configured: boolean;
@@ -796,6 +804,9 @@ export interface WorktreeMergeAgentSettings extends CredentialProfilePin {
 }
 
 /** Settings for git worktree management. */
+/** Longest automatic remote-fetch interval; 0 turns the fetch off. */
+export const MAX_WORKTREE_REMOTE_FETCH_MINUTES = 24 * 60;
+
 export interface WorktreeSettings {
   /** Global root folder new worktrees are created under (projects can override). */
   root: string;

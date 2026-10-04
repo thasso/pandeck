@@ -21,6 +21,8 @@ import type {
   Context7SettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { fileReadErrorText } from "./errors.ts";
+import { deadlineSignal } from "./httpRetry.ts";
 
 const CONTEXT7_SETTINGS_DIR = join(DATA_DIR, "settings");
 const CONTEXT7_CONFIG_PATH = join(CONTEXT7_SETTINGS_DIR, "context7.json");
@@ -42,7 +44,7 @@ function readFile(): Context7ConfigFile {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read Context7 config at ${CONTEXT7_CONFIG_PATH}: ${String(err)}`,
+      `Failed to read Context7 config at ${CONTEXT7_CONFIG_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -114,7 +116,9 @@ export function getContext7ToolConfig(): { apiKey: string } {
 }
 
 /** Validate the saved key with a minimal live library search. */
-export async function testContext7Settings(): Promise<Context7ConnectionStatus> {
+export async function testContext7Settings(
+  signal?: AbortSignal,
+): Promise<Context7ConnectionStatus> {
   const config = normalizeConfig(readFile());
   const checkedAt = Date.now();
   if (!config.enabled) {
@@ -134,7 +138,7 @@ export async function testContext7Settings(): Promise<Context7ConnectionStatus> 
       Accept: "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: deadlineSignal(15_000, signal),
   });
   if (!res.ok) {
     const body = (await res.text().catch(() => "")).slice(0, 300);

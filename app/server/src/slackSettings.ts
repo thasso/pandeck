@@ -19,7 +19,7 @@ import {
   PUBLIC_BASE_URL,
   SLACK_STATIC_CONFIG,
 } from "./config.ts";
-import { errorText } from "./errors.ts";
+import { errorText, fileReadErrorText } from "./errors.ts";
 import { userTimeZone } from "./userProfile.ts";
 
 const SLACK_SETTINGS_PATH = join(DATA_DIR, "settings", "slack.json");
@@ -146,7 +146,7 @@ function readPrivate(): Required<typeof DEFAULTS> {
       return normalizePrivate(parsed ?? {});
     } catch (err) {
       throw new Error(
-        `Failed to read Slack settings at ${SLACK_SETTINGS_PATH}: ${String(err)}`,
+        `Failed to read Slack settings at ${SLACK_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
       );
     }
   }
@@ -173,7 +173,7 @@ function readHuddlePrivate(): Required<typeof HUDDLE_DEFAULTS> {
       return normalizeHuddlePrivate(parsed);
     } catch (err) {
       throw new Error(
-        `Failed to read Slack Huddle settings at ${SLACK_HUDDLE_SETTINGS_PATH}: ${String(err)}`,
+        `Failed to read Slack Huddle settings at ${SLACK_HUDDLE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
       );
     }
   }
