@@ -42,16 +42,23 @@ Four layers, each depending only on the ones below it:
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
      lookup answer from memory alone. Create, fork, rename and remove move
-     behind it in steps 10–11; until then `hub.ts` still calls the stores for
-     them and builds the merged session list from each.
+     behind it in step 11; until then `hub.ts` still calls the stores for them
+     and builds the merged session list from each.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
-     view claim, worktree, session context, genesis card, context links, the
-     prompt — and the engine answers only what differs: whether it takes the
-     send (`admit`), what it resolves before a worktree is provisioned
-     (`prepare`, pi's model), and how it brings the session live (pi mints its
-     id and freezes the prompt evidence inside creation; Claude takes the
-     client's id, links the worktree and freezes first).
+     view claim, persona guard, worktree, session context, genesis card, context
+     links, the prompt — and the engine answers only what differs: whether it is
+     switched off (`disabled`), whether the client's id becomes the session's
+     (`takesClientId`, which the view claim then names), whether that id may be
+     taken (`admitId`), which persona gate applies (`personaGate`; the guard
+     itself stays in `connection.ts`), the account (`account`), what it resolves
+     before a worktree is provisioned (`prepare`, pi's model), and how it brings
+     the session live (pi mints its id and freezes the prompt evidence inside
+     creation; Claude takes the client's id, links the worktree and freezes
+     first). Step 11 starts by moving that creation into a registry-level
+     `create` reaching the hub through `HarnessHost`, so spawn and workflow stop
+     copying the Claude sequence and this module keeps only admission and
+     preparation.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -76,8 +83,7 @@ Four layers, each depending only on the ones below it:
      loads no engine SDK, so row projections stay cheap. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
      redeems OpenAI reset credits. Model handles a session is created with still
-     come from the engines until steps 10–11 route creation through the
-     registry.
+     come from the engines until step 11 routes creation through the registry.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:

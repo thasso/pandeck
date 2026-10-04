@@ -6,13 +6,7 @@
  * differs: whether it takes the send at all, what it resolves before a
  * worktree can be provisioned, and how it brings the session live.
  */
-import {
-  isOrdinarilyCreatableAgentType,
-  type ClientMessage,
-  type Harness,
-  type TaskSessionRef,
-} from "@assistant/shared";
-import { isAgentAvailable } from "../agents.ts";
+import type { ClientMessage, Harness, TaskSessionRef } from "@assistant/shared";
 import {
   defaultOpenAiProfileId,
   enabledCredentialProfileById,
@@ -60,13 +54,24 @@ type CreateFirstSendSession = (
   start: FirstSendStart,
 ) => Promise<{ refusal: FirstSendRefusal } | FirstSendSession>;
 
+/**
+ * Which persona gate a first send on this engine passes (`Connection` applies
+ * it; persona creation guards live there): `available` is pi's environment
+ * gate; `ordinarily-creatable` refuses only the server-owned personas, so a
+ * Claude workshop stays creatable in production.
+ */
+export type PersonaGate = "available" | "ordinarily-creatable";
+
 interface FirstSendEngine {
   /** Whether the send's own id becomes the session's; the view claims it then. */
   readonly takesClientId: boolean;
+  readonly personaGate: PersonaGate;
   /** Whether the engine is switched off: its sends are ignored outright. */
   disabled(): boolean;
-  /** The engine's own admission, in its order: the account it runs on, or why not. */
-  admit(req: FirstSendRequest): FirstSendRefusal | { profileId: string };
+  /** Whether the send's id may be the session's; asked before the persona. */
+  admitId(req: FirstSendRequest): FirstSendRefusal | undefined;
+  /** The account the session runs on, or why the send names none it may use. */
+  account(req: FirstSendRequest): FirstSendRefusal | { profileId: string };
   /** What has to be resolved before a worktree can be provisioned for it. */
   prepare(
     req: FirstSendRequest,
@@ -89,15 +94,15 @@ const engines: Record<Harness, FirstSendEngine> = {
   pi: {
     // pi mints the session id; the client's only names the optimistic view.
     takesClientId: false,
+    personaGate: "available",
     disabled: () => false,
-    admit(req) {
+    admitId: () => undefined,
+    account(req) {
       const profileId = req.credentialProfileId ?? defaultOpenAiProfileId();
       if (enabledCredentialProfileById(profileId)?.provider !== "openai-codex")
         return {
           message: "Select an OpenAI credential profile for this pi session.",
         };
-      if (!isAgentAvailable(req.agentType))
-        return { message: `The "${req.agentType}" agent is not available.` };
       return { profileId };
     },
     async prepare(req, profileId) {
@@ -157,18 +162,11 @@ const engines: Record<Harness, FirstSendEngine> = {
   },
   "claude-sdk": {
     takesClientId: true,
+    personaGate: "ordinarily-creatable",
     disabled: () => !getSettings().claudeSdk.enabled,
-    admit(req) {
-      // Before anything is written for the client-supplied id.
-      const held = claudeOwnershipRefusal(req.id);
-      if (held) return held;
-      // The singleton `personal-assistant` persona is server-owned; a crafted
-      // send must not be able to create it. Claude workshop must stay creatable
-      // in production, so this is not pi's availability gate.
-      if (!isOrdinarilyCreatableAgentType(req.agentType))
-        return {
-          message: `The "${String(req.agentType)}" agent cannot be created.`,
-        };
+    // Before anything is written for the client-supplied id.
+    admitId: (req) => claudeOwnershipRefusal(req.id),
+    account(req) {
       const profileId = req.credentialProfileId?.trim();
       if (
         !profileId ||

@@ -104,6 +104,7 @@ import {
   firstSendEngine,
   type FirstSendRefusal,
   type FirstSendRequest,
+  type PersonaGate,
 } from "./harnesses/firstSend.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -1527,7 +1528,13 @@ export class Connection implements Viewer {
       this.rejectBadId();
       return;
     }
-    const admitted = engine.admit(msg);
+    const heldId = engine.admitId(msg);
+    if (heldId) {
+      this.refuseFirstSend(msg, heldId);
+      return;
+    }
+    if (!this.guardFirstSendPersona(msg.agentType, engine.personaGate)) return;
+    const admitted = engine.account(msg);
     if ("message" in admitted) {
       this.refuseFirstSend(msg, admitted);
       return;
@@ -1613,6 +1620,25 @@ export class Connection implements Viewer {
     );
     // Now that the session has a turn, refresh the sidebar so it appears.
     await hub.broadcastSessions();
+  }
+
+  /**
+   * The persona creation guard of a first send, by the gate its engine names
+   * (`harnesses/firstSend.ts`): pi's environment availability, or, for a
+   * Claude session, only the server-owned personas refused, which a crafted
+   * send must not be able to create.
+   */
+  private guardFirstSendPersona(
+    agentType: AgentType,
+    gate: PersonaGate,
+  ): boolean {
+    if (gate === "available") return this.guardKind(agentType);
+    if (isOrdinarilyCreatableAgentType(agentType)) return true;
+    this.send({
+      type: "error",
+      message: `The "${String(agentType)}" agent cannot be created.`,
+    });
+    return false;
   }
 
   /**

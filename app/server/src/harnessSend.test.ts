@@ -72,6 +72,18 @@ test("validation", () => {
     );
   }
 
+  // Only a harness this app runs is routed; an unknown or inherited name is
+  // rejected before any handler looks it up.
+  for (const harness of ["bogus", "__proto__", "toString"]) {
+    const res = validateClientMessage(wellFormed(harness));
+    assert.equal(
+      res.ok,
+      false,
+      `harnessSend for ${harness} should be rejected`,
+    );
+  }
+  assert.equal(validateClientMessage(wellFormed("pi")).ok, true);
+
   // Wrong-kind optional field rejected.
   const badAttachments = validateClientMessage({
     ...wellFormed("claude-sdk"),

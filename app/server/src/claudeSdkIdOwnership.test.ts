@@ -51,6 +51,7 @@ function firstSend(id: string) {
   const acquire = vi.spyOn(hub, "acquireClaudeSdk");
   const freeze = vi.spyOn(promptConditions, "sessionPromptConditions");
   return {
+    conn,
     sent,
     acquire,
     freeze,
@@ -158,4 +159,19 @@ test("nothing is awaited between the last ownership check and the session", asyn
   });
   await assert.rejects(send.run(), /reached the session/);
   assert.equal(createdInWindow, true);
+});
+
+test("a Claude first send claims the view under its own id", async () => {
+  // The client names the session, so a delete or archive of that id supersedes
+  // the send still on its way (`clearSessionView`).
+  const send = firstSend("claims-its-id");
+  const claim = vi.spyOn(
+    send.conn as unknown as { claimViewRequest: (target?: string) => number },
+    "claimViewRequest",
+  );
+  send.acquire.mockImplementation(() => {
+    throw new Error("reached the session");
+  });
+  await assert.rejects(send.run(), /reached the session/);
+  assert.deepEqual(claim.mock.calls, [["claims-its-id"]]);
 });

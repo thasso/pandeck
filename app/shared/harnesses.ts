@@ -54,6 +54,11 @@ export const HARNESSES: Readonly<Record<Harness, HarnessDescriptor>> = {
   },
 };
 
+/** Whether an untrusted value names a harness this app runs. */
+export function isHarness(value: string): value is Harness {
+  return Object.hasOwn(HARNESSES, value);
+}
+
 /** The harness that runs a model of this picker provider. */
 export function harnessForModelProvider(provider: string | undefined): Harness {
   return provider === CLAUDE_SDK_PROVIDER ? "claude-sdk" : "pi";
