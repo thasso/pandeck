@@ -489,7 +489,7 @@ describe("tool catalog", () => {
     assert.equal(group.gate, undefined);
     assert.deepEqual(
       group.tools.map((tool) => tool.name),
-      ["settings_read", "settings_update"],
+      ["settings_read", "settings_update", "settings_request_input"],
     );
     for (const persona of [
       "assistant",
@@ -512,6 +512,7 @@ describe("tool catalog", () => {
     );
     assert.ok(plan.has("settings_read"));
     assert.ok(!plan.has("settings_update"));
+    assert.ok(!plan.has("settings_request_input"));
   });
 
   test("developer excludes the app-dev-box-only workshop tools", () => {
@@ -543,7 +544,12 @@ describe("tool catalog", () => {
     // The Personal Assistant alone also gets the settings tools.
     assert.deepEqual(
       permanent,
-      [...assistant, "settings_read", "settings_update"].sort(),
+      [
+        ...assistant,
+        "settings_read",
+        "settings_update",
+        "settings_request_input",
+      ].sort(),
     );
     const workshop = new Set(
       agentToolsFor("workshop").map((tool) => tool.name),

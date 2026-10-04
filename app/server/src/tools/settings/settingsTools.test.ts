@@ -101,7 +101,7 @@ describe("settings_update", () => {
       call(settingsUpdate, {
         changes: [{ path: "jira.atlassianToken", value: "secret" }],
       }),
-      /secret values never pass through an agent.*\/settings\/jira/,
+      /secret values never pass through an agent\. Ask the user for it with settings_request_input/,
     );
     assert.equal(getSettings().jira.atlassianTokenConfigured, false);
   });

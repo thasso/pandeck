@@ -61,7 +61,10 @@ export function PendingApprovalsLedge({
             className="shrink-0 text-warning"
             aria-hidden="true"
           />
-          <span className="shrink-0 font-medium text-warning">Approve</span>
+          <span className="shrink-0 font-medium text-warning">
+            {/* A settings-input card asks for a value, not a yes. */}
+            {card.body.kind === "settingsInput" ? "Enter" : "Approve"}
+          </span>
           <span className="min-w-0 flex-1 truncate text-fg">{card.title}</span>
           <span className="flex shrink-0 items-center gap-1 text-faint">
             Show card

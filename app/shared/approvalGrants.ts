@@ -52,6 +52,10 @@ export function approvalGrantKeys(body: ApprovalBody): string[] {
     case "tempoWorklog":
       for (const item of body.items) keys.add(`tempo:${item.action}`);
       break;
+    case "settingsInput":
+      // Never granted: only the user can type the secret or connect the
+      // account, so no earlier decision may answer a later card.
+      break;
     default:
       keys.add(body.kind);
   }

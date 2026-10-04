@@ -167,3 +167,33 @@ grant.
 Settings-file read errors never quote the file: a `JSON.parse` failure reads
 "the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the
 quoted text could be a token.
+
+## Cards for secrets and connections
+
+`settings_request_input` raises a `settingsInput` approval card for a `secret`
+or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
+`app/web/src/components/SettingsInputApprovalBody.tsx`):
+
+- **Secret**: the card shows a password field. Save sends the value in the
+  approving decision's `edits` (`SettingsInputResolutionEdits`) and nowhere
+  else. The executor's `prepare` checks it and holds it in memory for that one
+  resolution; `execute` writes it through `saveSettings` and runs the section's
+  connection test. The stored card, the outcome the agent reads and every client
+  see only "saved" and the server-written test result. A failed save is reported
+  in the server's words too, since a writer's or side effect's message may carry
+  the value in some encoding. The executor's `release` drops the held value
+  however the resolution ends, including a failure between `prepare` and
+  `execute`. An approval without a value is refused and the card stays pending.
+  In the browser the field lives in a component mounted only while the card
+  waits, so a dismissed, answered or replaced card keeps no typed value.
+- **Connect**: the card opens the descriptor's `connectPath` (the server's OAuth
+  start route) in a popup. The card cannot be approved before the account is
+  connected; when the OAuth callback announces its section, every pending
+  connection card it satisfied is approved and its outcome handed to the
+  session. A connection the deployment has no OAuth client for is refused when
+  asked for.
+
+The card has no grant key, so "approve for session" never covers it. Asking
+again for the same setting supersedes the earlier card. Claude and OpenAI
+account logins are credential profiles with their own login flows and are not
+covered yet.

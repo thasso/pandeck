@@ -95,6 +95,8 @@ export interface SettingDescriptor {
   configuredBy?: string;
   /** `secret`/`oauth`: the integration patch flag that clears it. */
   clearWith?: string;
+  /** `oauth`: the server route that starts the browser flow. */
+  connectPath?: string;
   /** Units, or what an empty value means. */
   hint?: string;
 }
@@ -182,8 +184,17 @@ function oauth(
   label: string,
   configuredBy: string,
   clearWith: string,
+  connectPath: string,
 ): SettingDescriptor {
-  return { path, section, label, access: "oauth", configuredBy, clearWith };
+  return {
+    path,
+    section,
+    label,
+    access: "oauth",
+    configuredBy,
+    clearWith,
+    connectPath,
+  };
 }
 
 /** The four fields every configured model slot shares. */
@@ -580,6 +591,7 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Google account connection",
     "google.refreshTokenConfigured",
     "clearTokens",
+    "/api/google/oauth/start",
   ),
   readonly("google.redirectUri", "google", "OAuth redirect URI"),
   readonly("google.accountEmail", "google", "Connected account"),
@@ -667,6 +679,7 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Tempo connection",
     "tempo.refreshTokenConfigured",
     "clearTokens",
+    "/api/tempo/oauth/start",
   ),
   readonly("tempo.redirectUri", "tempo", "OAuth redirect URI"),
   readonly(
@@ -720,6 +733,16 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
 ];
 
 const BY_PATH = new Map(SETTINGS_REGISTRY.map((d) => [d.path, d]));
+
+/** The value at a dotted settings path, or undefined where the path ends. */
+export function valueAtPath(root: unknown, path: string): unknown {
+  let node = root;
+  for (const key of path.split(".")) {
+    if (!node || typeof node !== "object") return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
+}
 
 export function settingDescriptor(path: string): SettingDescriptor | undefined {
   return BY_PATH.get(path);

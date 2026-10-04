@@ -48,7 +48,12 @@ test("personal-assistant is a real persona with the Assistant toolset plus setti
     .sort();
   assert.deepEqual(
     paNames,
-    [...asstNames, "settings_read", "settings_update"].sort(),
+    [
+      ...asstNames,
+      "settings_read",
+      "settings_update",
+      "settings_request_input",
+    ].sort(),
     "personal-assistant is the assistant toolset plus the settings tools",
   );
 });

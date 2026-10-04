@@ -153,6 +153,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   memory_manage: "local",
   settings_read: "none",
   settings_update: "local",
+  settings_request_input: "local",
   task_read: "none",
   task_manage: "local",
   list_attachments: "none",
@@ -760,9 +761,9 @@ function settingsToolGroup(): UnclassifiedToolGroup {
     id: "settings",
     label: "Settings",
     description:
-      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow.",
+      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow; ask the user for a secret or an account connection through a card.",
     searchHint:
-      "settings configuration configure preferences enable disable integration model account",
+      "settings configuration configure preferences enable disable integration model account token api key connect",
     loading: "deferred",
     family: "shared",
     tools: settingsTools,

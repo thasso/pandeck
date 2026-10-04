@@ -22,8 +22,19 @@ hidden prompt through `agentHandoffs.ts`.
 | `sessionSpawn`            | `session_spawn` with `operation: "propose"`               | `sessionSpawn`                                          |
 | `managedPullRequestMerge` | `worktree_finish_pull_request` into the default branch    | `managedPullRequestMerge`                               |
 | `projectCreate`           | `project_create`                                          | `projectCreate`                                         |
+| `settingsInput`           | `settings_request_input`                                  | none: never granted                                     |
 
 The `commit` kind remains readable for stored cards; nothing creates it today.
+
+A `settingsInput` card asks the user for a secret or an account connection the
+Personal Assistant may not handle itself (`docs/settings.md`). It has no grant
+key, so no earlier decision answers it and it is never auto-approved. A secret
+card can be approved only with the value in the decision's edits: `prepare`
+holds it in memory for that one resolution, `execute` writes it, and the
+executor's `release` hook (called in a `finally` around the whole resolution)
+drops it however the resolution ends. The stored card never carries it. A
+connection card refuses approval until the account is connected and is approved
+by the server when the OAuth callback announces the grant.
 
 `github_rerun_actions_run` writes without a card: a re-run loses nothing and is
 what an agent watching CI needs inside its loop. A branch-delete card binds the
