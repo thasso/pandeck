@@ -25,11 +25,11 @@ bootstrap page — never product UI.
   `build.rs`, never an edit there.
 - Desktop-only Tauri surface is `cfg(desktop)`, not merely unused: menu, extra
   windows, geometry, `inner_size` (tao sizes the `UIWindow` by it).
-- Keep the iOS webview covering the whole screen (`ios::cover_safe_area`), or
-  `env(safe-area-inset-*)` is zero.
-- Every open request from outside the page (notification tap, `pa://` link) goes
-  through `openurl::open_target`, addressed to ONE window; the target stays
-  opaque and rides `TARGET_KEY`.
+- Cover the iOS screen with `ios::cover_safe_area`, or CSS safe-area insets are
+  zero.
+- Route outside opens through `openurl::open_target` to ONE window. Retain
+  targets until that window acknowledges navigation; events only wake the drain.
+  Keep targets opaque under `TARGET_KEY`.
 - The init script stamps `data-native-shell` and the chrome insets before first
   paint; the page detects the shell only through `lib/nativeShell.ts`, never an
   awaited path. On macOS the top bar IS the title bar: no page height for it,

@@ -68,12 +68,32 @@ the string opaque — the page resolves it (`app/web/src/lib/openTarget.ts`),
 because teaching the shell the route table would mean rebuilding the shell
 whenever a route moved.
 
+The shell parks the newest target for the addressed window before emitting an
+`assistant://open-url` wake-up. The page registers its listener before the first
+`take_pending_open_url` drain, then serializes drains for later wake-ups. The
+command returns `{ target: string | null }` without clearing the slot. After
+navigation the page calls it again with `acknowledgedTarget`; only a matching
+parked target is cleared, so a newer tap survives an older acknowledgement.
+Events with no listener and replies arriving after teardown leave the target
+parked for the next page. A tap before any window exists waits for the first
+page. Acknowledged navigation is not repeated on reload.
+
+The web client also accepts older installed shells' string-or-null replies.
+Those shells do not park live taps, so only for that reply shape does an empty
+drain fall back to the event's target. Deploy the web before installing the new
+shell. The router fixes work with existing shells; retained delivery across
+reload and teardown needs a rebuilt shell.
+
+A session target remains the requested route while disconnected and until its
+snapshot arrives. The cached session list may omit it; that is not a reason to
+switch back to the previously viewed chat.
+
 On iOS the target travels under one key, `paTarget`, in both a local
 notification's `userInfo` and at the top level of the APNs payload beside `aps`
 (`userInfo` for a remote notification IS the whole JSON body). The shell reads
-it one way for both. **Renaming it means changing `app/shell/src/ios.rs` and
-`app/server/src/apns.ts` together**; a mismatch shows up as a tap that opens the
-app and loses the session.
+it one way for both. **Renaming it means changing `app/shell/src/usernotify.rs`
+and `app/server/src/apns.ts` together**; a mismatch shows up as a tap that opens
+the app and loses the session.
 
 ## Setting up APNs
 

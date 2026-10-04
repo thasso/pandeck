@@ -6,7 +6,8 @@
   so Close/traversal preserve origin, Forward and position.
 - Only `nativeShell.ts` knows Tauri exists; detect its root attribute
   synchronously and use typed helpers. Same-origin external files pass only
-  scoped token-free grants to its narrow opener, else fail closed.
+  scoped token-free grants to its narrow opener, else fail closed. Outside opens
+  register before draining, serialize drains, and acknowledge after navigation.
 - Exactly ONE runtime raises a socket `appNotification`, and
   `apnsPush.shouldRaiseAppNotification` is the only answer: two buzz twice, none
   is silence (`docs/notifications.md`).

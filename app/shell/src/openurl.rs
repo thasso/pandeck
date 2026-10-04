@@ -12,10 +12,12 @@
 //! thing a remote-URL shell exists to avoid — so the page does that half, and
 //! the two forms are told apart by their first character.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-use tauri::{AppHandle, Emitter, EventTarget, Manager};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow};
+
+use crate::openurl_pending::PendingTargets;
 
 use crate::trace;
 
@@ -24,19 +26,14 @@ use crate::trace;
 /// a notification click is not a deep link, and both must arrive the same way.
 pub const OPEN_URL_EVENT: &str = "assistant://open-url";
 
-/// A target that arrived before any page could hear it.
-///
-/// Opening a `pa://` link while the app is closed LAUNCHES it, and the page then
-/// takes seconds to load and subscribe — the event is long gone by then. So a
-/// target that lands before the first page is ready waits here instead. One
-/// slot, not a queue: these are navigations, and only the newest is wanted.
-static PENDING: Mutex<Option<String>> = Mutex::new(None);
+/// Keep every target until its addressed page acknowledges navigation. Events
+/// only wake the drain, so a reload, slow listener registration or failed emit
+/// cannot lose it. Each window has one slot, since only the newest is wanted.
+static PENDING: OnceLock<Mutex<PendingTargets>> = OnceLock::new();
 
-/// Set the first time a page collects the pending target, which is also the
-/// moment we know a page is listening. Before that the live event reaches
-/// nobody, so it has to be parked; after it, parking would navigate a window
-/// that already went there.
-static PAGE_READY: AtomicBool = AtomicBool::new(false);
+fn pending_targets() -> &'static Mutex<PendingTargets> {
+    PENDING.get_or_init(|| Mutex::new(PendingTargets::default()))
+}
 
 /// Hand a target to the app: raise a window and tell THAT window where to go.
 ///
@@ -49,28 +46,53 @@ pub fn open_target(app: &AppHandle, target: String) {
         // Launched by the link with nothing open yet, or every window closed
         // while the app kept running.
         .or_else(|| crate::open_app_window(app, None));
+    if let Ok(mut pending) = pending_targets().lock() {
+        pending.park(window.as_ref().map(|window| window.label()), target.clone());
+    }
     let Some(window) = window else {
-        trace!("open {target} -> no window to show it in");
+        trace!("open {target} -> parked until a window exists");
         return;
     };
     let _ = window.set_focus();
-
-    if PAGE_READY.load(Ordering::Relaxed) {
-        trace!("open {target} -> {}", window.label());
-        let _ = app.emit_to(EventTarget::webview_window(window.label()), OPEN_URL_EVENT, target);
-        return;
-    }
-    trace!("open {target} -> parked until a page is ready");
-    if let Ok(mut pending) = PENDING.lock() {
-        *pending = Some(target);
+    trace!("open {target} -> parked for {}", window.label());
+    // Keep the string payload for hosted pages, but the current page treats it
+    // as a wake-up and drains the slot rather than navigating twice.
+    if let Err(error) = app.emit_to(
+        EventTarget::webview_window(window.label()),
+        OPEN_URL_EVENT,
+        target,
+    ) {
+        trace!("open-url wake failed: {error}");
     }
 }
 
-/// The target the page has not seen yet, if any. Called once per page load, and
-/// taking it clears it, so a reload does not re-navigate somewhere the user has
-/// since left.
+/// A structured reply distinguishes acknowledged delivery from older shells'
+/// destructive string-or-null take, whose live events carry the only target.
+#[derive(Serialize)]
+pub struct PendingOpenUrl {
+    target: Option<String>,
+}
+
+/// Peek only the calling window, or acknowledge a target it already navigated
+/// to. A page that disappears with a reply in flight leaves its target parked.
 #[tauri::command]
-pub fn take_pending_open_url() -> Option<String> {
-    PAGE_READY.store(true, Ordering::Relaxed);
-    PENDING.lock().ok().and_then(|mut pending| pending.take())
+pub fn take_pending_open_url(
+    window: WebviewWindow,
+    acknowledged_target: Option<String>,
+) -> PendingOpenUrl {
+    let target = pending_targets().lock().ok().and_then(|mut pending| {
+        if let Some(target) = acknowledged_target {
+            pending.acknowledge(window.label(), &target);
+            return None;
+        }
+        pending.peek(window.label())
+    });
+    PendingOpenUrl { target }
+}
+
+#[cfg(desktop)]
+pub fn forget_window(label: &str) {
+    if let Ok(mut pending) = pending_targets().lock() {
+        pending.forget(label);
+    }
 }

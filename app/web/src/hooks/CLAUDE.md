@@ -21,11 +21,9 @@
   `personal-assistant` singleton row on shell-cache hydration, and an optimistic
   `settleSession` must not move `updatedAt` and must send its row's OBSERVED
   attention revision (0 when absent).
-- A display preference that reshapes transcript rows is held in two halves:
-  `useTranscriptScroll`'s `holdViewChange` in the EVENT that flips it (the
-  layout it measures is gone once that renders) and `commitViewChange` from the
-  commit that carries the new flags, which is where the hold's deadline starts.
-  Never capture in render, and never time a hold from the click: React may
-  abandon that render, or defer the transition past the deadline. Skipping
-  either half fails silently, by dropping the reader elsewhere in the
-  conversation.
+- Pending session routes wait for the addressed snapshot, even offline. A
+  session absent from the cached list never justifies reverting to the old chat.
+- Transcript display changes call `useTranscriptScroll`'s `holdViewChange` in
+  the flipping EVENT, then `commitViewChange` in the commit with the new flags,
+  which starts the deadline. Never capture in render or time from the click:
+  React may abandon or defer that render. Both halves preserve reading position.
