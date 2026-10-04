@@ -358,6 +358,30 @@ describe("peerPromptStore", () => {
       );
     });
 
+    it("takes a forward on a fresh chain as the answer, after the coordinator was prompted", () => {
+      // The user prompted C, closing the chain C's request to I lives on, so
+      // I's handoff to R — and R's report to C — travel on a fresh chain.
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      unanswered(c, i);
+      const fresh = store.createChain(`fresh-${seq++}`);
+      send(i, r, fresh);
+      assert.deepEqual(owedTo(c), [i], "handing on is not yet the answer");
+      send(r, c, fresh);
+      assert.equal(owedTo(c), undefined);
+    });
+
+    it("takes no report on another chain than the handoff that carried the work", () => {
+      const c = `owed-c-${seq++}`;
+      const i = `owed-i-${seq++}`;
+      const r = `owed-r-${seq++}`;
+      const request = unanswered(c, i);
+      send(i, r, request.chainId);
+      send(r, c, store.createChain(`unrelated-${seq++}`));
+      assert.deepEqual(owedTo(c), [i]);
+    });
+
     it("takes any later word from the owed peer as the answer", () => {
       // After a poke (which closes the peer's chains) or a re-ask, the peer's
       // report arrives on a different chain and marks nothing.
@@ -419,6 +443,10 @@ describe("peerPromptStore", () => {
       assert.match(
         details,
         /SEARCH r USING INDEX peer_prompts_recipient_sender_seq_idx \(recipient_session_id=\? AND sender_session_id=\? AND queue_seq>\?\)/,
+      );
+      assert.match(
+        details,
+        /SEARCH f USING INDEX peer_prompts_sender_idx \(sender_session_id=\? AND queue_seq>\?\)/,
       );
       assert.match(
         details,

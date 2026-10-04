@@ -1092,19 +1092,16 @@ export const OUTSTANDING_REPLIES_SQL = `
               AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
          )
      AND NOT EXISTS (
-           SELECT 1 FROM peer_prompts r
-            WHERE r.recipient_session_id = o.sender_session_id
-              AND r.chain_id = o.chain_id
-              AND r.queue_seq > o.queue_seq
+           SELECT 1 FROM peer_prompts f
+            CROSS JOIN peer_prompts r
+            WHERE f.sender_session_id = o.recipient_session_id
+              AND f.queue_seq > o.queue_seq
+              AND (f.accepted_at_ms IS NOT NULL OR f.status = 'interrupted')
+              AND r.recipient_session_id = o.sender_session_id
+              AND r.sender_session_id = f.recipient_session_id
+              AND r.chain_id = f.chain_id
+              AND r.queue_seq > f.queue_seq
               AND (r.accepted_at_ms IS NOT NULL OR r.status = 'interrupted')
-              AND EXISTS (
-                SELECT 1 FROM peer_prompts f
-                 WHERE f.chain_id = o.chain_id
-                   AND f.sender_session_id = o.recipient_session_id
-                   AND f.recipient_session_id = r.sender_session_id
-                   AND (f.accepted_at_ms IS NOT NULL OR f.status = 'interrupted')
-                   AND f.queue_seq > o.queue_seq
-                   AND f.queue_seq < r.queue_seq)
          )
    ORDER BY o.sender_session_id, o.recipient_session_id`;
 
@@ -1132,26 +1129,30 @@ export const OUTSTANDING_REPLIES_SQL = `
  *   peer, or an answer after the sender re-asked, leaves the original row
  *   open. A LATER prompt that REACHED the sender (durably admitted, or
  *   recovered at boot as `interrupted` after reaching its log — a report
- *   cancelled or failed before delivery answers nothing) from the owed peer
- *   counts as the answer, and so does one on the request's own chain (which a
- *   forward keeps) — but only from a session the owed peer itself handed the
- *   work to (a handoff that was delivered) on that chain since the request: peers spawned in one turn share a
- *   chain, and one reviewer's reply must not answer for the reviewer beside it,
- *   even when that reviewer delegated elsewhere on the same chain.
+ *   cancelled or failed before delivery answers nothing) counts as the
+ *   answer when it came from the owed peer, or from a session the owed peer
+ *   handed the work to since the request (a delivered handoff), on that
+ *   HANDOFF's chain. The handoff's chain, not the request's: a user prompt
+ *   to the coordinator or the owed peer closes their chains, so the handoff
+ *   and the report that follows it travel on a fresh one. And only from a
+ *   session the owed peer handed to: peers spawned in one turn share a chain,
+ *   and one reviewer's reply must not answer for the reviewer beside it.
  *
- * Each question is its own NOT EXISTS so each is one exact index seek on
- * (recipient, sender or chain, queue_seq) — `0065_peer_prompt_reply_lookup.sql`
- * (whose header overstates the gain: the earlier probes already seeked the
- * sender/chain indexes, reading the owed peer's later sends or the chain) —
- * and the lost-reply half follows `0066_peer_prompt_replied_by_index.sql`;
- * `peerPromptStore.test.ts` pins the plan.
+ * Each question is its own NOT EXISTS, each answered by index seeks: the
+ * owed peer's own word by (recipient, sender, queue_seq) from
+ * `0065_peer_prompt_reply_lookup.sql`, the forwarded one by the owed peer's
+ * later sends (`peer_prompts_sender_idx`) and then (recipient, chain,
+ * queue_seq) from 0065 — whose header overstates the gain, since the sender
+ * and chain indexes already existed. The lost-reply half follows
+ * `0066_peer_prompt_replied_by_index.sql`; `peerPromptStore.test.ts` pins the
+ * plan.
  *
- * Not modelled: a report that reaches the sender on a fresh chain through a
- * third peer (a poke closes the poked peer's chains, so its forward starts a
- * new one), a forward of two or more hops (owed peer → X → Y → sender), and a
- * sender that releases a peer with a plain message ("stand down") — each stays
- * owed until the user settles or archives that peer, or the request expires
- * (`RESPONSE_TTL_MS`, 30 days).
+ * Not modelled: a forward whose report travels on a different chain than the
+ * handoff that carried the work (the user prompted the forwarding peer in
+ * between, closing its chains), a forward of two or more hops (owed peer → X
+ * → Y → sender), and a sender that releases a peer with a plain message
+ * ("stand down") — each stays owed until the user settles or archives that
+ * peer, or the request expires (`RESPONSE_TTL_MS`, 30 days).
  */
 function outstandingRepliesBySender(now = Date.now()): Map<string, string[]> {
   const rows = getDb().prepare(OUTSTANDING_REPLIES_SQL).all(now, now) as {

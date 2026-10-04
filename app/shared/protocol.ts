@@ -1667,7 +1667,7 @@ export interface SessionListItem {
   /**
    * The peers that still owe this session a reply, by session id: it asked
    * (`responseRequested`), their turn ended without the answer, and nothing
-   * from them — nor on that request's chain — has reached it since. A request
+   * from them — nor from a peer they handed the work to, on that handoff's chain — has reached it since. A request
    * still being delivered is not listed. Omitted when none. What makes
    * a quiet tree STALLED rather than done: nothing is moving, and someone
    * still owes an answer (the Sessions inbox's `spawnTreeStall`).
