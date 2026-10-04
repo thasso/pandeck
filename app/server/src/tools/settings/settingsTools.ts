@@ -8,7 +8,9 @@ import {
   type SettingValueSpec,
   type SettingsSectionId,
 } from "@assistant/shared/settingsRegistry";
+import { errorText } from "../../errors.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
+import { redactSecrets, redactSecretsDeep } from "../../secretRedaction.ts";
 import { getSettings } from "../../settings.ts";
 import {
   ASSISTANT_PROFILE_FIELDS,
@@ -30,12 +32,9 @@ import {
 const MAX_PATHS = 50;
 const MAX_CHANGES = 50;
 
-type SettingsReadParams = { section?: string; paths?: string[] };
-
-type SettingsUpdateParams = {
-  changes?: Array<{ path?: string; value?: unknown }>;
-  test?: string[];
-};
+// Typed loosely on purpose: the arguments are checked at execution.
+type SettingsReadParams = Record<string, unknown>;
+type SettingsUpdateParams = Record<string, unknown>;
 
 const settingsReadSchema = {
   type: "object",
@@ -78,6 +77,8 @@ const settingsUpdateSchema = {
     },
     test: {
       type: "array",
+      maxItems: TESTABLE_SETTINGS_SECTIONS.length,
+      uniqueItems: true,
       items: { type: "string", enum: TESTABLE_SETTINGS_SECTIONS },
       description:
         "Integration sections whose connection test runs after saving.",
@@ -142,33 +143,127 @@ function sectionIndex() {
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function rejectUnknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  where: string,
+): void {
+  const extra = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extra.length > 0)
+    throw new Error(`${where} has unknown fields: ${extra.join(", ")}`);
+}
+
+function isSectionId(value: unknown): value is SettingsSectionId {
+  return (SETTINGS_SECTION_IDS as readonly unknown[]).includes(value);
+}
+
+/**
+ * The read arguments, checked here because neither harness enforces the
+ * schema before `execute`.
+ */
+function readParams(raw: unknown): {
+  section?: SettingsSectionId;
+  paths: string[];
+} {
+  if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+  rejectUnknownKeys(raw, ["section", "paths"], "settings_read");
+  if (raw.section !== undefined && !isSectionId(raw.section))
+    throw new Error(`Unknown section: ${String(raw.section)}`);
+  const paths = raw.paths ?? [];
+  if (
+    !Array.isArray(paths) ||
+    paths.length > MAX_PATHS ||
+    !paths.every((path) => typeof path === "string")
+  )
+    throw new Error(`paths must be at most ${MAX_PATHS} strings.`);
+  return {
+    ...(raw.section !== undefined ? { section: raw.section } : {}),
+    paths,
+  };
+}
+
+/** The update arguments, checked in full before anything is written. */
+function updateParams(raw: unknown): {
+  writes: SettingWrite[];
+  tests: SettingsSectionId[];
+} {
+  if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+  rejectUnknownKeys(raw, ["changes", "test"], "settings_update");
+  const changes = raw.changes ?? [];
+  if (!Array.isArray(changes) || changes.length > MAX_CHANGES)
+    throw new Error(`changes must be an array of at most ${MAX_CHANGES}.`);
+  const writes = changes.map((change: unknown, i): SettingWrite => {
+    if (!isRecord(change)) throw new Error(`changes[${i}] must be an object.`);
+    rejectUnknownKeys(change, ["path", "value"], `changes[${i}]`);
+    if (typeof change.path !== "string")
+      throw new Error(`changes[${i}].path must be a string.`);
+    // An omitted value is a malformed change, never a null that disconnects.
+    if (!Object.hasOwn(change, "value") || change.value === undefined)
+      throw new Error(`changes[${i}].value is required.`);
+    const descriptor = settingDescriptor(change.path);
+    if (descriptor?.access === "secret" && change.value !== null)
+      throw new Error(
+        `${change.path} is a secret, and secret values never pass through an agent. Ask the user to enter it on the Settings page (/settings/${descriptor.section}).`,
+      );
+    return { path: change.path, value: change.value };
+  });
+  const test = raw.test ?? [];
+  if (!Array.isArray(test))
+    throw new Error("test must be an array of section ids.");
+  const tests = [...new Set(test as unknown[])].map((section) => {
+    if (!TESTABLE_SETTINGS_SECTIONS.includes(section as SettingsSectionId))
+      throw new Error(
+        `${String(section)} has no connection test. Testable: ${TESTABLE_SETTINGS_SECTIONS.join(", ")}.`,
+      );
+    return section as SettingsSectionId;
+  });
+  if (writes.length === 0 && tests.length === 0)
+    throw new Error("Pass at least one change or one section to test.");
+  return { writes, tests };
+}
+
+/**
+ * Run a tool body with everything it returns or throws scrubbed of secrets.
+ * Settings values hold none by construction, but a base URL may carry
+ * credentials and integration errors were written for the Settings page.
+ */
+async function scrubbed(run: () => Promise<unknown>) {
+  try {
+    return jsonResult(redactSecretsDeep(await run()));
+  } catch (err) {
+    throw new Error(redactSecrets(errorText(err)));
+  }
+}
+
 const settingsReadTool = defineAgentTool<SettingsReadParams>({
   name: "settings_read",
   label: "Read Settings",
   description:
     "Read the app's settings: everything the user can see on the Settings page. With no arguments, list the sections; pass section for all its settings or paths for specific ones. Each setting reports its value, type and access. A secret reports only whether it is set: its value is never readable.",
   parameters: settingsReadSchema,
-  async execute(params) {
-    const paths = params.paths ?? [];
-    if (!params.section && paths.length === 0)
-      return jsonResult({ sections: sectionIndex() });
-    const unknown = paths.filter((path) => !settingDescriptor(path));
-    if (unknown.length > 0)
-      throw new Error(
-        `Unknown setting path: ${unknown.join(", ")}. Read a section to see its paths.`,
+  execute: (raw) =>
+    scrubbed(async () => {
+      const { section, paths } = readParams(raw);
+      if (!section && paths.length === 0) return { sections: sectionIndex() };
+      const unknown = paths.filter((path) => !settingDescriptor(path));
+      if (unknown.length > 0)
+        throw new Error(
+          `Unknown setting path: ${unknown.join(", ")}. Read a section to see its paths.`,
+        );
+      const descriptors = SETTINGS_REGISTRY.filter(
+        (d) => d.section === section || paths.includes(d.path),
       );
-    const descriptors = SETTINGS_REGISTRY.filter(
-      (d) => d.section === params.section || paths.includes(d.path),
-    );
-    const settings = getSettings();
-    const outside = params.section
-      ? SETTINGS_OUTSIDE_REGISTRY[params.section as SettingsSectionId]
-      : undefined;
-    return jsonResult({
-      settings: descriptors.map((d) => entryFor(d, settings)),
-      ...(outside ? { notInSettingsTools: outside } : {}),
-    });
-  },
+      const settings = getSettings();
+      const outside = section ? SETTINGS_OUTSIDE_REGISTRY[section] : undefined;
+      return {
+        settings: descriptors.map((d) => entryFor(d, settings)),
+        ...(outside ? { notInSettingsTools: outside } : {}),
+      };
+    }),
 });
 
 const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
@@ -177,42 +272,44 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
   description:
     "Change settings, as the user could on the Settings page; the change applies at once. Each change names a path from settings_read and its new value: a field replaces only itself, a json value is written whole. null clears a secret or disconnects an OAuth connection. Never ask for a secret's value in chat: the user enters it on the section's Settings page. test runs integration connection tests after saving.",
   parameters: settingsUpdateSchema,
-  async execute(params) {
-    const changes = params.changes ?? [];
-    const tests = (params.test ?? []) as SettingsSectionId[];
-    if (changes.length === 0 && tests.length === 0)
-      throw new Error("Pass at least one change or one section to test.");
-    const writes: SettingWrite[] = changes.map(({ path = "", value }) => {
-      const descriptor = settingDescriptor(path);
-      if (descriptor?.access === "secret" && value !== null)
-        throw new Error(
-          `${path} is a secret, and secret values never pass through an agent. Ask the user to enter it on the Settings page (/settings/${descriptor.section}).`,
+  execute: (raw, ctx) =>
+    scrubbed(async () => {
+      const { writes, tests } = updateParams(raw);
+      const patch = settingsPatchForWrites(writes);
+      ctx.signal?.throwIfAborted();
+      const assistantBefore = getSettings().permanentAssistant;
+      if (writes.length > 0) await saveSettings(patch);
+      const settings = getSettings();
+      const saved = writes.map(({ path }) =>
+        entryFor(settingDescriptor(path)!, settings),
+      );
+      const results: Array<{ section: string; ok: boolean; message: string }> =
+        [];
+      for (const section of tests) {
+        ctx.signal?.throwIfAborted();
+        results.push({
+          section,
+          ...(await testSettingsSection(section, ctx.signal)),
+        });
+        ctx.progress?.(
+          jsonResult(redactSecretsDeep({ saved, tests: results })),
         );
-      return { path, value: value === undefined ? null : value };
-    });
-    const assistantBefore = getSettings().permanentAssistant;
-    if (writes.length > 0) await saveSettings(settingsPatchForWrites(writes));
-    const settings = getSettings();
-    const saved = writes.map(({ path }) =>
-      entryFor(settingDescriptor(path)!, settings),
-    );
-    const results = [];
-    for (const section of tests)
-      results.push({ section, ...(await testSettingsSection(section)) });
-    const restartsAssistant = ASSISTANT_PROFILE_FIELDS.some(
-      (field) => assistantBefore[field] !== settings.permanentAssistant[field],
-    );
-    return jsonResult({
-      ...(saved.length > 0 ? { saved } : {}),
-      ...(results.length > 0 ? { tests: results } : {}),
-      ...(restartsAssistant
-        ? {
-            assistantRestart:
-              "The Personal Assistant's profile changed. The user's next message to it starts a fresh session with the new profile.",
-          }
-        : {}),
-    });
-  },
+      }
+      const restartsAssistant = ASSISTANT_PROFILE_FIELDS.some(
+        (field) =>
+          assistantBefore[field] !== settings.permanentAssistant[field],
+      );
+      return {
+        ...(saved.length > 0 ? { saved } : {}),
+        ...(results.length > 0 ? { tests: results } : {}),
+        ...(restartsAssistant
+          ? {
+              assistantRestart:
+                "The Personal Assistant's profile changed. The user's next message to it starts a fresh session with the new profile.",
+            }
+          : {}),
+      };
+    }),
 });
 
 export const settingsTools = [settingsReadTool, settingsUpdateTool];

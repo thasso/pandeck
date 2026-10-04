@@ -19,7 +19,7 @@ import {
   PORT,
   PUBLIC_BASE_URL,
 } from "./config.ts";
-import { errorText } from "./errors.ts";
+import { errorText, fileReadErrorText } from "./errors.ts";
 
 const GOOGLE_SETTINGS_PATH = join(DATA_DIR, "settings", "google.json");
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -160,7 +160,7 @@ function readPrivate(): StoredGoogleSettings {
     return normalizeStored(parsed);
   } catch (err) {
     throw new Error(
-      `Failed to read Google settings at ${GOOGLE_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Google settings at ${GOOGLE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -477,6 +477,7 @@ async function tokenRequest(
       Accept: "application/json",
     },
     body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(15_000),
   });
   const json = (await res.json().catch(() => ({}))) as GoogleTokenResponse;
   if (!res.ok)
@@ -585,6 +586,7 @@ async function googleGet<T>(url: string, accessToken: string): Promise<T> {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(15_000),
   });
   const text = await res.text();
   if (!res.ok)

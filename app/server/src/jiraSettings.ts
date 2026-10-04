@@ -13,6 +13,7 @@ import type {
 } from "@assistant/shared";
 import { DATA_DIR, JIRA_HOST } from "./config.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 const JIRA_SETTINGS_PATH = join(DATA_DIR, "settings", "jira.json");
 
@@ -55,7 +56,7 @@ function readPrivate(): StoredJiraSettings {
     return normalizeStored(parsed);
   } catch (err) {
     throw new Error(
-      `Failed to read Jira settings at ${JIRA_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Jira settings at ${JIRA_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -165,6 +166,7 @@ export async function testJiraSettings(): Promise<JiraConnectionStatus> {
   ).toString("base64");
   const res = await fetch(`https://${JIRA_HOST}/rest/api/3/myself`, {
     headers: { Authorization: `Basic ${auth}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     return {

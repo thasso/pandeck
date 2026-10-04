@@ -21,6 +21,7 @@ import type {
   Context7SettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 const CONTEXT7_SETTINGS_DIR = join(DATA_DIR, "settings");
 const CONTEXT7_CONFIG_PATH = join(CONTEXT7_SETTINGS_DIR, "context7.json");
@@ -42,7 +43,7 @@ function readFile(): Context7ConfigFile {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read Context7 config at ${CONTEXT7_CONFIG_PATH}: ${String(err)}`,
+      `Failed to read Context7 config at ${CONTEXT7_CONFIG_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

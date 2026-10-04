@@ -26,6 +26,7 @@ import {
   updateContext7Settings,
 } from "./context7Settings.ts";
 import { errorText } from "./errors.ts";
+import { redactSecrets } from "./secretRedaction.ts";
 import {
   testForgejoSettings,
   updateForgejoSettings,
@@ -417,12 +418,45 @@ export const TESTABLE_SETTINGS_SECTIONS = Object.keys(
   SECTION_TESTS,
 ) as SettingsSectionId[];
 
-/** Run a section's connection test. Throws for a section without one. */
+/** Longest a connection test may run; each makes at most a few HTTP calls. */
+const SECTION_TEST_DEADLINE_MS = 45_000;
+
+/**
+ * Run a section's connection test for an agent. The message is scrubbed of
+ * secrets: the tests were written for the Settings page, and an endpoint may
+ * echo the token it received. Throws for a section without a test, when
+ * `signal` aborts, or past the deadline; the test's own HTTP calls carry
+ * their own timeouts, so an abandoned one still ends.
+ */
 export async function testSettingsSection(
   section: SettingsSectionId,
+  signal?: AbortSignal,
 ): Promise<SettingsSectionTest> {
   const test = SECTION_TESTS[section];
   if (!test) throw new Error(`${section} has no connection test`);
-  const { ok, message } = await test();
-  return { ok, message };
+  const stop = AbortSignal.any([
+    ...(signal ? [signal] : []),
+    AbortSignal.timeout(SECTION_TEST_DEADLINE_MS),
+  ]);
+  stop.throwIfAborted();
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () =>
+      reject(
+        signal?.aborted
+          ? new Error(`The ${section} connection test was cancelled.`)
+          : new Error(
+              `The ${section} connection test took longer than ${SECTION_TEST_DEADLINE_MS / 1000}s.`,
+            ),
+      );
+    stop.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const { ok, message } = await Promise.race([test(), aborted]);
+    return { ok, message: redactSecrets(message) };
+  } catch (err) {
+    throw new Error(redactSecrets(errorText(err)));
+  } finally {
+    stop.removeEventListener("abort", onAbort);
+  }
 }

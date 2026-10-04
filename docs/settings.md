@@ -122,3 +122,26 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
 
 `settings_update` is a `local` side effect, so Plan mode keeps only
 `settings_read`.
+
+Both tools hold three guarantees the schema alone cannot give, since neither
+harness enforces it before `execute`:
+
+- **Arguments are checked in full first.** Unknown fields, unknown sections,
+  over-long arrays and a change without its own `value` are refused before
+  anything is written; an omitted value is never read as `null`, so a malformed
+  call cannot clear a secret or disconnect an account.
+- **Everything returned or thrown is scrubbed** by
+  `app/server/src/secretRedaction.ts`. It removes every stored secret (any
+  string under a token/key/secret/cookie/password key in the private settings
+  files, plus the deployment secrets) as itself, URL-encoded, base64, and as a
+  base64 `user:secret` basic-auth pair; a secret cut off at the end of a
+  truncated message; credentials in any URL; and `Basic`/`Bearer` header values.
+  Integration status messages were written for the Settings page and may echo
+  what an endpoint received, and a base URL may carry `user:password@`.
+- **Connection tests are bounded.** Named sections are deduplicated, each test
+  has a deadline and stops with the call's cancellation signal, and progress is
+  streamed after each one. Their HTTP calls carry their own timeouts.
+
+Settings-file read errors never quote the file: a `JSON.parse` failure reads
+"the file is not valid JSON" (`fileReadErrorText` in `errors.ts`), because the
+quoted text could be a token.

@@ -30,6 +30,7 @@ import {
   githubRequest,
   resolveAuthenticatedLogin,
 } from "./githubClient.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 /** Scope a classic PAT needs so GHCR (`ghcr.io`) accepts a container pull. */
 const PACKAGE_READ_SCOPE = "read:packages";
@@ -74,7 +75,7 @@ function readPrivate(): StoredGithubSettings {
     );
   } catch (err) {
     throw new Error(
-      `Failed to read GitHub settings at ${GITHUB_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read GitHub settings at ${GITHUB_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

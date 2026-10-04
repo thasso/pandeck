@@ -18,7 +18,7 @@ import type {
   OpenAiCompatibleThinkingFormat,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
-import { errorText } from "./errors.ts";
+import { errorText, fileReadErrorText } from "./errors.ts";
 
 const OPENAI_COMPATIBLE_SETTINGS_DIR = join(DATA_DIR, "settings");
 const OPENAI_COMPATIBLE_CONFIG_PATH = join(
@@ -54,7 +54,7 @@ function readFile(): OpenAiCompatibleConfigFile {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read OpenAI-compatible provider config at ${OPENAI_COMPATIBLE_CONFIG_PATH}: ${String(err)}`,
+      `Failed to read OpenAI-compatible provider config at ${OPENAI_COMPATIBLE_CONFIG_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

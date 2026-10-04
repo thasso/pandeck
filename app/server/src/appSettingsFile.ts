@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AppSettings } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 /**
  * User-editable settings are live runtime state, so they live under `DATA_DIR`
@@ -25,7 +26,7 @@ export function readStoredAppSettings(): Partial<AppSettings> {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read app settings at ${APP_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read app settings at ${APP_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

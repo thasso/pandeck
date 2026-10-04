@@ -23,7 +23,7 @@ import {
 import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
 import type { JiraApiConfig } from "./jiraClient.ts";
 import { jiraGet } from "./jiraClient.ts";
-import { errorText } from "./errors.ts";
+import { errorText, fileReadErrorText } from "./errors.ts";
 
 const TEMPO_SETTINGS_PATH = join(DATA_DIR, "settings", "tempo.json");
 const TEMPO_OAUTH_CALLBACK_PATH = "/api/tempo/oauth/callback";
@@ -145,7 +145,7 @@ function readPrivate(): StoredTempoSettings {
     return normalizeStored(parsed ?? undefined);
   } catch (err) {
     throw new Error(
-      `Failed to read Tempo settings at ${TEMPO_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Tempo settings at ${TEMPO_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
@@ -403,6 +403,7 @@ async function tempoTokenRequest(
       Accept: "application/json",
     },
     body: new URLSearchParams(params),
+    signal: AbortSignal.timeout(15_000),
   });
   const json = (await res.json().catch(() => ({}))) as TempoTokenResponse;
   if (!res.ok)
@@ -490,6 +491,7 @@ export async function testTempoSettings(): Promise<TempoConnectionStatus> {
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
     },
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     return {

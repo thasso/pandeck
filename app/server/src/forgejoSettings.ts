@@ -26,6 +26,7 @@ import {
   forgejoRequest,
   normalizeForgejoBaseUrl,
 } from "./forgejoClient.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 const FORGEJO_SETTINGS_PATH = join(DATA_DIR, "settings", "forgejo.json");
 
@@ -78,7 +79,7 @@ function readPrivate(): StoredForgejoSettings {
     ));
   } catch (err) {
     throw new Error(
-      `Failed to read Forgejo settings at ${FORGEJO_SETTINGS_PATH}: ${String(err)}`,
+      `Failed to read Forgejo settings at ${FORGEJO_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }

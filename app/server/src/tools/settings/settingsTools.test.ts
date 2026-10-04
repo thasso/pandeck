@@ -6,6 +6,10 @@ import { settingsTools } from "./settingsTools.ts";
 
 const [settingsRead, settingsUpdate] = settingsTools;
 
+/** Fake stored values the scrubbing tests look for in tool output. */
+const BRAVE_FIXTURE = "BRAVE_WRITEONLY_KEY_1";
+const KEPT_FIXTURE = "STILL_CONFIGURED_KEY";
+
 async function call(
   tool: (typeof settingsTools)[number] | undefined,
   params: Record<string, unknown>,
@@ -134,5 +138,158 @@ describe("settings_update", () => {
 
   test("refuses an empty call", async () => {
     await assert.rejects(call(settingsUpdate, {}), /at least one change/);
+  });
+});
+
+describe("nothing secret reaches the agent", () => {
+  test("a test response echoing the stored key is scrubbed", async () => {
+    await saveSettings({
+      brave: { enabled: true, apiKey: BRAVE_FIXTURE },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(`bad X-Subscription-Token: ${BRAVE_FIXTURE}`, {
+            status: 401,
+          }),
+      ),
+    );
+    const result = await settingsUpdate!.execute(
+      { test: ["web-search"] },
+      {} as never,
+    );
+    const text = JSON.stringify(result);
+    assert.equal(text.includes(BRAVE_FIXTURE), false);
+    assert.match(text, /\[redacted\]/);
+  });
+
+  test("a Basic auth echo of email and token is scrubbed", async () => {
+    await saveSettings({
+      jira: {
+        enabled: true,
+        atlassianEmail: "me@example.com",
+        atlassianToken: "JIRA_WRITEONLY_TOKEN",
+      },
+    });
+    const basic = Buffer.from("me@example.com:JIRA_WRITEONLY_TOKEN").toString(
+      "base64",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(`denied ${basic}`, { status: 401 })),
+    );
+    const result = await settingsUpdate!.execute(
+      { test: ["jira"] },
+      {} as never,
+    );
+    const text = JSON.stringify(result);
+    assert.equal(text.includes(basic), false);
+    assert.equal(text.includes("JIRA_WRITEONLY_TOKEN"), false);
+  });
+
+  test("credentials in a URL are never read back", async () => {
+    for (const baseUrl of [
+      "https://alice:URL_PASSWORD_1@example.invalid/v1",
+      "https://alice%40corp:URL%2FPASSWORD%3A2@example.invalid/v1",
+    ]) {
+      await saveSettings({ openAiCompatible: { baseUrl } });
+      const result = await settingsRead!.execute(
+        { paths: ["openAiCompatible.baseUrl"] },
+        {} as never,
+      );
+      const text = JSON.stringify(result);
+      assert.equal(
+        /URL_PASSWORD_1|URL%2FPASSWORD|alice/.test(text),
+        false,
+        text,
+      );
+      assert.match(text, /https:\/\/\[redacted\]@example\.invalid\/v1/);
+    }
+  });
+
+  test("a corrupt settings file never quotes its contents in an error", async () => {
+    const { writeFileSync, rmSync, existsSync, renameSync } =
+      await import("node:fs");
+    const { join } = await import("node:path");
+    const { DATA_DIR } = await import("../../config.ts");
+    const path = join(DATA_DIR, "settings", "context7.json");
+    const saved = `${path}.test-saved`;
+    const hadFile = existsSync(path);
+    if (hadFile) renameSync(path, saved);
+    writeFileSync(path, '{"apiKey": "CORRUPT_FILE_SECRET" oops');
+    try {
+      await assert.rejects(
+        settingsRead!.execute({ section: "context7" }, {} as never),
+        (err: Error) =>
+          /not valid JSON/.test(err.message) &&
+          !err.message.includes("CORRUPT_FILE_SECRET"),
+      );
+    } finally {
+      rmSync(path);
+      if (hadFile) renameSync(saved, path);
+    }
+  });
+});
+
+describe("arguments are checked before anything changes", () => {
+  test("an omitted value never clears or disconnects", async () => {
+    await saveSettings({ brave: { apiKey: KEPT_FIXTURE } });
+    for (const path of ["brave.apiKey", "google.connection"])
+      await assert.rejects(
+        call(settingsUpdate, { changes: [{ path }] }),
+        /changes\[0\]\.value is required/,
+      );
+    assert.equal(getSettings().brave.apiKeyConfigured, true);
+  });
+
+  test("unknown fields, sections and malformed shapes are refused", async () => {
+    const refuse = (
+      tool: typeof settingsRead,
+      params: unknown,
+      pattern: RegExp,
+    ) => assert.rejects(call(tool, params as Record<string, unknown>), pattern);
+    await refuse(settingsRead, { section: "nope" }, /Unknown section: nope/);
+    await refuse(settingsRead, { extra: 1 }, /unknown fields: extra/);
+    await refuse(settingsRead, { paths: "memory.maxCards" }, /paths must be/);
+    await refuse(
+      settingsUpdate,
+      { changes: [{ path: "sessionNaming.enabled", value: true, x: 1 }] },
+      /changes\[0\] has unknown fields: x/,
+    );
+    await refuse(
+      settingsUpdate,
+      { test: ["about"] },
+      /about has no connection test/,
+    );
+    await refuse(
+      settingsUpdate,
+      { changes: Array.from({ length: 51 }, () => ({ path: "a", value: 1 })) },
+      /at most 50/,
+    );
+  });
+
+  test("a section named twice is tested once", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+    const { tests } = (await call(settingsUpdate, {
+      test: ["context7", "context7"],
+    })) as { tests: unknown[] };
+    assert.equal(tests.length, 1);
+  });
+
+  test("a cancelled call writes nothing", async () => {
+    const before = getSettings().sessionNaming.enabled;
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      settingsUpdate!.execute(
+        { changes: [{ path: "sessionNaming.enabled", value: !before }] },
+        { signal: controller.signal } as never,
+      ),
+    );
+    assert.equal(getSettings().sessionNaming.enabled, before);
   });
 });

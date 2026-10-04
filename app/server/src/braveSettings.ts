@@ -20,6 +20,7 @@ import type {
   BraveSettingsPatch,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
+import { fileReadErrorText } from "./errors.ts";
 
 const BRAVE_SETTINGS_DIR = join(DATA_DIR, "settings");
 const BRAVE_CONFIG_PATH = join(BRAVE_SETTINGS_DIR, "brave.json");
@@ -39,7 +40,7 @@ function readFile(): BraveConfigFile {
     return parsed ?? {};
   } catch (err) {
     throw new Error(
-      `Failed to read Brave config at ${BRAVE_CONFIG_PATH}: ${String(err)}`,
+      `Failed to read Brave config at ${BRAVE_CONFIG_PATH}: ${fileReadErrorText(err)}`,
     );
   }
 }
