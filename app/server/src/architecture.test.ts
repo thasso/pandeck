@@ -332,6 +332,11 @@ test("curated model options load no engine SDK", () => {
 test("session creation and the first send import neither the hub nor the connection", () => {
   for (const entry of ["harnesses/create.ts", "harnesses/firstSend.ts"]) {
     const { modules } = staticReach(entry);
+    // The walk must see the engines, or a miss below would prove nothing.
+    assert.ok(
+      modules.includes("claudeSdk/claudeSdkStore.ts"),
+      `${entry} walk never reached the Claude store`,
+    );
     assert.ok(!modules.includes("hub.ts"), `${entry} reaches hub.ts`);
     assert.ok(
       !modules.includes("connection.ts"),

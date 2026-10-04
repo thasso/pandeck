@@ -13,7 +13,6 @@ import {
   type WorkflowRoleConfig,
   WORKTREE_MISSING_BLOCKED_REASON,
 } from "@assistant/shared";
-import { CWD } from "../config.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import {
   appendEvent,
@@ -25,15 +24,16 @@ import {
   type WorkflowRunRow,
   type WorkflowStepRow,
 } from "../db/workflowStore.ts";
-import { getWorktree, linkSessionToWorktree } from "../db/worktreeStore.ts";
+import { getWorktree } from "../db/worktreeStore.ts";
 import { errorText } from "../errors.ts";
+import {
+  createSession,
+  type NewSession,
+  type PiModel,
+} from "../harnesses/create.ts";
 import { hub } from "../hub.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
-import {
-  sessionPromptConditions,
-  type SessionPromptEvidence,
-} from "../promptConditions.ts";
-import { sessionSkills } from "../sessionSkills.ts";
+import type { SessionPromptEvidence } from "../promptConditions.ts";
 import {
   InactiveSessionError,
   SessionBusyError,
@@ -52,7 +52,6 @@ import { SESSION_TITLE_MAX_CHARS } from "../sessions.ts";
 import { readTask } from "../tasks.ts";
 import { taskNamingReference } from "../taskNaming.ts";
 import { broadcastWorkflowRuns } from "../workflowRuns.ts";
-import { broadcastWorktreeEdgeChange } from "../worktrees/worktrees.ts";
 import { buildReviewHandoffPrompt } from "../worktrees/reviewHandoff.ts";
 import { advanceRun, pauseRun } from "./engine.ts";
 import {
@@ -93,35 +92,17 @@ import {
  */
 type WorkflowAgentRole =
   "coordinator" | "implementer" | "reviewer" | "fixer" | "verdict";
-type PiModel = Awaited<ReturnType<typeof findModelForProfile>>;
 
 /** Injectable model/session seams; persistence and assignment rules stay real. */
 export interface WorkflowAgentExecutorDeps {
   newSessionId(): string;
   acquireById(id: string): Promise<RuntimePromptDriver | undefined>;
-  acquireClaudeSdk(input: {
-    id: string;
-    modelId: string;
-    thinkingLevel: ThinkingLevel;
-    cwd: string;
-    credentialProfileId: string;
-    agentType: "developer" | "workflow-coordinator";
-    title: string;
-  }): RuntimePromptDriver;
   findPiModel(
     credentialProfileId: string,
     provider: string,
     modelId: string,
-  ): Promise<PiModel>;
-  acquirePi(input: {
-    model: PiModel;
-    thinkingLevel: ThinkingLevel;
-    cwd: string;
-    credentialProfileId: string;
-    promptEvidence: SessionPromptEvidence;
-    agentType: "developer" | "workflow-coordinator";
-    title: string;
-  }): Promise<RuntimePromptDriver>;
+  ): Promise<PiModel | undefined>;
+  create(spec: NewSession): Promise<RuntimePromptDriver>;
   prompt(
     driver: RuntimePromptDriver,
     text: string,
@@ -144,34 +125,10 @@ const REAL_DEPS: WorkflowAgentExecutorDeps = {
   newSessionId: randomUUID,
   acquireById: async (id) =>
     (await hub.acquireById(id)) as RuntimePromptDriver | undefined,
-  acquireClaudeSdk: (input) => {
-    const session = hub.acquireClaudeSdk(
-      input.id,
-      input.modelId,
-      input.thinkingLevel,
-      input.agentType,
-      input.cwd,
-      undefined,
-      input.credentialProfileId,
-    );
-    session.setTitle(input.title);
-    return session;
-  },
   findPiModel: findModelForProfile,
-  acquirePi: async (input) => {
-    const session = await hub.acquireNew(
-      input.agentType,
-      input.model ?? undefined,
-      input.thinkingLevel,
-      {
-        cwd: input.cwd,
-        credentialProfileId: input.credentialProfileId,
-        promptEvidence: input.promptEvidence,
-      },
-    );
-    session.rename(input.title);
-    return session;
-  },
+  // Called through, never bound at load: creation reaches the tool catalog,
+  // which may still be initializing this module.
+  create: (spec) => createSession(spec),
   prompt: promptRuntimeSession,
   broadcastSessions: () => void hub.broadcastSessions(),
   isSessionBusy: (sessionId) => sessionRuntime.isRunning(sessionId),
@@ -251,7 +208,6 @@ async function dispatchWorkflowAgentStep(
       step,
       role,
       config,
-      worktree?.status === "active" ? worktree.path : CWD,
       sessionContextEvidence(startContext),
       deps,
     );
@@ -430,35 +386,29 @@ async function createRoleSession(
   step: WorkflowStepRow,
   role: WorkflowAgentRole,
   config: WorkflowRoleConfig & { credentialProfileId: string },
-  cwd: string,
   /** Frozen from the SAME resolution the first assignment's context comes from. */
   promptEvidence: SessionPromptEvidence,
   deps: WorkflowAgentExecutorDeps,
 ): Promise<RuntimePromptDriver> {
-  const title = workflowSessionTitle(run, step, role);
-  if (config.provider === CLAUDE_SDK_PROVIDER) {
-    const id = deps.newSessionId();
-    const agentType =
-      role === "coordinator" ? "workflow-coordinator" : "developer";
-    // Every workflow role executes in the run's checkout when provisioned. A
-    // coordinator may open the recovery plan before a failed provision creates
-    // that checkout; attachRunWorktree backfills its edge then.
-    if (run.worktreeId) {
-      linkSessionToWorktree(id, run.worktreeId);
-      broadcastWorktreeEdgeChange();
-    }
-    sessionPromptConditions(id, agentType, promptEvidence);
-    await sessionSkills(id, agentType);
-    return deps.acquireClaudeSdk({
-      id,
+  const start = {
+    agentType: role === "coordinator" ? "workflow-coordinator" : "developer",
+    thinkingLevel: config.thinkingLevel,
+    credentialProfileId: config.credentialProfileId,
+    promptEvidence,
+    title: workflowSessionTitle(run, step, role),
+    // Every workflow role executes in the run's checkout once it is live, and
+    // in the app CWD before then: a coordinator may open the recovery plan
+    // first. A run without a worktree yet gets its edge backfilled by
+    // attachRunWorktree once one is created.
+    ...(run.worktreeId ? { worktree: { id: run.worktreeId } } : {}),
+  } as const;
+  if (config.provider === CLAUDE_SDK_PROVIDER)
+    return deps.create({
+      harness: "claude-sdk",
+      id: deps.newSessionId(),
       modelId: config.modelId,
-      thinkingLevel: config.thinkingLevel,
-      cwd,
-      credentialProfileId: config.credentialProfileId,
-      agentType,
-      title,
+      ...start,
     });
-  }
 
   const model = await deps.findPiModel(
     config.credentialProfileId,
@@ -469,29 +419,7 @@ async function createRoleSession(
     throw new Error(
       `workflow model ${config.provider}:${config.modelId} is no longer available`,
     );
-  const agentType =
-    role === "coordinator" ? "workflow-coordinator" : "developer";
-  const driver = await deps.acquirePi({
-    model,
-    thinkingLevel: config.thinkingLevel,
-    cwd,
-    credentialProfileId: config.credentialProfileId,
-    promptEvidence,
-    agentType,
-    title,
-  });
-  sessionStore.upsert({
-    id: driver.sessionId,
-    harness: "pi",
-    agentType,
-    credentialProfileId: config.credentialProfileId,
-  });
-  await sessionSkills(driver.sessionId, agentType);
-  if (run.worktreeId) {
-    linkSessionToWorktree(driver.sessionId, run.worktreeId);
-    broadcastWorktreeEdgeChange();
-  }
-  return driver;
+  return deps.create({ harness: "pi", model, ...start });
 }
 
 /**

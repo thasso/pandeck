@@ -41,11 +41,11 @@ Four layers, each depending only on the ones below it:
      so routing is a lookup by harness id, never a branch per method. An id
      belongs to one engine: a client-supplied id another engine holds is refused
      before anything is written for it (`otherHolder`), which lets a resident
-     lookup answer from memory alone. A first send creates through
-     `createSession` (below) and step 11b moves the other creation callers onto
-     it; fork, rename and remove move behind the registry in step 11c, and until
-     then `hub.ts` still calls the stores for them and builds the merged session
-     list from each.
+     lookup answer from memory alone. A first send, spawn and the workflow
+     create through `createSession` (below), and step 11c moves the remaining
+     creation callers onto it; fork, rename and remove move behind the registry
+     in step 11d, and until then `hub.ts` still calls the stores for them and
+     builds the merged session list from each.
    - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
      asks of its engine. `Connection.handleFirstSend` runs one flow for both —
      view claim, persona guard, worktree, session context, genesis card, context
@@ -61,20 +61,26 @@ Four layers, each depending only on the ones below it:
    - `createSession` (`harnesses/create.ts`) is the one place that knows each
      engine's creation sequence; a caller names what the session starts with
      (`NewSession`: persona, model, account, cwd and worktree, prompt evidence,
-     skills, title) and keeps its own admission and model resolution. It calls
-     the stores directly, never `hub.ts`. A Claude session's id is checked
-     against every other holder right before its registration, with nothing
-     awaited in between: with the disk scan for an id the caller names (a
-     client's), from memory and the row for one it mints itself. Step 11b moves
-     every other creation caller onto it — spawn, workflow, the review-comment
+     title) and keeps its own admission and model resolution. It calls the
+     stores directly, never `hub.ts`. Every session it creates has its current
+     library skills frozen before its first query, whichever engine runs it. A
+     worktree named without its path runs where its edge resolves, the same for
+     both engines and as a reopen would: in its checkout when that is live, else
+     in the app CWD (a workflow coordinator planning a recovery). A Claude
+     session's id is checked against every other holder right before its
+     registration, with nothing awaited in between: with the disk scan for an id
+     the caller names (a client's, or spawn's and the workflow's minted ones),
+     from memory and the row for one it mints itself. A Claude id that already
+     holds a session reopens it: its stored settings win, while the worktree
+     link and title still apply. Callers keep resolving a pi model handle
+     themselves (`NewSession.model`), so each still branches on the engine for
+     that one step. Spawn reaches `create.ts` through a dynamic import, as it
+     does `hub.ts`, because `create.ts` → the Claude store → the tool catalog →
+     spawn closes a cycle. Step 11c moves the rest onto it — the review-comment
      new session, day session, new session and draft in `connection.ts`, the
      worktree merge agent and the permanent assistant — and retires
-     `hub.acquireClaudeSdk` and `hub.acquireNew`. Two things to settle there:
-     whether `NewSession` takes a neutral model (`{ provider, modelId }`,
-     resolved inside through the models port with a typed error the caller
-     words) so those callers stop branching on the engine; and that spawn must
-     reach `create.ts` through a dynamic import, as it does `hub.ts`, because
-     `create.ts` → the Claude store → the tool catalog → spawn closes a cycle.
+     `hub.acquireClaudeSdk` and `hub.acquireNew`. Their Claude sessions then
+     freeze skills at creation, not at the first prompt's backstop.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -99,8 +105,7 @@ Four layers, each depending only on the ones below it:
      loads no engine SDK, so row projections stay cheap. The usage port
      (`harnesses/usage.ts`) reads subscription usage per account kind and
      redeems OpenAI reset credits. The pi model handle a session is created with
-     still comes from the engine (`NewSession.model`); step 11b decides whether
-     `createSession` resolves it.
+     still comes from the engine (`NewSession.model`), resolved by the caller.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -165,8 +170,9 @@ table when a later step needs them.
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | landed |
 | 10   | One first-send path for both harnesses                                        | landed |
 | 11a  | `createSession`; the first send creates through it                            | landed |
-| 11b  | Every other creation caller on `createSession`                                | open   |
-| 11c  | Fork, delete and rename through the registry                                  | open   |
+| 11b  | Spawn and the workflow create through `createSession`                         | landed |
+| 11c  | Every other creation caller on `createSession`                                | open   |
+| 11d  | Fork, delete and rename through the registry                                  | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order

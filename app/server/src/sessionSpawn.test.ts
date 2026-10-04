@@ -51,7 +51,7 @@ const piModels: ModelOption[] = [
   },
 ];
 
-const { insertWorktree, updateWorktree } =
+const { insertWorktree, updateWorktree, worktreeIdForSession } =
   await import("./db/worktreeStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const piModelApi = await import("./piSdk/models.ts");
@@ -79,6 +79,10 @@ const { getSettings, updateSettings } = await import("./settings.ts");
 const { listCredentialProfiles } = await import("./credentialProfiles.ts");
 const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
+const { createSession } = await import("./harnesses/create.ts");
+const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
+const skillResolver = await import("./skills/skillResolver.ts");
 
 const spawnTool = sessionSpawnTools()[0]!;
 const SENDER = "spawner-session";
@@ -156,6 +160,12 @@ async function propose(rows: Array<Record<string, unknown>>) {
 
 const bodyOf = (card: ApprovalCard) => card.body as SessionSpawnApprovalBody;
 
+/**
+ * Survives `beforeEach`: every test mints unused ids, so no row an earlier test
+ * froze or linked can answer for a new session.
+ */
+let counter = 0;
+
 beforeEach(() => {
   setApprovalBroadcastForTests(() => {});
   vi.mocked(piModelApi.listModelsForProfile).mockImplementation(
@@ -164,17 +174,45 @@ beforeEach(() => {
   recorded = { claude: [], pi: [], delivered: [], events: [] };
   createFails = undefined;
   deliverFails = false;
-  let counter = 0;
+  const standIn = (sessionId: string) =>
+    ({ sessionId, setTitle() {}, rename() {} }) as never;
+  vi.spyOn(claudeSdkStore, "acquire").mockImplementation((id: string) =>
+    standIn(id),
+  );
+  vi.spyOn(piStore, "acquireNew").mockImplementation(async () =>
+    standIn(`pi-session-${(counter += 1)}`),
+  );
   setSessionSpawnDepsForTests({
     newSessionId: () => `claude-session-${(counter += 1)}`,
-    createClaude: async (input) => {
-      if (createFails === input.title) throw new Error("creation exploded");
-      recorded.claude.push({ ...input });
-    },
-    createPi: async (input) => {
-      if (createFails === input.title) throw new Error("creation exploded");
-      recorded.pi.push({ ...input });
-      return `pi-session-${(counter += 1)}`;
+    findPiModel: async (_profile, provider, modelId) =>
+      ({ provider, id: modelId }) as never,
+    create: async (spec) => {
+      if (createFails === spec.title) throw new Error("creation exploded");
+      const cwd = spec.worktree?.path ?? spec.cwd;
+      const started = {
+        thinkingLevel: spec.thinkingLevel,
+        agentType: spec.agentType,
+        ...(cwd ? { cwd } : {}),
+        credentialProfileId: spec.credentialProfileId,
+        title: spec.title,
+      };
+      if (spec.harness === "claude-sdk")
+        recorded.claude.push({
+          id: spec.id,
+          modelId: spec.modelId,
+          ...started,
+        });
+      else {
+        const model = spec.model as unknown as { provider: string; id: string };
+        recorded.pi.push({
+          provider: model.provider,
+          modelId: model.id,
+          ...started,
+          promptEvidence: spec.promptEvidence,
+        });
+      }
+      // The real creation sequence (link, freeze, title) on stand-in engines.
+      return createSession(spec);
     },
     deliver: async (input) => {
       // Provenance is durable BEFORE the opening prompt is delivered, and the
@@ -525,8 +563,10 @@ test("approving creates each session and delivers its opening prompt", async () 
     expect(outcomePrompt).toContain(item.resultSessionId);
 });
 
-test("coding peers freeze skills on both harness creation paths", async () => {
+test("coding peers are linked and freeze skills on both harness creation paths", async () => {
   activeWorktree("wt-skills");
+  const path = join(tmp, "wt-skills");
+  vi.spyOn(skillResolver, "resolveSkillNames").mockReturnValue(["alpha"]);
   const { card } = await propose([
     row({
       title: "Pi developer",
@@ -546,8 +586,13 @@ test("coding peers freeze skills on both harness creation paths", async () => {
 
   expect(recorded.pi).toHaveLength(1);
   expect(recorded.claude).toHaveLength(1);
-  for (const item of bodyOf(done).items)
-    expect(sessionStore.getSkills(item.resultSessionId!)).toBe("[]");
+  for (const item of bodyOf(done).items) {
+    expect(sessionStore.getSkills(item.resultSessionId!)).toBe('["alpha"]');
+    expect(worktreeIdForSession(item.resultSessionId!)).toBe("wt-skills");
+  }
+  // What the engines were handed, not just what spawn asked for.
+  expect(vi.mocked(claudeSdkStore.acquire).mock.calls[0]?.[1]?.cwd).toBe(path);
+  expect(vi.mocked(piStore.acquireNew).mock.calls[0]?.[3]?.cwd).toBe(path);
 });
 
 test("a skipped row creates nothing while the rest of the batch runs", async () => {

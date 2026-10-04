@@ -137,7 +137,6 @@ const engines: Record<Harness, FirstSendEngine> = {
           ...(worktree ? { worktree } : {}),
           credentialProfileId: profileId,
           promptEvidence: evidence,
-          skills: true,
         });
         return {
           live,
@@ -189,7 +188,6 @@ const engines: Record<Harness, FirstSendEngine> = {
             ...(worktree ? { worktree } : {}),
             credentialProfileId: profileId,
             promptEvidence: evidence,
-            skills: true,
           });
         } catch (err) {
           if (err instanceof SessionIdTakenError)

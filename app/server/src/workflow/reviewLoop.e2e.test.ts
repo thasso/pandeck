@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, test } from "vitest";
+import { afterAll, beforeEach, test, vi } from "vitest";
 import type { WorkflowActor, WorkflowJsonValue } from "@assistant/shared";
 import type {
   CommitWorkflowOptions,
@@ -64,6 +64,8 @@ const { sessionSubmitResultTools } =
 const { worktreeReviewTools: workshopReviewTools } =
   await import("../tools/workshop/worktreeReviewTools.ts");
 const { closeDb } = await import("../db/index.ts");
+const { createSession } = await import("../harnesses/create.ts");
+const { piStore } = await import("../piSdk/piStore.ts");
 
 afterAll(() => {
   closeDb();
@@ -227,11 +229,18 @@ function makeRig(
   const deps: WorkflowAgentExecutorDeps = {
     newSessionId: () => `claude-${rigCount}-${++nextSession}`,
     acquireById: async (id) => (available.has(id) ? driver(id) : undefined),
-    acquireClaudeSdk: () => {
-      throw new Error("the e2e rig runs pi sessions only");
-    },
     findPiModel: async (_profile, provider, id) => ({ provider, id }) as never,
-    acquirePi: async () => driver(`sess-${rigCount}-${++nextSession}`),
+    // The real creation sequence over a pi stand-in.
+    create: async (spec) => {
+      if (spec.harness !== "pi")
+        throw new Error("the e2e rig runs pi sessions only");
+      vi.spyOn(piStore, "acquireNew").mockResolvedValueOnce({
+        ...driver(`sess-${rigCount}-${++nextSession}`),
+        sessionMode: "build",
+        rename() {},
+      } as never);
+      return createSession(spec);
+    },
     prompt: async (live, text) => {
       if (text.includes('contract "work-plan"')) {
         await submit(live.sessionId, "completed", "simple", {
