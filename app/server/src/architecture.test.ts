@@ -299,7 +299,11 @@ test("runOneShot loads no engine SDK until a run needs it", () => {
     "piSdk/models.ts loads the pi SDK at import time",
   );
   assert.deepEqual(
-    [...packages].filter((name) => name.startsWith("@earendil-works/")),
+    [...packages].filter(
+      (name) =>
+        name.startsWith("@earendil-works/") ||
+        name === "@anthropic-ai/claude-agent-sdk",
+    ),
     [],
   );
 });

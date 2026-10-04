@@ -159,3 +159,28 @@ test("an unpinned agent follows the automatic account", async () => {
     "default",
   );
 });
+
+test("a refinement cut short by an error does not replace the draft", async () => {
+  vi.mocked(selectPiModelWithFallback).mockResolvedValue({
+    id: "gpt-4.1",
+  } as never);
+  vi.mocked(runPiOneShot).mockResolvedValue({
+    text: "partial refin",
+    usage: {},
+    stopReason: "aborted",
+    errorMessage: "aborted by provider",
+  } as never);
+
+  await assert.rejects(
+    () =>
+      refinePromptText({
+        text: "make this better",
+        settings: {
+          provider: "github-copilot",
+          modelId: "gpt-4.1",
+          thinkingLevel: "off",
+        },
+      }),
+    /aborted by provider/,
+  );
+});

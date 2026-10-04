@@ -78,8 +78,8 @@ export interface MemoryProcessorRunner {
 const realRunner: MemoryProcessorRunner = {
   async run(input) {
     // Exact configured model only (no silent fallback); processorConfigStatus
-    // gates the run so a missing model rarely throws. Claude reports no
-    // per-call cost.
+    // gates the run so a missing model rarely throws. The Claude runner does
+    // not read the run's reported cost, so Claude runs are not counted.
     const { text, usage } = await runOneShot({
       model: { provider: input.provider, modelId: input.modelId },
       thinkingLevel: input.thinkingLevel,
