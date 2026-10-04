@@ -108,7 +108,11 @@ export function piModelForSlot(
   return selectPiModelWithFallback(slot, credentialProfileId);
 }
 
-/** Re-read pi's model registry from disk; the error says what was unreadable. */
+/**
+ * Refresh pi's model registries: re-read the configured providers and fetch
+ * every account's remote catalog. The error names the configuration, runtime or
+ * catalog that failed.
+ */
 export function refreshPiModels(): ReturnType<typeof refreshModels> {
   return refreshModels();
 }
