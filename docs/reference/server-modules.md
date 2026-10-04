@@ -150,6 +150,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   worktrees (`worktrees/`), not the hub.
 - `harness.ts` owns the harness-neutral driver interfaces (`Viewer`,
   `HarnessDriver`, `PromptableDriver`) shared by both harnesses.
+- `harnesses/` is the seam between app code and the two engines
+  (`docs/agent-harnesses.md`): `oneShot.ts` (`runOneShot`, every helper run),
+  `models.ts` (picker and per-account model lists, exact availability, stored
+  session model display), `curatedModels.ts` (the Claude curated options,
+  loading no engine SDK) and `usage.ts` (per-account usage, OpenAI reset-credit
+  redeem). `harnessBoundary.test.ts` pins what still bypasses it.
 - `agentTypes.ts` owns the persona registry (`AGENT_TYPES`): system prompts and
   the per-persona `AgentTool` toolsets, independent of harness. Toolset
   COMPOSITION lives in the tool catalog (`tools/catalog.ts`): persona toolsets

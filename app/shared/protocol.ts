@@ -392,7 +392,7 @@ export const CLAUDE_SDK_MODELS: ModelOption[] = [
     id: "opus",
     name: "Claude Opus",
     reasoning: true,
-    supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+    supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
   },
   {
@@ -400,7 +400,7 @@ export const CLAUDE_SDK_MODELS: ModelOption[] = [
     id: "sonnet",
     name: "Claude Sonnet",
     reasoning: true,
-    supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+    supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
   },
   {
@@ -408,7 +408,7 @@ export const CLAUDE_SDK_MODELS: ModelOption[] = [
     id: "haiku",
     name: "Claude Haiku",
     reasoning: true,
-    supportedThinkingLevels: ["low", "medium", "high", "xhigh"],
+    supportedThinkingLevels: ["off", "low", "medium", "high", "xhigh"],
     contextWindow: 200_000,
   },
   // Fable's thinking is always on, so `off` is omitted from its levels. The
