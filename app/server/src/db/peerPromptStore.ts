@@ -1077,10 +1077,17 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
  *   delivery is work in progress, not a stall;
  * - one effectively answered without being marked: a reply closes exactly
  *   one request by strict correlation, so a report forwarded through a third
- *   peer, an answer after the user poked (which closes the peer's chains), or
- *   one after the sender re-asked leaves the original row open. Any LATER
- *   prompt that reached the sender from the owed peer, or on the request's
- *   own chain (which a forward keeps), counts as the answer.
+ *   peer, or an answer after the sender re-asked, leaves the original row
+ *   open. A LATER prompt that reached the sender from the owed peer counts as
+ *   the answer, and so does one on the request's own chain (which a forward
+ *   keeps) — but only once the owed peer itself has acted on that chain since
+ *   the request: peers spawned in one turn share a chain, and one reviewer's
+ *   reply must not answer for the reviewer beside it.
+ *
+ * Not modelled: a report that reaches the sender on a fresh chain through a
+ * third peer (a poke closes the poked peer's chains, so its forward starts a
+ * new one), and a sender that releases a peer with a plain message ("stand
+ * down") — both stay owed until the user settles or archives that peer.
  */
 function outstandingRepliesBySender(): Map<string, string[]> {
   const rows = getDb()
@@ -1093,7 +1100,12 @@ function outstandingRepliesBySender(): Map<string, string[]> {
              WHERE r.recipient_session_id = o.sender_session_id
                AND r.queue_seq > o.queue_seq
                AND (r.sender_session_id = o.recipient_session_id
-                    OR r.chain_id = o.chain_id)
+                    OR (r.chain_id = o.chain_id AND EXISTS (
+                      SELECT 1 FROM peer_prompts f
+                       WHERE f.chain_id = o.chain_id
+                         AND f.sender_session_id = o.recipient_session_id
+                         AND f.queue_seq > o.queue_seq
+                         AND f.queue_seq < r.queue_seq)))
           )
         ORDER BY o.sender_session_id, o.recipient_session_id`,
     )

@@ -162,8 +162,8 @@ function waitsOnHuman(session: SessionListItem): boolean {
  * coordinator commonly tells an implementer to report to a reviewer instead
  * of to itself, so the request to the implementer stays open while the work
  * is plainly going on elsewhere in the tree. Only when all of it has stopped
- * does an open request mean a stall. A peer that is archived, deleted or
- * outside this browser's list owes nothing here — the user put it away.
+ * does an open request mean a stall. A peer that is archived, settled, deleted
+ * or outside this browser's list owes nothing here — the user put it down.
  */
 export function spawnTreeStall(
   scope: readonly SessionListItem[],
@@ -173,7 +173,8 @@ export function spawnTreeStall(
   for (const session of scope)
     for (const id of session.awaitingRepliesFrom ?? []) {
       const peer = byId.get(id);
-      if (peer && !peer.archived) owed.set(id, peer);
+      // A peer the user put down — archived or settled — owes nothing here.
+      if (peer && !peer.archived && !isShelvedSession(peer)) owed.set(id, peer);
     }
   if (owed.size === 0) return undefined;
   const peers = [...owed.values()];

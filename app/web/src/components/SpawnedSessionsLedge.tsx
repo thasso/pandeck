@@ -98,7 +98,7 @@ export function SpawnedSessionsLedge({
     <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
       <button
         type="button"
-        title={`Open “${view.stall.peers[0]?.title.trim() || "the peer"}”`}
+        title={`Open “${stallTitle(view.stall)}”`}
         aria-label={`Stalled: ${stallLabel(view.stall)}`}
         onClick={() => {
           const peer = view.stall?.peers[0];

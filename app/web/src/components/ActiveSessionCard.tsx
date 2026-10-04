@@ -563,7 +563,7 @@ function ActiveSessionCardImpl({
                 {card.stall ? (
                   <button
                     type="button"
-                    title={`Open “${card.stall.peers[0]?.title.trim() || "the peer"}”`}
+                    title={`Open “${stallTitle(card.stall)}”`}
                     aria-label={`Stalled: ${stallLabel(card.stall)}`}
                     onClick={(e) => {
                       e.stopPropagation();

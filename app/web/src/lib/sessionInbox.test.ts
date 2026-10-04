@@ -3023,6 +3023,14 @@ describe("a stalled tree, at its edges", () => {
     expect(stallOf([root], [row("outside")])).toEqual(["outside"]);
   });
 
+  it("owes nothing from a peer the user settled", () => {
+    // A coordinator told it to stand down, and the user put it down.
+    const root = row("root", { awaitingRepliesFrom: ["done"] });
+    expect(stallOf([root], [row("done", { settledAt: NOW - 1_000 })])).toBe(
+      undefined,
+    );
+  });
+
   it("counts a job starting, or a retained host, as work going on", () => {
     const root = row("root", { awaitingRepliesFrom: ["rev"] });
     for (const activity of [

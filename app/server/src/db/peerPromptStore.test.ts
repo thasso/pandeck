@@ -193,8 +193,21 @@ describe("peerPromptStore", () => {
       const r = `owed-rev-${seq++}`;
       const request = unanswered(c, i);
       assert.deepEqual(owedTo(c), [i]);
+      send(i, r, request.chainId); // I hands the work on, on the same chain
+      assert.deepEqual(owedTo(c), [i], "handing on is not yet the answer");
       send(r, c, request.chainId);
       assert.equal(owedTo(c), undefined);
+    });
+
+    it("does not let one peer's reply answer for a peer beside it on the chain", () => {
+      // C spawns two reviewers in one turn: both requests share a chain.
+      const c = `owed-c-${seq++}`;
+      const sol = `owed-sol-${seq++}`;
+      const opus = `owed-opus-${seq++}`;
+      const first = unanswered(c, sol);
+      unanswered(c, opus, first.chainId);
+      send(sol, c, first.chainId);
+      assert.deepEqual(owedTo(c), [opus], "Opus never answered");
     });
 
     it("takes any later word from the owed peer as the answer", () => {
