@@ -39,14 +39,3 @@ export function setSpawnOwnership(
     ? "changed"
     : "unchanged";
 }
-
-/**
- * The runtime's human-prompt hook: every human-origin prompt closes the peer
- * chains its session takes part in, visible or hidden. It deliberately does
- * NOT move ownership — that is {@link setSpawnOwnership}'s, on request.
- */
-export function humanPromptHandler(deps: {
-  closeChains: (sessionId: string) => void;
-}): (sessionId: string) => void {
-  return (sessionId) => deps.closeChains(sessionId);
-}

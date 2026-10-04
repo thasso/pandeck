@@ -128,9 +128,9 @@ the outcome:
     inspector's **Take over** action (`setSpawnOwnership`). It records the state
     and one timestamp; taking over a child already taken over rewrites nothing.
     **Hand back** returns the child to `coordinator`, and a later Take over
-    stamps afresh. Only a live, user-scope session with a spawn edge can be set;
-    anything else is refused. Edges marked before this rule, when any visible
-    human prompt took a child over, keep their state.
+    stamps afresh. Only a non-deleted, user-scope session with a spawn edge can
+    be set; anything else is refused. Edges marked before this rule, when any
+    visible human prompt took a child over, keep their state.
   - `unknown` — a spawn edge from before ownership tracking, or metadata that
     cannot be classified. It fails closed: a consumer that folds
     coordinator-owned children under their coordinator must keep an `unknown`

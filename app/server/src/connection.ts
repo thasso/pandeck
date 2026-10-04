@@ -4712,16 +4712,17 @@ export class Connection implements Viewer {
   /**
    * Take a spawned peer over, or hand it back to its coordinator, on the
    * user's explicit word (`spawnOwnership.ts`). Every refusal — a session the
-   * user cannot act on, one with no spawn edge, a store failure — is an error
-   * targeted at the session, so the browser recovers its optimistic change; a
-   * request that changes nothing broadcasts nothing.
+   * user cannot act on, one with no spawn edge, any store failure, including
+   * the first read — is an error targeted at the session, so the browser
+   * recovers its optimistic change; a request that changes nothing broadcasts
+   * nothing. It changes metadata only and never starts the agent, so the
+   * harness/persona availability guard of run-starting commands does not
+   * apply: a disabled harness must not stop the user taking a peer over.
    */
   private async onSetSpawnOwnership(
     id: string,
     ownership: SettableSpawnOwnership,
   ): Promise<void> {
-    const ref = this.resolveSessionRef(id);
-    if (ref && !this.guardSessionRef(ref)) return;
     const target: MessageTarget = { type: "session", id };
     let result: SpawnOwnershipResult;
     try {
@@ -4747,7 +4748,6 @@ export class Connection implements Viewer {
       return;
     }
     if (result === "unchanged") return;
-    if (this.viewing?.sessionId === id) this.viewing.broadcastState();
     await hub.broadcastSessions();
   }
 

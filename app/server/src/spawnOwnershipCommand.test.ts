@@ -216,3 +216,70 @@ test("a store failure is an error the browser recovers from, not a no-op", async
     for (const id of [coordinator, peer]) sessionStore.remove(id);
   }
 });
+
+test("a failing first read is a session-targeted error, not an escape", async () => {
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  const original = sessionStore.get;
+  sessionStore.get = () => {
+    throw new Error("read failure");
+  };
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: "own-cmd-read-fail",
+      ownership: "taken-over",
+      requestId: "r-read",
+    } as ClientMessage);
+  } finally {
+    sessionStore.get = original;
+    connection.dispose();
+  }
+  const error = sent.find((message) => message.type === "error") as
+    { requestId?: string; target?: { type: string; id?: string } } | undefined;
+  assert.equal(error?.requestId, "r-read");
+  assert.deepEqual(error?.target, { type: "session", id: "own-cmd-read-fail" });
+  assert.equal(
+    sent.some((message) => message.type === "mutationSettled"),
+    false,
+  );
+});
+
+test("a disabled harness does not stop the user taking a peer over", async () => {
+  // Ownership is metadata: it never starts the agent, so the availability
+  // guard run-starting commands apply (the Claude SDK is off by default in
+  // tests) must not refuse it.
+  const stamp = Date.now();
+  const coordinator = `own-cmd-sdk-root-${stamp}`;
+  const peer = `own-cmd-sdk-peer-${stamp}`;
+  for (const id of [coordinator, peer])
+    sessionStore.upsert({
+      id,
+      harness: "claude-sdk",
+      agentType: "assistant",
+      title: id,
+    });
+  sessionStore.linkSpawned(coordinator, peer);
+  const sent: ServerMessage[] = [];
+  const connection = new Connection(fakeSocket(sent));
+  try {
+    await connection.handle({
+      type: "setSpawnOwnership",
+      id: peer,
+      ownership: "taken-over",
+      requestId: "r-sdk",
+    } as ClientMessage);
+    assert.equal(
+      sent.some((message) => message.type === "error"),
+      false,
+      JSON.stringify(sent),
+    );
+    assert.equal(
+      sessionStore.spawnedParentsByChildIds([peer]).get(peer)?.ownership,
+      "taken-over",
+    );
+  } finally {
+    connection.dispose();
+    for (const id of [coordinator, peer]) sessionStore.remove(id);
+  }
+});

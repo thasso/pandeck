@@ -21,8 +21,7 @@ const { SessionRuntime } = await import("./session/runtime/runtime.ts");
 const { setHumanPromptHook } = await import("./session/runtime/liveSession.ts");
 const { SessionLogStore } = await import("./session/log/store.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
-const { humanPromptHandler, setSpawnOwnership } =
-  await import("./spawnOwnership.ts");
+const { setSpawnOwnership } = await import("./spawnOwnership.ts");
 
 type AdapterEvent = import("./session/adapters/contract.ts").AdapterEvent;
 type AgentRunResult = import("./session/adapters/contract.ts").AgentRunResult;
@@ -95,11 +94,8 @@ sessionStore.upsert({
 created.push(coordinator);
 
 const chainResets: string[] = [];
-setHumanPromptHook(
-  humanPromptHandler({
-    closeChains: (sessionId) => chainResets.push(sessionId),
-  }),
-);
+// The production hook only closes peer chains; this records them instead.
+setHumanPromptHook((sessionId) => void chainResets.push(sessionId));
 
 afterAll(() => {
   setHumanPromptHook(undefined);
