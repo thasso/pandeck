@@ -31,30 +31,31 @@ vocabulary, display projection, and normalized session model types.
   `coordinator`-owned edges — a shelved peer folds only while an unshelved
   member folds into it, depth is unbounded, and a cycle is broken at its first
   id — `spawnClusterDescendantIds(rootId, forest)` is what a card shows folded
-  and what its Settle shelves, and `spawnClusterSettleBlockedReason` is the
-  aggregate refusal (own reason, else the first blocked descendant in forest
-  order) every Settle surface disables with and the server refuses with.
-  `SessionOutcomeAttention` is the durable half of that state
-  ([Task-674](pa://task/674)): a monotonic revision raised by a completion or a
-  failure, the revision Settle acknowledged, and the current outcome's kind and
-  time. `pendingSessionOutcome` is the ONE derivation of "not acknowledged yet"
-  — the server withholds `settledAt` from a row that has one, the browser
-  projects the card's status from it — and `isDirectlyOwnedSession` is the ONE
-  ownership gate for whose outcomes those may be (everything except a
-  coordinator-owned spawn). The server then distinguishes a directly owned
-  coordinator's intermediate peer wake from its final user-facing outcome.
-  `settleSession.throughRevision` is what the clicked row saw, so a stale click
-  cannot acknowledge an outcome it never rendered; it is REQUIRED, because
-  acknowledging whatever the server holds now is a privilege only a server-side
-  settlement may take and an optional field would hand it to any client that
-  omitted it. `SESSION_READ_DWELL_MS` is shared for the same reason: it is how
-  long a session must stay OPEN before reading it counts as read, and BOTH the
-  server's durable read mark and the browser's own "the session I am looking at
-  is never unread" rule wait it out, so an opened card moves once rather than
-  twice. `WORKTREE_MISSING_BLOCKED_REASON` is the third of that family
-  ([Task-321](pa://task/321)): the single wording for a session whose
-  `in_worktree` worktree is gone, carried by the server's refusal and the
-  browser's banner, with `worktreeMissing` on both `SessionListItem` and
+  and what its Settle shelves, `spawnClusterSettleBlockedReasons` answers every
+  member's refusal in one bottom-up sweep for surfaces that disable every row,
+  and `spawnClusterSettleBlockedReason` is the aggregate refusal (own reason,
+  else the first blocked descendant in forest order) every Settle surface
+  disables with and the server refuses with. `SessionOutcomeAttention` is the
+  durable half of that state ([Task-674](pa://task/674)): a monotonic revision
+  raised by a completion or a failure, the revision Settle acknowledged, and the
+  current outcome's kind and time. `pendingSessionOutcome` is the ONE derivation
+  of "not acknowledged yet" — the server withholds `settledAt` from a row that
+  has one, the browser projects the card's status from it — and
+  `isDirectlyOwnedSession` is the ONE ownership gate for whose outcomes those
+  may be (everything except a coordinator-owned spawn). The server then
+  distinguishes a directly owned coordinator's intermediate peer wake from its
+  final user-facing outcome. `settleSession.throughRevision` is what the clicked
+  row saw, so a stale click cannot acknowledge an outcome it never rendered; it
+  is REQUIRED, because acknowledging whatever the server holds now is a
+  privilege only a server-side settlement may take and an optional field would
+  hand it to any client that omitted it. `SESSION_READ_DWELL_MS` is shared for
+  the same reason: it is how long a session must stay OPEN before reading it
+  counts as read, and BOTH the server's durable read mark and the browser's own
+  "the session I am looking at is never unread" rule wait it out, so an opened
+  card moves once rather than twice. `WORKTREE_MISSING_BLOCKED_REASON` is the
+  third of that family ([Task-321](pa://task/321)): the single wording for a
+  session whose `in_worktree` worktree is gone, carried by the server's refusal
+  and the browser's banner, with `worktreeMissing` on both `SessionListItem` and
   `SessionState` meaning "dead edge, not yet acknowledged" — distinct from
   simply having no `worktreeId`, which is an ordinary app-CWD session.
   `delegation` (`SubagentDelegationSummary`, [Task-495](pa://task/495)) is an
