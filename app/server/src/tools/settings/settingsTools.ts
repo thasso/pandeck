@@ -145,6 +145,32 @@ function entryFor(descriptor: SettingDescriptor, settings: AppSettings) {
   };
 }
 
+/**
+ * Credentials a save dropped without being asked to: a stored token or
+ * connection stays with the URL origin it was made for (`urlOrigin.ts`), so
+ * moving an integration to another host clears it.
+ */
+function credentialsDropped(
+  writes: readonly SettingWrite[],
+  before: AppSettings,
+  after: AppSettings,
+) {
+  const written = new Set(writes.map((write) => write.path));
+  return SETTINGS_REGISTRY.filter(
+    (d) =>
+      (d.access === "secret" || d.access === "oauth") &&
+      !written.has(d.path) &&
+      settingIsSet(d, before) &&
+      !settingIsSet(d, after),
+  ).map((d) => ({
+    path: d.path,
+    note:
+      d.access === "secret"
+        ? "Cleared because its URL moved to another host. Ask the user to enter it again with settings_request_input."
+        : "Disconnected because its URL moved to another host. Ask the user to connect again with settings_request_input.",
+  }));
+}
+
 function sectionIndex() {
   return SETTINGS_SECTION_IDS.map((id) => {
     const count = SETTINGS_REGISTRY.filter((d) => d.section === id).length;
@@ -292,9 +318,10 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
       const { writes, tests } = updateParams(raw);
       const patch = settingsPatchForWrites(writes);
       ctx.signal?.throwIfAborted();
-      const assistantBefore = getSettings().permanentAssistant;
+      const before = getSettings();
       if (writes.length > 0) await saveSettings(patch);
       const settings = getSettings();
+      const dropped = credentialsDropped(writes, before, settings);
       const saved = writes.map(({ path }) =>
         entryFor(settingDescriptor(path)!, settings),
       );
@@ -312,10 +339,12 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
       }
       const restartsAssistant = ASSISTANT_PROFILE_FIELDS.some(
         (field) =>
-          assistantBefore[field] !== settings.permanentAssistant[field],
+          before.permanentAssistant[field] !==
+          settings.permanentAssistant[field],
       );
       return {
         ...(saved.length > 0 ? { saved } : {}),
+        ...(dropped.length > 0 ? { credentialsCleared: dropped } : {}),
         ...(results.length > 0 ? { tests: results } : {}),
         ...(restartsAssistant
           ? {

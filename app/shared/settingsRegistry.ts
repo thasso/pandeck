@@ -294,7 +294,9 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Provider name",
     STRING,
   ),
-  setting("openAiCompatible.baseUrl", "openai-compatible", "Base URL", STRING),
+  setting("openAiCompatible.baseUrl", "openai-compatible", "Base URL", STRING, {
+    hint: "Moving to another host clears the saved API key.",
+  }),
   setting(
     "openAiCompatible.thinkingFormat",
     "openai-compatible",
@@ -691,7 +693,9 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Confluence signs in with the Jira credentials.",
   ),
   setting("tempo.enabled", "tempo", "Tempo", BOOLEAN),
-  setting("tempo.apiBaseUrl", "tempo", "Tempo API base URL", STRING),
+  setting("tempo.apiBaseUrl", "tempo", "Tempo API base URL", STRING, {
+    hint: "Moving to another host disconnects Tempo.",
+  }),
   oauth(
     "tempo.connection",
     "tempo",
@@ -724,7 +728,9 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     BOOLEAN,
   ),
   setting("forgejo.enabled", "forgejo", "Forgejo", BOOLEAN),
-  setting("forgejo.baseUrl", "forgejo", "Instance URL", STRING),
+  setting("forgejo.baseUrl", "forgejo", "Instance URL", STRING, {
+    hint: "Moving to another host clears the saved token.",
+  }),
   secret(
     "forgejo.token",
     "forgejo",

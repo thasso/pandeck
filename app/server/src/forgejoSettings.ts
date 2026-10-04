@@ -28,6 +28,7 @@ import {
 } from "./forgejoClient.ts";
 import { fileReadErrorText } from "./errors.ts";
 import { deadlineSignal } from "./httpRetry.ts";
+import { sameOrigin } from "./urlOrigin.ts";
 
 const FORGEJO_SETTINGS_PATH = join(DATA_DIR, "settings", "forgejo.json");
 
@@ -113,13 +114,16 @@ export function updateForgejoSettings(
   patch: ForgejoSettingsPatch,
 ): ForgejoSettings {
   const current = readPrivate();
+  const baseUrl =
+    patch.baseUrl !== undefined
+      ? normalizeForgejoBaseUrl(patch.baseUrl)
+      : current.baseUrl;
+  // The stored token stays with the origin it was entered for (urlOrigin.ts).
+  const keptToken = sameOrigin(current.baseUrl, baseUrl) ? current.token : "";
   const next: StoredForgejoSettings = {
     enabled: patch.enabled ?? current.enabled,
-    baseUrl:
-      patch.baseUrl !== undefined
-        ? normalizeForgejoBaseUrl(patch.baseUrl)
-        : current.baseUrl,
-    token: patch.clearToken ? "" : patch.token?.trim() || current.token,
+    baseUrl,
+    token: patch.clearToken ? "" : patch.token?.trim() || keptToken,
     defaultOwner: (patch.defaultOwner ?? current.defaultOwner).trim(),
   };
   writePrivate(next);

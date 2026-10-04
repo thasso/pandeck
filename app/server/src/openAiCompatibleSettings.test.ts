@@ -243,3 +243,24 @@ test("a model list passes the display name in instead of re-reading it", () => {
   );
   assert.equal(option.providerName, "Passed Name");
 });
+
+test("the API key stays with the origin it was entered for", () => {
+  updateOpenAiCompatibleSettings({
+    enabled: true,
+    baseUrl: "https://llm.example.net/v1",
+    apiKey: FAKE_API_KEY,
+  });
+  let settings = updateOpenAiCompatibleSettings({
+    baseUrl: "https://llm.example.net/v2",
+  });
+  assert.equal(settings.apiKeyConfigured, true);
+  settings = updateOpenAiCompatibleSettings({
+    baseUrl: "https://evil.test/v1",
+  });
+  assert.equal(settings.apiKeyConfigured, false);
+  settings = updateOpenAiCompatibleSettings({
+    baseUrl: "https://llm.example.net/v1",
+    apiKey: FAKE_API_KEY,
+  });
+  assert.equal(settings.apiKeyConfigured, true);
+});

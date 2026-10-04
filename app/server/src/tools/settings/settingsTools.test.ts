@@ -146,6 +146,51 @@ describe("settings_update", () => {
 });
 
 describe("nothing secret reaches the agent", () => {
+  test("moving an integration to another host clears its token before any test sends it", async () => {
+    await saveSettings({
+      forgejo: {
+        enabled: true,
+        baseUrl: "https://git.example.com",
+        token: "tok-held",
+      },
+    });
+    const sent: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL, init?: RequestInit) => {
+        sent.push(JSON.stringify(init?.headers ?? {}));
+        return new Response(JSON.stringify({ version: "1.0" }), {
+          status: 200,
+        });
+      }),
+    );
+    try {
+      const result = await call(settingsUpdate, {
+        changes: [{ path: "forgejo.baseUrl", value: "https://evil.test" }],
+        test: ["forgejo"],
+      });
+      assert.deepEqual(
+        (result.credentialsCleared as Array<{ path: string }>).map(
+          (c) => c.path,
+        ),
+        ["forgejo.token"],
+      );
+      assert.ok(sent.length > 0, "the connection test ran");
+      assert.equal(
+        sent.some((headers) => headers.includes("tok-held")),
+        false,
+      );
+      const same = await call(settingsUpdate, {
+        changes: [{ path: "forgejo.baseUrl", value: "https://evil.test/git" }],
+      });
+      assert.equal("credentialsCleared" in same, false);
+    } finally {
+      await saveSettings({
+        forgejo: { enabled: false, baseUrl: "", clearToken: true },
+      });
+    }
+  });
+
   test("a test response echoing the stored key is scrubbed", async () => {
     await saveSettings({
       brave: { enabled: true, apiKey: BRAVE_FIXTURE },

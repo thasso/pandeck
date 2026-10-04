@@ -25,6 +25,7 @@ import type { JiraApiConfig } from "./jiraClient.ts";
 import { jiraGet } from "./jiraClient.ts";
 import { errorText, fileReadErrorText } from "./errors.ts";
 import { deadlineSignal } from "./httpRetry.ts";
+import { sameOrigin } from "./urlOrigin.ts";
 
 const TEMPO_SETTINGS_PATH = join(DATA_DIR, "settings", "tempo.json");
 const TEMPO_OAUTH_CALLBACK_PATH = "/api/tempo/oauth/callback";
@@ -205,14 +206,18 @@ export function updateTempoSettings(
   publicBaseUrl?: string,
 ): TempoSettings {
   const current = readPrivate();
-  const clearTokens = patch.clearTokens === true;
+  const apiBaseUrl = cleanUrl(
+    patch.apiBaseUrl ?? current.apiBaseUrl,
+    DEFAULT_API_BASE_URL,
+  );
+  // The connection stays with the API origin it was made for (urlOrigin.ts):
+  // moving the API elsewhere disconnects Tempo.
+  const clearTokens =
+    patch.clearTokens === true || !sameOrigin(current.apiBaseUrl, apiBaseUrl);
   const next: StoredTempoSettings = {
     ...current,
     enabled: patch.enabled ?? current.enabled,
-    apiBaseUrl: cleanUrl(
-      patch.apiBaseUrl ?? current.apiBaseUrl,
-      DEFAULT_API_BASE_URL,
-    ),
+    apiBaseUrl,
     accessToken: clearTokens ? "" : current.accessToken,
     refreshToken: clearTokens ? "" : current.refreshToken,
     accessTokenExpiresAt: clearTokens ? 0 : current.accessTokenExpiresAt,
@@ -364,16 +369,26 @@ export async function handleTempoOAuthCallback(
       settings.oauthRedirectUri || tempoOAuthRedirectUri(publicBaseUrl),
     code,
   });
-  settings.accessToken = token.access_token || "";
-  settings.refreshToken = token.refresh_token || settings.refreshToken;
-  settings.accessTokenExpiresAt = token.expires_in
+  // A disconnect or an API move while the token request was out cleared the
+  // pending state: storing the grant would reconnect what the user just
+  // disconnected, and writing the earlier snapshot would revert their save.
+  const fresh = readPrivate();
+  if (fresh.oauthState !== state)
+    return {
+      ok: false,
+      message:
+        "Tempo settings changed while connecting. Please connect again from Settings.",
+    };
+  fresh.accessToken = token.access_token || "";
+  fresh.refreshToken = token.refresh_token || fresh.refreshToken;
+  fresh.accessTokenExpiresAt = token.expires_in
     ? Date.now() + token.expires_in * 1000
     : 0;
-  settings.oauthState = "";
-  settings.oauthStateCreatedAt = 0;
-  writePrivate(settings);
+  fresh.oauthState = "";
+  fresh.oauthStateCreatedAt = 0;
+  writePrivate(fresh);
 
-  if (!settings.accessToken) {
+  if (!fresh.accessToken) {
     return {
       ok: false,
       message:
@@ -382,7 +397,7 @@ export async function handleTempoOAuthCallback(
   }
   return {
     ok: true,
-    message: settings.refreshToken
+    message: fresh.refreshToken
       ? "Tempo authorized."
       : "Tempo authorized (no refresh token was returned; you may need to reconnect when the token expires).",
   };
