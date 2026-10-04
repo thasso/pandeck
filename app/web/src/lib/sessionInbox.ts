@@ -56,7 +56,10 @@ export type SessionInboxStatus =
   | "unread"
   /** A run is active on the server. */
   | "running"
-  /** Unsettled, seen, idle — including a successful outcome already read. */
+  /**
+   * Unsettled, seen, idle — including a successful outcome already read, and a
+   * SHELVED session's stored failure, which the user already acknowledged.
+   */
   | "quiet";
 
 /** Attention tiers. Human-blocking work always outranks anything else. */
@@ -569,7 +572,7 @@ export function sessionStatusDetail(
 
 /**
  * The cluster's own line: what this card's peers are doing, as ONE bounded
- * sentence ("5 sessions · 3 working · 2 waiting"). A count that is zero is left
+ * sentence ("5 sessions · 2 running · 3 jobs · 1 waiting"). A count that is zero is left
  * out rather than shown as a zero — the line is read at a glance, and "0 failed"
  * is a word that means nothing happened.
  *
@@ -614,6 +617,10 @@ function clusterLiveParts(counts: SessionClusterCounts): string[] {
   if (counts.running > 0) parts.push(`${counts.running} running`);
   if (counts.jobs > 0)
     parts.push(`${counts.jobs} job${counts.jobs === 1 ? "" : "s"}`);
+  // Busy with neither a turn nor a job — a retained background host — still
+  // spins the fold, so the words must say why.
+  if (parts.length === 0 && counts.working > 0)
+    parts.push(`${counts.working} working`);
   return parts;
 }
 

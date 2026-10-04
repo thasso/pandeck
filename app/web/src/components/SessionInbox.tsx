@@ -838,7 +838,7 @@ export function SessionInbox({
                   type="button"
                   aria-expanded={settledHistory.includes(id)}
                   onClick={() => toggleSettledHistory(id)}
-                  className="flex min-h-7 w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-caption text-faint outline-none transition-colors hover:bg-raised hover:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                  className={`flex ${density === "comfortable" ? "min-h-8" : "min-h-7"} w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-caption text-faint outline-none transition-colors hover:bg-raised hover:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
                 >
                   <ChevronRight
                     size={12}

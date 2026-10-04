@@ -394,12 +394,14 @@ browser: focusable, swipeable, and openable. When the coordinator's tree also
 holds settled peers, the open fold ends in a "Show N settled" row that puts them
 back in the tree where they were spawned, after their live siblings; they stay
 on the Settled shelf (listed here under a prefixed row id, so the two rows never
-share one), offer no Settle, and count for nothing on the card. Neither does any
-other settled session listed in the tree — a bridge kept by live work below it,
-or a settled peer running again: it is already down, and the coordinator's own
-Settle is the one that reaches its subtree. A session whose peers are ALL
-settled has no fold at all: the card is about live work, and that history is on
-the Settled shelf and in the session's own composer ledge.
+share one), offer no Settle, and count for nothing on the card. No other settled
+session listed in the tree offers a Settle either — a bridge kept by live work
+below it, a settled peer running again, or a settled role of a Workflow Run: it
+is already down, and the coordinator's (or the run's) own Settle is the one that
+reaches it. Those live rows still count on the card, though: in its total, and
+under running or jobs while they are busy. A session whose peers are ALL settled
+has no fold at all: the card is about live work, and that history is on the
+Settled shelf and in the session's own composer ledge.
 
 A formal **Workflow Run** is one Sessions inbox item too
 ([Task-676](pa://task/676)). Every live run — active or paused — is a card of

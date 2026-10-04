@@ -1470,6 +1470,12 @@ describe("spawn clusters", () => {
       "2 sessions · 1 job",
     );
     expect(clusterLiveSummary(counts({ jobs: 0 }))).toBe("");
+    // Busy with neither a turn nor a job (a retained host): the spinner turns,
+    // so the words say why.
+    expect(clusterLiveSummary(counts({ working: 1 }))).toBe("1 working");
+    expect(clusterLiveSummary(counts({ working: 2, running: 1 }))).toBe(
+      "1 running",
+    );
   });
 });
 
