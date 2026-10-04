@@ -1,8 +1,10 @@
 /**
  * Headless one-shot run against a pi agent session.
  *
- * The pi engine half of `runOneShot` (`harnesses/oneShot.ts`), which is the
- * only caller; app code never reaches this module directly. It builds a locked-down resource loader
+ * The pi engine half of `runOneShot` (`harnesses/oneShot.ts`), the only caller
+ * of `runPiOneShot` and `findPiModelExact`. `selectPiModelWithFallback` also
+ * serves `permanentAssistant.ts` until model selection moves behind the models
+ * port (`docs/agent-harnesses.md`, step 6). It builds a locked-down resource loader
  * (no extensions/skills/prompt-templates/context files, custom system
  * prompt), runs a single prompt against an in-memory session, optionally
  * exposing an explicit app-tool allowlist through the direct AgentTool
@@ -51,16 +53,6 @@ export type PiRegistryModel = NonNullable<ReturnType<typeof findModel>>;
  * 0.87 dropped it and every remaining Copilot model reports `reasoning: true`,
  * so the non-reasoning tier below now only ever matches other providers.
  */
-/** The configured model if the account offers it; never a fallback. */
-export async function findPiModelExact(
-  settings: { provider: string; modelId: string },
-  credentialProfileId: string,
-): Promise<PiRegistryModel | undefined> {
-  const { modelRegistryForProfile } = await loadPi();
-  const registry = await modelRegistryForProfile(credentialProfileId);
-  return registry.find(settings.provider, settings.modelId);
-}
-
 export async function selectPiModelWithFallback(
   settings: { provider: string; modelId: string },
   credentialProfileId: string,
@@ -81,6 +73,16 @@ export async function selectPiModelWithFallback(
     available.find((m) => !m.reasoning && m.input.includes("text")) ??
     available[0]
   );
+}
+
+/** The configured model if the account offers it; never a fallback. */
+export async function findPiModelExact(
+  settings: { provider: string; modelId: string },
+  credentialProfileId: string,
+): Promise<PiRegistryModel | undefined> {
+  const { modelRegistryForProfile } = await loadPi();
+  const registry = await modelRegistryForProfile(credentialProfileId);
+  return registry.find(settings.provider, settings.modelId);
 }
 
 export interface PiOneShotOptions {

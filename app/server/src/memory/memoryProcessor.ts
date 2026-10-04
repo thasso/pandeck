@@ -39,7 +39,7 @@ import {
 } from "./memoryService.ts";
 import { searchMemory } from "./memorySelector.ts";
 import { findModelForProfile } from "../piSdk/models.ts";
-import { runOneShot } from "../harnesses/oneShot.ts";
+import { OneShotError, runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
 
 /* -------------------------------- bounds --------------------------------- */
@@ -91,15 +91,30 @@ const realRunner: MemoryProcessorRunner = {
       timeoutMs: input.timeoutMs,
       timeoutMessage: "Memory processor timed out.",
     });
-    const cost = usage.costUSD;
-    return {
-      text,
-      ...(cost !== undefined && cost > 0
-        ? { costMicrosUsd: Math.round(cost * 1_000_000) }
-        : {}),
-    };
+    const costMicrosUsd = costMicros(usage.costUSD);
+    return { text, ...(costMicrosUsd !== undefined ? { costMicrosUsd } : {}) };
   },
 };
+
+/** A reported USD cost in micro-USD; undefined when unpriced or zero. */
+function costMicros(costUSD: number | undefined): number | undefined {
+  return costUSD !== undefined && costUSD > 0
+    ? Math.round(costUSD * 1_000_000)
+    : undefined;
+}
+
+/**
+ * Close a run whose model call threw. A run that failed after billing still
+ * counts against the daily ceiling; a timeout or engine exception reported
+ * nothing to count.
+ */
+function reconcileFailedRun(runId: number, err: unknown): void {
+  const costMicrosUsd =
+    err instanceof OneShotError ? costMicros(err.usage.costUSD) : undefined;
+  memoryProcessorStore.reconcile(runId, "error", clock(), {
+    ...(costMicrosUsd !== undefined ? { costMicrosUsd } : {}),
+  });
+}
 
 let runner: MemoryProcessorRunner = realRunner;
 export function setMemoryProcessorRunnerForTests(
@@ -760,7 +775,7 @@ export async function runMemoryProcessor(
       timeoutMs: DEFAULT_TIMEOUT_MS,
     });
   } catch (err) {
-    memoryProcessorStore.reconcile(runId, "error", clock());
+    reconcileFailedRun(runId, err);
     // Recoverable: release for a bounded retry, else give up on this batch.
     for (const obs of observations) {
       if (obs.attempts >= MAX_ATTEMPTS)
@@ -939,7 +954,7 @@ export async function runConsolidation(): Promise<ProcessorOutcome> {
       timeoutMs: DEFAULT_TIMEOUT_MS,
     });
   } catch (err) {
-    memoryProcessorStore.reconcile(runId, "error", clock());
+    reconcileFailedRun(runId, err);
     return {
       ran: true,
       reason: "error",
