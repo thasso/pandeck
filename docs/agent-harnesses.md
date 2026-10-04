@@ -37,9 +37,13 @@ Four layers, each depending only on the ones below it:
    - `harnessRegistry` (`harnesses/registry.ts`) resolves a session id to the
      store that holds it: it lists what both hold resident, finds a resident
      session, opens one by id, and wires both stores to the hub's behaviour
-     (`HarnessHost`). Create, fork, rename and remove move behind it in steps
-     10–11; until then `hub.ts` still calls the stores for them and builds the
-     merged session list from each.
+     (`HarnessHost`). Each engine answers through one `HarnessSessions` entry,
+     so routing is a lookup by harness id, never a branch per method. An id
+     belongs to one engine: a client-supplied id another engine holds is refused
+     before anything is written for it (`otherHolder`), which lets a resident
+     lookup answer from memory alone. Create, fork, rename and remove move
+     behind it in steps 10–11; until then `hub.ts` still calls the stores for
+     them and builds the merged session list from each.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -134,6 +138,15 @@ table when a later step needs them.
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
 after 7.
+
+An id belongs to one engine, enforced in three places. Each store refuses to
+register an id the other holds resident (`setHeldElsewhere`, wired by the
+registry): the last word, whichever path asks. A Claude first send, the one path
+that takes a client-supplied id, refuses an id another engine holds resident, on
+record or on disk (`otherHolder`) before it writes anything, and checks again
+with nothing awaited before the session registers. `hub.acquireClaudeSdk` checks
+as a backstop and must never be the first refusal. Step 10's registry create
+folds the send and hub checks into one.
 
 Out of scope: splitting `ClaudeSdkSession.ts` internally. Step 8 removes its
 duplicated plumbing first, which makes that split a separate, smaller change.

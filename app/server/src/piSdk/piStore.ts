@@ -3,8 +3,9 @@
  * `claudeSdk/claudeSdkStore.ts`: a singleton store the hub delegates to. Owns
  * the live-session map, session creation/reopen/fork, eviction, and the pi
  * halves of id-only lookup, rename, image resolution, and session listing.
- * The hub wires the {@link PiSessionHost} via {@link PiSessionStore.setHost};
- * this module must never import hub.ts.
+ * The hub's behaviour arrives as the {@link HarnessHost} via
+ * {@link PiSessionStore.setHost} (`harnesses/registry.ts`); this module must
+ * never import hub.ts.
  */
 import {
   type AgentSession,
@@ -64,11 +65,21 @@ import {
   type PromptConditions,
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
-import { PiLiveSession, type PiSessionHost } from "./PiLiveSession.ts";
+import { PiLiveSession } from "./PiLiveSession.ts";
+import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import { defaultOpenAiProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
 import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
+
+/** Every persona a legacy per-persona transcript directory can hold. */
+const LEGACY_KINDS: readonly AgentType[] = [
+  "assistant",
+  "developer",
+  "workshop",
+  "personal-assistant",
+  "workflow-coordinator",
+];
 
 /**
  * A cold open lost to a delete: the session was tombstoned while its
@@ -175,19 +186,37 @@ class PiSessionStore {
   private toolRuntimes = new Map<string, PiToolActivation>();
   /** Live policy read by the built-in/bridge active-set merge. */
   private sessionModes = new Map<string, SessionMode>();
-  private host: PiSessionHost | undefined;
+  private host: HarnessHost | undefined;
+  /** Whether another engine holds an id resident; registration refuses it. */
+  private heldElsewhere: (id: string) => boolean = () => false;
 
   /**
-   * Wire the hub-side callbacks every {@link PiLiveSession} needs. The hub
-   * calls this once from its constructor (same pattern as
-   * `claudeSdkStore.setOnChange`), so the host inverts the session→hub calls
-   * and this module never imports hub.ts.
+   * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
+   * registry calls this once, when the hub hands it its host
+   * (`harnessRegistry.setHost`), so the host inverts the session→hub calls and
+   * this module never imports hub.ts.
    */
-  setHost(host: PiSessionHost): void {
+  setHost(host: HarnessHost): void {
     this.host = host;
   }
 
-  private requireHost(): PiSessionHost {
+  /** How to tell an id another engine holds resident (`harnessRegistry`). */
+  setHeldElsewhere(check: (id: string) => boolean): void {
+    this.heldElsewhere = check;
+  }
+
+  /**
+   * Whether a transcript for our id is on disk: the canonical file, or a
+   * legacy per-persona one a continuation could still reopen.
+   */
+  hasTranscript(id: string): boolean {
+    if (existsSync(canonicalPiSessionPath(id))) return true;
+    return LEGACY_KINDS.some(
+      (kind) => findLegacySessionFile(kind, id) !== undefined,
+    );
+  }
+
+  private requireHost(): HarnessHost {
     if (!this.host)
       throw new Error(
         "PiSessionStore host is not wired; the hub must call setHost() first.",
@@ -364,6 +393,13 @@ class PiSessionStore {
       ) {
         this.discardUnregistered(created.session);
         throw new PiSessionDeletedError(created.session.sessionId);
+      }
+      // An id belongs to one engine: one the Claude store took while this
+      // transcript was opening stays Claude's. Only a reopen registers an id
+      // it did not mint, so this is the one place pi has to ask.
+      if (this.heldElsewhere(created.session.sessionId)) {
+        this.discardRefused(created.session);
+        throw new SessionHeldElsewhereError(created.session.sessionId);
       }
       return this.track(kind, created.session, created.notices, cwd, profileId);
     })();
@@ -766,6 +802,17 @@ class PiSessionStore {
     this.closeToolRuntime(key);
     this.sessionModes.delete(key);
     void sessionRuntime.releaseHarness(key);
+  }
+
+  /**
+   * Tear down a session `create` built for an id another engine holds: only
+   * what pi made for it. Resources keyed by the id alone, its browser runtime
+   * above all, belong to the holder and stay open.
+   */
+  private discardRefused(session: AgentSession): void {
+    this.closeToolRuntime(session.sessionId);
+    this.sessionModes.delete(session.sessionId);
+    session.dispose();
   }
 
   /** Tear down a session `create` built that will never be registered. */

@@ -7,6 +7,7 @@
 import type {
   AgentType,
   BroadcastTopic,
+  BrowserRuntimeInfo,
   ContextInfo,
   DisplayMessage,
   Harness,
@@ -24,6 +25,34 @@ import type { RuntimePromptDriver } from "./session/runtimePrompt.ts";
  * command reopens it from disk (`docs/session-loading.md#letting-go`).
  */
 export const HARNESS_IDLE_EVICT_MS = 5 * 60_000;
+
+/**
+ * The hub behaviour both engines' sessions and stores reach without importing
+ * `hub.ts`; the hub hands it over once (`harnesses/registry.ts`).
+ */
+export interface HarnessHost {
+  /** Recompute the merged session list and push it to every connected tab. */
+  broadcastSessions(): Promise<void>;
+  /** A run just started; cancel any idle-settle countdown for a queued reload. */
+  noteRunStarted(): void;
+  /** Re-check after a run ends whether a deferred dev reload can now proceed. */
+  checkPendingReload(): void;
+  /** True while a requested dev reload is pending or already exiting. */
+  isReloadQueued(): boolean;
+  /** Browser runtimes visible to `sessionId`, for coding session state. */
+  browserRuntimesFor(sessionId: string): BrowserRuntimeInfo[];
+}
+
+/**
+ * A store refused to register a session because another engine already holds
+ * its id resident: an id belongs to one engine (`harnesses/registry.ts`).
+ */
+export class SessionHeldElsewhereError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Session ${sessionId} is already open on another harness.`);
+    this.name = "SessionHeldElsewhereError";
+  }
+}
 
 /** Anything that can receive server messages — implemented by `Connection`. */
 export interface Viewer {
@@ -133,6 +162,8 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
   setMode(mode: SessionMode): void;
   /** Send a message to everyone viewing this session. */
   broadcast(message: ServerMessage): void;
+  /** The title the session shows as, when it has one yet. */
+  readonly sessionTitle: string | undefined;
   /**
    * The model the session runs on (as its picker provider and id) and its
    * thinking level, for carrying them into a new session.

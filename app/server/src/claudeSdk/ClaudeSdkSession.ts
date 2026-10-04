@@ -789,6 +789,10 @@ export class ClaudeSdkSession implements LiveSession {
     return this.id;
   }
 
+  get sessionTitle(): string | undefined {
+    return this.title;
+  }
+
   get isRunning(): boolean {
     return this.running;
   }

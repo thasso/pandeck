@@ -24,9 +24,9 @@ and headless one-shot utility runs.
   contributes `compactContext` (pi's `AgentSession.compact`, which never
   declines) and the turn methods over `../sessionKit/hostCommandTurn.ts`; its
   `/commit accept` flow runs as one of those turns. It talks to the hub only
-  through the injected `PiSessionHost`. Prompt attachments are persisted +
-  turned into model content through the shared `promptAttachments.ts` builder
-  (images as content blocks; other files persisted to `sessionAttachments` and
+  through the injected `HarnessHost`. Prompt attachments are persisted + turned
+  into model content through the shared `promptAttachments.ts` builder (images
+  as content blocks; other files persisted to `sessionAttachments` and
   referenced/inlined via the prompt suffix).
 - `piStore.ts` owns the live-session registry: acquire/open/fork/create/track,
   eviction (runtime dispose stays adjacent to map removal), rename, image
@@ -270,7 +270,7 @@ and headless one-shot utility runs.
   `architecture.test.ts`); non-`piSdk/` modules may use focused `piSdk/` entry
   points, but must not import the pi package directly.
 - No static import of `hub.ts` anywhere in this folder; hub behavior arrives via
-  `piStore.setHost(...)`/`PiSessionHost` injection.
+  `piStore.setHost(...)`/`HarnessHost` injection.
 - Drive sessions through the runtime prompt facade/adapter; `PiLiveSession` raw
   prompting stays private.
 - Pi tools always come from the direct adapter over `toolActivation.ts` (the
