@@ -538,7 +538,11 @@ function createDaySessionOnce(
   if (!pending) {
     pending = (async () => {
       const boundId = getDaySessionId(date);
-      const bound = boundId ? await hub.acquireById(boundId) : undefined;
+      // A failed look-up is a stale binding, as for the activation itself:
+      // it must not fail every activation sharing this creation.
+      const bound = boundId
+        ? await hub.acquireById(boundId).catch(() => undefined)
+        : undefined;
       if (isLiveSession(bound)) return bound;
       const created = await create();
       setDaySessionId(date, created.sessionId);

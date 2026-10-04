@@ -137,7 +137,14 @@ export async function rotatePermanentAssistantSession(): Promise<void> {
   // belongs to the old profile and may no longer bind, and one asked for from
   // here on waits for the old singleton to be abandoned first.
   generation += 1;
-  const run = abandonPermanentAssistant();
+  // Chained: a rotation still flushing the old singleton finishes first, so
+  // its flush precedes every reset, and the last rotation to settle is the
+  // one acquisitions waited for.
+  const prior = rotation;
+  const run = (async () => {
+    await prior?.catch(() => {});
+    await abandonPermanentAssistant();
+  })();
   rotation = run;
   try {
     await run;
@@ -156,7 +163,9 @@ async function abandonPermanentAssistant(): Promise<void> {
     await memoryScheduler.flushBeforeReset(previous);
     resetMemorySessionContext(previous);
   }
-  permanentAssistantStore.clearSessionId();
+  // Only the singleton this rotation set out to abandon.
+  if (permanentAssistantStore.sessionId() === previous)
+    permanentAssistantStore.clearSessionId();
 }
 
 export async function permanentAssistantSessionId(): Promise<string> {

@@ -30,6 +30,40 @@ const { permanentAssistantStore } =
 const { getSettings } = await import("./settings.ts");
 const { permanentAssistantProfileInstructions } =
   await import("./permanentAssistantProfile.ts");
+const { hub } = await import("./hub.ts");
+const { memoryScheduler } = await import("./memory/memoryScheduler.ts");
+
+/** Creations answered in order as `assistant-1`, `assistant-2`, ... */
+function assistantCreations() {
+  const created: string[] = [];
+  vi.spyOn(create, "createSession").mockImplementation(async () => {
+    const id = `assistant-${created.length + 1}`;
+    created.push(id);
+    return { id, sessionId: id } as never;
+  });
+  return created;
+}
+
+/** The bound singleton `old`, answered as a real Personal Assistant. */
+function boundOld(lookup?: Promise<void>) {
+  permanentAssistantStore.setSessionId("old");
+  vi.spyOn(hub, "acquireById").mockImplementation(async (id: string) => {
+    if (id !== "old") return undefined;
+    await lookup;
+    return {
+      id: "old",
+      sessionId: "old",
+      agentType: "personal-assistant",
+      createRuntimeAdapter() {},
+    } as never;
+  });
+}
+
+function held() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => (release = resolve));
+  return { promise, release };
+}
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => {
@@ -85,4 +119,57 @@ test("a rotation retires a creation under way: the new profile's singleton is bo
   assert.equal(await old, "assistant-2");
   assert.equal(permanentAssistantStore.sessionId(), "assistant-2");
   assert.deepEqual(created, ["assistant-1", "assistant-2"]);
+});
+
+test("an acquisition asked for during a rotation waits for the old singleton to be abandoned", async () => {
+  const created = assistantCreations();
+  boundOld();
+  const flush = held();
+  vi.spyOn(memoryScheduler, "flushBeforeReset").mockReturnValue(flush.promise);
+
+  const rotating = rotatePermanentAssistantSession();
+  const id = permanentAssistantSessionId();
+  flush.release();
+  await rotating;
+
+  assert.equal(await id, "assistant-1");
+  assert.equal(permanentAssistantStore.sessionId(), "assistant-1");
+  assert.deepEqual(created, ["assistant-1"]);
+});
+
+test("a rotation while the bound singleton is looked up retires that answer", async () => {
+  const created = assistantCreations();
+  const lookup = held();
+  boundOld(lookup.promise);
+  vi.spyOn(memoryScheduler, "flushBeforeReset").mockResolvedValue(undefined);
+
+  const id = permanentAssistantSessionId();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await rotatePermanentAssistantSession();
+  lookup.release();
+
+  assert.equal(await id, "assistant-1");
+  assert.equal(permanentAssistantStore.sessionId(), "assistant-1");
+  assert.deepEqual(created, ["assistant-1"]);
+});
+
+test("overlapping rotations never clear the singleton bound after them", async () => {
+  assistantCreations();
+  boundOld();
+  // The scheduler flushes a session once: a second flush of the same session
+  // returns at once while the first is still running.
+  const flush = held();
+  vi.spyOn(memoryScheduler, "flushBeforeReset")
+    .mockReturnValueOnce(flush.promise)
+    .mockResolvedValue(undefined);
+
+  const first = rotatePermanentAssistantSession();
+  const second = rotatePermanentAssistantSession();
+  const id = permanentAssistantSessionId();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  flush.release();
+  await Promise.all([first, second]);
+
+  assert.equal(await id, "assistant-1");
+  assert.equal(permanentAssistantStore.sessionId(), "assistant-1");
 });
