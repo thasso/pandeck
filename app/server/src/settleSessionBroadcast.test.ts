@@ -254,6 +254,32 @@ test("a coordinated peer that still needs the user refuses the coordinator's set
   }
 });
 
+test("the cascade keeps the time an already-settled peer was put down", () => {
+  const stamp = Date.now();
+  const coordinator = `settle-keep-coordinator-${stamp}`;
+  const bridge = `settle-keep-bridge-${stamp}`;
+  for (const id of [coordinator, bridge])
+    sessionStore.upsert({
+      id,
+      harness: "pi",
+      agentType: "assistant",
+      title: id,
+      messageCount: 2,
+    });
+  try {
+    assert.equal(sessionStore.settleWithPeers(bridge, 0, [], 1_000), true);
+    assert.equal(
+      sessionStore.settleWithPeers(coordinator, 0, [bridge], 9_000),
+      true,
+    );
+    // Re-stamping would lift a long-settled peer to the top of the shelf.
+    assert.equal(sessionStore.get(bridge)?.settledAt, 1_000);
+    assert.equal(sessionStore.get(coordinator)?.settledAt, 9_000);
+  } finally {
+    for (const id of [coordinator, bridge]) sessionStore.remove(id);
+  }
+});
+
 test("the cascade is one transaction: a peer that cannot be written settles nothing", async () => {
   const stamp = Date.now();
   const coordinator = `settle-cluster-atomic-${stamp}`;

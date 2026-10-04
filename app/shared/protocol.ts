@@ -1932,6 +1932,11 @@ export function isShelvedSession(session: SessionListItem): boolean {
  * "shelved" alone would hide a peer its coordinator just set going again. ONE
  * predicate for the inbox's fold ({@link spawnClusterForest}), the composer
  * ledge and the server's Settle cascade, so the three agree on what is live.
+ * Queued work, a retained host or running subagents do NOT make a shelved
+ * session live here: they are not a turn or a job the user waits on. They
+ * still block a Settle ({@link settleBlockedReason}), so a dormant session kept
+ * in a fold by live work below it can refuse its coordinator's Settle in its
+ * own words, exactly as the server would.
  */
 export function isDormantInSpawnTree(session: SessionListItem): boolean {
   return (
@@ -1995,7 +2000,7 @@ export function spawnClusterForest(
   members: readonly SessionListItem[],
 ): SpawnClusterForest {
   const ids = new Set(members.map((session) => session.id));
-  const shelved = new Set(
+  const dormant = new Set(
     members.filter(isDormantInSpawnTree).map((session) => session.id),
   );
   const edgeOf = new Map<string, string>();
@@ -2005,18 +2010,18 @@ export function spawnClusterForest(
     if (!parentId || parentId === session.id || !ids.has(parentId)) continue;
     edgeOf.set(session.id, parentId);
   }
-  // A shelved member keeps its edge while an unshelved one folds into it:
-  // walk up from every live edge and mark the shelved spawners on the way. The
+  // A dormant member keeps its edge while a live one folds into it: walk up
+  // from every live edge and mark the dormant spawners on the way. The
   // walk stops at the first spawner that folds anyway — live, or already
   // marked — and at a repeat, so a cycle costs one lap.
   const liveBelow = new Set<string>();
   for (const [childId, firstParent] of edgeOf) {
-    if (shelved.has(childId)) continue;
+    if (dormant.has(childId)) continue;
     const seen = new Set([childId]);
     let parentId: string | undefined = firstParent;
     while (
       parentId !== undefined &&
-      shelved.has(parentId) &&
+      dormant.has(parentId) &&
       !liveBelow.has(parentId) &&
       !seen.has(parentId)
     ) {
@@ -2031,7 +2036,7 @@ export function spawnClusterForest(
   for (const session of members) {
     const parentId = edgeOf.get(session.id);
     if (parentId === undefined) continue;
-    if (shelved.has(session.id) && !liveBelow.has(session.id)) continue;
+    if (dormant.has(session.id) && !liveBelow.has(session.id)) continue;
     parentOf.set(session.id, parentId);
     const siblings = candidates.get(parentId);
     if (siblings) siblings.push(session.id);

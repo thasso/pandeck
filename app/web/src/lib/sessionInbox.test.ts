@@ -2802,6 +2802,24 @@ describe("a settled peer set running again", () => {
     expect(view.settled).toEqual([]);
   });
 
+  it("keeps a settled coordinator on the shelf: the peer runs from there", () => {
+    const shelvedRows = [
+      session({ id: "root", settledAt: NOW - 20_000 }),
+      ...rows.slice(1),
+    ];
+    const view = buildSessionInbox(shelvedRows);
+    // No card coming and going with every peer turn: nothing under the
+    // coordinator is unsettled or waiting on the user.
+    expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+    expect(view.settled.map((s) => s.id)).toEqual(["root"]);
+    // The coordinator's own ledge still shows the run.
+    const ledge = spawnedSessionsView({
+      sessions: shelvedRows,
+      coordinatorId: "root",
+    });
+    expect(ledge.counts.running).toBe(1);
+  });
+
   it("is live work on the composer ledge", () => {
     const ledge = spawnedSessionsView({
       sessions: rows,

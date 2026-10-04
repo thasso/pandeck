@@ -709,9 +709,13 @@ function settleWithPeers(
       )
       .run(ts, Math.max(0, Math.trunc(throughRevision)), id);
     if (owner.changes === 0) throw new Error("owner row not updated");
+    // A peer already down keeps the time it was put down: the cascade also
+    // reaches settled peers kept in the fold by live work below them, and
+    // re-stamping one would lift it to the top of the Settled shelf.
     const peer = db.prepare(
       `UPDATE session_index
-          SET settled_at_ms = ?, attention_settled_revision = attention_revision
+          SET settled_at_ms = COALESCE(settled_at_ms, ?),
+              attention_settled_revision = attention_revision
         WHERE id = ? AND deleted_at_ms IS NULL`,
     );
     for (const peerId of peerIds)

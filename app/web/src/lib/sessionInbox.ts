@@ -1426,6 +1426,25 @@ export function spawnedSessionsView(options: {
 }): SpawnedSessionsView {
   const { sessions, coordinatorId } = options;
   const includeSettled = Boolean(options.includeSettled);
+  const spawned = new Map<string, SessionListItem[]>();
+  for (const session of sessions) {
+    const parentId = session.spawnedBySessionId;
+    if (session.archived || !parentId || parentId === session.id) continue;
+    const siblings = spawned.get(parentId);
+    if (siblings) siblings.push(session);
+    else spawned.set(parentId, [session]);
+  }
+
+  // Almost every session on screen spawned nothing: answer that before
+  // building the forest this view otherwise reads on every broadcast.
+  if (!spawned.has(coordinatorId))
+    return {
+      rows: [],
+      counts: zeroCounts(),
+      settled: 0,
+      settledShown: includeSettled,
+    };
+
   // A peer's Settle settles what the INBOX folds under it — coordinator-owned
   // peers at every depth, along the shared forest — not this strip's
   // ownership-blind tree. So the refusal each card carries (and with it
@@ -1450,15 +1469,6 @@ export function spawnedSessionsView(options: {
     const blocked = reasons.get(session.id);
     return { ...rest, ...(blocked ? { settleBlocked: blocked } : {}) };
   };
-  const spawned = new Map<string, SessionListItem[]>();
-  for (const session of sessions) {
-    const parentId = session.spawnedBySessionId;
-    if (session.archived || !parentId || parentId === session.id) continue;
-    const siblings = spawned.get(parentId);
-    if (siblings) siblings.push(session);
-    else spawned.set(parentId, [session]);
-  }
-
   // Breadth-first from the coordinator: each peer is reached once, through
   // the first spawner that leads to it, so a cycle cannot list it twice.
   const cards = new Map<string, SessionInboxCard>();
@@ -1734,6 +1744,20 @@ function foldSpawnClusters(
   }
 
   const bubbleOf = resolveBubbles(nodes, forest);
+  // Which members have a session below them the user has NOT put down — what
+  // keeps a settled coordinator's card up. A settled peer merely running
+  // again does not: it runs from the shelf, like its coordinator's own turn.
+  const unsettledBelow = new Set<string>();
+  for (let index = forest.order.length - 1; index >= 0; index -= 1) {
+    const id = forest.order[index] as string;
+    if (
+      (forest.childrenOf.get(id) ?? []).some(
+        (childId) =>
+          unsettledBelow.has(childId) || nodes.get(childId)?.settled === false,
+      )
+    )
+      unsettledBelow.add(id);
+  }
   const peerCounts = subtreeCounts(
     forest.order,
     (id) => forest.childrenOf.get(id) ?? [],
@@ -1758,6 +1782,7 @@ function foldSpawnClusters(
     forest,
     bubbleOf,
     peerCounts,
+    unsettledBelow,
     shelvedChildrenOf,
     cards,
     settledRows,
@@ -1806,6 +1831,8 @@ interface EmitContext {
   bubbleOf: Map<string, ClusterNode | undefined>;
   /** What each member's own folded descendants are doing ({@link subtreeCounts}). */
   peerCounts: Map<string, SessionClusterCounts>;
+  /** Members with an unsettled session folded somewhere below them. */
+  unsettledBelow: ReadonlySet<string>;
   /**
    * Shelf rows by the session that spawned them, along `coordinator`-owned
    * edges: the settled history a fold puts back on request. Never part of a
@@ -1822,12 +1849,15 @@ interface EmitContext {
  * Turn one root into what the browser shows: a cluster card carrying its
  * descendants, a card of its own, or a Settled shelf row.
  *
- * A root with anything folded under it is a CARD, settled or not. The forest
- * folds only live work (a shelved peer folds only while live work hangs below
- * it), so a settled coordinator with a folded peer still has work going on in
- * its tree, and the top level is where that work is shown — under the session
- * that started it rather than released as cards of its own. Only a settled
- * root with nothing folded under it takes the shelf.
+ * An unsettled root with anything folded under it is a CARD. A SETTLED root
+ * is a card only while its fold holds a session the user has not put down —
+ * an unsettled peer at any depth — or one that bubbles: that is work going on
+ * in its tree, and the top level is where it is shown, under the session that
+ * started it rather than released as cards of its own. Otherwise the root
+ * takes the shelf with its whole fold. A settled peer running again is not
+ * enough on its own: it runs from the shelf raising no outcome, exactly as the
+ * coordinator's own next turn does, and a card that came and went with every
+ * peer turn would flicker in and out of the working set.
  *
  * A Settle from the cluster's own card shelves the peers with it (server-side,
  * through their current revisions — `spawnClusterDescendantIds`), so a settled
@@ -1835,16 +1865,24 @@ interface EmitContext {
  * woken by a later failure) or one it spawned after it was put down.
  */
 function emitCluster(id: string, context: EmitContext): void {
-  const { nodes, bubbleOf, peerCounts, cards, settledRows } = context;
+  const { nodes, bubbleOf, peerCounts, unsettledBelow, cards, settledRows } =
+    context;
   const node = nodes.get(id) as ClusterNode;
   const counts = peerCounts.get(id);
+  const bubbled = bubbleOf.get(id);
   if (!counts) {
     if (node.settled) settledRows.push(node.card.session);
     else cards.push(node.card);
     return;
   }
+  // Put down, and nothing under it is unsettled or waiting on the user: the
+  // whole fold stays on the shelf. Its settled peers that are running again
+  // run from there, exactly as its own next turn would.
+  if (node.settled && !bubbled && !unsettledBelow.has(id)) {
+    settledRows.push(node.card.session);
+    return;
+  }
 
-  const bubbled = bubbleOf.get(id);
   const children = clusterTree(id, context, false);
   const childrenWithSettled = clusterTree(id, context, true);
   cards.push({

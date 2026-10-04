@@ -663,6 +663,9 @@ export function SessionInbox({
     setOpenClusters((ids) =>
       ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
     );
+    // Closing a fold forgets its history toggle, as closing the composer
+    // ledge does: it opens again on what is live.
+    setSettledHistory((ids) => ids.filter((value) => value !== id));
   }, []);
   const toggleSettledHistory = useCallback((id: string) => {
     setSettledHistory((ids) =>

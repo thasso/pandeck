@@ -376,6 +376,11 @@ describe("SessionInbox clusters", () => {
     expect(toggle().textContent).toBe("Hide settled");
     click(toggle());
     expect(rowIds()).toEqual(["root", "impl", "rev"]);
+    // Closing the fold forgets the toggle: it reopens on what is live.
+    click(toggle());
+    click(button("Hide the 2 coordinated sessions"));
+    click(button("Show the 2 coordinated sessions"));
+    expect(rowIds()).toEqual(["root", "impl", "rev"]);
   });
 
   it("offers no Settle on a settled peer listed as history, by key or by swipe", () => {
@@ -407,6 +412,28 @@ describe("SessionInbox clusters", () => {
     // A live row in the same fold still settles.
     swipeRight("live");
     expect(settled).toEqual([["live", true]]);
+  });
+
+  it("offers no Settle on a settled peer kept in the tree by live work below it", () => {
+    vi.useFakeTimers();
+    const settled: Array<[string, boolean]> = [];
+    render(
+      [
+        session("root"),
+        peer("mid", "root", { settledAt: NOW - 5_000 }),
+        peer("leaf", "mid"),
+      ],
+      { onSettle: (id, value) => void settled.push([id, value]) },
+    );
+    click(button("Show the 2 coordinated sessions"));
+    act(() => {
+      row("mid").dispatchEvent(
+        new KeyboardEvent("keydown", { key: "s", bubbles: true }),
+      );
+    });
+    act(() => void vi.advanceTimersByTime(1_000));
+    swipeRight("mid");
+    expect(settled).toEqual([]);
   });
 
   it("keeps the disclosure honest about what the click will do", () => {

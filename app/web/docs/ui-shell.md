@@ -325,21 +325,24 @@ the coordinator itself is settled, so a settled coordinator can never bury a
 peer's question or failure. A failure here is the FAILED BADGE. A later run
 start may clear the failure's message, but the unacknowledged failed outcome
 keeps the session classified as `failed`, so the cluster still counts and
-bubbles it. More generally, a settled coordinator with ANY live peer folded
-under it stays a card in the working set, because nothing live may be folded
-into a row that is itself put down; only a settled coordinator with nothing
-folded under it takes the shelf. The same rule holds inside the tree: a settled
-peer folds only while live work hangs below it, so a live peer it spawned stays
-under the coordinator above instead of surfacing as a card of its own. A settled
-peer its coordinator sets going again — a turn, or background jobs — is live
-work itself: it runs from the shelf raising no outcome, so it folds, counts
-under running (a turn) or jobs (background work), refuses the coordinator's
-Settle in its own wording like any busy peer, and returns to history when it
-goes quiet (`isDormantInSpawnTree`). A settled session kept up that way shows no
-failure: the server withholds `settledAt` from a row whose latest outcome is
-open, so a shelved row's stored error is one the user already acknowledged, and
-it neither counts nor bubbles. Settled peers are otherwise history: out of the
-counts, the Settle cascade and the tree.
+bubbles it. More generally, a settled coordinator with an UNSETTLED peer folded
+anywhere under it stays a card in the working set, because work the user has not
+put down may never be folded into a row that is; otherwise it takes the shelf
+with its whole fold. A settled peer merely running again does not bring it back:
+it runs from the shelf raising no outcome, exactly as the coordinator's own next
+turn does, so the card does not come and go with every peer turn. The
+coordinator's composer ledge still shows that run. The same rule holds inside
+the tree: a settled peer folds only while live work hangs below it, so a live
+peer it spawned stays under the coordinator above instead of surfacing as a card
+of its own. A settled peer its coordinator sets going again — a turn, or
+background jobs — is live work itself: it runs from the shelf raising no
+outcome, so it folds, counts under running (a turn) or jobs (background work),
+refuses the coordinator's Settle in its own wording like any busy peer, and
+returns to history when it goes quiet (`isDormantInSpawnTree`). A settled
+session kept up that way shows no failure: the server withholds `settledAt` from
+a row whose latest outcome is open, so a shelved row's stored error is one the
+user already acknowledged, and it neither counts nor bubbles. Settled peers are
+otherwise history: out of the counts, the Settle cascade and the tree.
 
 Settle on a session settles it AND the peers it still coordinates, in one
 command: its own `session:<id>` outcome revision is acknowledged through the
