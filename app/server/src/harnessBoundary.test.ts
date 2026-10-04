@@ -42,10 +42,8 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "piSdk/models.ts",
   ],
   "hub.ts": [
-    "claudeSdk/ClaudeSdkSession.ts",
     "claudeSdk/claudeSdkStore.ts",
     "piSdk/PiLiveSession.ts",
-    "piSdk/index.ts",
     "piSdk/piStore.ts",
   ],
   "index.ts": ["piSdk/models.ts", "piSdk/toolBinaries.ts"],

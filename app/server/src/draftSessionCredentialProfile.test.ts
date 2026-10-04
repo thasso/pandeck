@@ -12,6 +12,7 @@ const { Connection } = await import("./connection.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { hub } = await import("./hub.ts");
+const { piStore } = await import("./piSdk/piStore.ts");
 
 interface SentMessage {
   type?: string;
@@ -32,7 +33,7 @@ test("message-level draft sessions inherit and persist the source pi profile", a
     credentialProfileId: profile.id,
   });
 
-  const originalAcquireNew = hub.acquireNew;
+  const originalAcquireNew = piStore.acquireNew;
   const originalListSessions = hub.listSessions;
   const originalBroadcastSessions = hub.broadcastSessions;
   let acquiredOptions: unknown;
@@ -43,7 +44,7 @@ test("message-level draft sessions inherit and persist the source pi profile", a
     contextInfo: () => ({ sessionId: childId }),
   };
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<typeof fakeLive>;
     }
   ).acquireNew = async (...args) => {
@@ -87,8 +88,11 @@ test("message-level draft sessions inherit and persist the source pi profile", a
       false,
     );
   } finally {
-    (hub as unknown as { acquireNew: typeof originalAcquireNew }).acquireNew =
-      originalAcquireNew;
+    (
+      piStore as unknown as {
+        acquireNew: typeof originalAcquireNew;
+      }
+    ).acquireNew = originalAcquireNew;
     (
       hub as unknown as { listSessions: typeof originalListSessions }
     ).listSessions = originalListSessions;

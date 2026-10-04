@@ -23,6 +23,8 @@ const { piStore } = await import("./piSdk/piStore.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
 const { addWorktreeComment } = await import("./worktrees/worktreeComments.ts");
 const { mainWorktreeId } = await import("./worktrees/worktreeResolve.ts");
+const worktreeStore = await import("./db/worktreeStore.ts");
+const settings = await import("./settings.ts");
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync(
@@ -79,10 +81,10 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
   });
   const sessionId = "review-profile-session";
 
-  const originalAcquireNew = hub.acquireNew;
+  const originalAcquireNew = piStore.acquireNew;
   const originalBroadcastSessions = hub.broadcastSessions;
   (
-    hub as unknown as {
+    piStore as unknown as {
       acquireNew: (...args: unknown[]) => Promise<{ sessionId: string }>;
     }
   ).acquireNew = async () => ({ sessionId });
@@ -175,11 +177,83 @@ test("pi review handoff persists the selected profile and cold reopen recovers i
       internals.track = originalTrack;
     }
   } finally {
-    (hub as unknown as { acquireNew: typeof originalAcquireNew }).acquireNew =
-      originalAcquireNew;
+    (
+      piStore as unknown as {
+        acquireNew: typeof originalAcquireNew;
+      }
+    ).acquireNew = originalAcquireNew;
     (
       hub as unknown as { broadcastSessions: typeof originalBroadcastSessions }
     ).broadcastSessions = originalBroadcastSessions;
+  }
+});
+
+test("a Claude review handoff on a non-Claude account is refused before anything is linked", async () => {
+  const repo = join(tmp, "claude-repo");
+  mkdirSync(repo, { recursive: true });
+  git(repo, "init", "-b", "main");
+  writeFileSync(join(repo, "review.txt"), "line one\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-m", "init");
+  projectStore.put({
+    id: "review-claude-project",
+    name: "Review Claude",
+    key: "RVC",
+    description: "",
+    status: "active",
+    localPaths: [{ path: repo, kind: "repo", match: "prefix" }],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const worktreeId = mainWorktreeId("review-claude-project");
+  const comment = await addWorktreeComment({
+    worktreeId,
+    body: "Please review this.",
+    author: { kind: "user" },
+    anchor: { path: "review.txt", side: "new", line: 1 },
+  });
+  const openAi = createCredentialProfile({
+    name: "Not Claude",
+    provider: "openai-codex",
+  });
+  const real = settings.getSettings();
+  vi.spyOn(settings, "getSettings").mockReturnValue({
+    ...real,
+    claudeSdk: { ...real.claudeSdk, enabled: true },
+  });
+  const link = vi.spyOn(worktreeStore, "linkSessionToWorktree");
+  const sent: Array<{ type: string; message?: string }> = [];
+  const connection = new (
+    Connection as unknown as new (ws: unknown) => Record<string, unknown>
+  )({
+    OPEN: 1,
+    readyState: 1,
+    send: (payload: string) => sent.push(JSON.parse(payload)),
+  }) as unknown as {
+    onAttachWorktreeComments: (
+      worktreeId: string,
+      commentIds: string[],
+      target: Record<string, unknown>,
+    ) => Promise<void>;
+  };
+
+  try {
+    await connection.onAttachWorktreeComments(worktreeId, [comment.id], {
+      kind: "new",
+      harness: "claude-sdk",
+      agentType: "assistant",
+      credentialProfileId: openAi.id,
+    });
+    assert.ok(
+      sent.some(
+        (message) =>
+          message.type === "error" &&
+          /enabled Claude credential profile/.test(message.message ?? ""),
+      ),
+    );
+    assert.equal(link.mock.calls.length, 0);
+  } finally {
+    vi.restoreAllMocks();
   }
 });
 

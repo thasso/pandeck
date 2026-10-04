@@ -4,13 +4,10 @@ import type {
   BroadcastTopic,
   DisplayMessage,
   ServerMessage,
-  SessionMode,
-  SessionScope,
   StateEvent,
   ProjectSummary,
   TaskSummary,
   SubagentThreadSummary,
-  ThinkingLevel,
 } from "@assistant/shared";
 import { isCodingAgentType } from "@assistant/shared";
 import {
@@ -22,8 +19,6 @@ import { sessionStore } from "./db/sessionStore.ts";
 import { pendingApprovalSessionIds } from "./pendingApprovals.ts";
 import { choosingTaskSessionIds } from "./pullRequestCards.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
-import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
-import type { SessionPromptEvidence } from "./promptConditions.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { subscribeHarnessOpened } from "./session/runtimePrompt.ts";
@@ -40,7 +35,6 @@ import {
   subscribeBrowserRuntimeChanges,
   type PostReloadContinuation,
 } from "./mcp/toolGroups/registry.ts";
-import type { AgentSession } from "./piSdk/index.ts";
 import type { PiLiveSession } from "./piSdk/PiLiveSession.ts";
 import { piStore } from "./piSdk/piStore.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
@@ -49,7 +43,6 @@ import { setKnowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
 import { setAppNotificationBroadcaster } from "./webPush.ts";
-import { defaultClaudeProfileId } from "./credentialProfiles.ts";
 import { setCalendarScanBroadcaster } from "./dayScan/scanProgress.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
 import { onSettingsChanged } from "./settingsService.ts";
@@ -189,9 +182,10 @@ export function broadcastCommentEventToViewers(
 /**
  * Process-global registry of open connections. Which engine holds a session is
  * the harness registry's to answer (`harnesses/registry.ts`); the remaining
- * lifecycle calls (creation, fork, rename, removal, pi images) and the merged
- * listing still delegate to {@link piStore} and {@link claudeSdkStore} until
- * they move behind it. Keeps every tab's session list in sync.
+ * lifecycle calls (fork, rename, removal, pi images) and the merged listing
+ * still delegate to {@link piStore} and {@link claudeSdkStore} until they move
+ * behind it; creation goes through `harnesses/create.ts`. Keeps every tab's
+ * session list in sync.
  */
 class SessionHub {
   private connections = new Set<Viewer>();
@@ -399,26 +393,6 @@ class SessionHub {
 
   consumePostReloadContinuation(): PostReloadContinuation | undefined {
     return consumePostReloadContinuation();
-  }
-
-  /** A fresh session for `kind`, carrying over the caller's model/thinking level. */
-  async acquireNew(
-    kind: AgentType,
-    model?: AgentSession["model"],
-    thinkingLevel?: ThinkingLevel,
-    opts?: {
-      variant?: "manager";
-      cwd?: string;
-      credentialProfileId?: string;
-      /** Session-start evidence for the frozen prompt conditions (Task 287). */
-      promptEvidence?: SessionPromptEvidence;
-      mode?: SessionMode;
-      /** Declared here, never after the fact: the scope is persisted before the
-       * session is registered live ({@link sessionStore.claimScope}). */
-      scope?: SessionScope;
-    },
-  ): Promise<PiLiveSession> {
-    return piStore.acquireNew(kind, model, thinkingLevel, opts);
   }
 
   /**
@@ -646,45 +620,6 @@ class SessionHub {
 
   async archivedSessionCount(): Promise<number> {
     return archivedSessionCount();
-  }
-
-  /**
-   * Get or create the in-process Claude-SDK session for `id`. It OWNS its
-   * conversation and is driven directly via prompt/abort by the connection. The
-   * store wires the real SDK seam, persistence, and the onChange →
-   * broadcastSessions hook. Server-minted ids only: its ownership backstop
-   * reads memory and the row, never the disk, so a client-supplied id goes
-   * through `createSession`, named as its `id`, instead (`harnesses/create.ts`).
-   */
-  acquireClaudeSdk(
-    id: string,
-    modelId?: string,
-    thinkingLevel?: ThinkingLevel,
-    agentType?: AgentType,
-    cwd?: string,
-    additionalSystemPrompt?: string,
-    credentialProfileId = defaultClaudeProfileId(),
-    mode?: SessionMode,
-  ): ClaudeSdkSession {
-    // A backstop, never the first refusal: only server-minted UUIDs reach this,
-    // which no transcript holds; a client-supplied id is created through
-    // `createSession`, which checks the disk too (`harnesses/create.ts`).
-    const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
-      onDisk: false,
-    });
-    if (holder)
-      throw new Error(`Session ${id} belongs to the ${holder} harness.`);
-    return claudeSdkStore.acquire(id, {
-      ...(modelId !== undefined ? { modelId } : {}),
-      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-      ...(agentType !== undefined ? { agentType } : {}),
-      ...(cwd !== undefined ? { cwd } : {}),
-      ...(additionalSystemPrompt !== undefined
-        ? { additionalSystemPrompt }
-        : {}),
-      credentialProfileId,
-      ...(mode !== undefined ? { mode } : {}),
-    });
   }
 
   /** Drop an in-process Claude-SDK session (tombstone + delete its record). */

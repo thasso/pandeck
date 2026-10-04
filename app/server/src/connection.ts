@@ -99,6 +99,7 @@ import {
 } from "./harness.ts";
 import { randomUUID } from "node:crypto";
 import type { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
+import { createSession, type PiModel } from "./harnesses/create.ts";
 import { pickerModels } from "./harnesses/models.ts";
 import {
   firstSendEngine,
@@ -517,6 +518,39 @@ function sessionContextRequest(
     ...(msg.knowledgeEntryId ? { knowledgeEntryId: msg.knowledgeEntryId } : {}),
     ...(worktree?.projectId ? { worktreeProjectId: worktree.projectId } : {}),
   };
+}
+
+/** Day-session creations under way, by date, shared by every connection. */
+const dayCreations = new Map<string, Promise<LiveSession>>();
+
+/**
+ * Create `date`'s day session once however many activations ask at the same
+ * time, and bind it. Creation yields before the binding is written, so two
+ * overlapping activations would each create one, and the later binding would
+ * hide the earlier conversation from the day panel. An activation that read
+ * the binding before another's creation settled finds that session here.
+ */
+function createDaySessionOnce(
+  date: string,
+  create: () => Promise<LiveSession>,
+): Promise<LiveSession> {
+  let pending = dayCreations.get(date);
+  if (!pending) {
+    pending = (async () => {
+      const boundId = getDaySessionId(date);
+      // A failed look-up is a stale binding, as for the activation itself:
+      // it must not fail every activation sharing this creation.
+      const bound = boundId
+        ? await hub.acquireById(boundId).catch(() => undefined)
+        : undefined;
+      if (isLiveSession(bound)) return bound;
+      const created = await create();
+      setDaySessionId(date, created.sessionId);
+      return created;
+    })().finally(() => dayCreations.delete(date));
+    dayCreations.set(date, pending);
+  }
+  return pending;
 }
 
 export class Connection implements Viewer {
@@ -2795,24 +2829,19 @@ export class Connection implements Viewer {
         if (target.harness === "claude-sdk") {
           if (!getSettings().claudeSdk.enabled)
             throw new Error("Claude SDK sessions are disabled.");
-          const id = randomUUID();
-          // Link BEFORE acquire so the store resolves the worktree cwd.
-          linkSessionToWorktree(id, canonicalId);
-          broadcastWorktreeEdgeChange();
           const profileId =
             target.credentialProfileId ?? defaultClaudeProfileId();
           if (enabledCredentialProfileById(profileId)?.provider !== "claude")
             throw new Error("Select an enabled Claude credential profile.");
-          driver = hub.acquireClaudeSdk(
-            id,
-            target.modelId,
-            target.thinkingLevel,
-            target.agentType,
-            row.path,
-            undefined,
-            profileId,
-            target.mode,
-          );
+          driver = await createSession({
+            harness: "claude-sdk",
+            agentType: target.agentType,
+            modelId: target.modelId,
+            thinkingLevel: target.thinkingLevel,
+            mode: target.mode,
+            worktree: { id: canonicalId, path: row.path },
+            credentialProfileId: profileId,
+          });
         } else {
           const kind = target.agentType;
           if (!this.guardKind(kind)) return;
@@ -2822,7 +2851,7 @@ export class Connection implements Viewer {
             enabledCredentialProfileById(profileId)?.provider !== "openai-codex"
           )
             throw new Error("Select an enabled OpenAI credential profile.");
-          let model: Parameters<typeof hub.acquireNew>[1] | undefined;
+          let model: PiModel | undefined;
           if (target.modelProvider && target.modelId) {
             model =
               (await findModelForProfile(
@@ -2835,21 +2864,15 @@ export class Connection implements Viewer {
                 `Model ${target.modelProvider}/${target.modelId} is not available.`,
               );
           }
-          const live = await hub.acquireNew(kind, model, target.thinkingLevel, {
-            cwd: row.path,
-            credentialProfileId: profileId,
-            ...(target.mode ? { mode: target.mode } : {}),
-          });
-          sessionStore.upsert({
-            id: live.sessionId,
+          driver = await createSession({
             harness: "pi",
-            agentType: target.agentType,
+            agentType: kind,
+            model,
+            thinkingLevel: target.thinkingLevel,
+            mode: target.mode,
+            worktree: { id: canonicalId, path: row.path },
             credentialProfileId: profileId,
-            mode: live.sessionMode,
           });
-          linkSessionToWorktree(live.sessionId, canonicalId);
-          broadcastWorktreeEdgeChange();
-          driver = live;
         }
       }
 
@@ -4247,7 +4270,10 @@ export class Connection implements Viewer {
           // Asked of the ACQUIRE, not of the storage-backed view: a legacy
           // binding with a transcript but no metadata row is reopenable, and
           // treating it as stale would drop a day the user still has.
-          if (!driver) clearDaySession(date);
+          // Only the binding this activation read: another one may have
+          // replaced it meanwhile with the day's new session.
+          if (!driver && getDaySessionId(date) === boundId)
+            clearDaySession(date);
           view = driver;
         }
       }
@@ -4257,42 +4283,25 @@ export class Connection implements Viewer {
       // scan workflow). A bare open just views an existing bound session and
       // never mints an empty one.
       if (!driver && (opts.text?.trim() || opts.scan || opts.logTime)) {
-        if (useClaudeSdk) {
-          // Chat runs in-process on the Claude SDK with the assistant persona so
-          // it gets the Google Calendar/Drive/Gmail and Tasks tools.
-          const sdk = hub.acquireClaudeSdk(
-            randomUUID(),
-            modelId,
+        driver = await createDaySessionOnce(date, async () => {
+          const start = {
+            agentType: "assistant",
             thinkingLevel,
-            "assistant",
-            undefined,
-            undefined,
             credentialProfileId,
-          );
-          sdk.setTitle(daySessionTitle(date));
-          setDaySessionId(date, sdk.sessionId);
-          driver = sdk;
-        } else {
+            title: daySessionTitle(date),
+          } as const;
+          // Chat runs in-process on the Claude SDK with the assistant persona
+          // so it gets the Google Calendar/Drive/Gmail and Tasks tools.
+          if (useClaudeSdk)
+            return createSession({ harness: "claude-sdk", modelId, ...start });
           const model =
             (await findModelForProfile(
               credentialProfileId,
               provider,
               modelId,
             )) ?? undefined;
-          const live = await hub.acquireNew("assistant", model, thinkingLevel, {
-            credentialProfileId,
-          });
-          sessionStore.upsert({
-            id: live.sessionId,
-            harness: "pi",
-            agentType: "assistant",
-            credentialProfileId,
-          });
-          // Set the name before the first prompt so it never auto-renames.
-          live.rename(daySessionTitle(date));
-          setDaySessionId(date, live.sessionId);
-          driver = live;
-        }
+          return createSession({ harness: "pi", model, ...start });
+        });
       }
 
       if (driver && !view) view = driver;
@@ -4474,23 +4483,19 @@ export class Connection implements Viewer {
     if (!this.guardDeveloperWorktree(agentType, worktree)) return;
     // view() attaches the runtime transport, which sends the atomic native
     // snapshot (state + empty timeline + context) for the fresh session.
-    const live = await hub.acquireNew(kind, model, thinkingLevel, {
-      ...(worktree ? { cwd: worktree.path } : {}),
-      credentialProfileId,
-      ...(mode ? { mode } : {}),
-    });
-    sessionStore.upsert({
-      id: live.sessionId,
+    const live = await createSession({
       harness: "pi",
-      agentType,
+      agentType: kind,
+      model,
+      thinkingLevel,
+      mode,
+      ...(worktree
+        ? { worktree: { id: worktree.id, path: worktree.path } }
+        : {}),
       credentialProfileId,
-      mode: live.sessionMode,
     });
-    if (worktree) {
-      linkSessionToWorktree(live.sessionId, worktree.id);
-      broadcastWorktreeEdgeChange();
+    if (worktree)
       projectStore.setSessionProject(live.sessionId, worktree.projectId);
-    }
     if (this.viewIfCurrent(ticket, live) && worktree)
       this.send({
         type: "contextInfo",
@@ -4897,15 +4902,13 @@ export class Connection implements Viewer {
           defaultOpenAiProfileId())
         : defaultOpenAiProfileId();
       const model = await this.resolveViewedModel(carried);
-      const live = await hub.acquireNew(kind, model, thinkingLevel, {
-        credentialProfileId,
-      });
-      sessionStore.upsert({
-        id: live.sessionId,
+      const live = await createSession({
         harness: "pi",
-        agentType,
-        purpose: "draft",
+        agentType: kind,
+        model,
+        thinkingLevel,
         credentialProfileId,
+        purpose: "draft",
       });
       // Listed before attaching: snapshot and route message leave together
       // (see `onOpenPermanentAssistant`). A newer navigation meanwhile keeps

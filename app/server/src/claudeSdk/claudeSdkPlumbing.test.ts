@@ -7,7 +7,7 @@
  * It exercises ONLY the plumbing that does NOT require a real Claude turn — it
  * never calls `prompt()` (that path is covered by ClaudeSdkSession.test.ts via a
  * fake seam). It asserts:
- *   1. `hub.acquireClaudeSdk` returns a session that exposes an empty snapshot()
+ *   1. `claudeSdkStore.acquire` returns a session that exposes an empty snapshot()
  *      and a state() with kind "claude-sdk", and the SAME id is idempotent.
  *   2. The empty runtime does not show in `hub.listSessions()` until prompted.
  *   3. `hub.removeClaudeSdk` tombstones the id: it disappears from listSessions
@@ -41,8 +41,11 @@ function cleanup(): void {
 async function main(): Promise<void> {
   cleanup();
 
-  // 1 + 2. Create via the hub (mirrors connection.onNewSession) and inspect it.
-  const session = hub.acquireClaudeSdk(ID, "opus", "high");
+  // 1 + 2. Create through the store and inspect it.
+  const session = claudeSdkStore.acquire(ID, {
+    modelId: "opus",
+    thinkingLevel: "high",
+  });
   assert.equal(session.harness, "claude-sdk", "harness is claude-sdk");
   assert.equal(session.kind, "workshop", "kind is the workshop persona");
   assert.equal(session.sessionId, ID, "sessionId matches the requested id");
@@ -70,7 +73,7 @@ async function main(): Promise<void> {
 
   // Idempotent: acquiring the same id returns the same instance.
   assert.equal(
-    hub.acquireClaudeSdk(ID),
+    claudeSdkStore.acquire(ID),
     session,
     "acquire is idempotent for a live id",
   );
@@ -153,7 +156,7 @@ async function main(): Promise<void> {
   );
 
   // A re-acquire of the tombstoned id starts CLEAN (the old record is not resurrected).
-  const reacquired = hub.acquireClaudeSdk(ID);
+  const reacquired = claudeSdkStore.acquire(ID);
   assert.deepEqual(
     reacquired.snapshot(),
     [],
