@@ -157,8 +157,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `models.ts` (picker and per-account model lists, exact availability, stored
   session model display), `curatedModels.ts` (the Claude curated options,
   loading no engine SDK), `usage.ts` (per-account usage, OpenAI reset-credit
-  redeem) and `registry.ts` (`harnessRegistry`: id routing, resident sessions,
-  store wiring). `harnessBoundary.test.ts` pins what still bypasses it.
+  redeem), `registry.ts` (`harnessRegistry`: id routing, resident sessions,
+  store wiring) and `firstSend.ts` (each engine's admission, preparation and
+  creation for a session's first send). `harnessBoundary.test.ts` pins what
+  still bypasses it.
 - `sessionKit/` holds what both engine session classes compose instead of
   copying: `residency.ts` (`SessionResidency`, the viewer set and the idle clock
   that lets the owning store release an unviewed, idle session) and
@@ -2645,7 +2647,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `developer` sessions REQUIRE a worktree (the `main:<projectId>` checkout
   counts): without an `in_worktree` edge, `worktrees/sessionCwd.ts` falls back
   to the app CWD (the server's home directory in production). Every client
-  creation path in `connection.ts` (`handlePiFirstSend`, `handleClaudeSdkSend`,
+  creation path in `connection.ts` (`handleFirstSend` for both harnesses,
   `onNewSession`, `onCreateDraftSession`) rejects a bare developer session via
   `guardDeveloperWorktree`; `workshop` is exempt (the app CWD is its purpose).
   Guarded by `developerWorktreeGuard.test.ts`.

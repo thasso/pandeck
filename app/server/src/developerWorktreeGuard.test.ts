@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // Isolate CWD and DATA_DIR BEFORE importing the connection, and enable the
-// claude-sdk harness so handleClaudeSdkSend reaches the guard.
+// claude-sdk harness so its first send reaches the guard.
 const tmp = mkdtempSync(join(tmpdir(), "dev-worktree-guard-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
@@ -119,23 +119,25 @@ test("guardDeveloperWorktree only rejects a bare developer session", () => {
 
 test("pi first send rejects a developer session without a worktree", async () => {
   const { conn, sent } = makeConnection();
-  await conn.handlePiFirstSend!({
+  await conn.handleFirstSend!({
+    harness: "pi",
     id: "p1",
     agentType: "developer",
     text: "hi",
   });
-  assertOnlyRejection(sent, "handlePiFirstSend");
+  assertOnlyRejection(sent, "pi first send");
 });
 
 test("claude-sdk send rejects a developer session without a worktree", async () => {
   const { conn, sent } = makeConnection();
-  await conn.handleClaudeSdkSend!({
+  await conn.handleFirstSend!({
+    harness: "claude-sdk",
     id: "c1",
     agentType: "developer",
     text: "hi",
     credentialProfileId: claudeProfile.id,
   });
-  assertOnlyRejection(sent, "handleClaudeSdkSend");
+  assertOnlyRejection(sent, "claude-sdk first send");
 });
 
 test("newSession rejects a developer session without a worktree", async () => {

@@ -44,6 +44,14 @@ Four layers, each depending only on the ones below it:
      lookup answer from memory alone. Create, fork, rename and remove move
      behind it in steps 10–11; until then `hub.ts` still calls the stores for
      them and builds the merged session list from each.
+   - `firstSendEngine` (`harnesses/firstSend.ts`) is what a session's first send
+     asks of its engine. `Connection.handleFirstSend` runs one flow for both —
+     view claim, worktree, session context, genesis card, context links, the
+     prompt — and the engine answers only what differs: whether it takes the
+     send (`admit`), what it resolves before a worktree is provisioned
+     (`prepare`, pi's model), and how it brings the session live (pi mints its
+     id and freezes the prompt evidence inside creation; Claude takes the
+     client's id, links the worktree and freezes first).
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -132,7 +140,7 @@ table when a later step needs them.
 | 8a   | Shared session kit: viewers and idle clock (`SessionResidency`)               | landed |
 | 8b   | Shared session kit: synthetic host-command turns                              | landed |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | landed |
-| 10   | One first-send path for both harnesses                                        | open   |
+| 10   | One first-send path for both harnesses                                        | landed |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
@@ -145,8 +153,8 @@ registry): the last word, whichever path asks. A Claude first send, the one path
 that takes a client-supplied id, refuses an id another engine holds resident, on
 record or on disk (`otherHolder`) before it writes anything, and checks again
 with nothing awaited before the session registers. `hub.acquireClaudeSdk` checks
-as a backstop and must never be the first refusal. Step 10's registry create
-folds the send and hub checks into one.
+as a backstop for server-minted ids, from memory and the row only, and must
+never be the first refusal.
 
 Out of scope: splitting `ClaudeSdkSession.ts` internally. Step 8 removes its
 duplicated plumbing first, which makes that split a separate, smaller change.

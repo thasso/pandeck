@@ -72,7 +72,7 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
  * number (or delete the entry) in the change that removes one.
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
-  "connection.ts": 13,
+  "connection.ts": 11,
   "promptInventory.ts": 4,
   "session/planHint.ts": 1,
   "sessionAudit.ts": 4,

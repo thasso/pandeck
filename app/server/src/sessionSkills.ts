@@ -39,6 +39,13 @@ export async function sessionSkillPreset(
 ): Promise<string[] | undefined> {
   if (!isCodingAgentType(agentType)) return undefined;
   if (deps.getFrozen(sessionId) !== undefined) return undefined;
+  return resolveSessionSkillNames(deps);
+}
+
+/** The current skill names a first freeze stores; a failed resolve freezes none. */
+async function resolveSessionSkillNames(
+  deps: SessionSkillsDeps,
+): Promise<string[]> {
   try {
     return normalizePreset(await deps.resolve());
   } catch (error) {
@@ -117,20 +124,11 @@ export async function sessionSkills(
   const stored = parseSessionSkills(deps.getFrozen(sessionId));
   if (stored !== undefined) return stored;
 
-  let names: string[];
-  if (preset !== undefined) {
-    names = normalizePreset(preset);
-  } else {
-    try {
-      names = normalizePreset(await deps.resolve());
-    } catch (error) {
-      console.warn(
-        "Failed to resolve session skills; freezing an empty list:",
-        error instanceof Error ? error.message : String(error),
-      );
-      names = [];
-    }
-  }
+  // With a preset nothing is awaited before the freeze below.
+  const names =
+    preset !== undefined
+      ? normalizePreset(preset)
+      : await resolveSessionSkillNames(deps);
 
   return (
     parseSessionSkills(deps.freeze(sessionId, JSON.stringify(names))) ?? []

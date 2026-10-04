@@ -41,7 +41,7 @@ function firstSend(id: string) {
   const sent: Array<{ type: string; message?: string }> = [];
   const conn = new (
     Connection as unknown as new (ws: unknown) => {
-      handleClaudeSdkSend: (msg: Record<string, unknown>) => Promise<void>;
+      handleFirstSend: (msg: Record<string, unknown>) => Promise<void>;
     }
   )({
     OPEN: 1,
@@ -55,7 +55,8 @@ function firstSend(id: string) {
     acquire,
     freeze,
     run: () =>
-      conn.handleClaudeSdkSend({
+      conn.handleFirstSend({
+        harness: "claude-sdk",
         id,
         agentType: "assistant",
         text: "hello",
@@ -136,4 +137,25 @@ test("an id pi takes while the send awaits is refused before any write", async (
   });
   assert.equal(send.acquire.mock.calls.length, 0);
   assert.equal(send.freeze.mock.calls.length, 0);
+});
+
+test("nothing is awaited between the last ownership check and the session", async () => {
+  // Each check opens a window that the next microtask closes: still open at
+  // the session's creation means no await came in between.
+  let windowOpen = false;
+  vi.spyOn(harnessRegistry, "otherHolder").mockImplementation(() => {
+    windowOpen = true;
+    queueMicrotask(() => {
+      windowOpen = false;
+    });
+    return undefined;
+  });
+  const send = firstSend("checked-then-created");
+  let createdInWindow: boolean | undefined;
+  send.acquire.mockImplementation(() => {
+    createdInWindow = windowOpen;
+    throw new Error("reached the session");
+  });
+  await assert.rejects(send.run(), /reached the session/);
+  assert.equal(createdInWindow, true);
 });

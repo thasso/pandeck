@@ -664,7 +664,12 @@ class SessionHub {
     credentialProfileId = defaultClaudeProfileId(),
     mode?: SessionMode,
   ): ClaudeSdkSession {
-    const holder = harnessRegistry.otherHolder(id, "claude-sdk");
+    // A backstop, never the first refusal: a client-supplied id was checked on
+    // disk already (`harnesses/firstSend.ts`), and every other id here is a
+    // server-minted UUID no transcript holds.
+    const holder = harnessRegistry.otherHolder(id, "claude-sdk", {
+      onDisk: false,
+    });
     if (holder)
       throw new Error(`Session ${id} belongs to the ${holder} harness.`);
     return claudeSdkStore.acquire(id, {

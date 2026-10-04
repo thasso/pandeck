@@ -20,7 +20,7 @@ import { join } from "node:path";
 import type { PromptAttachment } from "@assistant/shared";
 
 // Isolate CWD and DATA_DIR BEFORE importing the connection, and enable the
-// claude-sdk harness so handleClaudeSdkSend runs its body.
+// claude-sdk harness so the first send runs its body.
 const tmp = mkdtempSync(join(tmpdir(), "claude-sdk-first-send-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
@@ -45,6 +45,7 @@ vi.mock("./session/runtimePrompt.ts", () => ({
 }));
 
 const { Connection } = await import("./connection.ts");
+const { hub } = await import("./hub.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { createTask, readTask } = await import("./tasks.ts");
 const { addTaskComment } = await import("./taskComments.ts");
@@ -64,16 +65,18 @@ function makeConnection() {
   const conn = new (
     Connection as unknown as new (ws: unknown) => Record<string, unknown>
   )(fakeWs) as unknown as {
-    handleClaudeSdkSend: (msg: Record<string, unknown>) => Promise<void>;
-    ensureClaudeSdkView: unknown;
+    handleFirstSend: (msg: Record<string, unknown>) => Promise<void>;
+    view: unknown;
   };
   // The first prompt would otherwise create a real SDK session; the mocked
-  // prompt facade never touches the returned driver, so a marker object is enough.
-  conn.ensureClaudeSdkView = () => ({
+  // prompt facade never touches the returned driver, so a marker object is
+  // enough, and nothing attaches to view it.
+  vi.spyOn(hub, "acquireClaudeSdk").mockReturnValue({
     sessionId: "c1",
     broadcastState() {},
     contextInfo: () => ({}),
-  });
+  } as never);
+  conn.view = () => {};
   // linkTaskStart is NOT stubbed: it owns the `doing` nudge and hands back the
   // Task the attachment is built from, so stubbing it would hide the drift these
   // tests exist to catch.
@@ -107,7 +110,8 @@ test("claude-sdk first send builds the attached Task's context attachment", asyn
   });
   const { conn } = makeConnection();
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c1",
     agentType: "workshop",
     text: "hello",
@@ -143,7 +147,8 @@ test("the injected status is the post-nudge stored status, not the pre-nudge one
   assert.equal(task.status, "todo", "a fresh Task starts in todo");
   const { conn } = makeConnection();
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c-status",
     agentType: "workshop",
     text: "hello",
@@ -201,7 +206,8 @@ test("the attachment carries the parent chain, the latest comment and no re-read
   });
   const { conn } = makeConnection();
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c-chain",
     agentType: "workshop",
     text: "hello",
@@ -273,7 +279,8 @@ test("a huge epic parent and a huge comment stay inside the attachment budget", 
   });
   const { conn } = makeConnection();
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c-budget",
     agentType: "workshop",
     text: "hello",
@@ -316,7 +323,8 @@ test("a Task with a huge own description keeps it in full and drops the rest wit
   });
   const { conn } = makeConnection();
 
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c-own-body",
     agentType: "workshop",
     text: "hello",
@@ -355,7 +363,8 @@ test("a Task with a huge own description keeps it in full and drops the rest wit
 
 test("claude-sdk first send refuses a missing credential profile before creating a session", async () => {
   const { conn, sent } = makeConnection();
-  await conn.handleClaudeSdkSend({
+  await conn.handleFirstSend({
+    harness: "claude-sdk",
     id: "c2",
     agentType: "workshop",
     text: "hello",

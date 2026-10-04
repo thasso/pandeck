@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   activeSkillsForSession,
   parseSessionSkills,
+  sessionSkillPreset,
   sessionSkills,
   type SessionSkillsDeps,
 } from "./sessionSkills.ts";
@@ -77,5 +78,39 @@ describe("sessionSkills", () => {
     const frozen = `skills-state-frozen-${Date.now()}`;
     sessionStore.freezeSkills(frozen, '["alpha"]');
     expect(activeSkillsForSession(frozen, "developer")).toEqual(["alpha"]);
+  });
+});
+
+describe("sessionSkillPreset", () => {
+  it("resolves what a first freeze would store, and with it the freeze awaits nothing", async () => {
+    const deps = fakeDeps();
+    const preset = await sessionSkillPreset("session", "developer", deps);
+    expect(preset).toEqual(["alpha", "zeta"]);
+
+    // The freeze lands synchronously, before the returned promise settles.
+    const frozen = sessionSkills("session", "developer", preset, deps);
+    expect(deps.stored.get("session")).toBe('["alpha","zeta"]');
+    expect(await frozen).toEqual(["alpha", "zeta"]);
+  });
+
+  it("resolves nothing for a non-coding persona or an existing freeze", async () => {
+    const deps = fakeDeps('["kept"]');
+    expect(await sessionSkillPreset("session", "developer", deps)).toBe(
+      undefined,
+    );
+    expect(await sessionSkillPreset("other", "assistant", deps)).toBe(
+      undefined,
+    );
+    expect(deps.resolve).not.toHaveBeenCalled();
+  });
+
+  it("freezes no skills when they cannot be resolved", async () => {
+    const deps = fakeDeps();
+    deps.resolve = vi.fn(async () => {
+      throw new Error("library unreadable");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await sessionSkillPreset("session", "developer", deps)).toEqual([]);
+    warn.mockRestore();
   });
 });
