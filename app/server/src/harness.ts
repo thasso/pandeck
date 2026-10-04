@@ -43,6 +43,17 @@ export interface HarnessHost {
   browserRuntimesFor(sessionId: string): BrowserRuntimeInfo[];
 }
 
+/**
+ * A store refused to register a session because another engine already holds
+ * its id resident: an id belongs to one engine (`harnesses/registry.ts`).
+ */
+export class SessionHeldElsewhereError extends Error {
+  constructor(readonly sessionId: string) {
+    super(`Session ${sessionId} is already open on another harness.`);
+    this.name = "SessionHeldElsewhereError";
+  }
+}
+
 /** Anything that can receive server messages — implemented by `Connection`. */
 export interface Viewer {
   send(message: ServerMessage): void;

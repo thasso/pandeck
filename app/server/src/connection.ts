@@ -244,7 +244,7 @@ import {
 } from "./memory/memoryApi.ts";
 import { processorConfigStatus } from "./memory/memoryProcessor.ts";
 import { sessionPromptConditions } from "./promptConditions.ts";
-import { sessionSkills } from "./sessionSkills.ts";
+import { sessionSkillPreset, sessionSkills } from "./sessionSkills.ts";
 import {
   clearPendingQuestion,
   submitAgentQuestionResponse,
@@ -1685,18 +1685,7 @@ export class Connection implements Viewer {
     }
     // The id is client-supplied: one another engine already holds is refused
     // before anything (worktree edge, prompt conditions) is written for it.
-    const holder = harnessRegistry.otherHolder(msg.id, "claude-sdk");
-    if (holder) {
-      this.send({
-        type: "error",
-        message: `Session ${msg.id} belongs to the ${holder} harness.`,
-        target: { type: "session", id: msg.id },
-        ...(msg.clientRequestId !== undefined
-          ? { failedPromptClientRequestId: msg.clientRequestId }
-          : {}),
-      });
-      return;
-    }
+    if (this.refuseHeldSessionId(msg)) return;
     // The singleton `personal-assistant` persona is server-owned; a crafted
     // claude-sdk harnessSend must not be able to create it (the pi paths are
     // guarded by guardKind → isAgentAvailable, but claude-sdk workshop must stay
@@ -1732,6 +1721,11 @@ export class Connection implements Viewer {
     if (provisioned === undefined) return;
     const worktree = staged ?? provisioned?.worktree ?? null;
     if (!this.guardDeveloperWorktree(msg.agentType, worktree)) return;
+    // Everything the writes below need is resolved first: from the ownership
+    // check to the session's registration nothing awaits, so no other engine
+    // can take the id in between, and a refusal comes before any write.
+    const skillPreset = await sessionSkillPreset(msg.id, msg.agentType);
+    if (this.refuseHeldSessionId(msg)) return;
     // Link BEFORE acquire: the claude-sdk id is client-supplied, so the edge is
     // in place when the store resolves the session cwd.
     if (worktree) {
@@ -1752,7 +1746,8 @@ export class Connection implements Viewer {
         hasAttachments: Boolean(msg.attachments?.length),
       }),
     );
-    await sessionSkills(msg.id, msg.agentType);
+    // With the preset, the freeze awaits nothing: it lands before the session.
+    const skillsFrozen = sessionSkills(msg.id, msg.agentType, skillPreset);
     const sdk = this.ensureClaudeSdkView(
       ticket,
       msg.id,
@@ -1763,6 +1758,7 @@ export class Connection implements Viewer {
       profileId,
       msg.mode,
     );
+    await skillsFrozen;
     // The genesis card goes in before the first prompt: the checkout really did
     // precede the session, and live + durable then render the same order.
     if (provisioned) recordWorktreeProvisionForHost(sdk, provisioned.provision);
@@ -1820,6 +1816,29 @@ export class Connection implements Viewer {
    * transport, whose atomic snapshot swaps the optimistic placeholder for the
    * real session.
    */
+  /**
+   * Refuse a Claude send whose client-supplied id another engine holds,
+   * resident, on record or on disk (`harnessRegistry.otherHolder`), as an error
+   * on that session that retires the optimistic prompt. Answers whether it
+   * refused.
+   */
+  private refuseHeldSessionId(msg: {
+    id: string;
+    clientRequestId?: string;
+  }): boolean {
+    const holder = harnessRegistry.otherHolder(msg.id, "claude-sdk");
+    if (!holder) return false;
+    this.send({
+      type: "error",
+      message: `Session ${msg.id} belongs to the ${holder} harness.`,
+      target: { type: "session", id: msg.id },
+      ...(msg.clientRequestId !== undefined
+        ? { failedPromptClientRequestId: msg.clientRequestId }
+        : {}),
+    });
+    return true;
+  }
+
   private ensureClaudeSdkView(
     ticket: number,
     id: string,

@@ -21,8 +21,19 @@ interface HarnessSessions {
   get(id: string): LiveSession | undefined;
   /** The same, its idle clock restarted for a caller about to drive it. */
   getForDrive(id: string): LiveSession | undefined;
-  /** Whether the engine has the session on disk without a metadata row. */
+  /**
+   * Whether the engine can reopen the session from disk without a metadata row.
+   * Asked only after residency and the row, so it may also answer for those.
+   */
   storedWithoutRow(id: string): boolean;
+  /**
+   * Whether anything the engine could still reopen holds the id on disk,
+   * reopenable by id or not (a legacy pi transcript a continuation reopens by
+   * file): what decides that the id is the engine's.
+   */
+  holdsOnDisk(id: string): boolean;
+  /** Make the engine refuse to register an id `check` says another holds. */
+  setHeldElsewhere(check: (id: string) => boolean): void;
   /** Open the session from disk as the persona its row names. */
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
 }
@@ -34,6 +45,8 @@ const sessions: Record<Harness, HarnessSessions> = {
     getForDrive: (id) => piStore.getForDrive(id),
     // Recovery for pi transcripts that predate a valid metadata row.
     storedWithoutRow: (id) => existsSync(canonicalPiSessionPath(id)),
+    holdsOnDisk: (id) => piStore.hasTranscript(id),
+    setHeldElsewhere: (check) => piStore.setHeldElsewhere(check),
     // The pi session reopens from its canonical native path, derived from the
     // id, which also guards the open. A reopen the delete beat to registration
     // is a session that no longer exists, not a failure.
@@ -48,6 +61,8 @@ const sessions: Record<Harness, HarnessSessions> = {
     get: (id) => claudeSdkStore.get(id),
     getForDrive: (id) => claudeSdkStore.getForDrive(id),
     storedWithoutRow: (id) => claudeSdkStore.exists(id),
+    holdsOnDisk: (id) => claudeSdkStore.exists(id),
+    setHeldElsewhere: (check) => claudeSdkStore.setHeldElsewhere(check),
     // Rehydrated on the account its record names, else the default one.
     open: async (id) =>
       claudeSdkStore.acquire(id, {
@@ -72,6 +87,13 @@ const ROWLESS_ORDER: readonly Harness[] = [
   ...HARNESS_ORDER.filter((harness) => harness !== "claude-sdk"),
 ];
 
+/** The engine other than `harness` that holds `id` resident, if any. */
+function residentElsewhere(id: string, harness: Harness): Harness | undefined {
+  return HARNESS_ORDER.find(
+    (other) => other !== harness && sessions[other].get(id) !== undefined,
+  );
+}
+
 /** The resident session for our id, from memory only. */
 function residentInMemory(id: string): LiveSession | undefined {
   for (const harness of HARNESS_ORDER) {
@@ -90,9 +112,15 @@ interface BrowserRuntimeOwner {
 }
 
 export const harnessRegistry = {
-  /** Wire both stores to the hub. */
+  /** Wire both stores to the hub, and to each other's residency. */
   setHost(host: HarnessHost): void {
     piStore.setHost(host);
+    // Registration is the last word on ownership: neither store takes an id
+    // the other holds resident, whichever path asks.
+    for (const harness of HARNESS_ORDER)
+      sessions[harness].setHeldElsewhere(
+        (id) => residentElsewhere(id, harness) !== undefined,
+      );
     // A Claude session created, updated or removed changes the list, and may
     // unblock a queued dev reload (its turn just finished).
     claudeSdkStore.setOnChange(() => {
@@ -117,12 +145,16 @@ export const harnessRegistry = {
    * which is what lets {@link residentById} answer from memory alone.
    */
   otherHolder(id: string, harness: Harness): Harness | undefined {
-    const others = HARNESS_ORDER.filter((other) => other !== harness);
-    const resident = others.find((other) => sessions[other].get(id));
+    const resident = residentElsewhere(id, harness);
     if (resident) return resident;
     const row = sessionStore.get(id);
     if (row) return row.harness !== harness ? row.harness : undefined;
-    return others.find((other) => sessions[other].storedWithoutRow(id));
+    // Without a row, the disk decides as `acquireById` would: Claude's record
+    // first.
+    const holder = ROWLESS_ORDER.find((other) =>
+      sessions[other].holdsOnDisk(id),
+    );
+    return holder !== harness ? holder : undefined;
   },
 
   /**

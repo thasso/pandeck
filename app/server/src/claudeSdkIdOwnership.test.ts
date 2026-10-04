@@ -27,6 +27,7 @@ const { sessionStore } = await import("./db/sessionStore.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const promptConditions = await import("./promptConditions.ts");
 const { canonicalPiSessionPath } = await import("./sessionStorage.ts");
+const { harnessRegistry } = await import("./harnesses/registry.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.restoreAllMocks());
@@ -118,4 +119,21 @@ test("a first send for a Claude session's own id goes through", async () => {
   });
   await assert.rejects(send.run(), /reached the session/);
   assert.ok(!send.sent.some((m) => m.type === "error"));
+});
+
+test("an id pi takes while the send awaits is refused before any write", async () => {
+  // Free at the door; pi has it by the time the send's awaits are done.
+  vi.spyOn(harnessRegistry, "otherHolder")
+    .mockReturnValueOnce(undefined)
+    .mockReturnValue("pi");
+  const send = firstSend("taken-meanwhile");
+  await send.run();
+  assert.deepEqual(send.sent.at(-1), {
+    type: "error",
+    message: "Session taken-meanwhile belongs to the pi harness.",
+    target: { type: "session", id: "taken-meanwhile" },
+    failedPromptClientRequestId: "creq-1",
+  });
+  assert.equal(send.acquire.mock.calls.length, 0);
+  assert.equal(send.freeze.mock.calls.length, 0);
 });

@@ -21,12 +21,34 @@ const { claudeSdkStore } = await import("../claudeSdk/claudeSdkStore.ts");
 const { PiSessionDeletedError, piStore } = await import("../piSdk/piStore.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { canonicalPiSessionPath } = await import("../sessionStorage.ts");
+const { sessionDirFor } = await import("../piSdk/options.ts");
+const { SessionHeldElsewhereError } = await import("../harness.ts");
 
 /** A pi transcript on disk for `id`, with no metadata row. */
 function piTranscript(id: string): void {
   const file = canonicalPiSessionPath(id);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, "");
+}
+
+/** A legacy per-persona pi transcript for `id`, as old sessions left it. */
+function legacyPiTranscript(id: string): string {
+  const file = join(sessionDirFor("assistant"), `2024-01-01_${id}.jsonl`);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    [
+      JSON.stringify({
+        type: "session",
+        version: 3,
+        id,
+        timestamp: new Date().toISOString(),
+        cwd: tmp,
+      }),
+      "",
+    ].join("\n"),
+  );
+  return file;
 }
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -274,6 +296,62 @@ test("a Claude session is never created over an id pi holds", () => {
     /belongs to the pi harness/,
   );
   assert.equal(created.mock.calls.length, 0);
+});
+
+test("a legacy pi transcript is pi's, and a Claude record outranks a pi transcript", () => {
+  legacyPiTranscript("pi-legacy");
+  assert.equal(harnessRegistry.otherHolder("pi-legacy", "claude-sdk"), "pi");
+
+  // Without a row, the disk decides as acquireById would: Claude first.
+  piTranscript("both-on-disk");
+  vi.spyOn(claudeSdkStore, "exists").mockImplementation(
+    (id) => id === "both-on-disk",
+  );
+  assert.equal(
+    harnessRegistry.otherHolder("both-on-disk", "claude-sdk"),
+    undefined,
+  );
+  assert.equal(harnessRegistry.otherHolder("both-on-disk", "pi"), "claude-sdk");
+});
+
+test("the Claude store never registers an id pi holds resident", () => {
+  vi.spyOn(piStore, "getLiveById").mockImplementation((id) =>
+    id === "pi-resident-dup" ? ({ id } as never) : undefined,
+  );
+  assert.throws(
+    () => claudeSdkStore.acquire("pi-resident-dup"),
+    SessionHeldElsewhereError,
+  );
+  assert.equal(claudeSdkStore.get("pi-resident-dup"), undefined);
+});
+
+test("a pi reopen never registers an id the Claude store took meanwhile", async () => {
+  const file = legacyPiTranscript("claude-took-it");
+  const internals = piStore as unknown as {
+    create: (...args: unknown[]) => Promise<unknown>;
+  };
+  const disposed: string[] = [];
+  vi.spyOn(internals, "create").mockImplementation(async (...args) => {
+    const manager = args[1] as { getSessionId(): string };
+    return {
+      session: {
+        sessionId: manager.getSessionId(),
+        dispose: () => disposed.push(manager.getSessionId()),
+      },
+      notices: [],
+    };
+  });
+  // The Claude session registered while the transcript was opening.
+  vi.spyOn(claudeSdkStore, "get").mockImplementation((id) =>
+    id === "claude-took-it" ? ({ id } as never) : undefined,
+  );
+
+  await assert.rejects(
+    piStore.acquireExisting("assistant", file, "claude-took-it"),
+    SessionHeldElsewhereError,
+  );
+  assert.equal(piStore.getLiveById("claude-took-it"), undefined);
+  assert.deepEqual(disposed, ["claude-took-it"], "what it built is disposed");
 });
 
 test("both stores reach the hub through one host", () => {

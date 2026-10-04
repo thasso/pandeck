@@ -30,6 +30,30 @@ const REAL_DEPS: SessionSkillsDeps = {
  * Read a frozen JSON name list. A malformed row fails closed to an empty list:
  * it is still an existing freeze and must never be replaced from live settings.
  */
+/**
+ * The names a coding session's first skills freeze would store, resolved ahead
+ * so that freeze (`sessionSkills` with them as `preset`) awaits nothing.
+ * Undefined when there is nothing to resolve: a non-coding persona, or a
+ * session already frozen.
+ */
+export async function sessionSkillPreset(
+  sessionId: string,
+  agentType: AgentType,
+  deps: SessionSkillsDeps = REAL_DEPS,
+): Promise<string[] | undefined> {
+  if (!isCodingAgentType(agentType)) return undefined;
+  if (deps.getFrozen(sessionId) !== undefined) return undefined;
+  try {
+    return normalizePreset(await deps.resolve());
+  } catch (error) {
+    console.warn(
+      "Failed to resolve session skills; freezing an empty list:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return [];
+  }
+}
+
 export function parseSessionSkills(
   raw: string | undefined,
 ): string[] | undefined {

@@ -23,6 +23,7 @@ import { sessionRuntime } from "../session/runtimeInstance.ts";
 import { sessionStore } from "../db/sessionStore.ts";
 import { worktreeCwdForSession } from "../worktrees/sessionCwd.ts";
 import { claudeProfileSessionStore } from "./profileSessionStore.ts";
+import { SessionHeldElsewhereError } from "../harness.ts";
 import { defaultClaudeProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import {
@@ -44,6 +45,8 @@ const STORE_DIR = join(DATA_DIR, "claude-sdk");
 class ClaudeSdkSessionStore {
   private sessions = new Map<string, ClaudeSdkSession>();
   private deleted = new Set<string>();
+  /** Whether another engine holds an id resident; registration refuses it. */
+  private heldElsewhere: (id: string) => boolean = () => false;
   /** Where each live session's next persist continues its timeline log. */
   private logs = new Map<string, ClaudeSdkLogCursor>();
   /** Lazily-built real seam, shared by every live session. */
@@ -54,6 +57,11 @@ class ClaudeSdkSessionStore {
 
   setOnChange(cb: () => void): void {
     this.onChange = cb;
+  }
+
+  /** How to tell an id another engine holds resident (`harnessRegistry`). */
+  setHeldElsewhere(check: (id: string) => boolean): void {
+    this.heldElsewhere = check;
   }
 
   setBrowserRuntimesProvider(
@@ -148,6 +156,9 @@ class ClaudeSdkSessionStore {
   ): ClaudeSdkSession {
     const existing = this.getForDrive(id);
     if (existing) return existing;
+    // An id belongs to one engine: one pi holds resident is never taken here,
+    // whichever caller asks.
+    if (this.heldElsewhere(id)) throw new SessionHeldElsewhereError(id);
     const loaded = this.deleted.has(id)
       ? undefined
       : readClaudeSdkRecord(STORE_DIR, id);

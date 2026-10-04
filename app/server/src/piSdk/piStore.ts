@@ -66,7 +66,7 @@ import {
   type SessionPromptEvidence,
 } from "../promptConditions.ts";
 import { PiLiveSession } from "./PiLiveSession.ts";
-import type { HarnessHost } from "../harness.ts";
+import { SessionHeldElsewhereError, type HarnessHost } from "../harness.ts";
 import { defaultOpenAiProfileId } from "../credentialProfiles.ts";
 import { sessionSkills } from "../sessionSkills.ts";
 import { createPiBackgroundTools } from "./backgroundWorkBackend.ts";
@@ -77,6 +77,15 @@ import { closeToolGroupSession } from "../mcp/toolGroups/registry.ts";
  * transcript was opening, so nothing was registered and every acquisition
  * sharing that open is refused (`acquireExisting`).
  */
+/** Every persona a legacy per-persona transcript directory can hold. */
+const LEGACY_KINDS: readonly AgentType[] = [
+  "assistant",
+  "developer",
+  "workshop",
+  "personal-assistant",
+  "workflow-coordinator",
+];
+
 export class PiSessionDeletedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Session ${sessionId} was deleted while it was opening.`);
@@ -178,6 +187,8 @@ class PiSessionStore {
   /** Live policy read by the built-in/bridge active-set merge. */
   private sessionModes = new Map<string, SessionMode>();
   private host: HarnessHost | undefined;
+  /** Whether another engine holds an id resident; registration refuses it. */
+  private heldElsewhere: (id: string) => boolean = () => false;
 
   /**
    * Wire the hub-side callbacks every {@link PiLiveSession} needs. The harness
@@ -187,6 +198,22 @@ class PiSessionStore {
    */
   setHost(host: HarnessHost): void {
     this.host = host;
+  }
+
+  /** How to tell an id another engine holds resident (`harnessRegistry`). */
+  setHeldElsewhere(check: (id: string) => boolean): void {
+    this.heldElsewhere = check;
+  }
+
+  /**
+   * Whether a transcript for our id is on disk: the canonical file, or a
+   * legacy per-persona one a continuation could still reopen.
+   */
+  hasTranscript(id: string): boolean {
+    if (existsSync(canonicalPiSessionPath(id))) return true;
+    return LEGACY_KINDS.some(
+      (kind) => findLegacySessionFile(kind, id) !== undefined,
+    );
   }
 
   private requireHost(): HarnessHost {
@@ -366,6 +393,13 @@ class PiSessionStore {
       ) {
         this.discardUnregistered(created.session);
         throw new PiSessionDeletedError(created.session.sessionId);
+      }
+      // An id belongs to one engine: one the Claude store took while this
+      // transcript was opening stays Claude's. Only a reopen registers an id
+      // it did not mint, so this is the one place pi has to ask.
+      if (this.heldElsewhere(created.session.sessionId)) {
+        this.discardUnregistered(created.session);
+        throw new SessionHeldElsewhereError(created.session.sessionId);
       }
       return this.track(kind, created.session, created.notices, cwd, profileId);
     })();
