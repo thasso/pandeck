@@ -35,8 +35,6 @@ const HARNESS_IDS = new Set(["pi", "claude-sdk"]);
  * `src/`. Delete an entry in the change that removes the import.
  */
 const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
-  "commitWorkflow.ts": ["piSdk/index.ts"],
-  "connection.ts": ["claudeSdk/claudeSdkStore.ts"],
   "hub.ts": [
     "claudeSdk/claudeSdkStore.ts",
     "piSdk/PiLiveSession.ts",
@@ -49,7 +47,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "piSdk/piPromptMeasure.ts",
   ],
   "taskOverhead.ts": ["claudeSdk/claudeSdkRecords.ts"],
-  "viewSession.ts": ["piSdk/toolActivation.ts"],
 };
 
 /**
@@ -57,16 +54,11 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
  * number (or delete the entry) in the change that removes one.
  */
 const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
-  "connection.ts": 6,
+  "connection.ts": 1,
   "promptInventory.ts": 4,
-  "session/planHint.ts": 1,
   "sessionAudit.ts": 4,
   "sessionAuditSources.ts": 1,
-  "sessions.ts": 1,
   "taskOverhead.ts": 4,
-  "tools/sessions/sessionInspection.ts": 1,
-  "validateClientMessage.ts": 2,
-  "viewSession.ts": 1,
 };
 
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);

@@ -123,6 +123,19 @@ Four layers, each depending only on the ones below it:
    - `harnesses/boot.ts` is what the server's composition root (`index.ts`)
      starts in the engines: pi's tool binaries, its model provider sync, each
      account's model runtime and the OpenAI account login.
+   - `harnesses/storage.ts` answers where each engine keeps a session on disk
+     from paths alone, loading no store: the `file` a session's ref and list
+     item carry (`sessionRefFile`), the engine's own transcript
+     (`engineTranscript`) and whether a reopen has what it needs
+     (`storedSessionState`). The registry adds what needs the stores: the engine
+     and persona a row-less session opens as (`rowlessRef`) and why a stored
+     session cannot be opened (`unopenableReason`).
+   - `harnesses/availability.ts` says whether an existing session may be opened
+     now (`existingSessionRefusal`): a Claude session waits on the Claude SDK
+     setting, a pi session on its persona's availability.
+   - `harnesses/toolExposure.ts` and `harnesses/piSession.ts` carry the two
+     engine names app code still uses: pi's tool exposure for the session view,
+     and the pi session types a commit dry run is recorded on.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (`sessionKit/`) instead of carrying a copy:
@@ -135,8 +148,8 @@ Four layers, each depending only on the ones below it:
    helpers live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
    `PromptableAdapter` contract are already harness-neutral and do not change.
-   One piece of the folder is still migration work: `session/planHint.ts`
-   branches on a harness id, pinned below.
+   `session/planHint.ts` keeps each engine's Plan reminder in a table keyed by
+   harness rather than branching on one.
 
 `HARNESSES` in `app/shared/harnesses.ts` is the one table that maps a harness to
 its account provider, its model-picker provider (Claude only; pi models keep
@@ -190,8 +203,9 @@ table when a later step needs them.
 | 11c  | Every other creation caller on `createSession`                                | landed |
 | 11d  | Fork, delete and rename through the registry                                  | landed |
 | 12a  | Model resolution and engine boot through `harnesses/`                         | landed |
-| 12b  | The remaining engine imports and harness comparisons outside measurement      | open   |
-| 12c  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
+| 12b  | Session storage, availability and connection lookups through `harnesses/`     | landed |
+| 12c  | The hub's merged list and pi lookups; the review-handoff creation branch      | open   |
+| 12d  | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |
 
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
 after 7.

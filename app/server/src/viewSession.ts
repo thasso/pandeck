@@ -36,17 +36,16 @@ import { isCodingAgentType } from "@assistant/shared";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { worktreeIdForSession } from "./db/worktreeStore.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
-import { existsSync } from "node:fs";
 import type {
   HostClearOutcome,
   HostCompactionOutcome,
 } from "./hostSlashCommands.ts";
 import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
-import { toolExposureForSession } from "./piSdk/toolActivation.ts";
+import { engineTranscript } from "./harnesses/storage.ts";
+import { toolExposureForSession } from "./harnesses/toolExposure.ts";
 import { peerPromptThreadsFor } from "./peerPrompt.ts";
 import { promptQueueField } from "./promptQueue.ts";
-import { canonicalPiSessionPath } from "./sessionStorage.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { activeSkillsForSession } from "./sessionSkills.ts";
@@ -95,9 +94,7 @@ export class ViewSession implements HarnessDriver {
     this.harness = meta.harness;
     this.kind = kindOf(meta);
     this.agentType = meta.agentType as AgentType;
-    const native = canonicalPiSessionPath(meta.id);
-    this.sessionFile =
-      meta.harness === "pi" && existsSync(native) ? native : undefined;
+    this.sessionFile = engineTranscript(meta.harness, meta.id);
   }
 
   /** A session that is not resident is not running; see the module comment. */

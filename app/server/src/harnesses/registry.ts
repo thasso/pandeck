@@ -13,6 +13,7 @@ import { sessionStore } from "../db/sessionStore.ts";
 import type { HarnessHost, LiveSession } from "../harness.ts";
 import { PiSessionDeletedError, piStore } from "../piSdk/piStore.ts";
 import { canonicalPiSessionPath } from "../sessionStorage.ts";
+import { sessionRefFile } from "./storage.ts";
 
 /** A stored session as a lifecycle change names it. */
 interface SessionRef {
@@ -50,6 +51,13 @@ interface HarnessSessions {
   open(id: string, agentType: AgentType): Promise<LiveSession | undefined>;
   /** Persist a new title, which also marks auto-naming done. */
   rename(ref: SessionRef, title: string): Promise<void>;
+  /** The persona a session found on disk without a row is opened as. */
+  rowlessAgentType: AgentType;
+  /**
+   * Why a session the engine has on disk cannot be opened, for a caller that
+   * has to tell the reader; undefined when it can be, or when there is none.
+   */
+  unopenable(id: string): string | undefined;
   /**
    * Dispose the session and delete what the engine stored for it: awaited for
    * pi's transcript; Claude removes its native transcript in the background.
@@ -74,6 +82,9 @@ const sessions: Record<Harness, HarnessSessions> = {
         if (err instanceof PiSessionDeletedError) return undefined;
         throw err;
       }),
+    // Transcripts that predate a valid row are developer coding sessions.
+    rowlessAgentType: "developer",
+    unopenable: () => undefined,
     rename: ({ id, agentType, file }, title) =>
       piStore.renameSession(agentType, file ?? "", id, title),
     remove: async ({ id, file }) => {
@@ -93,6 +104,13 @@ const sessions: Record<Harness, HarnessSessions> = {
       claudeSdkStore.acquire(id, {
         credentialProfileId: defaultClaudeProfileId(),
       }),
+    // Records that predate the id registry or lost their metadata.
+    rowlessAgentType: "workshop",
+    unopenable: (id) =>
+      claudeSdkStore.exists(id)
+        ? (claudeSdkStore.unreadableRecord(id) ??
+          "it has no session metadata to show it from.")
+        : undefined,
     // Persisted with the session's record, which is opened for it; a session
     // without one is not renamed into existence.
     rename: async ({ id }, title) => {
@@ -253,6 +271,34 @@ export const harnessRegistry = {
    */
   remove(ref: SessionRef & { harness: Harness }): Promise<void> {
     return sessions[ref.harness].remove(ref);
+  },
+
+  /**
+   * A session the engines have on disk without a metadata row, as a lifecycle
+   * change names it: the engine that would open it ({@link acquireById}'s
+   * order), its persona and its ref `file`. Undefined when none has it.
+   */
+  rowlessRef(
+    id: string,
+  ): { harness: Harness; agentType: AgentType; file: string } | undefined {
+    const harness = ROWLESS_ORDER.find((engine) =>
+      sessions[engine].storedWithoutRow(id),
+    );
+    return harness
+      ? {
+          harness,
+          agentType: sessions[harness].rowlessAgentType,
+          file: sessionRefFile(harness, id),
+        }
+      : undefined;
+  },
+
+  /**
+   * Why a session its engine has on disk cannot be opened, so a reader is told
+   * instead of shown nothing. May throw while reading the record.
+   */
+  unopenableReason(harness: Harness, id: string): string | undefined {
+    return sessions[harness].unopenable(id);
   },
 
   /** The resident session that owns a browser runtime, as its listing shows it. */
