@@ -637,17 +637,19 @@ capability logic.
   feed of what the peers last did, and the tiering is stated on its collapsed
   line instead. It walks EVERY depth (breadth-first, each peer once, so a cycle
   cannot repeat one) and returns the peers as a tree with `depth` and nested
-  `peers` counts. Settled peers are history: out of `counts` and `rows` unless
-  `includeSettled`, and counted as `settled` — except a settled peer that live
-  work hangs below, which stays as the branch that work hangs from. `bubbled` —
-  the peer waiting on a human or holding a failure — is picked in TIER order
-  over all live peers, so the activity order cannot hide the one that needs
-  answering. `spawnedSessionsKey` is the content key the host holds the strip on
-  (`App.tsx` gates the ledge node on it exactly as it gates the Backlog's
-  session slice — the composer is memoized, and a node rebuilt on every
-  rebroadcast re-renders the whole card for a line whose text did not change;
-  `transcriptRedrawScenario.test.tsx` counts it). Same contract, and the same
-  silent failure, as `sessionCardKey` — with the bubble and whether it is
+  `peers` counts. The tree splits on `isDormantInSpawnTree`: LIVE peers — not
+  put down, a settled peer running a turn or holding jobs again, or a dormant
+  peer that live work hangs below (the branch it hangs from) — are always listed
+  and counted; DORMANT history is counted as `settled`, never in `counts`, and
+  listed in `rows` only with `includeSettled`, which adds rows and no numbers.
+  `bubbled` — the peer waiting on a human or holding a failure — is picked in
+  TIER order over all live peers, so the activity order cannot hide the one that
+  needs answering. `spawnedSessionsKey` is the content key the host holds the
+  strip on (`App.tsx` gates the ledge node on it exactly as it gates the
+  Backlog's session slice — the composer is memoized, and a node rebuilt on
+  every rebroadcast re-renders the whole card for a line whose text did not
+  change; `transcriptRedrawScenario.test.tsx` counts it). Same contract, and the
+  same silent failure, as `sessionCardKey` — with the bubble and whether it is
   DISMISSIBLE in it, and two differences that come from the CONSUMER rather than
   from taste: this key gates a value the host RETAINS, where a card key feeds a
   comparator that re-reads the old row against the new one at the current time.

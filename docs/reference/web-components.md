@@ -1649,24 +1649,25 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   each indented under the session that spawned it, siblings by latest activity,
   newest on top, NOT in the inbox's tier order: the list is read as "what just
   happened among my peers", and the tiering is already on the collapsed line as
-  the counts and the bubble. Settled peers are history — out of the counts and
-  the tree, behind a `Show N settled` button at the FOOT of the list; the host
-  answers it by rebuilding the view with them for that session alone (`App.tsx`
-  keys the state by session id, so switching chats starts with live peers only,
-  and closing the strip forgets it). The list is capped in height and scrolls in
-  place, so listing every peer changes what is in the box, never how tall the
-  composer's shelf is. It SUBSCRIBES NOTHING: `App.tsx` derives it from the
-  session list this browser already holds (`spawnedSessionsView`), mounts it
-  only for a session with peers, live or settled, so the ordinary chat pays no
-  line, and holds the node on `spawnedSessionsKey` so a rebroadcast that changes
-  nothing the strip draws does not re-render the memoized composer — which is
-  why that key asks whether the strip is OPEN (`web-lib.md`). Dismissal is the
-  ONLY lifecycle action here — Archive, Delete and a peer's own Settle stay in
-  the inbox, and `ClusterChildRow` binds those keyboard shortcuts only when its
-  host passes the handlers, because a row must never appear to acknowledge or
-  destroy something its surface cannot undo. Its rows ARE tab stops
-  (`tabbable`), which the inbox's are not: there is no roving focus above them
-  here, so without it the link would be reachable by pointer alone.
+  the counts and the bubble. Dormant settled peers are history — never counted,
+  and listed only behind a `Show N settled` button at the FOOT of the list (a
+  settled peer running or holding jobs again is live, listed and counted); the
+  host answers it by rebuilding the view with them for that session alone
+  (`App.tsx` keys the state by session id, so switching chats starts with live
+  peers only, and closing the strip forgets it). The list is capped in height
+  and scrolls in place, so listing every peer changes what is in the box, never
+  how tall the composer's shelf is. It SUBSCRIBES NOTHING: `App.tsx` derives it
+  from the session list this browser already holds (`spawnedSessionsView`),
+  mounts it only for a session with peers, live or settled, so the ordinary chat
+  pays no line, and holds the node on `spawnedSessionsKey` so a rebroadcast that
+  changes nothing the strip draws does not re-render the memoized composer —
+  which is why that key asks whether the strip is OPEN (`web-lib.md`). Dismissal
+  is the ONLY lifecycle action here — Archive, Delete and a peer's own Settle
+  stay in the inbox, and `ClusterChildRow` binds those keyboard shortcuts only
+  when its host passes the handlers, because a row must never appear to
+  acknowledge or destroy something its surface cannot undo. Its rows ARE tab
+  stops (`tabbable`), which the inbox's are not: there is no roving focus above
+  them here, so without it the link would be reachable by pointer alone.
 - The Sessions section's browser is an INBOX of the working set, not a history
   list: `SessionInbox.tsx` owns it (search, the labelled **Needs you** block,
   one priority-sorted list for everything else still unsettled, the compact

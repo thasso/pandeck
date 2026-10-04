@@ -55,8 +55,10 @@ export interface SpawnedSessionsLedgeProps {
  * to nothing: the peers are rows of the same list the Sessions inbox shapes,
  * so the ledge shows the same state, in the same words, through the same row —
  * as a tree of every peer at every depth, newest activity first among
- * siblings, in a list that scrolls in place. Settled peers are history: out of
- * the counts and the tree, behind a "Show N settled" at the foot of the list.
+ * siblings, in a list that scrolls in place. Dormant settled peers are
+ * history: never counted, and listed only behind a "Show N settled" at the
+ * foot of the list. A settled peer running or holding jobs again is live, and
+ * is listed and counted like any other.
  * A peer waiting on a human or holding a failure is NAMED on the collapsed
  * line, because a summary may hide how much is running and never what needs
  * answering — and, when that is a failure the user has moved on from, dismissed

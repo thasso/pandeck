@@ -275,6 +275,17 @@ test("the cascade keeps the time an already-settled peer was put down", () => {
     // Re-stamping would lift a long-settled peer to the top of the shelf.
     assert.equal(sessionStore.get(bridge)?.settledAt, 1_000);
     assert.equal(sessionStore.get(coordinator)?.settledAt, 9_000);
+
+    // A stored stamp is not settlement: under a new outcome the peer is up
+    // again, and the cascade that acknowledges it puts it down NOW.
+    sessionStore.recordSessionOutcome(bridge, "completed", 10_000);
+    assert.equal(sessionStore.isSettled(bridge), false);
+    assert.equal(
+      sessionStore.settleWithPeers(coordinator, 0, [bridge], 20_000),
+      true,
+    );
+    assert.equal(sessionStore.get(bridge)?.settledAt, 20_000);
+    assert.equal(sessionStore.isSettled(bridge), true);
   } finally {
     for (const id of [coordinator, bridge]) sessionStore.remove(id);
   }

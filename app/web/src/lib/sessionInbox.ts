@@ -1368,15 +1368,16 @@ export function buildSessionInbox(
 export interface SpawnedSessionsView {
   /**
    * The peers as a TREE, depth-first, each under the session that spawned it,
-   * siblings by latest activity, newest first. Settled peers are listed only
-   * when the view was asked to include them, after their live siblings.
+   * siblings by latest activity, newest first. Live peers always (a settled
+   * peer running or holding jobs again is live); dormant history only when
+   * the view was asked to include it, after its live siblings.
    */
   rows: SessionInboxCard[];
-  /** Over every LIVE peer at every depth; settled peers are history. */
+  /** Over every LIVE peer at every depth, whether or not history is shown. */
   counts: SessionClusterCounts;
-  /** Settled peers in the tree; listed only on request. */
+  /** Dormant peers in the tree: the history `includeSettled` lists. */
   settled: number;
-  /** Whether {@link rows} includes the settled peers. */
+  /** Whether {@link rows} includes that history. */
   settledShown: boolean;
   /**
    * The peer that speaks for the set — one waiting on a human, or one holding
@@ -1398,10 +1399,12 @@ export interface SpawnedSessionsView {
  * whatever that peer started in turn. Archived peers are out, because the user
  * put them away; a spawn cycle is walked once.
  *
- * SETTLED peers are history: they are left out of the counts and the tree
- * unless `includeSettled` asks for them. A settled peer that live work hangs
- * below still lists, so the live peer appears under the session that spawned
- * it rather than cut loose — the same rule the inbox's fold reads.
+ * The tree splits into LIVE peers and DORMANT history, on the forest's own
+ * predicate ({@link isDormantInSpawnTree}). Live is every peer not put down,
+ * a settled peer running a turn or holding background jobs again, and a
+ * dormant peer that live work hangs below (the branch it hangs from) — listed
+ * and counted always. Dormant history is listed only when `includeSettled`
+ * asks for it, and never counted: that flag adds rows, not numbers.
  *
  * Every row is the card that session would be on its own ({@link inboxCard}),
  * so the ledge, the inbox and the cluster fold state the same session
