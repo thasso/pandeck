@@ -91,7 +91,7 @@ export async function refinePromptText({
 
   const prompt = `${contextBlock}Draft prompt to refine:\n<<<DRAFT\n${draft}\nDRAFT\n>>>\n\nReturn only the refined Markdown prompt.`;
 
-  const { text: refined } = await runOneShot({
+  const { text: refined, failure } = await runOneShot({
     model: settings,
     thinkingLevel: settings.thinkingLevel,
     credentialProfileId: accountForSlot(settings),
@@ -101,6 +101,8 @@ export async function refinePromptText({
     timeoutMs: REFINEMENT_TIMEOUT_MS,
     timeoutMessage: "Prompt refinement timed out.",
   });
+  // A refinement cut short by an error must not replace the user's draft.
+  if (failure !== undefined) throw new Error(failure);
   const cleaned = cleanRefinedText(refined);
   if (!cleaned)
     throw new Error("Prompt refinement returned an empty response.");

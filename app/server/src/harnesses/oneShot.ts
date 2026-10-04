@@ -40,13 +40,13 @@ export interface OneShotRequest {
    * with {@link NoHelperModelError}. Only pi accounts can lack a model.
    */
   modelFallback?: "helper" | "none";
-  /** Message of the {@link NoHelperModelError} thrown when no model can run. */
-  noModelMessage: string;
+  /** Message of the {@link NoHelperModelError}; only pi can lack a model. */
+  noModelMessage?: string;
   systemPrompt: string;
   prompt: string;
   timeoutMs: number;
   timeoutMessage: string;
-  /** Explicit app-tool allowlist; built-in tools stay disabled on both engines. */
+  /** Explicit app-tool allowlist; built-in tools stay off on both engines. */
   tools?: AgentTool[];
   /** Claude only: model/tool turn cap when tools are enabled (pi has none). */
   maxTurns?: number;
@@ -149,7 +149,10 @@ async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
   if (request.documents?.length)
     throw new Error("Document input needs a Claude model.");
   const model = await piModelFor(request);
-  if (!model) throw new NoHelperModelError(request.noModelMessage);
+  if (!model)
+    throw new NoHelperModelError(
+      request.noModelMessage ?? "No model is available for this helper run.",
+    );
   const result = await runPiOneShot({
     model,
     credentialProfileId: request.credentialProfileId,

@@ -230,3 +230,37 @@ test("a thrown engine error passes through unchanged and is not recorded", async
     0,
   );
 });
+
+test("documents reach the Claude engine and tools reach either engine", async () => {
+  const documents = [{ mimeType: "application/pdf", dataBase64: "QQ==" }];
+  const tools = [{ name: "kb_read_asset" }] as unknown as NonNullable<
+    OneShotRequest["tools"]
+  >;
+  vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  await runOneShot(
+    request({
+      model: { provider: "claude-sdk", modelId: "sonnet" },
+      documents,
+      tools,
+    }),
+  );
+  const claudeCall = vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0];
+  assert.equal(claudeCall?.documents, documents);
+  assert.equal(claudeCall?.tools, tools);
+
+  vi.mocked(runPiOneShot).mockResolvedValue({ text: "ok", usage: {} });
+  await runOneShot(request({ tools }));
+  assert.equal(vi.mocked(runPiOneShot).mock.calls[0]?.[0].tools, tools);
+});
+
+test("the missing-model message defaults when the caller gives none", async () => {
+  vi.mocked(selectPiModelWithFallback).mockResolvedValue(undefined);
+  const { noModelMessage: _omitted, ...withoutMessage } = request();
+
+  await assert.rejects(
+    () => runOneShot(withoutMessage),
+    (err: unknown) =>
+      err instanceof NoHelperModelError &&
+      err.message === "No model is available for this helper run.",
+  );
+});

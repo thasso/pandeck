@@ -4,8 +4,8 @@
  * The pi engine half of `runOneShot` (`harnesses/oneShot.ts`), the only caller
  * of `runPiOneShot` and `findPiModelExact`. `selectPiModelWithFallback` also
  * serves `permanentAssistant.ts` until model selection moves behind the models
- * port (`docs/agent-harnesses.md`, step 6). It builds a locked-down resource loader
- * (no extensions/skills/prompt-templates/context files, custom system
+ * port (`docs/agent-harnesses.md`, step 6). It builds a locked-down resource
+ * loader (no extensions/skills/prompt-templates/context files, custom system
  * prompt), runs a single prompt against an in-memory session, optionally
  * exposing an explicit app-tool allowlist through the direct AgentTool
  * adapter, accumulates the streamed assistant text, races a timeout, and

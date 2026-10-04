@@ -32,7 +32,6 @@ export function registerPdfClaudeFallback(): void {
       model: { provider: CLAUDE_SDK_PROVIDER, modelId: settings.modelId },
       thinkingLevel: settings.thinkingLevel,
       credentialProfileId: accountForSlot(settings),
-      noModelMessage: "No Claude model is available for the PDF fallback.",
       systemPrompt: SYSTEM_PROMPT,
       prompt: USER_PROMPT,
       documents: [

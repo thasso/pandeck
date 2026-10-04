@@ -267,6 +267,43 @@ test("runtime prompt architecture boundaries do not gain new bypasses", () => {
   );
 });
 
+/**
+ * Helper runs are reached from tool modules and most of the server, so the
+ * entry point must not load the pi SDK (~0.75s) before a pi run needs it:
+ * `piSdk/oneShot.ts` loads it on first use (`docs/agent-harnesses.md`).
+ */
+test("runOneShot loads no engine SDK until a run needs it", () => {
+  const VALUE_IMPORT =
+    /^\s*(?:import|export)\s+(?!type\b)(?:[^;]*?\s+from\s+)?["']([^"']+)["']/gms;
+  const seen = new Set<string>();
+  const packages = new Set<string>();
+  const queue = [join(SRC_ROOT, "harnesses", "oneShot.ts")];
+  while (queue.length) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(VALUE_IMPORT)) {
+      const specifier = match[1] ?? "";
+      if (specifier.startsWith(".")) queue.push(join(dirname(file), specifier));
+      else packages.add(specifier);
+    }
+  }
+  const modules = [...seen].map((file) => relative(SRC_ROOT, file));
+  assert.ok(
+    modules.includes("piSdk/oneShot.ts"),
+    "the walk reaches the runner",
+  );
+  assert.deepEqual(
+    modules.filter((rel) => rel === "piSdk/models.ts"),
+    [],
+    "piSdk/models.ts loads the pi SDK at import time",
+  );
+  assert.deepEqual(
+    [...packages].filter((name) => name.startsWith("@earendil-works/")),
+    [],
+  );
+});
+
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
