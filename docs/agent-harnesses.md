@@ -34,8 +34,12 @@ Four layers, each depending only on the ones below it:
    It asks the seam for a session, a model list or a one-shot run, and branches
    on capabilities, never on a harness id.
 2. **`harnesses/`** is the seam and the only module that imports both backends:
-   - `HarnessRegistry` resolves a session id or harness id to its backend and
-     owns acquire, create, fork, rename and remove.
+   - `harnessRegistry` (`harnesses/registry.ts`) resolves a session id to the
+     store that holds it: it lists what both hold resident, finds a resident
+     session, opens one by id, and wires both stores to the hub's behaviour
+     (`HarnessHost`). Create, fork, rename and remove move behind it in steps
+     10–11; until then `hub.ts` still calls the stores for them and builds the
+     merged session list from each.
    - `LiveSession` (`harness.ts`) is the one driver interface every resident
      session implements: the read surface (`HarnessDriver`), prompting through
      the runtime, and what the app changes on it (mode, thinking level, the
@@ -67,9 +71,9 @@ Four layers, each depending only on the ones below it:
    shared session kit (`sessionKit/`) instead of carrying a copy:
    `SessionResidency` owns the viewer set and the idle clock, and the engine
    says only when it is idle and how its store releases it. `hostCommandTurn.ts`
-   emits a synthetic host-command turn (open, progress, tool output or card) to
-   viewers and the runtime adapter alike, while the engine keeps the turn's ids,
-   running state and teardown. A host command ends its turn with one
+   emits a synthetic host-command turn (open, progress, discard, tool output or
+   card) to viewers and the runtime adapter alike, while the engine keeps the
+   turn's ids, running state and teardown. A host command ends its turn with one
    `finishSyntheticCard`, whichever card it renders. The live display-block
    helpers live in `session/runtime/liveBlocks.ts`.
 4. **`session/`**: the runtime, log and transport core and the
@@ -123,7 +127,7 @@ table when a later step needs them.
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | landed |
 | 8a   | Shared session kit: viewers and idle clock (`SessionResidency`)               | landed |
 | 8b   | Shared session kit: synthetic host-command turns                              | landed |
-| 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |
+| 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | landed |
 | 10   | One first-send path for both harnesses                                        | open   |
 | 11   | Spawn, workflow, fork, delete and rename through the registry                 | open   |
 | 12   | Allowlists down to named measurement modules; tighten the `CLAUDE.md` rule    | open   |

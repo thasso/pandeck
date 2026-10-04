@@ -284,8 +284,9 @@ test("the first send provisions, records the genesis card, then runs the turn", 
         return { assistantId: "a1", toolId: "t1" };
       },
       finishSyntheticCard: (result: HostCommandResult) => {
-        if (result.kind === "worktreeProvision")
-          order.push(`card:${result.provision.state}`);
+        if (result.kind !== "worktreeProvision")
+          throw new Error(`unexpected ${result.kind} card`);
+        order.push(`card:${result.provision.state}`);
       },
     };
   };

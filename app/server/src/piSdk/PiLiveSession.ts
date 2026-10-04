@@ -994,13 +994,7 @@ export class PiLiveSession implements LiveSession {
     this.syntheticToolId = toolId;
     this.liveTurn = hostCommandTurn(assistantId, toolId, name, args);
     this.updatedAt = Date.now();
-    openHostCommandTurn(
-      this.hostCommandTarget,
-      this.liveTurn,
-      toolId,
-      name,
-      args,
-    );
+    openHostCommandTurn(this.hostCommandTarget, this.liveTurn);
     this.broadcastState();
     this.broadcastContextInfo(true);
     void this.host.broadcastSessions();

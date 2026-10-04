@@ -56,10 +56,11 @@ export function hostCommandTurn(
 export function openHostCommandTurn(
   target: HostCommandTurnTarget,
   turn: DisplayMessage,
-  toolId: string,
-  name: string,
-  args: unknown,
 ): void {
+  const tool = turn.blocks[0];
+  if (tool?.kind !== "tool")
+    throw new Error("A host-command turn opens with its tool block.");
+  const { toolId, name, args } = tool;
   const { sessionId, adapterEvents } = target;
   const assistantId = turn.id;
   target.broadcast({ type: "assistantStart", sessionId, id: assistantId });

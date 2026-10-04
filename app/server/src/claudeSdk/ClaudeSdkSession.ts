@@ -863,7 +863,7 @@ export class ClaudeSdkSession implements LiveSession {
       );
   }
 
-  private broadcast(message: Parameters<Viewer["send"]>[0]): void {
+  broadcast(message: Parameters<Viewer["send"]>[0]): void {
     this.residency.broadcast(message);
   }
 
@@ -2751,13 +2751,7 @@ export class ClaudeSdkSession implements LiveSession {
     this.liveTurnId = assistantId;
     this.liveTurn = hostCommandTurn(assistantId, toolId, name, args);
     this.updatedAt = Date.now();
-    openHostCommandTurn(
-      this.hostCommandTarget,
-      this.liveTurn,
-      toolId,
-      name,
-      args,
-    );
+    openHostCommandTurn(this.hostCommandTarget, this.liveTurn);
     this.broadcastState();
     return { assistantId, toolId };
   }

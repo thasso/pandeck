@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type {
   AgentType,
   BackgroundWorkItemSummary,
@@ -43,8 +42,8 @@ import {
 } from "./mcp/toolGroups/registry.ts";
 import type { AgentSession } from "./piSdk/index.ts";
 import type { PiLiveSession } from "./piSdk/PiLiveSession.ts";
-import { PiSessionDeletedError, piStore } from "./piSdk/piStore.ts";
-import { canonicalPiSessionPath } from "./sessionStorage.ts";
+import { piStore } from "./piSdk/piStore.ts";
+import { harnessRegistry } from "./harnesses/registry.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
 import { setKnowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
@@ -247,8 +246,8 @@ class SessionHub {
   private backgroundEventSequence = 0;
 
   constructor() {
-    // The host object inverts the session→hub calls so piSdk never imports hub.ts.
-    piStore.setHost({
+    // The host object inverts the session→hub calls so no engine imports hub.ts.
+    harnessRegistry.setHost({
       broadcastSessions: () => this.broadcastSessions(),
       noteRunStarted: () => this.noteRunStarted(),
       checkPendingReload: () => this.checkPendingReload(),
@@ -256,12 +255,8 @@ class SessionHub {
       browserRuntimesFor: (sessionId) => this.browserRuntimesFor(sessionId),
     });
     subscribeBrowserRuntimeChanges(() => {
-      for (const live of piStore.list()) {
-        if (isCodingAgentType(live.kind)) live.broadcastState();
-      }
-      for (const cs of claudeSdkStore.list()) {
-        if (isCodingAgentType(cs.agentType)) cs.broadcastState();
-      }
+      for (const session of harnessRegistry.resident())
+        if (isCodingAgentType(session.agentType)) session.broadcastState();
     });
     subscribeTaskChanges((ids) => {
       for (const id of ids) this.pendingTaskIds.add(id);
@@ -288,16 +283,6 @@ class SessionHub {
     sessionRuntime.subscribeEvents((_sessionId, event) => {
       if (event.type === "runStateChanged") void this.broadcastSessions();
     });
-    // An in-process Claude-SDK session being created / updated / removed
-    // re-broadcasts the list (so it appears with its running state), and may
-    // unblock a queued dev reload (e.g. its turn just finished).
-    claudeSdkStore.setOnChange(() => {
-      void this.broadcastSessions();
-      this.checkPendingReload();
-    });
-    claudeSdkStore.setBrowserRuntimesProvider((sessionId) =>
-      this.browserRuntimesFor(sessionId),
-    );
     // Same inversion for worktree domain modules: they push through this seam
     // instead of importing hub.ts.
     setWorktreeBroadcaster({
@@ -405,34 +390,9 @@ class SessionHub {
   }
 
   browserRuntimesFor(currentSessionId: string) {
-    return listBrowserRuntimes(currentSessionId, (sessionId) => {
-      const pi = piStore.getLiveById(sessionId);
-      if (pi) {
-        const sessionTitleValue = pi.title ?? pi.session.sessionName;
-        return {
-          agentKind: pi.kind,
-          agentStatus: pi.isRunning ? "running" : "idle",
-          ...(pi.session.sessionFile !== undefined
-            ? { sessionFile: pi.session.sessionFile }
-            : {}),
-          ...(sessionTitleValue !== undefined
-            ? { sessionTitle: sessionTitleValue }
-            : {}),
-        };
-      }
-      const sdk = claudeSdkStore.get(sessionId);
-      if (sdk) {
-        return {
-          agentKind: sdk.agentType,
-          agentStatus: sdk.isRunning ? "running" : "idle",
-          ...(sdk.sessionFile !== undefined
-            ? { sessionFile: sdk.sessionFile }
-            : {}),
-          ...(sdk.title !== undefined ? { sessionTitle: sdk.title } : {}),
-        };
-      }
-      return undefined;
-    });
+    return listBrowserRuntimes(currentSessionId, (sessionId) =>
+      harnessRegistry.browserRuntimeOwner(sessionId),
+    );
   }
 
   consumePostReloadContinuation(): PostReloadContinuation | undefined {
@@ -721,47 +681,14 @@ class SessionHub {
   }
 
   /**
-   * Metadata-backed, id-ONLY resolver: acquire (loading/reopening if needed) the
-   * {@link HarnessDriver} for OUR session id, with no `kind` from the caller.
-   * This is the single entry point the id-only `/sessions/<id>` routing uses; it
-   * looks the id up in the {@link sessionStore} and dispatches on the record's
-   * {@link Harness}:
-   *   - `pi` → reopen from its canonical native path (derived from the id), with
-   *     a checked legacy-persona-directory fallback for pre-fix forks. The pi
-   *     kind comes from the record's agentType and `expectedId` guards the open.
-   *   - `claude-sdk` → {@link acquireClaudeSdk}.
-   * Returns undefined when there is no record (or it was tombstoned/removed), or
-   * when a pi record has no native transcript to reopen from.
+   * The driver for OUR session id, opening it from disk when it is not resident:
+   * the single entry point the id-only `/sessions/<id>` routing uses. The
+   * registry decides the engine (`harnesses/registry.ts`). Undefined when there
+   * is no record (or it was tombstoned), or when a pi record has no native
+   * transcript to reopen from.
    */
   async acquireById(id: string): Promise<HarnessDriver | undefined> {
-    // Fresh pi sessions may be resident before their first prompt creates a
-    // transcript/metadata row. Prefer the live registry so singleton/system
-    // session creation can be viewed immediately.
-    const resident = piStore.getForDrive(id) ?? claudeSdkStore.getForDrive(id);
-    if (resident) return resident;
-    const record = sessionStore.get(id);
-    // A pi reopen the delete beat to registration is a session that no longer
-    // exists — the same answer as a tombstoned record, not a failure.
-    const unlessDeleted = (err: unknown): undefined => {
-      if (err instanceof PiSessionDeletedError) return undefined;
-      throw err;
-    };
-    if (!record) {
-      if (claudeSdkStore.exists(id)) return this.acquireClaudeSdk(id);
-      // Recovery path for pi transcripts that predate a valid metadata row
-      // (notably developer sessions created before the DB allowed that persona).
-      return existsSync(canonicalPiSessionPath(id))
-        ? piStore.acquireByRecordId(id, "developer").catch(unlessDeleted)
-        : undefined;
-    }
-    switch (record.harness) {
-      case "pi":
-        return piStore
-          .acquireByRecordId(id, record.agentType)
-          .catch(unlessDeleted);
-      case "claude-sdk":
-        return this.acquireClaudeSdk(id);
-    }
+    return harnessRegistry.acquireById(id);
   }
 
   /**
@@ -784,13 +711,7 @@ class SessionHub {
    * Returns undefined if the session isn't currently live in memory.
    */
   getLiveById(id: string): HarnessDriver | undefined {
-    const record = sessionStore.get(id);
-    if (!record) {
-      const sdk = claudeSdkStore.get(id);
-      if (sdk) return sdk;
-    }
-    if (record?.harness === "claude-sdk") return claudeSdkStore.get(id);
-    return piStore.getLiveById(id);
+    return harnessRegistry.residentById(id);
   }
 
   /**
@@ -1140,10 +1061,8 @@ class SessionHub {
     // but still shows the stale link, so it gets one final refresh.
     const targets = new Set([...linked, ...this.taskLinkedSessions]);
     this.taskLinkedSessions = linked;
-    for (const live of piStore.list())
-      if (targets.has(live.sessionId)) live.broadcastState();
-    for (const cs of claudeSdkStore.list())
-      if (targets.has(cs.sessionId)) cs.broadcastState();
+    for (const session of harnessRegistry.resident())
+      if (targets.has(session.sessionId)) session.broadcastState();
   }
 
   /** A session's prompt queue changed: its viewers get the complete new state. */
@@ -1191,21 +1110,14 @@ class SessionHub {
     });
   }
 
+  /** Viewers of a resident session get it; with none resident, every tab does. */
   private sendToSessionViewers(
     sessionId: string,
     msg: import("@assistant/shared").ServerMessage,
   ): void {
-    const live = piStore.get(sessionId);
-    if (live) {
-      live.broadcast(msg);
-      return;
-    }
-    const cs = claudeSdkStore.get(sessionId);
-    if (cs) {
-      for (const v of cs.viewers) v.send(msg);
-      return;
-    }
-    this.broadcastAll(msg);
+    const session = harnessRegistry.residentById(sessionId);
+    if (session) session.broadcast(msg);
+    else this.broadcastAll(msg);
   }
 
   /** Broadcast a pullRequestCardUpdate to viewers of the card's origin session only. */
@@ -1217,17 +1129,7 @@ class SessionHub {
       sessionId: card.sessionId,
       card,
     };
-    const live = piStore.get(card.sessionId);
-    if (live) {
-      live.broadcast(msg);
-      return;
-    }
-    const cs = claudeSdkStore.get(card.sessionId);
-    if (cs) {
-      for (const v of cs.viewers) v.send(msg);
-      return;
-    }
-    this.broadcastAll(msg);
+    this.sendToSessionViewers(card.sessionId, msg);
   }
 
   /** Broadcast a targeted peer-prompt card lifecycle patch to viewers of one session. */
@@ -1244,17 +1146,7 @@ class SessionHub {
       sessionId,
       ...update,
     };
-    const live = piStore.get(sessionId);
-    if (live) {
-      live.broadcast(msg);
-      return;
-    }
-    const cs = claudeSdkStore.get(sessionId);
-    if (cs) {
-      for (const v of cs.viewers) v.send(msg);
-      return;
-    }
-    this.broadcastAll(msg);
+    this.sendToSessionViewers(sessionId, msg);
   }
 
   async renameSession(
@@ -1302,10 +1194,8 @@ class SessionHub {
    * sessions. A dev reload must wait for any streaming turn to finish.
    */
   runningCount(): number {
-    let n = 0;
-    for (const ls of piStore.list()) if (ls.isRunning) n++;
-    for (const cs of claudeSdkStore.list()) if (cs.isRunning) n++;
-    return n;
+    return harnessRegistry.resident().filter((session) => session.isRunning)
+      .length;
   }
 
   /**

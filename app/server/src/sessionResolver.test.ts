@@ -1,6 +1,6 @@
 /**
  * Standalone unit test for the metadata-backed id-only resolver
- * `hub.acquireById`.
+ * `hub.acquireById` (`harnessRegistry.acquireById`).
  *
  * Run through the server Vitest suite:
  *   pnpm --filter @assistant/server test src/sessionResolver.test.ts
@@ -10,7 +10,7 @@
  * ONLY our session id (no kind) — looks the id up in the {@link sessionStore}
  * and dispatches to the correct backing per the record's {@link Harness}:
  *
- *   - `claude-sdk` → a {@link ClaudeSdkSession} (acquireClaudeSdk), live + cheap.
+ *   - `claude-sdk` → a {@link ClaudeSdkSession} from its store, live + cheap.
  *   - `pi`         → reopen from the canonical log path DERIVED from our id.
  *
  * The pi branch is asserted MECHANICS-ONLY: reopening a real pi file would need a

@@ -131,6 +131,8 @@ export interface LiveSession extends HarnessDriver, RuntimePromptDriver {
   /** The account the session runs on, when the engine recorded it. */
   readonly credentialProfileId: string | undefined;
   setMode(mode: SessionMode): void;
+  /** Send a message to everyone viewing this session. */
+  broadcast(message: ServerMessage): void;
   /**
    * The model the session runs on (as its picker provider and id) and its
    * thinking level, for carrying them into a new session.
