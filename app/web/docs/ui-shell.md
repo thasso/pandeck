@@ -327,15 +327,16 @@ start may clear the failure's message, but the unacknowledged failed outcome
 keeps the session classified as `failed`, so the cluster still counts and
 bubbles it. More generally, a settled coordinator with an UNSETTLED peer folded
 anywhere under it stays a card in the working set, because work the user has not
-put down may never be folded into a row that is; otherwise it takes the shelf
-with its whole fold. A settled peer merely running again does not bring it back:
-it runs from the shelf raising no outcome, exactly as the coordinator's own next
-turn does, so the card does not come and go with every peer turn. The
-coordinator's composer ledge still shows that run. The same rule holds inside
-the tree: a settled peer folds only while live work hangs below it, so a live
-peer it spawned stays under the coordinator above instead of surfacing as a card
-of its own. A settled peer its coordinator sets going again — a turn, or
-background jobs — is live work itself: it runs from the shelf raising no
+put down may never be folded into a row that is; otherwise it and every session
+folded under it take the shelf, each as its own shelf row, so none of them
+leaves the shelf while a peer runs. A settled peer merely running again does not
+bring it back: it runs from the shelf raising no outcome, exactly as the
+coordinator's own next turn does, so the card does not come and go with every
+peer turn. The coordinator's composer ledge still shows that run. The same rule
+holds inside the tree: a settled peer folds only while live work hangs below it,
+so a live peer it spawned stays under the coordinator above instead of surfacing
+as a card of its own. A settled peer its coordinator sets going again — a turn,
+or background jobs — is live work itself: it runs from the shelf raising no
 outcome, so it folds, counts under running (a turn) or jobs (background work),
 refuses the coordinator's Settle in its own wording like any busy peer, and
 returns to history when it goes quiet (`isDormantInSpawnTree`). A settled
@@ -392,9 +393,12 @@ browser: focusable, swipeable, and openable. When the coordinator's tree also
 holds settled peers, the open fold ends in a "Show N settled" row that puts them
 back in the tree where they were spawned, after their live siblings; they stay
 on the Settled shelf (listed here under a prefixed row id, so the two rows never
-share one), offer no Settle, and count for nothing on the card. A session whose
-peers are ALL settled has no fold at all: the card is about live work, and that
-history is on the Settled shelf and in the session's own composer ledge.
+share one), offer no Settle, and count for nothing on the card. Neither does any
+other settled session listed in the tree — a bridge kept by live work below it,
+or a settled peer running again: it is already down, and the coordinator's own
+Settle is the one that reaches its subtree. A session whose peers are ALL
+settled has no fold at all: the card is about live work, and that history is on
+the Settled shelf and in the session's own composer ledge.
 
 A formal **Workflow Run** is one Sessions inbox item too
 ([Task-676](pa://task/676)). Every live run — active or paused — is a card of

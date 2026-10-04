@@ -2811,13 +2811,43 @@ describe("a settled peer set running again", () => {
     // No card coming and going with every peer turn: nothing under the
     // coordinator is unsettled or waiting on the user.
     expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
-    expect(view.settled.map((s) => s.id)).toEqual(["root"]);
+    // Both keep their shelf rows; the peer runs from there.
+    expect(view.settled.map((s) => s.id).sort()).toEqual(["kid", "root"]);
     // The coordinator's own ledge still shows the run.
     const ledge = spawnedSessionsView({
       sessions: shelvedRows,
       coordinatorId: "root",
     });
     expect(ledge.counts.running).toBe(1);
+  });
+
+  it("keeps every session of a shelved fold on the shelf while a peer runs", () => {
+    const chain = (running: boolean) => [
+      session({ id: "root", settledAt: NOW - 30_000 }),
+      session({
+        id: "bridge",
+        spawnedBySessionId: "root",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 20_000,
+      }),
+      session({
+        id: "leaf",
+        spawnedBySessionId: "bridge",
+        spawnOwnership: "coordinator",
+        settledAt: NOW - 10_000,
+        ...(running ? { isStreaming: true, runStartedAt: NOW - 1_000 } : {}),
+      }),
+    ];
+    for (const running of [true, false]) {
+      const view = buildSessionInbox(chain(running), { currentId: "leaf" });
+      expect([...cards(view.needsYou), ...cards(view.active)]).toEqual([]);
+      expect(view.settled.map((s) => s.id).sort()).toEqual([
+        "bridge",
+        "leaf",
+        "root",
+      ]);
+      expect(view.settledTotal).toBe(3);
+    }
   });
 
   it("is live work on the composer ledge", () => {

@@ -1106,10 +1106,11 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     backgroundActivityKey(session.backgroundActivity, now),
     card.tier,
     // The cluster as the CARD states it: every count it draws from (the
-    // summary, the spinner, the live icons) and the bubbled child's own label. A folded child that starts asking repaints the card it
-    // is folded into; one that renames itself under a collapsed summary does
-    // not, because nothing on the card would read differently — the expanded
-    // child rows carry their own keys.
+    // summary, the spinner, the live icons) and the bubbled child's own
+    // label. A folded child that starts asking repaints the card it is folded
+    // into; one that renames itself under a collapsed summary does not,
+    // because nothing on the card would read differently — the expanded child
+    // rows carry their own keys.
     card.cluster ? clusterCountsKey(card.cluster.counts) : "",
     // The settled-history toggle's count, which the open fold states.
     card.cluster ? String(card.cluster.settledCount) : "",
@@ -1876,10 +1877,15 @@ function emitCluster(id: string, context: EmitContext): void {
     return;
   }
   // Put down, and nothing under it is unsettled or waiting on the user: the
-  // whole fold stays on the shelf. Its settled peers that are running again
-  // run from there, exactly as its own next turn would.
+  // whole fold stays on the shelf, each session as its own shelf row, so none
+  // leaves the shelf while a settled peer runs. Those peers run from there,
+  // exactly as the coordinator's own next turn would.
   if (node.settled && !bubbled && !unsettledBelow.has(id)) {
     settledRows.push(node.card.session);
+    for (const childId of spawnClusterDescendantIds(id, context.forest)) {
+      const child = nodes.get(childId);
+      if (child) settledRows.push(child.card.session);
+    }
     return;
   }
 
