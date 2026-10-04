@@ -260,6 +260,9 @@ test("an id another engine holds, resident or on record, is named as held", () =
     harnessRegistry.otherHolder("fresh-id", "claude-sdk"),
     undefined,
   );
+  // A pi transcript with no row is pi's too: acquireById would reopen it.
+  piTranscript("pi-on-disk");
+  assert.equal(harnessRegistry.otherHolder("pi-on-disk", "claude-sdk"), "pi");
 });
 
 test("a Claude session is never created over an id pi holds", () => {

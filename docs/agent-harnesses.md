@@ -139,5 +139,9 @@ table when a later step needs them.
 Steps 2–6 are independent of each other. Step 8 needs 7, and 9–12 run in order
 after 7.
 
+Until step 10, the id-ownership check (`otherHolder`) runs twice: before a
+Claude first send writes anything, and in `hub.acquireClaudeSdk`. Step 10's
+registry create runs it once, so no caller can create a session around it.
+
 Out of scope: splitting `ClaudeSdkSession.ts` internally. Step 8 removes its
 duplicated plumbing first, which makes that split a separate, smaller change.

@@ -1690,6 +1690,10 @@ export class Connection implements Viewer {
       this.send({
         type: "error",
         message: `Session ${msg.id} belongs to the ${holder} harness.`,
+        target: { type: "session", id: msg.id },
+        ...(msg.clientRequestId !== undefined
+          ? { failedPromptClientRequestId: msg.clientRequestId }
+          : {}),
       });
       return;
     }

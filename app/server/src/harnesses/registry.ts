@@ -64,7 +64,8 @@ const HARNESS_ORDER = Object.keys(sessions) as Harness[];
 
 /**
  * Who opens a session without a metadata row: a Claude record first, as it
- * always has been, then the rest. An id is on one engine's disk only.
+ * always has been, then the rest; when both have the id on disk, Claude's
+ * record wins.
  */
 const ROWLESS_ORDER: readonly Harness[] = [
   "claude-sdk",
@@ -109,18 +110,19 @@ export const harnessRegistry = {
   },
 
   /**
-   * The engine other than `harness` that already holds `id`, resident or on
-   * record; undefined when `harness` may bring it live. An id belongs to one
-   * engine: a client-supplied id is checked here before anything is created
-   * for it, which is what lets {@link residentById} answer from memory alone.
+   * The engine other than `harness` that already holds `id`: resident, on
+   * record, or on disk without a row (what {@link acquireById} would reopen);
+   * undefined when `harness` may bring it live. An id belongs to one engine: a
+   * client-supplied id is checked here before anything is created for it,
+   * which is what lets {@link residentById} answer from memory alone.
    */
   otherHolder(id: string, harness: Harness): Harness | undefined {
-    const resident = HARNESS_ORDER.find(
-      (other) => other !== harness && sessions[other].get(id),
-    );
+    const others = HARNESS_ORDER.filter((other) => other !== harness);
+    const resident = others.find((other) => sessions[other].get(id));
     if (resident) return resident;
     const row = sessionStore.get(id);
-    return row && row.harness !== harness ? row.harness : undefined;
+    if (row) return row.harness !== harness ? row.harness : undefined;
+    return others.find((other) => sessions[other].storedWithoutRow(id));
   },
 
   /**
