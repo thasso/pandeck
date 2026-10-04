@@ -3112,3 +3112,52 @@ describe("the composer ledge's stall", () => {
     expect(ledge.stall?.peers.map((p) => p.id)).toEqual(["impl"]);
   });
 });
+
+describe("the composer ledge for a Workflow Run's role", () => {
+  const activeRun: WorkflowRunSummary = {
+    id: "r1",
+    taskId: "676",
+    recipeId: "code-delivery",
+    recipeVersion: 1,
+    lifecycle: "active",
+    limits: { maxIterations: 3, maxReviewPasses: 2 },
+    createdAt: NOW - 3_600_000,
+    updatedAt: NOW - 30_000,
+  };
+  const card: WorkflowRunCard = {
+    runId: "r1",
+    phase: "review",
+    iterationsUsed: 1,
+    nextAction: "Wait for the implementer.",
+    mergeDecisionReady: false,
+    canRebaseAndReview: false,
+    canRetry: false,
+    canResume: true,
+    coordinatorSessionId: "coord",
+    implementerSessionId: "impl",
+  };
+
+  it("raises no stall of its own, spawned peers or not", () => {
+    for (const spawned of [false, true]) {
+      const sessions = [
+        session({ id: "coord", awaitingRepliesFrom: ["impl"] }),
+        session({
+          id: "impl",
+          ...(spawned
+            ? {
+                spawnedBySessionId: "coord",
+                spawnOwnership: "coordinator" as const,
+              }
+            : {}),
+        }),
+      ];
+      const ledge = spawnedSessionsView({
+        sessions,
+        coordinatorId: "coord",
+        workflowRuns: [activeRun],
+        workflowCards: { r1: card },
+      });
+      expect(ledge.stall, spawned ? "with peers" : "alone").toBe(undefined);
+    }
+  });
+});

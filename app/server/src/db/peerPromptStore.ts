@@ -1067,36 +1067,54 @@ function outstandingResponseRequestCount(senderSessionId: string): number {
 }
 
 /** The read behind {@link outstandingRepliesBySender}; exported for its plan test. */
-export const OUTSTANDING_REPLIES_SQL = `SELECT DISTINCT o.sender_session_id, o.recipient_session_id
-         FROM peer_prompts o
-        WHERE o.status = 'awaiting_response' AND o.response_requested = 1
-          AND NOT EXISTS (
-            SELECT 1 FROM peer_prompts r
-             WHERE r.recipient_session_id = o.sender_session_id
-               AND r.sender_session_id = o.recipient_session_id
-               AND r.queue_seq > o.queue_seq
-               AND r.accepted_at_ms IS NOT NULL
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM peer_prompts r
-             WHERE r.recipient_session_id = o.sender_session_id
-               AND r.chain_id = o.chain_id
-               AND r.queue_seq > o.queue_seq
-               AND r.accepted_at_ms IS NOT NULL
-               AND EXISTS (
-                 SELECT 1 FROM peer_prompts f
-                  WHERE f.chain_id = o.chain_id
-                    AND f.sender_session_id = o.recipient_session_id
-                    AND f.queue_seq > o.queue_seq
-                    AND f.queue_seq < r.queue_seq)
-          )
-        ORDER BY o.sender_session_id, o.recipient_session_id`;
+export const OUTSTANDING_REPLIES_SQL = `
+  WITH owed AS (
+    SELECT id, sender_session_id, recipient_session_id, chain_id, queue_seq
+      FROM peer_prompts
+     WHERE status = 'awaiting_response' AND response_requested = 1
+    UNION ALL
+    SELECT o.id, o.sender_session_id, o.recipient_session_id, o.chain_id,
+           o.queue_seq
+      FROM peer_prompts a
+      CROSS JOIN peer_prompts o ON o.replied_by_message_id = a.id
+     WHERE a.status IN ('cancelled', 'failed') AND a.accepted_at_ms IS NULL
+       AND o.status = 'replied' AND o.response_requested = 1
+  )
+  SELECT DISTINCT o.sender_session_id, o.recipient_session_id
+    FROM owed o
+   WHERE NOT EXISTS (
+           SELECT 1 FROM peer_prompts r
+            WHERE r.recipient_session_id = o.sender_session_id
+              AND r.sender_session_id = o.recipient_session_id
+              AND r.queue_seq > o.queue_seq
+              AND r.accepted_at_ms IS NOT NULL
+         )
+     AND NOT EXISTS (
+           SELECT 1 FROM peer_prompts r
+            WHERE r.recipient_session_id = o.sender_session_id
+              AND r.chain_id = o.chain_id
+              AND r.queue_seq > o.queue_seq
+              AND r.accepted_at_ms IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM peer_prompts f
+                 WHERE f.chain_id = o.chain_id
+                   AND f.sender_session_id = o.recipient_session_id
+                   AND f.queue_seq > o.queue_seq
+                   AND f.queue_seq < r.queue_seq)
+         )
+   ORDER BY o.sender_session_id, o.recipient_session_id`;
 
 /**
  * For every sender, the peers that still OWE it a reply: a `responseRequested`
  * prompt whose turn ended without the answer (`awaiting_response`) — the
  * session list's "who still owes whom" fact, which a quiet tree reads as
  * stalled. One read, so the list rebuild pays it once, not per row.
+ *
+ * A request marked `replied` whose correlated reply never reached the
+ * sender — cancelled or failed before admission — is still owed: `replied`
+ * is written when the reply is QUEUED, not when it lands. That half starts
+ * from the few lost replies (`CROSS JOIN` keeps SQLite from driving it from
+ * every replied row instead) and follows the back-link index.
  *
  * Two kinds of open row do NOT count:
  * - one still being delivered or retried (`queued` … `retryable_failed`):
@@ -1112,7 +1130,7 @@ export const OUTSTANDING_REPLIES_SQL = `SELECT DISTINCT o.sender_session_id, o.r
  *   reviewer's reply must not answer for the reviewer beside it.
  *
  * Each question is its own NOT EXISTS so each seeks an index
- * (`0065_peer_prompt_reply_lookup.sql`) instead of scanning everything the
+ * (`0065_peer_prompt_reply_lookup.sql`, `0066_peer_prompt_replied_by_index.sql`) instead of scanning everything the
  * sender ever received; `peerPromptStore.test.ts` pins the plan.
  *
  * Not modelled: a report that reaches the sender on a fresh chain through a

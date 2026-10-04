@@ -247,6 +247,33 @@ describe("peerPromptStore", () => {
       assert.deepEqual(owedTo(c), [i]);
     });
 
+    it("keeps owing a request whose correlated reply never landed", () => {
+      // A correlated reply marks the request `replied` when it is QUEUED.
+      for (const lose of ["cancel", "fail"] as const) {
+        const c = `owed-c-${seq++}`;
+        const p = `owed-p-${seq++}`;
+        const request = unanswered(c, p);
+        const reply = store.enqueueRouted({
+          conversationId: `reply-${seq++}`,
+          chainId: request.chainId,
+          fallbackChainId: `reply-fallback-${seq++}`,
+          senderSessionId: p,
+          recipientSessionId: c,
+          prompt: "my report",
+          responseRequested: false,
+          markRepliedId: request.id,
+          participants: [p, c],
+          maxHops: 100,
+        });
+        assert.equal(store.getById(request.id)?.status, "replied");
+        // Still on its way: the sender has queued work, so nothing stalls.
+        assert.equal(owedTo(c), undefined);
+        if (lose === "cancel") store.cancelPending(c, "test", p);
+        else store.markFailed(reply.id, "gave up");
+        assert.deepEqual(owedTo(c), [p], `${lose}: the answer never arrived`);
+      }
+    });
+
     it("seeks an index for both answer checks, never scanning the inbox", () => {
       const plan = getDb()
         .prepare(`EXPLAIN QUERY PLAN ${OUTSTANDING_REPLIES_SQL}`)
@@ -254,6 +281,7 @@ describe("peerPromptStore", () => {
       const details = plan.map((step) => step.detail).join("\n");
       assert.match(details, /peer_prompts_recipient_sender_seq_idx/);
       assert.match(details, /peer_prompts_recipient_chain_seq_idx/);
+      assert.match(details, /peer_prompts_replied_by_idx/);
     });
 
     it("still counts a request when later traffic came from someone else", () => {

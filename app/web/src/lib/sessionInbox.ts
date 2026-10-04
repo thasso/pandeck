@@ -1572,7 +1572,16 @@ export function spawnedSessionsView(options: {
   }
 
   const byId = new Map(sessions.map((session) => [session.id, session]));
-  const coordinator = byId.get(coordinatorId);
+  // The runs the inbox shows as items: a session one of them owns is that
+  // run's, so it raises no stall of its own, exactly as it has no card.
+  const runCards = options.workflowCards ?? {};
+  const runs = (options.workflowRuns ?? []).filter((run) =>
+    workflowRunInWorkingSet(run, runCards[run.id]),
+  );
+  const ownedByRun = workflowRunOwnerBySession(runs, runCards).has(
+    coordinatorId,
+  );
+  const coordinator = ownedByRun ? undefined : byId.get(coordinatorId);
 
   // Almost every session on screen spawned nothing: answer that before
   // building the forest this view otherwise reads on every broadcast. Such a
@@ -1594,11 +1603,7 @@ export function spawnedSessionsView(options: {
   // ownership-blind tree. So the refusal each card carries (and with it
   // whether a bubbled failure is dismissible) is the forest's, read for every
   // member in one sweep; a session the forest does not hold answers alone.
-  const members = spawnClusterMembers(
-    sessions,
-    options.workflowRuns ?? [],
-    options.workflowCards ?? {},
-  );
+  const members = spawnClusterMembers(sessions, runs, runCards);
   const forest = spawnClusterForest(members);
   const reasons = spawnClusterSettleBlockedReasons(byId, forest);
   const memberIds = new Set(members.map((session) => session.id));

@@ -88,7 +88,10 @@ by two `NOT EXISTS` probes — "a later admitted prompt from the owed peer" and 
 later admitted prompt on the request's chain after the owed peer acted on it".
 Each probe seeks its own index (`0065_peer_prompt_reply_lookup.sql`); a single
 probe with `OR` could only seek the recipient and scanned everything the sender
-ever received, which grows with history rather than with what is owed.
+ever received, which grows with history rather than with what is owed. A request
+already marked `replied` whose correlated reply was cancelled or failed before
+delivery stays owed; that half starts from the lost replies and follows the
+`replied_by_message_id` back-link (`0066_peer_prompt_replied_by_index.sql`).
 `peerPromptStore.test.ts` pins the plan. Measured on a copy of the production
 database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
 

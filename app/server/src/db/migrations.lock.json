@@ -63,5 +63,6 @@
   "0062_session_prompt_queue.sql": "e5d0db1b652844fbfd3d9ba362eb8a067c3fb148b5ccd3dae8db76038cb06871",
   "0063_card_stores.sql": "a12768def66ba18cf51f098438693edffda9c5af50606ec43dfe034808ad4900",
   "0064_drop_legacy_import_bookkeeping.sql": "fb6ae04bd39777efc4125c05f824a5245f74ddc32c3d4e57d55f1fea60748f69",
-  "0065_peer_prompt_reply_lookup.sql": "cf4e570324bf57e6e847b96b1dcf22f87033c72eb648356148391337b9ade55c"
+  "0065_peer_prompt_reply_lookup.sql": "cf4e570324bf57e6e847b96b1dcf22f87033c72eb648356148391337b9ade55c",
+  "0066_peer_prompt_replied_by_index.sql": "ad68bf71d51a1243d61797909dc01e8d7358a5989296ae858d5880233814f682"
 }
