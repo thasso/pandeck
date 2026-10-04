@@ -132,8 +132,9 @@ group (`app/server/src/tools/settings/settingsTools.ts`):
   the assistant's own profile, the result says the user's next message starts a
   fresh Personal Assistant session.
 
-`settings_update` is a `local` side effect, so Plan mode keeps only
-`settings_read`.
+`settings_update`, `settings_request_input`, `accounts_update` and
+`accounts_sign_in` are `local` side effects, so Plan mode keeps only
+`settings_read` and `accounts_read`.
 
 Both tools hold four guarantees the schema alone cannot give, since neither
 harness enforces it before `execute`:
@@ -206,8 +207,7 @@ or `oauth` setting and ends the turn (`app/server/src/settingsInput.ts`,
 
 The card has no grant key, so "approve for session" never covers it. Asking
 again for the same setting supersedes the earlier card. Claude and OpenAI
-account logins are credential profiles with their own login flows and are not
-covered yet.
+accounts sign in through the same card in `signIn` mode (see Accounts).
 
 ## Accounts
 
@@ -232,4 +232,13 @@ routes call:
   every account change (`subscribeCredentialProfileChanges`: created, renamed,
   enabled, deleted, login state moved), and a sign-in card for an account that
   is now enabled and signed in is approved and its outcome handed to the
-  session.
+  session. An OpenAI login counts as done once its credential file changes,
+  which nothing announces, so `watchSignInCards` also re-checks waiting sign-in
+  cards every few seconds while any waits, and once at boot for cards a restart
+  left waiting. An account that is already signed in gets no card: the tool
+  reports it, since a new login would satisfy a card with the old credential
+  before the new one exists.
+- An account's raw login error is the provider's text and can quote a device
+  code, link or token, so the tools never return it: an account in `error`
+  status carries a server-written note pointing at its Settings page, which
+  shows the error to the user.

@@ -175,3 +175,86 @@ describe("accounts_sign_in", () => {
     );
   });
 });
+
+describe("review fixes", () => {
+  test("a login error never reaches the agent, whatever it quotes", async () => {
+    const { created } = (await call("accounts_update", {
+      operation: "create",
+      provider: "openai-codex",
+      name: "Errored OpenAI",
+    })) as { created: Account };
+    const leaked = [
+      "WXYZ-9876",
+      "https://example.invalid/device?code=fixture",
+      "fixture-oauth-value",
+      Buffer.from("fixture-oauth-value").toString("base64"),
+    ];
+    setCredentialProfileLoginState(created.id, {
+      status: "error",
+      error: `login failed: ${leaked.join(" ")}`,
+    });
+    try {
+      const result = await tool("accounts_read").execute({}, ctx("s-err"));
+      const text = JSON.stringify(result);
+      for (const value of leaked) assert.equal(text.includes(value), false);
+      const entry = (
+        result.details as { accounts: Array<Account & { note?: string }> }
+      ).accounts.find((a) => a.id === created.id);
+      assert.equal(entry?.status, "error");
+      assert.match(entry?.note ?? "", /\/settings\/openai/);
+    } finally {
+      clearCredentialProfileLoginState(created.id);
+    }
+  });
+
+  test("an account already signed in gets no card", async () => {
+    const account = await create("Ready Claude");
+    writeFileSync(join(claudeConfigDir(account.id), ".credentials.json"), "{}");
+    const result = await tool("accounts_sign_in").execute(
+      { id: account.id },
+      ctx("s-ready"),
+    );
+    assert.equal(result.terminate, undefined);
+    assert.equal(
+      (result.details as { alreadySignedIn?: string }).alreadySignedIn,
+      account.id,
+    );
+    assert.equal(approvalsForSession("s-ready").length, 0);
+  });
+
+  test("an OpenAI login that persists without announcing itself still resolves the card", async () => {
+    const { mkdirSync } = await import("node:fs");
+    const { piAgentDir } = await import("../../credentialProfiles.ts");
+    const { setSignInReconcileIntervalForTests } =
+      await import("../../settingsInput.ts");
+    setSignInReconcileIntervalForTests(50);
+    try {
+      const { created } = (await call("accounts_update", {
+        operation: "create",
+        provider: "openai-codex",
+        name: "Quiet OpenAI",
+      })) as { created: Account };
+      await tool("accounts_sign_in").execute(
+        { id: created.id },
+        ctx("s-quiet"),
+      );
+      const card = approvalsForSession("s-quiet").find(
+        (c) => c.status === "pending",
+      )!;
+      // The device login starts; its post-login refresh never settles, so the
+      // login state is never cleared. Only the credential file changes.
+      setCredentialProfileLoginState(created.id, { status: "connecting" });
+      mkdirSync(piAgentDir(created.id), { recursive: true });
+      writeFileSync(
+        join(piAgentDir(created.id), "auth.json"),
+        JSON.stringify({ "openai-codex": { type: "oauth" } }),
+      );
+      await vi.waitFor(
+        () => assert.equal(approvalForId(card.id)?.status, "executed"),
+        { timeout: 15_000 },
+      );
+    } finally {
+      setSignInReconcileIntervalForTests(3_000);
+    }
+  });
+});

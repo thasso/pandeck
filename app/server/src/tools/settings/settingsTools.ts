@@ -31,7 +31,7 @@ import {
   createApproval,
 } from "../../pendingApprovals.ts";
 import { redactSecrets, redactSecretsDeep } from "../../secretRedaction.ts";
-import { settingIsSet } from "../../settingsInput.ts";
+import { settingIsSet, watchSignInCards } from "../../settingsInput.ts";
 import { getSettings } from "../../settings.ts";
 import {
   ASSISTANT_PROFILE_FIELDS,
@@ -431,7 +431,13 @@ function accountEntry(profile: CredentialProfileSummary) {
     provider: profile.provider,
     enabled: profile.enabled,
     status: profile.status,
-    ...(profile.error ? { error: profile.error } : {}),
+    // The raw login error is the provider's text and may quote a device code,
+    // a verification link or a token; it stays on the Settings page.
+    ...(profile.status === "error"
+      ? {
+          note: `The last sign-in failed. The Settings page shows why: /settings/${accountSection(profile)}.`,
+        }
+      : {}),
     ...(usage
       ? {
           pinnedBy: usage.pinnedSlots.map((slot) => slot.key),
@@ -442,6 +448,10 @@ function accountEntry(profile: CredentialProfileSummary) {
         }
       : {}),
   };
+}
+
+function accountSection(profile: { provider: string }): string {
+  return profile.provider === "claude" ? "claude-sdk" : "openai";
 }
 
 function accountOf(id: unknown): CredentialProfileSummary {
@@ -566,8 +576,10 @@ const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
       },
     },
   },
-  execute: (raw, ctx) =>
-    scrubbed(async () => {
+  execute: async (raw, ctx) => {
+    // The turn ends only when a card was raised for the user to answer.
+    let raised = false;
+    const result = await scrubbed(async () => {
       if (!isRecord(raw)) throw new Error("Arguments must be an object.");
       rejectUnknownKeys(raw, ["id", "reason"], "accounts_sign_in");
       const account = accountOf(raw.id);
@@ -577,17 +589,27 @@ const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
         );
       if (raw.reason !== undefined && typeof raw.reason !== "string")
         throw new Error("reason must be a string.");
+      // Already signed in: nothing to ask. A card would wait for an event that
+      // never comes, and a fresh login would satisfy it with the old
+      // credential before the new one exists.
+      if (account.status === "ready")
+        return {
+          alreadySignedIn: account.id,
+          note: `${account.name} is already signed in. To replace its sign-in, the user signs in again on the Settings page (/settings/${accountSection(account)}).`,
+        };
       const reason = raw.reason?.trim().slice(0, MAX_REASON_CHARS);
       const path = `accounts.${account.id}`;
       const body: SettingsInputApprovalBody = {
         kind: "settingsInput",
         path,
         label: account.name,
-        section: account.provider === "claude" ? "claude-sdk" : "openai",
+        section: accountSection(
+          account,
+        ) as SettingsInputApprovalBody["section"],
         mode: "signIn",
         account: { id: account.id, provider: account.provider },
         ...(reason ? { reason } : {}),
-        wasConfigured: account.status === "ready",
+        wasConfigured: false,
       };
       const card = createApproval({
         sessionId: ctx.session.sessionId,
@@ -600,11 +622,16 @@ const accountsSignInTool = defineAgentTool<Record<string, unknown>>({
         supersedes: (earlier) =>
           earlier.body.kind === "settingsInput" && earlier.body.path === path,
       });
+      raised = true;
+      // Covers a sign-in that finishes without announcing itself.
+      watchSignInCards();
       return {
         requested: account.id,
         note: `Waiting for the user to sign in. ${approvalCardReference(card)}`,
       };
-    }, true),
+    });
+    return raised ? { ...result, terminate: true } : result;
+  },
 });
 
 export const settingsTools = [

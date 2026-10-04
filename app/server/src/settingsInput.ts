@@ -215,43 +215,92 @@ async function resolveConnectedCards(
   }
 }
 
-/**
- * Approve every pending sign-in card for an account that is now ready, and
- * hand the outcome to its session.
- */
-async function resolveSignedInCards(accountId: string): Promise<void> {
+/** How often waiting sign-in cards are re-checked; see {@link watchSignInCards}. */
+let signInReconcileMs = 3_000;
+let signInTimer: ReturnType<typeof setInterval> | undefined;
+/** Cards a resolution is already under way for, so two paths never race one. */
+const resolvingCards = new Set<string>();
+
+function pendingSignInCards(): ApprovalCard[] {
+  const cards: ApprovalCard[] = [];
   for (const sessionId of pendingApprovalSessionIds())
-    for (const card of approvalsForSession(sessionId)) {
-      if (card.status !== "pending" || card.body.kind !== "settingsInput")
-        continue;
-      if (card.body.mode !== "signIn" || card.body.account?.id !== accountId)
-        continue;
-      if (!accountReady(card.body)) continue;
-      try {
-        const { outcomePrompt } = await resolveApproval(card.id, "approved");
-        if (outcomePrompt)
-          await deliverAgentHandoff({
-            sessionId: card.sessionId,
-            text: outcomePrompt,
-            origin: { kind: "system", source: "approval-decision" },
-          });
-      } catch (err) {
-        console.warn(
-          `[settings] signing in ${accountId} did not resolve its card:`,
-          redactSecrets(errorText(err)),
-        );
-      }
-    }
+    for (const card of approvalsForSession(sessionId))
+      if (
+        card.status === "pending" &&
+        card.body.kind === "settingsInput" &&
+        card.body.mode === "signIn"
+      )
+        cards.push(card);
+  return cards;
 }
 
-subscribeCredentialProfileChanges((accountId) => {
-  resolveSignedInCards(accountId).catch((err: unknown) =>
+/**
+ * Approve every waiting sign-in card whose account is now enabled and signed
+ * in, and hand the outcome to its session. Stops the watch once no card waits.
+ */
+async function reconcileSignInCards(): Promise<void> {
+  const waiting = pendingSignInCards();
+  if (waiting.length === 0 && signInTimer) {
+    clearInterval(signInTimer);
+    signInTimer = undefined;
+  }
+  for (const card of waiting) {
+    if (resolvingCards.has(card.id)) continue;
+    if (!accountReady(card.body as SettingsInputApprovalBody)) continue;
+    resolvingCards.add(card.id);
+    try {
+      const { outcomePrompt } = await resolveApproval(card.id, "approved");
+      if (outcomePrompt)
+        await deliverAgentHandoff({
+          sessionId: card.sessionId,
+          text: outcomePrompt,
+          origin: { kind: "system", source: "approval-decision" },
+        });
+    } catch (err) {
+      console.warn(
+        `[settings] a signed-in account did not resolve card ${card.id}:`,
+        redactSecrets(errorText(err)),
+      );
+    } finally {
+      resolvingCards.delete(card.id);
+    }
+  }
+}
+
+function reconcileSoon(): void {
+  reconcileSignInCards().catch((err: unknown) =>
     console.warn(
-      "[settings] could not check sign-in cards after an account change:",
+      "[settings] could not check sign-in cards:",
       redactSecrets(errorText(err)),
     ),
   );
-});
+}
+
+/**
+ * Check waiting sign-in cards now and every few seconds while any waits.
+ *
+ * Account change events cover most sign-ins, but an OpenAI login counts as
+ * done as soon as its credential file changes, before the SDK's post-login
+ * refresh settles, and nothing announces that file. The watch also picks up
+ * cards that were waiting when the server restarted (`index.ts` calls this at
+ * boot). It costs one read of the pending cards per tick and stops itself.
+ */
+export function watchSignInCards(): void {
+  reconcileSoon();
+  if (signInTimer) return;
+  signInTimer = setInterval(reconcileSoon, signInReconcileMs);
+  signInTimer.unref?.();
+}
+
+export function setSignInReconcileIntervalForTests(ms: number): void {
+  signInReconcileMs = ms;
+  if (signInTimer) {
+    clearInterval(signInTimer);
+    signInTimer = undefined;
+  }
+}
+
+subscribeCredentialProfileChanges(() => reconcileSoon());
 
 onSettingsChanged(({ sections }) => {
   resolveConnectedCards(sections).catch((err: unknown) =>

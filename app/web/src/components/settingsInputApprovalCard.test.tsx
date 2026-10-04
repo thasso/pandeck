@@ -269,5 +269,52 @@ test("a Claude sign-in opens the official login terminal", async () => {
     await Promise.resolve();
   });
   click("Sign in");
-  expect(container!.textContent).toContain("Claude login for Work account");
+  // A viewport modal: rendered at the document root, outside the transcript row.
+  expect(container!.textContent).not.toContain("Claude login");
+  expect(document.body.textContent).toContain("Claude login for Work account");
+});
+
+function signInButton(): HTMLButtonElement {
+  return [...container!.querySelectorAll("button")].find((b) =>
+    (b.textContent ?? "").includes("Sign in"),
+  ) as HTMLButtonElement;
+}
+
+test("a failed login shows the provider's error to the user", async () => {
+  accountsApi.fetchCredentialProfiles.mockResolvedValue([
+    {
+      ...account("openai-codex"),
+      status: "error",
+      error: "Device code expired.",
+    },
+  ]);
+  render(
+    <ApprovalCard approval={signInCard("openai-codex")} onResolve={vi.fn()} />,
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(container!.textContent).toContain("Device code expired.");
+});
+
+test("a missing or disabled account says so and cannot start a login", async () => {
+  accountsApi.fetchCredentialProfiles.mockResolvedValue([]);
+  render(<ApprovalCard approval={signInCard("claude")} onResolve={vi.fn()} />);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(container!.textContent).toContain("no longer exists");
+  expect(signInButton().disabled).toBe(true);
+  act(() => root?.unmount());
+  container?.remove();
+
+  accountsApi.fetchCredentialProfiles.mockResolvedValue([
+    { ...account("claude"), enabled: false },
+  ]);
+  render(<ApprovalCard approval={signInCard("claude")} onResolve={vi.fn()} />);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(container!.textContent).toContain("disabled");
+  expect(signInButton().disabled).toBe(true);
 });

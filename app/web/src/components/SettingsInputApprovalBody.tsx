@@ -11,6 +11,7 @@
  *   place of the generic Approve/Reject footer.
  */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { ExternalLink, LogIn, Save, XCircle } from "lucide-react";
 import type {
   CredentialProfileSummary,
@@ -167,9 +168,13 @@ const SIGN_IN_POLL_MS = 2500;
 function SignInControls(props: ControlProps) {
   const { body, active } = props;
   const accountId = body.account?.id;
-  const [account, setAccount] = useState<CredentialProfileSummary | null>(null);
+  // undefined: not read yet; null: the account no longer exists.
+  const [account, setAccount] = useState<
+    CredentialProfileSummary | null | undefined
+  >(undefined);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accountId) return;
@@ -179,11 +184,11 @@ function SignInControls(props: ControlProps) {
         .then((profiles) => {
           if (stopped) return;
           setAccount(profiles.find((p) => p.id === accountId) ?? null);
-          setError(null);
+          setReadError(null);
         })
         .catch((err: unknown) => {
           if (!stopped)
-            setError(err instanceof Error ? err.message : String(err));
+            setReadError(err instanceof Error ? err.message : String(err));
         });
     void read();
     const timer = window.setInterval(() => void read(), SIGN_IN_POLL_MS);
@@ -194,21 +199,32 @@ function SignInControls(props: ControlProps) {
   }, [accountId]);
 
   const signIn = () => {
-    if (!account) return;
+    if (!account?.enabled) return;
+    setActionError(null);
     if (account.provider === "claude") {
       setTerminalOpen(true);
       return;
     }
     startOpenAiProfileLogin(account.id).catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : String(err)),
+      setActionError(err instanceof Error ? err.message : String(err)),
     );
   };
 
   const verification = account?.setup?.verificationUri;
   const code = account?.setup?.userCode;
+  const status =
+    account === undefined
+      ? "Reading the account…"
+      : account === null
+        ? "This account no longer exists. Dismiss the card."
+        : !account.enabled
+          ? "This account is disabled. Enable it on the Settings page to sign it in."
+          : account.status === "connecting"
+            ? "Sign-in in progress. This card updates once the account is signed in."
+            : "Runs the provider's own sign-in. The assistant never sees it.";
   return (
     <>
-      {verification && code ? (
+      {verification && code && account?.enabled ? (
         <div className="space-y-1 text-caption text-fg">
           <div>
             Open{" "}
@@ -227,32 +243,41 @@ function SignInControls(props: ControlProps) {
           </div>
         </div>
       ) : (
-        <div className="text-caption text-faint">
-          {account?.status === "connecting"
-            ? "Sign-in in progress. This card updates once the account is signed in."
-            : "Runs the provider's own sign-in. The assistant never sees it."}
+        <div className="flex items-center gap-2 text-caption text-faint">
+          {account === undefined && <Spinner size="sm" />}
+          {status}
         </div>
       )}
-      {error && <ErrorNote message={error} />}
+      {/* The provider's own error, for the user only; the agent gets none. */}
+      {account?.status === "error" && account.error && (
+        <ErrorNote message={account.error} />
+      )}
+      {readError && <ErrorNote message={readError} />}
+      {actionError && <ErrorNote message={actionError} />}
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton {...props} />
         <button
           type="button"
           onClick={signIn}
-          disabled={!active || !account}
+          disabled={!active || !account?.enabled}
           className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
         >
           <LogIn size={12} />
           {account?.status === "connecting" ? "Sign in again" : "Sign in"}
         </button>
       </div>
-      {terminalOpen && account && (
-        <ClaudeLoginTerminal
-          profile={account}
-          onFinished={() => setTerminalOpen(false)}
-          onClose={() => setTerminalOpen(false)}
-        />
-      )}
+      {/* A transcript row clips what overflows it: the terminal is a viewport
+          modal, so it renders at the document root. */}
+      {terminalOpen &&
+        account &&
+        createPortal(
+          <ClaudeLoginTerminal
+            profile={account}
+            onFinished={() => setTerminalOpen(false)}
+            onClose={() => setTerminalOpen(false)}
+          />,
+          document.body,
+        )}
     </>
   );
 }
