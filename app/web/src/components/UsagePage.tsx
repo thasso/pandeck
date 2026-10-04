@@ -387,11 +387,13 @@ export function UsageOverviewCard({
           !snapshot.rateLimitsAvailable
         ? "Plan limits unavailable"
         : undefined;
+  const providerName = profile.provider === "claude" ? "Claude" : "OpenAI";
   return (
     <div className="rounded-xl border border-line bg-panel p-3.5">
       <div className="flex items-center gap-2">
         <ProviderIcon
           provider={profile.provider}
+          title={providerName}
           size={15}
           className="shrink-0 text-accent"
         />
@@ -399,9 +401,7 @@ export function UsageOverviewCard({
           <div className="truncate text-caption font-semibold text-fg">
             {profile.name}
           </div>
-          <div className="text-caption text-faint">
-            {profile.provider === "claude" ? "Claude" : "OpenAI"}
-          </div>
+          <div className="text-caption text-faint">{providerName}</div>
         </div>
         {/* R2: the meters below stay up while the account refetches. */}
         {snapshot && state && isPending(state) ? (

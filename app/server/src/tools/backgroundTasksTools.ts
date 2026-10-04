@@ -3,7 +3,11 @@
  * provider-neutral tool: PA task ids are the only address exposed to a model,
  * while the supervisor remains the only authority that can Stop work.
  */
-import type { BackgroundWorkBackend } from "@assistant/shared";
+import {
+  backgroundWorkBackendsForHarness,
+  type BackgroundWorkBackend,
+  type Harness,
+} from "@assistant/shared";
 import { backgroundWorkItemSummaryOf } from "../backgroundWorkRegistry.ts";
 import { backgroundWorkOwnerEligibility } from "../backgroundWork/policy.ts";
 import { backgroundWorkSupervisor } from "../backgroundWork/supervisor.ts";
@@ -82,10 +86,11 @@ const backgroundTasksSchema = {
   },
 } as const;
 
-function backendForHarness(
-  harness: "pi" | "claude-sdk",
-): BackgroundWorkBackend {
-  return harness === "claude-sdk" ? "claude-query" : "host-process";
+/** The backend a tool admits under: the harness's first (today its only) one. */
+function backendForHarness(harness: Harness): BackgroundWorkBackend {
+  const [backend] = backgroundWorkBackendsForHarness(harness);
+  if (!backend) throw new Error(`No background-work backend for ${harness}.`);
+  return backend;
 }
 
 function requireString(value: unknown, name: string, max: number): string {

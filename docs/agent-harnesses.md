@@ -11,7 +11,7 @@ what already holds.
 
 ## Vocabulary
 
-- **Harness** (`Harness` in `app/shared/protocol.ts`): which engine runs a
+- **Harness** (`Harness` in `app/shared/harnesses.ts`): which engine runs a
   session. Persisted on the session row; never changes for a session.
 - **Persona** (`AgentType` in `app/shared/protocol.ts`, field `agentType`): the
   system prompt and toolset a session presents (`assistant`, `developer`, …).

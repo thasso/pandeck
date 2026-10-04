@@ -3,8 +3,10 @@
  * goes by: its id, its account kind and its model-picker provider.
  */
 import { expect, test } from "vitest";
+import { OPENAI_COMPATIBLE_PROVIDER_ID } from "./protocol.ts";
 import {
   accountProviderForModelProvider,
+  backgroundWorkBackendsForHarness,
   CLAUDE_SDK_PROVIDER,
   HARNESSES,
   harnessForAccountProvider,
@@ -30,6 +32,9 @@ test("account kinds and model providers translate consistently", () => {
   expect(accountProviderForModelProvider("github-copilot")).toBe(
     "openai-codex",
   );
+  expect(accountProviderForModelProvider(OPENAI_COMPATIBLE_PROVIDER_ID)).toBe(
+    "openai-codex",
+  );
   expect(harnessForAccountProvider("claude")).toBe("claude-sdk");
   expect(harnessForAccountProvider("openai-codex")).toBe("pi");
   for (const id of HARNESS_IDS)
@@ -43,5 +48,14 @@ test("only a harness with one picker provider names it", () => {
     const provider = HARNESSES[id].modelProvider;
     if (provider !== undefined)
       expect(harnessForModelProvider(provider)).toBe(id);
+  }
+});
+
+test("every harness owns at least one background-work backend", () => {
+  for (const id of HARNESS_IDS) {
+    expect(backgroundWorkBackendsForHarness(id).length).toBeGreaterThan(0);
+    expect(backgroundWorkBackendsForHarness(id)).toBe(
+      HARNESSES[id].backgroundWorkBackends,
+    );
   }
 });
