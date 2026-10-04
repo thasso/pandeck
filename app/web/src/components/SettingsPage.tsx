@@ -64,6 +64,7 @@ import {
 import { isValidTimezone } from "../lib/timezone.ts";
 import type { BuildInfo } from "@assistant/shared/buildInfo";
 import { serverHttpOrigin } from "../lib/serverOrigin.ts";
+import { settingBounds } from "@assistant/shared/settingsRegistry";
 import {
   createCredentialProfile,
   disableAccountImpact,
@@ -1619,8 +1620,8 @@ function WorktreesSection({
           </label>
           <input
             type="number"
-            min={0}
-            max={1440}
+            min={settingBounds("worktrees.remoteFetchMinutes").min}
+            max={settingBounds("worktrees.remoteFetchMinutes").max}
             step={1}
             value={worktrees.remoteFetchMinutes}
             onChange={(event) => {
@@ -1628,8 +1629,11 @@ function WorktreesSection({
               if (!Number.isFinite(minutes)) return;
               save({
                 remoteFetchMinutes: Math.min(
-                  1440,
-                  Math.max(0, Math.floor(minutes)),
+                  settingBounds("worktrees.remoteFetchMinutes").max,
+                  Math.max(
+                    settingBounds("worktrees.remoteFetchMinutes").min,
+                    Math.floor(minutes),
+                  ),
                 ),
               });
             }}
@@ -1761,16 +1765,16 @@ function MeetingMinutesScannerSection({
           <Field label="Max source chars">
             <input
               type="number"
-              min={5000}
-              max={200000}
+              min={settingBounds("meetingMinutesScanner.maxSourceChars").min}
+              max={settingBounds("meetingMinutesScanner.maxSourceChars").max}
               value={scanner.maxSourceChars}
               onChange={(e) =>
                 save({
                   maxSourceChars: numberValue(
                     e.target.value,
                     scanner.maxSourceChars,
-                    5000,
-                    200000,
+                    settingBounds("meetingMinutesScanner.maxSourceChars").min,
+                    settingBounds("meetingMinutesScanner.maxSourceChars").max,
                   ),
                 })
               }
@@ -1781,16 +1785,16 @@ function MeetingMinutesScannerSection({
           <Field label="Max snippet chars">
             <input
               type="number"
-              min={2000}
-              max={60000}
+              min={settingBounds("meetingMinutesScanner.maxSnippetChars").min}
+              max={settingBounds("meetingMinutesScanner.maxSnippetChars").max}
               value={scanner.maxSnippetChars}
               onChange={(e) =>
                 save({
                   maxSnippetChars: numberValue(
                     e.target.value,
                     scanner.maxSnippetChars,
-                    2000,
-                    60000,
+                    settingBounds("meetingMinutesScanner.maxSnippetChars").min,
+                    settingBounds("meetingMinutesScanner.maxSnippetChars").max,
                   ),
                 })
               }
@@ -1801,16 +1805,16 @@ function MeetingMinutesScannerSection({
           <Field label="Timeout ms">
             <input
               type="number"
-              min={10000}
-              max={240000}
+              min={settingBounds("meetingMinutesScanner.timeoutMs").min}
+              max={settingBounds("meetingMinutesScanner.timeoutMs").max}
               value={scanner.timeoutMs}
               onChange={(e) =>
                 save({
                   timeoutMs: numberValue(
                     e.target.value,
                     scanner.timeoutMs,
-                    10000,
-                    240000,
+                    settingBounds("meetingMinutesScanner.timeoutMs").min,
+                    settingBounds("meetingMinutesScanner.timeoutMs").max,
                   ),
                 })
               }
@@ -1960,16 +1964,16 @@ function DayScanSection({
           <Field label="Jira changelog issue cap">
             <input
               type="number"
-              min={1}
-              max={500}
+              min={settingBounds("dayScan.changelogIssueCap").min}
+              max={settingBounds("dayScan.changelogIssueCap").max}
               value={dayScan.changelogIssueCap}
               onChange={(e) =>
                 save({
                   changelogIssueCap: clampInt(
                     e.target.value,
                     dayScan.changelogIssueCap,
-                    1,
-                    500,
+                    settingBounds("dayScan.changelogIssueCap").min,
+                    settingBounds("dayScan.changelogIssueCap").max,
                   ),
                 })
               }
@@ -1982,16 +1986,16 @@ function DayScanSection({
           <Field label="Max minutes docs per run">
             <input
               type="number"
-              min={1}
-              max={50}
+              min={settingBounds("dayScan.maxMinutesDocsPerRun").min}
+              max={settingBounds("dayScan.maxMinutesDocsPerRun").max}
               value={dayScan.maxMinutesDocsPerRun}
               onChange={(e) =>
                 save({
                   maxMinutesDocsPerRun: clampInt(
                     e.target.value,
                     dayScan.maxMinutesDocsPerRun,
-                    1,
-                    50,
+                    settingBounds("dayScan.maxMinutesDocsPerRun").min,
+                    settingBounds("dayScan.maxMinutesDocsPerRun").max,
                   ),
                 })
               }
@@ -2118,16 +2122,16 @@ function PdfConversionSection({
           <Field label="Timeout ms">
             <input
               type="number"
-              min={30000}
-              max={600000}
+              min={settingBounds("pdfConversion.timeoutMs").min}
+              max={settingBounds("pdfConversion.timeoutMs").max}
               value={pdf.timeoutMs}
               onChange={(e) =>
                 save({
                   timeoutMs: numberValue(
                     e.target.value,
                     pdf.timeoutMs,
-                    30000,
-                    600000,
+                    settingBounds("pdfConversion.timeoutMs").min,
+                    settingBounds("pdfConversion.timeoutMs").max,
                   ),
                 })
               }
@@ -2450,8 +2454,8 @@ function DictationSection({
             </label>
             <input
               type="number"
-              min={1}
-              max={32}
+              min={settingBounds("speechToText.numThreads").min}
+              max={settingBounds("speechToText.numThreads").max}
               value={speech.numThreads}
               onChange={(e) => save({ numThreads: Number(e.target.value) })}
               className="settings-input w-full"
@@ -2467,8 +2471,8 @@ function DictationSection({
             </label>
             <input
               type="number"
-              min={0}
-              max={86400}
+              min={settingBounds("speechToText.idleShutdownSeconds").min}
+              max={settingBounds("speechToText.idleShutdownSeconds").max}
               value={speech.idleShutdownSeconds}
               onChange={(e) =>
                 save({ idleShutdownSeconds: Number(e.target.value) })
@@ -2486,8 +2490,8 @@ function DictationSection({
             </label>
             <input
               type="number"
-              min={5}
-              max={300}
+              min={settingBounds("speechToText.maxUtteranceSeconds").min}
+              max={settingBounds("speechToText.maxUtteranceSeconds").max}
               value={speech.maxUtteranceSeconds}
               onChange={(e) =>
                 save({ maxUtteranceSeconds: Number(e.target.value) })

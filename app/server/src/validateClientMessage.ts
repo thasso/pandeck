@@ -30,6 +30,10 @@ import {
   type BroadcastTopic,
   type ClientMessage,
 } from "@assistant/shared";
+import {
+  SETTINGS_REGISTRY,
+  type SettingValueSpec,
+} from "@assistant/shared/settingsRegistry";
 
 /* ------------------------------ kind predicates ----------------------------- */
 
@@ -298,191 +302,68 @@ function checkAttachments(msg: Record<string, unknown>): string | null {
 
 /* ------------------------- updateSettings (key sink) ------------------------ */
 
-/** Validate a present settings section: the value's known fields, when present. */
-type SectionValidator = (section: Record<string, unknown>) => string | null;
-
-/** Wrap a flat field spec as a section validator (only present fields are checked). */
-function section(spec: FieldSpecMap): SectionValidator {
-  return (value) => checkOptionalFields(value, spec);
+/**
+ * The wire kind of a registry value. Kinds are all a settings message must
+ * get right: bounds and vocabularies stay with the normalizers, which clamp a
+ * hand-edited or older client's value instead of refusing it. The agent path
+ * is strict on top (`settingValueError` in `settingsPatchForWrites`).
+ */
+function kindOf(spec: SettingValueSpec): FieldSpec | undefined {
+  switch (spec.kind) {
+    case "boolean":
+      return BOOLEAN;
+    case "string":
+    case "enum":
+      return STRING;
+    case "integer":
+    case "number":
+      return NUMBER;
+    case "json":
+      return undefined;
+  }
 }
 
 /**
- * Field-level kind checks for the persisted settings sections — the key sink.
- * Every section's stored leaves are kind-checked so `updateSettings` cannot
- * persist wrong-kind values that later read back as a malformed `AppSettings`.
- * Sections written verbatim are flat field specs; sections that survive
- * normalization with wrong-kind nested leaves get a deep check.
- */
-const SETTINGS_SECTIONS: Record<string, SectionValidator> = {
-  models: section({ hidden: STRING_ARRAY, order: STRING_ARRAY }),
-  permanentAssistant: section({
-    name: STRING,
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-    additionalInstructions: STRING,
-  }),
-  sessionNaming: section({
-    enabled: BOOLEAN,
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-  }),
-  commitAgent: section({
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-  }),
-  prAgent: section({
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-  }),
-  meetingMinutesScanner: section({
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-    maxSourceChars: NUMBER,
-    maxSnippetChars: NUMBER,
-    timeoutMs: NUMBER,
-  }),
-  pdfConversion: section({
-    fallbackEnabled: BOOLEAN,
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-    timeoutMs: NUMBER,
-  }),
-  promptRefinement: section({
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-  }),
-  taskIntakeAgent: section({
-    provider: STRING,
-    modelId: STRING,
-    thinkingLevel: STRING,
-    projectId: STRING,
-    additionalInstructions: STRING,
-  }),
-  browserTools: section({ headed: BOOLEAN, rawMcpEnabled: BOOLEAN }),
-  speechToText: validateSpeechToTextSection,
-  worktrees: validateWorktreesSection,
-  memory: validateMemorySection,
-  skills: validateSkillToggles,
-  // `effectiveTimeZone` is the read-only projection the client echoes back:
-  // kind-checked, then ignored by the normalizer.
-  profile: section({
-    displayName: STRING,
-    timeZone: STRING,
-    effectiveTimeZone: STRING,
-  }),
-};
-
-/**
- * The one MAP-valued settings section: global skill toggles
+ * The one MAP-valued setting: global skill toggles
  * ([Task-613](pa://task/613)). Its keys are declared skill names, so there is
  * no field spec to check — every value must be exactly one of the two states.
  * A wrong-kind value is rejected rather than normalized away, so a client that
  * misunderstands the section cannot quietly erase a toggle the user set.
  */
-function validateSkillToggles(value: Record<string, unknown>): string | null {
+function validateSkillToggles(value: unknown): string | null {
+  if (!isPlainObject(value)) return "must be an object";
   for (const [name, state] of Object.entries(value))
     if (state !== "on" && state !== "off")
-      return `${name} must be "on" or "off"`;
+      return `.${name} must be "on" or "off"`;
   return null;
 }
 
 /**
- * Deep check for dictation. The vocabulary is replaced whole and its
- * normalizer answers a non-array with an empty list, so an unchecked malformed
- * patch would silently delete every correction the user added.
+ * Dictation corrections. The vocabulary is replaced whole and its normalizer
+ * answers a non-array with an empty list, so an unchecked malformed patch
+ * would silently delete every correction the user added.
  */
-function validateSpeechToTextSection(
-  value: Record<string, unknown>,
-): string | null {
-  const flat = checkOptionalFields(value, {
-    enabled: BOOLEAN,
-    modelId: STRING,
-    numThreads: NUMBER,
-    idleShutdownSeconds: NUMBER,
-    maxUtteranceSeconds: NUMBER,
-  });
-  if (flat) return flat;
-  if (!hasOwn(value, "vocabulary") || value.vocabulary === undefined)
-    return null;
-  const vocabulary = value.vocabulary;
-  if (!Array.isArray(vocabulary)) return "vocabulary must be an array";
+function validateVocabulary(vocabulary: unknown): string | null {
+  if (!Array.isArray(vocabulary)) return "must be an array";
   if (vocabulary.length > SPEECH_TO_TEXT_LIMITS.vocabularyEntries)
-    return `vocabulary must have at most ${SPEECH_TO_TEXT_LIMITS.vocabularyEntries} entries`;
+    return `must have at most ${SPEECH_TO_TEXT_LIMITS.vocabularyEntries} entries`;
   for (let i = 0; i < vocabulary.length; i += 1) {
     const entry: unknown = vocabulary[i];
-    if (!isPlainObject(entry)) return `vocabulary[${i}] must be an object`;
+    if (!isPlainObject(entry)) return `[${i}] must be an object`;
     const reason = checkRequiredFields(entry, { from: STRING, to: STRING });
-    if (reason) return `vocabulary[${i}].${reason}`;
-  }
-  return null;
-}
-
-/** Deep check for the Memory settings section, including the nested processor slot. */
-function validateMemorySection(value: Record<string, unknown>): string | null {
-  const flat = checkOptionalFields(value, {
-    loadingEnabled: BOOLEAN,
-    learningMode: STRING,
-    maintenanceEnabled: BOOLEAN,
-    maxCards: NUMBER,
-    maxRenderedChars: NUMBER,
-    timezone: STRING,
-    maxCallsPerHour: NUMBER,
-    maxCostPerDayUsd: NUMBER,
-  });
-  if (flat) return flat;
-  if (hasOwn(value, "processor") && value.processor !== undefined) {
-    const processor = value.processor;
-    if (!isPlainObject(processor)) return "processor must be an object";
-    const reason = checkOptionalFields(processor, {
-      provider: STRING,
-      modelId: STRING,
-      thinkingLevel: STRING,
-    });
-    if (reason) return `processor.${reason}`;
-  }
-  return null;
-}
-
-/** Deep check: the two agent slots are nested objects that persist verbatim leaves. */
-function validateWorktreesSection(
-  value: Record<string, unknown>,
-): string | null {
-  const flat = checkOptionalFields(value, {
-    root: STRING,
-    defaultMergeStrategy: STRING,
-    remoteFetchMinutes: NUMBER,
-  });
-  if (flat) return flat;
-  for (const slot of ["namingAgent", "mergeAgent"] as const) {
-    if (!hasOwn(value, slot) || value[slot] === undefined) continue;
-    const agent = value[slot];
-    if (!isPlainObject(agent)) return `${slot} must be an object`;
-    const reason = checkOptionalFields(agent, {
-      provider: STRING,
-      modelId: STRING,
-      thinkingLevel: STRING,
-    });
-    if (reason) return `${slot}.${reason}`;
+    if (reason) return `[${i}].${reason}`;
   }
   return null;
 }
 
 /**
- * The one ARRAY-valued settings section: the approved peer runtimes
- * ([Task-595](pa://task/595)).
+ * The approved peer runtimes ([Task-595](pa://task/595)).
  *
- * It needs its own check because a patch here REPLACES the whole roster, and
- * the section's normalizer answers "not an array" with an empty list — so an
- * unvalidated `peerSpawnRuntimes: "oops"` would not be rejected, it would
- * silently delete every runtime the user approved. Rejecting the malformed
- * patch is the only outcome that preserves the standing approvals.
+ * A patch here REPLACES the whole roster, and the normalizer answers "not an
+ * array" with an empty list — so an unvalidated `peerSpawnRuntimes: "oops"`
+ * would not be rejected, it would silently delete every runtime the user
+ * approved. Rejecting the malformed patch is the only outcome that preserves
+ * the standing approvals.
  */
 function validatePeerSpawnRuntimes(value: unknown): string | null {
   if (!Array.isArray(value)) return "must be an array";
@@ -531,32 +412,74 @@ function validatePeerSpawnRuntimes(value: unknown): string | null {
 }
 
 /**
+ * Deep checks for the `json` settings, which are written whole. Keyed by
+ * registry path; a test requires one for every `json` descriptor. A reason
+ * starting with `.` or `[` names a part inside the value.
+ */
+export const JSON_SETTING_VALIDATORS: Record<
+  string,
+  (value: unknown) => string | null
+> = {
+  "models.hidden": (value) =>
+    isStringArray(value) ? null : "must be a string array",
+  "models.order": (value) =>
+    isStringArray(value) ? null : "must be a string array",
+  "speechToText.vocabulary": validateVocabulary,
+  skills: validateSkillToggles,
+  peerSpawnRuntimes: validatePeerSpawnRuntimes,
+};
+
+/**
+ * The registry settings checked against every settings patch: the writable
+ * ones, and the read-only ones a client echoes back, which declare the kind
+ * they read as.
+ */
+const CHECKED_SETTINGS = SETTINGS_REGISTRY.filter(
+  (descriptor) =>
+    descriptor.value &&
+    (descriptor.access === "value" || descriptor.access === "readonly"),
+);
+
+/**
  * Why an `AppSettings` patch must not reach `updateSettings`, or null. Shared
  * by the socket message and the agent write path (`settingsService.ts`).
+ *
+ * The checks come from the settings registry
+ * (`@assistant/shared/settingsRegistry`): every present leaf of a checked
+ * setting must be its registry kind, every object on the way to it must be an
+ * object, and every `json` setting passes its deep check. Fields the registry
+ * does not name are left to the normalizers, which ignore them.
  */
 export function appSettingsPatchError(patch: unknown): string | null {
   if (!isPlainObject(patch)) return "patch must be an object";
-  for (const [name, validate] of Object.entries(SETTINGS_SECTIONS)) {
-    if (!hasOwn(patch, name) || patch[name] === undefined) continue;
-    const value = patch[name];
-    if (!isPlainObject(value)) return `patch.${name} must be an object`;
-    const reason = validate(value);
-    if (reason) return `patch.${name}.${reason}`;
-  }
-  if (
-    hasOwn(patch, "peerSpawnRuntimes") &&
-    patch.peerSpawnRuntimes !== undefined
-  ) {
-    const reason = validatePeerSpawnRuntimes(patch.peerSpawnRuntimes);
+  for (const descriptor of CHECKED_SETTINGS) {
+    const keys = descriptor.path.split(".");
+    let node: Record<string, unknown> = patch;
+    let reached = true;
+    for (let i = 0; i < keys.length - 1; i += 1) {
+      const key = keys[i]!;
+      if (!hasOwn(node, key) || node[key] === undefined) {
+        reached = false;
+        break;
+      }
+      const next = node[key];
+      if (!isPlainObject(next))
+        return `patch.${keys.slice(0, i + 1).join(".")} must be an object`;
+      node = next;
+    }
+    const leaf = keys[keys.length - 1]!;
+    if (!reached || !hasOwn(node, leaf) || node[leaf] === undefined) continue;
+    const value = node[leaf];
+    const spec = descriptor.value!;
+    const kind = kindOf(spec);
+    const reason = kind
+      ? kind.check(value)
+        ? null
+        : `must be ${kind.kind}`
+      : (JSON_SETTING_VALIDATORS[descriptor.path]?.(value) ?? null);
     if (reason)
-      return `patch.peerSpawnRuntimes${reason.startsWith("[") ? "" : " "}${reason}`;
+      return `patch.${descriptor.path}${/^[.[]/.test(reason) ? "" : " "}${reason}`;
   }
-  if (
-    hasOwn(patch, "sessionPeerPromptMaxHops") &&
-    patch.sessionPeerPromptMaxHops !== undefined &&
-    !isFiniteNumber(patch.sessionPeerPromptMaxHops)
-  )
-    return "patch.sessionPeerPromptMaxHops must be a finite number";
   return null;
 }
 

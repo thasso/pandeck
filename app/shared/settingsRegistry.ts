@@ -87,7 +87,10 @@ export interface SettingDescriptor {
   section: SettingsSectionId;
   label: string;
   access: SettingAccess;
-  /** What a write must look like (`value` and `secret` access). */
+  /**
+   * What a write must look like (`value` and `secret` access). A `readonly`
+   * setting a client echoes back declares the kind it reads as.
+   */
   value?: SettingValueSpec;
   /** Writing `""` removes the field, e.g. an account pin back to automatic. */
   optional?: boolean;
@@ -259,7 +262,15 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
   setting("profile.timeZone", "profile", "Time zone", STRING, {
     hint: "IANA zone such as Europe/Berlin; empty means the server's zone.",
   }),
-  readonly("profile.effectiveTimeZone", "profile", "Time zone in effect"),
+  // The Settings page echoes this back in a profile patch, so it declares the
+  // kind it reads as and a wrong-kind echo is refused.
+  {
+    path: "profile.effectiveTimeZone",
+    section: "profile",
+    label: "Time zone in effect",
+    access: "readonly",
+    value: STRING,
+  },
 
   // Models & providers
   setting("models.hidden", "models", "Models hidden from the picker", {
@@ -746,6 +757,14 @@ export function valueAtPath(root: unknown, path: string): unknown {
 
 export function settingDescriptor(path: string): SettingDescriptor | undefined {
   return BY_PATH.get(path);
+}
+
+/** A numeric setting's bounds. Asking for any other setting is a coding error. */
+export function settingBounds(path: string): { min: number; max: number } {
+  const spec = settingDescriptor(path)?.value;
+  if (spec?.kind !== "integer" && spec?.kind !== "number")
+    throw new Error(`${path} is not a numeric setting`);
+  return { min: spec.min, max: spec.max };
 }
 
 /**
