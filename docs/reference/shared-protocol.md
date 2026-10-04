@@ -321,6 +321,12 @@ vocabulary, display projection, and normalized session model types.
   audio socket has its own validator, so the session socket's exhaustive
   per-type validator registry stays untouched. `SpeechToTextSettings.modelId`
   names a catalogued model id, never a filesystem path.
+- `harnesses.ts` owns the `Harness` type, `CLAUDE_SDK_PROVIDER` and the
+  `HARNESSES` table (per harness: account provider, model-picker provider when
+  it owns one, background-work backends), the three translations between those
+  names (`harnessForModelProvider`, `harnessForAccountProvider`,
+  `accountProviderForModelProvider`) and the background-work backend predicates;
+  `protocol.ts` re-exports it (`docs/agent-harnesses.md`).
 - `speechVocabulary.ts` owns `applySpeechVocabulary`, the post-decode
   `spoken → written` rewrite engine (whole-word, case-insensitive, literal
   replacement, ALL rules in ONE pass so no rule rewrites another's output),

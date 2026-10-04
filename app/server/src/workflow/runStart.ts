@@ -24,8 +24,6 @@
  */
 import {
   accountProviderForModelProvider,
-  CLAUDE_SDK_MODELS,
-  CLAUDE_SDK_PROVIDER,
   isTerminalWorkflowRunLifecycle,
   normalizeWorkflowRunLimits,
   supportedThinkingLevelsForModel,
@@ -57,7 +55,7 @@ import {
 } from "../db/workflowStore.ts";
 import { errorText } from "../errors.ts";
 import { gitOptional } from "../gitExec.ts";
-import { listModelsForProfile } from "../piSdk/models.ts";
+import { modelsForAccount } from "../harnesses/models.ts";
 import { getProject, type ProjectRecord } from "../projectRegistry.ts";
 import { getSettings } from "../settings.ts";
 import { readTask } from "../tasks.ts";
@@ -397,7 +395,6 @@ async function resolveRoleConfig(
       `The ${role} prompt override is ${promptOverride.length} characters; the limit is ${WORKFLOW_PROMPT_OVERRIDE_MAX_CHARS}.`,
     );
 
-  const isClaudeSdk = provider === CLAUDE_SDK_PROVIDER;
   const family = accountProviderForModelProvider(provider);
   const requestedProfileId = config.credentialProfileId?.trim();
   const profileId = requestedProfileId ?? automaticProfileIdFor(family);
@@ -412,11 +409,7 @@ async function resolveRoleConfig(
     );
 
   // The same list the sheet's picker offers for that account, resolved fresh.
-  const models = isClaudeSdk
-    ? getSettings().claudeSdk.enabled
-      ? CLAUDE_SDK_MODELS
-      : []
-    : await listModelsForProfile(profile.id);
+  const models = await modelsForAccount(profile);
   const model = models.find(
     (candidate) => candidate.provider === provider && candidate.id === modelId,
   );

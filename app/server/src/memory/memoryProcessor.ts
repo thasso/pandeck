@@ -38,7 +38,7 @@ import {
   type MemoryScopeContext,
 } from "./memoryService.ts";
 import { searchMemory } from "./memorySelector.ts";
-import { findModelForProfile } from "../piSdk/models.ts";
+import { accountOffersModel } from "../harnesses/models.ts";
 import { OneShotError, runOneShot } from "../harnesses/oneShot.ts";
 import { accountForSlot } from "../settingsModelSlots.ts";
 
@@ -185,7 +185,7 @@ export async function processorConfigStatus(): Promise<ProcessorConfigStatus> {
   // different model, which would run something other than what was configured.
   // Availability is per account, so this checks the account the slot resolves to.
   if (
-    !(await findModelForProfile(
+    !(await accountOffersModel(
       accountForSlot(processor),
       processor.provider,
       processor.modelId,

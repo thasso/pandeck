@@ -12,10 +12,7 @@ import {
   type SessionTaskProgress,
 } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
-import {
-  claudeSdkModelOption,
-  knownClaudeSdkModelAlias,
-} from "./claudeSdk/modelSettings.ts";
+import { curatedModelOption } from "./harnesses/curatedModels.ts";
 import { getPendingAgentQuestion } from "./tools/core/questionTool.ts";
 import { pendingApprovalSessionIds } from "./pendingApprovals.ts";
 import {
@@ -265,18 +262,14 @@ function normalizeThinkingLevel(
  * an id no alias covers is passed through as stored rather than guessed.
  */
 function sessionModel(
-  harness: string,
+  harness: Harness,
   provider: string | undefined,
   modelId: string | undefined,
 ): SessionListItem["model"] | undefined {
   if (!modelId) return undefined;
-  if (harness === "claude-sdk") {
-    const alias = knownClaudeSdkModelAlias(modelId);
-    if (alias) {
-      const option = claudeSdkModelOption(alias);
-      return { provider: option.provider, id: option.id, name: option.name };
-    }
-  }
+  const option = curatedModelOption(harness, modelId);
+  if (option)
+    return { provider: option.provider, id: option.id, name: option.name };
   if (!provider) return undefined;
   return { provider, id: modelId };
 }

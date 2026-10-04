@@ -39,7 +39,6 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
   "connection.ts": [
     "claudeSdk/ClaudeSdkSession.ts",
     "claudeSdk/claudeSdkStore.ts",
-    "claudeSdk/modelSettings.ts",
     "piSdk/PiLiveSession.ts",
     "piSdk/models.ts",
   ],
@@ -50,15 +49,7 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
     "piSdk/index.ts",
     "piSdk/piStore.ts",
   ],
-  "index.ts": [
-    "claudeSdk/modelSettings.ts",
-    "piSdk/models.ts",
-    "piSdk/openaiUsageQuery.ts",
-    "piSdk/toolBinaries.ts",
-  ],
-  "memory/memoryProcessor.ts": ["piSdk/models.ts"],
-  "openaiResetAutoRedeem.ts": ["piSdk/openaiUsageQuery.ts"],
-  "peerSpawnRuntimes.ts": ["claudeSdk/modelSettings.ts", "piSdk/models.ts"],
+  "index.ts": ["piSdk/models.ts", "piSdk/toolBinaries.ts"],
   "permanentAssistant.ts": ["piSdk/oneShot.ts"],
   "promptBudgets.ts": ["piSdk/piPromptMeasure.ts"],
   "promptInventory.ts": [
@@ -68,16 +59,9 @@ const ENGINE_IMPORT_EXCEPTIONS: Record<string, string[]> = {
   ],
   "session/adapters/claudeSdk.ts": ["claudeSdk/modelSettings.ts"],
   "sessionSpawn.ts": ["piSdk/models.ts"],
-  "sessions.ts": ["claudeSdk/modelSettings.ts"],
   "taskOverhead.ts": ["claudeSdk/claudeSdkRecords.ts"],
-  "usageCache.ts": ["claudeSdk/usageQuery.ts", "piSdk/openaiUsageQuery.ts"],
-  "viewSession.ts": [
-    "claudeSdk/modelSettings.ts",
-    "piSdk/models.ts",
-    "piSdk/toolActivation.ts",
-  ],
+  "viewSession.ts": ["piSdk/toolActivation.ts"],
   "workflow/agentExecutor.ts": ["piSdk/models.ts"],
-  "workflow/runStart.ts": ["piSdk/models.ts"],
   "worktrees/worktreeMerge.ts": [
     "claudeSdk/modelSettings.ts",
     "piSdk/models.ts",
@@ -95,11 +79,11 @@ const HARNESS_LITERAL_EXCEPTIONS: Record<string, number> = {
   "session/planHint.ts": 1,
   "sessionAudit.ts": 4,
   "sessionAuditSources.ts": 1,
-  "sessions.ts": 2,
+  "sessions.ts": 1,
   "taskOverhead.ts": 4,
   "tools/sessions/sessionInspection.ts": 1,
   "validateClientMessage.ts": 2,
-  "viewSession.ts": 2,
+  "viewSession.ts": 1,
 };
 
 const EQUALITY_OPERATORS = new Set(["==", "===", "!=", "!=="]);

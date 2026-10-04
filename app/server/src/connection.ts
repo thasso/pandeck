@@ -31,7 +31,6 @@ import {
   type Harness,
   type MessageTarget,
   messageTargetForComment,
-  type ModelOption,
   type WorktreeMergeStrategy,
   type WorktreeProvisionDisplay,
   type ProjectListRequest,
@@ -87,7 +86,6 @@ import { testJiraSettings } from "./jiraSettings.ts";
 import {
   findModel,
   findModelForProfile,
-  listModels,
   refreshModels,
 } from "./piSdk/models.ts";
 import { hub } from "./hub.ts";
@@ -95,7 +93,7 @@ import { PiLiveSession } from "./piSdk/PiLiveSession.ts";
 import type { HarnessDriver, Viewer } from "./harness.ts";
 import { randomUUID } from "node:crypto";
 import { ClaudeSdkSession } from "./claudeSdk/ClaudeSdkSession.ts";
-import { CLAUDE_SDK_MODELS } from "./claudeSdk/modelSettings.ts";
+import { pickerModels } from "./harnesses/models.ts";
 import { claudeSdkStore } from "./claudeSdk/claudeSdkStore.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import { ViewSession } from "./viewSession.ts";
@@ -659,7 +657,7 @@ export class Connection implements Viewer {
       type: "ready",
       ...(this.webBuildId ? { webBuildId: this.webBuildId } : {}),
       state: viewing?.state() ?? null,
-      models: clientModels(),
+      models: pickerModels(),
       agents: availableAgents(),
       sessions: initial.sessions,
       archivedSessionCount,
@@ -3751,7 +3749,7 @@ export class Connection implements Viewer {
       change.sections.includes("claudeSdk") ||
       change.sections.includes("openAiCompatible")
     )
-      this.send({ type: "models", models: clientModels(settings) });
+      this.send({ type: "models", models: pickerModels(settings) });
     // Availability depends on the settings just saved (`modelId` selects among
     // installed models), so recompute it — otherwise the Settings health line
     // and the mic button's reason keep reporting the pre-save answer until the
@@ -4049,7 +4047,7 @@ export class Connection implements Viewer {
         type: "openAiCompatibleStatus",
         status,
         settings: getSettings(),
-        models: clientModels(),
+        models: pickerModels(),
       });
     } catch (err) {
       this.send({
@@ -4068,7 +4066,7 @@ export class Connection implements Viewer {
         type: "openAiCompatibleStatus",
         status,
         settings: getSettings(),
-        models: clientModels(),
+        models: pickerModels(),
       });
     } catch (err) {
       this.send({
@@ -4243,7 +4241,7 @@ export class Connection implements Viewer {
   private async onRefreshModels(requestId: string): Promise<void> {
     try {
       const { error } = await refreshModels();
-      const models = clientModels();
+      const models = pickerModels();
       this.send({ type: "models", models, requestId });
       // The refreshed list is the receipt; only a broken models.json or an
       // account whose catalog could not be fetched is worth saying out loud,
@@ -4257,7 +4255,7 @@ export class Connection implements Viewer {
     } catch (err) {
       // The reply is what retires the client's busy state, so it goes out even
       // when the refresh threw — with the list the client already had.
-      this.send({ type: "models", models: clientModels(), requestId });
+      this.send({ type: "models", models: pickerModels(), requestId });
       this.send({
         type: "error",
         message: `Failed to refresh models: ${errorText(err)}`,
@@ -6130,15 +6128,6 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
   };
-}
-
-function clientModels(settings: AppSettings = getSettings()): ModelOption[] {
-  const models = listModels();
-  if (!settings.claudeSdk.enabled) return models;
-  return [
-    ...models,
-    ...CLAUDE_SDK_MODELS.map(({ sdkModelId: _sdkModelId, ...model }) => model),
-  ];
 }
 
 /**

@@ -33,13 +33,12 @@ import {
   peerRuntimeUnavailableReason,
   supportedThinkingLevelsForModel,
 } from "@assistant/shared";
-import { CLAUDE_SDK_MODELS } from "./claudeSdk/modelSettings.ts";
 import {
   credentialProfileById,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
-import { listModelsForProfile } from "./piSdk/models.ts";
+import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { runtimeStateFor } from "./tools/sessions/sessionInspection.ts";
 
@@ -57,11 +56,7 @@ export async function modelsForProfile(
 ): Promise<ModelOption[]> {
   const profile = credentialProfileById(profileId);
   if (!profile) return [];
-  if (profile.provider === "claude")
-    return getSettings().claudeSdk.enabled
-      ? CLAUDE_SDK_MODELS.map(({ sdkModelId: _sdkModelId, ...model }) => model)
-      : [];
-  return listModelsForProfile(profileId).catch(() => []);
+  return modelsForAccount(profile).catch(() => []);
 }
 
 /**

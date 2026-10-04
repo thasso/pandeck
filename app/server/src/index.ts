@@ -35,8 +35,8 @@ import { Connection } from "./connection.ts";
 import { getGoogleDriveFileTextPreview } from "./tools/google/googleDriveTools.ts";
 import { getGmailThreadTextPreview } from "./tools/google/googleGmailTools.ts";
 import { getCalendarEvents } from "./calendarService.ts";
-import { CLAUDE_SDK_MODELS } from "./claudeSdk/modelSettings.ts";
-import { redeemOpenAiResetCreditForProfile } from "./piSdk/openaiUsageQuery.ts";
+import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
+import { modelsForAccount } from "./harnesses/models.ts";
 import {
   automaticProfileIdFor,
   createCredentialProfile,
@@ -58,7 +58,6 @@ import {
   listCredentialProfilesWithUsage,
 } from "./credentialProfileUsage.ts";
 import {
-  listModelsForProfile,
   modelRuntimeForProfile,
   startOpenAiProfileLogin,
   syncConfiguredModelProviders,
@@ -826,13 +825,7 @@ async function handleRequest(
             await Promise.all(
               profiles.map(async (profile) => [
                 profile.id,
-                profile.provider === "claude"
-                  ? getSettings().claudeSdk.enabled
-                    ? CLAUDE_SDK_MODELS.map(
-                        ({ sdkModelId: _sdkModelId, ...model }) => model,
-                      )
-                    : []
-                  : await listModelsForProfile(profile.id).catch(() => []),
+                await modelsForAccount(profile).catch(() => []),
               ]),
             ),
           )
@@ -1030,7 +1023,7 @@ async function handleRequest(
         throw new Error("That is not an OpenAI credential profile.");
       // `force` is the user's explicit "redeem anyway" from the confirm
       // dialog: it skips the applicability guard rather than 409-ing.
-      const result = await redeemOpenAiResetCreditForProfile(
+      const result = await redeemOpenAiResetCredit(
         profileId || defaultOpenAiProfileId(),
         creditId,
         { requireApplicable: body.force !== true },

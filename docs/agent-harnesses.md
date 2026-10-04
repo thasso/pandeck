@@ -49,8 +49,16 @@ Four layers, each depending only on the ones below it:
      exception throws a plain error and drops partial text. It records the
      internal usage session itself when asked, for every run that reported its
      usage (so not a timeout).
-   - The models and usage ports list and resolve models per credential profile
-     and read subscription usage.
+   - The models port (`harnesses/models.ts`) lists the models the pickers offer
+     (`pickerModels`) and an account can run (`modelsForAccount`), answers
+     whether an account offers an exact model (`accountOffersModel`), and
+     renders a stored session's model (`storedSessionModelOption`). The
+     Claude-only curated options sit in `harnesses/curatedModels.ts`, which
+     loads no engine SDK, so row projections stay cheap. The usage port
+     (`harnesses/usage.ts`) reads subscription usage per account kind and
+     redeems OpenAI reset credits. Model handles a session is created with still
+     come from the engines until steps 10–11 route creation through the
+     registry.
 3. **Engines** (`piSdk/`, `claudeSdk/`) each export one backend object and are
    the only place their SDK package is imported. Each session class composes a
    shared session kit (viewer set, idle eviction, synthetic host-command turns)
@@ -103,7 +111,7 @@ table when a later step needs them.
 | 3    | One persona type (`AgentType` in `shared/`) replaces three identical unions   | landed |
 | 4    | `HARNESSES` descriptor in `shared/`, read by server and web                   | landed |
 | 5    | `runOneShot()` and its 10 callers                                             | landed |
-| 6    | Models and usage ports                                                        | open   |
+| 6    | Models and usage ports                                                        | landed |
 | 7    | `LiveSession` interface; no `instanceof` on session classes                   | open   |
 | 8    | Shared session kit                                                            | open   |
 | 9    | `HarnessRegistry` over both stores; `hub.ts` stops dispatching by hand        | open   |

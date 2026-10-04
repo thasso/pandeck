@@ -1802,30 +1802,30 @@ APIs, agent/tool integrations, settings, tasks and persistence.
     account must be a currently enabled credential profile of the model's
     provider family (an omitted account resolves to the automatic default and
     the resolved id is what gets stored), the model must be in that account's
-    own offered list (`CLAUDE_SDK_MODELS` behind the claudeSdk gate,
-    `piSdk/models.ts` `listModelsForProfile` otherwise — the same lists the
-    sheet's pickers show), the thinking level must be one that model accepts,
-    and prompt overrides are REJECTED over their bound rather than truncated.
-    The four role sets are independently bounded by `WORKFLOW_ROLE_SET_BOUNDS`
-    here and in `validateClientMessage.ts`: implementer/reviewer require 1..6
-    candidates, fixer/verdict allow 0..6. Candidate `family` and bounded
-    optional `notes` are persisted and rendered as coordinator evidence; they
-    never become hard family-routing rules; the coordinator picks a fixer and a
-    verdict later, at the decisions that have their evidence, so the plan
-    chooses only the implementer and the first reviewer. The run's two ceilings
-    are normalized here and nothing is derived from them at start — sessions
-    follow from them at run time. It then creates the run row with the resolved
-    `CodeDeliveryWorkflowConfig` in the run's generic `config` column, then
-    provisions the run worktree (naming agent with timestamp fallback, primary
-    Jira key or `t<taskId>` branch prefix, `createWorktree` with the Task link),
-    attaches it write-once, and hands over to `advanceRun`. The
-    row-before-provisioning order is deliberate: provisioning can take minutes
-    and fail, and a failure PAUSES the durable run naming the error instead of
-    throwing. Progress streams through a `report` callback that `connection.ts`
-    turns into `workflowRunStart` phase messages keyed by the sheet's
-    `requestId`. The browser chooses the base before this call: nearest Task
-    ancestor with an active same-Project worktree first, then the main checkout;
-    this module validates every explicit branch either way.
+    own offered list (`modelsForAccount` in `harnesses/models.ts`: the curated
+    Claude list behind the claudeSdk gate, the account's pi registry otherwise —
+    the same lists the sheet's pickers show), the thinking level must be one
+    that model accepts, and prompt overrides are REJECTED over their bound
+    rather than truncated. The four role sets are independently bounded by
+    `WORKFLOW_ROLE_SET_BOUNDS` here and in `validateClientMessage.ts`:
+    implementer/reviewer require 1..6 candidates, fixer/verdict allow 0..6.
+    Candidate `family` and bounded optional `notes` are persisted and rendered
+    as coordinator evidence; they never become hard family-routing rules; the
+    coordinator picks a fixer and a verdict later, at the decisions that have
+    their evidence, so the plan chooses only the implementer and the first
+    reviewer. The run's two ceilings are normalized here and nothing is derived
+    from them at start — sessions follow from them at run time. It then creates
+    the run row with the resolved `CodeDeliveryWorkflowConfig` in the run's
+    generic `config` column, then provisions the run worktree (naming agent with
+    timestamp fallback, primary Jira key or `t<taskId>` branch prefix,
+    `createWorktree` with the Task link), attaches it write-once, and hands over
+    to `advanceRun`. The row-before-provisioning order is deliberate:
+    provisioning can take minutes and fail, and a failure PAUSES the durable run
+    naming the error instead of throwing. Progress streams through a `report`
+    callback that `connection.ts` turns into `workflowRunStart` phase messages
+    keyed by the sheet's `requestId`. The browser chooses the base before this
+    call: nearest Task ancestor with an active same-Project worktree first, then
+    the main checkout; this module validates every explicit branch either way.
 - `projectProvision.ts` owns project repo SETUP and teardown via the user's
   ambient git+ssh: resolving `settings.projectsRoot/<project id>`
   (tilde-expanded) and cloning a project's `repoUrl` there (idempotent,

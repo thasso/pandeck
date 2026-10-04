@@ -504,11 +504,16 @@ test("a thinking level the model does not accept is refused", async () => {
     makeTask("wf-proj"),
     {
       ...config,
-      // Claude SDK models accept low…xhigh; "off" is not among them.
+      // Fable accepts low…xhigh only; "off" is not among them (the account's
+      // offered list, the same one the sheet's picker shows, decides).
       roles: {
         ...config.roles,
         implementer: [
-          { ...config.roles.implementer[0]!, thinkingLevel: "off" },
+          {
+            ...config.roles.implementer[0]!,
+            modelId: "fable",
+            thinkingLevel: "off",
+          },
         ],
       },
     },

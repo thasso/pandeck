@@ -41,8 +41,10 @@ import {
   listCredentialProfiles,
   subscribeCredentialProfileDeleted,
 } from "./credentialProfiles.ts";
-import { fetchClaudeSdkUsage } from "./claudeSdk/usageQuery.ts";
-import { fetchOpenAiUsageForProfile } from "./piSdk/openaiUsageQuery.ts";
+import {
+  fetchClaudeAccountUsage,
+  fetchOpenAiAccountUsage,
+} from "./harnesses/usage.ts";
 import { errorText } from "./errors.ts";
 
 const CACHE_DIR = join(DATA_DIR, "cache", "usage");
@@ -136,9 +138,8 @@ export interface UsageCacheDeps {
 }
 
 const realDeps: UsageCacheDeps = {
-  fetchClaude: (profileId, timeoutMs) =>
-    fetchClaudeSdkUsage(timeoutMs, profileId),
-  fetchOpenAi: (profileId) => fetchOpenAiUsageForProfile(profileId),
+  fetchClaude: fetchClaudeAccountUsage,
+  fetchOpenAi: fetchOpenAiAccountUsage,
   listProfiles: () => listCredentialProfiles(),
   now: () => Date.now(),
 };
