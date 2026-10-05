@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import {
-  BookOpen,
   ClipboardList,
+  FileText,
   FolderKanban,
   GitBranch,
   MessageSquareQuote,
@@ -42,7 +42,7 @@ export type SessionDockContextSlot =
   | { kind: "add-context"; onRun: () => void }
   | { kind: "attach"; onRun: () => void }
   | {
-      kind: "worktree" | "task" | "project" | "knowledge";
+      kind: "worktree" | "task" | "project" | "file";
       /** The worktree's uncommitted-changes dot, the one indicator worth seeing here. */
       dirty?: boolean;
       onOpen: () => void;
@@ -475,21 +475,19 @@ const DICTATION_HANDOVER_MAX_AGE_MS = 5000;
 
 /** Each object's own glyph, so the slot says where it lands (`primaryNavSections`). */
 const CONTEXT_GLYPH: Record<
-  "worktree" | "task" | "project" | "knowledge",
+  "worktree" | "task" | "project" | "file",
   ReactNode
 > = {
   worktree: <GitBranch size={18} />,
   task: <ClipboardList size={18} />,
   project: <FolderKanban size={18} />,
-  knowledge: <BookOpen size={18} />,
+  file: <FileText size={18} />,
 };
 
-const CONTEXT_LABEL: Record<
-  "worktree" | "task" | "project" | "knowledge",
-  string
-> = {
-  worktree: "View this session's worktree changes",
-  task: "Open this session's task",
-  project: "Open this session's project",
-  knowledge: "Open this session's knowledge entry",
-};
+const CONTEXT_LABEL: Record<"worktree" | "task" | "project" | "file", string> =
+  {
+    worktree: "View this session's worktree changes",
+    task: "Open this session's task",
+    project: "Open this session's project",
+    file: "Open this session's file",
+  };

@@ -1334,7 +1334,8 @@ export function KnowledgeInspector({
   entryId?: string | null;
   entryPath?: string | null;
   openers: ObjectOpeners;
-  onStartSession: (entryId: string, title: string) => void;
+  /** Start a session with the entry's own file (`path`) staged. */
+  onStartSession: (path: string, title: string) => void;
   refreshToken?: number;
   /** Diff rendering prefs (theme, word-level, wrap) for the history diff view. */
   prefs: Prefs;
@@ -1400,7 +1401,7 @@ export function KnowledgeInspector({
             primary: true,
             icon: <MessageSquarePlus size={14} />,
             label: "Start session with this entry",
-            onRun: () => onStartSession(resource.id, resource.title),
+            onRun: () => onStartSession(resource.path, resource.title),
           },
           // Only while the entry's tray holds something: with nothing
           // collected this action would send nothing at all.

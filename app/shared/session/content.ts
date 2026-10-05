@@ -106,7 +106,7 @@ export type AgentContentBlock =
       name?: string;
       ref?: string;
       size?: number;
-      role?: "task-context" | "project-context" | "knowledge-context";
+      role?: "task-context" | "project-context" | "file-context";
     };
 
 /**

@@ -233,6 +233,16 @@ async function resolveDocumentGrantSource(
   }
 }
 
+/**
+ * The absolute path a document target names, resolved through its owning root
+ * or registry exactly as a grant would be — never a client-supplied path.
+ */
+export async function resolveDocumentTargetPath(
+  target: DocumentTarget,
+): Promise<string> {
+  return (await resolveDocumentGrantSource(target)).filePath;
+}
+
 /** Mint the minimum source-bound capability represented by one wire request. */
 export async function mintDocumentTargetGrant(
   request: MintFileGrantRequest,

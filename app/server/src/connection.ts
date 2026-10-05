@@ -477,14 +477,14 @@ function sessionContextRequest(
   msg: {
     attachTaskId?: string;
     projectId?: string;
-    knowledgeEntryId?: string;
+    fileContext?: string;
   },
   worktree?: { projectId?: string } | null,
 ): SessionContextRequest {
   return {
     ...(msg.attachTaskId ? { taskId: msg.attachTaskId } : {}),
     ...(msg.projectId ? { projectId: msg.projectId } : {}),
-    ...(msg.knowledgeEntryId ? { knowledgeEntryId: msg.knowledgeEntryId } : {}),
+    ...(msg.fileContext ? { fileContext: msg.fileContext } : {}),
     ...(worktree?.projectId ? { worktreeProjectId: worktree.projectId } : {}),
   };
 }
@@ -806,7 +806,6 @@ export class Connection implements Viewer {
           this.viewing?.broadcastState();
           void hub.broadcastSessions();
         }
-        if (stagedContext.kind === "knowledge") void hub.broadcastSessions();
         if (stagedContext.kind === "project")
           this.send({
             type: "contextInfo",

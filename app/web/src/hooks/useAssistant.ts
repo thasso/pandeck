@@ -6096,7 +6096,8 @@ export interface HarnessSendInput {
   worktreeId?: string;
   /** "+ New worktree": provision one in this project before creating the session. */
   createWorktreeInProjectId?: string;
-  knowledgeEntryId?: string;
+  /** A document staged as context, as its canonical viewer route. */
+  fileContext?: string;
   /**
    * Reuse a previous send's id when re-issuing it (a first send retried after
    * its worktree provisioning failed), so the optimistic echo is replaced
@@ -6111,7 +6112,7 @@ export interface AssistantActions {
     attachments?: PromptAttachment[],
     attachTaskId?: string,
     projectId?: string,
-    knowledgeEntryId?: string,
+    fileContext?: string,
   ) => void;
   runSlashCommand: (name: string, rawArgs: string) => void;
   /** Edit a session's prompt queue; the server answers with its new state. */
@@ -7927,13 +7928,7 @@ export function useAssistant({
     };
     const refetchSettings = () => send({ type: "requestSettings" });
     return {
-      prompt: (
-        text,
-        attachments,
-        attachTaskId,
-        projectId,
-        knowledgeEntryId,
-      ) => {
+      prompt: (text, attachments, attachTaskId, projectId, fileContext) => {
         const clientRequestId = createClientId();
         // Every outgoing send retires the target session's last failure, echo
         // or no echo: an attachments-only prompt has no text to echo.
@@ -7947,7 +7942,7 @@ export function useAssistant({
           ...(attachments !== undefined ? { attachments } : {}),
           ...(attachTaskId !== undefined ? { attachTaskId } : {}),
           ...(projectId !== undefined ? { projectId } : {}),
-          ...(knowledgeEntryId !== undefined ? { knowledgeEntryId } : {}),
+          ...(fileContext !== undefined ? { fileContext } : {}),
           clientRequestId,
         });
       },

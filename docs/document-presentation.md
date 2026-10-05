@@ -124,6 +124,23 @@ session artifact directory, a Knowledge document stays in Knowledge, and a
 worktree document stays in the same worktree. Relative worktree links reset to
 ordinary file view. A link must say `view=diff` again to open a diff.
 
+## Starting a session from a document
+
+Every document viewer — a host file, an artifact, a Knowledge file or entry, a
+worktree file — leads with "Start session with this file" (the route's primary
+action in `App.tsx`, `lib/fileSessionStart.ts`). It stages the document as a
+`file-context` chip on the new-session composer. A file inside a worktree also
+stages that worktree, so the session runs in the checkout the file belongs to.
+
+On the wire the staged file is its canonical viewer route without the line
+anchor (`fileContext` on `prompt` and `harnessSend`). The server parses it as a
+`DocumentTarget` and resolves the absolute path through the same source
+authority a grant uses (`resolveDocumentTargetPath`), so the client cannot name
+a path the viewer could not open. The first turn carries a `file-context`
+attachment holding the file's name, absolute path and route — never its content:
+the agent reads the file when it needs it. A file outranks a Project and yields
+to a Task (`sessionContext.ts`), and an unresolvable target attaches nothing.
+
 ## Navigation shell
 
 `DocumentNavigationShell` surrounds source-specific renderers. It owns document

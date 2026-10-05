@@ -26,9 +26,9 @@ describe("resolveSessionDockContext", () => {
     expect(
       resolveSessionDockContext({
         hasUserPrompt: false,
-        staged: { knowledgeEntryId: "kb-1", projectId: "proj-1" },
+        staged: { fileHref: "/files/tmp/plan.md", projectId: "proj-1" },
       }),
-    ).toEqual({ kind: "knowledge", id: "kb-1" });
+    ).toEqual({ kind: "file", id: "/files/tmp/plan.md" });
     expect(
       resolveSessionDockContext({
         hasUserPrompt: false,

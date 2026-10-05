@@ -10,7 +10,8 @@
 export type SessionDockContextTarget =
   | { kind: "worktree"; id: string }
   | { kind: "task"; id: string }
-  | { kind: "knowledge"; id: string }
+  /** A staged document; `id` is its viewer route. */
+  | { kind: "file"; id: string }
   | { kind: "project"; id: string };
 
 export interface SessionDockContextInput {
@@ -28,7 +29,7 @@ export interface SessionDockContextInput {
   staged?: {
     worktreeId?: string | null;
     taskId?: string | null;
-    knowledgeEntryId?: string | null;
+    fileHref?: string | null;
     projectId?: string | null;
   };
 }
@@ -36,7 +37,7 @@ export interface SessionDockContextInput {
 /**
  * Worktree first: it is the screen a session is left for most, and the only tier with a
  * state (uncommitted changes) worth a dot. Then the object the session hangs off, from
- * most to least specific — a Task, an entry under review, and finally its project.
+ * most to least specific — a Task, a staged file, and finally its project.
  * `undefined` means the session hangs off nothing, and the row falls back to the
  * composer's paperclip. (Before the first send the slot is the staged-context picker
  * instead, so this answers for a session that has one — or is mid-first-send.)
@@ -49,8 +50,7 @@ export function resolveSessionDockContext(
   if (worktreeId) return { kind: "worktree", id: worktreeId };
   const taskId = input.originTaskId ?? staged?.taskId ?? undefined;
   if (taskId) return { kind: "task", id: taskId };
-  if (staged?.knowledgeEntryId)
-    return { kind: "knowledge", id: staged.knowledgeEntryId };
+  if (staged?.fileHref) return { kind: "file", id: staged.fileHref };
   const projectId = staged?.projectId ?? undefined;
   if (projectId) return { kind: "project", id: projectId };
   return undefined;

@@ -537,7 +537,7 @@ const validatePrompt: Validator = (msg) => {
   return checkOptionalFields(msg, {
     attachTaskId: STRING,
     projectId: STRING,
-    knowledgeEntryId: STRING,
+    fileContext: STRING,
     clientRequestId: STRING,
   });
 };
@@ -575,7 +575,7 @@ const validateHarnessSend: Validator = (msg) => {
     mode: STRING,
     attachTaskId: STRING,
     projectId: STRING,
-    knowledgeEntryId: STRING,
+    fileContext: STRING,
     worktreeId: STRING,
     createWorktreeInProjectId: STRING,
     clientRequestId: STRING,

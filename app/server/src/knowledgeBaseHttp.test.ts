@@ -1,4 +1,3 @@
-import { Buffer } from "node:buffer";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 import { buildKnowledgeIndex } from "./knowledgeBaseIndex.ts";
-import { buildKnowledgeContextAttachment } from "./knowledgeBaseContext.ts";
 import {
   resolveKnowledgeEntryResponse,
   resolveKnowledgeInspectorResponse,
@@ -330,31 +328,6 @@ describe("resolveKnowledgeEntryResponse", () => {
     assert.equal(added?.status, "added");
     assert.equal(added?.oldText, null);
     assert.ok(added?.newText?.includes("one"));
-  });
-
-  test("builds Knowledge context attachment without raw body content", async () => {
-    await store.commitChanges(
-      [
-        {
-          op: "write",
-          path: "alpha/index.md",
-          content: entryDoc({
-            id: "kb-alpha",
-            title: "Alpha",
-            summary: "Compact summary.",
-            body: "SECRET BODY SHOULD NOT RIDE ALONG",
-          }),
-        },
-      ],
-      { actor: AGENT, reason: "seed alpha", entryIds: ["kb-alpha"] },
-    );
-    const attachment = await buildKnowledgeContextAttachment("kb-alpha", store);
-    assert.ok(attachment);
-    assert.equal(attachment.role, "knowledge-context");
-    const body = Buffer.from(attachment.data, "base64").toString("utf8");
-    assert.ok(body.includes("Entry id: kb-alpha"));
-    assert.ok(body.includes("Compact summary."));
-    assert.ok(!body.includes("SECRET BODY"));
   });
 
   test("returns null for a missing entry", async () => {
