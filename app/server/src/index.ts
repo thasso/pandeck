@@ -163,7 +163,6 @@ import { getSettings } from "./settings.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 import { handleWorktreeApi } from "./worktrees/worktreeHttp.ts";
 import { handlePullRequestApi } from "./pullRequestHttp.ts";
-import { handleKnowledgeBaseApi } from "./knowledgeBaseHttp.ts";
 import { handleSkillsApi } from "./skills/skillsHttp.ts";
 import { handleApnsApi } from "./apnsHttp.ts";
 import { handleWebPushApi } from "./webPushHttp.ts";
@@ -713,11 +712,6 @@ async function handleRequest(
     requestUrl.pathname.startsWith("/api/pull-requests/")
   ) {
     await handlePullRequestApi(req, res, requestUrl, corsJsonHeaders);
-    return;
-  }
-
-  if (requestUrl.pathname.startsWith("/api/knowledge/")) {
-    await handleKnowledgeBaseApi(req, res, requestUrl, corsJsonHeaders);
     return;
   }
 

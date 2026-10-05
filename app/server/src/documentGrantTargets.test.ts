@@ -13,13 +13,11 @@ import {
   parseMintFileGrantRequest,
   type DocumentGrantResolverDependencies,
 } from "./documentGrantTargets.ts";
-import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 
 let server: Server;
 let origin: string;
 let root: string;
 let dataDir: string;
-let knowledgeRoot: string;
 let worktreeRoot: string;
 let dependencies: DocumentGrantResolverDependencies;
 
@@ -35,12 +33,9 @@ function htmlPair(directory: string): void {
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), "pa-document-grants-"));
   dataDir = join(root, "data");
-  knowledgeRoot = join(root, "knowledge");
   worktreeRoot = join(root, "worktree");
   htmlPair(join(root, "host"));
   htmlPair(join(dataDir, "session-artifacts", "session-1", "report"));
-  htmlPair(join(knowledgeRoot, "loose"));
-  htmlPair(join(knowledgeRoot, "entry-one", "assets"));
   htmlPair(join(worktreeRoot, "site"));
   const elsewhere = join(root, "elsewhere");
   mkdirSync(elsewhere);
@@ -48,8 +43,6 @@ beforeAll(async () => {
   for (const directory of [
     join(root, "host"),
     join(dataDir, "session-artifacts", "session-1", "report"),
-    join(knowledgeRoot, "loose"),
-    join(knowledgeRoot, "entry-one", "assets"),
     join(worktreeRoot, "site"),
   ]) {
     symlinkSync(join(elsewhere, "secret.txt"), join(directory, "escape.txt"));
@@ -60,23 +53,8 @@ beforeAll(async () => {
     join(dataDir, "session-artifacts", "session-1"),
     join(dataDir, "session-artifacts", "session-alias"),
   );
-  const knowledgeStore = new KnowledgeBaseStore(knowledgeRoot);
-  await knowledgeStore.ensureInitialized();
   dependencies = {
     dataDir,
-    knowledgeStore: () => knowledgeStore,
-    resolveKnowledgeAsset: async (_store, entryId, path) => {
-      if (
-        entryId !== "entry-1" ||
-        (path !== "assets/page.html" && path !== "assets/pretend.html")
-      )
-        throw new Error("Knowledge asset not found.");
-      return {
-        entryId,
-        entryFolder: "entry-one",
-        sourcePath: `entry-one/${path}`,
-      };
-    },
     resolveWorktree: async (id) =>
       id === "worktree-1"
         ? {
@@ -126,21 +104,6 @@ const sources = [
       kind: "sessionArtifact" as const,
       sessionId: "session-1",
       path: "report/page.html",
-    }),
-  },
-  {
-    label: "Knowledge file",
-    target: () => ({
-      kind: "knowledgeFile" as const,
-      path: "loose/page.html",
-    }),
-  },
-  {
-    label: "Knowledge asset",
-    target: () => ({
-      kind: "knowledgeAsset" as const,
-      entryId: "entry-1",
-      path: "assets/page.html",
     }),
   },
   {
@@ -210,12 +173,6 @@ describe("typed document grants", () => {
         kind: "sessionArtifact" as const,
         sessionId: "session-1",
         path: "report/pretend.html",
-      },
-      { kind: "knowledgeFile" as const, path: "loose/pretend.html" },
-      {
-        kind: "knowledgeAsset" as const,
-        entryId: "entry-1",
-        path: "assets/pretend.html",
       },
       {
         kind: "worktreeFile" as const,
@@ -368,7 +325,7 @@ describe("typed document grants", () => {
     assert.throws(
       () =>
         parseMintFileGrantRequest({
-          target: { kind: "knowledgeFile", path: "notes.md" },
+          target: { kind: "sessionArtifact", sessionId: "s", path: "notes.md" },
           scope: "directory",
           delivery: "inline",
         }),

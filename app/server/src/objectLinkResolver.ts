@@ -1,3 +1,5 @@
+import { documentTargetHref } from "@assistant/shared/documentTargets";
+import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import {
   approvalCardHref,
   fallbackPaObjectResolution,
@@ -98,7 +100,17 @@ async function resolveOne(
       const entry = knowledge.entries.find(
         (candidate) => candidate.id === parsed.id,
       );
-      return resolved(parsed, entry?.title, Boolean(entry));
+      if (!entry) return resolved(parsed, undefined, false);
+      // An entry IS its file now: the link opens that file in the KB browser.
+      return {
+        ...resolved(parsed, entry.title, true),
+        href: documentTargetHref({
+          kind: "worktreeFile",
+          worktreeId: KNOWLEDGE_WORKTREE_ID,
+          path: entry.path,
+          view: "file",
+        }),
+      };
     }
     case "approval": {
       // The card's session is what gives it an address; the bare id has none.

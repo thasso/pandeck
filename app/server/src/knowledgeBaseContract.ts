@@ -8,7 +8,7 @@
 
 export const KB_REPO_DIR_NAME = "knowledge";
 const KB_CONTROL_DIR = ".kb";
-export const KB_COMMENTS_DIR = `${KB_CONTROL_DIR}/comments`;
+const KB_COMMENTS_DIR = `${KB_CONTROL_DIR}/comments`;
 export const KB_GENERATED_DIR = `${KB_CONTROL_DIR}/generated`;
 export const KB_ENTRY_INDEX_FILE = "index.md";
 export const KB_ENTRY_ASSETS_DIR = "assets";

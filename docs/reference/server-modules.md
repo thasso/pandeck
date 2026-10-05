@@ -1372,24 +1372,6 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   generated artifact at `.kb/generated/index/kb-index.json` (`getKnowledgeIndex`
   reuses it until KB HEAD moves). Pure/read-only over the store; it never writes
   source of truth.
-- `knowledgeBaseHttp.ts` owns the browser-facing read-only KB HTTP surface under
-  `/api/knowledge/*`: the compact app-shell tree payload, one readable entry
-  document by id/path (`/entry`, resolving body Markdown, metadata, assets, and
-  `pa://` references via `objectLinkResolver`, and degrading to an invalid-entry
-  state), compact inspector payloads (`/inspect`, metadata/related
-  objects/history/bounded diff without body Markdown; the diff carries the raw
-  patch plus structured per-file old/new text for rich rendering), raw
-  entry-local asset bytes (`/asset`) for inline images/downloads, and raw bytes
-  of ANY KB source file (`/file?path=<repo-relative>`, entry asset or loose file
-  addressed by its full tree path — no entry identity; `readEntryBytesBounded` +
-  `resolveSourcePath` enforce containment and reject reserved/generated/control
-  paths) for the main-pane file viewer. Entry history is DOCUMENT history:
-  `entryHistory` keeps only commits that changed the entry folder (following
-  moves via the entry-id trailer) and drops comment-log-only commits
-  (`isCommentLogOnlyCommit` — the retired comment workflow's commits touched
-  only `.kb/comments/…`) so they never render as empty diffs, and the default
-  diff is the latest content commit. `resolveKnowledgeEntryResponse` and
-  `resolveKnowledgeInspectorResponse` are the testable entry-building seams.
 - `knowledgeBaseAssets.ts` owns KB asset APIs (KB 06): entry-local `assets/...`
   path containment, compact asset listing that merges frontmatter metadata with
   actual asset files, bounded binary/text reads, source asset commits that
@@ -1435,12 +1417,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `taskComments` list through the `taskEvents.ts` seam, and calls `tasks.ts`
   `notifyTaskChange()` so `TaskSummary.commentCount` badges refresh; there is no
   threading, resolve/reopen, editing, or text anchoring. `taskEvents.ts` is the
-  broadcaster seam (mirrors `knowledgeBaseEvents.ts`), installed by the hub.
-  `connection.ts` watches only the currently open Task trace: a correlated
-  `listTaskComments` answer starts it and `unwatchTaskComments` stops it; later
-  broadcasts carry no originating browser request id. `tasks.ts` `listTasks`
-  fills `commentCount` from `taskCommentStore.countsByTask()`, and `deleteTask`
-  hard-removes the trace.
+  broadcaster seam, installed by the hub. `connection.ts` watches only the
+  currently open Task trace: a correlated `listTaskComments` answer starts it
+  and `unwatchTaskComments` stops it; later broadcasts carry no originating
+  browser request id. `tasks.ts` `listTasks` fills `commentCount` from
+  `taskCommentStore.countsByTask()`, and `deleteTask` hard-removes the trace.
 - `taskContext.ts` builds the hidden `task-context` prompt attachment for a
   Task-attached session (harness-neutral; both `connection.ts` first-send paths
   and the ordinary `prompt` path use it). It takes the post-nudge `TaskItem`
@@ -1471,12 +1452,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   units (never splitting a surrogate pair) and appends the marker, so a clipped
   value is slightly longer than its limit and a byte-budget caller charges
   itself for the result.
-- `memoryEvents.ts` owns the memory broadcaster seam (mirrors
-  `knowledgeBaseEvents.ts`): the hub installs the connected-client
-  `broadcastAll` during construction, and this module subscribes to the memory
-  domain change + effective-load events, emitting compact targeted
-  `memoryInvalidated`/`memoryLoadInvalidated` messages so open panels refetch
-  authoritative data without bloating session-list payloads.
+- `memoryEvents.ts` owns the memory broadcaster seam: the hub installs the
+  connected-client `broadcastAll` during construction, and this module
+  subscribes to the memory domain change + effective-load events, emitting
+  compact targeted `memoryInvalidated`/`memoryLoadInvalidated` messages so open
+  panels refetch authoritative data without bloating session-list payloads.
 - `projectRegistry.ts` owns the Project notify-with-touched-ids seam, persisted
   revisions, lean summary projection reads, digest and targeted-item recovery.
   `hub.ts` coalesces those notifications into archived-inclusive `stateEvents`;
@@ -2698,12 +2678,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - Domain LIST broadcasts are addressed by topic, not fanned out.
   `hub.broadcastTopic(topic, msg)` sends only to connections whose
   `Viewer.wantsTopic(topic)` is true (`BroadcastTopic` in `@assistant/shared`:
-  `tasks`, `projects`, `worktrees`, `knowledge`, `skills`), and every domain
-  broadcaster seam
-  (`taskEvents`/`knowledgeBaseEvents`/`worktreeEvents`/`skills/skillLibraryEvents`)
-  exposes exactly one `broadcast` the hub binds to its topic; migrated Projects
-  instead expose notify-with-touched-ids from `projectRegistry.ts`, which the
-  hub projects into that same topic. A `broadcastAll` seam would let a domain
+  `tasks`, `projects`, `worktrees`, `skills`, …), and every domain broadcaster
+  seam (`taskEvents`/`worktreeEvents`/`skills/skillLibraryEvents`) exposes
+  exactly one `broadcast` the hub binds to its topic; migrated Projects instead
+  expose notify-with-touched-ids from `projectRegistry.ts`, which the hub
+  projects into that same topic. A `broadcastAll` seam would let a domain
   quietly opt out of addressing. `connection.ts` owns the `topics` set behind
   `subscribe`/`unsubscribe`, and subscribing is ALSO the authoritative read for
   every stateful list: cold `tasks`/`projects` and the complete app-level
@@ -2791,8 +2770,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   the working-tree tier pushes a full changed-file list after debounced dirty
   events and once when the tree becomes clean, suppressing repeat-empty pushes;
   it used to reach every connected browser because SOMEONE had a worktree open.
-  Only `worktreeList` and `knowledgeChanged` stay topic-wide — both are
-  list-level and small.
+  Only `worktreeList` stays topic-wide — it is list-level and small.
 - Task activity traces are delivered per holder, not broadcast:
   `Viewer.wantsTaskComments(taskId)` gates `taskEvents.ts`'s
   `broadcastTaskComments`, and `connection.ts` subscribes a connection when it

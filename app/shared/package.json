@@ -13,7 +13,6 @@
     "./turnStats": "./turnStats.ts",
     "./objectLinks": "./objectLinks.ts",
     "./comments": "./comments.ts",
-    "./knowledgeBase": "./knowledgeBase.ts",
     "./usage": "./usage.ts",
     "./servedFiles": "./servedFiles.ts",
     "./documentTargets": "./documentTargets.ts",

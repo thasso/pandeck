@@ -68,10 +68,6 @@ function isSelectorBundle(value: unknown): boolean {
 function isCommentDocument(value: unknown): value is CommentDocument {
   const document = value as Partial<Record<string, unknown>> | undefined;
   if (!document || typeof document !== "object") return false;
-  if (document.kind === "knowledgeEntry")
-    return (
-      typeof document.entryId === "string" && typeof document.title === "string"
-    );
   return document.kind === "hostFile" && typeof document.path === "string";
 }
 

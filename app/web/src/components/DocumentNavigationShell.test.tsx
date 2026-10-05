@@ -475,16 +475,14 @@ it("chooses a deterministic fallback for every source", () => {
       view: "file",
     }),
   ).toBe("/worktrees/w%201/files");
-  expect(documentCloseFallback({ kind: "knowledgeFile", path: "a" })).toBe(
-    "/knowledge",
-  );
   expect(
     documentCloseFallback({
-      kind: "knowledgeAsset",
-      entryId: "kb 1",
+      kind: "worktreeFile",
+      worktreeId: "knowledge",
       path: "a",
+      view: "file",
     }),
-  ).toBe("/knowledge/kb%201");
+  ).toBe("/knowledge/files");
   expect(
     documentCloseFallback({
       kind: "worktreeFile",

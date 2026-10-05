@@ -116,7 +116,7 @@ function claim(homes: Partial<FailureHomes>): void {
   setFailureHomes({
     viewedSessionId: null,
     stagedSend: null,
-    openObjects: { project: [], task: [], knowledge: [] },
+    openObjects: { project: [], task: [] },
     ...homes,
   });
 }
@@ -350,29 +350,27 @@ describe("what an arriving server message says", () => {
  * what a surface draws, a global slot that lost one object's failure to the next,
  * and a retirement that followed the traffic instead of the object.
  */
-describe("a failure about a project, Task or Knowledge entry", () => {
+describe("a failure about a project or Task", () => {
   const failure = (
-    type: "project" | "task" | "knowledge",
+    type: "project" | "task",
     id: string,
     message: string,
   ): ServerMessage => ({ type: "error", message, target: { type, id } });
 
   it("keeps the open object's failure in place and announces the others", async () => {
     claim({
-      openObjects: { project: ["p1"], task: ["t1"], knowledge: ["k1"] },
+      openObjects: { project: ["p1"], task: ["t1"] },
     });
     await act(async () => {
       socket.receive(
         failure("project", "p1", "Failed to save project: EACCES"),
       );
       socket.receive(failure("task", "t1", "Failed to archive task: locked"));
-      socket.receive(failure("knowledge", "k1", "Failed to add comment: EIO"));
     });
     expect(announced()).toEqual([]);
     expect(latestState.objectFailures).toEqual({
       project: { p1: "Failed to save project: EACCES" },
       task: { t1: "Failed to archive task: locked" },
-      knowledge: { k1: "Failed to add comment: EIO" },
     });
 
     // A member that is only a ROW in a list has no failure surface, so it is
@@ -391,7 +389,7 @@ describe("a failure about a project, Task or Knowledge entry", () => {
   // A claim covers what the surface DRAWS. The object's note exists for a
   // failure, so a warning about that same object still has nowhere to go.
   it("still announces a warning about the object on screen", async () => {
-    claim({ openObjects: { project: [], task: ["t1"], knowledge: [] } });
+    claim({ openObjects: { project: [], task: ["t1"] } });
     await act(async () =>
       socket.receive({
         type: "notice",
@@ -406,7 +404,7 @@ describe("a failure about a project, Task or Knowledge entry", () => {
 
   // Retirement follows the object it names, and survives everything else.
   it("retires one object's failure by that object's own next write", async () => {
-    claim({ openObjects: { project: [], task: ["t1"], knowledge: [] } });
+    claim({ openObjects: { project: [], task: ["t1"] } });
     await act(async () => {
       socket.receive(failure("task", "t1", "Failed to archive task: locked"));
       socket.receive(failure("task", "t2", "Failed to delete task: locked"));
@@ -439,7 +437,7 @@ describe("a failure about a project, Task or Knowledge entry", () => {
         revisions: [],
       }),
     );
-    claim({ openObjects: { project: [], task: ["t1"], knowledge: [] } });
+    claim({ openObjects: { project: [], task: ["t1"] } });
     await act(async () => latestActions.saveTask({ id: "t1", title: "Two" }));
     const write = socket.sent.find((message) => message.type === "saveTask");
     const requestId = write?.type === "saveTask" ? write.requestId : undefined;

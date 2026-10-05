@@ -144,7 +144,7 @@ describe("pa:// object links", () => {
       "pa://knowledge/kb-resolver-demo",
     ]);
     expect(resolved).toMatchObject({
-      href: "/knowledge/kb-resolver-demo",
+      href: "/knowledge/files?path=resolver-demo%2Findex.md",
       title: "Resolver Demo Entry",
       typeLabel: "Knowledge",
       existence: "exists",

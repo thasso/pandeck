@@ -24,17 +24,17 @@ describe("document targets", () => {
       sessionId: "s 1",
       path: "out/report.txt",
     });
-    expect(parseDocumentTarget("/knowledge/~file/team/data.json")).toEqual({
-      kind: "knowledgeFile",
-      path: "team/data.json",
-    });
+    // The Knowledge Base is the checkout `knowledge`, at its own route.
     expect(
-      parseDocumentTarget("/api/knowledge/asset?id=kb-1&path=images%2Fa.png"),
+      parseDocumentTarget("/knowledge/files?path=team%2Fdata.json#L3"),
     ).toEqual({
-      kind: "knowledgeAsset",
-      entryId: "kb-1",
-      path: "images/a.png",
+      kind: "worktreeFile",
+      worktreeId: "knowledge",
+      path: "team/data.json",
+      view: "file",
+      anchor: { start: 3 },
     });
+    expect(parseDocumentTarget("/knowledge/~file/team/data.json")).toBeNull();
     expect(parseDocumentTarget("https://example.com/report.md")).toBeNull();
     expect(
       parseDocumentTarget("https://assistant.example/api/files/etc/passwd"),
@@ -91,14 +91,19 @@ describe("document targets", () => {
     expect(documentTargetPaUri({ ...file, view: "diff" })).toContain(
       "&view=diff#L7",
     );
-    const asset: DocumentTarget = {
-      kind: "knowledgeAsset",
-      entryId: "kb 1",
-      path: "images/a plot.png",
+    const knowledge: DocumentTarget = {
+      kind: "worktreeFile",
+      worktreeId: "knowledge",
+      path: "notes/a plot.md",
+      view: "file",
       anchor: { start: 2 },
     };
-    expect(parseDocumentTarget(documentTargetHref(asset))).toEqual(asset);
-    expect(parseDocumentTarget(documentTargetPaUri(asset)!)).toEqual(asset);
+    expect(documentTargetHref(knowledge)).toBe(
+      "/knowledge/files?path=notes%2Fa+plot.md#L2",
+    );
+    expect(parseDocumentTarget(documentTargetHref(knowledge))).toEqual(
+      knowledge,
+    );
   });
 
   it("uses inclusive one-based line anchors", () => {

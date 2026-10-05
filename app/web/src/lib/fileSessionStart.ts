@@ -1,3 +1,4 @@
+import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import {
   documentTargetHref,
   type DocumentTarget,
@@ -9,7 +10,10 @@ interface FileSessionStart {
   href: string;
   /** Its name, for the composer chip. */
   title: string;
-  /** The checkout the session should run in, for a file inside one. */
+  /**
+   * The checkout the session should run in, for a file inside one. Never the
+   * Knowledge Base: it is no session's working directory.
+   */
   worktreeId: string | null;
 }
 
@@ -24,6 +28,9 @@ export function fileSessionStart(target: DocumentTarget): FileSessionStart {
   return {
     href: documentTargetHref(file),
     title: bare.path.split("/").filter(Boolean).at(-1) ?? bare.path,
-    worktreeId: bare.kind === "worktreeFile" ? bare.worktreeId : null,
+    worktreeId:
+      bare.kind === "worktreeFile" && bare.worktreeId !== KNOWLEDGE_WORKTREE_ID
+        ? bare.worktreeId
+        : null,
   };
 }

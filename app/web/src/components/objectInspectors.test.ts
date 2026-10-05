@@ -7,9 +7,7 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import type { KnowledgeEntryInspect } from "@assistant/shared/knowledgeBase";
 import {
-  knowledgeRelationGroups,
   projectRelationGroups,
   pullRequestInspectorActions,
   pullRequestRelationGroups,
@@ -580,101 +578,6 @@ describe("pullRequestRelationGroups", () => {
       ["sessions", ["s1"]],
       ["tasks", []],
     ]);
-  });
-});
-
-describe("knowledgeRelationGroups", () => {
-  it("groups resolved pa links and skips the entry's self link", () => {
-    const entry: KnowledgeEntryInspect = {
-      kind: "entry",
-      id: "kb-self",
-      path: "self/index.md",
-      folder: "self",
-      slug: "self",
-      uri: "pa://knowledge/kb-self",
-      title: "Self",
-      type: "note",
-      status: "active",
-      summary: null,
-      tags: [],
-      aliases: [],
-      links: [],
-      sourceRefs: [],
-      assets: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      frontmatter: {
-        schema: 1,
-        id: "kb-self",
-        type: "note",
-        title: "Self",
-        status: "active",
-        summary: null,
-        tags: [],
-        aliases: [],
-        links: [],
-        sourceRefs: [],
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-      paObjectReferences: [
-        {
-          uri: "pa://task/266",
-          objectType: "task",
-          knownType: true,
-          id: "266",
-          href: "/tasks/266",
-          title: "KB 11",
-          typeLabel: "Task",
-          existence: "exists",
-        },
-        {
-          uri: "pa://project/time-tracking-automation",
-          objectType: "project",
-          knownType: true,
-          id: "time-tracking-automation",
-          href: "/projects/time-tracking-automation",
-          title: "PA · Pandeck",
-          typeLabel: "Project",
-          existence: "exists",
-        },
-        {
-          uri: "pa://knowledge/kb-self",
-          objectType: "knowledge",
-          knownType: true,
-          id: "kb-self",
-          href: "/knowledge/kb-self",
-          title: "Self",
-          typeLabel: "Knowledge",
-          existence: "exists",
-        },
-        {
-          uri: "pa://task/missing",
-          objectType: "task",
-          knownType: true,
-          id: "missing",
-          href: "/tasks/missing",
-          title: "Task missing",
-          typeLabel: "Task",
-          existence: "missing",
-        },
-      ],
-      history: [],
-      latestDiff: null,
-    };
-    const groups = knowledgeRelationGroups(entry);
-    expect(groups.find((g) => g.label === "Tasks")?.refs).toEqual([
-      { kind: "task", id: "266", title: "KB 11", subtitle: "Task" },
-    ]);
-    expect(groups.find((g) => g.label === "Projects")?.refs).toEqual([
-      {
-        kind: "project",
-        id: "time-tracking-automation",
-        title: "PA · Pandeck",
-        subtitle: "Project",
-      },
-    ]);
-    expect(groups.find((g) => g.label === "Knowledge")?.refs).toEqual([]);
   });
 });
 

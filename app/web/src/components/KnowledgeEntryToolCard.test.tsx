@@ -103,8 +103,9 @@ it("opens the carded entry in the side panel or the Knowledge route", () => {
 
   click("Open in side panel");
   click("Open in Knowledge");
-  expect(panel).toEqual(["kb-alpha"]);
-  expect(main).toEqual(["kb-alpha"]);
+  // The entry IS its `index.md`: both targets open that file.
+  expect(panel).toEqual(["notes/alpha/index.md"]);
+  expect(main).toEqual(["notes/alpha/index.md"]);
 });
 
 it("offers the route alone where there is no side panel", () => {

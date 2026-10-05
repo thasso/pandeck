@@ -933,21 +933,13 @@ capability logic.
   it arrives on the `skills` topic through `useAssistant`. Fetches take an
   `AbortSignal` so `useFetchState` aborts the previous skill or file when its
   key changes.
-- `knowledgeBaseApi.ts` owns the browser's KB fetches (compact tree, one entry
-  document by id/path, compact inspector metadata/history/diff by id/path), the
-  token-carrying entry-asset URL helper, and the generic KB-file helpers
-  (`knowledgeFileUrl`/`fetchKnowledgeFileText`) for any source file by full tree
-  path; `knowledgeTree.ts` owns pure sidebar tree/selection helpers (entry-id
-  and path-based selection plus `knowledgeTreeOpenTarget`, which resolves an
-  entry id, an invalid-entry folder path, or a non-entry file `{ filePath }` for
-  assets/loose files); `knowledgeEntry.ts` owns pure entry-viewer helpers
-  (entry-local asset link detection); `knowledgeMarkdownDiff.ts` owns the pure
-  Markdown diff helpers backing the history inspector's rendered diff:
-  frontmatter strip, `diffMarkdownLines` (line-level runs), `diffMarkdownWords`
-  (word-level segments), and `buildRenderedDiffMarkdown` (a single Markdown
-  string with inline `<ins>`/`<del>` marks, line-aware so no mark spans a block
-  boundary and block markers stay outside the mark) — all over one LCS core
-  (prefix/suffix trimming, coarse fallback for huge changes) with an optional
+- `knowledgeMarkdownDiff.ts` owns the pure Markdown diff helpers backing the KB
+  tool cards' rendered diff: frontmatter strip, `diffMarkdownLines` (line-level
+  runs), `diffMarkdownWords` (word-level segments), and
+  `buildRenderedDiffMarkdown` (a single Markdown string with inline
+  `<ins>`/`<del>` marks, line-aware so no mark spans a block boundary and block
+  markers stay outside the mark) — all over one LCS core (prefix/suffix
+  trimming, coarse fallback for huge changes) with an optional
   `ignoreWhitespace` comparison.
 - `timezone.ts` owns pure IANA-timezone wall-clock conversion
   (`zonedWallTimeToUtcMs` over `@assistant/shared/zonedTime`'s verified

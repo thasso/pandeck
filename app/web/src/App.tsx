@@ -31,6 +31,7 @@ import {
   harnessForModelProvider,
   isClaudeSdkModel,
   isCodingAgentType,
+  KNOWLEDGE_WORKTREE_ID,
   modelKey,
   type ModelOption,
   type PromptAttachment,
@@ -103,6 +104,10 @@ import {
 } from "./lib/chatCommentPrompt.ts";
 import { documentTargetHref } from "@assistant/shared/documentTargets";
 import { fileSessionStart } from "./lib/fileSessionStart.ts";
+import {
+  knowledgeCheckoutRecord,
+  knowledgeUncommittedCount,
+} from "./lib/knowledgeCheckout.ts";
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
@@ -128,8 +133,6 @@ import {
   backgroundTasksPath,
   calendarPath,
   isSectionIndexRoute,
-  knowledgeEntryPath,
-  knowledgeFilePath,
   knowledgePath,
   PERMANENT_ASSISTANT_PATH,
   projectPath,
@@ -244,7 +247,6 @@ import {
 import { PRIMARY_NAV_SLOTS } from "./components/primaryNavSections.tsx";
 import { Topbar } from "./components/Topbar.tsx";
 import {
-  KnowledgeInspector,
   ProjectInspector,
   PullRequestInspector,
   SessionInspector,
@@ -301,6 +303,7 @@ import {
   KnowledgeOpenTargetsProvider,
   type KnowledgeOpenTargets,
 } from "./components/KnowledgeOpenTargets.tsx";
+import { KnowledgeInspector } from "./components/KnowledgeInspector.tsx";
 import { useWorktreeCommentWatch } from "./hooks/useCommentWatch.ts";
 import { useMobileLayout } from "./components/shell/useMobileLayout.ts";
 import {
@@ -364,6 +367,10 @@ const NO_CREDENTIAL_PROFILES: import("@assistant/shared").CredentialProfileSumma
 const NO_CREDENTIAL_PROFILE_MODELS: Record<string, ModelOption[]> = {};
 /** And for a worktree with no review comments: the diff surfaces memoize on it. */
 const NO_WORKTREE_COMMENTS: WorktreeComment[] = [];
+// The Knowledge Base checkout takes no line comments (`lineComments={false}`),
+// so these are never called; module scope keeps them referentially stable.
+const noopKnowledgeComments = () => {};
+const NO_KNOWLEDGE_COMMENT_ACTIONS = {} as CommentActions;
 const NO_WORKTREE_REVIEW_SETS: WorktreeReviewSet[] = [];
 const DEFAULT_WORKTREE_REVIEW_PROMPT =
   "Review the selected comments, apply the appropriate changes, and reply to or resolve each thread.";
@@ -465,11 +472,6 @@ const TaskManagementPage = lazy(() =>
 const ProjectDetailPage = lazy(() =>
   import("./components/ProjectDetailPage.tsx").then((module) => ({
     default: module.ProjectDetailPage,
-  })),
-);
-const KnowledgePage = lazy(() =>
-  import("./components/KnowledgePage.tsx").then((module) => ({
-    default: module.KnowledgePage,
   })),
 );
 const KnowledgePanel = lazy(() =>
@@ -1519,8 +1521,7 @@ function AppContent() {
   const documentRoute =
     route.name === "files" ||
     route.name === "artifacts" ||
-    (route.name === "knowledge" &&
-      Boolean(route.filePath || (route.entryId && route.assetPath))) ||
+    (route.name === "knowledge" && Boolean(route.path)) ||
     (route.name === "worktrees" && Boolean(route.id && route.path));
   // Published outside lazy route bodies so document navigation is present in
   // the first committed frame; source renderers replace this registration with
@@ -1539,17 +1540,12 @@ function AppContent() {
         path: route.path,
         ...(route.anchor ? { anchor: route.anchor } : {}),
       };
-    if (route.name === "knowledge" && route.filePath)
+    if (route.name === "knowledge" && route.path)
       return {
-        kind: "knowledgeFile" as const,
-        path: route.filePath,
-        ...(route.anchor ? { anchor: route.anchor } : {}),
-      };
-    if (route.name === "knowledge" && route.entryId && route.assetPath)
-      return {
-        kind: "knowledgeAsset" as const,
-        entryId: route.entryId,
-        path: route.assetPath,
+        kind: "worktreeFile" as const,
+        worktreeId: KNOWLEDGE_WORKTREE_ID,
+        path: route.path,
+        view: route.view === "changes" ? ("diff" as const) : ("file" as const),
         ...(route.anchor ? { anchor: route.anchor } : {}),
       };
     if (route.name === "worktrees" && route.id && route.path)
@@ -1672,10 +1668,26 @@ function AppContent() {
   // worktree too, and whichever of the two let go first used to take the
   // other's watch with it.
   const watchedWorktreeId =
-    route.name === "worktrees" ? (route.id ?? null) : null;
+    route.name === "worktrees"
+      ? (route.id ?? null)
+      : route.name === "knowledge"
+        ? KNOWLEDGE_WORKTREE_ID
+        : null;
+  // The right panel's Knowledge tab reads the KB checkout beside the route,
+  // and needs its live status as much as the route does.
+  const knowledgePanelVisible =
+    !mobileLayout && inspectorOpen && activeRightPanel === "knowledge";
   const routeWorktreeIds = useMemo(
-    () => (watchedWorktreeId ? [watchedWorktreeId] : NO_WORKTREE_IDS),
-    [watchedWorktreeId],
+    () =>
+      [
+        ...new Set(
+          [
+            watchedWorktreeId,
+            knowledgePanelVisible ? KNOWLEDGE_WORKTREE_ID : null,
+          ].filter((id): id is string => Boolean(id)),
+        ),
+      ].sort(),
+    [watchedWorktreeId, knowledgePanelVisible],
   );
   useWorktreeWatches({
     ids: routeWorktreeIds,
@@ -2351,37 +2363,6 @@ function AppContent() {
   // The sidebar is memoized, so every handler it takes must be stable — an
   // inline arrow re-renders the whole left pane on each App render, which
   // during a streaming turn means up to ~60 times a second.
-  /**
-   * The open Knowledge entry's title, reported by the page once its document loads.
-   * The dock's action row labels "Start session" and stages the review draft for a
-   * NAMED entry, and only the loaded document knows that name.
-   *
-   * It carries the ADDRESS it was loaded for, because this state outlives the
-   * route: `addressedPath` is the entry path the page was asked for, or null when
-   * the route named an id. Without it, a path→path navigation reports entry A
-   * while B is still loading, and anything reading the id (the dock's label, the
-   * failure home below) would speak for A under B's URL.
-   */
-  const [knowledgeEntry, setKnowledgeEntry] = useState<{
-    id: string;
-    title: string;
-    addressedPath: string | null;
-    /** The entry's own `index.md`, what "Start session" hands over. */
-    path: string;
-  } | null>(null);
-  const rememberKnowledgeEntry = useCallback(
-    (id: string, title: string, addressedPath: string | null, path: string) => {
-      setKnowledgeEntry((current) =>
-        current?.id === id &&
-        current.title === title &&
-        current.addressedPath === addressedPath &&
-        current.path === path
-          ? current
-          : { id, title, addressedPath, path },
-      );
-    },
-    [],
-  );
   const openCalendarView = useCallback(
     (view: "month" | "week" | "day") =>
       navigate(calendarPath(view, todayIso(userTimeZone))),
@@ -2391,35 +2372,50 @@ function AppContent() {
     (id: string) => navigate(projectPath(id)),
     [navigate],
   );
-  const openKnowledgeEntry = useCallback(
-    (entryId: string) => navigate(knowledgePath(entryId)),
-    [navigate],
-  );
-  const openInvalidKnowledgeEntry = useCallback(
-    (path: string) => navigate(knowledgeEntryPath(path)),
-    [navigate],
-  );
+  /** One Knowledge Base file in the main pane. */
   const openKnowledgeFile = useCallback(
-    (path: string) => navigate(knowledgeFilePath(path)),
+    (path: string) =>
+      navigate(worktreePath(KNOWLEDGE_WORKTREE_ID, "files", { path })),
+    [navigate],
+  );
+  const openKnowledge = useCallback(
+    (view: "files" | "changes") =>
+      navigate(
+        view === "files"
+          ? knowledgePath()
+          : worktreePath(KNOWLEDGE_WORKTREE_ID, view),
+      ),
     [navigate],
   );
   /**
-   * The entry the right panel's Knowledge tab is reading, or null while it is
-   * browsing the tree. It is panel state, not route state: the panel exists to
-   * read an entry BESIDE whatever the main pane is on, so the URL keeps naming
-   * the main pane's object.
+   * Where a `pa://knowledge/<id>` entry named in the app opens: its file, as
+   * the server's link resolution addresses it, else the Knowledge Base itself.
    */
-  const [knowledgePanelEntryId, setKnowledgePanelEntryId] = useState<
-    string | null
-  >(null);
+  const knowledgeEntryHref = useCallback(
+    (entryId: string) =>
+      state.objectLinks[`pa://knowledge/${entryId}`]?.href ?? knowledgePath(),
+    [state.objectLinks],
+  );
+  /**
+   * A file a card asked the right panel's Knowledge tab to show. The tab keeps
+   * its own location; the nonce makes a second request for the same file
+   * bring it forward again.
+   */
+  const [knowledgePanelOpenRequest, setKnowledgePanelOpenRequest] = useState<{
+    path: string;
+    nonce: number;
+  } | null>(null);
   /** The panel a card elsewhere in the app asked the right panel to show. */
   const [rightPanelOpenRequest, setRightPanelOpenRequest] = useState<{
     panel: PanelId;
     nonce: number;
   } | null>(null);
   const openKnowledgeInSidePanel = useCallback(
-    (entryId: string) => {
-      setKnowledgePanelEntryId(entryId);
+    (path: string) => {
+      setKnowledgePanelOpenRequest((current) => ({
+        path,
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
       setInspectorOpen(true);
       // The nonce counts requests rather than reading the clock: two cards
       // opened inside one millisecond are two requests, and the second must
@@ -2432,29 +2428,18 @@ function AppContent() {
     [setInspectorOpen],
   );
   /**
-   * Where a Knowledge entry named anywhere in the app opens. The side panel is
-   * a desktop surface (`app/web/docs/ui-shell.md`, Small Screens): on a phone
-   * the right panel is the object dock and has no tabs, so a card there offers
-   * the route alone rather than an action that would go nowhere.
+   * Where a Knowledge file a card names opens. The side panel is a desktop
+   * surface (`app/web/docs/ui-shell.md`, Small Screens): on a phone the right
+   * panel is the object dock and has no tabs, so a card there offers the
+   * route alone rather than an action that would go nowhere.
    */
   const knowledgeOpenTargets = useMemo<KnowledgeOpenTargets>(
     () => ({
-      openInMain: openKnowledgeEntry,
+      openInMain: openKnowledgeFile,
       ...(mobileLayout ? {} : { openInPanel: openKnowledgeInSidePanel }),
     }),
-    [mobileLayout, openKnowledgeEntry, openKnowledgeInSidePanel],
+    [mobileLayout, openKnowledgeFile, openKnowledgeInSidePanel],
   );
-  /**
-   * The panel's entry when it is actually READABLE: this layout has right-panel
-   * tabs, the panel is open, and Knowledge is the active one. The panel draws
-   * that entry's failure note in place, so it may only CLAIM the entry's
-   * failures while the reader can see it — a note behind an unselected tab
-   * would suppress the announcement and show nothing (`lib/messageArrival.ts`).
-   */
-  const visibleKnowledgePanelEntryId =
-    !mobileLayout && inspectorOpen && activeRightPanel === "knowledge"
-      ? knowledgePanelEntryId
-      : null;
   const openSettingsSection = useCallback(
     (section: SettingsSection) => navigate(settingsPath(section)),
     [navigate],
@@ -2660,22 +2645,6 @@ function AppContent() {
   }, [openSidebarSection, projects, selectedDeleteState, selectedProjectId]);
   const activeSettingsSection =
     route.name === "settings" ? (route.section ?? null) : null;
-  const selectedKnowledgeEntryId =
-    route.name === "knowledge" ? (route.entryId ?? null) : null;
-  const selectedKnowledgeEntryPath =
-    route.name === "knowledge" ? (route.entryPath ?? null) : null;
-  const selectedKnowledgeFilePath =
-    route.name === "knowledge" ? (route.filePath ?? null) : null;
-  // Newest committed KB change this client has heard about; the sidebar tree is
-  // an HTTP read model, so agent-created entries need this to become visible.
-  const knowledgeChangedAt = useMemo(
-    () =>
-      Object.values(state.knowledgeChangedAt).reduce(
-        (newest, at) => Math.max(newest, at),
-        0,
-      ),
-    [state.knowledgeChangedAt],
-  );
   // Includes archived so stale assignments still resolve names in badges/selectors.
   const projectsById = useMemo(() => buildProjectsById(projects), [projects]);
   const selectedTaskDetailState = selectedTaskId
@@ -3767,22 +3736,20 @@ function AppContent() {
       if (isDocumentComment(comment)) {
         const document = comment.anchor.document;
         navigate(
-          document.kind === "knowledgeEntry"
-            ? knowledgePath(document.entryId)
-            : documentTargetHref({
-                kind: "hostFile",
-                path: document.path,
-                ...(comment.lines
-                  ? {
-                      anchor: {
-                        start: comment.lines.start,
-                        ...(comment.lines.end > comment.lines.start
-                          ? { end: comment.lines.end }
-                          : {}),
-                      },
-                    }
-                  : {}),
-              }),
+          documentTargetHref({
+            kind: "hostFile",
+            path: document.path,
+            ...(comment.lines
+              ? {
+                  anchor: {
+                    start: comment.lines.start,
+                    ...(comment.lines.end > comment.lines.start
+                      ? { end: comment.lines.end }
+                      : {}),
+                  },
+                }
+              : {}),
+          }),
         );
         return;
       }
@@ -4451,26 +4418,6 @@ function AppContent() {
    * COLLECTION, so the pane's `ErrorNote` needs no claim here at all.
    */
   const stagedSendSessionId = stagedSend?.input?.id ?? null;
-  /**
-   * The Knowledge entry actually open, by its real id: a route may address an
-   * entry by PATH, and only the loaded document knows which entry that is.
-   *
-   * Correlated against the CURRENT address, not merely gated on there being one.
-   * The reported pair outlives the page that reported it, so a path→path
-   * navigation holds entry A's id until B's document lands — and claiming A there
-   * would suppress A's failure as if it were on screen and draw A's note over B's
-   * loading surface. Both halves of the claim have to name the same entry the
-   * user is looking at, or neither may.
-   */
-  const openKnowledgeEntryId =
-    route.name !== "knowledge" || selectedKnowledgeFilePath
-      ? null
-      : selectedKnowledgeEntryId
-        ? selectedKnowledgeEntryId
-        : selectedKnowledgeEntryPath &&
-            knowledgeEntry?.addressedPath === selectedKnowledgeEntryPath
-          ? knowledgeEntry.id
-          : null;
   useEffect(() => {
     setFailureHomes({
       viewedSessionId: displayCurrentId ?? null,
@@ -4488,15 +4435,6 @@ function AppContent() {
       openObjects: {
         project: selectedProjectId ? [selectedProjectId] : [],
         task: selectedTaskId ? [selectedTaskId] : [],
-        // Two Knowledge surfaces can read at once, each drawing its own note:
-        // the route in the main pane and the right panel's Knowledge tab.
-        knowledge: [
-          ...new Set(
-            [openKnowledgeEntryId, visibleKnowledgePanelEntryId].filter(
-              (id): id is string => Boolean(id),
-            ),
-          ),
-        ],
       },
     });
   }, [
@@ -4505,8 +4443,6 @@ function AppContent() {
     stagedSendSessionId,
     selectedProjectId,
     selectedTaskId,
-    openKnowledgeEntryId,
-    visibleKnowledgePanelEntryId,
   ]);
 
   // Leaving settings returns to the chat we were in, or to /sessions/create for a fresh start.
@@ -5314,27 +5250,11 @@ function AppContent() {
         onRun: () => startSessionInWorktree(worktreeId),
       };
     }
-    if (route.name === "knowledge" && route.entryId) {
-      // The entry's own file, once the loaded document has said which it is.
-      const entry =
-        knowledgeEntry?.id === route.entryId ? knowledgeEntry : null;
-      if (!entry) return null;
-      const href = documentTargetHref({
-        kind: "knowledgeFile",
-        path: entry.path,
-      });
-      return {
-        label: "Start session with this entry",
-        icon,
-        onRun: () => startSessionForFile(href, entry.title),
-      };
-    }
     return null;
   }, [
     route,
     routeDocumentTarget,
     backlogTasks,
-    knowledgeEntry,
     pullRequestWorktreeId,
     startSessionForTask,
     startSessionForProject,
@@ -6060,13 +5980,13 @@ function AppContent() {
         selectedPullRequest={pullRequestTarget}
         onOpenPullRequest={openPullRequest}
         selectedWorktreeId={selectedWorktreeId}
-        selectedKnowledgeEntryId={selectedKnowledgeEntryId}
-        selectedKnowledgeEntryPath={selectedKnowledgeEntryPath}
-        selectedKnowledgeFilePath={selectedKnowledgeFilePath}
-        onOpenKnowledgeEntry={openKnowledgeEntry}
-        onOpenInvalidKnowledgeEntry={openInvalidKnowledgeEntry}
-        onOpenKnowledgeFile={openKnowledgeFile}
-        knowledgeChangedAt={knowledgeChangedAt}
+        knowledgeView={
+          route.name === "knowledge" ? (route.view ?? "files") : null
+        }
+        knowledgeUncommitted={knowledgeUncommittedCount(
+          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
+        )}
+        onOpenKnowledge={openKnowledge}
         onLoadWorktrees={actions.listWorktrees}
         onOpenWorktree={openWorktree}
         onStartSessionInWorktree={startSessionInWorktree}
@@ -6138,7 +6058,7 @@ function AppContent() {
     onOpenProject: (id) => navigateFromInspector(projectPath(id)),
     onOpenSession: (id) => navigateFromInspector(sessionPath(id)),
     onOpenWorktree: (id) => navigateFromInspector(worktreePath(id)),
-    onOpenKnowledge: (id) => navigateFromInspector(knowledgePath(id)),
+    onOpenKnowledge: (id) => navigateFromInspector(knowledgeEntryHref(id)),
   };
 
   const inspectedTask =
@@ -6291,21 +6211,7 @@ function AppContent() {
     )
   ) : route.name === "knowledge" ? (
     <KnowledgeInspector
-      entryId={route.entryId ?? null}
-      entryPath={route.entryPath ?? null}
-      refreshToken={
-        route.entryId ? (state.knowledgeChangedAt[route.entryId] ?? 0) : 0
-      }
-      prefs={prefs}
-      onUpdatePrefs={update}
-      openers={inspectorOpeners}
-      onStartSession={(path, title) =>
-        startSessionForFile(
-          documentTargetHref({ kind: "knowledgeFile", path }),
-          title,
-        )
-      }
-      // Mobile folds the entry viewer's header buttons in here.
+      status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
     />
   ) : route.name === "settings" ||
     route.name === "usage" ||
@@ -6511,29 +6417,11 @@ function AppContent() {
         knowledge={
           <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
             <KnowledgePanel
-              entryId={knowledgePanelEntryId}
-              failure={
-                knowledgePanelEntryId
-                  ? state.objectFailures.knowledge[knowledgePanelEntryId]
-                  : undefined
-              }
-              onDismissFailure={() =>
-                knowledgePanelEntryId &&
-                actions.dismissObjectFailure("knowledge", knowledgePanelEntryId)
-              }
-              onSelectEntry={setKnowledgePanelEntryId}
-              onOpenInMain={openKnowledgeEntry}
-              onOpenFile={openKnowledgeFile}
-              // A Knowledge link followed INSIDE the panel stays in the panel;
-              // anything else is another object, which belongs in the pane that
-              // addresses objects.
-              onOpenPaObject={(link) =>
-                link.objectType === "knowledge"
-                  ? setKnowledgePanelEntryId(link.id)
-                  : navigate(link.href)
-              }
-              changedAtByEntryId={state.knowledgeChangedAt}
-              changedAt={knowledgeChangedAt}
+              status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
+              prefs={prefs}
+              onUpdatePrefs={update}
+              openRequest={knowledgePanelOpenRequest}
+              onNavigate={navigate}
             />
           </Suspense>
         }
@@ -6850,28 +6738,29 @@ function AppContent() {
                 <Suspense
                   fallback={<LazySurfaceFallback label="Opening Knowledge…" />}
                 >
-                  <KnowledgePage
+                  <WorktreeDetailPage
                     back={screenBack}
-                    failure={
-                      openKnowledgeEntryId
-                        ? state.objectFailures.knowledge[openKnowledgeEntryId]
-                        : undefined
-                    }
-                    onDismissFailure={() =>
-                      openKnowledgeEntryId &&
-                      actions.dismissObjectFailure(
-                        "knowledge",
-                        openKnowledgeEntryId,
-                      )
-                    }
-                    entryId={route.entryId ?? null}
-                    entryPath={route.entryPath ?? null}
-                    filePath={route.filePath ?? null}
-                    assetPath={route.assetPath ?? null}
+                    worktree={knowledgeCheckoutRecord(
+                      state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
+                    )}
+                    status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
+                    title="Knowledge Base"
+                    lineComments={false}
+                    markdownPreviewFirst
+                    narrow={mobileLayout}
+                    view={route.view ?? "files"}
+                    filePath={route.path}
+                    from={route.from}
+                    to={route.to}
                     anchor={route.anchor}
-                    onOpenPaObject={(link) => navigate(link.href)}
-                    onEntryLoaded={rememberKnowledgeEntry}
-                    changedAtByEntryId={state.knowledgeChangedAt}
+                    navigate={navigate}
+                    prefs={prefs}
+                    onUpdatePrefs={update}
+                    comments={NO_WORKTREE_COMMENTS}
+                    onLoadComments={noopKnowledgeComments}
+                    onUnloadComments={noopKnowledgeComments}
+                    commentActions={NO_KNOWLEDGE_COMMENT_ACTIONS}
+                    onSubmitReview={noopKnowledgeComments}
                   />
                 </Suspense>
               ) : route.name === "settings" ? (

@@ -140,6 +140,10 @@ const SANCTIONED_SINKS: readonly string[] = [
   "App.tsx: PullRequestDetailPage.status={pullRequestWorktreeId ? state.worktreeStatuses[pullRequestWorktreeId] : undefined}",
   "App.tsx: WorktreeInspector.status={state.worktreeStatuses[route.id]}",
   "App.tsx: WorktreeDetailPage.status={state.worktreeStatuses[worktree.id]}",
+  // The Knowledge Base checkout, read live by its route and the panel tab.
+  "App.tsx: WorktreeDetailPage.status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}",
+  "App.tsx: KnowledgePanel.status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}",
+  "App.tsx: KnowledgeInspector.status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}",
   "components/Sidebar.tsx: SessionInbox.worktreeStatuses={worktreeStatuses}",
   "components/worktree/WorktreeOverlays.tsx: MergeWorktreeDialog.status={state.worktreeStatuses[worktree.id]}",
   "components/worktree/WorktreeOverlays.tsx: RemoveWorktreeDialog.status={state.worktreeStatuses[worktree.id]}",

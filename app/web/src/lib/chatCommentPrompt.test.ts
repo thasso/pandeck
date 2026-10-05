@@ -200,11 +200,7 @@ function documentComment(
 
 describe("serializeChatCommentPrompt with documents", () => {
   const plan = { kind: "hostFile" as const, path: "/tmp/example/plan.md" };
-  const entry = {
-    kind: "knowledgeEntry" as const,
-    entryId: "kb-deploy",
-    title: "Deploy notes",
-  };
+  const notes = { kind: "hostFile" as const, path: "/tmp/example/deploy.md" };
 
   it("groups comments per document, whole-document first, numbered across sections", () => {
     const serialized = serializeChatCommentPrompt("Please revise.", [
@@ -213,7 +209,7 @@ describe("serializeChatCommentPrompt with documents", () => {
         lines: { start: 9, end: 9 },
       }),
       comment("t1", "e1", 1, 0, 0, "a reply", "Transcript note"),
-      documentComment("k1", entry, "Split this entry"),
+      documentComment("k1", notes, "Split this file"),
       documentComment("p1", plan, "Name the owner", {
         quote: "someone will",
         lines: { start: 3, end: 5 },
@@ -234,10 +230,10 @@ Comments on \`/tmp/example/plan.md\`:
 3. Line 9, “ship it soon”:
    Too vague
 
-Comments on Knowledge entry “Deploy notes” (id \`kb-deploy\`; lines count from the first body line after the frontmatter):
+Comments on \`/tmp/example/deploy.md\`:
 
 4. On the whole document:
-   Split this entry`);
+   Split this file`);
   });
 
   it("quotes a passage without lines when the renderer could not name them", () => {

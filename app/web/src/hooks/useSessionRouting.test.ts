@@ -6,8 +6,6 @@ import {
   canonicalizeEmptySessionToCreate,
   fileViewerPath,
   isSectionIndexRoute,
-  knowledgeEntryPath,
-  knowledgeFilePath,
   knowledgePath,
   parseRoute,
   PERMANENT_ASSISTANT_PATH,
@@ -17,6 +15,7 @@ import {
   settingsPath,
   stagedSendCreatedSession,
   taskPath,
+  worktreePath,
 } from "./useSessionRouting.ts";
 import {
   canonicalSidebarSection,
@@ -68,37 +67,28 @@ describe("parseRoute", () => {
     });
   });
 
-  it("parses knowledge routes", () => {
+  it("parses knowledge routes as the knowledge checkout", () => {
     expect(parseRoute("/knowledge")).toEqual({ name: "knowledge" });
-    expect(parseRoute("/knowledge/kb%201")).toEqual({
+    expect(parseRoute("/knowledge/files?path=notes%2Fa%20b.md#L3")).toEqual({
       name: "knowledge",
-      entryId: "kb 1",
-    });
-    // Invalid entries (no kb.id) are addressed by folder path under ~invalid/.
-    expect(parseRoute("/knowledge/~invalid/customers/broken")).toEqual({
-      name: "knowledge",
-      entryPath: "customers/broken",
-    });
-    expect(parseRoute("/knowledge/~invalid/broken")).toEqual({
-      name: "knowledge",
-      entryPath: "broken",
-    });
-    // Non-entry files (assets/loose files) are addressed by tree path under ~file/.
-    expect(
-      parseRoute("/knowledge/~file/customers/globex/assets/source.pdf"),
-    ).toEqual({
-      name: "knowledge",
-      filePath: "customers/globex/assets/source.pdf",
-    });
-    expect(parseRoute(knowledgeFilePath("customers/data set.json"))).toEqual({
-      name: "knowledge",
-      filePath: "customers/data set.json",
-    });
-    expect(parseRoute("/knowledge/kb-1?asset=images%2Fplot.png#L3")).toEqual({
-      name: "knowledge",
-      entryId: "kb-1",
-      assetPath: "images/plot.png",
+      view: "files",
+      path: "notes/a b.md",
       anchor: { start: 3 },
+    });
+    expect(parseRoute("/knowledge/changes?path=a.md&from=abc&to=def")).toEqual({
+      name: "knowledge",
+      view: "changes",
+      path: "a.md",
+      from: "abc",
+      to: "def",
+    });
+    // The page builds its links with `worktreePath`; for the KB they stay here.
+    expect(worktreePath("knowledge", "files", { path: "a.md" })).toBe(
+      "/knowledge/files?path=a.md",
+    );
+    // Entry-id routes are gone: an entry is its file now.
+    expect(parseRoute("/knowledge/kb-1")).not.toMatchObject({
+      name: "knowledge",
     });
   });
 
@@ -246,14 +236,7 @@ describe("path helpers round-trip through parseRoute", () => {
       view: "day",
       date: "2026-07-05",
     });
-    expect(parseRoute(knowledgePath("kb/1"))).toEqual({
-      name: "knowledge",
-      entryId: "kb/1",
-    });
-    expect(parseRoute(knowledgeEntryPath("customers/broken note"))).toEqual({
-      name: "knowledge",
-      entryPath: "customers/broken note",
-    });
+    expect(parseRoute(knowledgePath())).toEqual({ name: "knowledge" });
     expect(
       parseRoute(fileViewerPath("/tmp/example/a b.md", { start: 3 })),
     ).toEqual({
@@ -325,13 +308,9 @@ describe("section index routes", () => {
         ),
       ),
     ).toBe(false);
-    expect(isSectionIndexRoute(parseRoute(knowledgePath("kb1")))).toBe(false);
-    expect(isSectionIndexRoute(parseRoute(knowledgeEntryPath("broken")))).toBe(
-      false,
-    );
-    expect(isSectionIndexRoute(parseRoute(knowledgeFilePath("a/b.json")))).toBe(
-      false,
-    );
+    expect(
+      isSectionIndexRoute(parseRoute("/knowledge/files?path=a%2Fb.json")),
+    ).toBe(false);
     expect(
       isSectionIndexRoute(parseRoute(calendarPath("week", "2026-07-05"))),
     ).toBe(false);

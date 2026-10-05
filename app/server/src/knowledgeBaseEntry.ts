@@ -2,7 +2,6 @@ import {
   isPaRelationLink,
   parsePaObjectLink,
 } from "@assistant/shared/objectLinks";
-import { knowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import {
   parseYamlSubset,
   splitYamlFrontmatter,
@@ -159,24 +158,11 @@ export async function commitValidatedKnowledgeChanges(
   }
 
   assertUniqueEntryIdsInChangeSet(entryWrites);
-  const result = await store.commitChanges(prepared, meta, {
+  return store.commitChanges(prepared, meta, {
     beforeApply: async () => {
       await assertUniqueEntryIdsInRepo(store, entryWrites, deletedEntryPaths);
     },
   });
-  const entryIds = [
-    ...new Set([
-      ...(meta.entryIds ?? []),
-      ...entryWrites.map((entry) => entry.id),
-    ]),
-  ];
-  if (entryIds.length)
-    knowledgeBaseBroadcaster().broadcast({
-      type: "knowledgeChanged",
-      entryIds,
-      changedAt: Date.now(),
-    });
-  return result;
 }
 
 function assertUniqueEntryIdsInChangeSet(

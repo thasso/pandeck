@@ -19,7 +19,7 @@ import {
  */
 
 const nowhere = { viewedSessionId: null, revealRequestId: null };
-const NO_OBJECTS = { project: [], task: [], knowledge: [] };
+const NO_OBJECTS = { project: [], task: [] };
 
 /** Claim only what a case is about; everything else is off screen. */
 function claim(homes: Partial<FailureHomes>): void {
@@ -240,8 +240,8 @@ it("consumes a collection's load failure wherever the user is", () => {
       target: { type: "task" },
     }),
   ).toBe(true);
-  // A Knowledge entry has no COLLECTION condition — the tree loads over HTTP and
-  // reports itself — so a targetless Knowledge failure is still said.
+  // The Knowledge Base keeps no failure home at all: it is a file browser that
+  // reports its own reads, so a failure naming it is still said.
   expect(
     arrivalHasHome({
       severity: "error",
@@ -317,11 +317,11 @@ it("claims nothing until a surface says so", () => {
   });
 });
 
-// A project, Task or Knowledge entry answers the same first question as a
+// A project or Task answers the same first question as a
 // session, and the answer is per OBJECT: one open Task says nothing about the
 // rest of the list.
-it("consumes a failure the open project, Task or entry renders", () => {
-  claim({ openObjects: { project: ["p1"], task: ["t1"], knowledge: ["k1"] } });
+it("consumes a failure the open project or Task renders", () => {
+  claim({ openObjects: { project: ["p1"], task: ["t1"] } });
   const about = (type: "project" | "task" | "knowledge", id: string) => ({
     severity: "error" as const,
     message: "Failed to save: nope",
@@ -329,11 +329,11 @@ it("consumes a failure the open project, Task or entry renders", () => {
   });
   expect(arrivalHasHome(about("project", "p1"))).toBe(true);
   expect(arrivalHasHome(about("task", "t1"))).toBe(true);
-  expect(arrivalHasHome(about("knowledge", "k1"))).toBe(true);
+  // A Knowledge Base entry is a file now, and a file draws no failure note.
+  expect(arrivalHasHome(about("knowledge", "k1"))).toBe(false);
   // Another member of the same type is a row at best, and has no home.
   expect(arrivalHasHome(about("project", "p2"))).toBe(false);
   expect(arrivalHasHome(about("task", "t2"))).toBe(false);
-  expect(arrivalHasHome(about("knowledge", "k2"))).toBe(false);
   // A worktree keeps no such store: its writes narrate themselves where they
   // were issued, so a failure naming one is announced.
   expect(
@@ -347,7 +347,7 @@ it("consumes a failure the open project, Task or entry renders", () => {
 
 // One derivation, so the store that keeps a failure and the announcer that
 // therefore stays quiet can never disagree about which object it was.
-it("puts an error that names a project, Task or entry onto that object", () => {
+it("puts an error that names a project or Task onto that object", () => {
   expect(
     objectFailureFrom({
       type: "error",
@@ -365,11 +365,7 @@ it("puts an error that names a project, Task or entry onto that object", () => {
       message: "Failed to add comment: EIO",
       target: { type: "knowledge", id: "k1" },
     }),
-  ).toEqual({
-    type: "knowledge",
-    id: "k1",
-    message: "Failed to add comment: EIO",
-  });
+  ).toBeNull();
   // A warning, a collection, a session and a worktree are all somebody else's.
   expect(
     objectFailureFrom({

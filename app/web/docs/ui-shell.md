@@ -685,18 +685,18 @@ also arrives after its container does. What is restored is the row the reader
 left at the top edge, not a pixel offset — these lists re-sort under them.
 
 Routes identify objects, not sidebar state: one canonical route shape per object
-type (`/sessions/:id`, `/tasks/:id`, `/knowledge/:entryId`, …) plus section
-index routes such as `/knowledge`. The singleton Personal Assistant has the
-dedicated `/assistant` route so its empty first-use state is not mistaken for
-the ordinary `/sessions/create` draft surface. No legacy aliases.
+type (`/sessions/:id`, `/tasks/:id`, `/worktrees/:id`, …) plus section index
+routes such as `/knowledge`. The singleton Personal Assistant has the dedicated
+`/assistant` route so its empty first-use state is not mistaken for the ordinary
+`/sessions/create` draft surface. No legacy aliases.
 
 Document routes share one navigation shell around source-specific renderers
 (`docs/document-presentation.md`). `/files/<absolute path>` addresses a live
 host file and `/artifacts/<session>/<path>` addresses captured session output.
-Knowledge and worktree files keep their canonical Knowledge and Worktree routes.
-A host-file route has no sidebar location or index because there is no useful
-list of every file on the host. Worktree routes carry the worktree id; an
-absolute filesystem path never supplies it.
+Knowledge Base and worktree files keep their canonical `/knowledge/files` and
+`/worktrees/:id/files` routes. A host-file route has no sidebar location or
+index because there is no useful list of every file on the host. Worktree routes
+carry the worktree id; an absolute filesystem path never supplies it.
 
 `/background-tasks` is the canonical registry of session-owned background work,
 an ACTION surface with no sidebar location; `?task=<id>` anchors one item by its
@@ -737,33 +737,28 @@ drawing, so it is mounted whenever its tab is open. Closing every tab leaves the
 panel open on a centered list of available panels; **Personal Assistant** is the
 second panel and opens an independent view of the server-owned permanent
 conversation, so it can remain beside the routed main-session chat.
-**Knowledge** is the third: the compact KB tree until an entry is chosen, then
-that entry as the SAME document surface the `/knowledge/:entryId` route draws —
-live body, live comment threads, commenting and review submission included —
-with a back control to the tree and an action handing the entry to the main
-pane. Its comment and review controls are scoped to the entry it shows, never to
-the object the main pane is on, and a tree row that is not a readable entry
-(asset, loose file, unparsable entry) opens on its own Knowledge route in the
-main pane instead. While it is the VISIBLE tab it is also that entry's failure
-surface, drawing a refused write about it in place (`docs/messaging.md`). A
-panel surface is opened from elsewhere by request: `kb_show_entry`'s transcript
-card opens its entry here. **Worktree** is the fourth, and it is the only panel
-that addresses no object of its own: it follows the OPEN SESSION to the worktree
-that session executes in, drawing the same Review and Files page the
-`/worktrees/:id` route draws — diffs, file tree, commenting and review
-submission included — so the changes can be read beside the chat producing them.
-It is a narrow column, so it takes the list→detail layout and the unified diffs
-a phone takes — but only the LAYOUT: its scope picker and jump list open as
-anchored popovers, since a viewport-wide sheet dropped over the app is a phone
-affordance, and this panel exists to sit beside what the reader is comparing
-against. Moving inside it (a view, a file, a diff scope) is panel state and
-never touches the address bar, which keeps naming the main pane's object; its
-one action hands the worktree, at the view it is on, to the main pane. A session
-with no worktree, and one whose worktree is gone, each say so rather than
-drawing an empty page. The tab bar is panel chrome, not a second object-title
-row. On small layouts none of this tab state exists: the right panel remains the
-direct flip-up Inspector dock, and a Knowledge card there offers its route
-alone. Top to bottom, for the current main-pane object:
+**Knowledge** is the third: the Knowledge Base folder as the SAME Files and
+Review page the `/knowledge` route draws — file tree, File/Preview/History,
+uncommitted changes — in a narrow column. Moving inside it is panel state, like
+the Worktree panel below, and its one action hands the file or view it is on to
+the main pane. A panel surface is opened from elsewhere by request:
+`kb_show_entry`'s transcript card opens its entry's file here. **Worktree** is
+the fourth, and it is the only panel that addresses no object of its own: it
+follows the OPEN SESSION to the worktree that session executes in, drawing the
+same Review and Files page the `/worktrees/:id` route draws — diffs, file tree,
+commenting and review submission included — so the changes can be read beside
+the chat producing them. It is a narrow column, so it takes the list→detail
+layout and the unified diffs a phone takes — but only the LAYOUT: its scope
+picker and jump list open as anchored popovers, since a viewport-wide sheet
+dropped over the app is a phone affordance, and this panel exists to sit beside
+what the reader is comparing against. Moving inside it (a view, a file, a diff
+scope) is panel state and never touches the address bar, which keeps naming the
+main pane's object; its one action hands the worktree, at the view it is on, to
+the main pane. A session with no worktree, and one whose worktree is gone, each
+say so rather than drawing an empty page. The tab bar is panel chrome, not a
+second object-title row. On small layouts none of this tab state exists: the
+right panel remains the direct flip-up Inspector dock, and a Knowledge card
+there offers its route alone. Top to bottom, for the current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links
@@ -791,13 +786,13 @@ There is no embedded agent panel. The **Start a new session** action navigates
 to the new-session page (`/sessions/create`) with the inspected object (and any
 derivable context) already staged as removable chips, so the user only fills in
 what is missing, types a prompt, and sends. Every agent-enabled object type
-(Task, Project, Worktree, Knowledge) exposes this one action rather than a
+(Task, Project, Worktree, any document) exposes this one action rather than a
 nested main-pane split. A worktree review handoff is the same editable draft: it
 stages the worktree plus the selected comment bundle and prefills a review
 prompt; sending to an existing session stays an immediate send that jumps to
-that session. A document's comment tray (a Knowledge entry, a file) is not a
-handoff: sending it moves the comments into the chosen session's composer and
-goes there (`docs/comments.md`).
+that session. A document's comment tray (a host file) is not a handoff: sending
+it moves the comments into the chosen session's composer and goes there
+(`docs/comments.md`).
 
 ## Structured Context
 

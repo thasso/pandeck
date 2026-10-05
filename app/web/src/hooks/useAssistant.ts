@@ -618,7 +618,6 @@ export interface UIState {
   openTaskProjectionId: string | null;
   /** Authoritative re-anchored Knowledge comment threads per entry id. */
   /** Latest committed invalidation timestamp per Knowledge entry. */
-  knowledgeChangedAt: Record<string, number>;
   /** Merge-back progress per worktree id (survives dialog close). */
   worktreeMerge: Record<
     string,
@@ -865,7 +864,6 @@ const emptyInitial: UIState = {
   taskComments: {},
   taskCommentsLru: [],
   openTaskProjectionId: null,
-  knowledgeChangedAt: {},
   worktreeMerge: {},
   taskDetails: {},
   taskDetailsLru: [],
@@ -888,7 +886,7 @@ const emptyInitial: UIState = {
   streamingMessageId: null,
   sessionFailures: {},
   unopenableSessions: {},
-  objectFailures: { project: {}, task: {}, knowledge: {} },
+  objectFailures: { project: {}, task: {} },
   taskProjectsAssignedSeq: 0,
   error: null,
   forkDraft: null,
@@ -5725,21 +5723,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           worktreeReviewSetRevisions,
         };
       return { ...state, comments, commentTargets, commentRevisions };
-    }
-    case "knowledgeChanged": {
-      // Comment mutations commit their append-only log through the same KB
-      // transaction and therefore emit this invalidation immediately before
-      // their targeted `commentEvents` upsert. Comments are an event projection:
-      // clearing it here loses every earlier thread, leaving only the last
-      // event to repopulate the entry. Keep it intact; the paired entry refresh
-      // updates the document, and comment events remain the comment authority.
-      return {
-        ...state,
-        knowledgeChangedAt: Object.fromEntries([
-          ...Object.entries(state.knowledgeChangedAt),
-          ...msg.entryIds.map((entryId) => [entryId, msg.changedAt] as const),
-        ]),
-      };
     }
     case "worktreeMergeUpdate":
       return {

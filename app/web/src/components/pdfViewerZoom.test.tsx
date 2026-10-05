@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { KnowledgeFileViewer } from "./KnowledgeFileViewer.tsx";
+import { FileViewerPage } from "./FileViewerPage.tsx";
 import {
   useDocumentNavigationRegistration,
   type DocumentNavigationRegistration,
@@ -38,15 +38,6 @@ function stubEngine(scrollsEmbeddedPdf: boolean): void {
   });
 }
 
-vi.mock("../lib/knowledgeBaseApi.ts", () => ({
-  fetchKnowledgeEntry: () => new Promise(() => {}),
-  fetchKnowledgeEntryByPath: () => new Promise(() => {}),
-  fetchKnowledgeFileText: () => new Promise(() => {}),
-  knowledgeAssetUrl: (entryId: string, path: string) =>
-    `asset:${entryId}/${path}`,
-  knowledgeFileUrl: (path: string) => `file:${path}`,
-}));
-
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
@@ -73,7 +64,7 @@ beforeEach(() => {
   );
   resetHistoryNavForTests();
   window.sessionStorage.clear();
-  window.history.replaceState(null, "", "/knowledge/~file/notes/report.pdf");
+  window.history.replaceState(null, "", "/files/tmp/notes/report.pdf");
   initHistoryNav();
   container = document.createElement("div");
   document.body.append(container);
@@ -98,7 +89,7 @@ async function renderPdfViewer(): Promise<DocumentNavigationRegistration | null>
     root!.render(
       <>
         <Probe />
-        <KnowledgeFileViewer path="notes/report.pdf" />
+        <FileViewerPage path="/tmp/notes/report.pdf" />
       </>,
     );
   });

@@ -5533,7 +5533,6 @@ export type BroadcastTopic =
   /** Canonical durable session-owned background work items. */
   | "background"
   | "worktrees"
-  | "knowledge"
   | "usage"
   | "workflow"
   /** The user-owned skills library, rescanned on every subscribe. */
@@ -5545,7 +5544,6 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "subagents",
   "background",
   "worktrees",
-  "knowledge",
   "usage",
   "workflow",
   "skills",
@@ -7917,7 +7915,6 @@ export type ServerMessage =
   /** Fresh working-tree change list, pushed by the watcher while clients view the worktree. */
   | { type: "worktreeChanges"; changes: WorktreeChangesResponse }
   /** A committed KB mutation invalidated entry/inspector HTTP projections. */
-  | { type: "knowledgeChanged"; entryIds: string[]; changedAt: number }
   /** Merge-back progress: phase transitions, conflicts, and the merger-agent session. */
   | {
       type: "worktreeMergeUpdate";

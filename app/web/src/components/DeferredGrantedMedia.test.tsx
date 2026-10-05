@@ -95,30 +95,6 @@ it("shows element failures and retries with a fresh artifact grant", async () =>
   );
 });
 
-it("renews a playing Knowledge source before expiry and restores position", async () => {
-  const play = vi
-    .spyOn(HTMLMediaElement.prototype, "play")
-    .mockResolvedValue(undefined);
-  const audio = await renderAndPlay({
-    kind: "knowledgeAsset",
-    entryId: "entry-1",
-    path: "assets/clip.mp3",
-  });
-  audio.currentTime = 37;
-  Object.defineProperty(audio, "paused", { configurable: true, value: false });
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(9 * 60_000);
-  });
-  expect(mints).toBe(2);
-  const renewed = container.querySelector("audio")!;
-  act(() => {
-    renewed.dispatchEvent(new Event("loadedmetadata"));
-  });
-  expect(renewed.currentTime).toBe(37);
-  expect(play).toHaveBeenCalled();
-});
-
 it("plays video inline rather than letting iOS take it fullscreen", async () => {
   const target = { kind: "hostFile" as const, path: "/tmp/clip.mp4" };
   await act(async () => {

@@ -173,7 +173,7 @@ it("runs every internal HTML source only through a token-free grant", async () =
   render(
     [
       "![artifact](/api/session-artifacts/s1/tool-output/page.html)",
-      "![knowledge](/api/knowledge/asset?id=kb-1&path=assets%2Fpage.html)",
+      "![knowledge](/knowledge/files?path=notes%2Fpage.html)",
       "![worktree](/worktrees/w1/files?path=docs%2Fpage.html)",
     ].join("\n\n"),
   );
@@ -191,7 +191,8 @@ it("runs every internal HTML source only through a token-free grant", async () =
   );
   expect(targets.map((request) => request.target.kind)).toEqual([
     "sessionArtifact",
-    "knowledgeAsset",
+    // The Knowledge Base is the checkout `knowledge`: a worktree source.
+    "worktreeFile",
     "worktreeFile",
   ]);
   expect(targets.every((request) => request.scope === "directory")).toBe(true);

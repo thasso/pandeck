@@ -1,7 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 
 /**
- * Where a Knowledge entry named anywhere in the app can be OPENED, published
+ * Where a Knowledge Base file named anywhere in the app can be OPENED, published
  * once by the app shell.
  *
  * A transcript card is the reason this is a context rather than a prop: the
@@ -16,9 +16,9 @@ export interface KnowledgeOpenTargets {
    * (`app/web/docs/ui-shell.md`, Small Screens) — there, reading an entry means
    * going to its route.
    */
-  openInPanel?: ((entryId: string) => void) | undefined;
-  /** Open the entry's canonical Knowledge route in the main pane. */
-  openInMain: (entryId: string) => void;
+  openInPanel?: ((path: string) => void) | undefined;
+  /** Open the file's Knowledge route in the main pane. */
+  openInMain: (path: string) => void;
 }
 
 const KnowledgeOpenTargetsContext = createContext<KnowledgeOpenTargets | null>(
