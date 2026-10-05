@@ -13,7 +13,7 @@ import {
 } from "./DocumentAnchorRegion.tsx";
 import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { DocumentNavigationShell } from "./DocumentNavigationShell.tsx";
-import { Markdown } from "./Markdown.tsx";
+import { MarkdownFile } from "./MarkdownFile.tsx";
 import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import { DeferredGrantedMedia } from "./InlineDocumentEmbed.tsx";
@@ -133,7 +133,7 @@ export function SessionArtifactViewer({
             {/* Markdown is addressed by source line and rendered as blocks:
                 the bounded range marks the blocks it falls in. */}
             <DocumentRangeNotice anchor={anchor} className="mb-3" />
-            <Markdown
+            <MarkdownFile
               text={text}
               sourcePositions={Boolean(anchor)}
               documentTarget={{ kind: "sessionArtifact", sessionId, path }}

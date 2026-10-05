@@ -105,6 +105,17 @@ cannot inflate — and the anchor marks every block intersecting the bounded
 range, never a block beyond it. A worktree file or diff surface selects the
 bounded range and draws it through pierre.
 
+A Markdown FILE — a host file, an artifact, a worktree preview — renders through
+`MarkdownFile`: leading YAML frontmatter becomes a compact metadata header
+(title, tag chips, the other fields as label/value rows) instead of rendering as
+a rule and a setext heading. The body keeps the file's own line numbers — the
+frontmatter's lines become blank lines — so `#L` anchors and line comments still
+address the source as written. Frontmatter outside the shared YAML subset
+(`app/shared/frontmatter.ts`) shows as its raw text in a collapsed disclosure. A
+block that is one namespace (`kb:`) reads as that namespace's fields. Chat and
+tool-output Markdown never take this path: frontmatter only means something at
+the top of a file.
+
 A same-document `#Lx` reference keeps the current target and replaces its
 anchor. Other relative links keep the current source identity without inheriting
 the source anchor. Paths use URL resolution and percent-decode exactly once. A

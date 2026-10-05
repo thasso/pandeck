@@ -17,6 +17,7 @@
     "./usage": "./usage.ts",
     "./servedFiles": "./servedFiles.ts",
     "./documentTargets": "./documentTargets.ts",
+    "./frontmatter": "./frontmatter.ts",
     "./toolCards": "./toolCards.ts",
     "./portForwarding": "./portForwarding.ts",
     "./settingsRegistry": "./settingsRegistry.ts",

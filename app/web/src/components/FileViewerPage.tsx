@@ -28,7 +28,7 @@ import {
   type ServedFileKind,
 } from "../lib/servedFiles.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
-import { Markdown } from "./Markdown.tsx";
+import { MarkdownFile } from "./MarkdownFile.tsx";
 import {
   DocumentAnchorRegion,
   DocumentRangeNotice,
@@ -358,7 +358,7 @@ function ViewerBody({
         {/* Relative references inside the document resolve against its own
             directory, so an image beside the Markdown file renders. */}
         <div ref={textRootRef}>
-          <Markdown
+          <MarkdownFile
             text={body.text}
             documentDirectory={documentDirectory}
             documentTarget={{ kind: "hostFile", path }}

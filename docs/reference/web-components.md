@@ -70,6 +70,10 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   the panel, and it destroys work that no single row can bring back.
 - Top-level component files own feature pages/cards used directly by `App.tsx`
   and message rendering.
+- `MarkdownFile.tsx` owns how a Markdown FILE renders in a document viewer (host
+  file, artifact, worktree preview): `lib/markdownFrontmatter.ts` splits the
+  frontmatter off on the file's own line numbers, a compact header shows it, and
+  the body goes to `Markdown` with the caller's props unchanged.
 - `Markdown.tsx` owns shared chat/prose Markdown rendering. `density="compact"`
   is the same prose one size down (`.prose-compact`) for text that sits INSIDE
   another surface rather than owning the column — what `ui/CommentBody` renders

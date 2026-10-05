@@ -3,7 +3,10 @@ import {
   parsePaObjectLink,
 } from "@assistant/shared/objectLinks";
 import { knowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
-import { parseYamlSubset, splitYamlFrontmatter } from "./frontmatter.ts";
+import {
+  parseYamlSubset,
+  splitYamlFrontmatter,
+} from "@assistant/shared/frontmatter";
 import {
   classifyKnowledgePath,
   isGeneratedKnowledgePath,

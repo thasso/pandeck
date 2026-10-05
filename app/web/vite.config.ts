@@ -145,6 +145,9 @@ export default defineConfig(({ command }) => {
         "@assistant/shared/toolCards": fileURLToPath(
           new URL("../shared/toolCards.ts", import.meta.url),
         ),
+        "@assistant/shared/frontmatter": fileURLToPath(
+          new URL("../shared/frontmatter.ts", import.meta.url),
+        ),
         "@assistant/shared/zonedTime": fileURLToPath(
           new URL("../shared/zonedTime.ts", import.meta.url),
         ),

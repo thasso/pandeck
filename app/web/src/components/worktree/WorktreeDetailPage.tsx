@@ -916,8 +916,10 @@ function ChangesView({
 /* ---------------------------------- files ---------------------------------- */
 
 // Markdown is its own heavy chunk; load it only when a preview is opened.
-const MarkdownLazy = lazy(() =>
-  import("../Markdown.tsx").then((module) => ({ default: module.Markdown })),
+const MarkdownFileLazy = lazy(() =>
+  import("../MarkdownFile.tsx").then((module) => ({
+    default: module.MarkdownFile,
+  })),
 );
 
 function FilePreview({
@@ -937,7 +939,7 @@ function FilePreview({
     return (
       <div className="mx-auto w-full max-w-3xl p-4">
         <Suspense fallback={<PaneLoading label="Loading preview…" />}>
-          <MarkdownLazy
+          <MarkdownFileLazy
             text={content}
             documentTarget={{
               kind: "worktreeFile",
