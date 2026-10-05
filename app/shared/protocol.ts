@@ -4319,6 +4319,13 @@ export type WorktreeStatusKind = "active" | "removed";
  * localPaths — it is never stored. Main is read + session + review only: no
  * merge-back and no remove.
  */
+/**
+ * The Knowledge Base folder, read as a checkout: the worktree file browser
+ * (files, History, uncommitted Changes, Commit) addresses the KB by this id. It
+ * is never a session's working directory, a delivery target or a list row.
+ */
+export const KNOWLEDGE_WORKTREE_ID = "knowledge";
+
 export interface WorktreeRecord {
   id: string;
   projectId: string;

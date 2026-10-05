@@ -34,11 +34,9 @@ import {
   worktreeIdBySession,
   type WorktreeRow,
 } from "../db/worktreeStore.ts";
-import {
-  canonicalWorktreeId,
-  resolveWorktreeRow,
-  worktreeExistsSync,
-} from "./worktreeResolve.ts";
+import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
+import { canonicalWorktreeId, worktreeExistsSync } from "./worktreeResolve.ts";
+import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
 import {
   cachedRepoBranchUpstreams,
   computeWorktreeStatus,
@@ -728,7 +726,7 @@ async function scanRepo(mainRepoRoot: string, paths: string[]): Promise<void> {
   if (!repo) return;
   const rows: WorktreeRow[] = [];
   for (const worktreeId of [...repo.worktreeIds]) {
-    const row = await resolveWorktreeRow(worktreeId);
+    const row = await resolveReadableWorktreeRow(worktreeId);
     if (!row || row.status !== "active") {
       repo.worktreeIds.delete(worktreeId);
       repo.gitDirNames.delete(worktreeId);
@@ -826,7 +824,7 @@ function scheduleTreeScan(worktreeId: string): void {
   tree.debounce = setTimeout(() => {
     tree.debounce = undefined;
     void (async () => {
-      const row = await resolveWorktreeRow(worktreeId);
+      const row = await resolveReadableWorktreeRow(worktreeId);
       if (!row || row.status !== "active") return;
       const currentTree = treeWatches.get(worktreeId);
       try {
@@ -1154,7 +1152,7 @@ function dropTree(tree: TreeWatch): void {
  */
 export async function addWorktreeViewer(worktreeId: string): Promise<void> {
   const id = canonicalWorktreeId(worktreeId);
-  if (!worktreeExistsSync(id)) return;
+  if (id !== KNOWLEDGE_WORKTREE_ID && !worktreeExistsSync(id)) return;
 
   let tree = treeWatches.get(id);
   if (!tree) {
@@ -1194,7 +1192,7 @@ export async function addWorktreeViewer(worktreeId: string): Promise<void> {
     tree.linger = undefined;
   }
 
-  const row = await resolveWorktreeRow(id);
+  const row = await resolveReadableWorktreeRow(id);
   // No git-backed row (e.g. an existing but non-git project that passed the sync
   // gate): release our reservation immediately so no inert entry lingers.
   if (!row || row.status !== "active") {

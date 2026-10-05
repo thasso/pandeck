@@ -8,6 +8,7 @@
  * centrally in `index.ts` before this handler runs.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import type {
   WorktreeAutoCommitRequest,
   WorktreeCommitRequest,
@@ -21,7 +22,7 @@ import type {
 import { errorText } from "../errors.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { listWorktreeRows } from "./worktrees.ts";
-import { resolveWorktreeRow } from "./worktreeResolve.ts";
+import { resolveReadableWorktreeRow } from "./knowledgeCheckout.ts";
 import { computeWorktreeStatus } from "./worktreeStatus.ts";
 import {
   getWorktreeChanges,
@@ -61,6 +62,21 @@ const POST_VERBS = new Set([
   "create-pr",
   "merge-pr",
   "retire",
+]);
+/**
+ * What the Knowledge Base checkout answers: reading its files and committing
+ * its uncommitted edits. Delivery and history rewriting never apply to it.
+ */
+const KNOWLEDGE_VERBS = new Set([
+  "status",
+  "changes",
+  "file-diff",
+  "file",
+  "file-raw",
+  "log",
+  "file-log",
+  "tree",
+  "commit",
 ]);
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -146,8 +162,13 @@ export async function handleWorktreeApi(
     return;
   }
 
+  if (worktreeId === KNOWLEDGE_WORKTREE_ID && !KNOWLEDGE_VERBS.has(verb!)) {
+    respond(404, { error: "Not available for the Knowledge Base." });
+    return;
+  }
+
   try {
-    const row = await resolveWorktreeRow(worktreeId);
+    const row = await resolveReadableWorktreeRow(worktreeId);
     if (!row) {
       respond(404, { error: "Unknown worktree" });
       return;
