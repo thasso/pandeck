@@ -678,6 +678,10 @@ Guidelines for briefs:
 
 ## Sidebar navigation surface
 
+- During initial account selection, the main chat pane is a focused onboarding
+  surface: omit both side panels, the global topbar and its back/forward and
+  panel toggles, and the mobile edge-back gesture. Restore normal shell chrome
+  after setup; do not overwrite saved panel-open preferences to hide it.
 - The bottom navigation bar uses the user's saved slot order, filtered by
   availability: during first-run account setup offer only Settings; show New
   Session once a signed-in account offers a model, and show integration-backed

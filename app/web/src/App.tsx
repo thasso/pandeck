@@ -4040,10 +4040,14 @@ function AppContent() {
   // the dock's row. Once the first prompt is sent that stops being true — the
   // screen is a session being created, and the row carries the identity the
   // transcript never states plus the bootstrap's progress.
+  const onboardingFocus =
+    onboarding !== "complete" &&
+    (route.name === "new" || route.name === "permanentAssistant");
   const chatHeaderHidden =
     mobileLayout && route.name === "new" && !sessionShell.bootstrapping;
-  const displaySessionTitle =
-    route.name === "permanentAssistant"
+  const displaySessionTitle = onboardingFocus
+    ? "Welcome to Pandeck"
+    : route.name === "permanentAssistant"
       ? state.settings.permanentAssistant.name || "Personal Assistant"
       : isNewChatRoute
         ? sessionShell.title
@@ -6786,7 +6790,7 @@ function AppContent() {
               // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
               // the two pane toggles, which have nowhere better yet.
               header={
-                mobileLayout ? undefined : (
+                mobileLayout || onboardingFocus ? undefined : (
                   <Topbar
                     prefs={prefs}
                     updatePrefs={update}
@@ -6800,49 +6804,60 @@ function AppContent() {
                   />
                 )
               }
-              left={{
-                open: sidebarPanelOpen,
-                width: prefs.sidebarWidth,
-                minWidth: SIDEBAR_MIN_WIDTH,
-                onResize: (width) => update({ sidebarWidth: width }),
-                animate: prefs.animateLeftSidebar,
-                // On mobile the browser is a route-driven screen, so it has no dismiss.
-                mobilePresentation: "screen",
-                onDismiss: () => setSidebarOpen(false),
-                label: "sidebar",
-                content: sidebarContent,
-              }}
-              right={{
-                open: inspectorOpen,
-                width: prefs.taskDrawerWidth,
-                minWidth: TASK_DRAWER_MIN_WIDTH,
-                onResize: (width) => update({ taskDrawerWidth: width }),
-                animate: prefs.animateRightDrawer,
-                // On mobile the object panel is a bottom dock: peek at rest, sheet when
-                // expanded. `open` therefore means expanded there.
-                mobilePresentation: "dock",
-                ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
-                mobileDockSuppressed: dockSuppressed || composerOwnsBottomEdge,
-                onExpand: () => setInspectorOpen(true),
-                onDismiss: () => setInspectorOpen(false),
-                label: "inspector",
-                // The page header owns the inspector's overflow actions on wide layouts,
-                // so keep their publisher alive even when the panel itself is closed.
-                keepMountedWhenClosed: true,
-                // The expanded sheet is where a document's detailed zoom controls
-                // live on a phone; the desktop keeps them in the viewer's header.
-                content: mobileLayout ? (
-                  <>
-                    {documentRoute && documentNavigation?.zoom ? (
-                      <DocumentZoomSection zoom={documentNavigation.zoom} />
-                    ) : null}
-                    {rightPanelContent}
-                  </>
-                ) : (
-                  desktopRightPanelContent
-                ),
-              }}
-              edgeBack={edgeBack}
+              left={
+                onboardingFocus
+                  ? undefined
+                  : {
+                      open: sidebarPanelOpen,
+                      width: prefs.sidebarWidth,
+                      minWidth: SIDEBAR_MIN_WIDTH,
+                      onResize: (width) => update({ sidebarWidth: width }),
+                      animate: prefs.animateLeftSidebar,
+                      // On mobile the browser is a route-driven screen, so it has no dismiss.
+                      mobilePresentation: "screen",
+                      onDismiss: () => setSidebarOpen(false),
+                      label: "sidebar",
+                      content: sidebarContent,
+                    }
+              }
+              right={
+                onboardingFocus
+                  ? undefined
+                  : {
+                      open: inspectorOpen,
+                      width: prefs.taskDrawerWidth,
+                      minWidth: TASK_DRAWER_MIN_WIDTH,
+                      onResize: (width) => update({ taskDrawerWidth: width }),
+                      animate: prefs.animateRightDrawer,
+                      // On mobile the object panel is a bottom dock: peek at rest, sheet when
+                      // expanded. `open` therefore means expanded there.
+                      mobilePresentation: "dock",
+                      ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
+                      mobileDockSuppressed:
+                        dockSuppressed || composerOwnsBottomEdge,
+                      onExpand: () => setInspectorOpen(true),
+                      onDismiss: () => setInspectorOpen(false),
+                      label: "inspector",
+                      // The page header owns the inspector's overflow actions on wide layouts,
+                      // so keep their publisher alive even when the panel itself is closed.
+                      keepMountedWhenClosed: true,
+                      // The expanded sheet is where a document's detailed zoom controls
+                      // live on a phone; the desktop keeps them in the viewer's header.
+                      content: mobileLayout ? (
+                        <>
+                          {documentRoute && documentNavigation?.zoom ? (
+                            <DocumentZoomSection
+                              zoom={documentNavigation.zoom}
+                            />
+                          ) : null}
+                          {rightPanelContent}
+                        </>
+                      ) : (
+                        desktopRightPanelContent
+                      ),
+                    }
+              }
+              edgeBack={onboardingFocus ? undefined : edgeBack}
             >
               {routeDocumentTarget ? (
                 <DocumentNavigationMarker
