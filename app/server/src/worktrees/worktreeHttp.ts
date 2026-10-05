@@ -28,6 +28,7 @@ import {
   getWorktreeFileContent,
   getWorktreeFileDiff,
   getWorktreeFileRaw,
+  getWorktreeFileLog,
   getWorktreeLog,
   getWorktreeTree,
   isSafeRef,
@@ -328,6 +329,12 @@ async function dispatch(
       );
     case "log":
       return getWorktreeLog(row, Number(params.get("limit")) || 50);
+    case "file-log":
+      return getWorktreeFileLog(
+        row,
+        params.get("path") ?? "",
+        Number(params.get("limit")) || 50,
+      );
     case "tree":
       return getWorktreeTree(
         row,

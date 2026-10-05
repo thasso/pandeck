@@ -5299,6 +5299,31 @@ export interface WorktreeLogResponse {
   entries: WorktreeCommitLogEntry[];
 }
 
+/** One commit that touched a file, as the file's History lists it. */
+export interface WorktreeFileLogEntry {
+  oid: string;
+  shortOid: string;
+  subject: string;
+  author: string;
+  authoredAt: number;
+  /** The file's path in this commit; older than a rename it is the old name. */
+  path: string;
+  /**
+   * What this commit's change is shown against: its first parent, or the
+   * empty tree for a root commit. `parentOid..oid` is the diff range.
+   */
+  parentOid: string;
+}
+
+/** The commits reachable from HEAD that touched one file, newest first. */
+export interface WorktreeFileLogResponse {
+  worktreeId: string;
+  path: string;
+  entries: WorktreeFileLogEntry[];
+  /** True when the history goes back further than `entries`. */
+  truncated: boolean;
+}
+
 export interface WorktreeTreeEntry {
   name: string;
   path: string;

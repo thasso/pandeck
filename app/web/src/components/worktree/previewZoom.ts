@@ -1,7 +1,7 @@
 import type { DocumentZoomMode } from "../../lib/documentZoom.ts";
 
 /** Which pane of a worktree file the reader is on. */
-export type FilePivot = "file" | "preview" | "vs-base";
+export type FilePivot = "file" | "preview" | "vs-base" | "history";
 
 /** How a file can render beyond source: browser-native image, or a rendered document. */
 export type PreviewKind = "raster" | "svg" | "markdown" | "html";
@@ -45,7 +45,8 @@ export function worktreeZoomMode(
   if (view === "diff") return "text";
   // An image has no source worth reading, so it gets no separate Preview
   // pivot: the File pivot IS the picture, and zoom has to scale it.
-  if (previewKind === "raster" && pivot !== "vs-base") return "visual";
+  if (previewKind === "raster" && (pivot === "file" || pivot === "preview"))
+    return "visual";
   if (pivot !== "preview") return "text";
   return previewKind === "markdown" ? "text" : "visual";
 }

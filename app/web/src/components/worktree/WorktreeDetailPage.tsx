@@ -33,6 +33,7 @@ import {
   FolderTree,
   GitBranch,
   GitCompareArrows,
+  History,
   List,
   PanelLeftClose,
   PanelLeftOpen,
@@ -87,6 +88,7 @@ import {
   externalDocumentActionEnabled,
   runExternalDocumentAction,
 } from "../../lib/documentActions.ts";
+import { FileHistoryList } from "./FileHistoryList.tsx";
 import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { dataOf, errorOf, isInitialLoad } from "../../lib/loadState.ts";
 import {
@@ -1205,6 +1207,7 @@ function FilesView({
             icon: <GitCompareArrows size={15} />,
           },
         ] as Array<{ id: FilePivot; label: string; icon: ReactNode }>)),
+    { id: "history", label: "History", icon: <History size={15} /> },
   ];
   // Content/diff-derived, memoized pierre cache keys (see ChangesView).
   const pivotDiffPath = pivotDiff?.path;
@@ -1239,13 +1242,15 @@ function FilesView({
     ? "Hide ignored and hidden files"
     : "Show ignored and hidden files";
   const shownRefresh =
-    pivot === "vs-base"
-      ? pivotFetch.state.status === "refreshing"
-        ? "Refreshing this diff"
-        : null
-      : fileFetch.state.status === "refreshing"
-        ? "Refreshing this file"
-        : null;
+    pivot === "history"
+      ? null // the history list marks its own refresh
+      : pivot === "vs-base"
+        ? pivotFetch.state.status === "refreshing"
+          ? "Refreshing this diff"
+          : null
+        : fileFetch.state.status === "refreshing"
+          ? "Refreshing this file"
+          : null;
   const pivotControls =
     pivots.length > 1 ? (
       <div
@@ -1420,6 +1425,21 @@ function FilesView({
                     content={file && !file.binary ? file.content : undefined}
                   />
                 )
+              ) : pivot === "history" ? (
+                <FileHistoryList
+                  worktreeId={worktree.id}
+                  path={filePath}
+                  refreshToken={refreshToken}
+                  onOpenCommit={(entry) =>
+                    navigate(
+                      worktreePath(worktree.id, "changes", {
+                        path: entry.path,
+                        from: entry.parentOid,
+                        to: entry.oid,
+                      }),
+                    )
+                  }
+                />
               ) : pivot !== "file" ? (
                 pivotDiff ? (
                   // Unconditional frame: see ChangesView — a note that appears
