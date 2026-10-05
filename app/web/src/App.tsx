@@ -6252,6 +6252,11 @@ function AppContent() {
     route.name === "tasks" && route.id
       ? backlogTasks.find((t) => t.id === route.id)
       : undefined;
+  // A draft has no real account/model until onboarding connects one. Session
+  // history retains its own recorded profile regardless of onboarding state.
+  const showSessionProfile =
+    runtimeHasStarted ||
+    (onboarding === "complete" && activeCredentialProfiles.length > 0);
   const rightPanelContent = calendarRoute ? (
     calendarDetailEl
   ) : route.name === "tasks" && route.id ? (
@@ -6422,26 +6427,34 @@ function AppContent() {
       relatedTasks={relatedGlobalTasks}
       sessionTasks={sessionTasks}
       forkOrigin={displaySession?.forkOrigin}
-      credentialProfile={(() => {
-        const profileId =
-          displaySessionListItem?.credentialProfileId ??
-          (!runtimeHasStarted ? credentialProfileId : undefined);
-        const profile = credentialProfiles.find(
-          (item) => item.id === profileId,
-        );
-        return profile
-          ? { name: profile.name, provider: profile.provider }
-          : undefined;
-      })()}
+      credentialProfile={
+        showSessionProfile
+          ? (() => {
+              const profileId =
+                displaySessionListItem?.credentialProfileId ??
+                (!runtimeHasStarted ? credentialProfileId : undefined);
+              const profile = credentialProfiles.find(
+                (item) => item.id === profileId,
+              );
+              return profile
+                ? { name: profile.name, provider: profile.provider }
+                : undefined;
+            })()
+          : undefined
+      }
       // Before the first prompt the runtime is still the staged selection, the
-      // same one the composer's pickers show.
+      // same one the composer's pickers show — but only after an account exists.
       model={
-        displaySession?.model ??
-        (runtimeHasStarted ? undefined : defaultNewSessionModel)
+        showSessionProfile
+          ? (displaySession?.model ??
+            (runtimeHasStarted ? undefined : defaultNewSessionModel))
+          : undefined
       }
       thinkingLevel={
-        displaySession?.thinkingLevel ??
-        (runtimeHasStarted ? undefined : defaultNewSessionThinking)
+        showSessionProfile
+          ? (displaySession?.thinkingLevel ??
+            (runtimeHasStarted ? undefined : defaultNewSessionThinking))
+          : undefined
       }
       sessions={state.sessions}
       projects={projects}

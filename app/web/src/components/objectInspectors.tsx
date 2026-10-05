@@ -1041,18 +1041,17 @@ export function SessionInspector({
       actions={actions}
       sectionStorageScope={`session:${sessionId ?? "draft"}`}
     >
-      {profileFacts.length > 0 ? (
-        <InspectorSection
-          id="credential-profile"
-          storageScope={`session:${sessionId ?? "draft"}`}
-          title="Profile"
-          icon={<IdCard size={13} />}
-          summary={profileSummary}
-          defaultOpen={false}
-        >
-          <InspectorFacts facts={profileFacts} />
-        </InspectorSection>
-      ) : null}
+      <InspectorSection
+        id="credential-profile"
+        storageScope={`session:${sessionId ?? "draft"}`}
+        title="Profile"
+        icon={<IdCard size={13} />}
+        summary={profileFacts.length > 0 ? profileSummary : "No account or model yet"}
+        defaultOpen={false}
+        collapsible={profileFacts.length > 0}
+      >
+        {profileFacts.length > 0 ? <InspectorFacts facts={profileFacts} /> : null}
+      </InspectorSection>
       {children}
       {view ? (
         <InspectorSection
