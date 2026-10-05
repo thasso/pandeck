@@ -149,6 +149,10 @@ Validation/formatting contracts:
 
 - KB mutations are serialized by a repository lock before filesystem writes and
   Git commits.
+- That lock is the folder's ordinary repo lock (`repoLockKey`), the same one the
+  worktree Commit takes, so a KB write and a commit from the browser never
+  interleave. Concurrent stores initializing one new folder share a single
+  in-flight init, since the key changes when `git init` creates `.git`.
 - Each successful mutation creates a Git commit with structured metadata in the
   message or trailer block: actor, session id, task id, entry id(s), reason, and
   changed paths (`KB-Actor`, `KB-Session`, `KB-Task`, `KB-Entry`, `KB-Paths`).
@@ -160,6 +164,17 @@ Validation/formatting contracts:
   loading unrelated large files into agent context.
 
 ## Browser Knowledge surfaces
+
+The KB folder is also readable as a checkout under the reserved worktree id
+`knowledge` (`KNOWLEDGE_WORKTREE_ID`,
+`app/server/src/worktrees/knowledgeCheckout.ts`): the worktree file routes serve
+its tree, files, raw bytes, History and uncommitted Changes, and Commit commits
+edits made outside the app. Every other worktree verb — push, pull requests,
+merge, clean, retire, hosting — answers 404 for it. Only the surfaces that call
+`resolveReadableWorktreeRow` (the worktree file routes, document grants, the
+change watcher) see the id; session placement, spawning, agent worktree tools,
+comments and delivery resolve through `resolveWorktreeRow`, which never returns
+the KB.
 
 Browser read APIs live in `app/server/src/knowledgeBaseHttp.ts` under
 `/api/knowledge/*`:

@@ -485,6 +485,11 @@ a synthetic record (never a DB row).
   detached or diverged state is never written. It invalidates only the selected
   base/main row and merged worktree status ids. The merge projection catches
   unexpected refresh failures because the provider merge has already landed.
+- `knowledgeCheckout.ts` reads the Knowledge Base folder as the checkout
+  `knowledge`: `resolveReadableWorktreeRow` is the resolver for the file
+  surfaces only (`worktreeHttp.ts`, which also gates the KB to its read verbs
+  plus `commit`; the watcher; document grants), never part of
+  `resolveWorktreeRow`.
 - `worktreeDiff.ts` owns the read surfaces (change lists, per-file diffs as raw
   patches plus text-sized full old/new contents, file contents, log,
   gitignore-aware tree), parameterized by `WorktreeDiffScope`; `worktreeHttp.ts`

@@ -120,6 +120,7 @@ import {
 } from "./session/runtimePrompt.ts";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
+import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
 import { subagentStore } from "./db/subagentStore.ts";
@@ -1250,7 +1251,7 @@ export class Connection implements Viewer {
           void (async () => {
             await addWorktreeViewer(watchId);
             if (!this.watchedWorktrees.has(watchId)) return;
-            const row = await resolveWorktreeRow(watchId);
+            const row = await resolveReadableWorktreeRow(watchId);
             if (!row || row.status !== "active") return;
             const status = await computeWorktreeStatus(row);
             if (this.watchedWorktrees.has(watchId))

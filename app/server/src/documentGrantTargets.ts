@@ -14,7 +14,7 @@ import { mintDocumentGrant, type MintedDocument } from "./directFileGrants.ts";
 import { readKnowledgeAsset } from "./knowledgeBaseAssets.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 import { containedRealPath } from "./worktrees/worktreeDiff.ts";
-import { resolveWorktreeRow } from "./worktrees/worktreeResolve.ts";
+import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 
 interface ResolvedGrantSource {
   filePath: string;
@@ -128,7 +128,7 @@ export interface DocumentGrantResolverDependencies {
     entryId: string,
     path: string,
   ) => Promise<{ entryId: string; entryFolder: string; sourcePath: string }>;
-  resolveWorktree: typeof resolveWorktreeRow;
+  resolveWorktree: typeof resolveReadableWorktreeRow;
 }
 
 const DEFAULT_RESOLVER_DEPENDENCIES: DocumentGrantResolverDependencies = {
@@ -146,7 +146,7 @@ const DEFAULT_RESOLVER_DEPENDENCIES: DocumentGrantResolverDependencies = {
       sourcePath: asset.asset.sourcePath,
     };
   },
-  resolveWorktree: resolveWorktreeRow,
+  resolveWorktree: resolveReadableWorktreeRow,
 };
 
 /**
