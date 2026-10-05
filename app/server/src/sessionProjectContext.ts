@@ -82,7 +82,7 @@ function formatLocalPath(path: ProjectLocalPath): string {
  * and the link form to write.
  */
 function projectKnowledgeLine(projectId: string): string {
-  return `- Durable Project knowledge lives in the Knowledge Base (kb_* tools, tool search "knowledge base"): tag ${inlineCode(`project:${projectId}`)}, kb.links entry ${inlineCode(`pa://project/${projectId}`)}.`;
+  return `- Durable Project knowledge lives in the Knowledge Base (kb_* tools, tool search "knowledge base"): tag ${inlineCode(`project:${projectId}`)}, link ${inlineCode(`pa://project/${projectId}`)}.`;
 }
 
 /**

@@ -20,6 +20,6 @@ export function knowledgeBaseBehaviorGuidance(): string {
   return [
     "## Assistant Knowledge Base",
     "",
-    'A versioned, first-class Knowledge Base lives under DATA_DIR/knowledge. Search it before answering durable questions or asking the user about facts it may already hold. Its kb_* tools load on demand: find them with a tool search for "knowledge base", then read with kb_search and kb_get_entry, and write with kb_write_entry, kb_edit_entry, and related tools. Never edit DATA_DIR/knowledge directly — always use the tools so writes are validated and committed. Full read/write, scoping, entry id, frontmatter, asset, and comment guidance lives in the tool descriptions.',
+    'A versioned Knowledge Base — a Git-backed folder of Markdown and other files — lives under DATA_DIR/knowledge. Search it before answering durable questions or asking the user about facts it may already hold. Its kb_* tools load on demand: find them with a tool search for "knowledge base", then read with kb_search and kb_read, and write with kb_write and kb_edit. Never edit DATA_DIR/knowledge directly: the user edits it too, and the tools commit only your own changes. Writing, linking and scoping guidance lives in the tool descriptions.',
   ].join("\n");
 }

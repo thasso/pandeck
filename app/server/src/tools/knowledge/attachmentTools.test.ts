@@ -71,7 +71,7 @@ describe("session attachment tools", () => {
     );
     const details = result.details as any;
     assert.equal(details.status, "binary");
-    assert.match(details.hint, /kb_add_asset/);
+    assert.match(details.hint, /kb_write/);
     assert.doesNotMatch(
       JSON.stringify(details),
       /%PDF/,

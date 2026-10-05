@@ -3,6 +3,8 @@
  *
  * `pa://<object-type>/<id>` links are durable Markdown/app references whose
  * visible labels can be resolved at render time without rewriting stored text.
+ * A Knowledge Base link names a FILE PATH instead of an id —
+ * `pa://knowledge/projects/plan.md` — so its "id" may span several segments.
  */
 export const PA_OBJECT_TYPES = [
   "knowledge",
@@ -23,7 +25,10 @@ export interface PaObjectLink {
   objectType: string;
   /** True when objectType is one of the app's known first-class object types. */
   knownType: boolean;
-  /** Decoded single path segment identifying the app object. */
+  /**
+   * Decoded path segment identifying the app object; for `knowledge`, the
+   * file's path inside the Knowledge Base, segments joined by `/`.
+   */
   id: string;
   /** URI query string without the leading `?`, preserved for future extensions. */
   query?: string;
@@ -50,24 +55,14 @@ export interface PaObjectLinkResolution extends PaObjectLink {
 const PA_SCHEME = "pa:";
 const MAX_OBJECT_TYPE_LENGTH = 40;
 const MAX_OBJECT_ID_LENGTH = 256;
+const MAX_KNOWLEDGE_PATH_LENGTH = 1024;
 const OBJECT_TYPE_RE = /^[a-z][a-z0-9._-]*$/;
 const PA_URI_PATTERN =
-  /\bpa:\/\/[A-Za-z][A-Za-z0-9._-]*\/[\w.%~:+-]+(?:\?[^\s<>()[\]{}]*)?(?:#[^\s<>()[\]{}]*)?/g;
+  /\bpa:\/\/[A-Za-z][A-Za-z0-9._-]*\/[\w.%~:+-]+(?:\/[\w.%~:+-]+)*(?:\?[^\s<>()[\]{}]*)?(?:#[^\s<>()[\]{}]*)?/g;
 const KNOWN_TYPES = new Set<string>(PA_OBJECT_TYPES);
 
 export function isPaObjectType(value: string): value is PaObjectType {
   return KNOWN_TYPES.has(value);
-}
-
-/**
- * Whether a durable relation (a KB entry's `links` and source refs) may name
- * this object. Every known type may, except an approval card: it is a decision
- * inside one session, answered and gone, not an object to relate an entry to.
- */
-export function isPaRelationLink(
-  link: Pick<PaObjectLink, "objectType" | "knownType">,
-): boolean {
-  return link.knownType && link.objectType !== "approval";
 }
 
 export function parsePaObjectLink(input: string): PaObjectLink | null {
@@ -87,15 +82,14 @@ export function parsePaObjectLink(input: string): PaObjectLink | null {
     objectType.length > MAX_OBJECT_TYPE_LENGTH
   )
     return null;
-  const encodedPath = url.pathname.replace(/^\//, "");
-  if (!encodedPath || encodedPath.includes("/")) return null;
-  let id: string;
-  try {
-    id = decodeURIComponent(encodedPath);
-  } catch {
-    return null;
-  }
-  if (!id || id.length > MAX_OBJECT_ID_LENGTH || /[\0/]/.test(id)) return null;
+  // The path as written: `URL` would resolve `a/../b` to `b` silently.
+  const encodedPath = /^pa:\/\/[^/?#]*\/([^?#]*)/i.exec(raw)?.[1] ?? "";
+  if (!encodedPath) return null;
+  const id =
+    objectType === "knowledge"
+      ? decodeKnowledgePath(encodedPath)
+      : decodeObjectId(encodedPath);
+  if (id === null) return null;
   let fragment: string | undefined;
   try {
     fragment = url.hash ? decodeURIComponent(url.hash.slice(1)) : undefined;
@@ -110,6 +104,36 @@ export function parsePaObjectLink(input: string): PaObjectLink | null {
     ...(url.search ? { query: url.search.slice(1) } : {}),
     ...(fragment !== undefined ? { fragment } : {}),
   };
+}
+
+function decodeObjectId(encoded: string): string | null {
+  if (encoded.includes("/")) return null;
+  let id: string;
+  try {
+    id = decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+  return id && id.length <= MAX_OBJECT_ID_LENGTH && !/[\0/]/.test(id)
+    ? id
+    : null;
+}
+
+/** A Knowledge Base file path: plain relative segments, never `.`/`..`. */
+function decodeKnowledgePath(encoded: string): string | null {
+  const segments: string[] = [];
+  for (const part of encoded.split("/")) {
+    const segment = decodeObjectId(part);
+    if (segment === null || segment === "." || segment === "..") return null;
+    segments.push(segment);
+  }
+  const path = segments.join("/");
+  return path.length <= MAX_KNOWLEDGE_PATH_LENGTH ? path : null;
+}
+
+/** The `pa://knowledge/<path>` link to one Knowledge Base file. */
+export function knowledgeFileLink(path: string): string {
+  return formatPaObjectLink({ objectType: "knowledge", id: path });
 }
 
 export function formatPaObjectLink(input: {
@@ -128,14 +152,26 @@ export function formatPaObjectLink(input: {
     );
   }
   const id = input.id.trim();
-  if (!id || id.length > MAX_OBJECT_ID_LENGTH || /[\0/]/.test(id))
-    throw new Error("pa:// object id must be a non-empty single path segment.");
+  const encoded =
+    objectType === "knowledge"
+      ? id.split("/").map(encodeURIComponent).join("/")
+      : encodeURIComponent(id);
+  const valid =
+    objectType === "knowledge"
+      ? decodeKnowledgePath(encoded) === id
+      : decodeObjectId(encoded) === id;
+  if (!valid)
+    throw new Error(
+      objectType === "knowledge"
+        ? "pa://knowledge path must be a relative file path without empty, '.' or '..' segments."
+        : "pa:// object id must be a non-empty single path segment.",
+    );
   const query =
     input.query instanceof URLSearchParams
       ? input.query.toString()
       : input.query?.replace(/^\?/, "");
   const fragment = input.fragment?.replace(/^#/, "");
-  return `pa://${objectType}/${encodeURIComponent(id)}${query ? `?${query}` : ""}${fragment ? `#${encodeURIComponent(fragment)}` : ""}`;
+  return `pa://${objectType}/${encoded}${query ? `?${query}` : ""}${fragment ? `#${encodeURIComponent(fragment)}` : ""}`;
 }
 
 export function findPaObjectLinkUris(text: string): string[] {
@@ -159,7 +195,7 @@ export function paObjectPath(type: string, id: string): string {
   const encoded = encodeURIComponent(id);
   switch (type) {
     case "knowledge":
-      return `/knowledge/${encoded}`;
+      return `/knowledge/files?path=${encoded}`;
     case "task":
       return `/tasks/${encoded}`;
     case "project":
@@ -224,7 +260,8 @@ export function paObjectHref(
 ): string {
   const path = paObjectPath(link.objectType, link.id);
   if (path.startsWith("#")) return path;
-  return `${path}${link.query ? `?${link.query}` : ""}${link.fragment ? `#${encodeURIComponent(link.fragment)}` : ""}`;
+  const join = path.includes("?") ? "&" : "?";
+  return `${path}${link.query ? `${join}${link.query}` : ""}${link.fragment ? `#${encodeURIComponent(link.fragment)}` : ""}`;
 }
 
 export function paObjectKey(
@@ -236,6 +273,9 @@ export function paObjectKey(
 export function fallbackPaObjectTitle(
   link: Pick<PaObjectLink, "objectType" | "id">,
 ): string {
+  // A Knowledge Base file reads best by its name.
+  if (link.objectType === "knowledge")
+    return link.id.split("/").pop() ?? link.id;
   return `${paObjectTypeLabel(link.objectType)} ${link.id}`;
 }
 

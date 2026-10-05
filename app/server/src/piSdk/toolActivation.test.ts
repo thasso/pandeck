@@ -63,7 +63,7 @@ test("initial active set is eager + find_tools; deferred tools stay out", () => 
     assert.ok(initial.has("find_tools"));
     assert.equal(initial.has("web_search"), false);
     assert.equal(initial.has("kb_search"), false, "Task-286: KB reads defer");
-    assert.equal(initial.has("kb_write_entry"), false);
+    assert.equal(initial.has("kb_write"), false);
     assert.equal(initial.has("session_send_prompt"), false);
   } finally {
     activation.dispose();
@@ -83,21 +83,21 @@ test("Plan keeps Task mutations but removes other side-effecting app tools", () 
     applyActiveToolNames: (names) => applied.push(new Set(names)),
   });
   try {
-    activation.initialize(["kb_get_entry", "kb_write_entry"]);
+    activation.initialize(["kb_read", "kb_write"]);
     const build = applied.at(-1)!;
     assert.ok(build.has("task_read"));
     assert.ok(build.has("task_manage"));
-    assert.ok(build.has("kb_get_entry"));
-    assert.ok(build.has("kb_write_entry"));
+    assert.ok(build.has("kb_read"));
+    assert.ok(build.has("kb_write"));
 
     mode = "plan";
     activation.reapply();
     const plan = applied.at(-1)!;
     assert.ok(plan.has("task_read"));
-    assert.ok(plan.has("kb_get_entry"));
+    assert.ok(plan.has("kb_read"));
     assert.ok(plan.has("find_tools"));
     assert.ok(plan.has("task_manage"), "Plan permits durable Task mutations");
-    assert.equal(plan.has("kb_write_entry"), false);
+    assert.equal(plan.has("kb_write"), false);
 
     mode = "build";
     activation.reapply();
@@ -158,13 +158,13 @@ test("a durable-knowledge query reaches the deferred KB reads in one find_tools 
       ) as { loaded?: string[] };
       assert.ok(
         payload.loaded?.includes("kb_search") ||
-          payload.loaded?.includes("kb_get_entry"),
+          payload.loaded?.includes("kb_read"),
         `"${query}" did not discover the KB read tools: ${JSON.stringify(payload)}`,
       );
       if (query === "what do we already know about this project")
         assert.deepEqual(
           payload.loaded,
-          ["kb_get_entry", "kb_search"],
+          ["kb_search", "kb_read"],
           `durable-knowledge read intent loaded another family or a write tool: ${JSON.stringify(payload)}`,
         );
       assert.ok(applied.at(-1)!.has("current_time"), "activation is additive");
@@ -176,14 +176,11 @@ test("a durable-knowledge query reaches the deferred KB reads in one find_tools 
 
 test("transcript addedToolNames seed keeps previously loaded tools active on reopen", () => {
   const applied: Array<ReadonlySet<string>> = [];
-  const activation = assistantActivation(applied, [
-    "web_search",
-    "kb_write_entry",
-  ]);
+  const activation = assistantActivation(applied, ["web_search", "kb_write"]);
   try {
     const initial = applied[applied.length - 1]!;
     assert.ok(initial.has("web_search"));
-    assert.ok(initial.has("kb_write_entry"));
+    assert.ok(initial.has("kb_write"));
     assert.equal(initial.has("jira_get_issue"), false);
   } finally {
     activation.dispose();
@@ -570,7 +567,7 @@ test("find_tools still discovers app tools by capability", async () => {
       ["stop a spawned child session", "session_control"],
       ["search the web", "web_search"],
       ["convert a pdf attachment to markdown", "convert_pdf"],
-      ["write a knowledge base entry", "kb_write_entry"],
+      ["write a knowledge base entry", "kb_write"],
       ["look up a person in the contacts directory", "contacts_lookup"],
       ["project registry mapping for a local repo", "project_registry_read"],
       ["propose an app change to the workshop", "workshop_draft_handoff"],

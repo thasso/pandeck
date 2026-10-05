@@ -741,24 +741,24 @@ conversation, so it can remain beside the routed main-session chat.
 Review page the `/knowledge` route draws — file tree, File/Preview/History,
 uncommitted changes — in a narrow column. Moving inside it is panel state, like
 the Worktree panel below, and its one action hands the file or view it is on to
-the main pane. A panel surface is opened from elsewhere by request:
-`kb_show_entry`'s transcript card opens its entry's file here. **Worktree** is
-the fourth, and it is the only panel that addresses no object of its own: it
-follows the OPEN SESSION to the worktree that session executes in, drawing the
-same Review and Files page the `/worktrees/:id` route draws — diffs, file tree,
-commenting and review submission included — so the changes can be read beside
-the chat producing them. It is a narrow column, so it takes the list→detail
-layout and the unified diffs a phone takes — but only the LAYOUT: its scope
-picker and jump list open as anchored popovers, since a viewport-wide sheet
-dropped over the app is a phone affordance, and this panel exists to sit beside
-what the reader is comparing against. Moving inside it (a view, a file, a diff
-scope) is panel state and never touches the address bar, which keeps naming the
-main pane's object; its one action hands the worktree, at the view it is on, to
-the main pane. A session with no worktree, and one whose worktree is gone, each
-say so rather than drawing an empty page. The tab bar is panel chrome, not a
-second object-title row. On small layouts none of this tab state exists: the
-right panel remains the direct flip-up Inspector dock, and a Knowledge card
-there offers its route alone. Top to bottom, for the current main-pane object:
+the main pane. A panel surface is opened from elsewhere by request: `kb_show`'s
+transcript card opens its file here. **Worktree** is the fourth, and it is the
+only panel that addresses no object of its own: it follows the OPEN SESSION to
+the worktree that session executes in, drawing the same Review and Files page
+the `/worktrees/:id` route draws — diffs, file tree, commenting and review
+submission included — so the changes can be read beside the chat producing them.
+It is a narrow column, so it takes the list→detail layout and the unified diffs
+a phone takes — but only the LAYOUT: its scope picker and jump list open as
+anchored popovers, since a viewport-wide sheet dropped over the app is a phone
+affordance, and this panel exists to sit beside what the reader is comparing
+against. Moving inside it (a view, a file, a diff scope) is panel state and
+never touches the address bar, which keeps naming the main pane's object; its
+one action hands the worktree, at the view it is on, to the main pane. A session
+with no worktree, and one whose worktree is gone, each say so rather than
+drawing an empty page. The tab bar is panel chrome, not a second object-title
+row. On small layouts none of this tab state exists: the right panel remains the
+direct flip-up Inspector dock, and a Knowledge card there offers its route
+alone. Top to bottom, for the current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links

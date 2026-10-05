@@ -147,8 +147,8 @@ Three properties make that guard total rather than best-effort:
 - **`confluence_download_attachment`** — one attachment, by id or by page and
   file name, into the session attachment store (source `confluence`). The result
   is the session attachment id and host path, never the bytes, so the file
-  continues into `read_attachment`, `convert_pdf`, `kb_add_asset` or an upload.
-  50 MiB by default, 100 MiB at most; a larger file is refused rather than
+  continues into `read_attachment`, `convert_pdf`, `kb_write` or an upload. 50
+  MiB by default, 100 MiB at most; a larger file is refused rather than
   truncated.
 - **`confluence_mutate_page`** — approval-gated `create`, `edit`, `comment`,
   `delete`, `uploadAttachment` and `deleteAttachment`, at most 10 items per

@@ -104,6 +104,10 @@ describe("document targets", () => {
     expect(parseDocumentTarget(documentTargetHref(knowledge))).toEqual(
       knowledge,
     );
+    expect(documentTargetPaUri(knowledge)).toBe(
+      "pa://knowledge/notes/a%20plot.md#L2",
+    );
+    expect(parseDocumentTarget("pa://knowledge/notes/a%20plot.md")).toBeNull();
   });
 
   it("uses inclusive one-based line anchors", () => {

@@ -1,4 +1,4 @@
-import { parsePaObjectLink } from "./objectLinks.ts";
+import { knowledgeFileLink, parsePaObjectLink } from "./objectLinks.ts";
 import { KNOWLEDGE_WORKTREE_ID } from "./protocol.ts";
 
 export interface DocumentLineAnchor {
@@ -124,6 +124,8 @@ function anchored<T extends Omit<DocumentTarget, "anchor">>(
 
 /** Parse a durable app/API/pa:// document address. External URLs return null. */
 export function parseDocumentTarget(input: string): DocumentTarget | null {
+  // `pa://knowledge/<path>` is NOT parsed here: it stays an object link, so
+  // the resolver titles it (and still finds a link that names a retired id).
   const pa = parsePaObjectLink(input);
   if (pa?.objectType === "worktree") {
     const params = new URLSearchParams(pa.query ?? "");
@@ -240,6 +242,8 @@ export function documentTargetHref(target: DocumentTarget): string {
 export function documentTargetPaUri(target: DocumentTarget): string | null {
   const anchor = formatDocumentLineAnchor(target.anchor);
   if (target.kind === "worktreeFile") {
+    if (target.worktreeId === KNOWLEDGE_WORKTREE_ID && target.view !== "diff")
+      return `${knowledgeFileLink(target.path)}${anchor}`;
     const params = new URLSearchParams({ path: target.path });
     if (target.view === "diff") params.set("view", "diff");
     return `pa://worktree/${encodeURIComponent(target.worktreeId)}?${params.toString()}${anchor}`;

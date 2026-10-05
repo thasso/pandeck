@@ -273,7 +273,7 @@ async function main(): Promise<void> {
     mcpServer: {} as never,
   });
   const mcpVerdict = await planWithMcp.canUseTool!(
-    "mcp__pa__kb_write_entry",
+    "mcp__pa__kb_write",
     {},
     {} as never,
   );
@@ -298,7 +298,7 @@ async function main(): Promise<void> {
     "Plan permits durable Task mutations",
   );
   const readMcpVerdict = await planWithMcp.canUseTool!(
-    "mcp__pa__kb_get_entry",
+    "mcp__pa__kb_read",
     {},
     {} as never,
   );

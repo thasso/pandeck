@@ -115,9 +115,9 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   checkout `knowledge` (`lib/knowledgeCheckout.ts` builds its record), with
   `lineComments={false}` and `markdownPreviewFirst`. `KnowledgeInspector.tsx` is
   the route's inspector: the uncommitted-file count and "Commit changes…".
-- `KnowledgeEntryToolCard.tsx` renders the `kb_show_entry` card: the entry an
-  agent is pointing at, with the two ways to read its `index.md` (the Knowledge
-  panel, or the `/knowledge/files` route). It reads its open targets from
+- `KnowledgeEntryToolCard.tsx` renders the `kb_show` card: the file an agent is
+  pointing at, with the two ways to read its `index.md` (the Knowledge panel, or
+  the `/knowledge/files` route). It reads its open targets from
   `KnowledgeOpenTargets.tsx`, a context the shell publishes, because the
   transcript renders in both the main pane and the Personal Assistant panel and
   neither threads Knowledge navigation through `MessageList`. The side-panel
@@ -607,10 +607,10 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   scroll — those belong to the page the URL addresses. Its `navigate` intercepts
   the page's own `worktreePath` links into panel state and passes everything
   else to the main pane. An `openRequest` prop opens and activates a tab on
-  behalf of something else in the app (the `kb_show_entry` card). Mobile
-  bypasses that host entirely and keeps the direct Inspector dock. An inspector
-  whose object has not arrived passes `loading` to reserve body sections. The
-  "No related objects yet." `EmptyBox` waits for an actual answer
+  behalf of something else in the app (the `kb_show` card). Mobile bypasses that
+  host entirely and keeps the direct Inspector dock. An inspector whose object
+  has not arrived passes `loading` to reserve body sections. The "No related
+  objects yet." `EmptyBox` waits for an actual answer
   (`app/web/docs/loading-states.md`). `KnowledgeInspector` fetches through the
   keyed `useFetchState`, so entry→entry switches show the NEW object's
   placeholder while a same-object refetch (a commit token, an expanded history

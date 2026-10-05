@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     "a Plan turn permits durable Task mutations",
   );
   const mutatingMcpVerdict = await planOptions!.canUseTool!(
-    "mcp__pa__kb_write_entry",
+    "mcp__pa__kb_write",
     {},
     {} as never,
   );

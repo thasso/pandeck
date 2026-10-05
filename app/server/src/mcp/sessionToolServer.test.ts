@@ -422,7 +422,7 @@ test("claude-sdk session tool server exposes persona tools and links tasks", asy
         true,
         `${eager} must stay always-loaded for the Claude harness`,
       );
-    for (const deferred of ["kb_search", "kb_get_entry"]) {
+    for (const deferred of ["kb_search", "kb_read"]) {
       assert.equal(
         metaOf(deferred)["anthropic/alwaysLoad"],
         undefined,

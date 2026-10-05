@@ -15,16 +15,16 @@ sizes only.
 
 | Persona | Harness | System prompt | Eager tools | First request |
 | --- | --- | ---: | ---: | ---: |
-| assistant | pi | 6,235 | 10,667 | 16,902 |
-| assistant | claude | 6,215 | 9,964 | 16,179 |
-| personal-assistant | pi | 5,465 | 10,667 | 16,132 |
-| personal-assistant | claude | 5,445 | 9,964 | 15,409 |
-| workshop | pi | 13,052 | 20,445 | 33,497 |
-| workshop | claude | 6,919 | 11,927 | 18,846 |
+| assistant | pi | 6,208 | 10,667 | 16,875 |
+| assistant | claude | 6,188 | 9,964 | 16,152 |
+| personal-assistant | pi | 5,438 | 10,667 | 16,105 |
+| personal-assistant | claude | 5,418 | 9,964 | 15,382 |
+| workshop | pi | 13,025 | 20,445 | 33,470 |
+| workshop | claude | 6,892 | 11,927 | 18,819 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,486 | 19,958 | 33,444 |
-| developer | claude | 7,353 | 11,431 | 18,784 |
+| developer | pi | 13,459 | 19,958 | 33,417 |
+| developer | claude | 7,326 | 11,431 | 18,757 |
 
 ## assistant — pi
 
@@ -42,7 +42,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,487 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | yes | 0 |
@@ -51,7 +51,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,104 |
 | `tools:eager:schemas` | tools | yes | 8,451 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 137,183 |
+| `tools:deferred:universe` | tools | no | 131,664 |
 
 ## assistant — claude
 
@@ -64,7 +64,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,487 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | no | 0 |
@@ -73,7 +73,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,732 |
 | `tools:eager:schemas` | tools | yes | 8,058 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 138,047 |
+| `tools:deferred:universe` | tools | no | 132,483 |
 
 ## personal-assistant — pi
 
@@ -90,7 +90,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,778 |
 | `profile-suffix` | prompt | yes | 107 |
 | `project-context` | prompt | yes | 0 |
@@ -99,7 +99,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,104 |
 | `tools:eager:schemas` | tools | yes | 8,451 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 141,563 |
+| `tools:deferred:universe` | tools | no | 136,044 |
 
 ## personal-assistant — claude
 
@@ -111,7 +111,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,778 |
 | `profile-suffix` | prompt | yes | 107 |
 | `project-context` | prompt | no | 0 |
@@ -120,7 +120,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,732 |
 | `tools:eager:schemas` | tools | yes | 8,058 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 142,481 |
+| `tools:deferred:universe` | tools | no | 136,917 |
 
 ## workshop — pi
 
@@ -136,7 +136,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | yes | 3,769 |
@@ -145,7 +145,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,905 |
 | `tools:eager:schemas` | tools | yes | 10,743 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 167,155 |
+| `tools:deferred:universe` | tools | no | 161,636 |
 
 ## workshop — claude
 
@@ -156,7 +156,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | no | 3,613 |
@@ -165,7 +165,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,411 |
 | `tools:eager:schemas` | tools | yes | 9,206 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 168,379 |
+| `tools:deferred:universe` | tools | no | 162,815 |
 
 ## workflow-coordinator — pi
 
@@ -216,7 +216,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | yes | 3,769 |
@@ -225,7 +225,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,731 |
 | `tools:eager:schemas` | tools | yes | 10,457 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 165,966 |
+| `tools:deferred:universe` | tools | no | 160,453 |
 
 ## developer — claude
 
@@ -236,7 +236,7 @@ sizes only.
 | `project-registry` | prompt | yes | 413 |
 | `chat-files` | prompt | yes | 860 |
 | `chat-math` | prompt | yes | 234 |
-| `kb-guidance` | prompt | yes | 597 |
+| `kb-guidance` | prompt | yes | 570 |
 | `memory-guidance` | prompt | yes | 1,401 |
 | `profile-suffix` | prompt | yes | 0 |
 | `project-context` | prompt | no | 3,613 |
@@ -245,4 +245,4 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,237 |
 | `tools:eager:schemas` | tools | yes | 8,920 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 167,181 |
+| `tools:deferred:universe` | tools | no | 161,623 |

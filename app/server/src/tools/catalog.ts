@@ -160,18 +160,13 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   list_attachments: "none",
   read_attachment: "none",
   kb_search: "none",
-  kb_get_entry: "none",
-  kb_show_entry: "none",
-  kb_tree: "none",
-  kb_write_entry: "local",
-  kb_edit_entry: "local",
-  kb_add_asset: "local",
-  kb_list_assets: "none",
-  kb_read_asset: "none",
-  kb_read_extract: "none",
-  kb_move_entry: "local",
+  kb_read: "none",
+  kb_list: "none",
+  kb_show: "none",
+  kb_write: "local",
+  kb_edit: "local",
+  kb_move: "local",
   kb_history: "none",
-  kb_diff: "none",
   skill_list: "none",
   skill_get: "none",
   skill_read_file: "none",
@@ -318,7 +313,7 @@ function classifyToolGroups(groups: UnclassifiedToolGroup[]): ToolGroup[] {
   }));
 }
 
-const KNOWLEDGE_CORE_TOOL_NAMES = new Set(["kb_search", "kb_get_entry"]);
+const KNOWLEDGE_CORE_TOOL_NAMES = new Set(["kb_search", "kb_read"]);
 
 function knowledgeCoreTools(): AgentTool[] {
   return assistantKnowledgeBaseTools.filter((tool) =>
@@ -408,9 +403,9 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       id: "knowledge",
       label: "Knowledge Base management",
       description:
-        "Knowledge Base authoring and organization: entries, targeted edits, assets, history, diffs, and anchored comment threads.",
+        "Knowledge Base authoring and organization: write, edit and move files, list folders, history and diffs, and show a file to the user.",
       searchHint:
-        "knowledge base kb entry asset history diff comment durable documentation",
+        "knowledge base kb file folder write edit move history diff durable documentation",
       loading: "deferred",
       family: "integration",
       tools: knowledgeManagementTools(),

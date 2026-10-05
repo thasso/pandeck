@@ -233,7 +233,7 @@ test("a thrown engine error passes through unchanged and is not recorded", async
 
 test("documents reach the Claude engine and tools reach either engine", async () => {
   const documents = [{ mimeType: "application/pdf", dataBase64: "QQ==" }];
-  const tools = [{ name: "kb_read_asset" }] as unknown as NonNullable<
+  const tools = [{ name: "kb_read" }] as unknown as NonNullable<
     OneShotRequest["tools"]
   >;
   vi.mocked(runClaudeSdkOneShot).mockResolvedValue({ text: "ok", usage: {} });

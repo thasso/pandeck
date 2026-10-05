@@ -1215,23 +1215,21 @@ export interface ShowFilesCard {
 }
 
 /**
- * One Knowledge entry a `kb_show_entry` call put in front of the user, as the
+ * One Knowledge Base file a `kb_show` call put in front of the user, as the
  * shortcut into the reading surfaces: the chat card opens it in the right
- * panel's Knowledge tab, or in the main Knowledge route.
+ * panel's Knowledge tab, or on the `/knowledge` route.
  *
- * Identity comes from the KB index, never from the caller: the tool resolves
- * the entry and re-spells its id, title and path here, so a card can only ever
- * name an entry that exists. {@link note} is the agent's own one line about why
- * it is showing this entry and is rendered as plain text.
+ * Identity comes from the Knowledge Base, never from the caller: the tool
+ * checks the file exists and re-spells its path and title here. {@link note}
+ * is the agent's own one line about why it is showing this file and is
+ * rendered as plain text.
  */
 export interface KnowledgeEntryCard {
-  /** Durable `kb.id`; the card's `pa://knowledge/<id>` address. */
-  entryId: string;
-  /** Entry title from its frontmatter. */
-  title: string;
-  /** Entry folder path in the KB repository, for orientation. */
+  /** The file's path inside the Knowledge Base; the card opens it. */
   path: string;
-  /** Frontmatter summary, when the entry has one. */
+  /** Its title: frontmatter `title`, else its first heading, else its name. */
+  title: string;
+  /** Frontmatter summary, when the file has one. */
   summary?: string;
   /** The agent's reason for showing it, shown under the title. */
   note?: string;

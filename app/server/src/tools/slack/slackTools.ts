@@ -849,7 +849,7 @@ export const slackFileReadTool = defineAgentTool<{
     }
     // Binary files (PDF, images, docs, …) are staged into the session attachment
     // store BY REFERENCE: the raw bytes never enter the model context. Follow up
-    // with kb_add_asset (sourceAttachmentId) to copy the file into the KB.
+    // with kb_write (sourceAttachmentId) to copy the file into the KB.
     if (downloaded.truncated || downloaded.bytes.byteLength === 0)
       return result({
         capability: "file_read",

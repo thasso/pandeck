@@ -1,6 +1,6 @@
 /**
  * `convert_xlsx`: read an Excel workbook (session attachment, host file or KB
- * asset) into tables. Every sheet is persisted as a CSV session artifact the
+ * file) into tables. Every sheet is persisted as a CSV session artifact the
  * user can download and later turns can read; the reply carries only a bounded
  * preview so a large history workbook never lands in chat whole.
  */
@@ -9,7 +9,6 @@ import { basename, isAbsolute, resolve } from "node:path";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import { stageSessionArtifact } from "../../mcp/toolGroups/packRuntime.ts";
 import { readSessionAttachmentBytes } from "../../sessionAttachments.ts";
-import { readKnowledgeAsset } from "../../knowledgeBaseAssets.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import { isXlsx, readXlsx, type XlsxSheet } from "../../xlsxConversion.ts";
 import { csvLine } from "../../csv.ts";
@@ -23,9 +22,7 @@ const MAX_WORKBOOK_BYTES = 64 * 1024 * 1024;
 type ConvertXlsxParams = {
   attachmentId?: string;
   path?: string;
-  entryId?: string;
-  entryPath?: string;
-  assetPath?: string;
+  kbPath?: string;
   sheet?: string;
   maxRows?: number;
   persistCsv?: boolean;
@@ -35,7 +32,7 @@ export const convertXlsxTool = defineAgentTool<ConvertXlsxParams>({
   name: "convert_xlsx",
   label: "Documents: XLSX to tables",
   description:
-    "Read an Excel .xlsx workbook — a session attachment, a file on this host, or a KB asset — into tables. Each sheet is written as a CSV session artifact (download link returned) and the reply previews one sheet's first rows, so read the CSV with file tools for anything beyond the preview rather than asking for more rows. Cell values are text: numbers as stored, date-formatted cells as ISO dates, formulas as their cached result.",
+    "Read an Excel .xlsx workbook — a session attachment, a file on this host, or a Knowledge Base file — into tables. Each sheet is written as a CSV session artifact (download link returned) and the reply previews one sheet's first rows, so read the CSV with file tools for anything beyond the preview rather than asking for more rows. Cell values are text: numbers as stored, date-formatted cells as ISO dates, formulas as their cached result.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -48,17 +45,10 @@ export const convertXlsxTool = defineAgentTool<ConvertXlsxParams>({
         type: "string",
         description: "Absolute path of an .xlsx file on this host.",
       },
-      entryId: {
+      kbPath: {
         type: "string",
-        description: "KB entry stable kb.id (with assetPath).",
-      },
-      entryPath: {
-        type: "string",
-        description: "KB entry folder or index.md path (with assetPath).",
-      },
-      assetPath: {
-        type: "string",
-        description: "Entry-local KB asset path such as assets/history.xlsx.",
+        description:
+          "Knowledge Base file path such as projects/acme/history.xlsx.",
       },
       sheet: {
         type: "string",
@@ -80,11 +70,11 @@ export const convertXlsxTool = defineAgentTool<ConvertXlsxParams>({
     const sources = [
       params.attachmentId?.trim(),
       params.path?.trim(),
-      params.assetPath?.trim(),
+      params.kbPath?.trim(),
     ].filter(Boolean);
     if (sources.length !== 1)
       throw new Error(
-        "Provide exactly one source: attachmentId, path, or a KB asset (entryId/entryPath + assetPath).",
+        "Provide exactly one source: attachmentId, path, or kbPath.",
       );
 
     let bytes: Uint8Array;
@@ -126,24 +116,19 @@ export const convertXlsxTool = defineAgentTool<ConvertXlsxParams>({
       name = basename(resolved);
       source = { kind: "file", path: resolved };
     } else {
-      const assetPath = params.assetPath!.trim();
-      const read = await readKnowledgeAsset(new KnowledgeBaseStore(), {
-        ...(params.entryId !== undefined ? { entryId: params.entryId } : {}),
-        ...(params.entryPath !== undefined
-          ? { entryPath: params.entryPath }
-          : {}),
-        assetPath,
-        maxBytes: MAX_WORKBOOK_BYTES,
-      });
+      const read = await new KnowledgeBaseStore().readBytes(
+        params.kbPath!.trim(),
+        MAX_WORKBOOK_BYTES,
+      );
       if (read.truncated)
         throw new Error(
-          `KB asset "${assetPath}" is larger than ${MAX_WORKBOOK_BYTES} bytes and cannot be read.`,
+          `KB file "${read.path}" is larger than ${MAX_WORKBOOK_BYTES} bytes and cannot be read.`,
         );
-      if (!isXlsx(read.asset.mimeType, read.asset.path))
-        throw new Error(`KB asset "${read.asset.path}" is not an .xlsx file.`);
+      if (!isXlsx(null, read.path))
+        throw new Error(`KB file "${read.path}" is not an .xlsx file.`);
       bytes = read.content;
-      name = basename(read.asset.path);
-      source = { kind: "kb_asset", entryId: read.entry.id, assetPath };
+      name = basename(read.path);
+      source = { kind: "kb_file", kbPath: read.path };
     }
 
     const sheets = readXlsx(bytes);

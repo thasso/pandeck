@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { knowledgeBaseBehaviorGuidance } from "./knowledgeBasePrompt.ts";
 import {
-  kbAddAssetTool,
-  kbEditEntryTool,
-  kbReadAssetTool,
-  kbWriteEntryTool,
+  kbEditTool,
+  kbReadTool,
+  kbWriteTool,
 } from "./tools/knowledge/knowledgeBaseTools.ts";
 import { projectRegistryReadTool } from "./tools/core/projectRegistryTools.ts";
 import { eagerToolNamesFor } from "./tools/catalog.ts";
@@ -25,61 +24,49 @@ test("the KB pointer and tool descriptions state the KB rules", () => {
         // check:prompts budgets whole prompts; this one section has its own cap.
         "fits-600-chars": (text) => text.length <= 600,
         "names-kb_search": /kb_search/,
-        "names-kb_get_entry": /kb_get_entry/,
-        "names-kb_write_entry": /kb_write_entry/,
-        "names-kb_edit_entry": /kb_edit_entry/,
+        "names-kb_read": /kb_read/,
+        "names-kb_write": /kb_write/,
+        "names-kb_edit": /kb_edit/,
         "tools-load-via-tool-search": /tool search/i,
         "search-before-answering-durable":
           /search[^.\n]*before answering[^.\n]*durable/i,
         "forbids-raw-fs-writes":
           /never (edit|write)[^.\n]*DATA_DIR\/knowledge/i,
-        "no-obsolete-knowledge_*-tools": absent(/knowledge_[a-z]/),
-        "no-restated-write-rule": absent(/durable long-form/i),
-        "no-restated-scoping-rule": absent(/separate entries/i),
-        "no-tool-local-asset-rule": absent(/kb_read_asset/),
+        "no-obsolete-entry-tools": absent(/kb_[a-z]+_entry|kb_get_entry/),
+        "no-restated-write-rule": absent(/never store/i),
+        "no-tool-local-binary-rule": absent(/sourceAttachmentId/),
       },
     },
-    kb_write_entry: {
-      text: kbWriteEntryTool.description,
+    kb_write: {
+      text: kbWriteTool.description,
       rules: {
-        "for-durable-long-form": /durable long-form/i,
-        "scopes-in-separate-entries":
-          /separate[^.\n]*entries|entries[^.\n]*separate/i,
-        "tags-avoid-cross-contamination": affirmed(
-          /(?<key>avoid|prevent)[^.\n]*cross-contaminat/i,
-        ),
-        "never-invent-entry-ids": /never invent[^.\n]*\bids?\b/i,
-        "links-via-pa-uris": /pa:\/\//,
+        "for-durable-knowledge": /knowledge: notes/i,
+        "reuses-existing-files": /reuse existing files[^.\n]*kb_search/i,
+        "links-via-pa-uris": /pa:\/\/knowledge\/<path>/,
         "no-secrets": noSecrets,
-        "records-provenance": /provenance/i,
+        "says-where-facts-came-from": /where a fact came from/i,
         "marks-uncertain-facts": /mark[^.\n]*uncertain/i,
         "atomic-facts-go-to-memory": affirmed(
-          /belongs? in Memory|Memory[^.\n]*not the KB/i,
+          /belongs? in Memory|Memory[^.\n]*not here/i,
         ),
         "asks-on-ambiguity-or-conflict":
           /ask (first|before)[^.\n]*(ambiguous|conflict)/i,
+        "refuses-uncommitted-user-edits": /without committing is refused/i,
+        "copies-attachments-server-side": /sourceAttachmentId/,
       },
     },
-    kb_edit_entry: {
-      text: kbEditEntryTool.description,
+    kb_edit: {
+      text: kbEditTool.description,
       rules: {
-        "schema-is-1": /kb\.schema\s*=\s*1\b/,
-        "type-enum": /kb\.type/,
-        "status-enum": /kb\.status/,
-        "error-names-the-field": /error[^.\n]*names[^.\n]*field/i,
+        "exact-unique-replacements": /exactly once/i,
         "no-secrets": noSecrets,
+        "refuses-uncommitted-user-edits": /without committing is refused/i,
       },
     },
-    kb_add_asset: {
-      text: kbAddAssetTool.description,
-      rules: { "no-secrets": noSecrets },
-    },
-    kb_read_asset: {
-      text: kbReadAssetTool.description,
+    kb_read: {
+      text: kbReadTool.description,
       rules: {
-        "extracts-are-kb_read_extract": affirmed(
-          /kb_read_extract[^.\n]*?(?<key>only)[^.\n]*GENERATED/,
-        ),
+        "binary-files-go-to-converters": /convert_pdf[^.\n]*convert_xlsx/,
       },
     },
     project_registry_read: {
@@ -100,7 +87,7 @@ test("no kb_* read tool is eager, so the pointer's discovery rule is the only wa
   // pointer's "load them with a tool search" rule is misleading.
   for (const persona of ["assistant", "developer"] as const) {
     const eager = eagerToolNamesFor(persona);
-    for (const name of ["kb_search", "kb_get_entry"])
+    for (const name of ["kb_search", "kb_read"])
       assert.ok(!eager.has(name), `${name} is eager again for ${persona}`);
   }
 });

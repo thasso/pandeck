@@ -90,48 +90,52 @@ describe("toolCardOf", () => {
     ).toBeNull();
   });
 
-  it("cards a kb_show_entry result only when it names an entry", () => {
-    const entry = (patch: Record<string, unknown>) => ({
+  it("cards a kb_show result only when it names a file", () => {
+    const shown = (patch: Record<string, unknown>) => ({
       renderKind: "knowledgeEntry",
-      version: 1,
-      card: { entryId: "kb-a", title: "Alpha", path: "notes/alpha", ...patch },
+      version: 2,
+      card: { title: "Alpha", path: "notes/alpha.md", ...patch },
     });
-    expect(card("kb_show_entry", entry({}))).toBe("knowledgeEntry");
-    expect(card("mcp__pa__kb_show_entry", entry({}))).toBe("knowledgeEntry");
-    expect(card("kb_show_entry", entry({ entryId: "" }))).toBeNull();
-    expect(card("kb_show_entry", entry({ title: 3 }))).toBeNull();
-    expect(card("kb_show_entry", { renderKind: "knowledgeEntry" })).toBeNull();
-    expect(card("kb_get_entry", entry({}))).toBeNull();
-    expect(card("kb_show_entry", entry({}), {}, true)).toBeNull();
-    // A shape this parser was not written against is refused, not read by v1
-    // rules.
-    expect(card("kb_show_entry", { ...entry({}), version: 2 })).toBeNull();
-    expect(
-      card("kb_show_entry", { ...entry({}), version: undefined }),
-    ).toBeNull();
+    expect(card("kb_show", shown({}))).toBe("knowledgeEntry");
+    expect(card("mcp__pa__kb_show", shown({}))).toBe("knowledgeEntry");
+    expect(card("kb_show", shown({ path: "" }))).toBeNull();
+    expect(card("kb_show", shown({ title: 3 }))).toBeNull();
+    expect(card("kb_show", { renderKind: "knowledgeEntry" })).toBeNull();
+    expect(card("kb_read", shown({}))).toBeNull();
+    expect(card("kb_show", shown({}), {}, true)).toBeNull();
+    // A shape this parser was not written against is refused.
+    expect(card("kb_show", { ...shown({}), version: 3 })).toBeNull();
+    expect(card("kb_show", { ...shown({}), version: undefined })).toBeNull();
   });
 
-  it("bounds the prose a kb_show_entry payload puts in the transcript", () => {
+  it("opens an older kb_show_entry card on its folder's index.md", () => {
+    expect(
+      knowledgeEntryCardOf({
+        name: "kb_show_entry",
+        args: {},
+        isError: false,
+        output: JSON.stringify({
+          renderKind: "knowledgeEntry",
+          version: 1,
+          card: { entryId: "kb-a", title: "Alpha", path: "notes/alpha" },
+        }),
+      }),
+    ).toEqual({ path: "notes/alpha/index.md", title: "Alpha" });
+  });
+
+  it("bounds the prose a kb_show payload puts in the transcript", () => {
     const long = "x".repeat(5000);
     const parsed = knowledgeEntryCardOf({
-      name: "kb_show_entry",
+      name: "kb_show",
       args: {},
       isError: false,
       output: JSON.stringify({
         renderKind: "knowledgeEntry",
-        version: 1,
-        card: {
-          entryId: "kb-a",
-          title: long,
-          path: long,
-          summary: long,
-          note: long,
-        },
+        version: 2,
+        card: { title: long, path: long, summary: long, note: long },
       }),
     });
-    // The card's actions carry the id, so a payload cannot point somewhere
-    // else; what it CAN do is fill the transcript, and every field is clipped.
-    expect(parsed?.entryId).toBe("kb-a");
+    // What a payload CAN do is fill the transcript, and every field is clipped.
     for (const text of [
       parsed?.title,
       parsed?.path,
