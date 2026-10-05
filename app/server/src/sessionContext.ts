@@ -2,8 +2,7 @@
  * The ONE place that decides what context a session starts with
  * ([Task-554](pa://task/554)).
  *
- * A session can be started from a Task, from a Knowledge Base entry, or on a
- * plain Project, by any of five triggers: an ordinary send carrying staged
+ * A session can be started from a Task, from a file, or on a plain Project, by any of five triggers: an ordinary send carrying staged
  * context, the pi and claude first sends behind the new-session landing, a
  * workflow role, and an agent-proposed peer session. Every one of those used to
  * carry its own copy of the same block, and the copies had drifted — one had no
@@ -36,9 +35,8 @@ import type {
   TaskItem,
   TaskSessionRef,
 } from "@assistant/shared";
-import { linkSessionToObject } from "./db/sessionObjectStore.ts";
 import { projectStore } from "./db/projectStore.ts";
-import { buildKnowledgeContextAttachment } from "./knowledgeBaseContext.ts";
+import { buildFileContextAttachment } from "./fileContext.ts";
 import type { SessionPromptEvidence } from "./promptConditions.ts";
 import { buildProjectContextAttachment } from "./sessionProjectContext.ts";
 import { buildTaskContextAttachment } from "./taskContext.ts";
@@ -49,7 +47,8 @@ import { findOriginTask, readTask } from "./tasks.ts";
 export interface SessionContextRequest {
   taskId?: string;
   projectId?: string;
-  knowledgeEntryId?: string;
+  /** A document staged as context, as its canonical viewer route. */
+  fileContext?: string;
   /**
    * The Project a named-nothing session falls back to — its worktree's.
    *
@@ -61,12 +60,12 @@ export interface SessionContextRequest {
 }
 
 /**
- * The one precedence rule, resolved. A Task wins over a Knowledge entry, which
- * wins over a Project: the more specific context implies the rest.
+ * The one precedence rule, resolved. A Task wins over a file, which wins over a
+ * Project: the more specific context implies the rest.
  */
 export type ResolvedSessionContext =
   | { kind: "task"; taskId: string; projectId?: string }
-  | { kind: "knowledge"; entryId: string }
+  | { kind: "file"; href: string }
   | { kind: "project"; projectId: string }
   | { kind: "none" };
 
@@ -112,8 +111,8 @@ export function resolveSessionContext(
       request.worktreeProjectId?.trim();
     return { kind: "task", taskId, ...(projectId ? { projectId } : {}) };
   }
-  const entryId = request.knowledgeEntryId?.trim();
-  if (entryId) return { kind: "knowledge", entryId };
+  const href = request.fileContext?.trim();
+  if (href) return { kind: "file", href };
   const projectId =
     request.projectId?.trim() || request.worktreeProjectId?.trim();
   return projectId ? { kind: "project", projectId } : { kind: "none" };
@@ -122,8 +121,8 @@ export function resolveSessionContext(
 /**
  * The evidence this context freezes into the session's prompt conditions.
  *
- * A Knowledge entry deliberately yields NO Project: the session did not start
- * on one, so it keeps the eager registry pointer.
+ * A file deliberately yields NO Project: the session did not start on one, so
+ * it keeps the eager registry pointer.
  */
 export function sessionContextEvidence(
   resolved: ResolvedSessionContext,
@@ -181,16 +180,8 @@ export async function applySessionContext(
         ...(resolved.projectId ? { projectId: resolved.projectId } : {}),
       };
     }
-    case "knowledge": {
-      linkSessionToObject(
-        ref.sessionId,
-        "knowledge",
-        resolved.entryId,
-        "initial-context",
-      );
-      const attachment = await buildKnowledgeContextAttachment(
-        resolved.entryId,
-      );
+    case "file": {
+      const attachment = await buildFileContextAttachment(resolved.href);
       return { attachments: attachment ? [attachment] : [] };
     }
     case "project":
@@ -234,8 +225,8 @@ function pinTaskProject(
  * the links are already durable, so this survives a restart between creation
  * and delivery and needs no new state.
  *
- * Knowledge context is deliberately absent: no trigger starts a session on a KB
- * entry and defers its first turn, and inventing that path here would be an
+ * File context is deliberately absent: no trigger starts a session on a file
+ * and defers its first turn, and inventing that path here would be an
  * untested branch. Add it with the trigger that needs it.
  */
 export function sessionFirstTurnContext(

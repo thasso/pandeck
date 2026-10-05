@@ -682,7 +682,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   page header; the mobile dock has no header `…`, so it retains the full Actions
   section. `App.tsx` routes the "Start a new session" action with context
   pre-staged as chips
-  (`startSessionForTask`/`startSessionForProject`/`startSessionInWorktree`/`startSessionForKnowledge`).
+  (`startSessionForTask`/`startSessionForProject`/`startSessionInWorktree`/`startSessionForFile`).
   A document's comment tray goes through `sendDocumentComments`, which moves it
   into the chosen session's composer (or the new-session draft) and navigates
   there. Because the dock is the object's ONE action home on small screens, each

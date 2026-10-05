@@ -2255,7 +2255,7 @@ export const Composer = memo(function Composer({
                   onChangeWorktree={contextBar.onChangeWorktree}
                   onChangeTask={contextBar.onChangeTask}
                   onChangeReview={contextBar.onChangeReview}
-                  onChangeKnowledge={contextBar.onChangeKnowledge}
+                  onChangeFile={contextBar.onChangeFile}
                 />
               ) : null}
 

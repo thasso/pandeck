@@ -61,7 +61,7 @@ test("a Task wins over everything else named alongside it", () => {
   const resolved = resolveSessionContext({
     taskId: task.id,
     projectId: "ctx-proj",
-    knowledgeEntryId: "kb-1",
+    fileContext: "/files/tmp/notes.md",
     worktreeProjectId: "wt-proj",
   });
 
@@ -98,11 +98,13 @@ test("a Task with NO Project keeps the one the session is started in", () => {
   ).toEqual({ kind: "task", taskId: task.id, projectId: "ctx-proj" });
 });
 
-test("a Knowledge entry wins over a Project but not a Task", () => {
+test("a file wins over a Project but not a Task", () => {
   expect(
-    resolveSessionContext({ knowledgeEntryId: "kb-1", projectId: "ctx-proj" })
-      .kind,
-  ).toBe("knowledge");
+    resolveSessionContext({
+      fileContext: "/files/tmp/notes.md",
+      projectId: "ctx-proj",
+    }),
+  ).toEqual({ kind: "file", href: "/files/tmp/notes.md" });
 });
 
 test("a named Project beats the worktree's", () => {
@@ -166,9 +168,9 @@ test("a Task lends its own Project to the evidence, never the worktree's", () =>
   expect(evidence.projectId).toBe("task-proj");
 });
 
-test("a Knowledge entry brings no Project, so the pointer stays", () => {
+test("a file brings no Project, so the pointer stays", () => {
   const evidence = sessionContextEvidence(
-    resolveSessionContext({ knowledgeEntryId: "kb-1" }),
+    resolveSessionContext({ fileContext: "/files/tmp/notes.md" }),
   );
 
   expect(evidence.projectId).toBeUndefined();

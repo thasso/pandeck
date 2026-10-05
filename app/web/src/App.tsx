@@ -102,6 +102,7 @@ import {
   type PendingChatComment,
 } from "./lib/chatCommentPrompt.ts";
 import { documentTargetHref } from "@assistant/shared/documentTargets";
+import { fileSessionStart } from "./lib/fileSessionStart.ts";
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
@@ -1010,9 +1011,9 @@ function AppContent() {
   const [pendingProjectContext, setPendingProjectContext] = useState<
     string | null
   >(null);
-  /** Knowledge entry staged as a structured reference on the next fresh session. */
-  const [pendingKnowledgeContext, setPendingKnowledgeContext] = useState<{
-    entryId: string;
+  /** A document staged as context on the next fresh session (its viewer route). */
+  const [pendingFileContext, setPendingFileContext] = useState<{
+    href: string;
     title: string;
   } | null>(null);
   /** Pending "follow this comment" request from the worktree panel's roster to the detail page. */
@@ -2365,15 +2366,18 @@ function AppContent() {
     id: string;
     title: string;
     addressedPath: string | null;
+    /** The entry's own `index.md`, what "Start session" hands over. */
+    path: string;
   } | null>(null);
   const rememberKnowledgeEntry = useCallback(
-    (id: string, title: string, addressedPath: string | null) => {
+    (id: string, title: string, addressedPath: string | null, path: string) => {
       setKnowledgeEntry((current) =>
         current?.id === id &&
         current.title === title &&
-        current.addressedPath === addressedPath
+        current.addressedPath === addressedPath &&
+        current.path === path
           ? current
-          : { id, title, addressedPath },
+          : { id, title, addressedPath, path },
       );
     },
     [],
@@ -2943,7 +2947,7 @@ function AppContent() {
   // that changed every render would recompute that row's memo on every render with it.
   const startNewChat = useCallback(() => {
     setPendingProjectContext(null);
-    setPendingKnowledgeContext(null);
+    setPendingFileContext(null);
     setPendingWorktreeContext(null);
     setPendingWorktreeReview(null);
     setSessionReviewDraft(null);
@@ -3067,7 +3071,7 @@ function AppContent() {
   // clears any staged Knowledge entry/review.
   const stageProjectContext = useCallback(
     (projectId: string | null) => {
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       const norm = projectId?.trim() || null;
       setPendingProjectContext(norm);
       // Re-picking the project can drop the staged worktree; a staged Developer
@@ -3115,7 +3119,7 @@ function AppContent() {
       /** Passed straight to `switchStagedAgentType` — see its `fresh`. */
       opts?: { fresh?: boolean },
     ) => {
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       if (
         pendingWorktreeReview &&
         pendingWorktreeReview.worktreeId !== worktreeId
@@ -3157,7 +3161,7 @@ function AppContent() {
    */
   const stageNewWorktree = useCallback(
     (staged: boolean) => {
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setPendingWorktreeContext(null);
       setPendingNewWorktree(staged);
@@ -3185,7 +3189,7 @@ function AppContent() {
   );
   const stageTaskContext = useCallback(
     (task: { taskId: string; title: string } | null) => {
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       if (task) setPendingWorktreeReview(null);
       setPendingTaskAttach(task);
       const pid = task ? projectIdForTask(task.taskId) : null;
@@ -3223,7 +3227,7 @@ function AppContent() {
   // Worktree row scopes to it), then land on the new-session page.
   const startSessionForTask = useCallback(
     (taskId: string, title: string) => {
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
       setPendingStart(null);
@@ -3255,7 +3259,7 @@ function AppContent() {
   const startSessionForProject = useCallback(
     (projectId: string) => {
       setPendingTaskAttach(null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingStart(null);
       setPendingWorktreeContext(null);
       setPendingWorktreeReview(null);
@@ -3267,18 +3271,18 @@ function AppContent() {
     [navigate, revealNewSessionSurface],
   );
 
-  // Start a fresh session with a Knowledge entry staged as initial context (the
-  // composer shows it as a removable chip; the entry's inspector "Start session"
-  // action and plain per-entry starts route here).
-  const startSessionForKnowledge = useCallback(
-    (entryId: string, title: string) => {
+  // Start a fresh session with a document staged as initial context (the
+  // composer shows it as a removable chip; every viewer's "Start session with
+  // this file" routes here). `href` is the document's canonical viewer route.
+  const startSessionForFile = useCallback(
+    (href: string, title: string) => {
       setPendingTaskAttach(null);
       setPendingProjectContext(null);
       setPendingWorktreeContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
       setPendingStart(null);
-      setPendingKnowledgeContext({ entryId, title });
+      setPendingFileContext({ href, title });
       navigate(SESSIONS_CREATE_PATH);
       revealNewSessionSurface();
     },
@@ -3361,7 +3365,7 @@ function AppContent() {
         backlogTasks,
       );
       setPendingTaskAttach(context.task ?? null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setSessionReviewDraft(null);
       setPendingProjectContext(context.projectId ?? null);
@@ -3427,7 +3431,7 @@ function AppContent() {
         },
       );
       setPendingTaskAttach(context.task ?? null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setPendingProjectContext(context.projectId ?? item.projectId);
       setPendingWorktreeContext(worktreeId);
@@ -3479,7 +3483,7 @@ function AppContent() {
         backlogTasks,
       );
       setPendingTaskAttach(context.task ?? null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setSessionReviewDraft(null);
       setPendingProjectContext(context.projectId ?? null);
       setPendingWorktreeContext(worktreeId);
@@ -3558,7 +3562,7 @@ function AppContent() {
         backlogTasks,
       );
       setPendingTaskAttach(context.task ?? null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeReview(null);
       setPendingProjectContext(context.projectId ?? null);
       setPendingWorktreeContext(context.worktreeId ?? null);
@@ -4040,7 +4044,7 @@ function AppContent() {
           review: pendingWorktreeReview
             ? { commentCount: pendingWorktreeReview.commentCount }
             : null,
-          knowledge: pendingKnowledgeContext,
+          file: pendingFileContext,
         },
         projects: orderedPickerProjects,
         worktrees: orderedWorktrees,
@@ -4056,7 +4060,7 @@ function AppContent() {
         onChangeTask: stageTaskContext,
         onTaskPickerOpenChange: setTaskPickerOpen,
         onChangeReview: () => setPendingWorktreeReview(null),
-        onChangeKnowledge: () => setPendingKnowledgeContext(null),
+        onChangeFile: () => setPendingFileContext(null),
         // Reuse the left-panel Backlog list for the Task field: same rows,
         // status/project filtering, and drag UI. When a project is already
         // staged we pin it as the fixed filter (the picker already scopes to it);
@@ -4403,7 +4407,7 @@ function AppContent() {
     // opened straight from another's.
     if (routeSessionId && displayHasUserPrompt) {
       setPendingProjectContext(null);
-      setPendingKnowledgeContext(null);
+      setPendingFileContext(null);
       setPendingWorktreeContext(null);
       setPendingWorktreeReview(null);
     }
@@ -4573,12 +4577,12 @@ function AppContent() {
       pendingTaskAttach && !displayHasUserPrompt
         ? pendingTaskAttach.taskId
         : undefined;
-    const knowledgeEntryId =
+    const fileContext =
       !attachTaskId && !displayHasUserPrompt
-        ? pendingKnowledgeContext?.entryId
+        ? pendingFileContext?.href
         : undefined;
     const projectId =
-      !attachTaskId && !knowledgeEntryId && !displayHasUserPrompt
+      !attachTaskId && !fileContext && !displayHasUserPrompt
         ? pendingProjectContext?.trim() || undefined
         : undefined;
     const worktreeId = !displayHasUserPrompt
@@ -4666,7 +4670,7 @@ function AppContent() {
               ...(createWorktreeInProjectId !== undefined
                 ? { createWorktreeInProjectId }
                 : {}),
-              ...(knowledgeEntryId !== undefined ? { knowledgeEntryId } : {}),
+              ...(fileContext !== undefined ? { fileContext } : {}),
             };
       const clientRequestId = actions.harnessSend(input);
       // Hold the send verbatim for the whole bootstrap: it is what the shell
@@ -4689,11 +4693,11 @@ function AppContent() {
         allAttachments,
         attachTaskId,
         projectId,
-        knowledgeEntryId,
+        fileContext,
       );
     }
     if (attachTaskId) setPendingTaskAttach(null);
-    if (knowledgeEntryId) setPendingKnowledgeContext(null);
+    if (fileContext) setPendingFileContext(null);
     if (projectId) setPendingProjectContext(null);
     if (worktreeId) setPendingWorktreeContext(null);
     if (createWorktreeInProjectId) setPendingNewWorktree(false);
@@ -5210,8 +5214,8 @@ function AppContent() {
         ...(pendingTaskAttach?.taskId !== undefined
           ? { taskId: pendingTaskAttach?.taskId }
           : {}),
-        ...(pendingKnowledgeContext?.entryId !== undefined
-          ? { knowledgeEntryId: pendingKnowledgeContext?.entryId }
+        ...(pendingFileContext?.href !== undefined
+          ? { fileHref: pendingFileContext?.href }
           : {}),
         projectId: pendingProjectContext,
       },
@@ -5229,10 +5233,10 @@ function AppContent() {
           kind: target.kind,
           onOpen: () => navigate(taskPath(target.id)),
         };
-      case "knowledge":
+      case "file":
         return {
           kind: target.kind,
-          onOpen: () => navigate(knowledgePath(target.id)),
+          onOpen: () => navigate(target.id),
         };
       case "project":
         return {
@@ -5247,7 +5251,7 @@ function AppContent() {
     state.worktreeStatuses,
     sessionOriginTask?.id,
     pendingTaskAttach?.taskId,
-    pendingKnowledgeContext?.entryId,
+    pendingFileContext?.href,
     pendingProjectContext,
     navigate,
   ]);
@@ -5277,6 +5281,20 @@ function AppContent() {
         onRun: () => startSessionForProject(projectId),
       };
     }
+    // A document on screen leads with itself. One in a checkout also runs the
+    // session IN that checkout, the file staged on top of it.
+    if (routeDocumentTarget) {
+      const { href, title, worktreeId } = fileSessionStart(routeDocumentTarget);
+      return {
+        label: "Start session with this file",
+        icon,
+        onRun: () => {
+          if (!worktreeId) return startSessionForFile(href, title);
+          startSessionInWorktree(worktreeId);
+          setPendingFileContext({ href, title });
+        },
+      };
+    }
     if (route.name === "worktrees" && route.id) {
       const worktreeId = route.id;
       return {
@@ -5297,25 +5315,31 @@ function AppContent() {
       };
     }
     if (route.name === "knowledge" && route.entryId) {
-      const entryId = route.entryId;
-      const title =
-        knowledgeEntry?.id === entryId ? knowledgeEntry.title : entryId;
+      // The entry's own file, once the loaded document has said which it is.
+      const entry =
+        knowledgeEntry?.id === route.entryId ? knowledgeEntry : null;
+      if (!entry) return null;
+      const href = documentTargetHref({
+        kind: "knowledgeFile",
+        path: entry.path,
+      });
       return {
         label: "Start session with this entry",
         icon,
-        onRun: () => startSessionForKnowledge(entryId, title),
+        onRun: () => startSessionForFile(href, entry.title),
       };
     }
     return null;
   }, [
     route,
+    routeDocumentTarget,
     backlogTasks,
     knowledgeEntry,
     pullRequestWorktreeId,
     startSessionForTask,
     startSessionForProject,
     startSessionInWorktree,
-    startSessionForKnowledge,
+    startSessionForFile,
   ]);
 
   const dockPeek = useMemo<DockPeek | undefined>(() => {
@@ -6086,19 +6110,9 @@ function AppContent() {
               },
             ]
           : []),
-        ...(pendingKnowledgeContext && !pendingTaskAttach
-          ? [
-              {
-                kind: "knowledge" as const,
-                id: pendingKnowledgeContext.entryId,
-                title: pendingKnowledgeContext.title,
-                subtitle: "Attached to first prompt",
-              },
-            ]
-          : []),
         ...(pendingProjectContext &&
         !pendingWorktreeContext &&
-        !pendingKnowledgeContext
+        !pendingFileContext
           ? [
               {
                 kind: "project" as const,
@@ -6285,7 +6299,12 @@ function AppContent() {
       prefs={prefs}
       onUpdatePrefs={update}
       openers={inspectorOpeners}
-      onStartSession={startSessionForKnowledge}
+      onStartSession={(path, title) =>
+        startSessionForFile(
+          documentTargetHref({ kind: "knowledgeFile", path }),
+          title,
+        )
+      }
       // Mobile folds the entry viewer's header buttons in here.
     />
   ) : route.name === "settings" ||

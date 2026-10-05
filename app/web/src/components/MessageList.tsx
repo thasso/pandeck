@@ -9,7 +9,6 @@ import {
   useState,
 } from "react";
 import {
-  BookOpen,
   Bot,
   Check,
   ClipboardList,
@@ -331,13 +330,13 @@ function AttachmentChip({
       </div>
     );
   }
-  if (attachment.role === "knowledge-context") {
+  if (attachment.role === "file-context") {
     return (
       <div
         className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted"
-        title="Knowledge entry context was attached to this first prompt."
+        title="This session was started from this file."
       >
-        <BookOpen size={13} className="shrink-0 text-accent" />
+        <FileText size={13} className="shrink-0 text-accent" />
         <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
           {attachment.name}
         </span>

@@ -1,8 +1,8 @@
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import {
-  BookOpen,
   ChevronDown,
   ClipboardList,
+  FileText,
   FolderKanban,
   GitBranch,
   MessageSquareText,
@@ -35,8 +35,8 @@ export interface StagedContextValue {
   newWorktree?: boolean;
   task: { taskId: string; title: string } | null;
   review?: { commentCount: number } | null;
-  /** A staged Knowledge entry (its own start path, not part of the Project/Worktree/Task picker). */
-  knowledge?: { entryId: string; title: string } | null;
+  /** A staged document (its own start path, not part of the Project/Worktree/Task picker). */
+  file?: { href: string; title: string } | null;
 }
 
 export interface StagedContextData {
@@ -63,8 +63,8 @@ export interface StagedContextData {
   onTaskPickerOpenChange?: (open: boolean) => void;
   /** Remove a staged structured review bundle without removing its worktree. */
   onChangeReview?: (review: null) => void;
-  /** Remove a staged Knowledge entry. */
-  onChangeKnowledge?: (knowledge: null) => void;
+  /** Remove a staged document. */
+  onChangeFile?: (file: null) => void;
   /**
    * Renders the Task-field body using the shared Backlog list (filtering, status
    * chips, project scoping) so the picker matches the left panel. Called lazily
@@ -109,7 +109,7 @@ export function StagedContextBar({
   onChangeNewWorktree,
   onChangeTask,
   onChangeReview,
-  onChangeKnowledge,
+  onChangeFile,
 }: {
   value: StagedContextValue;
   projects: ProjectRecord[];
@@ -120,11 +120,11 @@ export function StagedContextBar({
   onChangeNewWorktree?: (staged: boolean) => void;
   onChangeTask: (task: { taskId: string; title: string } | null) => void;
   onChangeReview?: ((review: null) => void) | undefined;
-  onChangeKnowledge?: ((knowledge: null) => void) | undefined;
+  onChangeFile?: ((file: null) => void) | undefined;
 }) {
   const hasAny = Boolean(
     value.review ||
-    value.knowledge ||
+    value.file ||
     value.task ||
     value.worktreeId ||
     value.newWorktree ||
@@ -150,14 +150,12 @@ export function StagedContextBar({
           onRemove={onChangeReview ? () => onChangeReview(null) : undefined}
         />
       ) : null}
-      {value.knowledge ? (
+      {value.file ? (
         <ContextChip
-          icon={<BookOpen size={12} />}
-          label={value.knowledge.title}
+          icon={<FileText size={12} />}
+          label={value.file.title}
           tone="accent"
-          onRemove={
-            onChangeKnowledge ? () => onChangeKnowledge(null) : undefined
-          }
+          onRemove={onChangeFile ? () => onChangeFile(null) : undefined}
         />
       ) : null}
       {value.task ? (

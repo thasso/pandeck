@@ -3967,12 +3967,12 @@ export type WorktreeProvisionPhase =
  * chip instead of a file chip. The attachment id is `taskctx-<taskId>`.
  * `project-context` is standalone Session Project context selected before the
  * first prompt; the model receives registry context and the UI renders a compact
- * context chip instead of a file chip. `knowledge-context` is a structured KB
- * entry reference; the model receives only compact metadata and is nudged to use
- * KB tools rather than receiving pasted raw entry content.
+ * context chip instead of a file chip. `file-context` is a document the session
+ * was started from: the model receives its name, absolute path and viewer route,
+ * never its content, and reads the file itself when it needs it.
  */
 export type AttachmentRole =
-  "task-context" | "project-context" | "knowledge-context";
+  "task-context" | "project-context" | "file-context";
 
 export interface DisplayAttachment {
   id: string;
@@ -6582,7 +6582,8 @@ export type ClientMessage =
       attachments?: PromptAttachment[];
       attachTaskId?: string;
       projectId?: string;
-      knowledgeEntryId?: string;
+      /** A document staged as context, as its canonical viewer route. */
+      fileContext?: string;
       clientRequestId?: string;
     }
   | { type: "runSlashCommand"; name: string; rawArgs: string }
@@ -7059,7 +7060,8 @@ export type ClientMessage =
       credentialProfileId?: string;
       attachTaskId?: string;
       projectId?: string;
-      knowledgeEntryId?: string;
+      /** A document staged as context, as its canonical viewer route. */
+      fileContext?: string;
       worktreeId?: string;
       /**
        * Create a fresh worktree in this project and run the session in it —

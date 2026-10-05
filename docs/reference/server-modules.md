@@ -1408,10 +1408,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   quote under 12 normalized characters never reaches the fuzzy step at all. All
   offsets in and out are into the RAW document text. Worktree review comments
   are its reader.
-- `knowledgeBaseContext.ts` owns structured Knowledge-entry/comment session
-  context renderings: compact metadata and `pa://knowledge/<id>` refs only,
-  never raw entry bodies; comment starts add bounded thread/snippet context. It
-  renders as either runtime attachments or text-only prompt preambles.
+- `fileContext.ts` builds the `file-context` attachment for a session started
+  from a document: it resolves the staged viewer route through
+  `documentGrantTargets.resolveDocumentTargetPath` and attaches the file's name,
+  absolute path and route, never its content.
 - `tools/knowledgeBaseTools.ts` owns first-class KB v1 agent tools (`kb_tree`,
   `kb_search`, `kb_get_entry`, `kb_write_entry`, `kb_edit_entry`,
   `kb_add_asset`, `kb_move_entry`, `kb_history`, `kb_diff`, `kb_read_asset`

@@ -69,6 +69,7 @@ export function KnowledgePage({
     entryId: string,
     title: string,
     addressedPath: string | null,
+    path: string,
   ) => void;
   changedAtByEntryId?: Record<string, number> | undefined;
 }) {
@@ -129,7 +130,12 @@ function KnowledgeEntryLoader({
    * cannot tell "entry A is open" from "A is still on screen while B loads".
    */
   onEntryLoaded?:
-    | ((entryId: string, title: string, addressedPath: string | null) => void)
+    | ((
+        entryId: string,
+        title: string,
+        addressedPath: string | null,
+        path: string,
+      ) => void)
     | undefined;
   changedAtByEntryId?: Record<string, number> | undefined;
 }) {
@@ -167,6 +173,7 @@ function KnowledgeEntryLoader({
   const loadedEntry = resource?.kind === "entry" ? resource : null;
   const loadedEntryId = loadedEntry?.id ?? null;
   const loadedEntryTitle = loadedEntry?.title ?? null;
+  const loadedEntryPath = loadedEntry?.path ?? null;
   // The address is part of what is reported, so a same-entry re-address has to
   // re-report it rather than leaving the host correlating against the old one.
   const addressedPath = "path" in target ? target.path : null;
@@ -174,9 +181,25 @@ function KnowledgeEntryLoader({
   // entry, and only the loaded document knows its title — so a rename re-reports
   // it, which is a cheap call and touches no subscription.
   useEffect(() => {
-    if (loadedEntryId === null || loadedEntryTitle === null) return;
-    onEntryLoaded?.(loadedEntryId, loadedEntryTitle, addressedPath);
-  }, [loadedEntryId, loadedEntryTitle, addressedPath, onEntryLoaded]);
+    if (
+      loadedEntryId === null ||
+      loadedEntryTitle === null ||
+      loadedEntryPath === null
+    )
+      return;
+    onEntryLoaded?.(
+      loadedEntryId,
+      loadedEntryTitle,
+      addressedPath,
+      loadedEntryPath,
+    );
+  }, [
+    loadedEntryId,
+    loadedEntryTitle,
+    addressedPath,
+    loadedEntryPath,
+    onEntryLoaded,
+  ]);
 
   // The entry's OWN failure, drawn in every state below: a write about the entry
   // can be refused while its document is still loading or cannot be read at all,

@@ -186,14 +186,10 @@ same comment tray. The panel scopes its own comment/primary-action channels so
 its controls speak for the entry it shows, and it links the entry to its
 canonical route rather than replacing it.
 
-Starting a session from a Knowledge entry must attach a structured
-`knowledge-context` reference (entry id, URI, title, type/status, path, compact
-summary), not pasted raw entry content. The durable generic session→object
-context edge makes those sessions discoverable in the entry's Details inspector
-(related-object rows). Text-only runtimes that do not support attachments must
-inline the same compact metadata into the first prompt instead of recording an
-unsupported attachment. Agents should use `kb_get_entry` when they need the
-current body or assets.
+Starting a session from a Knowledge entry stages the entry's own `index.md` as a
+generic file context (`docs/document-presentation.md`, Starting a session from a
+document): the agent gets the file's name, absolute path and viewer route, never
+its content.
 
 ## Agent-facing KB tools
 

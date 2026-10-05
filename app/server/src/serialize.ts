@@ -153,7 +153,7 @@ export function splitAttachmentManifest(rawText: string): {
             size: typeof o.size === "number" ? o.size : 0,
             ...(o.role === "task-context" ||
             o.role === "project-context" ||
-            o.role === "knowledge-context"
+            o.role === "file-context"
               ? { role: o.role }
               : {}),
           },
