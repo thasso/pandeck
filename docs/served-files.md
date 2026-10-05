@@ -76,19 +76,19 @@ which refuses every sibling:
 
 1. The web client POSTs JSON to `/api/file-grants` with the app token: a typed
    `DocumentTarget`, `scope`, and `delivery`. The server resolves host files,
-   session artifacts, Knowledge files/assets and worktree files through their
-   authoritative root or registry; no non-host target can supply a resolved
-   filesystem path. Artifact session ids accept neither slash style and their
-   resolved root must be the exactly named direct child of `session-artifacts`.
-   The resolver canonicalizes the source authority and selected file, then uses
-   that spelling for the grant directory, containment checks and URL name. The
-   document must exist and be a regular file. Directory scope is rejected unless
-   the CANONICAL resolved document — not a client `.html` spelling or symlink
-   name — is runnable HTML; attachment delivery requires file scope. Source
-   identity, scope and delivery are bound into grant reuse, so two source
-   authorities over the same inode do not merge powers and public URL queries
-   cannot toggle behavior. A compatible live grant is reused and expires an hour
-   after minting.
+   session artifacts and worktree files (the Knowledge Base included) through
+   their authoritative root or registry; no non-host target can supply a
+   resolved filesystem path. Artifact session ids accept neither slash style and
+   their resolved root must be the exactly named direct child of
+   `session-artifacts`. The resolver canonicalizes the source authority and
+   selected file, then uses that spelling for the grant directory, containment
+   checks and URL name. The document must exist and be a regular file. Directory
+   scope is rejected unless the CANONICAL resolved document — not a client
+   `.html` spelling or symlink name — is runnable HTML; attachment delivery
+   requires file scope. Source identity, scope and delivery are bound into grant
+   reuse, so two source authorities over the same inode do not merge powers and
+   public URL queries cannot toggle behavior. A compatible live grant is reused
+   and expires an hour after minting.
 2. Active HTML and SVG responses carry
    `Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads`
    — no `allow-same-origin`, so active content lives in an opaque origin with no
@@ -97,13 +97,12 @@ which refuses every sibling:
    otherwise block the built-in PDF renderer, and its capability reaches one
    inert file with no siblings.
 3. Directory-grant requests resolve relative to that directory and may descend
-   but never climb out, so HTML siblings load. For a Knowledge file this means
-   the selected file's parent inside the Knowledge root; for a declared asset,
-   its parent inside that entry root; for a worktree file, its parent inside the
-   active registered worktree. A file grant resolves only its minted name: even
-   a sibling in the same directory is refused. An attachment grant adds
-   `Content-Disposition: attachment` with a sanitized ASCII fallback filename
-   and an RFC 5987 UTF-8 filename; inline grants add no disposition.
+   but never climb out, so HTML siblings load. For a worktree file this means
+   its parent inside the active registered worktree, or inside the Knowledge
+   Base folder for the checkout `knowledge`. A file grant resolves only its
+   minted name: even a sibling in the same directory is refused. An attachment
+   grant adds `Content-Disposition: attachment` with a sanitized ASCII fallback
+   filename and an RFC 5987 UTF-8 filename; inline grants add no disposition.
 
 Containment is decided on the CANONICAL path, not the spelling, and that is not
 a detail: `..` is the obvious way out and a SYMLINK inside the granted directory

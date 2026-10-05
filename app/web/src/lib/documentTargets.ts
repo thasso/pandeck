@@ -2,7 +2,6 @@ import {
   parseDocumentTarget,
   type DocumentTarget,
 } from "@assistant/shared/documentTargets";
-import { knowledgeAssetUrl, knowledgeFileUrl } from "./knowledgeBaseApi.ts";
 import { directFileApiPath } from "./servedFiles.ts";
 import { serverHttpOrigin } from "./serverOrigin.ts";
 import { worktreeFileRawUrl } from "./worktrees.ts";
@@ -48,10 +47,6 @@ export function documentTargetRawUrl(target: DocumentTarget): string {
         .split("/")
         .map(encodeURIComponent)
         .join("/")}`;
-    case "knowledgeFile":
-      return knowledgeFileUrl(target.path);
-    case "knowledgeAsset":
-      return knowledgeAssetUrl(target.entryId, target.path);
     case "worktreeFile":
       return worktreeFileRawUrl(target.worktreeId, target.path);
   }

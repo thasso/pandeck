@@ -21,9 +21,7 @@ export interface PendingTranscriptComment {
  * names it here is what the agent is told, so it carries the path or id the
  * agent reads the document by.
  */
-export type CommentDocument =
-  | { kind: "knowledgeEntry"; entryId: string; title: string }
-  | { kind: "hostFile"; path: string };
+export type CommentDocument = { kind: "hostFile"; path: string };
 
 /** A comment on a document: a quoted passage, or the whole document. */
 export interface PendingDocumentComment {
@@ -74,18 +72,14 @@ export function isDocumentComment(
   return comment.anchor.kind === "document";
 }
 
-/** A short human name for a document: its title, or its file name. */
+/** A short human name for a document: its file name. */
 export function commentDocumentLabel(document: CommentDocument): string {
-  return document.kind === "knowledgeEntry"
-    ? document.title
-    : (document.path.split("/").filter(Boolean).pop() ?? document.path);
+  return document.path.split("/").filter(Boolean).pop() ?? document.path;
 }
 
 /** One key per document, shared by its tray and the prompt's grouping. */
 export function commentDocumentKey(document: CommentDocument): string {
-  return document.kind === "knowledgeEntry"
-    ? `kb:${document.entryId}`
-    : `file:${document.path}`;
+  return `file:${document.path}`;
 }
 
 function compareTranscriptComments(
@@ -133,9 +127,7 @@ function indentBody(body: string): string {
 }
 
 function documentHeading(document: CommentDocument): string {
-  return document.kind === "knowledgeEntry"
-    ? `Comments on Knowledge entry “${document.title}” (id \`${document.entryId}\`; lines count from the first body line after the frontmatter):`
-    : `Comments on \`${document.path}\`:`;
+  return `Comments on \`${document.path}\`:`;
 }
 
 function documentLocator(comment: PendingDocumentComment): string {

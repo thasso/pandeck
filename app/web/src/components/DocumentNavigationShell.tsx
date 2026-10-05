@@ -34,6 +34,7 @@ import {
 } from "./DocumentZoom.tsx";
 import { PageHeader, type PageHeaderIconTone } from "./PageHeader.tsx";
 import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { worktreePath } from "../hooks/useSessionRouting.ts";
 
 export interface DocumentSourceAction {
   id: string;
@@ -149,12 +150,11 @@ export function documentCloseFallback(target: DocumentTarget): string {
   switch (target.kind) {
     case "sessionArtifact":
       return `/sessions/${encodeURIComponent(target.sessionId)}`;
-    case "knowledgeFile":
-      return "/knowledge";
-    case "knowledgeAsset":
-      return `/knowledge/${encodeURIComponent(target.entryId)}`;
     case "worktreeFile":
-      return `/worktrees/${encodeURIComponent(target.worktreeId)}/${target.view === "diff" ? "changes" : "files"}`;
+      return worktreePath(
+        target.worktreeId,
+        target.view === "diff" ? "changes" : "files",
+      );
     case "hostFile":
       return "/sessions";
   }

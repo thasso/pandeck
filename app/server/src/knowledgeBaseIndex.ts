@@ -17,7 +17,11 @@
 import { parseKbEntryMarkdown } from "./knowledgeBaseEntry.ts";
 import { KnowledgeBaseStore, type KbTreeNode } from "./knowledgeBaseStore.ts";
 import type { KbEntryStatus, KbEntryType } from "./knowledgeBaseContract.ts";
-import type { KnowledgeEntryHeading } from "@assistant/shared/knowledgeBase";
+/** One heading of an entry body, in document order. */
+interface KnowledgeEntryHeading {
+  text: string;
+  level: number;
+}
 
 /** Persisted generated artifact for the built index (rebuildable, gitignored). */
 export const KB_INDEX_ARTIFACT = "index/kb-index.json";
@@ -69,7 +73,7 @@ export interface KbIndexEntry {
 }
 
 /** An entry whose `index.md` frontmatter failed to parse/validate. */
-export interface KbIndexInvalidEntry {
+interface KbIndexInvalidEntry {
   path: string;
   folder: string;
   slug: string;
@@ -207,16 +211,6 @@ function toIndexEntry(
     body,
     excerpt: makeExcerpt(kb.summary ?? body),
   };
-}
-
-/**
- * The body's heading outline WITH levels, in document order. Exported because
- * the entry HTTP view renders the document's real structure (a nested contents
- * tree), while this index only needs the flat text for search — one parser, so
- * the two cannot disagree about what counts as a heading.
- */
-export function entryHeadingOutline(body: string): KnowledgeEntryHeading[] {
-  return analyzeBody(body).outline;
 }
 
 /**

@@ -147,9 +147,9 @@ export function useFetchState<T>(
  * Turn an external invalidation token into a REFRESH of the current key (R2).
  *
  * Surfaces are told their data went stale by a counter — a worktree status
- * `updatedAt`, a `knowledgeChanged` timestamp — and the naive wiring folds it
- * into the fetch key, which blanks the pane on every push. This reloads the
- * SAME key instead, so the data stays on screen while it refetches, and it
+ * `updatedAt` — and the naive wiring folds it into the fetch key, which blanks
+ * the pane on every push. This reloads the SAME key instead, so the data stays
+ * on screen while it refetches, and it
  * compares the previous key too: arriving at an object that already carries a
  * token is a first load, not an invalidation of it.
  */

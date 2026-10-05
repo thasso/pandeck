@@ -110,78 +110,19 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   reconciliation of the existing DOM rather than a rebuild of it, which is what
   a wide code block's horizontal scroll, a live selection and the lazily mounted
   `CodeBlock`s inside it depend on.
-- `KnowledgeBrowser.tsx` refetches its tree whenever a committed KB change is
-  broadcast (`changedAt`, from `state.knowledgeChangedAt` via `Sidebar`): it is
-  an HTTP read model, and mount-only loading meant an agent creating or moving
-  an entry stayed invisible until a reload. The entry page and the KB inspector
-  already had their own per-entry refresh tokens; the tree was the gap.
-- The Knowledge surfaces run on `hooks/useFetchState.ts` and the five states of
-  `docs/loading-states.md` (Task-361 Phase 3b). What each key means: the tree is
-  ONE query under a constant key, so a `changedAt` bump reloads it in place
-  (`useReloadOnToken`, the one copy of that pattern since Phase 3c) — rows,
-  expansion and reading position survive, marked by a `RefreshIndicator` and, on
-  failure, an inline `ErrorNote` over the tree it keeps. The entry route keys on
-  the ADDRESS (`id:<id>` / `path:<folder>`), which is what makes R3 structural
-  rather than remembered: navigating to another entry drops the previous
-  document during render, so it can never be read under the new URL, while
-  `changedAtByEntryId` invalidates the SAME key and therefore refreshes
-  (`KnowledgeEntryViewer`'s `refreshing` prop marks the header; a failed refresh
-  keeps the document under a note, whose FRAME is rendered unconditionally — a
-  wrapper that appears with the error changes the element type at the viewer's
-  position, so React remounts the document and a transient failure costs the
-  reading position and every draft in it). `KnowledgeFileViewer`'s text pane
-  keys on the file path. Covered by `knowledgeLoadStates.test.tsx`, which
-  asserts the `<main>` node survives that failure.
+- The Knowledge Base has no browser of its own: the `/knowledge` route and the
+  right panel's Knowledge tab draw `worktree/WorktreeDetailPage.tsx` for the
+  checkout `knowledge` (`lib/knowledgeCheckout.ts` builds its record), with
+  `lineComments={false}` and `markdownPreviewFirst`. `KnowledgeInspector.tsx` is
+  the route's inspector: the uncommitted-file count and "Commit changes…".
 - `KnowledgeEntryToolCard.tsx` renders the `kb_show_entry` card: the entry an
-  agent is pointing at, with the two ways to read it. It reads its open targets
-  from `KnowledgeOpenTargets.tsx`, a context the shell publishes, because the
+  agent is pointing at, with the two ways to read its `index.md` (the Knowledge
+  panel, or the `/knowledge/files` route). It reads its open targets from
+  `KnowledgeOpenTargets.tsx`, a context the shell publishes, because the
   transcript renders in both the main pane and the Personal Assistant panel and
   neither threads Knowledge navigation through `MessageList`. The side-panel
   target is absent on small screens, where that panel does not exist, and the
   card then offers the route alone.
-- `KnowledgeBrowser.tsx` owns the sidebar KB tree browser (opens valid entries
-  by `kb.id`, invalid entries by folder path, and non-entry files — entry assets
-  or loose files like JSON/YAML/PDF/images — by full tree path via
-  `onOpenFile`); `KnowledgePage.tsx` owns the main-pane Knowledge routes and
-  committed-entry invalidation refetches, dispatching a `filePath` route to
-  `KnowledgeFileViewer.tsx` (images inline, PDFs in an iframe where the engine
-  scrolls one and otherwise in a panel that opens the file in a browser tab,
-  text files via `ui/CodeBlock`, else a raw/download fallback; bytes come from
-  the server `/api/knowledge/file` endpoint through `lib/knowledgeBaseApi.ts`'s
-  `knowledgeFileUrl`/`fetchKnowledgeFileText`); `KnowledgeEntryViewer.tsx` owns
-  the entry document surface. Its header is ONE compact identity row that keeps
-  the entry title visible while reading; its glyph both marks it as a KB entry
-  and copies its `pa://` link — at both widths, which is why the panel no longer
-  carries a duplicate Copy-link action. On a first document load, the pane shows
-  only `PaneLoading`; its page header is held until the readable entry and its
-  title arrive, so a reload never flashes placeholder chrome before the
-  document. Tags/type/status/updated are frontmatter and live in the panel, not
-  between the reader and the document. **Contents** is an inline
-  `CollapsibleSection` flush with the column (never a card) whose body is the
-  real heading TREE — `buildOutlineTree` nests the wire `outline`
-  (`{text, level}`) and drops a leading H1 that repeats the title, since a tree
-  rooted at "the document" says nothing; a row scrolls the rendered document to
-  that heading (matched by text, as the Markdown renderer emits no heading
-  slugs) and the hover link copies a deep `pa://` link. Comments are the shared
-  browser-local tray (`DocumentComments.tsx`'s `DocumentCommentLayer`,
-  `docs/comments.md`) mounted as the column's last child: a passage comment from
-  a selection (Markdown source lines from the rendered blocks'
-  `data-source-line-*`), a whole-entry comment without one, and a "Send to
-  session" bar that moves the tray into a session composer.
-  `objectInspectors.tsx` owns object Details inspectors. The Knowledge
-  inspector's History section renders each commit's changes through
-  `KnowledgeDiffView.tsx` (lazy-imported so the @pierre/diffs + Shiki stack
-  stays out of the main bundle): a per-file view with two modes — "Rendered"
-  (the entry Markdown rendered as prose with inline word-level `<ins>`/`<del>`
-  "suggested changes" marks via `lib/knowledgeMarkdownDiff.ts`'s
-  `buildRenderedDiffMarkdown` + `Markdown.tsx`'s raw-HTML rendering;
-  `.kb-md-diff ins/del` in `index.css` styles the marks) and "Diff" (the shared
-  `diff/DiffSurface` pierre surface, forced unified in the narrow inspector but
-  otherwise honoring diff prefs). It honors the shared `diffIgnoreWhitespace`
-  pref (whitespace-only changes hidden, on by default) with an in-header toggle,
-  so it needs both `prefs` and `onUpdatePrefs`; `App.tsx` passes them to
-  `KnowledgeInspector`. The server `KnowledgeDiffPreview.files` supplies the
-  bounded per-file old/new text.
 - `TaskStatusIcon.tsx` owns the Backlog's circular status glyph
   (`TaskStatusIcon`) and the three status labels (`TASK_STATUS_LABEL`). Its
   `claimed` flag paints the SAME shape amber when an agent has suggested a
@@ -457,13 +398,10 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   the threshold.
 - The failure an OBJECT is carrying renders as one `ErrorNote` above its
   content, with a Dismiss: `TaskManagementPage.tsx` above the open Task's title
-  block, `ProjectDetailPage.tsx` at the top of the project's detail body, and
-  `KnowledgePage.tsx` as a sibling slot beside the refresh note — a sibling, not
-  a wrapper, because an element appearing AT the viewer's position would remount
-  the document (R2). It is for the writes no control on the page tracks
-  (archiving a Task, a comment on an entry); a tracked write is refused on its
-  own control, and the two are never both shown for one failure
-  (`docs/messaging.md`).
+  block, and `ProjectDetailPage.tsx` at the top of the project's detail body. It
+  is for the writes no control on the page tracks (archiving a Task); a tracked
+  write is refused on its own control, and the two are never both shown for one
+  failure (`docs/messaging.md`).
 - `TaskManagementPage.tsx`'s detail splits identity from content, at every
   width. The header is ONE compact row: the Tasks glyph (which copies
   `Task-123`) and the id. The title and status moved into the top of the
@@ -659,11 +597,10 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `App.tsx` keeps this host mounted with the panel shut. Its **Personal
   Assistant** tab owns an independent connection to the server-owned permanent
   conversation, so it can remain open beside the routed main session; its
-  **Knowledge** tab (`shell/KnowledgePanel.tsx`) browses `KnowledgeBrowser`'s
-  tree and then renders `KnowledgePage` for the chosen entry inside its own
-  `CommentActuationProvider` and `RoutePrimaryActionProvider`, so the entry's
-  comment and review controls cannot be confused with the main-pane object's.
-  Its **Worktree** tab (`shell/WorktreePanel.tsx`) renders that same
+  **Knowledge** tab (`shell/KnowledgePanel.tsx`) renders the Knowledge Base
+  checkout's `WorktreeDetailPage` (narrow, embedded) inside its own
+  `RoutePrimaryActionProvider`, keeping its location as panel state. Its
+  **Worktree** tab (`shell/WorktreePanel.tsx`) renders that same
   `WorktreeDetailPage` for the worktree the OPEN SESSION executes in, in the
   same two providers, with `narrow` for the column's width and `embedded` so the
   panel copy neither publishes the shell's document navigation nor restores its
@@ -899,26 +836,25 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   whole-section replacement: that map has to be built on the one last SENT while
   a save is in flight, which only the hook holds, and a skill momentarily
   missing from the scan keeps its stored entry either way. It reuses the generic
-  `Tree`, `PageHeader`, `CodeBlock`, `Markdown`, and `ui/load.tsx` primitives;
-  `KnowledgeBrowser`/`KnowledgeFileViewer` remain hard-wired to the KB's HTTP
-  API and are deliberately untouched. Opening a row reads that skill's
-  `SKILL.md` and recursive supporting-file tree into a detail pane below the
-  list ([Task-614](pa://task/614)): the body is NOT in the list, it is
-  `fetchSkillDetail` through `useFetchState` KEYED BY THE SELECTED NAME, which
-  is what makes R3 structural here — switching rows drops the previous document
-  during render and a late answer for it is discarded, so one skill's
-  instructions can never be read under another skill's heading. The row's
-  metadata is the button (a whole-row target would nest the toggle's checkbox
-  inside a control); the body renders through the shared sanitized `Markdown`,
-  never raw HTML; a truncated body says how much of the file it is showing; an
-  `invalid` answer renders the scan/read race's reason as content rather than as
-  an error; and a new scan rereads the open skill in place, keeping it on screen
-  (R2) so browse and injection cannot disagree about the file. File selection is
-  independently keyed by name + relative path: Markdown is sanitized, text/code
-  is highlighted, images use the bounded raw URL, and binary/unsupported files
-  get raw/download actions only. First load, file switches, refresh failure,
-  binary detection, and body/tree/preview truncation each render their own state
-  rather than borrowing the previously selected file's content.
+  `Tree`, `PageHeader`, `CodeBlock`, `Markdown`, and `ui/load.tsx` primitives.
+  Opening a row reads that skill's `SKILL.md` and recursive supporting-file tree
+  into a detail pane below the list ([Task-614](pa://task/614)): the body is NOT
+  in the list, it is `fetchSkillDetail` through `useFetchState` KEYED BY THE
+  SELECTED NAME, which is what makes R3 structural here — switching rows drops
+  the previous document during render and a late answer for it is discarded, so
+  one skill's instructions can never be read under another skill's heading. The
+  row's metadata is the button (a whole-row target would nest the toggle's
+  checkbox inside a control); the body renders through the shared sanitized
+  `Markdown`, never raw HTML; a truncated body says how much of the file it is
+  showing; an `invalid` answer renders the scan/read race's reason as content
+  rather than as an error; and a new scan rereads the open skill in place,
+  keeping it on screen (R2) so browse and injection cannot disagree about the
+  file. File selection is independently keyed by name + relative path: Markdown
+  is sanitized, text/code is highlighted, images use the bounded raw URL, and
+  binary/unsupported files get raw/download actions only. First load, file
+  switches, refresh failure, binary detection, and body/tree/preview truncation
+  each render their own state rather than borrowing the previously selected
+  file's content.
 - Configured agents choose an ACCOUNT/MODEL COMBINATION: `AgentModelFields.tsx`
   (its own module, because both `SettingsPage.tsx` and
   `MemorySettingsSection.tsx` render it) takes `AccountModelOption`s, so

@@ -17,6 +17,8 @@ import { useKnowledgeOpenTargets } from "./KnowledgeOpenTargets.tsx";
 export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   const targets = useKnowledgeOpenTargets();
   const openInPanel = targets?.openInPanel;
+  // The card names the entry's folder; the entry is its `index.md` file.
+  const entryFile = `${card.path}/index.md`;
   return (
     <div className="not-prose my-2 overflow-hidden rounded-xl border border-line bg-surface text-left shadow-sm">
       <div className="flex items-start gap-2 p-2.5">
@@ -50,7 +52,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           {openInPanel ? (
             <button
               type="button"
-              onClick={() => openInPanel(card.entryId)}
+              onClick={() => openInPanel(entryFile)}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <PanelRight size={13} />
@@ -59,7 +61,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           ) : null}
           <button
             type="button"
-            onClick={() => targets.openInMain(card.entryId)}
+            onClick={() => targets.openInMain(entryFile)}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <SquareArrowOutUpRight size={13} />

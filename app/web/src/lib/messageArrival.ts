@@ -140,19 +140,18 @@ export function sessionFailureFrom(
  * object, for the surface that has that object open to render in place.
  *
  * A worktree is deliberately absent: its failures are already narrated by the
- * dialog or the delivery card that issued them, so a fourth store would be a
+ * dialog or the delivery card that issued them, so a third store would be a
  * second copy of a note that is already on screen.
  */
 const OBJECT_FAILURE_TYPES = [
   "project",
   "task",
-  "knowledge",
 ] as const satisfies readonly MessageTarget["type"][];
 
 export type ObjectFailureType = (typeof OBJECT_FAILURE_TYPES)[number];
 
 /**
- * The failure an arrival puts on a project, Task or Knowledge entry, or null.
+ * The failure an arrival puts on a project or Task, or null.
  *
  * Same derivation as the session case and from the same one place, so the store
  * that keeps a failure and the decision not to also announce it can never
@@ -272,7 +271,7 @@ export interface FailureHomes {
 const NO_HOMES: FailureHomes = {
   viewedSessionId: null,
   stagedSend: null,
-  openObjects: { project: [], task: [], knowledge: [] },
+  openObjects: { project: [], task: [] },
 };
 
 let homes: FailureHomes = NO_HOMES;

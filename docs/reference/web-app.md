@@ -184,9 +184,8 @@ tasks/projects, calendar, and browser-side helpers.
   it there; a refused move is returned to the tray to report in place. The dock
   action row's last SLOT carries **Send comments** (badged with the pending
   count) while a tray holds some, and otherwise the object's primary action —
-  **Start session** on a Knowledge entry, whose NAME only the loaded document
-  knows, so `KnowledgePage`'s `onEntryLoaded` reports it. A WORKTREE screen's
-  row carries **Submit review** through `submitWorktreeReview` and
+  **Start session with this file** on a document. A WORKTREE screen's row
+  carries **Submit review** through `submitWorktreeReview` and
   `worktree/worktreeReview.tsx`'s pending helpers. Its inspector action is
   domain-owned by `worktreeInspectorActions`; Add comment remains shell-owned.
   The worktree's comment roster itself lives ONLY in the object panel

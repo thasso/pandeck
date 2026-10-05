@@ -57,10 +57,13 @@ const DiffCommentActuationContext =
 export function DiffCommentBarProvider({
   pendingCount,
   onSubmitReview,
+  enabled = true,
   children,
 }: {
   pendingCount: number;
   onSubmitReview: () => void;
+  /** False for a surface whose lines take no comments: the header offers none. */
+  enabled?: boolean;
   children: ReactNode;
 }) {
   const [target, setTarget] = useState<DiffCommentTarget | null>(null);
@@ -91,7 +94,7 @@ export function DiffCommentBarProvider({
     }),
     [onComment, onSubmitReview, pendingCount, target],
   );
-  usePublishCommentActuation(actuation);
+  usePublishCommentActuation(enabled ? actuation : null);
   return (
     <DiffCommentActuationContext.Provider value={contextValue}>
       {children}

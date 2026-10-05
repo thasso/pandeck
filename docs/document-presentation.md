@@ -41,14 +41,16 @@ parses app-relative and `pa://` addresses, never HTTP origins.
 
 `DocumentTarget` has these sources:
 
-| Source           | Durable input                                            | Viewer route                                         |
-| ---------------- | -------------------------------------------------------- | ---------------------------------------------------- |
-| Live host file   | `/api/files/<absolute path>`                             | `/files/<absolute path>`                             |
-| Session artifact | `/api/session-artifacts/<session>/<path>`                | `/artifacts/<session>/<path>`                        |
-| Knowledge file   | `/api/knowledge/file?path=...` or `/knowledge/~file/...` | `/knowledge/~file/<tree path>`                       |
-| Knowledge asset  | `pa://knowledge/<entry>?asset=<relative path>`           | `/knowledge/<entry>?asset=<relative path>`           |
-| Worktree file    | `pa://worktree/<id>?path=<repo path>`                    | `/worktrees/<id>/files?path=<repo path>`             |
-| Worktree diff    | `pa://worktree/<id>?path=<repo path>&view=diff`          | `/worktrees/<id>/changes?path=<repo path>&view=diff` |
+| Source           | Durable input                                   | Viewer route                                         |
+| ---------------- | ----------------------------------------------- | ---------------------------------------------------- |
+| Live host file   | `/api/files/<absolute path>`                    | `/files/<absolute path>`                             |
+| Session artifact | `/api/session-artifacts/<session>/<path>`       | `/artifacts/<session>/<path>`                        |
+| Worktree file    | `pa://worktree/<id>?path=<repo path>`           | `/worktrees/<id>/files?path=<repo path>`             |
+| Worktree diff    | `pa://worktree/<id>?path=<repo path>&view=diff` | `/worktrees/<id>/changes?path=<repo path>&view=diff` |
+
+A Knowledge Base file is a worktree file of the reserved checkout `knowledge`
+(`KNOWLEDGE_WORKTREE_ID`): `pa://worktree/knowledge?path=<KB path>` opens on
+`/knowledge/files?path=<KB path>`, and its diff on `/knowledge/changes`.
 
 A worktree target without `view=diff` always opens the ordinary file. A changed
 file is still a file unless the author explicitly asks for its diff. Worktree
@@ -78,7 +80,7 @@ stays in the URL and in every link, and `boundedDocumentLineRange` is what a
 renderer draws — the whole range when it fits, otherwise the cap counted FROM
 the first addressed line.
 
-Every line-oriented body — a host file, a captured artifact, a Knowledge file —
+Every line-oriented body — a host file, a captured artifact, a worktree file —
 is the SAME renderer, so the sources cannot answer one address three ways. It
 opens on a window of that same 500-line size whether or not there is an anchor:
 centred on the addressed lines when they fit, and starting at the first
@@ -120,17 +122,18 @@ A same-document `#Lx` reference keeps the current target and replaces its
 anchor. Other relative links keep the current source identity without inheriting
 the source anchor. Paths use URL resolution and percent-decode exactly once. A
 host document links to another host file, an artifact links within the same
-session artifact directory, a Knowledge document stays in Knowledge, and a
-worktree document stays in the same worktree. Relative worktree links reset to
-ordinary file view. A link must say `view=diff` again to open a diff.
+session artifact directory, and a worktree document (the Knowledge Base
+included) stays in the same worktree. Relative worktree links reset to ordinary
+file view. A link must say `view=diff` again to open a diff.
 
 ## Starting a session from a document
 
-Every document viewer — a host file, an artifact, a Knowledge file or entry, a
-worktree file — leads with "Start session with this file" (the route's primary
-action in `App.tsx`, `lib/fileSessionStart.ts`). It stages the document as a
+Every document viewer — a host file, an artifact, a worktree or Knowledge Base
+file — leads with "Start session with this file" (the route's primary action in
+`App.tsx`, `lib/fileSessionStart.ts`). It stages the document as a
 `file-context` chip on the new-session composer. A file inside a worktree also
-stages that worktree, so the session runs in the checkout the file belongs to.
+stages that worktree, so the session runs in the checkout the file belongs to; a
+Knowledge Base file stages only itself, since no session runs in the KB.
 
 On the wire the staged file is its canonical viewer route without the line
 anchor (`fileContext` on `prompt` and `harnessSend`). The server parses it as a
@@ -152,48 +155,47 @@ identity and the three distinct navigation commands:
   history, carries that origin, and preserves Forward when the reader traverses
   back.
 - A deep-linked document has no opening entry. Close then uses a deterministic
-  source fallback: the owning Session for an artifact, Knowledge for a Knowledge
-  file, the worktree Files view for a worktree file, and Sessions for a live
-  host file. Knowledge assets fall back to their owning entry, and an explicit
-  worktree diff falls back to Changes.
+  source fallback: the owning Session for an artifact, the worktree Files view
+  for a worktree file (`/knowledge/files` for the Knowledge Base), and Sessions
+  for a live host file. An explicit worktree diff falls back to Changes.
 
-Host, artifact, Knowledge, and worktree renderers keep their own fetch and
-rendering rules. The shell does not route every source through `FileViewerPage`.
-On a phone it renders only the compact identity row. Back, Forward, Close, and
-typed source actions register with the existing object dock and bottom-card
-system, composed with worktree comment/review/start-session actions. One builder
-owns that row's order (`components/DocumentDockRow.tsx`), so no source can
-reorder it: Back and Forward are the fixed leading pair, the source's and
-object's actions fill the middle, and Close is fixed at the FAR RIGHT end. A
-document with source and worktree actions overflows that middle at 360px and it
-scrolls horizontally — which is why both ends sit outside it (`DockPeek.back`
-and `DockPeek.trailing`): neither the way back nor the way out may scroll away.
-It does not add a fixed toolbar. Route-level registration exists outside lazy
-viewer bodies, so the dock never flashes the previous screen's action set. A
-wide layout puts the same controls in the identity header, in the same order:
-Back and Forward first, Close last.
+Host, artifact, and worktree renderers keep their own fetch and rendering rules.
+The shell does not route every source through `FileViewerPage`. On a phone it
+renders only the compact identity row. Back, Forward, Close, and typed source
+actions register with the existing object dock and bottom-card system, composed
+with worktree comment/review/start-session actions. One builder owns that row's
+order (`components/DocumentDockRow.tsx`), so no source can reorder it: Back and
+Forward are the fixed leading pair, the source's and object's actions fill the
+middle, and Close is fixed at the FAR RIGHT end. A document with source and
+worktree actions overflows that middle at 360px and it scrolls horizontally —
+which is why both ends sit outside it (`DockPeek.back` and `DockPeek.trailing`):
+neither the way back nor the way out may scroll away. It does not add a fixed
+toolbar. Route-level registration exists outside lazy viewer bodies, so the dock
+never flashes the previous screen's action set. A wide layout puts the same
+controls in the identity header, in the same order: Back and Forward first,
+Close last.
 
 ## Rendering and security
 
 The delivery rules in `served-files.md` still apply. HTML from every internal
 source runs only through a typed, directory-scoped opaque grant. Host paths,
-session artifacts, Knowledge files/assets and worktree files keep their source
-identity through minting; the server resolves that identity through the owning
-root or registry and never accepts a client-resolved filesystem path. Source
-viewers keep their natural fetch/render context. PDFs use passive file-scoped
-grants and omit response/iframe sandboxing so Chromium/WebKit's built-in viewer
-is not plugin-blocked; active HTML/SVG remains sandboxed. A PDF is EMBEDDED only
-where the engine can scroll one. On iOS and iPadOS WebKit — every browser there,
-an installed Home Screen app, and the shell's WKWebView — a framed PDF is its
-first page at native size with nothing to scroll, so the dedicated viewer
-renders a panel instead: the file's name, its size where the source knows it, a
-line saying the document opens in the browser, and one action that hands the
-same grant to a real tab (the native opener in the shell). An inline PDF embed
-keeps degrading to its canonical viewer link. A framed document in a dedicated
-viewer fills that viewer's panel — the frame and everything wrapping it carry
-the height, since a frame whose height cannot resolve collapses to the browser's
-150px default — while an inline embed stays bounded. Unsupported bytes retain
-Open and Download actions.
+session artifacts and worktree files (the Knowledge Base included) keep their
+source identity through minting; the server resolves that identity through the
+owning root or registry and never accepts a client-resolved filesystem path.
+Source viewers keep their natural fetch/render context. PDFs use passive
+file-scoped grants and omit response/iframe sandboxing so Chromium/WebKit's
+built-in viewer is not plugin-blocked; active HTML/SVG remains sandboxed. A PDF
+is EMBEDDED only where the engine can scroll one. On iOS and iPadOS WebKit —
+every browser there, an installed Home Screen app, and the shell's WKWebView — a
+framed PDF is its first page at native size with nothing to scroll, so the
+dedicated viewer renders a panel instead: the file's name, its size where the
+source knows it, a line saying the document opens in the browser, and one action
+that hands the same grant to a real tab (the native opener in the shell). An
+inline PDF embed keeps degrading to its canonical viewer link. A framed document
+in a dedicated viewer fills that viewer's panel — the frame and everything
+wrapping it carry the height, since a frame whose height cannot resolve
+collapses to the browser's 150px default — while an inline embed stays bounded.
+Unsupported bytes retain Open and Download actions.
 
 An explicit image embed is bare and lazy, and it enlarges: clicking it opens the
 full-screen image viewer rather than leaving the surface the reader is on. That

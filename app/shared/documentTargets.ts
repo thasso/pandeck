@@ -1,4 +1,5 @@
 import { parsePaObjectLink } from "./objectLinks.ts";
+import { KNOWLEDGE_WORKTREE_ID } from "./protocol.ts";
 
 export interface DocumentLineAnchor {
   /** First 1-based line in the addressed range. */
@@ -13,12 +14,6 @@ type Anchored = { anchor?: DocumentLineAnchor };
 export type DocumentTarget =
   | ({ kind: "hostFile"; path: string } & Anchored)
   | ({ kind: "sessionArtifact"; sessionId: string; path: string } & Anchored)
-  | ({ kind: "knowledgeFile"; path: string } & Anchored)
-  | ({
-      kind: "knowledgeAsset";
-      entryId: string;
-      path: string;
-    } & Anchored)
   | ({
       kind: "worktreeFile";
       worktreeId: string;
@@ -145,15 +140,6 @@ export function parseDocumentTarget(input: string): DocumentTarget | null {
       pa.fragment ?? "",
     );
   }
-  if (pa?.objectType === "knowledge") {
-    const params = new URLSearchParams(pa.query ?? "");
-    const path = params.get("asset");
-    if (!path) return null;
-    return anchored(
-      { kind: "knowledgeAsset", entryId: pa.id, path },
-      pa.fragment ?? "",
-    );
-  }
 
   const url = parseAppUrl(input);
   if (!url) return null;
@@ -195,51 +181,17 @@ export function parseDocumentTarget(input: string): DocumentTarget | null {
       : null;
   }
 
-  if (path.startsWith("/knowledge/~file/")) {
-    const decoded = decodePath(path.slice("/knowledge/~file/".length));
-    return decoded
-      ? anchored({ kind: "knowledgeFile", path: decoded }, anchor)
-      : null;
-  }
-  if (path === "/api/knowledge/file") {
-    const filePath = url.searchParams.get("path");
-    return filePath
-      ? anchored({ kind: "knowledgeFile", path: filePath }, anchor)
-      : null;
-  }
-  if (path === "/api/knowledge/asset") {
-    const entryId = url.searchParams.get("id");
-    const assetPath = url.searchParams.get("path");
-    return entryId && assetPath
-      ? anchored({ kind: "knowledgeAsset", entryId, path: assetPath }, anchor)
-      : null;
-  }
-  const knowledgeAsset = path.match(/^\/knowledge\/([^/]+)\/?$/);
-  const knowledgeAssetPath = url.searchParams.get("asset");
-  if (knowledgeAsset?.[1] && knowledgeAssetPath) {
-    try {
-      return anchored(
-        {
-          kind: "knowledgeAsset",
-          entryId: decodeURIComponent(knowledgeAsset[1]),
-          path: knowledgeAssetPath,
-        },
-        anchor,
-      );
-    } catch {
-      return null;
-    }
-  }
-
-  const worktree = path.match(
-    /^\/worktrees\/([^/]+)(?:\/(files|changes))?\/?$/,
-  );
+  // The Knowledge Base is the checkout `knowledge`, at its own route.
+  const knowledge = path.match(/^\/knowledge(?:\/(files|changes))?\/?$/);
+  const worktree = knowledge
+    ? [path, KNOWLEDGE_WORKTREE_ID, knowledge[1]]
+    : path.match(/^\/worktrees\/([^/]+)(?:\/(files|changes))?\/?$/);
   if (worktree?.[1]) {
     const filePath = url.searchParams.get("path");
     if (!filePath) return null;
     let worktreeId: string;
     try {
-      worktreeId = decodeURIComponent(worktree[1]);
+      worktreeId = knowledge ? worktree[1] : decodeURIComponent(worktree[1]);
     } catch {
       return null;
     }
@@ -271,15 +223,15 @@ export function documentTargetHref(target: DocumentTarget): string {
       return `/files/${encodedPath(target.path)}${anchor}`;
     case "sessionArtifact":
       return `/artifacts/${encodeURIComponent(target.sessionId)}/${encodedPath(target.path)}${anchor}`;
-    case "knowledgeFile":
-      return `/knowledge/~file/${encodedPath(target.path)}${anchor}`;
-    case "knowledgeAsset":
-      return `/knowledge/${encodeURIComponent(target.entryId)}?asset=${encodeURIComponent(target.path)}${anchor}`;
     case "worktreeFile": {
       const params = new URLSearchParams({ path: target.path });
       if (target.view === "diff") params.set("view", "diff");
       const view = target.view === "diff" ? "changes" : "files";
-      return `/worktrees/${encodeURIComponent(target.worktreeId)}/${view}?${params.toString()}${anchor}`;
+      const base =
+        target.worktreeId === KNOWLEDGE_WORKTREE_ID
+          ? "/knowledge"
+          : `/worktrees/${encodeURIComponent(target.worktreeId)}`;
+      return `${base}/${view}?${params.toString()}${anchor}`;
     }
   }
 }
@@ -291,9 +243,6 @@ export function documentTargetPaUri(target: DocumentTarget): string | null {
     const params = new URLSearchParams({ path: target.path });
     if (target.view === "diff") params.set("view", "diff");
     return `pa://worktree/${encodeURIComponent(target.worktreeId)}?${params.toString()}${anchor}`;
-  }
-  if (target.kind === "knowledgeAsset") {
-    return `pa://knowledge/${encodeURIComponent(target.entryId)}?asset=${encodeURIComponent(target.path)}${anchor}`;
   }
   return null;
 }
@@ -312,15 +261,6 @@ function sourceWithPathAndAnchor(
       return {
         kind: "sessionArtifact",
         sessionId: source.sessionId,
-        path,
-        ...anchored,
-      };
-    case "knowledgeFile":
-      return { kind: "knowledgeFile", path, ...anchored };
-    case "knowledgeAsset":
-      return {
-        kind: "knowledgeAsset",
-        entryId: source.entryId,
         path,
         ...anchored,
       };

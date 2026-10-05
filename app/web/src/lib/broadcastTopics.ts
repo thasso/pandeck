@@ -108,8 +108,6 @@ export function topicsForSurface({
   }
   if (taskPickerOpen && (routeName === "new" || routeName === "sessions"))
     topics.add("tasks");
-  if (shownSection === "knowledge" || routeName === "knowledge")
-    topics.add("knowledge");
   // The settings BROWSER lists sections without reading any of them, so the
   // rendered section is the only thing that counts here. The session inspector
   // also reads the library to distinguish loaded from unloaded skills.

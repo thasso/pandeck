@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  KNOWLEDGE_WORKTREE_ID,
   isGitHostingProviderKind,
   type GitHostingProviderKind,
   type SessionListItem,
@@ -45,10 +46,9 @@ import {
  *   /pull-requests       → Pull Requests section index (a real surface)
  *   /pull-requests/:projectId/:provider/:repositoryKey/:number → one PR
  *   /calendar            → calendar surface (optionally /calendar/:view/:date)
- *   /knowledge                  → Knowledge Base surface
- *   /knowledge/:entryId         → Knowledge entry by stable kb.id
- *   /knowledge/~invalid/:path   → invalid entry (no kb.id) by folder path
- *   /knowledge/~file/:path      → a non-entry KB file (asset/loose) by tree path
+ *   /knowledge           → the Knowledge Base folder (files)
+ *   /knowledge/files?path=…      → one KB file
+ *   /knowledge/changes?path=…    → uncommitted edits, or a commit range (from/to)
  *   /usage               → provider account usage/rate-limit surface (Claude today)
  *   /files/:absolutePath → the file viewer for one live host file
  *   /artifacts/:session/:path → a captured session artifact
@@ -99,11 +99,12 @@ export type Route =
     }
   | { name: "calendar"; view?: "month" | "week" | "day"; date?: string }
   | {
+      /** The KB folder, browsed as the checkout `knowledge` (same coordinates as a worktree). */
       name: "knowledge";
-      entryId?: string;
-      entryPath?: string;
-      filePath?: string;
-      assetPath?: string;
+      view?: WorktreeView;
+      path?: string;
+      from?: string;
+      to?: string;
       anchor?: DocumentLineAnchor;
     }
   | { name: "usage" }
@@ -165,29 +166,9 @@ export function pullRequestPath(target?: {
   return `${PULL_REQUESTS_PATH}/${segments.join("/")}`;
 }
 
-/** Knowledge Base surface, or one entry addressed by its stable `kb.id`. */
-export function knowledgePath(entryId?: string): string {
-  return entryId ? `/knowledge/${encodeURIComponent(entryId)}` : "/knowledge";
-}
-
-/**
- * Route for an entry addressed by folder path rather than id. Invalid entries
- * have no parseable `kb.id`, so they are reachable only by path. The reserved
- * `~invalid/` prefix cannot collide with a `kb.id` (ids never contain `/`).
- */
-export function knowledgeEntryPath(folder: string): string {
-  const encoded = folder.split("/").map(encodeURIComponent).join("/");
-  return `/knowledge/~invalid/${encoded}`;
-}
-
-/**
- * Route for a non-entry KB file (an entry asset or a loose file) addressed by
- * its full tree path, so it can be viewed in the main pane. The reserved
- * `~file/` prefix cannot collide with a `kb.id` (ids never contain `/`).
- */
-export function knowledgeFilePath(path: string): string {
-  const encoded = path.split("/").map(encodeURIComponent).join("/");
-  return `/knowledge/~file/${encoded}`;
+/** The Knowledge Base folder. */
+export function knowledgePath(): string {
+  return "/knowledge";
 }
 
 /** Provider account usage/rate-limit surface. */
@@ -242,7 +223,12 @@ export function worktreePath(
   view?: WorktreeView,
   query?: { path?: string; from?: string; to?: string },
 ): string {
-  const base = `/worktrees/${encodeURIComponent(id)}${view ? `/${view}` : ""}`;
+  // The Knowledge Base is the checkout `knowledge`, at its own section route.
+  const root =
+    id === KNOWLEDGE_WORKTREE_ID
+      ? "/knowledge"
+      : `/worktrees/${encodeURIComponent(id)}`;
+  const base = `${root}${view ? `/${view}` : ""}`;
   const params = new URLSearchParams();
   if (query?.path) params.set("path", query.path);
   if (query?.from) params.set("from", query.from);
@@ -349,37 +335,27 @@ export function parseRoute(pathAndSearch: string): Route {
       ...(anchor ? { anchor } : {}),
     };
   }
-  if (pathname === "/knowledge" || pathname === "/knowledge/")
-    return { name: "knowledge" };
-  const knowledgeInvalid = pathname.match(/^\/knowledge\/~invalid\/(.+?)\/?$/);
-  if (knowledgeInvalid?.[1]) {
-    return {
-      name: "knowledge",
-      entryPath: knowledgeInvalid[1]
-        .split("/")
-        .map(decodeURIComponent)
-        .join("/"),
-      ...(anchor ? { anchor } : {}),
-    };
-  }
-  const knowledgeFile = pathname.match(/^\/knowledge\/~file\/(.+?)\/?$/);
-  if (knowledgeFile?.[1]) {
-    return {
-      name: "knowledge",
-      filePath: knowledgeFile[1].split("/").map(decodeURIComponent).join("/"),
-      ...(anchor ? { anchor } : {}),
-    };
-  }
-  const knowledgeDetail = pathname.match(/^\/knowledge\/([^/]+)\/?$/);
-  if (knowledgeDetail?.[1]) {
+  const knowledge = pathname.match(/^\/knowledge(?:\/(changes|files))?\/?$/);
+  if (knowledge) {
     const params = new URLSearchParams(
       queryIndex >= 0 ? withoutHash.slice(queryIndex + 1) : "",
     );
-    const assetPath = params.get("asset") ?? undefined;
+    const pathValue = params.get("path") ?? undefined;
+    const viewValue =
+      (knowledge[1] as WorktreeView | undefined) ??
+      (pathValue
+        ? params.get("view") === "diff"
+          ? "changes"
+          : "files"
+        : undefined);
+    const fromValue = params.get("from") ?? undefined;
+    const toValue = params.get("to") ?? undefined;
     return {
       name: "knowledge",
-      entryId: decodeURIComponent(knowledgeDetail[1]),
-      ...(assetPath ? { assetPath } : {}),
+      ...(viewValue !== undefined ? { view: viewValue } : {}),
+      ...(pathValue !== undefined ? { path: pathValue } : {}),
+      ...(fromValue !== undefined ? { from: fromValue } : {}),
+      ...(toValue !== undefined ? { to: toValue } : {}),
       ...(anchor ? { anchor } : {}),
     };
   }
@@ -461,7 +437,7 @@ export function isSectionIndexRoute(route: Route): boolean {
       // an object screen.
       return false;
     case "knowledge":
-      return !route.entryId && !route.entryPath && !route.filePath;
+      return !route.view && !route.path;
     case "calendar":
       // A bare /calendar is the index; a view+date addresses the calendar itself.
       return !route.date;
@@ -493,14 +469,7 @@ function routeKey(route: Route): string {
     return route.date
       ? `calendar:${route.view ?? "month"}:${route.date}`
       : "calendar";
-  if (route.name === "knowledge")
-    return route.entryId
-      ? `knowledge:${route.entryId}`
-      : route.entryPath
-        ? `knowledge:~invalid:${route.entryPath}`
-        : route.filePath
-          ? `knowledge:~file:${route.filePath}`
-          : "knowledge";
+  if (route.name === "knowledge") return `knowledge:${route.view ?? "files"}`;
   if (route.name === "usage") return "usage";
   if (route.name === "backgroundTasks")
     return `backgroundTasks:${route.taskId ?? ""}`;

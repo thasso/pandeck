@@ -574,11 +574,11 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   twice over — the effect cleanup aborts the request and the setter re-checks
   the key on arrival. Contract: `app/web/docs/loading-states.md`. Its
   `useReloadOnToken(key, token, reload)` is how an external invalidation counter
-  (a worktree status `updatedAt`, a `knowledgeChanged` timestamp) reaches a
-  surface without blanking it: folding the token into the fetch key would drop
-  the data on every push, so it reloads the SAME key instead, and it compares
-  the previous key too — arriving at an object that already carries a token is a
-  first load, not an invalidation of it.
+  (a worktree status `updatedAt`) reaches a surface without blanking it: folding
+  the token into the fetch key would drop the data on every push, so it reloads
+  the SAME key instead, and it compares the previous key too — arriving at an
+  object that already carries a token is a first load, not an invalidation of
+  it.
 - `useTouchComposerMode.ts` answers ONE question for every composer that accepts
   Enter — the chat one and every comment one: is this a thumb or a keyboard.
   Enter sends on a keyboard (Shift+Enter is the newline) and inserts a line on a

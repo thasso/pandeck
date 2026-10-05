@@ -198,12 +198,6 @@ it("opens every non-host typed source through a grant in Tauri", async () => {
   window.__TAURI__ = { core: { invoke } };
   const targets = [
     { kind: "sessionArtifact" as const, sessionId: "s1", path: "report.pdf" },
-    { kind: "knowledgeFile" as const, path: "loose/report.pdf" },
-    {
-      kind: "knowledgeAsset" as const,
-      entryId: "kb-1",
-      path: "assets/report.pdf",
-    },
     {
       kind: "worktreeFile" as const,
       worktreeId: "w1",
@@ -227,7 +221,7 @@ it("opens every non-host typed source through a grant in Tauri", async () => {
     expect(externalDocumentActionEnabled(target)).toBe(true);
     await runExternalDocumentAction(target, "open");
   }
-  expect(fetchSpy).toHaveBeenCalledTimes(4);
+  expect(fetchSpy).toHaveBeenCalledTimes(targets.length);
   expect(
     fetchSpy.mock.calls.map((call) =>
       JSON.parse(String((call as unknown as [unknown, RequestInit])[1].body)),
@@ -239,7 +233,7 @@ it("opens every non-host typed source through a grant in Tauri", async () => {
       delivery: "inline",
     })),
   );
-  expect(invoke).toHaveBeenCalledTimes(4);
+  expect(invoke).toHaveBeenCalledTimes(targets.length);
   expect(invoke).toHaveBeenLastCalledWith("open_served_file", {
     url: `${serverHttpOrigin()}/api/file-grants/source-1/report.pdf`,
   });

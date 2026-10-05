@@ -32,7 +32,6 @@ import {
 import { harnessRegistry } from "./harnesses/registry.ts";
 import { mergedSessionList } from "./harnesses/sessionList.ts";
 import { setWorktreeBroadcaster } from "./worktrees/worktreeEvents.ts";
-import { setKnowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
 import { setAppNotificationBroadcaster } from "./webPush.ts";
@@ -278,9 +277,6 @@ class SessionHub {
           if (c.wantsWorktree?.(worktreeId)) c.send(msg);
         }
       },
-    });
-    setKnowledgeBaseBroadcaster({
-      broadcast: (msg) => this.broadcastTopic("knowledge", msg),
     });
     // The library's only path to browsers: one topic, one list shape.
     setSkillLibraryBroadcaster({

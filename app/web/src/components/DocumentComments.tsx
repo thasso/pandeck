@@ -101,11 +101,6 @@ export function DocumentCommentHostProvider({
   );
 }
 
-/** Whether this surface may collect comments at all. */
-export function useDocumentCommentsEnabled(): boolean {
-  return useContext(DocumentCommentHostContext) !== null;
-}
-
 const DRAFT_PREFIX = "pa.draft.document-comment:";
 const PENDING_HIGHLIGHT = "document-comment-pending";
 

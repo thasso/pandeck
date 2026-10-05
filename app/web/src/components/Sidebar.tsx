@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, FileDiff, FolderOpen } from "lucide-react";
 import type {
   ProjectRecord,
   PullRequestInventoryItem,
@@ -9,13 +9,12 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import { isShelvedSession } from "@assistant/shared";
+import { KNOWLEDGE_WORKTREE_ID, isShelvedSession } from "@assistant/shared";
 import { PullRequestBrowser } from "./PullRequestBrowser.tsx";
 import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
-import { KnowledgeBrowser } from "./KnowledgeBrowser.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
 import {
@@ -184,20 +183,12 @@ interface Props {
   onOpenPullRequest: (target: PullRequestTarget) => void;
   /** Worktree id currently open in the detail route, for highlighting. */
   selectedWorktreeId?: string | null;
-  /** Knowledge entry id currently open in the Knowledge route, for highlighting. */
-  selectedKnowledgeEntryId?: string | null;
-  /** Folder path of a path-addressed (invalid) Knowledge entry open in the route. */
-  selectedKnowledgeEntryPath?: string | null;
-  /** Tree path of a non-entry Knowledge file (asset/loose) open in the route. */
-  selectedKnowledgeFilePath?: string | null;
-  /** Open a Knowledge entry detail route. */
-  onOpenKnowledgeEntry: (entryId: string) => void;
-  /** Open an invalid Knowledge entry (no `kb.id`) by folder path. */
-  onOpenInvalidKnowledgeEntry?: (path: string) => void;
-  /** Open a non-entry Knowledge file (entry asset or loose file) by tree path. */
-  onOpenKnowledgeFile?: (path: string) => void;
-  /** Newest committed KB change heard about, so the tree refetches instead of going stale. */
-  knowledgeChangedAt?: number;
+  /** The Knowledge Base view the route is on, for highlighting. */
+  knowledgeView?: KnowledgeView | null;
+  /** Files with uncommitted edits in the Knowledge Base folder. */
+  knowledgeUncommitted?: number;
+  /** Open the Knowledge Base's files or its uncommitted changes. */
+  onOpenKnowledge: (view: KnowledgeView) => void;
   /** Fetch the worktree list (called when a section that joins worktrees is shown). */
   onLoadWorktrees: () => void;
   /** Open a worktree's detail route. */
@@ -249,6 +240,55 @@ function CalendarBrowser({
   );
 }
 
+type KnowledgeView = "files" | "changes";
+
+/**
+ * The Knowledge Base section: the folder is one object, browsed by the page's
+ * own file tree, so the section offers its two views — the files, and the
+ * edits not yet committed (with their count, live while the section shows).
+ */
+function KnowledgeBrowser({
+  active,
+  uncommitted,
+  onOpen,
+}: {
+  active: KnowledgeView | null;
+  uncommitted: number;
+  onOpen: (view: KnowledgeView) => void;
+}) {
+  const views = [
+    { id: "files" as const, label: "Files", icon: <FolderOpen size={15} /> },
+    {
+      id: "changes" as const,
+      label: "Uncommitted changes",
+      icon: <FileDiff size={15} />,
+    },
+  ];
+  return (
+    <div className="flex flex-col gap-0.5">
+      {views.map((view) => (
+        <button
+          key={view.id}
+          type="button"
+          aria-current={active === view.id ? "page" : undefined}
+          onClick={() => onOpen(view.id)}
+          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active === view.id ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+        >
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+            {view.icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{view.label}</span>
+          {view.id === "changes" && uncommitted > 0 ? (
+            <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-micro font-medium text-accent">
+              {uncommitted}
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Which worktrees the visible browser needs live git status for: every listed
  * worktree in the Projects browser, and only the ones the Sessions inbox's own
@@ -271,6 +311,8 @@ export function sidebarWorktreeWatchIds(
   visibleProjectWorktreeIds: string[],
 ): string[] {
   if (section === "projects") return visibleProjectWorktreeIds;
+  // The Knowledge section's uncommitted count is the KB checkout's status.
+  if (section === "knowledge") return [KNOWLEDGE_WORKTREE_ID];
   if (section !== "sessions") return [];
   const ids = new Set<string>();
   for (const session of sessions) {
@@ -397,13 +439,9 @@ function SidebarImpl({
   selectedPullRequest,
   onOpenPullRequest,
   selectedWorktreeId,
-  selectedKnowledgeEntryId,
-  selectedKnowledgeEntryPath,
-  selectedKnowledgeFilePath,
-  onOpenKnowledgeEntry,
-  onOpenInvalidKnowledgeEntry,
-  onOpenKnowledgeFile,
-  knowledgeChangedAt,
+  knowledgeView,
+  knowledgeUncommitted = 0,
+  onOpenKnowledge,
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
@@ -689,13 +727,9 @@ function SidebarImpl({
           />
         ) : section === "knowledge" ? (
           <KnowledgeBrowser
-            selectedEntryId={selectedKnowledgeEntryId}
-            selectedEntryPath={selectedKnowledgeEntryPath}
-            selectedFilePath={selectedKnowledgeFilePath}
-            onOpenEntry={onOpenKnowledgeEntry}
-            onOpenInvalidEntry={onOpenInvalidKnowledgeEntry}
-            onOpenFile={onOpenKnowledgeFile}
-            changedAt={knowledgeChangedAt}
+            active={knowledgeView ?? null}
+            uncommitted={knowledgeUncommitted}
+            onOpen={onOpenKnowledge}
           />
         ) : section === "calendar" ? (
           <CalendarBrowser onOpenView={onOpenCalendarView} />

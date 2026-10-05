@@ -200,9 +200,9 @@ drops the previous object's answer. `SKILL.md` and other Markdown use the shared
 sanitized renderer, source/text files use `CodeBlock`, and images use the
 bounded raw URL. Binary/unsupported files get only raw/download actions. The
 file viewer uses the generic Tree, PageHeader, and load-state primitives; it
-does not make KnowledgeBrowser or KnowledgeFileViewer generic. A rescan re-reads
-the open skill in place, keeping existing content through a refresh failure.
-Tree, body, and preview truncation are all stated in the pane.
+does not reuse the worktree file page. A rescan re-reads the open skill in
+place, keeping existing content through a refresh failure. Tree, body, and
+preview truncation are all stated in the pane.
 
 Editing files in the browser and executing skill scripts remain out of scope;
 authoring goes through the agent tools below.

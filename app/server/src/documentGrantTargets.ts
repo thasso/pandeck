@@ -11,8 +11,6 @@ import type { DocumentTarget } from "@assistant/shared/documentTargets";
 import type { MintFileGrantRequest } from "@assistant/shared/servedFiles";
 import { DATA_DIR } from "./config.ts";
 import { mintDocumentGrant, type MintedDocument } from "./directFileGrants.ts";
-import { readKnowledgeAsset } from "./knowledgeBaseAssets.ts";
-import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 import { containedRealPath } from "./worktrees/worktreeDiff.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 
@@ -78,16 +76,6 @@ export function parseMintFileGrantRequest(
         path,
       };
       break;
-    case "knowledgeFile":
-      parsedTarget = { kind: "knowledgeFile", path };
-      break;
-    case "knowledgeAsset":
-      parsedTarget = {
-        kind: "knowledgeAsset",
-        entryId: requiredString(target.entryId, "Knowledge entry id"),
-        path,
-      };
-      break;
     case "worktreeFile":
       if (target.view !== "file" && target.view !== "diff")
         throw new Error("Invalid worktree document view.");
@@ -122,30 +110,11 @@ function containedPath(root: string, path: string): string {
 
 export interface DocumentGrantResolverDependencies {
   dataDir: string;
-  knowledgeStore: () => KnowledgeBaseStore;
-  resolveKnowledgeAsset: (
-    store: KnowledgeBaseStore,
-    entryId: string,
-    path: string,
-  ) => Promise<{ entryId: string; entryFolder: string; sourcePath: string }>;
   resolveWorktree: typeof resolveReadableWorktreeRow;
 }
 
 const DEFAULT_RESOLVER_DEPENDENCIES: DocumentGrantResolverDependencies = {
   dataDir: DATA_DIR,
-  knowledgeStore: () => new KnowledgeBaseStore(),
-  resolveKnowledgeAsset: async (store, entryId, path) => {
-    const asset = await readKnowledgeAsset(store, {
-      entryId,
-      assetPath: path,
-      maxBytes: 1,
-    });
-    return {
-      entryId: asset.entry.id,
-      entryFolder: asset.entry.folder,
-      sourcePath: asset.asset.sourcePath,
-    };
-  },
   resolveWorktree: resolveReadableWorktreeRow,
 };
 
@@ -192,33 +161,6 @@ async function resolveDocumentGrantSource(
         filePath: containedPath(root, target.path),
         root,
         sourceKey: `artifact:${target.sessionId}`,
-      };
-    }
-    case "knowledgeFile": {
-      const store = dependencies.knowledgeStore();
-      const source = await store.statSourcePath(target.path);
-      return {
-        filePath: join(store.root, source.path),
-        root: store.root,
-        sourceKey: "knowledge:file",
-      };
-    }
-    case "knowledgeAsset": {
-      const store = dependencies.knowledgeStore();
-      const asset = await dependencies.resolveKnowledgeAsset(
-        store,
-        target.entryId,
-        target.path,
-      );
-      const knowledgeRoot = await realpath(store.root);
-      const entryRootSpelling = containedPath(knowledgeRoot, asset.entryFolder);
-      const entryRoot = await realpath(entryRootSpelling);
-      if (entryRoot !== entryRootSpelling)
-        throw new Error("Knowledge entry root escapes its source authority.");
-      return {
-        filePath: join(knowledgeRoot, asset.sourcePath),
-        root: entryRoot,
-        sourceKey: `knowledge:asset:${asset.entryId}`,
       };
     }
     case "worktreeFile": {

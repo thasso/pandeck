@@ -88,17 +88,16 @@ be refused.
 
 ### Which object, and where it renders
 
-Five object types name themselves on the wire, and each has one home:
+Four object types name themselves on the wire, and each has one home:
 
-| Object          | In place                                                                                | Retired by                                    |
-| --------------- | --------------------------------------------------------------------------------------- | --------------------------------------------- |
-| Session         | Above that session's composer (`sessionFailures`)                                       | Its dismiss, or that session's own next send  |
-| Project         | The refused control on the project's page or panel, else a note at the top of that page | Its dismiss, or that project's own next write |
-| Task            | The refused control on the open Task, else a note above the Task                        | Its dismiss, or that Task's own next write    |
-| Knowledge entry | A note above the open entry's document                                                  | Its dismiss, or that entry's own next write   |
-| Worktree        | The dialog, card or delivery flow that issued the write                                 | That flow's own next attempt                  |
+| Object   | In place                                                                                | Retired by                                    |
+| -------- | --------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Session  | Above that session's composer (`sessionFailures`)                                       | Its dismiss, or that session's own next send  |
+| Project  | The refused control on the project's page or panel, else a note at the top of that page | Its dismiss, or that project's own next write |
+| Task     | The refused control on the open Task, else a note above the Task                        | Its dismiss, or that Task's own next write    |
+| Worktree | The dialog, card or delivery flow that issued the write                                 | That flow's own next attempt                  |
 
-A collection (a target with no member id) is the sixth case and is covered
+A collection (a target with no member id) is the fifth case and is covered
 below.
 
 **Two things can render a failure in place, and the wire says which.** A write
@@ -218,15 +217,14 @@ still announced. The same holds for the object notes: each exists for a failure,
 so a warning naming the open Task is still announced.
 
 What is claimed, then, is the viewed session, a staged send's situation, and the
-ids whose own surface is open AND VISIBLE — the projects, Tasks and Knowledge
-entries (`FailureHomes.openObjects`). Usually one id per type, because the app
-opens one of each at a time; Knowledge is the exception, since an entry can be
-read on its route and in the right panel's Knowledge tab at once and each of
-those draws its own note. The claim is by id rather than by type because the
-alternative suppresses every row in the list behind the one open member, and it
-requires the surface to be on screen rather than merely mounted: a note behind
-an unselected panel tab, or behind a collapsed panel, would suppress the
-announcement and then show the user nothing at all.
+ids whose own surface is open AND VISIBLE — the projects and Tasks
+(`FailureHomes.openObjects`). One id per type, because the app opens one of each
+at a time. A Knowledge Base file draws no note of its own, so a failure naming
+one is announced. The claim is by id rather than by type because the alternative
+suppresses every row in the list behind the one open member, and it requires the
+surface to be on screen rather than merely mounted: a note behind an unselected
+panel tab, or behind a collapsed panel, would suppress the announcement and then
+show the user nothing at all.
 
 A collection's load failure needs no claim: it is a condition, kept on the
 collection and rendered by the pane whenever the user arrives, on screen or not,

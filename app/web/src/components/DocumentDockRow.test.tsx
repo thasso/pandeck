@@ -156,23 +156,6 @@ describe.each([320, 360])("at %ipx", (width) => {
     expect(labels().some((label) => label.startsWith("Zoom"))).toBe(false);
   });
 
-  it("arranges a Knowledge file row the same way", () => {
-    renderRow(
-      registration({ kind: "knowledgeFile", path: "notes/data.json" }, [
-        action("open", "Open raw file"),
-        action("download", "Download file"),
-      ]),
-    );
-    expect(labels()).toEqual([
-      "Back",
-      "Forward",
-      "Open raw file",
-      "Download file",
-      "Close document",
-    ]);
-    expect(scrollingLabels()).toEqual(["Open raw file", "Download file"]);
-  });
-
   it("arranges an artifact row the same way", () => {
     renderRow(
       registration(

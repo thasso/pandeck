@@ -119,12 +119,15 @@ export function CommitWorktreeDialog({
   error,
   onCommit,
   onClose,
+  scopeLabel = "this worktree",
 }: {
   status?: WorktreeGitStatus;
   busy: boolean;
   error: string | null;
   onCommit: (message: string) => void;
   onClose: () => void;
+  /** What is being committed, as the sentence names it. */
+  scopeLabel?: string;
 }) {
   const [message, setMessage] = useState("");
   const fileCount = (status?.filesChanged ?? 0) + (status?.untracked ?? 0);
@@ -138,7 +141,7 @@ export function CommitWorktreeDialog({
         {fileCount > 0
           ? `all ${fileCount} changed file${fileCount === 1 ? "" : "s"}`
           : "everything changed"}{" "}
-        in this worktree with your git identity.
+        in {scopeLabel} with your git identity.
       </p>
       <textarea
         autoFocus

@@ -176,35 +176,23 @@ change watcher) see the id; session placement, spawning, agent worktree tools,
 comments and delivery resolve through `resolveWorktreeRow`, which never returns
 the KB.
 
-Browser read APIs live in `app/server/src/knowledgeBaseHttp.ts` under
-`/api/knowledge/*`:
+The browser has no Knowledge-specific read API: it reads the KB only through
+that checkout. The `/knowledge` route (`Files` and `Uncommitted changes` in the
+sidebar) and the right panel's Knowledge tab both draw the worktree file page
+for it (`WorktreeDetailPage`, titled "Knowledge Base", no line comments, a
+Markdown file opening on its Preview with the frontmatter header). The route's
+inspector (`KnowledgeInspector`) counts the uncommitted files and offers "Commit
+changes…", which commits them all with the user's git identity. Live refresh is
+the checkout's own change watcher: a tool commit or an external edit moves its
+git status, and the open page reloads in place.
 
-- `/tree` returns the compact app-shell tree used by the Knowledge sidebar.
-- `/entry` returns one readable main-pane document with body Markdown,
-  frontmatter-derived metadata, assets, and resolved `pa://` references.
-- `/inspect` returns the right-inspector projection only: compact summary,
-  frontmatter metadata, related `pa://` objects, assets, recent Git history, and
-  a bounded diff preview. It intentionally omits body Markdown so inspector
-  refreshes do not duplicate full entry reads.
-- `/asset` streams one entry-local source asset for inline images/downloads.
+A `pa://knowledge/<entry id>` link resolves to the entry's `index.md` there
+(`/knowledge/files?path=…`), and a `kb_show_entry` card opens the same file in
+the panel or the main pane.
 
-Every committed KB mutation emits an entry invalidation so an open viewer and
-Details inspector refetch after an agent edit. Comments on an entry are the
-shared browser-local tray (`docs/comments.md`): no KB write, no wire command.
-
-An entry is readable in TWO places: the `/knowledge/:entryId` route in the main
-pane, and the right panel's Knowledge tab, which browses the same compact tree
-and then draws the same loader and viewer beside whatever the main pane is on
-(`app/web/docs/ui-shell.md`, Object panel). One surface, not a second
-implementation: both follow the same entry invalidation and read and write the
-same comment tray. The panel scopes its own comment/primary-action channels so
-its controls speak for the entry it shows, and it links the entry to its
-canonical route rather than replacing it.
-
-Starting a session from a Knowledge entry stages the entry's own `index.md` as a
-generic file context (`docs/document-presentation.md`, Starting a session from a
-document): the agent gets the file's name, absolute path and viewer route, never
-its content.
+Starting a session from a KB file stages it as a generic file context
+(`docs/document-presentation.md`, Starting a session from a document): the agent
+gets the file's name, absolute path and viewer route, never its content.
 
 ## Agent-facing KB tools
 
@@ -274,11 +262,11 @@ are NOT duplicated in the eager text.
 
 `pnpm run test:kb` is the focused fast regression suite for KB work. It runs the
 server tests covering contracts, schema validation, formatting, Git storage,
-index/tree/search, assets, HTTP projections, agent tools, prompt behavior, and
-the final large-ish fixture token/performance audit in
+index/tree/search, assets, agent tools, prompt behavior, and the final large-ish
+fixture token/performance audit in
 `app/server/src/knowledgeBaseRegression.test.ts`; it also runs the web tests for
-canonical Knowledge routing, tree selection, Markdown/`pa://` rendering, entry
-viewer, and inspector projections.
+canonical Knowledge routing, the Knowledge panel, Markdown/`pa://` rendering,
+and the Markdown diff used by tool cards.
 
 The final audit fixture keeps default agent-tool output compact and bounded:
 `kb_tree` is capped and body-free by default, `kb_search` defaults to compact

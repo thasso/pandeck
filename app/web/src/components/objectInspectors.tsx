@@ -1,12 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useMemo, type ReactNode } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -18,7 +10,6 @@ import {
   ClipboardList,
   ExternalLink,
   Eye,
-  FileText,
   FolderKanban,
   GitBranch,
   GitBranchPlus,
@@ -28,9 +19,7 @@ import {
   ListChecks,
   MessageSquare,
   MessageSquarePlus,
-  Paperclip,
   Pencil,
-  RefreshCw,
   RotateCcw,
   SearchCheck,
   SendHorizontal,
@@ -57,12 +46,6 @@ import {
   type WorktreeRecord,
   type WorktreeReviewSet,
 } from "@assistant/shared";
-import type { PaObjectLinkResolution } from "@assistant/shared/objectLinks";
-import type {
-  KnowledgeEntryInspect,
-  KnowledgeInspectResponse,
-} from "@assistant/shared/knowledgeBase";
-import type { Prefs } from "../hooks/usePrefs.ts";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import {
@@ -75,16 +58,13 @@ import {
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
 import { THINKING_LABELS } from "./ui/ModelThinkingSelect.tsx";
-import { EmptyBox, ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
-import { useFetchState, useReloadOnToken } from "../hooks/useFetchState.ts";
+import { EmptyBox, ErrorNote, Spinner } from "./ui/load.tsx";
 import {
   dataOf,
   errorOf,
-  isInitialLoad,
   isPending,
   type LoadState,
 } from "../lib/loadState.ts";
-import { fetchKnowledgeInspector } from "../lib/knowledgeBaseApi.ts";
 // Free of the `diff/` stack on purpose (see worktree/CLAUDE.md), so the review
 // roster can live in this main-bundle module.
 import { worktreeReviewThreads } from "./worktree/worktreeReview.tsx";
@@ -110,14 +90,6 @@ import {
   type JoinSource,
   type PullRequestJoinSources,
 } from "../lib/pullRequestInbox.ts";
-
-// Lazy: pulls the @pierre/diffs + Shiki stack into its own chunk, kept out of
-// the main bundle (see components/diff/CLAUDE.md).
-const KnowledgeDiffView = lazy(() =>
-  import("./KnowledgeDiffView.tsx").then((m) => ({
-    default: m.KnowledgeDiffView,
-  })),
-);
 
 /** A resolved reference to another work-graph object. */
 export interface ObjectRef {
@@ -1247,450 +1219,6 @@ export function ProjectInspector({
       ) : null}
     </Inspector>
   );
-}
-
-function objectRefFromPaLink(link: PaObjectLinkResolution): ObjectRef | null {
-  if (link.existence === "missing" || !link.knownType) return null;
-  const subtitle =
-    link.existence === "unknown"
-      ? `${link.typeLabel} · existence unknown`
-      : link.typeLabel;
-  if (link.objectType === "task")
-    return { kind: "task", id: link.id, title: link.title, subtitle };
-  if (link.objectType === "project")
-    return { kind: "project", id: link.id, title: link.title, subtitle };
-  if (link.objectType === "session")
-    return { kind: "session", id: link.id, title: link.title, subtitle };
-  if (link.objectType === "worktree")
-    return { kind: "worktree", id: link.id, title: link.title, subtitle };
-  if (link.objectType === "knowledge")
-    return { kind: "knowledge", id: link.id, title: link.title, subtitle };
-  return null;
-}
-
-/** Resolve a KB entry's compact `pa://` references into inspector groups. */
-export function knowledgeRelationGroups(
-  entry: KnowledgeEntryInspect,
-): ObjectRefGroup[] {
-  const byKind = new Map<ObjectRef["kind"], ObjectRef[]>();
-  for (const link of entry.paObjectReferences) {
-    const ref = objectRefFromPaLink(link);
-    if (!ref) continue;
-    if (ref.kind === "knowledge" && ref.id === entry.id) continue;
-    byKind.set(ref.kind, [...(byKind.get(ref.kind) ?? []), ref]);
-  }
-  const specs: Array<{
-    kind: ObjectRef["kind"];
-    label: string;
-    icon: ReactNode;
-  }> = [
-    { kind: "task", label: "Tasks", icon: <ListChecks size={13} /> },
-    { kind: "project", label: "Projects", icon: <FolderKanban size={13} /> },
-    { kind: "session", label: "Sessions", icon: <MessageSquare size={13} /> },
-    { kind: "worktree", label: "Worktrees", icon: <GitBranch size={13} /> },
-    { kind: "knowledge", label: "Knowledge", icon: <BookOpen size={13} /> },
-  ];
-  return specs.map((spec) => {
-    const refs = dedupeRefs(byKind.get(spec.kind) ?? []);
-    return {
-      id: `knowledge-${spec.kind}`,
-      label: spec.label,
-      icon: spec.icon,
-      ...(refs.length ? { summary: `${refs.length}` } : {}),
-      refs,
-    };
-  });
-}
-
-function dedupeRefs(refs: ObjectRef[]): ObjectRef[] {
-  const seen = new Set<string>();
-  const out: ObjectRef[] = [];
-  for (const ref of refs) {
-    const key = `${ref.kind}:${ref.id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(ref);
-  }
-  return out;
-}
-
-/**
- * @component KnowledgeInspector
- * @purpose Right-sidebar inspector for a Knowledge entry: compact summary,
- * frontmatter metadata, related `pa://` objects, assets, Git history/diff, and
- * session actions.
- * @useWhen The main pane shows a Knowledge route.
- * @related KnowledgePage, KnowledgeEntryViewer, Inspector.
- */
-export function KnowledgeInspector({
-  entryId,
-  entryPath,
-  openers,
-  onStartSession,
-  refreshToken = 0,
-  prefs,
-  onUpdatePrefs,
-}: {
-  entryId?: string | null;
-  entryPath?: string | null;
-  openers: ObjectOpeners;
-  /** Start a session with the entry's own file (`path`) staged. */
-  onStartSession: (path: string, title: string) => void;
-  refreshToken?: number;
-  /** Diff rendering prefs (theme, word-level, wrap) for the history diff view. */
-  prefs: Prefs;
-  /** Update diff prefs (e.g. the history diff's ignore-whitespace toggle). */
-  onUpdatePrefs?: (patch: Partial<Prefs>) => void;
-}) {
-  const commentActuation = useCommentActuation();
-  // The addressed entry IS the key: entry → entry is a different object, so its
-  // panel starts from ITS placeholder rather than the previous entry's facts
-  // (R3). Everything else about the same entry — a committed change, an
-  // expanded history diff — is a reload of this key, which keeps the panel up
-  // while it refetches (R2).
-  const key = entryId
-    ? `id:${entryId}`
-    : entryPath
-      ? `path:${entryPath}`
-      : null;
-  const [expandedDiff, setExpandedDiff] = useState<string | null>(null);
-  const [diffKey, setDiffKey] = useState<string | null>(null);
-  // R3 applied to the diff too: a new entry has no expanded commit of its own.
-  if (diffKey !== key) {
-    setDiffKey(key);
-    if (expandedDiff !== null) setExpandedDiff(null);
-  }
-  // Read at call time, so expanding a commit reloads the SAME key instead of
-  // folding the commit into it (which would blank the panel on every expand).
-  const expandedDiffRef = useRef(expandedDiff);
-  expandedDiffRef.current = expandedDiff;
-  const fetchInspector = useCallback(
-    (fetchKey: string) =>
-      fetchKnowledgeInspector(
-        fetchKey.startsWith("id:")
-          ? { id: fetchKey.slice(3) }
-          : { path: fetchKey.slice(5) },
-        expandedDiffRef.current
-          ? { diffCommit: expandedDiffRef.current, diffMaxChars: 12_000 }
-          : {},
-      ),
-    [],
-  );
-  const { state, reload } = useFetchState(key, fetchInspector);
-  const resource = dataOf(state) ?? null;
-  const error = errorOf(state);
-  const loading = isInitialLoad(state);
-
-  // A commit to this entry invalidates the panel's data without changing which
-  // entry it addresses.
-  useReloadOnToken(key, refreshToken, reload);
-
-  const expandDiff = useCallback(
-    (commit: string) => {
-      setExpandedDiff(commit);
-      reload();
-    },
-    [reload],
-  );
-
-  const actions: InspectorAction[] =
-    resource?.kind === "entry"
-      ? [
-          {
-            key: "start-session",
-            primary: true,
-            icon: <MessageSquarePlus size={14} />,
-            label: "Start session with this entry",
-            onRun: () => onStartSession(resource.path, resource.title),
-          },
-          // Only while the entry's tray holds something: with nothing
-          // collected this action would send nothing at all.
-          ...(commentActuation?.onSubmitReview && commentActuation.pendingCount
-            ? [
-                {
-                  key: "submit-review",
-                  icon: <SendHorizontal size={14} />,
-                  label: commentActuation.submitLabel ?? "Submit review",
-                  onRun: commentActuation.onSubmitReview,
-                  hint: `${commentActuation.pendingCount} comment${commentActuation.pendingCount === 1 ? "" : "s"}`,
-                  commentActuation: true,
-                },
-              ]
-            : []),
-        ]
-      : [];
-
-  return (
-    <Inspector
-      loading={loading}
-      relations={
-        resource?.kind === "entry"
-          ? toInspectorGroups(knowledgeRelationGroups(resource), openers)
-          : []
-      }
-      actions={actions}
-      sectionStorageScope={
-        entryId
-          ? `knowledge:${entryId}`
-          : entryPath
-            ? `knowledge:~invalid:${entryPath}`
-            : "knowledge"
-      }
-    >
-      <div className="space-y-4 text-caption">
-        {/* R2: a refresh that failed keeps the sections it already resolved and
-            adds the reason above them, retryable from here. */}
-        {error ? <ErrorNote message={error} onRetry={reload} /> : null}
-        {resource?.kind === "entry" ? (
-          <KnowledgeMetadataSections entry={resource} />
-        ) : null}
-        {resource?.kind === "invalid" ? (
-          <KnowledgeInvalidSection entry={resource} />
-        ) : null}
-        {resource ? (
-          <KnowledgeHistorySection
-            entry={resource}
-            expandedDiff={expandedDiff}
-            onExpandDiff={expandDiff}
-            prefs={prefs}
-            onUpdatePrefs={onUpdatePrefs}
-          />
-        ) : null}
-      </div>
-    </Inspector>
-  );
-}
-
-function KnowledgeMetadataSections({
-  entry,
-}: {
-  entry: KnowledgeEntryInspect;
-}) {
-  return (
-    <>
-      <InspectorSection
-        id="summary"
-        storageScope={`knowledge:${entry.id}`}
-        title="Summary"
-        icon={<BookOpen size={13} />}
-        summary={entry.type}
-      >
-        <div className="px-1">
-          {entry.summary ? (
-            <p className="text-caption text-muted">{entry.summary}</p>
-          ) : (
-            <p className="text-caption text-faint">
-              No summary in frontmatter.
-            </p>
-          )}
-          {entry.tags.length ? (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {entry.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="rounded-full bg-raised px-1.5 py-px text-micro text-muted"
-                >
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </InspectorSection>
-      <InspectorSection
-        id="metadata"
-        storageScope={`knowledge:${entry.id}`}
-        title="Frontmatter"
-        icon={<FileText size={13} />}
-        summary={entry.status}
-      >
-        <InspectorFacts
-          facts={[
-            { label: "ID", value: entry.id, mono: true, title: entry.id },
-            { label: "Path", value: entry.path, mono: true, title: entry.path },
-            { label: "Created", value: formatInspectorDate(entry.createdAt) },
-            { label: "Updated", value: formatInspectorDate(entry.updatedAt) },
-            ...(entry.aliases.length
-              ? [
-                  {
-                    label: "Aliases",
-                    value: entry.aliases.join(", "),
-                    title: entry.aliases.join(", "),
-                  },
-                ]
-              : []),
-            ...(entry.sourceRefs.length
-              ? [
-                  {
-                    label: "Sources",
-                    value: entry.sourceRefs.length,
-                    title: entry.sourceRefs.join(", "),
-                  },
-                ]
-              : []),
-          ]}
-        />
-      </InspectorSection>
-      <InspectorSection
-        id="assets"
-        storageScope={`knowledge:${entry.id}`}
-        title="Assets"
-        icon={<Paperclip size={13} />}
-        summary={entry.assets.length ? `${entry.assets.length}` : undefined}
-      >
-        {entry.assets.length ? (
-          <div className="flex flex-col">
-            {entry.assets.map((asset) => (
-              <div
-                key={asset.path}
-                className="flex items-center gap-2 rounded-lg px-2 py-1 text-caption text-muted"
-              >
-                <Paperclip size={12} className="shrink-0 text-faint" />
-                <span className="min-w-0 flex-1 truncate" title={asset.path}>
-                  {asset.title ?? asset.path}
-                </span>
-                {asset.sizeBytes != null ? (
-                  <span className="shrink-0 font-mono text-micro text-faint">
-                    {formatBytes(asset.sizeBytes)}
-                  </span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="px-1 text-faint">No assets.</p>
-        )}
-      </InspectorSection>
-    </>
-  );
-}
-
-function KnowledgeInvalidSection({
-  entry,
-}: {
-  entry: Extract<KnowledgeInspectResponse, { kind: "invalid" }>;
-}) {
-  return (
-    <InspectorSection
-      id="invalid-entry"
-      storageScope={`knowledge:~invalid:${entry.folder}`}
-      title="Invalid entry"
-      icon={<FileText size={13} />}
-      summary="parse error"
-    >
-      <div className="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
-        <div className="truncate font-mono text-caption" title={entry.path}>
-          {entry.path}
-        </div>
-        <p className="mt-1 break-words text-caption">{entry.error}</p>
-      </div>
-    </InspectorSection>
-  );
-}
-
-function KnowledgeHistorySection({
-  entry,
-  expandedDiff,
-  onExpandDiff,
-  prefs,
-  onUpdatePrefs,
-}: {
-  entry: KnowledgeInspectResponse;
-  expandedDiff: string | null;
-  onExpandDiff: (commit: string) => void;
-  prefs: Prefs;
-  onUpdatePrefs?: ((patch: Partial<Prefs>) => void) | undefined;
-}) {
-  const diff = entry.latestDiff;
-  // The diff always tracks a specific selected commit; default to the latest.
-  const selectedCommit =
-    expandedDiff ?? entry.history[0]?.fullCommit ?? diff?.commit ?? null;
-  return (
-    <InspectorSection
-      id="history"
-      storageScope={
-        entry.kind === "entry"
-          ? `knowledge:${entry.id}`
-          : `knowledge:~invalid:${entry.folder}`
-      }
-      title="History"
-      icon={<RefreshCw size={13} />}
-      summary={entry.history.length ? `${entry.history.length}` : undefined}
-    >
-      <div className="flex flex-col gap-2">
-        {entry.history.length ? (
-          <div className="flex flex-col">
-            {entry.history.map((row) => (
-              <button
-                key={row.fullCommit}
-                type="button"
-                onClick={() => onExpandDiff(row.fullCommit)}
-                className={`rounded-lg px-2 py-1.5 text-left hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${selectedCommit === row.fullCommit ? "bg-raised" : ""}`}
-              >
-                <span className="flex items-center gap-2">
-                  <span className="font-mono text-caption text-accent">
-                    {row.commit}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-caption text-fg">
-                    {row.subject || "Update knowledge"}
-                  </span>
-                </span>
-                <span className="mt-0.5 block truncate text-micro text-faint">
-                  {formatInspectorDate(row.date)} · {row.author}
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="px-1 text-faint">No history yet.</p>
-        )}
-        {diff && diff.commit === selectedCommit ? (
-          <Suspense fallback={<DiffLoadingRows />}>
-            <KnowledgeDiffView
-              diff={diff}
-              prefs={prefs}
-              onUpdatePrefs={onUpdatePrefs}
-            />
-          </Suspense>
-        ) : selectedCommit ? (
-          // The selected commit's patch is still on its way (the renderer's
-          // chunk, or the refetch that carries the diff): reserve its rows
-          // rather than collapsing the section under the list (R4).
-          <DiffLoadingRows />
-        ) : null}
-      </div>
-    </InspectorSection>
-  );
-}
-
-/** The history diff's silhouette: a header line and a few patch rows. */
-function DiffLoadingRows() {
-  return (
-    <div role="status" aria-label="Loading diff" className="space-y-1.5">
-      <Skeleton className="h-3.5 w-32" />
-      {["w-full", "w-11/12", "w-4/5", "w-2/3"].map((width) => (
-        <Skeleton key={width} className={`h-3 ${width}`} />
-      ))}
-    </div>
-  );
-}
-
-function formatInspectorDate(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**

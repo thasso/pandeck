@@ -29,6 +29,21 @@ describe("fileSessionStart", () => {
     expect(start.href).toContain("wt-1");
   });
 
+  it("stages a Knowledge Base file without running the session in the KB", () => {
+    expect(
+      fileSessionStart({
+        kind: "worktreeFile",
+        worktreeId: "knowledge",
+        path: "projects/plan.md",
+        view: "file",
+      }),
+    ).toEqual({
+      href: "/knowledge/files?path=projects%2Fplan.md",
+      title: "plan.md",
+      worktreeId: null,
+    });
+  });
+
   it("stages a session artifact by its own route", () => {
     expect(
       fileSessionStart({

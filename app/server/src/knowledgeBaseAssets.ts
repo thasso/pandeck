@@ -19,7 +19,7 @@ import {
   type KbCommitResult,
 } from "./knowledgeBaseStore.ts";
 
-export const KB_ASSET_MAX_WRITE_BYTES = 50 * 1024 * 1024;
+const KB_ASSET_MAX_WRITE_BYTES = 50 * 1024 * 1024;
 const KB_ASSET_MAX_READ_BYTES = 10 * 1024 * 1024;
 const KB_ASSET_TEXT_PREVIEW_CHARS = 16_000;
 const KB_GENERATED_EXTRACT_MAX_WRITE_BYTES = 2 * 1024 * 1024;
@@ -55,7 +55,7 @@ export interface KbAddAssetInput extends KbEntryRef, KbAssetMetadataInput {
   maxBytes?: number;
 }
 
-export interface KbAssetRecord {
+interface KbAssetRecord {
   /** Entry-local path stored in frontmatter, for example `assets/source.pdf`. */
   path: string;
   /** Source-of-truth path in the KB repo, for example `entry/assets/source.pdf`. */

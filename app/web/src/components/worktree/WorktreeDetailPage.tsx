@@ -163,6 +163,19 @@ export interface WorktreeDetailPageProps {
    * where the comments (and therefore each one's current file) are known.
    */
   openComment?: { commentId: string; nonce: number } | undefined;
+  /** Header title instead of the branch name (the Knowledge Base's own name). */
+  title?: string | undefined;
+  /**
+   * Whether lines take review comments. A checkout with no comment store — the
+   * Knowledge Base — reads its files without them.
+   */
+  lineComments?: boolean;
+  /**
+   * Open a Markdown file on its rendered Preview instead of its source: a
+   * folder of notes (the Knowledge Base) is read more than it is reviewed. A
+   * line anchor still opens the source, where the line is.
+   */
+  markdownPreviewFirst?: boolean;
 }
 
 function scopeFromRoute(from?: string, to?: string): WorktreeDiffScope {
@@ -983,6 +996,7 @@ function FilesView({
   viewOptionsControl,
   pivot,
   onPivotChange,
+  markdownPreviewFirst,
   commentsConfigFor,
 }: {
   worktree: WorktreeRecord;
@@ -997,6 +1011,7 @@ function FilesView({
   viewOptionsControl: ReactNode;
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
+  markdownPreviewFirst: boolean;
   commentsConfigFor: (
     path: string,
     current: boolean,
@@ -1156,9 +1171,17 @@ function FilesView({
 
   // The pivot belongs to the file you opened, not to the last refresh: a
   // background push must not throw you back from "Changes vs base" to source.
+  const hasAnchor = anchor !== undefined;
   useEffect(() => {
-    onPivotChange("file");
-  }, [filePath, onPivotChange, worktree.id]);
+    onPivotChange(
+      markdownPreviewFirst &&
+        !hasAnchor &&
+        filePath &&
+        previewKindForPath(filePath) === "markdown"
+        ? "preview"
+        : "file",
+    );
+  }, [filePath, onPivotChange, worktree.id, markdownPreviewFirst, hasAnchor]);
 
   const pivotKey =
     filePath && pivot === "vs-base"
@@ -1559,6 +1582,9 @@ export default function WorktreeDetailPage({
   openComment,
   embedded = false,
   headerActions,
+  title,
+  lineComments = true,
+  markdownPreviewFirst = false,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
     WorktreeGitStatus | undefined
@@ -1603,9 +1629,10 @@ export default function WorktreeDetailPage({
   const commentWatchRef = useRef({ onLoadComments, onUnloadComments });
   commentWatchRef.current = { onLoadComments, onUnloadComments };
   useEffect(() => {
+    if (!lineComments) return;
     commentWatchRef.current.onLoadComments();
     return () => commentWatchRef.current.onUnloadComments();
-  }, [worktree.id]);
+  }, [worktree.id, lineComments]);
 
   // Watcher pushes bump status.updatedAt → the views refetch their data.
   const refreshToken = status?.updatedAt ?? 0;
@@ -1684,27 +1711,29 @@ export default function WorktreeDetailPage({
       current: boolean,
       refOid?: string,
     ): LineCommentsConfig | undefined =>
-      current
-        ? {
-            comments,
-            path,
-            actions: commentActions,
-            ...(focusComment?.path === path && focusRequest
-              ? { focus: focusRequest }
-              : {}),
-          }
-        : refOid
+      !lineComments
+        ? undefined
+        : current
           ? {
               comments,
               path,
               actions: commentActions,
-              refOid,
               ...(focusComment?.path === path && focusRequest
                 ? { focus: focusRequest }
                 : {}),
             }
-          : undefined,
-    [comments, commentActions, focusComment, focusRequest],
+          : refOid
+            ? {
+                comments,
+                path,
+                actions: commentActions,
+                refOid,
+                ...(focusComment?.path === path && focusRequest
+                  ? { focus: focusRequest }
+                  : {}),
+              }
+            : undefined,
+    [comments, commentActions, focusComment, focusRequest, lineComments],
   );
 
   const navigationControls = VIEW_TABS.map((tab) => (
@@ -1845,6 +1874,7 @@ export default function WorktreeDetailPage({
         />
       ) : null}
       <DiffCommentBarProvider
+        enabled={lineComments}
         pendingCount={pendingReviewIds.length}
         // An empty batch never opens the sheet: it would offer to start a
         // session on no comments at all.
@@ -1869,15 +1899,19 @@ export default function WorktreeDetailPage({
                 <GitBranch size={16} />
               )
             }
-            onIconClick={() => {
-              void copyWithToast(worktree.path, {
-                successMessage: "Copied worktree path",
-              });
-              setPathCopied(true);
-              window.setTimeout(() => setPathCopied(false), 1200);
-            }}
+            onIconClick={
+              worktree.path
+                ? () => {
+                    void copyWithToast(worktree.path, {
+                      successMessage: "Copied worktree path",
+                    });
+                    setPathCopied(true);
+                    window.setTimeout(() => setPathCopied(false), 1200);
+                  }
+                : undefined
+            }
             iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
-            title={worktree.branch}
+            title={title ?? worktree.branch}
             actions={
               embedded ? (
                 headerActions
@@ -1900,6 +1934,7 @@ export default function WorktreeDetailPage({
               viewOptionsControl={viewOptionsControl}
               pivot={filePivot}
               onPivotChange={setFilePivot}
+              markdownPreviewFirst={markdownPreviewFirst}
               commentsConfigFor={commentsConfigFor}
             />
           ) : (

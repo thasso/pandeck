@@ -67,17 +67,17 @@ tool cards, and feature pages.
   to axes/ticks/legend/title/tooltip — never an independent chart scale; the
   canvas rebuilds when the root `data-text-scale` changes (MutationObserver).
 - `bottomSheet.ts` owns the ONE bottom-sheet look (gutter, radius, border,
-  background, shadow, height cap) shared by `Sheet.tsx`, the shell's
-  `ObjectDock`, and `KnowledgeEntryViewer`'s mobile thread popover. Each of
-  those had grown its own radius/border/background, so the same gesture at the
-  same edge produced three different objects. The tokens carry NO padding and NO
-  chrome: a title row with a close, a drag grabber, or a comment card is
-  genuinely per surface. The horizontal gutter is deliberate — a card that stops
-  short of the screen edges reads as something lying on the page, and it keeps
-  the rounded top corners from looking like a cropped rectangle. A fixed sheet's
-  CARD bleeds to the bottom of the LAYOUT viewport, which on iOS Safari is
-  behind the floating address bar: that is correct for a background (no sliver
-  of page between the sheet and the browser chrome) but wrong for content, and
+  background, shadow, height cap) shared by `Sheet.tsx`, the shell's and the
+  shell's `ObjectDock` (and once a mobile thread popover). Each of those had
+  grown its own radius/border/background, so the same gesture at the same edge
+  produced three different objects. The tokens carry NO padding and NO chrome: a
+  title row with a close, a drag grabber, or a comment card is genuinely per
+  surface. The horizontal gutter is deliberate — a card that stops short of the
+  screen edges reads as something lying on the page, and it keeps the rounded
+  top corners from looking like a cropped rectangle. A fixed sheet's CARD bleeds
+  to the bottom of the LAYOUT viewport, which on iOS Safari is behind the
+  floating address bar: that is correct for a background (no sliver of page
+  between the sheet and the browser chrome) but wrong for content, and
   `env(safe-area-inset-bottom)` cannot fix it because Safari reports 0 there and
   shrinks the VISUAL viewport instead. Hence `BOTTOM_SHEET_BOTTOM_PADDING_CLASS`
   = `max(0.75rem, safe-area)`, the same trick `--app-composer-bottom-padding`

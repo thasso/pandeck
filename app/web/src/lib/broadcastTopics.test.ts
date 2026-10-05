@@ -19,7 +19,7 @@ describe("topicsForSurface", () => {
         sidebarSection: "knowledge",
         routeName: "session",
       }),
-    ).toEqual(["knowledge"]);
+    ).toEqual([]);
   });
 
   it("gives the Pull Requests surfaces the lists its joins resolve against", () => {
@@ -229,7 +229,7 @@ describe("topicsForSurface", () => {
         sidebarSection: "sessions",
         routeName: "knowledge",
       }),
-    ).toEqual(["knowledge"]);
+    ).toEqual([]);
     expect(
       topicsForSurface({
         sidebarVisible: false,
