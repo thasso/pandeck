@@ -31,6 +31,7 @@ const codingNamesFor = (gates: IntegrationToolGates) =>
   );
 
 const ALL_OFF = {
+  memory: false,
   jira: false,
   confluence: false,
   tempo: false,

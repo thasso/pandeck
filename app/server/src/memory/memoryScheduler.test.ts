@@ -41,7 +41,13 @@ async function settle(): Promise<void> {
 }
 
 function setMode(mode: "off" | "adaptive" | "every-turn"): void {
-  updateSettings({ memory: { ...getSettings().memory, learningMode: mode } });
+  updateSettings({
+    memory: {
+      ...getSettings().memory,
+      loadingEnabled: true,
+      learningMode: mode,
+    },
+  });
 }
 
 beforeEach(() => {

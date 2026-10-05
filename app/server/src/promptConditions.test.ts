@@ -27,6 +27,7 @@ import {
 import { upsertProject } from "./projectRegistry.ts";
 import { buildProjectContext } from "./sessionProjectContext.ts";
 import { buildAgentOptions } from "./piSdk/options.ts";
+import { getSettings, updateSettings } from "./settings.ts";
 import { updateSlackSettings } from "./slackSettings.ts";
 import { updateTempoSettings } from "./tempoSettings.ts";
 import { eagerToolNamesFor } from "./tools/catalog.ts";
@@ -45,7 +46,12 @@ function setGates(on: boolean): void {
 let seq = 0;
 const nextSessionId = (): string => `prompt-conditions-${(seq += 1)}`;
 
-beforeEach(() => setGates(false));
+beforeEach(() => {
+  setGates(false);
+  updateSettings({
+    memory: { ...getSettings().memory, loadingEnabled: true },
+  });
+});
 
 describe("session-start prompt conditions", () => {
   test("are computed once per session and outlive a gate change", () => {
@@ -60,6 +66,7 @@ describe("session-start prompt conditions", () => {
       google: true,
       tempo: true,
       projectRegistryPointer: true,
+      memoryEnabled: true,
       memoryWrite: true,
     });
 
@@ -242,6 +249,16 @@ describe("session-start prompt conditions", () => {
     assert.equal(sessionPromptConditions(id, "assistant").memoryWrite, true);
   });
 
+  test("disabled Memory adds neither guidance nor eager tools", () => {
+    updateSettings({
+      memory: { ...getSettings().memory, loadingEnabled: false },
+    });
+    const conditions = computePromptConditions("assistant");
+    assert.equal(conditions.memoryEnabled, false);
+    assert.doesNotMatch(assistantPrompt(conditions), /## Memory/);
+    assert.ok(!eagerToolNamesFor("assistant", conditions).has("memory_search"));
+  });
+
   test("memory write rules follow the persona's capability", () => {
     const coding = computePromptConditions("developer", {});
     const assistant = computePromptConditions("assistant", {});
@@ -309,6 +326,7 @@ describe("session-start prompt conditions", () => {
       google: true,
       tempo: true,
       projectRegistryPointer: true,
+      memoryEnabled: true,
       memoryWrite: true,
     });
   });

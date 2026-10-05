@@ -1,8 +1,9 @@
 import { applyPatch, MEMORY_KINDS } from "@assistant/shared";
 /**
  * Memory settings + post-hoc management UI (Task 101). No candidate/approval/
- * pending-review concepts — automatic operations are already applied; the user
- * configures behavior and edits/pins/archives/corrects memories after the fact.
+ * pending-review concepts — automatic operations are already applied. The
+ * Enable Memory switch gates loading, learning, maintenance and agent tools;
+ * the user can still manage stored cards while it is off.
  */
 import { useEffect, useState } from "react";
 import {
@@ -56,7 +57,7 @@ const LEARNING_MODES: {
   {
     id: "off",
     label: "Off",
-    help: "No automatic model calls. Existing memories are kept and still loaded.",
+    help: "No automatic model calls. Existing memories can still be loaded when Memory is enabled.",
   },
   {
     id: "adaptive",
@@ -92,8 +93,14 @@ export function MemorySettingsSection({
   // forever. `fetchStatus` is stable per socket.
   const { fetchStatus } = memory;
   useEffect(() => {
-    fetchStatus();
-  }, [m.processor.provider, m.processor.modelId, m.learningMode, fetchStatus]);
+    if (m.loadingEnabled) fetchStatus();
+  }, [
+    m.loadingEnabled,
+    m.processor.provider,
+    m.processor.modelId,
+    m.learningMode,
+    fetchStatus,
+  ]);
   const status = memory.processorStatus;
 
   return (
@@ -108,16 +115,19 @@ export function MemorySettingsSection({
 
       <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
         <Toggle
-          label="Use memory (load into turns)"
+          label="Enable Memory"
           checked={m.loadingEnabled}
           onChange={(v) => save({ loadingEnabled: v })}
-          help="When off, memories are neither loaded nor injected. Turning this off does not delete anything."
+          help="When off, memories are not loaded, learned, or maintained. Existing memories are kept; turn this on to resume."
         />
 
         <div>
           <div className="text-caption font-medium text-fg">
             Automatic learning
           </div>
+          <p className="mt-1 text-caption text-muted">
+            Runs only while Memory is enabled.
+          </p>
           <div className="mt-2 space-y-2">
             {LEARNING_MODES.map((mode) => (
               <label
@@ -146,7 +156,7 @@ export function MemorySettingsSection({
           label="Automatic maintenance"
           checked={m.maintenanceEnabled}
           onChange={(v) => save({ maintenanceEnabled: v })}
-          help="Deterministic expiry of ended working memories plus periodic consolidation. Expiry needs no model call."
+          help="Only runs while Memory is enabled. Deterministic expiry of ended working memories plus periodic consolidation."
         />
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -190,7 +200,7 @@ export function MemorySettingsSection({
             })
           }
         />
-        {status && !status.configured && (
+        {m.loadingEnabled && status && !status.configured && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-caption text-amber-600 dark:text-amber-400">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>

@@ -5816,6 +5816,9 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     calendarDaySession: settings.calendarDaySession,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
+    // The Session inspector must not guess whether Memory is enabled from the
+    // web fallback; the full Settings snapshot is fetched only on that route.
+    memory: settings.memory,
   };
 }
 

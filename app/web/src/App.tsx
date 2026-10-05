@@ -194,6 +194,8 @@ import { failureOnViewedSession } from "./lib/messageAnnounce.ts";
 import { setFailureHomes } from "./lib/messageArrival.ts";
 import { visibleModels } from "./lib/models.ts";
 import { accountModelOptions } from "./lib/credentialProfiles.ts";
+import { fetchOnboardingState } from "./lib/onboarding.ts";
+import { OnboardingProviderStep } from "./components/OnboardingProviderStep.tsx";
 import {
   credentialProfileProjectionBlockReason,
   credentialProfileProjectionBlocksSend,
@@ -822,6 +824,19 @@ function AppContent() {
   const documentNavigation = useDocumentNavigationRegistration();
 
   const { state, actions, socket } = useAssistant();
+  const [onboarding, setOnboarding] = useState<
+    "loading" | "required" | "complete" | "error"
+  >("loading");
+  const [guidedSetup, setGuidedSetup] = useState(false);
+  const checkOnboarding = useCallback(() => {
+    void fetchOnboardingState()
+      .then((result) => {
+        setGuidedSetup(result.guidedSetup);
+        setOnboarding(result.required ? "required" : "complete");
+      })
+      .catch(() => setOnboarding("error"));
+  }, []);
+  useEffect(() => checkOnboarding(), [checkOnboarding]);
   const { prefs, update } = usePrefs();
   const credentialProfileFetch = useCredentialProfileProjection({
     connected: state.connected,
@@ -1165,6 +1180,7 @@ function AppContent() {
     hasMessages,
     loadSession: actions.loadSession,
     openPermanentAssistant: actions.openPermanentAssistant,
+    canOpenPersonalAssistant: onboarding === "complete",
   });
   useEffect(() => {
     if (!state.hydrated || (route.name !== "new" && route.name !== "sessions"))
@@ -5917,7 +5933,30 @@ function AppContent() {
     return (
       <>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
-          {showContextPicker ? (
+          {route.name === "permanentAssistant" && guidedSetup ? (
+            <div className="mx-auto w-full max-w-xl px-6 text-center">
+              <h2 className="text-title font-semibold text-fg">
+                Let's get you set up
+              </h2>
+              <p className="mt-2 text-body text-muted">
+                Your Personal Assistant can guide you through your profile,
+                integrations, and the other things you can configure. You can
+                take it one step at a time.
+              </p>
+              <button
+                type="button"
+                disabled={!state.connected || !displaySession}
+                onClick={() =>
+                  submitPrompt(
+                    "Help me set up my Personal Assistant. Start with the basics, then walk me through the available options one at a time. Ask before changing settings, and never ask me to paste secrets into chat.",
+                  )
+                }
+                className="mt-5 rounded-lg bg-accent px-4 py-2 text-caption font-medium text-accent-fg disabled:opacity-50"
+              >
+                Start guided setup
+              </button>
+            </div>
+          ) : showContextPicker ? (
             <NewSessionQuickStart
               credentialProfiles={activeCredentialProfiles}
               credentialProfilesLoaded={
@@ -6525,42 +6564,44 @@ function AppContent() {
             : false
         }
       />
-      <LoadedMemorySection
-        sessionId={displaySession?.sessionId}
-        hasAcceptedUserTurn={runtimeHasStarted}
-        stagedScope={{
-          persona: displayAgentType,
-          ...(pendingProjectContext
-            ? { projectId: pendingProjectContext }
-            : pendingTaskAttach
-              ? (() => {
-                  // Resolve the ACTUAL project from the authoritative task list rather
-                  // than just showing the Task's title (a title is not a scope).
-                  const task = backlogTasks.find(
-                    (t) => t.id === pendingTaskAttach.taskId,
-                  );
-                  if (!task)
-                    return {
-                      pendingTaskTitle: pendingTaskAttach.title,
-                      projectUnresolved: true as const,
-                    };
-                  return task.projectId
-                    ? {
-                        projectId: task.projectId,
+      {state.settings.memory.loadingEnabled && (
+        <LoadedMemorySection
+          sessionId={displaySession?.sessionId}
+          hasAcceptedUserTurn={runtimeHasStarted}
+          stagedScope={{
+            persona: displayAgentType,
+            ...(pendingProjectContext
+              ? { projectId: pendingProjectContext }
+              : pendingTaskAttach
+                ? (() => {
+                    // Resolve the ACTUAL project from the authoritative task list rather
+                    // than just showing the Task's title (a title is not a scope).
+                    const task = backlogTasks.find(
+                      (t) => t.id === pendingTaskAttach.taskId,
+                    );
+                    if (!task)
+                      return {
                         pendingTaskTitle: pendingTaskAttach.title,
-                      }
-                    : {
-                        projectIsGlobal: true as const,
-                        pendingTaskTitle: pendingTaskAttach.title,
+                        projectUnresolved: true as const,
                       };
-                })()
-              : {}),
-        }}
-        memory={memory}
-        loadingEnabled={state.settings.memory.loadingEnabled}
-        maxCards={state.settings.memory.maxCards}
-        onOpenManager={() => navigateFromInspector(settingsPath("memory"))}
-      />
+                    return task.projectId
+                      ? {
+                          projectId: task.projectId,
+                          pendingTaskTitle: pendingTaskAttach.title,
+                        }
+                      : {
+                          projectIsGlobal: true as const,
+                          pendingTaskTitle: pendingTaskAttach.title,
+                        };
+                  })()
+                : {}),
+          }}
+          memory={memory}
+          loadingEnabled={state.settings.memory.loadingEnabled}
+          maxCards={state.settings.memory.maxCards}
+          onOpenManager={() => navigateFromInspector(settingsPath("memory"))}
+        />
+      )}
     </SessionInspector>
   );
 
@@ -7145,7 +7186,34 @@ function AppContent() {
                     <SessionRefreshMark />
                   )}
 
-                  {chatSurface}
+                  {(route.name === "new" ||
+                    route.name === "permanentAssistant") &&
+                  onboarding !== "complete" ? (
+                    onboarding === "required" ? (
+                      <OnboardingProviderStep
+                        onComplete={() => {
+                          setGuidedSetup(true);
+                          setOnboarding("complete");
+                          navigate(PERMANENT_ASSISTANT_PATH);
+                        }}
+                      />
+                    ) : onboarding === "error" ? (
+                      <div className="mx-auto w-full max-w-xl p-6 text-body text-danger">
+                        Could not check initial setup.{" "}
+                        <button
+                          type="button"
+                          onClick={checkOnboarding}
+                          className="text-accent underline"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <PaneLoading label="Checking setup…" />
+                    )
+                  ) : (
+                    chatSurface
+                  )}
                 </>
               )}
             </AppShell>

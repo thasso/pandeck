@@ -65,6 +65,8 @@ export interface PromptConditions {
    * `sessionProjectContext.ts`; the two must stay in step).
    */
   projectRegistryPointer: boolean;
+  /** Memory was enabled when the session started. */
+  memoryEnabled: boolean;
   /** This persona may WRITE memory (the write-side rules apply to it). */
   memoryWrite: boolean;
 }
@@ -77,6 +79,7 @@ export const PROMPT_CONDITION_KEYS: readonly PromptConditionKey[] = [
   "google",
   "tempo",
   "projectRegistryPointer",
+  "memoryEnabled",
   "memoryWrite",
 ];
 
@@ -92,6 +95,7 @@ const ALL_PROMPT_CONDITIONS: PromptConditions = {
   google: true,
   tempo: true,
   projectRegistryPointer: true,
+  memoryEnabled: true,
   memoryWrite: true,
 };
 
@@ -144,6 +148,7 @@ export function computePromptConditions(
     google: gates.google,
     tempo: gates.tempo,
     projectRegistryPointer: !knownProject,
+    memoryEnabled: gates.memory,
     memoryWrite: personaWritesMemory(agentType),
   };
 }

@@ -20,6 +20,7 @@
     "./toolCards": "./toolCards.ts",
     "./portForwarding": "./portForwarding.ts",
     "./settingsRegistry": "./settingsRegistry.ts",
+    "./onboarding": "./onboarding.ts",
     "./zonedTime": "./zonedTime.ts"
   },
   "types": "./protocol.ts",

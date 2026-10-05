@@ -198,7 +198,13 @@ beforeEach(() => {
   db.exec("DELETE FROM memory_load_batches");
   db.exec("DELETE FROM memory_load_items");
   nowMs = T0;
-  updateSettings({ memory: { ...getSettings().memory, learningMode: "off" } });
+  updateSettings({
+    memory: {
+      ...getSettings().memory,
+      loadingEnabled: true,
+      learningMode: "off",
+    },
+  });
 });
 afterAll(() => {
   svc.resetMemoryClockForTests();

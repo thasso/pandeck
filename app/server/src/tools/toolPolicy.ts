@@ -9,6 +9,7 @@
  * module, so anything a tool can reach must not read the catalog back.
  */
 import type { AgentTool } from "../mcp/tool.ts";
+import { getSettings } from "../settings.ts";
 import { getGoogleSettings } from "../googleSettings.ts";
 import { getConfluenceSettings } from "../confluenceSettings.ts";
 import { getJiraSettings } from "../jiraSettings.ts";
@@ -23,6 +24,8 @@ import { getBrowserToolSettings } from "../browserSettings.ts";
 
 /** Integration gates (Settings-driven) that switch optional tool groups. */
 export interface IntegrationToolGates {
+  /** Memory is opt-in; keep its tools out of disabled sessions. */
+  memory: boolean;
   jira: boolean;
   /** Confluence pages; authenticates with the Jira integration's Atlassian credentials. */
   confluence: boolean;
@@ -42,6 +45,7 @@ export function currentIntegrationToolGates(): IntegrationToolGates {
   const slack = getSlackRuntimeSettings();
   const huddles = getSlackHuddleCapabilitySettings();
   return {
+    memory: getSettings().memory.loadingEnabled,
     jira: getJiraSettings().enabled,
     confluence: getConfluenceSettings().enabled,
     tempo: getTempoSettings().enabled,

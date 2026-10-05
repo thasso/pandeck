@@ -26,6 +26,7 @@ const { memoryObservationStore } =
   await import("../db/memoryObservationStore.ts");
 const { memoryLoadStore } = await import("../db/memoryLoadStore.ts");
 const { getDb, closeDb } = await import("../db/index.ts");
+const { getSettings, updateSettings } = await import("../settings.ts");
 
 let nowMs = 1_700_000_000_000;
 svc.setMemoryClockForTests(() => nowMs);
@@ -44,6 +45,9 @@ beforeEach(() => {
   db.exec("DELETE FROM memory_processor_runs");
   nowMs = 1_700_000_000_000;
   proc.resetMemoryProcessorRunnerForTests();
+  updateSettings({
+    memory: { ...getSettings().memory, loadingEnabled: true },
+  });
 });
 afterAll(() => {
   svc.resetMemoryClockForTests();

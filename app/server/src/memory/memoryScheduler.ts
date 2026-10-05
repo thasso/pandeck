@@ -110,7 +110,7 @@ class MemoryScheduler {
   observeTurn(input: ObserveTurnInput): void {
     try {
       const settings = getSettings().memory;
-      if (settings.learningMode === "off") return;
+      if (!settings.loadingEnabled || settings.learningMode === "off") return;
       if (!isCaptureEligiblePersona(input.persona)) return;
       const humanText = input.humanText.trim();
       if (!humanText) return;
@@ -166,6 +166,7 @@ class MemoryScheduler {
    * one re-flush after the in-flight run completes.
    */
   async flushSession(sessionId: string, trigger: string): Promise<void> {
+    if (!getSettings().memory.loadingEnabled) return;
     if (this.inFlight.has(sessionId)) {
       this.reflush.add(sessionId);
       return;
@@ -199,7 +200,7 @@ class MemoryScheduler {
    */
   async flushIdle(nowMs = clock()): Promise<void> {
     const settings = getSettings().memory;
-    if (settings.learningMode === "off") return;
+    if (!settings.loadingEnabled || settings.learningMode === "off") return;
     const pending = memoryObservationStore.pending(500);
     const bySession = new Map<string, number>(); // session → newest pending createdAt
     for (const o of pending)
@@ -244,7 +245,7 @@ class MemoryScheduler {
     );
     memoryOperationStore.prune(nowMs - OPERATION_LEDGER_RETENTION_MS);
     const settings = getSettings().memory;
-    if (!settings.maintenanceEnabled)
+    if (!settings.loadingEnabled || !settings.maintenanceEnabled)
       return { expired: 0, consolidationDue: false, pruned };
     const expired = expireDueMemories(nowMs).length;
     const dailyIdle = nowMs - this.lastConsolidationAt >= 86_400_000;
@@ -261,6 +262,8 @@ class MemoryScheduler {
   /** Model consolidation over existing memories, single-flight, via the bounded processor. */
   private consolidating = false;
   async runConsolidation(nowMs = clock()): Promise<void> {
+    const settings = getSettings().memory;
+    if (!settings.loadingEnabled || !settings.maintenanceEnabled) return;
     if (this.consolidating) return;
     this.consolidating = true;
     try {

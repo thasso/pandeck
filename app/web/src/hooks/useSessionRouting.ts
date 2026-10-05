@@ -588,6 +588,8 @@ interface Args {
   loadSession: (id: string) => void;
   /** Create/restore and view the server-owned singleton Personal Assistant. */
   openPermanentAssistant: () => void;
+  /** Defer the singleton's first acquisition until onboarding has a provider. */
+  canOpenPersonalAssistant?: boolean;
 }
 
 export function useSessionRouting({
@@ -598,6 +600,7 @@ export function useSessionRouting({
   hasMessages,
   loadSession,
   openPermanentAssistant,
+  canOpenPersonalAssistant = true,
 }: Args): {
   route: Route;
   navigate: (path: string) => void;
@@ -676,6 +679,7 @@ export function useSessionRouting({
       return;
 
     if (route.name === "permanentAssistant") {
+      if (!canOpenPersonalAssistant) return;
       const key = routeKey(route);
       if (applied.current !== key) {
         applied.current = key;
@@ -713,6 +717,7 @@ export function useSessionRouting({
     hasMessages,
     loadSession,
     openPermanentAssistant,
+    canOpenPersonalAssistant,
   ]);
 
   // Server → URL: wait for the addressed session, including while disconnected.

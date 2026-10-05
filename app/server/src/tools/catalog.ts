@@ -363,6 +363,8 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       description:
         "Long-term memory: search and manage durable preferences, facts, constraints, and working state.",
       loading: "eager",
+      eagerWhen: "memoryEnabled",
+      gate: "memory",
       family: "shared",
       tools: memoryTools,
     },

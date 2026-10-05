@@ -47,7 +47,13 @@ beforeEach(() => {
   nowMs = 1_700_000_000_000;
   // This suite covers delivery (Task 96); disable automatic learning so the
   // facade's post-turn observation (Task 99) never invokes the real processor.
-  updateSettings({ memory: { ...getSettings().memory, learningMode: "off" } });
+  updateSettings({
+    memory: {
+      ...getSettings().memory,
+      loadingEnabled: true,
+      learningMode: "off",
+    },
+  });
 });
 
 afterAll(() => {

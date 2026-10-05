@@ -207,8 +207,13 @@ export async function saveSettings(patch: SettingsPatch): Promise<AppSettings> {
   }
   // Read only when needed: a full read touches every integration's file, and
   // one unreadable file must not block saving an unrelated section.
-  const assistantBefore = appPatch.permanentAssistant
-    ? getSettings().permanentAssistant
+  const before =
+    appPatch.permanentAssistant || appPatch.memory ? getSettings() : undefined;
+  const assistantBefore = before
+    ? {
+        profile: before.permanentAssistant,
+        memoryEnabled: before.memory.loadingEnabled,
+      }
     : undefined;
   // A section counts once its writer has run, even if it then threw: a writer
   // may persist before it fails (`updateSettings` re-reads everything after
@@ -257,7 +262,10 @@ export async function announceSettingsWritten(
  */
 async function settingsWritten(
   sections: (keyof AppSettings)[],
-  assistantBefore?: AppSettings["permanentAssistant"],
+  assistantBefore?: {
+    profile: AppSettings["permanentAssistant"];
+    memoryEnabled: boolean;
+  },
 ): Promise<string[]> {
   const failures: string[] = [];
   const effect = async (name: string, run: () => unknown): Promise<void> => {
@@ -268,15 +276,19 @@ async function settingsWritten(
     }
   };
   const wrote = (key: keyof AppSettings) => sections.includes(key);
-  if (assistantBefore && wrote("permanentAssistant"))
+  if (assistantBefore && (wrote("permanentAssistant") || wrote("memory")))
     await effect("restarting the Personal Assistant", async () => {
-      const after = getSettings().permanentAssistant;
-      if (
-        !ASSISTANT_PROFILE_FIELDS.some(
-          (field) => assistantBefore[field] !== after[field],
-        )
-      )
-        return;
+      const after = getSettings();
+      const profileChanged =
+        wrote("permanentAssistant") &&
+        ASSISTANT_PROFILE_FIELDS.some(
+          (field) =>
+            assistantBefore.profile[field] !== after.permanentAssistant[field],
+        );
+      const memoryChanged =
+        wrote("memory") &&
+        assistantBefore.memoryEnabled !== after.memory.loadingEnabled;
+      if (!profileChanged && !memoryChanged) return;
       const { rotatePermanentAssistantSession } =
         await import("./permanentAssistant.ts");
       await rotatePermanentAssistantSession();
@@ -303,6 +315,7 @@ async function settingsWritten(
     await effect("syncing model providers", () => syncModelProviders());
   // OpenAI-compatible models reach sessions through the model list, not tools.
   if (
+    wrote("memory") ||
     sections.some((key) => isIntegrationKey(key) && key !== "openAiCompatible")
   )
     await effect("updating session tools", notifyIntegrationToolsChanged);

@@ -326,7 +326,9 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Additional instructions",
     TEXT,
   ),
-  setting("memory.loadingEnabled", "memory", "Load memory into turns", BOOLEAN),
+  setting("memory.loadingEnabled", "memory", "Enable Memory", BOOLEAN, {
+    hint: "Master switch for loading, automatic learning and maintenance. Stored memories are kept when off.",
+  }),
   setting(
     "memory.learningMode",
     "memory",

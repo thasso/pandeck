@@ -17,7 +17,7 @@ const { getSettings, updateSettings } = await import("../settings.ts");
 
 test("memory settings: safe defaults", () => {
   const m = getSettings().memory;
-  assert.equal(m.loadingEnabled, true);
+  assert.equal(m.loadingEnabled, false);
   assert.equal(m.learningMode, "adaptive");
   assert.equal(m.maintenanceEnabled, true);
   assert.equal(m.maxCards, 8);

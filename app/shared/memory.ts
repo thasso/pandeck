@@ -195,10 +195,10 @@ export interface MemoryLoadBatch {
 
 /** Public, secret-free memory settings. */
 export interface MemorySettings {
-  /** Load existing memory into turns. Independent of automatic learning. */
+  /** Master Enable Memory switch: gates loading, automatic learning, maintenance and agent tools. */
   loadingEnabled: boolean;
   learningMode: MemoryLearningMode;
-  /** Automatic maintenance (deterministic expiry + model consolidation). */
+  /** Automatic maintenance (when Memory is enabled). */
   maintenanceEnabled: boolean;
   /** Max effective cards per turn. */
   maxCards: number;

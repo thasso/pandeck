@@ -276,9 +276,9 @@ const DEFAULT_BROWSER_TOOL_SETTINGS: BrowserToolSettings =
 
 const DEFAULT_CLAUDE_SDK_SETTINGS: ClaudeSdkSettings = { enabled: false };
 
-/** Safe memory defaults: loading on, adaptive learning, maintenance on, 8/1200, cheap processor, global 12/hr + $1/day. */
+/** Memory is opt-in; its learning and maintenance preferences apply only once enabled. */
 const DEFAULT_MEMORY_SETTINGS: MemorySettings = {
-  loadingEnabled: true,
+  loadingEnabled: false,
   learningMode: "adaptive",
   maintenanceEnabled: true,
   maxCards: 8,
@@ -302,7 +302,7 @@ function normalizeMemorySettings(
     : DEFAULT_MEMORY_SETTINGS.learningMode;
   const processor = s.processor;
   return {
-    loadingEnabled: s.loadingEnabled !== false,
+    loadingEnabled: s.loadingEnabled === true,
     learningMode,
     maintenanceEnabled: s.maintenanceEnabled !== false,
     maxCards: clampInt(

@@ -130,8 +130,16 @@ turn's decision reflects a different (stale or unadvanced) one.
 
 ## Processing cadence, settings & safety ceilings
 
-Automatic learning modes: `off`, `adaptive` (default), `every-turn`
-(experimental). Loading is independently switchable. The adaptive scheduler
+Memory is **opt-in**: `memory.loadingEnabled` defaults to `false` and is the
+master Enable Memory switch in Settings and `settings_update`. While off, no
+memories are injected, observed, processed or automatically maintained; existing
+cards remain stored. The Memory tool group is gated off and no Memory guidance
+is added to new system prompts. Enabling it makes the tools available live and
+rotates the permanent Personal Assistant so its next session has the Memory
+prompt; other existing sessions keep their frozen prompt until a new session.
+Automatic learning modes: `off`, `adaptive` (the preference used when Memory is
+enabled), `every-turn` (experimental). Loading, learning and maintenance run
+only under the master switch. The adaptive scheduler
 (`memory/memoryScheduler.ts`) enqueues a bounded observation per completed
 eligible human turn, processes high-signal turns immediately, and batches the
 rest on a turn threshold / idle period / before rotation-compaction.
@@ -153,10 +161,10 @@ initially **12 processor calls/hour** and **$1 USD reported cost/day**.
 Exhaustion defers work to a later window rather than dropping or fanning out.
 Unknown reported cost never disables the call ceiling.
 
-Settings (`AppSettings.memory`): loading enabled, learning mode, maintenance,
-max cards / rendered chars, processor provider/model/thinking level, and the two
-global ceilings. The authoritative timezone is the profile timezone
-(`user-profile.md`).
+Settings (`AppSettings.memory`): the master `loadingEnabled` switch, learning
+mode, maintenance, max cards / rendered chars, processor provider/model/thinking
+level, and the two global ceilings. The authoritative timezone is the profile
+timezone (`user-profile.md`).
 
 ## Tools & prompt guidance
 
@@ -167,48 +175,53 @@ the primary continuity path — agents are not told to search or write every tur
 
 ## Observability
 
-The Session Details inspector's **Loaded memory** section shows the persisted
-effective load for a turn (Injected/Reused/Cleared/None/Failed, exact per-card
-text/scope/reason read from the audit — never recomputed), defaults to the
-latest batch with bounded prev/next navigation among recent batches, and
-distinguishes loading-disabled/draft/not-yet-loaded/no-eligible-memory/failed
-states. A draft session (which can already have a defined but staged/optimistic
-session id) is detected via an explicit `hasAcceptedUserTurn` signal from the
-app, not by the session id alone, and never issues a load-audit fetch; it
-renders the ACTUAL staged scope (persona, directly-attached project id, or — for
-a staged Task attach — the Task's OWN project resolved client-side from the
-authoritative task list, shown as "global" when the Task genuinely has none and
-only as "resolves once sent" when the Task can't be resolved at all) rather than
-the Task's title alone. Per-row actions (pin/unpin, edit/correct,
-archive/restore) are revealed only once the row's CURRENT live card is fetched
-on demand, so an action is never guessed from the historical audit snapshot; a
-link opens the full Memory settings/management surface. The **Memory** Settings
-section configures behavior and provides a post-hoc manager: real SQL-backed
-prev/next pagination and totals for every filter, including `active-now` — its
-deterministic modes (`persistent`/`until-changed`/`window`) are entirely
-SQL-computable (from/until bounds need no timezone for the boolean itself);
-`recurring` cards (the one mode SQLite cannot evaluate) are scanned in
-fixed-size SQL chunks, advancing by a KEYSET cursor (not an increasing `OFFSET`,
-which would force SQLite to re-walk the whole already-seen prefix on every call)
-backed by a dedicated index matching that exact filter+order (so the cursor is
-genuinely O(chunk size) per chunk, verified via `EXPLAIN QUERY PLAN`), with only
-the requested page's worth ever retained in memory — bounded regardless of how
-many recurring cards exist, never fetched whole. Every card is still findable
-and `total` is exact, never truncated by an arbitrary scan cap. Per-card lineage
-(predecessor/superseded-by, keyed by memory id so independently expanded rows
-never clobber each other) and provenance (source kind + originating session
-link), and scope/time editing (project/persona/temporal mode, window start/end,
-recurring weekday/timezone) alongside correct/pin/archive. Changing temporal
-mode resets mode-incompatible fields (a window's `validUntilMs` cannot linger
-onto a "persistent" card and silently expire it later); window/recurring
-datetime inputs are interpreted in the card's/configured timezone via a
-validated (never-throwing) timezone guard — a raw invalid IANA string would
-otherwise crash the render — that only applies to the modes that actually use a
-timezone, so a stale invalid value left over from a window/recurring edit never
-permanently blocks saving persistent/until-changed; the active/expired/upcoming
-label uses both from/until bounds in that same timezone, not the browser's.
-Non-text scope/time-only changes are a non-semantic edit (no supersession); a
-text change supersedes. There is no review/approval inbox.
+When Memory is enabled, the Session Details inspector's **Loaded memory**
+section shows the persisted effective load for a turn
+(Injected/Reused/Cleared/None/Failed, exact per-card text/scope/reason read from
+the audit — never recomputed), defaults to the latest batch with bounded
+prev/next navigation among recent batches, and distinguishes
+draft/not-yet-loaded/no-eligible-memory/failed states. When Memory is off, the
+whole inspector section is hidden rather than showing an inactive placeholder.
+The app shell receives the server's Memory settings on connect so a returning
+user with Memory enabled sees the section without opening Settings first; the
+web fallback also defaults to off. A draft session (which can already have a
+defined but staged/optimistic session id) is detected via an explicit
+`hasAcceptedUserTurn` signal from the app, not by the session id alone, and
+never issues a load-audit fetch; it renders the ACTUAL staged scope (persona,
+directly-attached project id, or — for a staged Task attach — the Task's OWN
+project resolved client-side from the authoritative task list, shown as "global"
+when the Task genuinely has none and only as "resolves once sent" when the Task
+can't be resolved at all) rather than the Task's title alone. Per-row actions
+(pin/unpin, edit/correct, archive/restore) are revealed only once the row's
+CURRENT live card is fetched on demand, so an action is never guessed from the
+historical audit snapshot; a link opens the full Memory settings/management
+surface. The **Memory** Settings section configures behavior and provides a
+post-hoc manager: real SQL-backed prev/next pagination and totals for every
+filter, including `active-now` — its deterministic modes
+(`persistent`/`until-changed`/`window`) are entirely SQL-computable (from/until
+bounds need no timezone for the boolean itself); `recurring` cards (the one mode
+SQLite cannot evaluate) are scanned in fixed-size SQL chunks, advancing by a
+KEYSET cursor (not an increasing `OFFSET`, which would force SQLite to re-walk
+the whole already-seen prefix on every call) backed by a dedicated index
+matching that exact filter+order (so the cursor is genuinely O(chunk size) per
+chunk, verified via `EXPLAIN QUERY PLAN`), with only the requested page's worth
+ever retained in memory — bounded regardless of how many recurring cards exist,
+never fetched whole. Every card is still findable and `total` is exact, never
+truncated by an arbitrary scan cap. Per-card lineage (predecessor/superseded-by,
+keyed by memory id so independently expanded rows never clobber each other) and
+provenance (source kind + originating session link), and scope/time editing
+(project/persona/temporal mode, window start/end, recurring weekday/timezone)
+alongside correct/pin/archive. Changing temporal mode resets mode-incompatible
+fields (a window's `validUntilMs` cannot linger onto a "persistent" card and
+silently expire it later); window/recurring datetime inputs are interpreted in
+the card's/configured timezone via a validated (never-throwing) timezone guard —
+a raw invalid IANA string would otherwise crash the render — that only applies
+to the modes that actually use a timezone, so a stale invalid value left over
+from a window/recurring edit never permanently blocks saving
+persistent/until-changed; the active/expired/upcoming label uses both from/until
+bounds in that same timezone, not the browser's. Non-text scope/time-only
+changes are a non-semantic edit (no supersession); a text change supersedes.
+There is no review/approval inbox.
 
 ## Known v1 limitations (tracked by fixtures)
 

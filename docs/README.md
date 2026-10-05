@@ -39,6 +39,8 @@ only binding rules; everything else lives here.
   distinction, temporal semantics, selection and sticky-snapshot delivery,
   cadence/settings/safety ceilings, tool and prompt rules, observability, known
   limitations, and the reset boundary.
+- `onboarding.md` — first-run provider sign-in, legacy-install detection, the
+  persisted setup boundary, and the handoff to the Personal Assistant chat.
 - `settings.md` — the settings registry (one descriptor per setting the Settings
   page shows, with value/readonly/secret/oauth access), the tests that keep it
   complete, and the one write path: `saveSettings`, its per-section side

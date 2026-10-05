@@ -72,6 +72,7 @@ sections need:
 | Section written       | Effect                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------- |
 | `permanentAssistant`  | A changed name, model, thinking level or instructions rotates the Personal Assistant to a fresh session |
+| `memory`              | Enabling/disabling Memory updates live tools and rotates the Personal Assistant for its frozen prompt   |
 | `dayScan`, `profile`  | Re-arm the daily scan schedule                                                                          |
 | `slack`               | Reconcile Socket Mode                                                                                   |
 | `github`              | Reconcile the package proxy                                                                             |
@@ -96,8 +97,8 @@ When a write fails, the sections it reached still run their effects and are
 announced, and then the write's own error is thrown. When every write lands but
 an effect fails, the error says the settings were saved and names what failed.
 Listener failures are only logged. A save reads full settings only when it
-touches `permanentAssistant`, so one unreadable integration file never blocks
-saving an unrelated section.
+touches `permanentAssistant` or `memory`, so one unreadable integration file
+never blocks saving an unrelated section.
 
 `announceSettingsWritten(sections)` covers settings a module persists on its
 own: an OpenAI-compatible connection test stores the models it discovered, and

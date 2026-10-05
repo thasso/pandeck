@@ -348,7 +348,7 @@ const defaultSettings: AppSettings = {
     remoteFetchMinutes: 10,
   },
   memory: {
-    loadingEnabled: true,
+    loadingEnabled: false,
     learningMode: "adaptive",
     maintenanceEnabled: true,
     maxCards: 8,

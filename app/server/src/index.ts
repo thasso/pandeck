@@ -38,6 +38,11 @@ import { getCalendarEvents } from "./calendarService.ts";
 import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import {
+  beginOnboarding,
+  completeOnboarding,
+  onboardingState,
+} from "./onboarding.ts";
+import {
   automaticProfileIdFor,
   createCredentialProfile,
   credentialProfileById,
@@ -811,6 +816,48 @@ async function handleRequest(
     };
     res.writeHead(200, corsJsonHeaders(req));
     res.end(JSON.stringify(response));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/onboarding") {
+    if (req.method === "GET") {
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify(onboardingState()));
+      return;
+    }
+    if (req.method === "POST") {
+      try {
+        const body = await readJsonBody<{ profileId?: unknown }>(req);
+        if (typeof body.profileId !== "string")
+          throw new Error("Select a signed-in account.");
+        await completeOnboarding(body.profileId);
+        res.writeHead(200, corsJsonHeaders(req));
+        res.end(JSON.stringify(onboardingState()));
+      } catch (err) {
+        res.writeHead(400, corsJsonHeaders(req));
+        res.end(JSON.stringify({ error: errorText(err) }));
+      }
+      return;
+    }
+    res.writeHead(405, corsJsonHeaders(req));
+    res.end(JSON.stringify({ error: "Method not allowed" }));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/onboarding/start") {
+    if (req.method !== "POST") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      beginOnboarding();
+      res.writeHead(200, corsJsonHeaders(req));
+      res.end(JSON.stringify(onboardingState()));
+    } catch (err) {
+      res.writeHead(400, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: errorText(err) }));
+    }
     return;
   }
 

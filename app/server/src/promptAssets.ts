@@ -282,14 +282,18 @@ function personaLayers(
     resolveAsset("chat-files", CHAT_FILES_FILE, promptsDir),
     resolveAsset("chat-math", CHAT_MATH_FILE, promptsDir),
     layerOf("kb-guidance", knowledgeBaseBehaviorGuidance(), "builtin-code"),
-    layerOf(
-      "memory-guidance",
-      // Undefined conditions fall back to the persona's own write capability
-      // inside the guidance, so an unconditioned caller cannot turn a coding
-      // session's read-only memory rules into write rules.
-      memoryBehaviorGuidance(agentType, opts?.conditions?.memoryWrite),
-      "builtin-code",
-    ),
+    ...(on("memoryEnabled")
+      ? [
+          layerOf(
+            "memory-guidance",
+            // Undefined conditions fall back to the persona's own write capability
+            // inside the guidance, so an unconditioned caller cannot turn a coding
+            // session's read-only memory rules into write rules.
+            memoryBehaviorGuidance(agentType, opts?.conditions?.memoryWrite),
+            "builtin-code",
+          ),
+        ]
+      : []),
   ];
 }
 

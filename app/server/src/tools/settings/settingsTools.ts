@@ -337,11 +337,12 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
           jsonResult(redactSecretsDeep({ saved, tests: results })),
         );
       }
-      const restartsAssistant = ASSISTANT_PROFILE_FIELDS.some(
-        (field) =>
-          before.permanentAssistant[field] !==
-          settings.permanentAssistant[field],
-      );
+      const restartsAssistant =
+        ASSISTANT_PROFILE_FIELDS.some(
+          (field) =>
+            before.permanentAssistant[field] !==
+            settings.permanentAssistant[field],
+        ) || before.memory.loadingEnabled !== settings.memory.loadingEnabled;
       return {
         ...(saved.length > 0 ? { saved } : {}),
         ...(dropped.length > 0 ? { credentialsCleared: dropped } : {}),
@@ -349,7 +350,7 @@ const settingsUpdateTool = defineAgentTool<SettingsUpdateParams>({
         ...(restartsAssistant
           ? {
               assistantRestart:
-                "The Personal Assistant's profile changed. The user's next message to it starts a fresh session with the new profile.",
+                "The Personal Assistant's profile or Memory setting changed. The user's next message to it starts a fresh session with the updated settings.",
             }
           : {}),
       };
