@@ -1335,7 +1335,7 @@ export const forgejoGetContentTool = defineAgentTool<GetContentParams>({
   name: "forgejo_get_content",
   label: "Forgejo: Get Content",
   description:
-    "Read a file or list a directory in a Forgejo repository at an optional ref. Read-only. Text files return bounded UTF-8 content with `contentTruncated`; binary files return status 'saved_attachment' plus an id for read_attachment/kb_add_asset (bytes stay off-context); oversized files return status 'too_large'. Forgejo has no code search, so browse from the repository root or a known path.",
+    "Read a file or list a directory in a Forgejo repository at an optional ref. Read-only. Text files return bounded UTF-8 content with `contentTruncated`; binary files return status 'saved_attachment' plus an id for read_attachment/kb_write (bytes stay off-context); oversized files return status 'too_large'. Forgejo has no code search, so browse from the repository root or a known path.",
   parameters: {
     type: "object",
     additionalProperties: false,

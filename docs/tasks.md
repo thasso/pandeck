@@ -111,7 +111,7 @@ not Jira keys, not GitHub issues, not external links.
 | A decision, constraint, or scope change a later reader of this work needs       | Fold it into the Task's description as a targeted edit             |
 | The record that something happened: work finished, a handoff, a small follow-up | At most one comment on the Task                                    |
 | The steps of the work in flight — the plan, progress so far, what is next       | Nowhere. Reply text and the streamed tool activity already show it |
-| Durable long-form material: research, a brief, a plan, a reference              | A Knowledge Base entry (`kb_write_entry`), linked from the Task    |
+| Durable long-form material: research, a brief, a plan, a reference              | A Knowledge Base file (`kb_write`), linked from the Task           |
 | A short atomic preference, fact, or constraint the user asked you to remember   | Memory (`memory_manage`), not a Task and not a KB entry            |
 | Review remarks on a code change                                                 | Worktree comments (`review_comment_*`), never the Task trace       |
 | Bookkeeping about your own tool calls, retries, or intentions                   | Nowhere                                                            |

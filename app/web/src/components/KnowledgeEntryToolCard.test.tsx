@@ -7,9 +7,9 @@ import { KnowledgeOpenTargetsProvider } from "./KnowledgeOpenTargets.tsx";
 import { renderToolBlock } from "./tools/registry.tsx";
 
 /**
- * `kb_show_entry` exists to hand the reader an entry: the card has to show with
- * tools hidden, offer both reading surfaces, and open the entry the SERVER
- * named rather than anything the transcript claims around it.
+ * `kb_show` exists to hand the reader a Knowledge Base file: the card has to
+ * show with tools hidden, offer both reading surfaces, and open the file the
+ * SERVER named rather than anything the transcript claims around it.
  */
 
 (
@@ -26,13 +26,13 @@ afterEach(() => {
   container = null;
 });
 
-function showEntryBlock(card: unknown, name = "kb_show_entry"): DisplayBlock {
+function showEntryBlock(card: unknown, name = "kb_show"): DisplayBlock {
   return {
     kind: "tool",
     toolId: "tc1",
     name,
-    args: { entryId: "kb-alpha" },
-    output: JSON.stringify({ renderKind: "knowledgeEntry", version: 1, card }),
+    args: { path: "notes/alpha.md" },
+    output: JSON.stringify({ renderKind: "knowledgeEntry", version: 2, card }),
     isError: false,
     done: true,
   };
@@ -48,8 +48,8 @@ function renderNode(node: ReactNode): void {
 function renderCard(
   block: DisplayBlock,
   targets: {
-    openInMain: (entryId: string) => void;
-    openInPanel?: (entryId: string) => void;
+    openInMain: (path: string) => void;
+    openInPanel?: (path: string) => void;
   } | null = { openInMain: () => {} },
 ): void {
   const card = (
@@ -79,33 +79,31 @@ function click(label: string): void {
 }
 
 const CARD = {
-  entryId: "kb-alpha",
   title: "Alpha Entry",
-  path: "notes/alpha",
+  path: "notes/alpha.md",
   summary: "Summary of the entry",
   note: "Rewrote the summary",
 };
 
-it("opens the carded entry in the side panel or the Knowledge route", () => {
+it("opens the carded file in the side panel or the Knowledge route", () => {
   const panel: string[] = [];
   const main: string[] = [];
   renderCard(showEntryBlock(CARD), {
-    openInMain: (entryId) => main.push(entryId),
-    openInPanel: (entryId) => panel.push(entryId),
+    openInMain: (path) => main.push(path),
+    openInPanel: (path) => panel.push(path),
   });
 
   expect(container!.textContent).toContain("Alpha Entry");
-  expect(container!.textContent).toContain("notes/alpha");
+  expect(container!.textContent).toContain("notes/alpha.md");
   // The agent's own line wins over the frontmatter summary: it says why THIS
-  // entry is being shown now.
+  // file is being shown now.
   expect(container!.textContent).toContain("Rewrote the summary");
   expect(container!.textContent).not.toContain("Summary of the entry");
 
   click("Open in side panel");
   click("Open in Knowledge");
-  // The entry IS its `index.md`: both targets open that file.
-  expect(panel).toEqual(["notes/alpha/index.md"]);
-  expect(main).toEqual(["notes/alpha/index.md"]);
+  expect(panel).toEqual(["notes/alpha.md"]);
+  expect(main).toEqual(["notes/alpha.md"]);
 });
 
 it("offers the route alone where there is no side panel", () => {
@@ -114,7 +112,7 @@ it("offers the route alone where there is no side panel", () => {
   expect(container!.textContent).toContain("Open in Knowledge");
 });
 
-it("leaves a payload that names no entry as an ordinary tool block", () => {
+it("leaves a payload that names no file as an ordinary tool block", () => {
   renderCard(showEntryBlock({ title: "Alpha Entry" }));
   expect(container!.textContent).toBe("");
 });

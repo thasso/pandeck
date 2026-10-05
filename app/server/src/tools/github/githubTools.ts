@@ -1560,7 +1560,7 @@ export const githubGetContentTool = defineAgentTool<GetContentParams>({
   name: "github_get_content",
   label: "GitHub: Get Content",
   description:
-    "Read a file or list a directory in a repository at an optional ref via the Contents API. Read-only. Text files return bounded UTF-8 content with `contentTruncated`; binary files return status 'saved_attachment' plus an id for read_attachment/kb_add_asset (bytes stay off-context); oversized files return status 'too_large'.",
+    "Read a file or list a directory in a repository at an optional ref via the Contents API. Read-only. Text files return bounded UTF-8 content with `contentTruncated`; binary files return status 'saved_attachment' plus an id for read_attachment/kb_write (bytes stay off-context); oversized files return status 'too_large'.",
   parameters: {
     type: "object",
     additionalProperties: false,

@@ -2,7 +2,7 @@
  * Session attachment tools. Uploaded files and server-fetched binaries live in
  * the addressable session attachment store (`../sessionAttachments.ts`); these
  * tools let the agent discover them and read bounded text. Raw binary bytes are
- * never returned inline — copy those into the Knowledge Base with kb_add_asset
+ * never returned inline — copy those into the Knowledge Base with kb_write
  * (sourceAttachmentId), which transfers server-side.
  */
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
@@ -41,7 +41,7 @@ export const readAttachmentTool = defineAgentTool<{
 }>({
   name: "read_attachment",
   label: "Attachments: Read",
-  // The binary case ends in a result that NAMES kb_add_asset as the way to
+  // The binary case ends in a result that NAMES kb_write as the way to
   // carry the file into the KB, so the description only has to say that raw
   // bytes never come back inline (Task-285).
   description:
@@ -73,7 +73,7 @@ export const readAttachmentTool = defineAgentTool<{
         capability: "read_attachment",
         attachment: publicRecord(record),
         status: "binary",
-        hint: "Use kb_add_asset with sourceAttachmentId to copy this file into the Knowledge Base.",
+        hint: "Use kb_write with sourceAttachmentId to copy this file into the Knowledge Base.",
       });
     }
     const maxCharacters = clamp(

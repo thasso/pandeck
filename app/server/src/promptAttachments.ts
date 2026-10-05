@@ -6,7 +6,7 @@
  * other file is persisted to the addressable session attachment store and
  * represented in a prompt suffix — inline decoded text for text-like files,
  * otherwise a saved-path reference the model can read via `read_attachment` or
- * copy via `kb_add_asset`. A leading comment-wrapped manifest lets a reloaded
+ * copy via `kb_write`. A leading comment-wrapped manifest lets a reloaded
  * transcript rebuild the attachment chips (and recover the clean prompt text).
  *
  * The durable/display attachment chips are recorded separately by the runtime
@@ -100,7 +100,7 @@ function attachmentPromptSuffix(
     } else {
       parts.push(
         `Attached file: ${a.name} (${a.mimeType || "unknown type"}, ${a.size} bytes, attachment id ${a.id}) saved on the server at: ${savedPath}. ` +
-          "Use read_attachment to inspect it or kb_add_asset with sourceAttachmentId to copy the raw file into the Knowledge Base; the bytes never pass through your context.",
+          "Use read_attachment to inspect it or kb_write with sourceAttachmentId to copy the raw file into the Knowledge Base; the bytes never pass through your context.",
       );
     }
   }

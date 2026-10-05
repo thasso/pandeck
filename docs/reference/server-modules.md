@@ -1342,41 +1342,19 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   atomic rename publication recover safely from repeated, concurrent, or
   interrupted calls. Runtime directories remain disposable caches of the library
   working tree, not source of truth.
-- `knowledgeBaseEntry.ts` owns KB entry parsing and v1 schema validation,
-  deterministic Markdown/YAML/JSON/JSONL formatting, and the tool-facing
-  `commitValidatedKnowledgeChanges` wrapper that validates/formats text writes
-  before the storage layer touches disk.
-- `knowledgeBaseStore.ts` owns the Git-backed KB storage core
-  (`KnowledgeBaseStore`) over `DATA_DIR/knowledge`: repo init, path-validated
-  atomic `commitChanges` with structured `KB-*` commit trailers (including
-  optional `KB-Comment` for comment-thread workflow commits), tree/history/diff
-  reads (including `commitChangedFiles` = a commit's changed source files with
-  normalized statuses), bounded source/generated file reads,
-  `restorePaths`/`revertCommit`, and gitignored `.kb/generated` artifact
-  helpers. All caller-supplied Git revisions
-  (`diff`/`showCommit`/`readFileAtCommit`/`restorePaths`/`revertCommit`) are
-  validated (no leading `-`) and passed after `--end-of-options`, so
-  option-shaped revisions like `--output=<file>` cannot turn a read into a
-  write. Mutations serialize on the KB repo via `gitExec` `withRepoLock`;
-  repo-local `gc.autoDetach=false` keeps automatic Git maintenance inside that
-  lock, and `commitChanges` may run a domain validation hook there before
-  writes. It stays free of UI, agent tools, and frontmatter-schema concerns;
-  callers that accept user/agent entry text must layer `knowledgeBaseEntry.ts`
-  validation/formatting above it.
-- `knowledgeBaseIndex.ts` owns the rebuildable KB tree index and search (KB 05)
-  over `knowledgeBaseStore` nodes + validated frontmatter: a hierarchical
-  browsable tree (folders, entries, invalid entries, assets, files; empty
-  leftover folders pruned; `index.md` folded into its entry), ranked search
-  across title/aliases/tags/headings/body/asset metadata with
-  compact/standard/full detail levels, and a deterministic write-if-changed
-  generated artifact at `.kb/generated/index/kb-index.json` (`getKnowledgeIndex`
-  reuses it until KB HEAD moves). Pure/read-only over the store; it never writes
-  source of truth.
-- `knowledgeBaseAssets.ts` owns KB asset APIs (KB 06): entry-local `assets/...`
-  path containment, compact asset listing that merges frontmatter metadata with
-  actual asset files, bounded binary/text reads, source asset commits that
-  update `kb.assets`, and generated text extract helpers under
-  `.kb/generated/extracts/`.
+- `knowledgeBaseStore.ts` owns the KB folder's Git layer (`KnowledgeBaseStore`)
+  over `DATA_DIR/knowledge`: init (an empty first commit for an unborn repo, no
+  config or `.gitignore` writes), `commitChanges` and `move` that refuse paths
+  with uncommitted edits and commit exactly their own paths
+  (`git commit -- <paths>`) with `KB-*` trailers, working-tree listing that
+  skips dot-paths, bounded byte reads, history (`--follow` for one file) and a
+  bounded `showCommit`. Caller revisions are validated and passed after
+  `--end-of-options`. Writes serialize on the folder's `withRepoLock`.
+- `knowledgeBaseIndex.ts` describes the KB's files for the tools and link
+  titles: title (frontmatter `title`, the retired `kb.title`, first heading or
+  file name), tags, summary, the retired `kb.id` (`legacyId`), headings and
+  bounded prose, cached in memory per file by size and mtime, plus ranked search
+  over them.
 - `comments/resolveAnchor.ts` owns the ONE anchor resolver behind
   `docs/comments.md`, shared by every commentable surface: the ladder (stored
   position → block hint → exact quote disambiguated by ±32 characters of context
@@ -1390,15 +1368,11 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   from a document: it resolves the staged viewer route through
   `documentGrantTargets.resolveDocumentTargetPath` and attaches the file's name,
   absolute path and route, never its content.
-- `tools/knowledgeBaseTools.ts` owns first-class KB v1 agent tools (`kb_tree`,
-  `kb_search`, `kb_get_entry`, `kb_write_entry`, `kb_edit_entry`,
-  `kb_add_asset`, `kb_move_entry`, `kb_history`, `kb_diff`, `kb_read_asset`
-  (bounded UTF-8 read of one committed entry-local asset; refuses binary), plus
-  asset/extract helpers). Tool outputs are compact JSON by default, and
-  mutations must route through KB validation/storage helpers with Git commit
-  metadata. `kb_add_asset` accepts exactly one source — inline
-  `contentBase64`/`contentText` or `sourceAttachmentId` (a `sessionAttachments`
-  id copied server-side so raw uploaded/Slack bytes bypass the model context).
+- `tools/knowledge/knowledgeBaseTools.ts` owns the KB agent tools: `kb_search`,
+  `kb_read` (windowed text, binary files answered with their path), `kb_list`,
+  `kb_write` (text, base64, or a `sessionAttachments` id copied server-side),
+  `kb_edit`, `kb_move`, `kb_history` (log, or one commit's bounded patch) and
+  `kb_show` (the transcript card).
 - `contacts.ts` owns the contacts domain layer over `db/contactStore.ts`: the
   general people directory (NOT time-logging specific; time-logging routing is
   one consumer). Id derivation, field normalization/bounds, identity-based
@@ -2383,7 +2357,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   server-staged binaries (e.g. `slack_file_read` downloads), tracked in an
   `index.json` sidecar with a directory-scan fallback that keeps
   pre-index/legacy files discoverable. Bytes move BY REFERENCE (an attachment
-  id) into KB assets (`kb_add_asset` `sourceAttachmentId`) or bounded reads
+  id) into KB files (`kb_write` `sourceAttachmentId`) or bounded reads
   (`list_attachments`/`read_attachment`), never through the model context;
   resolution is path-contained under the session dir.
 - `promptAttachments.ts` owns the harness-neutral model-facing prompt-attachment
@@ -2392,7 +2366,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   images to the model as image content blocks, and represents non-image files in
   a prompt suffix (inline decoded text for text-like files, otherwise a
   saved-path reference the model reads via `read_attachment`/copies via
-  `kb_add_asset`) led by a comment-wrapped manifest. Display/durable attachment
+  `kb_write`) led by a comment-wrapped manifest. Display/durable attachment
   chips are recorded separately by the runtime from the structured
   `PromptAttachment` list.
 - `slackUrls.ts` owns the canonical Slack private-download host classifier

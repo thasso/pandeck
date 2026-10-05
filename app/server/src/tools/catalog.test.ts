@@ -199,14 +199,14 @@ describe("tool catalog", () => {
       "github_get_issue",
       "tempo_list_worklogs",
       "web_search",
-      "kb_write_entry",
+      "kb_write",
       "session_control",
       "session_send_prompt",
       "convert_pdf",
       // Task-286: the KB read tools are discovered, not eager. The eager KB
       // prompt pointer is what keeps the Knowledge Base reachable.
       "kb_search",
-      "kb_get_entry",
+      "kb_read",
     ]) {
       assert.ok(
         !assistantEager.has(deferred),
@@ -410,11 +410,14 @@ describe("tool catalog", () => {
   test("first-class kb_* tools are exposed", () => {
     const names = assistantIntegrationTools().map((tool) => tool.name);
     for (const tool of [
-      "kb_tree",
       "kb_search",
-      "kb_get_entry",
-      "kb_write_entry",
-      "kb_edit_entry",
+      "kb_read",
+      "kb_list",
+      "kb_write",
+      "kb_edit",
+      "kb_move",
+      "kb_history",
+      "kb_show",
     ]) {
       assert.ok(
         names.includes(tool),

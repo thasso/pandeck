@@ -1,5 +1,3 @@
-import { documentTargetHref } from "@assistant/shared/documentTargets";
-import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import {
   approvalCardHref,
   fallbackPaObjectResolution,
@@ -15,7 +13,7 @@ import { approvalForId } from "./pendingApprovals.ts";
 import { getProject } from "./projectRegistry.ts";
 import { hub } from "./hub.ts";
 import { resolveWorktreeRow } from "./worktrees/worktreeResolve.ts";
-import { getKnowledgeIndex, type KbIndex } from "./knowledgeBaseIndex.ts";
+import { knowledgeFiles, type KbFileInfo } from "./knowledgeBaseIndex.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 
 /**
@@ -38,7 +36,7 @@ export async function resolvePaObjectLinks(
   const knowledge = unique.some(
     (uri) => parsePaObjectLink(uri)?.objectType === "knowledge",
   )
-    ? await getKnowledgeIndex(new KnowledgeBaseStore()).catch(() => null)
+    ? await knowledgeFiles(new KnowledgeBaseStore()).catch(() => null)
     : null;
   return Promise.all(unique.map((uri) => resolveOne(uri, sessions, knowledge)));
 }
@@ -46,7 +44,7 @@ export async function resolvePaObjectLinks(
 async function resolveOne(
   uri: string,
   sessions: Awaited<ReturnType<typeof hub.listSessions>>,
-  knowledge: KbIndex | null,
+  knowledge: KbFileInfo[] | null,
 ): Promise<PaObjectLinkResolution> {
   const parsed = parsePaObjectLink(uri);
   if (!parsed) {
@@ -92,24 +90,18 @@ async function resolveOne(
       return resolved(parsed, title, Boolean(worktree));
     }
     case "knowledge": {
-      // Resolve titles/existence from the rebuildable KB index. When the index
-      // is unavailable, fall back to an explicitly unknown placeholder rather
-      // than a broken link, since the entry may simply not be indexed yet.
+      // The link names a file by its path. When the folder cannot be read,
+      // say "unknown" rather than draw a broken link.
       if (!knowledge)
         return { ...fallbackPaObjectResolution(parsed), existence: "unknown" };
-      const entry = knowledge.entries.find(
-        (candidate) => candidate.id === parsed.id,
-      );
-      if (!entry) return resolved(parsed, undefined, false);
-      // An entry IS its file now: the link opens that file in the KB browser.
+      const file =
+        knowledge.find((candidate) => candidate.path === parsed.id) ??
+        // A link from before links were paths names the entry's `kb.id`.
+        knowledge.find((candidate) => candidate.legacyId === parsed.id);
+      if (!file) return resolved(parsed, undefined, false);
       return {
-        ...resolved(parsed, entry.title, true),
-        href: documentTargetHref({
-          kind: "worktreeFile",
-          worktreeId: KNOWLEDGE_WORKTREE_ID,
-          path: entry.path,
-          view: "file",
-        }),
+        ...resolved(parsed, file.title, true),
+        href: paObjectHref({ ...parsed, id: file.path }),
       };
     }
     case "approval": {

@@ -56,7 +56,7 @@ const workshopDraftHandoffTool = defineAgentTool<{
   name: "workshop_draft_handoff",
   label: "Workshop: Draft Handoff",
   description:
-    "Propose code, tool, UI, or workflow implementation work that belongs in the Workshop agent rather than this restricted one: saves a proposal Markdown file and returns a UI handoff that can create a Workshop session with an editable, unsubmitted draft prompt. It does NOT start implementation — the user opens the handoff, adjusts model/thinking and the prompt, and submits it. Not for normal answers or knowledge updates; durable knowledge goes to kb_write_entry.",
+    "Propose code, tool, UI, or workflow implementation work that belongs in the Workshop agent rather than this restricted one: saves a proposal Markdown file and returns a UI handoff that can create a Workshop session with an editable, unsubmitted draft prompt. It does NOT start implementation — the user opens the handoff, adjusts model/thinking and the prompt, and submits it. Not for normal answers or knowledge updates; durable knowledge goes to kb_write.",
   searchHint:
     "propose implementation handoff workshop draft build change the app feature request",
   parameters: handoffSchema,

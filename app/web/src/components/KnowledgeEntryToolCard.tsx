@@ -4,21 +4,19 @@ import { useKnowledgeOpenTargets } from "./KnowledgeOpenTargets.tsx";
 
 /**
  * @component KnowledgeEntryToolCard
- * @purpose The `kb_show_entry` card: a Knowledge entry an agent is pointing at,
+ * @purpose The `kb_show` card: a Knowledge Base file an agent is pointing at,
  * with the two ways to read it — the side panel beside this conversation, or
  * the main Knowledge view.
- * @useWhen Rendering a completed `kb_show_entry` tool result in a transcript.
- * @avoidWhen Linking an entry inside prose; `pa://knowledge/<id>` already
+ * @useWhen Rendering a completed `kb_show` tool result in a transcript.
+ * @avoidWhen Linking a file inside prose; `pa://knowledge/<path>` already
  * resolves to a link the Markdown renderer opens.
  * @intent The card is the whole point of the call, so it shows with tools
- * hidden. It carries no entry content: reading happens on a Knowledge surface,
- * which is also where commenting and live updates live.
+ * hidden. It carries no file content: reading happens on a Knowledge surface,
+ * which is also where history and live updates live.
  */
 export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   const targets = useKnowledgeOpenTargets();
   const openInPanel = targets?.openInPanel;
-  // The card names the entry's folder; the entry is its `index.md` file.
-  const entryFile = `${card.path}/index.md`;
   return (
     <div className="not-prose my-2 overflow-hidden rounded-xl border border-line bg-surface text-left shadow-sm">
       <div className="flex items-start gap-2 p-2.5">
@@ -52,7 +50,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           {openInPanel ? (
             <button
               type="button"
-              onClick={() => openInPanel(entryFile)}
+              onClick={() => openInPanel(card.path)}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <PanelRight size={13} />
@@ -61,7 +59,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           ) : null}
           <button
             type="button"
-            onClick={() => targets.openInMain(entryFile)}
+            onClick={() => targets.openInMain(card.path)}
             className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
             <SquareArrowOutUpRight size={13} />

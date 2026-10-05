@@ -67,6 +67,27 @@ describe("pa:// object links", () => {
     expect(parsePaObjectLink("pa://task:123/257")).toBeNull();
   });
 
+  it("addresses a Knowledge Base file by its path", () => {
+    const uri = formatPaObjectLink({
+      objectType: "knowledge",
+      id: "projects/demo plan/notes.md",
+    });
+    expect(uri).toBe("pa://knowledge/projects/demo%20plan/notes.md");
+    expect(parsePaObjectLink(`${uri}#L4`)).toMatchObject({
+      objectType: "knowledge",
+      id: "projects/demo plan/notes.md",
+      fragment: "L4",
+    });
+    expect(parsePaObjectLink("pa://knowledge/a/../b.md")).toBeNull();
+    expect(parsePaObjectLink("pa://knowledge/a//b.md")).toBeNull();
+    expect(() =>
+      formatPaObjectLink({ objectType: "knowledge", id: "../secret" }),
+    ).toThrow();
+    expect(
+      extractPaObjectLinkUris("Read pa://knowledge/projects/plan.md, then."),
+    ).toEqual(["pa://knowledge/projects/plan.md"]);
+  });
+
   it("formats worktree link titles from one shared helper", () => {
     expect(
       paWorktreeTitle({ id: "main:proj", branch: "main" }, "Project Name"),
@@ -114,7 +135,10 @@ describe("pa:// object links", () => {
     // A knowledge id that is not indexed resolves as missing (not a placeholder).
     expect(
       links.find((link) => link.uri === "pa://knowledge/example#Intro"),
-    ).toMatchObject({ href: "/knowledge/example#Intro", existence: "missing" });
+    ).toMatchObject({
+      href: "/knowledge/files?path=example#Intro",
+      existence: "missing",
+    });
   });
 
   it("resolves knowledge links to indexed entry titles", async () => {

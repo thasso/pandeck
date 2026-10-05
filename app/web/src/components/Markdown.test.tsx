@@ -140,7 +140,7 @@ describe("Markdown pa:// links", () => {
             objectType: "knowledge",
             knownType: true,
             id: "kb-entry",
-            href: "/knowledge/kb-entry",
+            href: "/knowledge/files?path=kb-entry",
             title: "Knowledge entry",
             typeLabel: "Knowledge",
             existence: "exists",
@@ -149,7 +149,7 @@ describe("Markdown pa:// links", () => {
       />,
     );
     expect(html).toContain("Knowledge entry");
-    expect(html).toContain('href="/knowledge/kb-entry#Heading"');
+    expect(html).toContain('href="/knowledge/files?path=kb-entry#Heading"');
   });
 
   it("marks unresolved known objects as broken when supplied by the resolver", () => {

@@ -49,8 +49,9 @@ parses app-relative and `pa://` addresses, never HTTP origins.
 | Worktree diff    | `pa://worktree/<id>?path=<repo path>&view=diff` | `/worktrees/<id>/changes?path=<repo path>&view=diff` |
 
 A Knowledge Base file is a worktree file of the reserved checkout `knowledge`
-(`KNOWLEDGE_WORKTREE_ID`): `pa://worktree/knowledge?path=<KB path>` opens on
-`/knowledge/files?path=<KB path>`, and its diff on `/knowledge/changes`.
+(`KNOWLEDGE_WORKTREE_ID`). Its durable link is `pa://knowledge/<KB path>`
+(`docs/knowledge-base.md`), which opens on `/knowledge/files?path=<KB path>`;
+its diff opens on `/knowledge/changes`.
 
 A worktree target without `view=diff` always opens the ordinary file. A changed
 file is still a file unless the author explicitly asks for its diff. Worktree

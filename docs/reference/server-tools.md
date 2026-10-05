@@ -496,8 +496,7 @@ persona toolsets.
   every persona: `list_attachments` (metadata-only listing of the current
   session's `sessionAttachments` store) and `read_attachment` (bounded UTF-8
   text for text-like files; binary files return metadata + a pointer to
-  `kb_add_asset` `sourceAttachmentId`). It never returns raw binary bytes
-  inline.
+  `kb_write` `sourceAttachmentId`). It never returns raw binary bytes inline.
 - `sessions/sessionLogTools.ts` owns read-only cross-session inspection:
   `session_read` (bounded transcript window from a copied id,
   `at`=latest/start/entryId) and `session_search` (bounded literal-substring
@@ -620,18 +619,16 @@ persona toolsets.
   caller session as actor, broadcast the immutable result, and fire-and-forget
   `advanceRun`; its compact JSON confirmation is a byte-stable tool result.
 - `knowledge/documentTools.ts` owns `convert_pdf` (shared by every persona):
-  converts a PDF from a session attachment OR a KB asset to Markdown, resolving
-  bytes server-side (raw binary never enters model context). Conversion logic
-  lives in `../documentConversion.ts`; the tool only resolves the source,
-  enforces exactly-one-source and PDF-only, bounds the returned Markdown to
-  `maxChars`, and optionally persists the result into the KB asset's text
-  extract (`persistToExtract`, KB source only, via
-  `writeKnowledgeAssetExtract`). Has a test-only store seam
+  converts a PDF from a session attachment OR a KB file (`kbPath`) to Markdown,
+  resolving bytes server-side (raw binary never enters model context).
+  Conversion logic lives in `../documentConversion.ts`; the tool only resolves
+  the source, enforces exactly-one-source and PDF-only, and bounds the returned
+  Markdown to `maxChars`. Has a test-only store seam
   (`setDocumentToolsStoreFactoryForTests`). The scanned-PDF Claude fallback
   (model/thinking/enable) is configured by the `pdfConversion` app settings and
   wired in `../pdfClaudeFallback.ts`.
 - `knowledge/spreadsheetTools.ts` owns `convert_xlsx` (same `documents` group):
-  reads an .xlsx from a session attachment, an absolute host path or a KB asset
+  reads an .xlsx from a session attachment, an absolute host path or a KB file
   through the dependency-free `../xlsxConversion.ts` (ZIP central directory +
   SpreadsheetML: shared strings, date-styled serials → ISO, booleans, cached
   formula values), stages one CSV session artifact per sheet under
@@ -711,22 +708,22 @@ persona toolsets.
   `memory_manage`, ~3.6k chars) stays eager on purpose: the `<memory>` snapshot
   already arrives in the prompt, so reinforcing, correcting, or archiving
   `[id@revision]` must not need a discovery hop first. `knowledge-core`
-  (`kb_search`, `kb_get_entry`) was moved to the deferred tier: most sessions
-  never consult the KB, and the eager KB prompt pointer keeps it discoverable
-  for the ones that do. Measured with `pnpm run measure:prompts` when it landed,
-  that cut ~1.3k chars (~335 tokens) off the first request of EVERY persona on
-  both harnesses, against a 21-char growth of the KB pointer; re-run the script
-  for current numbers rather than trusting a figure quoted here. What a KB-using
+  (`kb_search`, `kb_read`) was moved to the deferred tier: most sessions never
+  consult the KB, and the eager KB prompt pointer keeps it discoverable for the
+  ones that do. Measured with `pnpm run measure:prompts` when it landed, that
+  cut ~1.3k chars (~335 tokens) off the first request of EVERY persona on both
+  harnesses, against a 21-char growth of the KB pointer; re-run the script for
+  current numbers rather than trusting a figure quoted here. What a KB-using
   session pays back is one `find_tools`/ToolSearch call, which at the default
   limit of 5 loads the matching KB tools (a few thousand chars of definitions) —
   a bounded per-session cost in place of a cost every session used to pay. The
   two search paths are pinned to DIFFERENT depths, because only one of them is
   ours: `piSdk/toolActivation.test.ts` drives our real `find_tools` scorer and
-  asserts realistic durable-knowledge queries reach `kb_search`/`kb_get_entry`
-  in ONE call, while `mcp/sessionToolServer.test.ts` can only assert the list
-  metadata the vendor ToolSearch consumes (memory marked `anthropic/alwaysLoad`,
-  the KB reads carrying the `anthropic/searchHint` it ranks on) — the ranking
-  itself runs inside the Claude CLI and is not reproducible in-process. Keep KB
+  asserts realistic durable-knowledge queries reach `kb_search`/`kb_read` in ONE
+  call, while `mcp/sessionToolServer.test.ts` can only assert the list metadata
+  the vendor ToolSearch consumes (memory marked `anthropic/alwaysLoad`, the KB
+  reads carrying the `anthropic/searchHint` it ranks on) — the ranking itself
+  runs inside the Claude CLI and is not reproducible in-process. Keep KB
   `searchHint`s to domain nouns: the pi scorer is substring-based, so
   conversational filler in a hint drags the tool into unrelated top-5s and
   displaces real matches at the default limit.
@@ -874,10 +871,10 @@ persona toolsets.
   rather than dropping a status suggestion on the floor.
 - An agent cannot replace a whole Task description: `description` on an `update`
   operation THROWS, and the body changes only through `descriptionEdits`
-  (`{oldText, newText}`, mirroring `kb_edit_entry` — each `oldText` must occur
-  exactly once and the edits must not overlap). `create` still writes a whole
-  body, since there is nothing there to clobber, and the user's own web edit
-  path is untouched.
+  (`{oldText, newText}`, mirroring `kb_edit` — each `oldText` must occur exactly
+  once and the edits must not overlap). `create` still writes a whole body,
+  since there is nothing there to clobber, and the user's own web edit path is
+  untouched.
 - Long-running tools stream partials via `ctx.progress?.(...)`; honor
   `ctx.signal`; throw on failure (never encode errors in content);
   `terminate: true` asks the agent to stop after the current tool batch.

@@ -187,7 +187,7 @@ test("durable project knowledge intent does not activate registries or write too
   const payload = JSON.parse(first?.type === "text" ? first.text : "{}") as {
     loaded?: string[];
   };
-  assert.deepEqual(payload.loaded, ["kb_get_entry", "kb_search"]);
+  assert.deepEqual(payload.loaded, ["kb_search", "kb_read"]);
 });
 
 test("a session transcript query loads only a small coherent session set", async () => {

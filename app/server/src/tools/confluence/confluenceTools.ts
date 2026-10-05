@@ -885,7 +885,7 @@ export const confluenceDownloadAttachmentTool = defineAgentTool<DownloadParams>(
     name: "confluence_download_attachment",
     label: "Confluence: Download Attachment",
     description:
-      "Download one Confluence page attachment into this session's attachment store. The bytes never enter your context: the result names a session attachment id and its path on this host. Inspect it with read_attachment, convert_pdf or convert_xlsx, copy it into the KB with kb_add_asset, or change the file and upload it back with confluence_mutate_page operation=uploadAttachment.",
+      "Download one Confluence page attachment into this session's attachment store. The bytes never enter your context: the result names a session attachment id and its path on this host. Inspect it with read_attachment, convert_pdf or convert_xlsx, copy it into the KB with kb_write (sourceAttachmentId), or change the file and upload it back with confluence_mutate_page operation=uploadAttachment.",
     searchHint:
       "confluence attachment download file image pdf spreadsheet fetch",
     parameters: {

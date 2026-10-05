@@ -220,9 +220,9 @@ function showFilesCardFrom(block: ToolBlock): ShowFilesCardRow[] | null {
 }
 
 /**
- * `kb_show_entry` exists to put the entry in front of the reader, so its card
- * shows with tools hidden; a payload that names no entry stays an ordinary tool
- * block.
+ * `kb_show` exists to put a Knowledge Base file in front of the reader, so its
+ * card shows with tools hidden; a payload that names no file stays an ordinary
+ * tool block.
  */
 function knowledgeEntryCardFrom(block: ToolBlock): KnowledgeEntryCard | null {
   return block.done ? knowledgeEntryCardOf(candidateOf(block)) : null;

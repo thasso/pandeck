@@ -6,15 +6,7 @@ import { afterEach, describe, test } from "vitest";
 import type { ToolCallContext } from "../../mcp/tool.ts";
 import { buildTestPdf } from "../../test/pdfFixtures.ts";
 import { setPdfClaudeFallback } from "../../documentConversion.ts";
-import {
-  persistUploadedAttachment,
-  stageSessionAttachment,
-} from "../../sessionAttachments.ts";
-import {
-  addKnowledgeAsset,
-  readKnowledgeGeneratedExtract,
-} from "../../knowledgeBaseAssets.ts";
-import { commitValidatedKnowledgeChanges } from "../../knowledgeBaseEntry.ts";
+import { persistUploadedAttachment } from "../../sessionAttachments.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import {
   convertPdfTool,
@@ -66,12 +58,10 @@ describe("convert_pdf tool", () => {
     const d = details<{
       engine: string;
       markdown: string;
-      persisted: boolean;
       source: { kind: string };
     }>(result);
     assert.equal(d.engine, "pdf2md");
     assert.equal(d.source.kind, "attachment");
-    assert.equal(d.persisted, false);
     assert.match(d.markdown, /Quarterly Report Summary/);
   });
 
@@ -88,30 +78,10 @@ describe("convert_pdf tool", () => {
     );
   });
 
-  test("rejects persistToExtract on an attachment source", async () => {
-    stageSessionAttachment(ctx.session.sessionId, {
-      id: "att-p",
-      name: "a.pdf",
-      mimeType: "application/pdf",
-      bytes: buildTestPdf({ pages: 1, firstPageText: BORN_DIGITAL_TEXT }),
-      source: "upload",
-    });
-    await assert.rejects(
-      convertPdfTool.execute(
-        { attachmentId: "att-p", persistToExtract: true },
-        ctx,
-      ),
-      /persistToExtract applies only to a KB asset/,
-    );
-  });
-
   test("requires exactly one source", async () => {
     await assert.rejects(convertPdfTool.execute({}, ctx), /exactly one source/);
     await assert.rejects(
-      convertPdfTool.execute(
-        { attachmentId: "x", assetPath: "assets/a.pdf" },
-        ctx,
-      ),
+      convertPdfTool.execute({ attachmentId: "x", kbPath: "files/a.pdf" }, ctx),
       /exactly one source/,
     );
   });
@@ -133,77 +103,40 @@ describe("convert_pdf tool", () => {
     assert.match(d.markdown, /…$/);
   });
 
-  test("persists converted Markdown into a KB asset extract", async () => {
+  test("converts a PDF in the Knowledge Base by its path", async () => {
     const root = mkdtempSync(join(tmpdir(), "doc-tools-kb-"));
     const store = new KnowledgeBaseStore(root);
     setDocumentToolsStoreFactoryForTests(() => store);
     try {
-      const meta = {
-        actor: { kind: "system" as const, name: "test" },
-        reason: "seed",
-      };
-      await commitValidatedKnowledgeChanges(
-        store,
+      await store.commitChanges(
         [
           {
             op: "write",
-            path: "docs/report/index.md",
-            content: entryMarkdown("kb-report", "Report"),
+            path: "docs/report.pdf",
+            content: buildTestPdf({
+              pages: 1,
+              firstPageText: BORN_DIGITAL_TEXT,
+            }),
           },
         ],
-        meta,
+        { actor: { kind: "system", name: "test" }, reason: "seed" },
       );
-      await addKnowledgeAsset(
-        store,
-        {
-          entryId: "kb-report",
-          assetPath: "assets/report.pdf",
-          content: buildTestPdf({ pages: 1, firstPageText: BORN_DIGITAL_TEXT }),
-          mimeType: "application/pdf",
-        },
-        meta,
-      );
-
       const result = await convertPdfTool.execute(
-        {
-          entryId: "kb-report",
-          assetPath: "assets/report.pdf",
-          persistToExtract: true,
-          reason: "Store extract",
-        },
+        { kbPath: "docs/report.pdf" },
         ctx,
       );
       const d = details<{
-        engine: string;
-        persisted: boolean;
-        extractPath: string;
-        source: { kind: string };
+        markdown: string;
+        source: { kind: string; kbPath: string };
       }>(result);
-      assert.equal(d.source.kind, "kb_asset");
-      assert.equal(d.persisted, true);
-      assert.ok(d.extractPath);
-
-      const extract = await readKnowledgeGeneratedExtract(store, d.extractPath);
-      assert.ok(extract);
-      assert.match(extract!.text, /Quarterly Report Summary/);
+      assert.deepEqual(d.source, {
+        kind: "kb_file",
+        kbPath: "docs/report.pdf",
+      });
+      assert.match(d.markdown, /Quarterly Report Summary/);
     } finally {
       setDocumentToolsStoreFactoryForTests(null);
       rmSync(root, { recursive: true, force: true });
     }
   });
 });
-
-function entryMarkdown(id: string, title: string): string {
-  return `---
-kb:
-  schema: 1
-  id: ${id}
-  type: reference
-  title: ${title}
-  status: active
-  createdAt: "2026-07-08T09:00:00.000Z"
-  updatedAt: "2026-07-08T10:00:00.000Z"
----
-# ${title}
-`;
-}

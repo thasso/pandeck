@@ -301,49 +301,56 @@ export function showFilesCardRowsOf(
   return parseShowFilesCard(parseJsonValue(c.output), resolve);
 }
 
-/* ------------------------------ kb_show_entry ----------------------------- */
+/* --------------------------------- kb_show -------------------------------- */
 
-/** The one payload shape this card is written against. */
-const KNOWLEDGE_ENTRY_CARD_VERSION = 1;
+/** The payload shape `kb_show` writes. */
+const KNOWLEDGE_ENTRY_CARD_VERSION = 2;
 /** What the card can show of one field before its own layout truncates it. */
 const KNOWLEDGE_ENTRY_CARD_TEXT_CHARS = 400;
 
 /**
- * The Knowledge entry a `kb_show_entry` call is offering to open, or null when
- * the payload carries no usable entry.
+ * The Knowledge Base file a `kb_show` call is offering to open, or null when
+ * the payload carries no usable file.
  *
- * A card names an entry by its durable id and title, so both are required and
- * the envelope's `version` has to be the one this parser was written against —
- * a later shape is refused rather than read by v1 rules. Everything else is
- * coerced and BOUNDED: a payload is untrusted data (it may be partial,
- * malformed, or crafted), and prose is the one part of it the transcript draws
- * verbatim.
+ * A card names a file by its path and title, so both are required and the
+ * envelope's `version` has to be one this parser was written against. The
+ * retired `kb_show_entry` (version 1) named an entry FOLDER; its cards in older
+ * transcripts open that folder's `index.md`. Everything else is coerced and
+ * BOUNDED: a payload is untrusted data (it may be partial, malformed, or
+ * crafted), and prose is the one part of it the transcript draws verbatim.
  *
- * Bounding is all the defence the text needs, because the text decides nothing:
- * both of the card's actions carry {@link KnowledgeEntryCard.entryId}, and the
- * surface that opens loads the entry by that id and draws the entry's REAL
- * title. A payload that lies about a title cannot make anyone read the wrong
- * document; it can only mislabel a button for one click.
+ * Bounding is all the defence the text needs, because the text decides
+ * nothing: the surface that opens reads the file at that path and draws its
+ * REAL content. A payload that lies about a title cannot make anyone read the
+ * wrong document; it can only mislabel a button for one click.
  */
 export function knowledgeEntryCardOf(
   c: ToolCardCandidate,
 ): KnowledgeEntryCard | null {
-  if (c.isError || normalizedToolName(c.name) !== "kb_show_entry") return null;
+  if (c.isError) return null;
+  const name = normalizedToolName(c.name);
+  const version =
+    name === "kb_show"
+      ? KNOWLEDGE_ENTRY_CARD_VERSION
+      : name === "kb_show_entry"
+        ? 1
+        : null;
+  if (version === null) return null;
   if (!outputHasRenderKind(c.output, "knowledgeEntry")) return null;
   const payload = asRecord(parseJsonValue(c.output));
-  if (payload?.version !== KNOWLEDGE_ENTRY_CARD_VERSION) return null;
+  if (payload?.version !== version) return null;
   const raw = asRecord(payload.card);
   if (!raw) return null;
-  const { entryId, title, path, summary, note } = raw;
-  if (typeof entryId !== "string" || !entryId) return null;
+  const { path, title, summary, note } = raw;
+  const boundedPath = boundedCardText(path);
+  if (!boundedPath) return null;
   const boundedTitle = boundedCardText(title);
   if (!boundedTitle) return null;
   const boundedSummary = boundedCardText(summary);
   const boundedNote = boundedCardText(note);
   return {
-    entryId: entryId.slice(0, KNOWLEDGE_ENTRY_CARD_TEXT_CHARS),
+    path: version === 1 ? `${boundedPath}/index.md` : boundedPath,
     title: boundedTitle,
-    path: boundedCardText(path) ?? "",
     ...(boundedSummary ? { summary: boundedSummary } : {}),
     ...(boundedNote ? { note: boundedNote } : {}),
   };

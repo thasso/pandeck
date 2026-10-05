@@ -21,8 +21,8 @@ only binding rules; everything else lives here.
   author and lets nothing ship without fresh eyes on it, the two ceilings only
   the user may raise, safety/recovery invariants, UX, phases, and the explicitly
   deferred generalizations.
-- `knowledge-base.md` — the first-class Knowledge Base product/storage contract
-  and reset boundary.
+- `knowledge-base.md` — the Knowledge Base folder: layout, path links, the Git
+  rules for tool writes, browser surfaces and the `kb_*` tools.
 - `skills.md` — the user-owned Git-backed skills library, its dual
   hand-authoring/validated-agent-authoring contract (clean-tree refusal, one
   commit per mutation with provenance, rename/delete consequences, limits, and

@@ -1,23 +1,21 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "vitest";
-import type { ToolCallContext } from "../../mcp/tool.ts";
+import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import {
-  kbAddAssetTool,
-  kbDiffTool,
-  kbEditEntryTool,
-  kbGetEntryTool,
+  kbEditTool,
   kbHistoryTool,
-  kbListAssetsTool,
-  kbMoveEntryTool,
+  kbListTool,
+  kbMoveTool,
+  kbReadTool,
   kbSearchTool,
-  kbShowEntryTool,
-  kbTreeTool,
-  kbWriteEntryTool,
+  kbShowTool,
+  kbWriteTool,
   setKnowledgeBaseToolStoreFactoryForTests,
 } from "./knowledgeBaseTools.ts";
 
@@ -45,329 +43,211 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function entryMarkdown(
-  id: string,
-  title: string,
-  body: string,
-  updated = "2026-07-08T10:00:00.000Z",
-): string {
-  return `---
-kb:
-  schema: 1
-  id: ${id}
-  type: note
-  title: ${title}
-  status: active
-  summary: Summary for ${title}
-  tags:
-    - test
-  createdAt: "2026-07-08T09:00:00.000Z"
-  updatedAt: "${updated}"
----
-${body}
-`;
+function payload(result: ToolResult): Record<string, unknown> {
+  return result.details as Record<string, unknown>;
 }
 
-function jsonText(
-  result: Awaited<ReturnType<typeof kbWriteEntryTool.execute>>,
-): string {
-  return result.content[0]?.type === "text" ? result.content[0].text : "";
+async function write(path: string, content: string): Promise<void> {
+  await kbWriteTool.execute({ path, content, reason: `write ${path}` }, ctx);
 }
 
-function details<T>(result: { details?: unknown }): T {
-  return result.details as T;
-}
+describe("reading", () => {
+  test("lists, searches and reads files with their titles", async () => {
+    await write(
+      "projects/acme/plan.md",
+      "---\ntitle: Acme plan\n---\n# Plan\n\nMove billing first.\n",
+    );
+    await write("notes.md", "# Notes\n");
 
-describe("first-class KB tools", () => {
-  test("write/search/get/tree/edit/asset/move/history/diff success paths are compact by default", async () => {
-    const write = await kbWriteEntryTool.execute(
+    const listed = payload(await kbListTool.execute({}, ctx));
+    assert.deepEqual(listed.items, [
+      { path: "notes.md", type: "file", sizeBytes: 8, title: "Notes" },
+      { path: "projects", type: "dir" },
+      { path: "projects/acme", type: "dir" },
+    ]);
+    // Deeper files are below the depth limit, not cut: their folders are listed.
+    assert.equal(listed.truncated, false);
+
+    const found = payload(
+      await kbSearchTool.execute({ query: "billing" }, ctx),
+    );
+    assert.deepEqual(
+      (found.results as { path: string; title: string }[]).map((hit) => [
+        hit.path,
+        hit.title,
+      ]),
+      [["projects/acme/plan.md", "Acme plan"]],
+    );
+
+    const read = payload(
+      await kbReadTool.execute({ path: "projects/acme/plan.md" }, ctx),
+    );
+    assert.equal(read.title, "Acme plan");
+    assert.equal(read.link, "pa://knowledge/projects/acme/plan.md");
+    assert.equal(read.absolutePath, join(root, "projects/acme/plan.md"));
+    assert.match(read.content as string, /Move billing first/);
+  });
+
+  test("reads a long file in windows and a binary file not at all", async () => {
+    await write(
+      "long.md",
+      Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n"),
+    );
+    const first = payload(
+      await kbReadTool.execute({ path: "long.md", maxChars: 40 }, ctx),
+    );
+    assert.equal(first.startLine, 1);
+    assert.equal(first.endLine, 5);
+    const next = payload(
+      await kbReadTool.execute(
+        { path: "long.md", startLine: first.nextStartLine as number },
+        ctx,
+      ),
+    );
+    assert.match(next.content as string, /^line 6\n/);
+    assert.equal(next.nextStartLine, undefined);
+
+    await kbWriteTool.execute(
       {
-        path: "notes/alpha",
-        content: entryMarkdown(
-          "kb-alpha",
-          "Alpha Entry",
-          "# Alpha\n\nSecret full body prose that should not leak into compact tree output.\n",
-        ),
-        reason: "Add alpha entry",
+        path: "files/scan.pdf",
+        contentBase64: Buffer.from([37, 80, 0, 1]).toString("base64"),
+        reason: "add scan",
       },
       ctx,
     );
-    assert.match(jsonText(write), /"action":"write_entry"/);
+    const binary = payload(
+      await kbReadTool.execute({ path: "files/scan.pdf" }, ctx),
+    );
+    assert.equal(binary.binary, true);
+    assert.equal(binary.content, undefined);
+  });
+});
 
-    const compactEntry = await kbGetEntryTool.execute(
-      { entryId: "kb-alpha" },
-      ctx,
+describe("writing", () => {
+  test("writes, edits and moves files, each one commit", async () => {
+    await write("draft.md", "# Draft\n\nFirst take.\n");
+    const edited = payload(
+      await kbEditTool.execute(
+        {
+          path: "draft.md",
+          edits: [{ oldText: "First take.", newText: "Second take." }],
+          reason: "revise",
+        },
+        ctx,
+      ),
     );
-    assert.doesNotMatch(
-      jsonText(compactEntry),
-      /Secret full body prose/,
-      "compact get does not include entry body",
-    );
-
-    const fullEntry = await kbGetEntryTool.execute(
-      { entryId: "kb-alpha", detail: "full", maxChars: 5000 },
-      ctx,
-    );
-    assert.match(
-      jsonText(fullEntry),
-      /Secret full body prose/,
-      "full get explicitly includes bounded content",
-    );
-
-    const tree = await kbTreeTool.execute({}, ctx);
-    const treePayload = JSON.parse(jsonText(tree)) as {
-      items: unknown[];
-      counts: { entries: number };
-    };
-    assert.equal(treePayload.counts.entries, 1);
-    assert.doesNotMatch(
-      jsonText(tree),
-      /Secret full body prose/,
-      "tree output excludes entry bodies",
-    );
-
-    const search = await kbSearchTool.execute(
-      { query: "Alpha", maxResults: 5 },
-      ctx,
-    );
-    const searchPayload = details<{ results: { id: string }[] }>(search);
-    assert.equal(searchPayload.results[0]?.id, "kb-alpha");
-    assert.doesNotMatch(
-      jsonText(search),
-      /Secret full body prose/,
-      "compact search returns snippets, not full entry bodies",
-    );
-
-    const edited = await kbEditEntryTool.execute(
-      {
-        entryId: "kb-alpha",
-        edits: [
-          { oldText: "Secret full body prose", newText: "Updated body prose" },
-        ],
-        reason: "Update alpha body",
-      },
-      ctx,
-    );
-    assert.equal(details<{ replacements: number }>(edited).replacements, 1);
-
-    const asset = await kbAddAssetTool.execute(
-      {
-        entryId: "kb-alpha",
-        assetPath: "assets/source.txt",
-        contentText: "asset text",
-        mimeType: "text/plain",
-        reason: "Add source asset",
-      },
+    assert.equal(edited.replacements, 1);
+    await kbMoveTool.execute(
+      { from: "draft.md", to: "final/plan.md", reason: "file it" },
       ctx,
     );
     assert.equal(
-      details<{ asset: { path: string; exists: boolean } }>(asset).asset.path,
-      "assets/source.txt",
+      await readFile(join(root, "final/plan.md"), "utf8"),
+      "# Draft\n\nSecond take.\n",
     );
-
-    const assets = await kbListAssetsTool.execute({ entryId: "kb-alpha" }, ctx);
-    assert.match(jsonText(assets), /source.txt/);
-    assert.doesNotMatch(
-      jsonText(assets),
-      /asset text/,
-      "asset list does not dump file content",
+    const history = payload(
+      await kbHistoryTool.execute({ path: "final/plan.md" }, ctx),
+    ).history as { subject: string; sessionId?: string }[];
+    assert.deepEqual(
+      history.map((row) => row.subject),
+      ["file it", "revise", "write draft.md"],
     );
-
-    const moved = await kbMoveEntryTool.execute(
-      { entryId: "kb-alpha", toPath: "archive/alpha", reason: "Move alpha" },
-      ctx,
-    );
-    assert.equal(
-      details<{ entry: { path: string } }>(moved).entry.path,
-      "archive/alpha/index.md",
-    );
-
-    const history = await kbHistoryTool.execute(
-      { entryId: "kb-alpha", limit: 10 },
-      ctx,
-    );
-    const historyPayload = details<{ history: { subject: string }[] }>(history);
-    assert.ok(
-      historyPayload.history.some((row) => row.subject === "Move alpha"),
-    );
-    assert.ok(
-      historyPayload.history.some((row) => row.subject === "Update alpha body"),
-    );
-    assert.ok(
-      historyPayload.history.some((row) => row.subject === "Add alpha entry"),
-    );
-
-    const firstCommit = details<{ commit: { commit: string } }>(write).commit
-      .commit;
-    const diff = await kbDiffTool.execute(
-      { from: firstCommit, entryId: "kb-alpha", maxChars: 10_000 },
-      ctx,
-    );
-    const diffPayload = details<{ patch: string; truncated: boolean }>(diff);
-    assert.match(diffPayload.patch, /archive\/alpha/);
-    assert.equal(diffPayload.truncated, false);
+    assert.equal(history[0]?.sessionId, "sess-test");
   });
 
-  test("kb_show_entry cards the entry from the index and refuses an unknown one", async () => {
-    await kbWriteEntryTool.execute(
-      {
-        path: "notes/alpha",
-        content: entryMarkdown(
-          "kb-alpha",
-          "Alpha Entry",
-          "# Alpha\n\nSecret full body prose that never belongs on a card.\n",
-        ),
-        reason: "Add alpha entry",
-      },
-      ctx,
+  test("returns one commit's patch, bounded", async () => {
+    await write("a.md", "alpha\n");
+    const [head] = await store.history({ limit: 1 });
+    const patch = payload(
+      await kbHistoryTool.execute({ commit: head!.shortCommit }, ctx),
     );
-
-    const shown = await kbShowEntryTool.execute(
-      { entryPath: "notes/alpha", note: "  Rewrote   the summary\n" },
-      ctx,
-    );
-    const payload = details<{
-      renderKind: string;
-      card: {
-        entryId: string;
-        title: string;
-        path: string;
-        summary?: string;
-        note?: string;
-      };
-    }>(shown);
-    assert.equal(payload.renderKind, "knowledgeEntry");
-    // Identity is re-spelled from the index, so a path-addressed call still
-    // cards the durable id the web surfaces open.
-    assert.equal(payload.card.entryId, "kb-alpha");
-    assert.equal(payload.card.title, "Alpha Entry");
-    assert.equal(payload.card.path, "notes/alpha");
-    assert.equal(payload.card.summary, "Summary for Alpha Entry");
-    assert.equal(payload.card.note, "Rewrote the summary");
-    assert.doesNotMatch(
-      jsonText(shown),
-      /Secret full body prose/,
-      "the card carries no entry content",
-    );
-
-    await assert.rejects(
-      () => kbShowEntryTool.execute({ entryId: "kb-missing" }, ctx),
-      /not found/,
-    );
+    assert.match(patch.patch as string, /\+alpha/);
+    assert.equal(patch.truncated, false);
   });
 
-  test("kb_add_asset copies a raw session attachment by id without inlining bytes", async () => {
-    await kbWriteEntryTool.execute(
-      {
-        path: "notes/att",
-        content: entryMarkdown("kb-att", "Attachment Entry", "# Att\n\nBody\n"),
-        reason: "Add att entry",
-      },
-      ctx,
-    );
-    // A binary file staged in the calling session's attachment store.
-    const bytes = Buffer.from("%PDF-1.7 raw pdf bytes");
+  test("copies a session attachment without its bytes passing through", async () => {
     stageSessionAttachment(ctx.session.sessionId, {
       id: "up-1",
       name: "spec.pdf",
       mimeType: "application/pdf",
-      bytes,
+      bytes: new Uint8Array([37, 80, 68, 70, 0]),
       source: "upload",
     });
-
-    const added = await kbAddAssetTool.execute(
+    await kbWriteTool.execute(
       {
-        entryId: "kb-att",
-        assetPath: "assets/spec.pdf",
+        path: "specs/spec.pdf",
         sourceAttachmentId: "up-1",
-        reason: "Copy uploaded PDF",
+        reason: "keep spec",
       },
       ctx,
     );
-    const asset = details<{
-      asset: { path: string; sizeBytes?: number; mimeType?: string };
-    }>(added).asset;
-    assert.equal(asset.path, "assets/spec.pdf");
-    assert.equal(asset.sizeBytes, bytes.byteLength);
-    assert.equal(asset.mimeType, "application/pdf");
+    assert.deepEqual(
+      [...(await readFile(join(root, "specs/spec.pdf")))],
+      [37, 80, 68, 70, 0],
+    );
+  });
 
+  test("refuses a file the user is editing, and an ambiguous edit", async () => {
+    await write("shared.md", "one\none\n");
     await assert.rejects(
-      kbAddAssetTool.execute(
+      kbEditTool.execute(
         {
-          entryId: "kb-att",
-          assetPath: "assets/x.pdf",
-          sourceAttachmentId: "missing",
+          path: "shared.md",
+          edits: [{ oldText: "one", newText: "two" }],
           reason: "x",
         },
         ctx,
       ),
-      /No session attachment/,
+      /not unique/,
+    );
+    await writeFile(join(root, "shared.md"), "the user's edit\n");
+    await assert.rejects(
+      write("shared.md", "agent\n"),
+      /Uncommitted changes[^]*commit or discard/,
+    );
+    assert.equal(
+      await readFile(join(root, "shared.md"), "utf8"),
+      "the user's edit\n",
+    );
+  });
+
+  test("requires exactly one content source and a reason", async () => {
+    await assert.rejects(
+      kbWriteTool.execute({ path: "x.md", reason: "r" }, ctx),
+      /exactly one/,
     );
     await assert.rejects(
-      kbAddAssetTool.execute(
-        {
-          entryId: "kb-att",
-          assetPath: "assets/y.pdf",
-          sourceAttachmentId: "up-1",
-          contentText: "z",
-          reason: "x",
-        },
+      kbWriteTool.execute({ path: "x.md", content: "x", reason: " " }, ctx),
+      /reason is required/,
+    );
+  });
+});
+
+describe("showing", () => {
+  test("cards an existing file under the title the folder gives it", async () => {
+    await write(
+      "brief.md",
+      "---\ntitle: Launch brief\nsummary: What ships when.\n---\nBody\n",
+    );
+    const shown = payload(
+      await kbShowTool.execute(
+        { path: "brief.md", note: "  Updated   the dates  " },
         ctx,
       ),
-      /exactly one of/,
     );
-  });
-
-  test("rejects invalid entry frontmatter before writing", async () => {
-    await assert.rejects(
-      () =>
-        kbWriteEntryTool.execute(
-          {
-            path: "bad",
-            content: "# Missing frontmatter\n",
-            reason: "Bad write",
-          },
-          ctx,
-        ),
-      /frontmatter/,
-    );
-  });
-
-  test("rejects invalid paths before writing", async () => {
-    await assert.rejects(
-      () =>
-        kbWriteEntryTool.execute(
-          {
-            path: "../escape",
-            content: entryMarkdown("kb-escape", "Escape", "body"),
-            reason: "Bad path",
-          },
-          ctx,
-        ),
-      /relative.*traversal/,
-    );
-  });
-
-  test("rejects duplicate KB ids across entries", async () => {
-    await kbWriteEntryTool.execute(
-      {
-        path: "one",
-        content: entryMarkdown("kb-dupe", "One", "one"),
-        reason: "Add one",
+    assert.deepEqual(shown, {
+      renderKind: "knowledgeEntry",
+      version: 2,
+      card: {
+        path: "brief.md",
+        title: "Launch brief",
+        summary: "What ships when.",
+        note: "Updated the dates",
       },
-      ctx,
-    );
+    });
     await assert.rejects(
-      () =>
-        kbWriteEntryTool.execute(
-          {
-            path: "two",
-            content: entryMarkdown("kb-dupe", "Two", "two"),
-            reason: "Add duplicate",
-          },
-          ctx,
-        ),
-      /Duplicate KB entry id/,
+      kbShowTool.execute({ path: "missing.md" }, ctx),
+      /No file/,
     );
   });
 });
