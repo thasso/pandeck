@@ -1153,16 +1153,16 @@ function AppearanceSection({
       <div className="mt-5 space-y-3 rounded-xl border border-line bg-panel p-4">
         <h3 className="text-body font-semibold text-fg">Right panel</h3>
         <p className="text-caption text-muted">
-          Show these optional panels in the desktop right-panel picker. Their
-          features remain available elsewhere when hidden here.
+          Choose which optional spaces appear in navigation. Their features
+          remain available through links and tools when hidden here.
         </p>
         <PreferenceToggle
           checked={appearance.knowledgePanelEnabled}
           onChange={(checked) =>
             saveAppearance({ knowledgePanelEnabled: checked })
           }
-          label="Show Knowledge panel"
-          description="Add Knowledge to the right-panel picker. The Knowledge Base remains available elsewhere."
+          label="Show Knowledge"
+          description="Add Knowledge to the sidebar and right-panel picker. The Knowledge Base remains available through links and tools."
         />
         <PreferenceToggle
           checked={appearance.worktreePanelEnabled}

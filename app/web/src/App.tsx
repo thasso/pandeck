@@ -239,7 +239,9 @@ import {
   canonicalSidebarSection,
   sectionIndexPath,
   useSidebarSection,
+  DEFAULT_NAV_SLOTS,
   type NavAction,
+  type NavSlot,
   type SidebarSection,
 } from "./hooks/useSidebarSection.ts";
 import { PRIMARY_NAV_SLOTS } from "./components/primaryNavSections.tsx";
@@ -363,6 +365,8 @@ const NO_CHANGED_FILES: WorktreeChangeFile[] = [];
 const NO_CREDENTIAL_PROFILES: import("@assistant/shared").CredentialProfileSummary[] =
   [];
 const NO_CREDENTIAL_PROFILE_MODELS: Record<string, ModelOption[]> = {};
+/** Keep the Sidebar's memoized nav prop stable across streaming app renders. */
+const NAV_SLOTS_BY_AVAILABILITY = new Map<string, NavSlot[]>();
 /** And for a worktree with no review comments: the diff surfaces memoize on it. */
 const NO_WORKTREE_COMMENTS: WorktreeComment[] = [];
 const NO_WORKTREE_REVIEW_SETS: WorktreeReviewSet[] = [];
@@ -6092,6 +6096,77 @@ function AppContent() {
     </Suspense>
   );
 
+  // No account is available during first-run onboarding. After setup, show only
+  // spaces that are usable or that the user explicitly opted into in Settings.
+  const hasReadyAccount = activeCredentialProfiles.some(
+    (profile) => profile.status === "ready",
+  );
+  const hasReadyModel = activeCredentialProfiles.some(
+    (profile) =>
+      profile.status === "ready" &&
+      (credentialProfileModels[profile.id]?.length ?? 0) > 0,
+  );
+  const assistantModelReady =
+    onboarding === "complete" &&
+    activeCredentialProfiles.some(
+      (profile) =>
+        profile.status === "ready" &&
+        profile.provider ===
+          accountProviderForModelProvider(
+            state.settings.permanentAssistant.provider,
+          ) &&
+        (credentialProfileModels[profile.id] ?? []).some(
+          (model) =>
+            model.provider === state.settings.permanentAssistant.provider &&
+            model.id === state.settings.permanentAssistant.modelId,
+        ),
+    );
+  const knowledgeNavigationEnabled =
+    state.settings.appearance.knowledgePanelEnabled;
+  const pullRequestsAvailable =
+    state.settings.github.enabled || state.settings.forgejo.enabled;
+  const calendarAvailable = state.settings.google.enabled;
+  const backgroundAvailable =
+    state.backgroundWorkItems.length > 0 ||
+    (state.settings.backgroundWork.enabled && hasReadyAccount);
+  const navAvailabilityKey = [
+    onboarding === "complete",
+    hasReadyModel,
+    assistantModelReady,
+    knowledgeNavigationEnabled,
+    pullRequestsAvailable,
+    calendarAvailable,
+    hasReadyAccount,
+    backgroundAvailable,
+  ]
+    .map(Number)
+    .join("");
+  let availableNavSlots = NAV_SLOTS_BY_AVAILABILITY.get(navAvailabilityKey);
+  if (!availableNavSlots) {
+    availableNavSlots = DEFAULT_NAV_SLOTS.filter((id) => {
+      if (id === "settings") return true;
+      if (onboarding !== "complete") return false;
+      if (id === "new-session") return hasReadyModel;
+      switch (id) {
+        case "assistant":
+          return assistantModelReady;
+        case "knowledge":
+          return knowledgeNavigationEnabled;
+        case "pull-requests":
+          return pullRequestsAvailable;
+        case "calendar":
+          return calendarAvailable;
+        case "usage":
+          return hasReadyAccount;
+        case "background-tasks":
+          return backgroundAvailable;
+        default:
+          return true;
+      }
+    });
+    NAV_SLOTS_BY_AVAILABILITY.set(navAvailabilityKey, availableNavSlots);
+  }
+
   // The left sidebar's navigation callbacks. Opening an object just navigates: on
   // mobile that object route IS what replaces the browser screen (ui-shell.md,
   // Small Screens), and on desktop the panel stays open beside it.
@@ -6109,6 +6184,7 @@ function AppContent() {
         assistantLabel={
           state.settings.permanentAssistant.name || "Personal Assistant"
         }
+        availableNavSlots={availableNavSlots}
         onArchive={archiveSession}
         onSettleSession={settleSession}
         onRenameSession={promptRenameSession}
@@ -6617,24 +6693,6 @@ function AppContent() {
       )}
     </SessionInspector>
   );
-
-  // Do not offer the assistant panel before its configured model is available
-  // on a signed-in account. A default model id alone is not a usable setup.
-  const assistantModelReady =
-    onboarding === "complete" &&
-    activeCredentialProfiles.some(
-      (profile) =>
-        profile.status === "ready" &&
-        profile.provider ===
-          accountProviderForModelProvider(
-            state.settings.permanentAssistant.provider,
-          ) &&
-        (credentialProfileModels[profile.id] ?? []).some(
-          (model) =>
-            model.provider === state.settings.permanentAssistant.provider &&
-            model.id === state.settings.permanentAssistant.modelId,
-        ),
-    );
 
   // Desktop right-panel surfaces live in a closeable tab host. The mobile dock
   // deliberately receives the Inspector directly, preserving its existing flip-up

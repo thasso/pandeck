@@ -5822,6 +5822,12 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     // Right-panel availability must reflect persisted settings without a visit
     // to Settings; the client fallback only covers the connection gap.
     appearance: settings.appearance,
+    // Integration-backed navigation and Background availability must also be
+    // correct before the user has visited Settings.
+    github: settings.github,
+    forgejo: settings.forgejo,
+    google: settings.google,
+    backgroundWork: settings.backgroundWork,
   };
 }
 

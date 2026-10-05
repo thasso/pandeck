@@ -515,7 +515,7 @@ export interface AppearanceSettings {
    * of averaged into the turn sum. Only meaningful when {@link turnStatsRow} is on.
    */
   turnStatsPerRequest: boolean;
-  /** Offer Knowledge in the desktop right-panel picker; does not disable the Knowledge Base. */
+  /** Offer Knowledge in navigation and the right-panel picker; does not disable the Knowledge Base. */
   knowledgePanelEnabled: boolean;
   /** Offer Worktree in the desktop right-panel picker; does not disable worktrees. */
   worktreePanelEnabled: boolean;

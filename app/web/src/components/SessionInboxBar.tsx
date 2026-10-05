@@ -17,8 +17,8 @@ interface Props {
 
 /**
  * @component SessionInboxBar
- * @purpose The Sessions browser's STABLE header: three counts that are always
- * rendered, at a constant size, whatever the list underneath is doing.
+ * @purpose The Sessions browser's STABLE 44px header, aligned with the chat
+ * and right-panel bars: three counts always render as the list changes.
  * @useWhen Heading the Sessions inbox. It is the browser's own chrome.
  * @avoidWhen Announcing anything — app-wide lifecycle state belongs to
  * `AppStatus` and an event belongs in a toast (`docs/messaging.md`). This bar
@@ -60,7 +60,7 @@ export function SessionInboxBar({
     // band the chips are not centred in — the whole complaint this bar exists
     // to answer. The height is a constant rather than padding around content
     // for the same reason the counts never unmount.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-line bg-panel px-2 sm:-mx-2 sm:px-3">
+    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-11 shrink-0 items-center gap-2 border-b border-line bg-panel px-3 sm:-mx-2">
       <Chip
         label={
           needsYou === 0
@@ -71,7 +71,7 @@ export function SessionInboxBar({
         tone={needsYou > 0 ? "accent" : "quiet"}
         onClick={needsYou > 0 ? onNeedsYou : undefined}
       >
-        <CircleHelp size={12} aria-hidden />
+        <CircleHelp size={16} aria-hidden />
       </Chip>
       <Chip
         label={
@@ -86,9 +86,9 @@ export function SessionInboxBar({
             it stays the glyph — and at zero it becomes the same circle standing
             still, which keeps the slot exactly as wide either way. */}
         {working > 0 ? (
-          <Spinner size="sm" />
+          <Spinner size="md" />
         ) : (
-          <CircleDashed size={12} aria-hidden />
+          <CircleDashed size={16} aria-hidden />
         )}
       </Chip>
       <Chip
@@ -103,7 +103,7 @@ export function SessionInboxBar({
         tone={activeCount > 0 ? "live" : "quiet"}
         onClick={onOpenBackgroundTasks}
       >
-        <Activity size={12} aria-hidden />
+        <Activity size={16} aria-hidden />
       </Chip>
     </div>
   );
@@ -136,30 +136,14 @@ function Chip({
   onClick?: (() => void) | undefined;
   children: ReactNode;
 }) {
-  const shape = `flex items-center gap-1 rounded-full px-1.5 py-0.5 text-micro font-medium tabular-nums ${TONE_CLASS[tone]}`;
-  // Every glyph gets the SAME box, whatever it is: a 12px icon, a 13px spinner
-  // and whatever the next one is all centre in it, so the three chips sit on
-  // one line and the digit beside them has a constant thing to centre against.
+  const shape = `inline-flex h-8 items-center gap-1.5 rounded-full px-2 text-caption font-medium leading-none tabular-nums ${TONE_CLASS[tone]}`;
+  // Match every glyph to the same box and centre the digit's line box beside it.
   const glyph = (
-    <span className="flex size-3.5 shrink-0 items-center justify-center">
+    <span className="flex size-4 shrink-0 items-center justify-center">
       {children}
     </span>
   );
-  // The number is nudged DOWN, and the nudge is what `items-center` cannot
-  // reach. Every BOX here — chip, glyph box, svg, number — centres on exactly
-  // the same y; that was measured in the browser. What does not line up is the
-  // INK: a glyph fills its box, while a digit fills only the cap height of its
-  // line box and hangs nothing below the baseline, so it draws ~1.7px ABOVE the
-  // centre everything else is aligned on and the glyph next to it reads as
-  // sitting low. Measured off the rendered pixels, not derived from the font's
-  // metrics, which disagreed with what Chromium actually drew. The number is
-  // what moves because the glyph was already where it belongs. `em`, because
-  // the type scale is a user preference: at twice the size the error doubles.
-  const number = (
-    <span aria-hidden className="relative top-[0.14em]">
-      {count}
-    </span>
-  );
+  const number = <span aria-hidden>{count}</span>;
   if (!onClick)
     return (
       <span className={shape} title={label}>

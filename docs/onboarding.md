@@ -29,8 +29,10 @@ session inspector's Profile section says “No account or model yet” rather th
 showing the draft's fallback model and thinking level. The desktop right-panel
 chooser keeps Personal Assistant disabled until its model is available on a
 signed-in account; Knowledge and Worktree panels are opt-in in Settings →
-Appearance. Account login and retry stay there; only the conversational setup
-follows in the Personal Assistant. The account step is not tied to any
-CLI/default account, and an interrupted sign-in can be resumed with the same
-named account. The provider/model can be changed later in Settings → Personal
-Assistant.
+Appearance. The sidebar bottom bar offers only Settings until an account and
+model are ready, without losing the user's saved navigation order. The empty
+Sessions inbox does not direct users to New Session before it is available.
+Account login and retry stay there; only the conversational setup follows in the
+Personal Assistant. The account step is not tied to any CLI/default account, and
+an interrupted sign-in can be resumed with the same named account. The
+provider/model can be changed later in Settings → Personal Assistant.

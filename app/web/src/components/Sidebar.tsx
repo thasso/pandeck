@@ -88,6 +88,8 @@ interface Props {
   onOpenBackgroundTasks: () => void;
   /** Configured name of the singleton Personal Assistant, used as its slot label. */
   assistantLabel: string;
+  /** Slots currently usable; the saved order remains intact while others are hidden. */
+  availableNavSlots: readonly NavSlot[];
   /** Mobile (single-pane) layout: the sidebar renders as a full-screen overlay. */
   mobile: boolean;
   /** Open a calendar view for today from the minimal calendar browser. */
@@ -362,6 +364,7 @@ function SidebarImpl({
   onNavAction,
   onOpenBackgroundTasks,
   assistantLabel,
+  availableNavSlots,
   mobile,
   onOpenCalendarView,
   onStartSessionForProject,
@@ -594,13 +597,13 @@ function SidebarImpl({
 
   // Sections and actions are one flat, user-ordered row: same slot width, same
   // treatment. Only the handler differs, and only the assistant's label is dynamic.
-  const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots.map(
-    (id) => ({
+  const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
+    .filter((id) => availableNavSlots.includes(id))
+    .map((id) => ({
       id,
       ...PRIMARY_NAV_SLOTS[id],
       ...(id === "assistant" ? { label: assistantLabel } : {}),
-    }),
-  );
+    }));
 
   return (
     // `relative` because on a phone the nav bar is a `BottomCard` positioned in
@@ -713,6 +716,7 @@ function SidebarImpl({
             workflowCards={workflowCards}
             worktreeStatuses={worktreeStatuses}
             animateListChanges={prefs.animateListChanges}
+            canStartSession={availableNavSlots.includes("new-session")}
             // The host's call, like the Backlog toolbar's: a phone screen gets
             // thumb-sized rows, the rail keeps its tight ones.
             density={mobile ? "comfortable" : "tight"}

@@ -678,6 +678,12 @@ Guidelines for briefs:
 
 ## Sidebar navigation surface
 
+- The bottom navigation bar uses the user's saved slot order, filtered by
+  availability: during first-run account setup offer only Settings; show New
+  Session once a signed-in account offers a model, and show integration-backed
+  destinations only when configured and optional Knowledge navigation only when
+  enabled in Settings. Filtering must not rewrite the saved order, so newly
+  available slots regain their chosen positions.
 - The primary left sidebar is the global navigation rail, not only a session
   list. Its `SidebarHeader` is a single compact row whose primary control is the
   Sessions/Backlog/Projects tab switch; the active tab already names the
@@ -719,6 +725,9 @@ Guidelines for briefs:
   Sessions sidebar and Task detail linked-session lists. It owns the kind
   avatar/icon, title, recency, running/awaiting-input/unread states, optional
   task progress/fork metadata, and subtle missing/not-loaded fallback rows.
+- The Sessions inbox's sticky counter header should match the compact chat and
+  right-panel bars at `h-11`. Keep its status glyphs and tabular counts in
+  matching centered slots so zero and nonzero states do not shift the row.
 - The Sessions tab should present chat navigation as one unified Sessions list
   rather than separate Assistant/Workshop scroll regions. Distinguish session
   kinds with compact icons/badges.

@@ -261,10 +261,10 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
   setting(
     "appearance.knowledgePanelEnabled",
     "appearance",
-    "Show Knowledge right panel",
+    "Show Knowledge in navigation",
     BOOLEAN,
     {
-      hint: "Only controls the desktop right-panel picker; the Knowledge Base remains available elsewhere.",
+      hint: "Controls the sidebar and desktop right-panel picker; the Knowledge Base remains available through links and tools.",
     },
   ),
   setting(

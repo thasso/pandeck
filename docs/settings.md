@@ -44,10 +44,12 @@ OpenAI accounts are credential profiles, push subscriptions and port forwards
 belong to a device, and the About page has nothing to set.
 
 The Appearance section's `knowledgePanelEnabled` and `worktreePanelEnabled`
-switches default off. They control only the desktop right-panel picker and
-restored tabs, not the Knowledge Base or worktree features elsewhere. Startup
-settings include Appearance so these choices take effect without visiting
-Settings first.
+switches default off. Knowledge visibility controls the sidebar and desktop
+right-panel picker; Worktree visibility controls its right-panel entry. Neither
+disables the underlying Knowledge Base or worktrees. The sidebar also waits for
+onboarding, signed-in models, and enabled integrations before offering their
+respective destinations. Startup settings include the relevant sections so these
+choices take effect without visiting Settings first.
 
 ## Coverage
 

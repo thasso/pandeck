@@ -127,6 +127,8 @@ interface Props {
   worktreeStatuses: Record<string, WorktreeGitStatus>;
   /** Appearance preference: animate a settled card out before the list closes. */
   animateListChanges: boolean;
+  /** Whether an account currently offers a model for starting a session. */
+  canStartSession?: boolean;
   /**
    * The host's row density (`lib/rowDensity.ts`), passed to every card and
    * row: `comfortable` when this browser is a phone SCREEN, `tight` on the
@@ -185,6 +187,7 @@ export function SessionInbox({
   workflowCards,
   worktreeStatuses,
   animateListChanges,
+  canStartSession = true,
   density,
   onSelect,
   onSettle,
@@ -885,7 +888,11 @@ export function SessionInbox({
       />
 
       {coldStart ? (
-        <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
+        <EmptyBox>
+          {canStartSession
+            ? "No sessions yet. Use “New Session” to start one."
+            : "No sessions yet."}
+        </EmptyBox>
       ) : view.empty && archivedSessions.length === 0 ? (
         <EmptyBox>Nothing needs you right now.</EmptyBox>
       ) : null}
