@@ -25,10 +25,7 @@ import {
   type GithubResponse,
 } from "../../githubClient.ts";
 import { githubProvider } from "../../gitHosting.ts";
-import {
-  localDateForInstant,
-  localDayWindow,
-} from "../../dayScan/dayWindow.ts";
+import { localDateOf, localDayBoundsMs } from "@assistant/shared/zonedTime";
 import { userTimeZone } from "../../userProfile.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
 import { createPullRequestCheckWatchTool } from "../pullRequestCheckWatch.ts";
@@ -944,9 +941,7 @@ export const githubOrgActivityTool = defineAgentTool<OrgActivityParams>({
       1,
       GITHUB_EVENTS_HARD_CAP,
     );
-    const window = localDayWindow(date, timeZone);
-    const fromMs = window.startMs;
-    const toMs = window.endMs;
+    const { startMs: fromMs, endMs: toMs } = localDayBoundsMs(date, timeZone);
 
     const scan = await scanOrgEvents(config, org, {
       fromMs,
@@ -1012,7 +1007,10 @@ export const githubOrgActivityTool = defineAgentTool<OrgActivityParams>({
       date,
       timeZone,
       source: scan.source,
-      window: { from: window.startIso, to: window.endIso },
+      window: {
+        from: new Date(fromMs).toISOString(),
+        to: new Date(toMs).toISOString(),
+      },
       eventsScanned: scan.scanned,
       eventsInWindow: scan.inWindow.length,
       exhausted: scan.exhausted,
@@ -1033,8 +1031,8 @@ export const githubOrgActivityTool = defineAgentTool<OrgActivityParams>({
 
 type OrgEventSource = "user-dashboard" | "public-org";
 
-/** Raw org-feed event; exported for the day-scan GitHub collector (shared fetch core). */
-export type OrgEvent = {
+/** Raw org-feed event. */
+type OrgEvent = {
   id?: string;
   type?: string;
   actor?: { login?: string };
@@ -1050,10 +1048,8 @@ export type OrgEvent = {
  * which includes PRIVATE activity the user can see (pushes, PR reviews, etc.) and is
  * near-real-time. The public `/orgs/{org}/events` feed is only used as a fallback for
  * orgs the user is not a member of — it omits pushes and private repos and is stale.
- *
- * Exported as the shared fetch core for the day-scan GitHub collector.
  */
-export async function scanOrgEvents(
+async function scanOrgEvents(
   config: GithubApiConfig,
   org: string,
   opts: {
@@ -1302,7 +1298,7 @@ function normalizeDate(date: string | undefined, timeZone: string): string {
   const trimmed = date?.trim();
   if (trimmed && /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
   if (trimmed) throw new Error(`date must be YYYY-MM-DD, got "${date}".`);
-  return localDateForInstant(Date.now(), timeZone);
+  return localDateOf(Date.now(), timeZone);
 }
 
 /** Derive `owner/repo` from a REST `repository_url` (…/repos/owner/repo). */
