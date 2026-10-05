@@ -88,6 +88,17 @@ describe("splitMarkdownFrontmatter", () => {
     ]);
   });
 
+  it("clips a long value and keeps the whole of it", () => {
+    const long = "x".repeat(300);
+    const { frontmatter } = splitMarkdownFrontmatter(
+      `---\ntitle: T\nnote: ${long}\n---\n`,
+    );
+    const note = frontmatter?.fields[0];
+    expect(note?.value).toHaveLength(240);
+    expect(note?.value.endsWith("…")).toBe(true);
+    expect(note?.full).toBe(long);
+  });
+
   it("keeps YAML outside the shared subset as raw text", () => {
     const text = "---\nsummary: |\n  multi\n  line\n---\nBody\n";
     const { frontmatter, body } = splitMarkdownFrontmatter(text);

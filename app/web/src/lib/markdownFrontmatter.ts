@@ -6,7 +6,10 @@ import {
 /** One frontmatter field shown as a label and a one-line value. */
 interface FrontmatterField {
   key: string;
+  /** The value as shown, clipped to one readable line. */
   value: string;
+  /** The whole value when `value` had to be clipped. */
+  full?: string;
 }
 
 /** A Markdown document's frontmatter, projected for a compact header. */
@@ -77,7 +80,12 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
       }
     }
     const shown = displayValue(field);
-    if (shown) out.fields.push({ key, value: shown });
+    if (!shown) continue;
+    out.fields.push(
+      shown.length > MAX_VALUE_CHARS
+        ? { key, value: `${shown.slice(0, MAX_VALUE_CHARS - 1)}…`, full: shown }
+        : { key, value: shown },
+    );
   }
   return out;
 }
@@ -107,23 +115,15 @@ function tagList(value: unknown): string[] | null {
 
 function displayValue(value: unknown): string {
   if (value === null || value === undefined) return "";
-  if (isScalar(value)) return clip(String(value).trim());
+  if (isScalar(value)) return String(value).trim();
   if (Array.isArray(value) && value.every((item) => isScalar(item)))
-    return clip(
-      value
-        .map((item) => String(item).trim())
-        .filter(Boolean)
-        .join(", "),
-    );
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .join(", ");
   if (Array.isArray(value) && value.length === 0) return "";
   if (isRecord(value) && Object.keys(value).length === 0) return "";
-  return clip(JSON.stringify(value));
-}
-
-function clip(text: string): string {
-  return text.length > MAX_VALUE_CHARS
-    ? `${text.slice(0, MAX_VALUE_CHARS - 1)}…`
-    : text;
+  return JSON.stringify(value);
 }
 
 function isScalar(value: unknown): value is string | number | boolean {

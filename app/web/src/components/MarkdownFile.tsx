@@ -87,7 +87,9 @@ function MarkdownFrontmatterHeader({
           {fields.map((field) => (
             <div key={field.key} className="contents">
               <dt className="text-faint">{field.key}</dt>
-              <dd className="min-w-0 break-words text-muted">{field.value}</dd>
+              <dd className="min-w-0 break-words text-muted" title={field.full}>
+                {field.value}
+              </dd>
             </div>
           ))}
         </dl>
