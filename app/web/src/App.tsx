@@ -5754,7 +5754,18 @@ function AppContent() {
           streaming={displayStreaming}
           // A dead worktree edge disables the whole composer, not just Send: the
           // banner above it owns the one action that unblocks the session.
-          disabled={!state.connected || routeSessionPending || worktreeMissing}
+          disabled={
+            !state.connected ||
+            routeSessionPending ||
+            worktreeMissing ||
+            onboardingFocus
+          }
+          disabledPlaceholder={
+            onboardingFocus
+              ? "Connect an account to start chatting…"
+              : undefined
+          }
+          disabledPreview={onboardingFocus}
           contextInfo={currentContextInfo}
           session={displaySession}
           models={pickerModels}
@@ -5776,16 +5787,18 @@ function AppContent() {
           onDraftConsumed={retireStagedDraft}
           // Never on mobile: the screen rests on the dock's action row, so autofocus
           // would open the keyboard over the quick-start rows before anything is picked.
-          draftAutoFocus={!mobileLayout}
-          branchInfo={branchInfo}
-          contextBar={stagedContextBar}
-          contextOpenRequest={contextSheetRequest}
+          draftAutoFocus={!mobileLayout && !onboardingFocus}
+          branchInfo={onboardingFocus ? undefined : branchInfo}
+          contextBar={onboardingFocus ? undefined : stagedContextBar}
+          contextOpenRequest={onboardingFocus ? undefined : contextSheetRequest}
           sendBlockedReason={
-            newSessionNeedsWorktree
-              ? "Developer sessions run in a worktree — pick one to continue."
-              : credentialProfileSendBlockedReason
+            onboardingFocus
+              ? undefined
+              : newSessionNeedsWorktree
+                ? "Developer sessions run in a worktree — pick one to continue."
+                : credentialProfileSendBlockedReason
           }
-          sendBlocked={credentialProfileSendBlocked}
+          sendBlocked={onboardingFocus || credentialProfileSendBlocked}
           mobile={mobileLayout}
           // Mobile has no collapsed bar: the composer reports when it takes over the
           // bottom edge (so the dock's row stands down) and when a draft is waiting in
@@ -5805,21 +5818,63 @@ function AppContent() {
           isModelDisabled={isModelDisabled}
           modelLocked={modelLocked}
           thinkingLocked={thinkingLocked}
-          hideRuntimeControls={route.name === "permanentAssistant"}
-          ledge={composerLedge}
+          hideRuntimeControls={
+            onboardingFocus || route.name === "permanentAssistant"
+          }
+          ledge={onboardingFocus ? undefined : composerLedge}
           selectedAgentType={
-            showAgentTypePicker ? agentTypeForPicker : undefined
+            showAgentTypePicker && !onboardingFocus
+              ? agentTypeForPicker
+              : undefined
           }
           availableAgentTypes={
-            showAgentTypePicker ? availableAgentTypes : undefined
+            showAgentTypePicker && !onboardingFocus
+              ? availableAgentTypes
+              : undefined
           }
           onAgentTypeChange={
-            showAgentTypePicker ? switchStagedAgentType : undefined
+            showAgentTypePicker && !onboardingFocus
+              ? switchStagedAgentType
+              : undefined
           }
-          dictation={composerDictation}
+          dictation={onboardingFocus ? undefined : composerDictation}
         />
       </>
     );
+
+    if (onboardingFocus) {
+      return (
+        <>
+          {onboarding === "required" ? (
+            <OnboardingProviderStep
+              onComplete={() => {
+                setGuidedSetup(true);
+                setOnboarding("complete");
+                navigate(PERMANENT_ASSISTANT_PATH);
+              }}
+            />
+          ) : onboarding === "error" ? (
+            <div className="mx-auto w-full max-w-3xl flex-1 p-6 text-body text-danger">
+              Could not check initial setup.{" "}
+              <button
+                type="button"
+                onClick={checkOnboarding}
+                className="text-accent underline"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center">
+              <PaneLoading label="Checking setup…" />
+            </div>
+          )}
+          <div className="relative z-10 shrink-0 bg-transparent">
+            {composerEl}
+          </div>
+        </>
+      );
+    }
 
     // The bootstrap's one line, under the prompt it belongs to: the session the
     // surface is already rendering does not exist yet.
@@ -7209,7 +7264,7 @@ function AppContent() {
                 <>
                   {chatHeaderHidden ? null : (
                     <PageHeader
-                      back={screenBack}
+                      back={onboardingFocus ? undefined : screenBack}
                       {...sessionHeaderIcon("session", {
                         harness: displayHarness,
                         agentType: displayAgentType,
@@ -7225,9 +7280,13 @@ function AppContent() {
                           chatHeaderGlyph
                         )
                       }
-                      onIconClick={copySessionId}
+                      onIconClick={onboardingFocus ? undefined : copySessionId}
                       iconLabel={
-                        sessionIdCopied ? "Copied!" : "Copy session ID"
+                        onboardingFocus
+                          ? undefined
+                          : sessionIdCopied
+                            ? "Copied!"
+                            : "Copy session ID"
                       }
                       objectOverflow={false}
                       // The Plan badge rides the identity row so the mode is visible
@@ -7246,7 +7305,7 @@ function AppContent() {
                       // Mobile folds both of these into the object dock (ui-shell.md, Small
                       // Screens), leaving this row to identity alone.
                       actions={
-                        mobileLayout ? undefined : (
+                        mobileLayout || onboardingFocus ? undefined : (
                           <div className="flex items-center gap-1">
                             {displayWorktreeId && (
                               <button
@@ -7289,38 +7348,11 @@ function AppContent() {
                 transcript nobody has revalidated yet; a streaming row narrates
                 that itself, and two narrations for one source is exactly what
                 the model forbids. */}
-                  {usePreview && !previewHasStreamingMessage && (
-                    <SessionRefreshMark />
-                  )}
+                  {usePreview &&
+                    !onboardingFocus &&
+                    !previewHasStreamingMessage && <SessionRefreshMark />}
 
-                  {(route.name === "new" ||
-                    route.name === "permanentAssistant") &&
-                  onboarding !== "complete" ? (
-                    onboarding === "required" ? (
-                      <OnboardingProviderStep
-                        onComplete={() => {
-                          setGuidedSetup(true);
-                          setOnboarding("complete");
-                          navigate(PERMANENT_ASSISTANT_PATH);
-                        }}
-                      />
-                    ) : onboarding === "error" ? (
-                      <div className="mx-auto w-full max-w-xl p-6 text-body text-danger">
-                        Could not check initial setup.{" "}
-                        <button
-                          type="button"
-                          onClick={checkOnboarding}
-                          className="text-accent underline"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    ) : (
-                      <PaneLoading label="Checking setup…" />
-                    )
-                  ) : (
-                    chatSurface
-                  )}
+                  {chatSurface}
                 </>
               )}
             </AppShell>

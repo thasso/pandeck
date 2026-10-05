@@ -148,6 +148,10 @@ interface Props {
   onAbort: () => void;
   streaming: boolean;
   disabled: boolean;
+  /** Explain why an unavailable chat cannot accept text yet. */
+  disabledPlaceholder?: string;
+  /** Non-interactive setup preview: stay expanded on mobile, with only text and Send. */
+  disabledPreview?: boolean;
   contextInfo: ContextInfo | null;
   session: SessionState | null;
   models: ModelOption[];
@@ -941,6 +945,8 @@ export const Composer = memo(function Composer({
   onAbort,
   streaming,
   disabled,
+  disabledPlaceholder,
+  disabledPreview = false,
   contextInfo,
   session,
   models,
@@ -1829,7 +1835,7 @@ export const Composer = memo(function Composer({
   // it mid-interaction), a file is being dragged, or an attachment is staged (the
   // collapsed bar cannot show attachments). Unsent text survives via the draft
   // and shows as a preview in the collapsed bar, so hiding it here is safe.
-  const collapsible = collapseWhenBlurred || mobile;
+  const collapsible = !disabledPreview && (collapseWhenBlurred || mobile);
   // Recording forces the compact bar EVERYWHERE, including the desktop chat
   // composer that never collapses otherwise: the bar is the recording surface, so
   // one flow serves both entry points and both viewports.
@@ -2293,17 +2299,19 @@ export const Composer = memo(function Composer({
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
                 placeholder={
-                  commentMode
-                    ? editingComment
-                      ? "Edit this comment…"
-                      : "Add a comment…"
-                    : streaming
-                      ? effectiveBusyMode === "queue"
-                        ? "Queue a message for after this response…"
-                        : providerCanSteer
-                          ? "Send a message to steer…"
-                          : "Wait for this provider to finish before sending…"
-                      : COMPOSER_PLACEHOLDER
+                  disabled && disabledPlaceholder
+                    ? disabledPlaceholder
+                    : commentMode
+                      ? editingComment
+                        ? "Edit this comment…"
+                        : "Add a comment…"
+                      : streaming
+                        ? effectiveBusyMode === "queue"
+                          ? "Queue a message for after this response…"
+                          : providerCanSteer
+                            ? "Send a message to steer…"
+                            : "Wait for this provider to finish before sending…"
+                        : COMPOSER_PLACEHOLDER
                 }
                 className={COMPOSER_FIELD_CLASS}
               />
@@ -2418,7 +2426,7 @@ export const Composer = memo(function Composer({
                     data-composer-fit="lead"
                     className="flex shrink-0 items-center gap-1"
                   >
-                    {commentMode ? null : (
+                    {commentMode || disabledPreview ? null : (
                       <button
                         type="button"
                         onClick={() => fileRef.current?.click()}
@@ -2520,7 +2528,7 @@ export const Composer = memo(function Composer({
                   data-composer-fit="trail"
                   className={COMPOSER_ACTION_CLUSTER_CLASS}
                 >
-                  {showBranches && !commentMode && (
+                  {showBranches && !commentMode && !disabledPreview && (
                     <button
                       type="button"
                       onClick={() => {
@@ -2548,8 +2556,10 @@ export const Composer = memo(function Composer({
                       )}
                     </button>
                   )}
-                  {commentMode ? null : <ContextMeter info={contextInfo} />}
-                  {commentMode ? null : (
+                  {!commentMode && !disabledPreview ? (
+                    <ContextMeter info={contextInfo} />
+                  ) : null}
+                  {commentMode || disabledPreview ? null : (
                     <button
                       type="button"
                       onPointerDown={(event) => event.preventDefault()}
@@ -2565,25 +2575,27 @@ export const Composer = memo(function Composer({
                       <MessageSquareQuote size={16} />
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => void refineDraft()}
-                    disabled={
-                      disabled ||
-                      isRefining ||
-                      !(commentMode ? commentBody : text).trim()
-                    }
-                    aria-busy={isRefining || undefined}
-                    title="Refine draft prompt"
-                    className={COMPOSER_ICON_ACTION_CLASS}
-                  >
-                    {isRefining ? (
-                      <Spinner size="md" />
-                    ) : (
-                      <WandSparkles size={16} />
-                    )}
-                  </button>
-                  {dictationAvailable && (
+                  {!disabledPreview && (
+                    <button
+                      type="button"
+                      onClick={() => void refineDraft()}
+                      disabled={
+                        disabled ||
+                        isRefining ||
+                        !(commentMode ? commentBody : text).trim()
+                      }
+                      aria-busy={isRefining || undefined}
+                      title="Refine draft prompt"
+                      className={COMPOSER_ICON_ACTION_CLASS}
+                    >
+                      {isRefining ? (
+                        <Spinner size="md" />
+                      ) : (
+                        <WandSparkles size={16} />
+                      )}
+                    </button>
+                  )}
+                  {!disabledPreview && dictationAvailable && (
                     <button
                       type="button"
                       // One gesture: this collapses the composer (dropping the keyboard)
@@ -2667,9 +2679,10 @@ export const Composer = memo(function Composer({
                           : () => submit()
                     }
                     disabled={
-                      commentMode
+                      disabledPreview ||
+                      (commentMode
                         ? !commentBody.trim()
-                        : primaryAction === "send" && !canSubmit
+                        : primaryAction === "send" && !canSubmit)
                     }
                     title={
                       commentMode

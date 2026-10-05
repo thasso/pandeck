@@ -655,11 +655,14 @@ Guidelines for briefs:
   regardless of agent kind. `/sessions` is reserved for the Sessions navigation
   surface (sidebar/sheet open and focused) and must not be reused as the
   empty-bootstrap landing.
-- The `/sessions/create` page shows only the composer, centered vertically in
-  the viewport (flex `justify-center` +
+- Outside first-run onboarding, `/sessions/create` shows only the composer,
+  centered vertically in the viewport (flex `justify-center` +
   `paddingBottom: var(--app-keyboard-inset-bottom, 0px)` for mobile keyboard
-  safety). Do not add cards, onboarding panels, or empty-state content — keep
-  the page minimal.
+  safety). First-run account selection is the exception: render the provider
+  step as a card in the transcript column with the real Composer anchored below
+  it, disabled with a setup hint and kept expanded even on mobile. The setup
+  card is app UI, not a fabricated durable assistant message; sign-in stays
+  outside chat.
 - Old home routes (`/`, `/assistant`, `/workshop`) redirect to
   `/sessions/create` once the server confirms the session is empty; they keep
   their parse-level routes so programmatic `/workshop` navigation (e.g. Backlog
