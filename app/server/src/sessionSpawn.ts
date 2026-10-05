@@ -38,7 +38,7 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import {
-  credentialProfileById,
+  credentialProfileSummaryById,
   enabledCredentialProfileById,
   automaticProfileIdFor,
 } from "./credentialProfiles.ts";
@@ -162,7 +162,7 @@ function clampThinking(
 }
 
 function accountNameOf(profileId: string): string | undefined {
-  return credentialProfileById(profileId)?.name;
+  return credentialProfileSummaryById(profileId)?.name;
 }
 
 function runtimeOf(

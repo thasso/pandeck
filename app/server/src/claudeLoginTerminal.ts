@@ -5,6 +5,7 @@ import {
 } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
 import { releaseChildOomScore } from "./childOomScore.ts";
@@ -14,15 +15,20 @@ import type {
   ClaudeLoginTerminalStatus,
 } from "@assistant/shared";
 import {
+  claudeConfigDir,
   claudeProfileEnvironment,
   claudeProfileHasCredential,
   clearCredentialProfileLoginState,
   credentialProfileById,
+  credentialProfileSummaryById,
+  listCredentialProfiles,
+  markClaudeProfileLoginVerified,
   setCredentialProfileLoginState,
   subscribeCredentialProfileDeleted,
 } from "./credentialProfiles.ts";
 import { errorText } from "./errors.ts";
 import { packagedClaudeCliPath } from "./runtimeAssets.ts";
+import { brokerExecFile } from "./spawnBroker.ts";
 
 const MAX_OUTPUT_CHARS = 64_000;
 const MAX_INPUT_CHARS = 8_192;
@@ -56,6 +62,9 @@ interface LoginRun {
 }
 
 const runs = new Map<string, LoginRun>();
+const authChecks = new Map<string, Promise<void>>();
+const lastAuthCheck = new Map<string, number>();
+const AUTH_CHECK_RETRY_MS = 30_000;
 
 /** Resolve the exact native Claude CLI bundled with the installed Agent SDK. */
 export function bundledClaudeCliPath(): string {
@@ -123,6 +132,66 @@ function claudeLoginEnvironment(profileId: string): Record<string, string> {
     ),
   );
   return { ...env, NO_COLOR: "1", BROWSER: "false" };
+}
+
+async function officialClaudeAuthStatus(profileId: string): Promise<boolean> {
+  try {
+    const result = await brokerExecFile({
+      file: bundledClaudeCliPath(),
+      args: ["auth", "status", "--json"],
+      cwd: claudeConfigDir(profileId),
+      env: claudeLoginEnvironment(profileId),
+      encoding: "utf8",
+      maxBuffer: 64_000,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (result.error) return false;
+    const value: unknown = JSON.parse(result.stdout);
+    return (
+      value !== null &&
+      typeof value === "object" &&
+      "loggedIn" in value &&
+      value.loggedIn === true
+    );
+  } catch {
+    return false;
+  }
+}
+let verifyClaudeAuthStatus: (profileId: string) => Promise<boolean> =
+  officialClaudeAuthStatus;
+
+/** Recover successful logins from newer Claude CLIs without re-running OAuth. */
+export async function reconcileIsolatedClaudeLogins(): Promise<void> {
+  await Promise.all(
+    listCredentialProfiles()
+      .filter(
+        (profile) =>
+          profile.provider === "claude" &&
+          profile.id !== "claude-default" &&
+          profile.status !== "ready" &&
+          profile.status !== "connecting" &&
+          existsSync(join(claudeConfigDir(profile.id), ".claude.json")),
+      )
+      .map(async (profile) => {
+        const id = profile.id;
+        let check = authChecks.get(id);
+        if (!check) {
+          if (Date.now() - (lastAuthCheck.get(id) ?? 0) < AUTH_CHECK_RETRY_MS)
+            return;
+          check = (async () => {
+            lastAuthCheck.set(id, Date.now());
+            if (
+              (await verifyClaudeAuthStatus(id)) &&
+              credentialProfileSummaryById(id)?.status !== "connecting" &&
+              credentialProfileById(id)
+            )
+              markClaudeProfileLoginVerified(id);
+          })().finally(() => authChecks.delete(id));
+          authChecks.set(id, check);
+        }
+        await check;
+      }),
+  );
 }
 
 /** Output is display-only: drop terminal controls and bound retained/browser-visible text. */
@@ -247,9 +316,35 @@ function startRun(profileId: string): LoginRun {
   );
   child.on("close", (code, signal) => {
     if (run.finished) return;
-    if (code === 0 && claudeProfileHasCredential(profileId)) {
-      appendOutput(run, "\nClaude login completed.\n");
-      finish(run, "ready");
+    if (code === 0) {
+      void (async () => {
+        const verified =
+          claudeProfileHasCredential(profileId) ||
+          (await verifyClaudeAuthStatus(profileId));
+        if (run.finished) return;
+        if (verified) {
+          if (
+            profileId !== "claude-default" &&
+            !claudeProfileHasCredential(profileId)
+          )
+            markClaudeProfileLoginVerified(profileId);
+          appendOutput(run, "\nClaude login completed.\n");
+          finish(run, "ready");
+        } else {
+          finish(
+            run,
+            "error",
+            "Claude reported a successful login, but this isolated profile could not be verified. Retry the sign-in.",
+          );
+        }
+      })().catch((error: unknown) => {
+        if (!run.finished)
+          finish(
+            run,
+            "error",
+            `Could not verify Claude login: ${errorText(error)}`,
+          );
+      });
       return;
     }
     const detail = signal
@@ -400,4 +495,11 @@ export function setClaudeLoginSpawnForTests(
 
 export function setClaudeLoginTimeoutForTests(value: number | null): void {
   loginTimeoutMs = value ?? DEFAULT_TIMEOUT_MS;
+}
+
+export function setClaudeAuthStatusVerifierForTests(
+  value: ((profileId: string) => Promise<boolean>) | null,
+): void {
+  verifyClaudeAuthStatus = value ?? officialClaudeAuthStatus;
+  lastAuthCheck.clear();
 }

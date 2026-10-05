@@ -155,6 +155,7 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   settings_update: "local",
   settings_request_input: "local",
   accounts_read: "none",
+  models_read: "none",
   accounts_update: "local",
   accounts_sign_in: "local",
   task_read: "none",

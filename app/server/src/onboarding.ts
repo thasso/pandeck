@@ -1,7 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import type { OnboardingState } from "@assistant/shared/onboarding";
 import { join } from "node:path";
-import { CLAUDE_SDK_PROVIDER, DEFAULT_HELPER_MODEL } from "@assistant/shared";
+import {
+  CLAUDE_SDK_PROVIDER,
+  DEFAULT_HELPER_MODEL,
+  clampThinkingLevelForModel,
+} from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import {
@@ -12,8 +16,12 @@ import { sessionStore } from "./db/sessionStore.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import { getSettings } from "./settings.ts";
 import { saveSettings } from "./settingsService.ts";
+import {
+  guidedSetupInProgress,
+  ONBOARDING_COMPLETION_FILE,
+} from "./onboardingPhase.ts";
 
-const completionFile = join(DATA_DIR, "onboarding-complete");
+const completionFile = ONBOARDING_COMPLETION_FILE;
 const pendingFile = join(DATA_DIR, "onboarding-pending");
 
 /** Read-only detection: never mark an existing installation on GET. */
@@ -21,7 +29,7 @@ export function onboardingState(): OnboardingState {
   if (existsSync(completionFile))
     return {
       required: false,
-      guidedSetup: readFileSync(completionFile, "utf8") === "complete\n",
+      guidedSetup: guidedSetupInProgress(),
     };
   if (existsSync(pendingFile)) return { required: true, guidedSetup: false };
   return {
@@ -61,14 +69,16 @@ export async function completeOnboarding(profileId: string): Promise<void> {
   const settings = getSettings();
   const availableModels =
     profile.provider === "claude" ? [] : await modelsForAccount(profile);
+  const openAiModel =
+    availableModels.find(
+      (item) =>
+        item.provider === DEFAULT_HELPER_MODEL.provider &&
+        item.id === DEFAULT_HELPER_MODEL.modelId,
+    ) ?? availableModels.find((item) => item.provider === "openai-codex");
   const model =
     profile.provider === "claude"
-      ? { provider: CLAUDE_SDK_PROVIDER, id: "sonnet" }
-      : (availableModels.find(
-          (item) =>
-            item.provider === DEFAULT_HELPER_MODEL.provider &&
-            item.id === DEFAULT_HELPER_MODEL.modelId,
-        ) ?? availableModels.find((item) => item.provider === "openai-codex"));
+      ? { provider: CLAUDE_SDK_PROVIDER, id: "opus" }
+      : openAiModel;
   if (!model)
     throw new Error(
       "No model is available for this account yet. Try again after sign-in completes.",
@@ -80,8 +90,18 @@ export async function completeOnboarding(profileId: string): Promise<void> {
       ...settings.permanentAssistant,
       provider: model.provider,
       modelId: model.id,
+      thinkingLevel:
+        profile.provider === "claude"
+          ? "medium"
+          : clampThinkingLevelForModel(openAiModel, "high"),
       credentialProfileId: profileId,
     },
   });
+  // A resumed first-run may already hold an empty Assistant session created
+  // before guided setup began. Retire that binding so the next acquisition gets
+  // the setup instructions, without deleting the old session or account.
+  const { rotatePermanentAssistantSession } =
+    await import("./permanentAssistant.ts");
+  await rotatePermanentAssistantSession();
   writeFileSync(completionFile, "complete\n", { mode: 0o600, flag: "wx" });
 }

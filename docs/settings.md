@@ -256,8 +256,11 @@ accounts sign in through the same card in `signIn` mode (see Accounts).
 ## Accounts
 
 The Claude and OpenAI accounts models run on are credential profiles
-(`app/server/src/credentialProfiles.ts`), kept outside the settings registry.
-The Personal Assistant reaches them through three tools in the same `settings`
+(`app/server/src/credentialProfiles.ts`), kept outside the settings registry. A
+named profile created by first-run onboarding has no stored custom name; its
+projection displays the provider-only label “Claude” or “OpenAI” until renamed.
+The protected default profiles keep their explicit “Default” labels. The
+Personal Assistant reaches them through three tools in the same `settings`
 group, which call the functions the Settings page's `/api/credential-profiles`
 routes call:
 
@@ -265,6 +268,10 @@ routes call:
   status, the settings that pin it, how many sessions are bound to it, and
   whether it takes its provider's unpinned work. A login in progress never shows
   its device code or link here.
+- `models_read`: list each enabled, signed-in account's offered models and their
+  current visibility in the model picker. `models.hidden` is a whole-list
+  setting shared across accounts by provider/model key; read its current value
+  before updating it, and do not guess an unavailable account's catalog.
 - `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
   default account or one a session is bound to, as the page does, and unpins the
   account from every setting through `clearProfilePins`.
@@ -281,7 +288,12 @@ routes call:
   cards every few seconds while any waits, and once at boot for cards a restart
   left waiting. An account that is already signed in gets no card: the tool
   reports it, since a new login would satisfy a card with the old credential
-  before the new one exists.
+  before the new one exists. Claude login accepts a zero-exit CLI only when
+  `claude auth status --json` confirms the selected isolated profile (or the
+  legacy profile-local credential file exists); a private non-secret marker
+  keeps that verified readiness across restarts. The account-list API checks
+  older unmarked Claude profiles so an earlier successful login is recovered
+  without re-entering OAuth.
 - An account's raw login error is the provider's text and can quote a device
   code, link or token, so the tools never return it: an account in `error`
   status carries a server-written note pointing at its Settings page, which

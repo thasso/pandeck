@@ -25,6 +25,7 @@ import {
   listCredentialProfilesWithUsage,
 } from "../../credentialProfileUsage.ts";
 import { errorText } from "../../errors.ts";
+import { modelsForAccount } from "../../harnesses/models.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import {
   approvalCardReference,
@@ -505,6 +506,44 @@ const accountsReadTool = defineAgentTool<Record<string, unknown>>({
     }),
 });
 
+const modelsReadTool = defineAgentTool<Record<string, unknown>>({
+  name: "models_read",
+  label: "Read available models",
+  description:
+    "List the models offered by each enabled, signed-in account, with their model-picker visibility and provider:modelId key. Use this before asking which models to show; settings_update writes the complete models.hidden list to hide or reveal them.",
+  parameters: { type: "object", additionalProperties: false, properties: {} },
+  execute: (raw) =>
+    scrubbed(async () => {
+      if (!isRecord(raw)) throw new Error("Arguments must be an object.");
+      rejectUnknownKeys(raw, [], "models_read");
+      const hidden = new Set(getSettings().models.hidden);
+      const accounts = listCredentialProfilesWithUsage().filter(
+        (profile) => profile.enabled && profile.status === "ready",
+      );
+      return {
+        accounts: await Promise.all(
+          accounts.map(async (profile) => {
+            const models = await modelsForAccount(profile).catch(() => null);
+            return {
+              id: profile.id,
+              name: profile.name,
+              provider: profile.provider,
+              ...(models === null ? { catalogUnavailable: true } : {}),
+              models: (models ?? []).map((model) => {
+                const key = `${model.provider}:${model.id}`;
+                return {
+                  key,
+                  name: model.name,
+                  visible: !hidden.has(key),
+                };
+              }),
+            };
+          }),
+        ),
+      };
+    }),
+});
+
 const accountsUpdateTool = defineAgentTool<Record<string, unknown>>({
   name: "accounts_update",
   label: "Update Accounts",
@@ -669,6 +708,7 @@ export const settingsTools = [
   settingsUpdateTool,
   settingsRequestInputTool,
   accountsReadTool,
+  modelsReadTool,
   accountsUpdateTool,
   accountsSignInTool,
 ];

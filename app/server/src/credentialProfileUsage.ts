@@ -13,7 +13,7 @@ import type {
 } from "@assistant/shared";
 import {
   automaticProfileIdFor,
-  credentialProfileById,
+  credentialProfileSummaryById,
   listCredentialProfiles,
 } from "./credentialProfiles.ts";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -48,7 +48,9 @@ export function credentialProfileUsage(
   // This account currently takes all unpinned work; report where that moves.
   const fallbackId = automaticProfileIdFor(profile.provider, profile.id);
   const fallback =
-    fallbackId === profile.id ? undefined : credentialProfileById(fallbackId);
+    fallbackId === profile.id
+      ? undefined
+      : credentialProfileSummaryById(fallbackId);
   return {
     ...usage,
     automaticForProvider: profile.provider,

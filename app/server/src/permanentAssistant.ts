@@ -19,6 +19,7 @@ import {
 } from "./session/runtimePrompt.ts";
 import { getSettings } from "./settings.ts";
 import { permanentAssistantProfileInstructions } from "./permanentAssistantProfile.ts";
+import { guidedSetupInProgress } from "./onboardingPhase.ts";
 import { memoryScheduler } from "./memory/memoryScheduler.ts";
 import { resetMemorySessionContext } from "./memory/memoryRuntime.ts";
 import { accountForSlot } from "./settingsModelSlots.ts";
@@ -251,7 +252,9 @@ async function acquireOrCreatePermanentAssistant(
   }
 
   const profile = getSettings().permanentAssistant;
-  const profileInstructions = permanentAssistantProfileInstructions(profile);
+  const profileInstructions = permanentAssistantProfileInstructions(profile, {
+    guidedSetup: guidedSetupInProgress(),
+  });
   const credentialProfileId = accountForSlot(profile);
   let driver: PermanentAssistantDriver;
   if (

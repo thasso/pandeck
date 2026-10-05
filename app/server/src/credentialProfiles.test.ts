@@ -91,6 +91,27 @@ test("keeps profile metadata and provider directories private without exposing a
   assert.equal(mode(authPath), 0o600);
 });
 
+test("unnamed accounts have provider-only labels until renamed", () => {
+  ensureDefaultPiProfile();
+  const claude = createCredentialProfile({ provider: "claude" });
+  const openai = createCredentialProfile({ provider: "openai-codex" });
+  assert.equal(claude.name, "Claude");
+  assert.equal(openai.name, "OpenAI");
+  const stored = JSON.parse(
+    readFileSync(join(root, "profiles.json"), "utf8"),
+  ) as Array<{ id: string; name?: string }>;
+  assert.equal(stored.find((item) => item.id === claude.id)?.name, undefined);
+  assert.equal(stored.find((item) => item.id === openai.id)?.name, undefined);
+  assert.equal(
+    listCredentialProfiles().find((item) => item.id === claude.id)?.name,
+    "Claude",
+  );
+  assert.equal(
+    renameCredentialProfile(claude.id, "Work Claude").name,
+    "Work Claude",
+  );
+});
+
 test("allows the protected default account to be disabled in favor of a secondary profile", () => {
   ensureDefaultPiProfile();
   const secondary = createCredentialProfile({

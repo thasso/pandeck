@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import {
   BookOpen,
@@ -791,6 +792,8 @@ function promptOriginLabel(origin: DisplayMessage["promptOrigin"]): string {
 interface Props {
   sessionId: string | undefined;
   messages: DisplayMessage[];
+  /** Local-only content before the first durable turn, inside the same scroll owner. */
+  intro?: ReactNode;
   /** Durable entries behind the rendered messages (tool-result target mapping). */
   timeline?: readonly ClientTimelineEntry[] | undefined;
   /** Browser-local annotations attached to this session's next composer send. */
@@ -1203,6 +1206,7 @@ function messageHasEntry(message: DisplayMessage, entryId: string): boolean {
 export function MessageList({
   sessionId,
   messages,
+  intro,
   timeline = [],
   chatComments,
   commentDraft,
@@ -1857,6 +1861,9 @@ export function MessageList({
         onClick={openCommentAtPoint}
         className="mx-auto flex w-full max-w-3xl flex-col px-4 py-6 [&>*]:mt-5 [&>*:first-child]:mt-0 [&>[data-role=assistant]+[data-role=assistant]]:mt-3"
       >
+        {intro && hiddenRowCount === 0 && !hasOlderMessages ? (
+          <div className="flex flex-col">{intro}</div>
+        ) : null}
         {hiddenRowCount > 0 ? (
           <div className="flex justify-center">
             <button

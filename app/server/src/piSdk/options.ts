@@ -23,6 +23,7 @@ import type { AgentTool } from "../mcp/tool.ts";
 import { eagerToolNamesFor } from "../tools/catalog.ts";
 import { getSettings } from "../settings.ts";
 import { permanentAssistantProfileInstructions } from "../permanentAssistantProfile.ts";
+import { guidedSetupInProgress } from "../onboardingPhase.ts";
 import { piAgentDir } from "../credentialProfiles.ts";
 import { createPiOutputPolicyExtension } from "./outputPolicyExtension.ts";
 import { skillLibraryStore } from "../skills/skillLibraryStore.ts";
@@ -186,7 +187,7 @@ async function buildPiOptions(
           },
         ],
         systemPrompt: withProfileSuffix
-          ? `${AGENT_TYPES[agentType].systemPrompt(promptOptions)}\n\n## Personal profile instructions\n\n${permanentAssistantProfileInstructions(getSettings().permanentAssistant)}`
+          ? `${AGENT_TYPES[agentType].systemPrompt(promptOptions)}\n\n## Personal profile instructions\n\n${permanentAssistantProfileInstructions(getSettings().permanentAssistant, { guidedSetup: guidedSetupInProgress() })}`
           : AGENT_TYPES[agentType].systemPrompt(promptOptions),
       });
       await loader.reload();

@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     async (_name: string, _provider: string) =>
       ({
         id: "new-claude",
-        name: "Personal Assistant Claude",
+        name: "Claude",
         provider: "claude",
         enabled: true,
         status: "disconnected",
@@ -70,23 +70,20 @@ test("offers explicit Claude and OpenAI sign-in without showing protected defaul
   await act(async () => {
     await Promise.resolve();
   });
-  expect(view.container.textContent).toContain("Continue with Claude");
-  expect(view.container.textContent).toContain("Continue with OpenAI");
+  expect(view.container.textContent).toContain("Sign in with Claude");
+  expect(view.container.textContent).toContain("Sign in with OpenAI");
   expect(view.container.textContent).not.toContain(
     "Continue a previous sign-in",
   );
   await act(async () => {
-    button(view.container, "Continue with Claude").click();
+    button(view.container, "Sign in with Claude").click();
     await Promise.resolve();
   });
   expect(mocks.begin).toHaveBeenCalledOnce();
-  expect(mocks.create).toHaveBeenCalledWith(
-    "Personal Assistant Claude",
-    "claude",
-  );
+  expect(mocks.create).toHaveBeenCalledWith(undefined, "claude");
   expect(
     view.container.querySelector('[role="dialog"]')?.textContent,
-  ).toContain("Sign in to Personal Assistant Claude");
+  ).toContain("Sign in to Claude");
 });
 
 test("resumes a ready named account and finishes without exposing credentials", async () => {
@@ -99,13 +96,10 @@ test("resumes a ready named account and finishes without exposing credentials", 
   await act(async () => {
     await Promise.resolve();
   });
-  expect(view.container.textContent).toContain("my-openai · ready");
-  expect(view.container.textContent).not.toContain("default · ready");
+  expect(view.container.textContent).toContain("Continue with my-openai");
+  expect(view.container.textContent).not.toContain("Continue with default");
   await act(async () => {
-    button(view.container, "my-openai · ready").click();
-  });
-  await act(async () => {
-    button(view.container, "Open Personal Assistant").click();
+    button(view.container, "Continue with my-openai").click();
     await Promise.resolve();
   });
   expect(mocks.finish).toHaveBeenCalledWith("my-openai");

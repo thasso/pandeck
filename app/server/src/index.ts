@@ -172,6 +172,7 @@ import {
 } from "./speech/speechSocket.ts";
 import {
   attachClaudeLoginSocket,
+  reconcileIsolatedClaudeLogins,
   stopClaudeLoginTerminals,
 } from "./claudeLoginTerminal.ts";
 import { sttEngine } from "./speech/sttEngine.ts";
@@ -863,6 +864,7 @@ async function handleRequest(
 
   if (requestUrl.pathname === "/api/credential-profiles") {
     if (req.method === "GET") {
+      await reconcileIsolatedClaudeLogins();
       const includeUsage = requestUrl.searchParams.get("includeUsage") === "1";
       const profiles = includeUsage
         ? listCredentialProfilesWithUsage()
@@ -894,12 +896,14 @@ async function handleRequest(
           req,
         );
         if (
-          typeof body.name !== "string" ||
+          (body.name !== undefined && typeof body.name !== "string") ||
           (body.provider !== "openai-codex" && body.provider !== "claude")
         )
-          throw new Error("A name and supported provider are required.");
+          throw new Error(
+            "A supported provider and optional name are required.",
+          );
         const profile = createCredentialProfile({
-          name: body.name,
+          ...(body.name !== undefined ? { name: body.name } : {}),
           provider: body.provider,
         });
         if (profile.provider === "openai-codex")

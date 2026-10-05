@@ -25,6 +25,7 @@ import {
   type AgentQuestionResponse,
   type AgentType,
   clampThinkingLevelForModel,
+  type CredentialProfileSummary,
   claudeSdkModelOption,
   type Harness,
   harnessForAccountProvider,
@@ -195,7 +196,10 @@ import { setFailureHomes } from "./lib/messageArrival.ts";
 import { visibleModels } from "./lib/models.ts";
 import { accountModelOptions } from "./lib/credentialProfiles.ts";
 import { fetchOnboardingState } from "./lib/onboarding.ts";
-import { OnboardingProviderStep } from "./components/OnboardingProviderStep.tsx";
+import {
+  OnboardingHistory,
+  OnboardingProviderStep,
+} from "./components/OnboardingProviderStep.tsx";
 import {
   credentialProfileProjectionBlockReason,
   credentialProfileProjectionBlocksSend,
@@ -832,6 +836,10 @@ function AppContent() {
     "loading" | "required" | "complete" | "error"
   >("loading");
   const [guidedSetup, setGuidedSetup] = useState(false);
+  const [onboardingConnectedProfile, setOnboardingConnectedProfile] = useState<
+    Pick<CredentialProfileSummary, "id" | "name" | "provider"> | undefined
+  >();
+  const [onboardingInitialName, setOnboardingInitialName] = useState<string>();
   const checkOnboarding = useCallback(() => {
     void fetchOnboardingState()
       .then((result) => {
@@ -4041,8 +4049,47 @@ function AppContent() {
   // screen is a session being created, and the row carries the identity the
   // transcript never states plus the bootstrap's progress.
   const onboardingFocus =
-    onboarding !== "complete" &&
-    (route.name === "new" || route.name === "permanentAssistant");
+    (onboarding !== "complete" &&
+      (route.name === "new" || route.name === "permanentAssistant")) ||
+    (guidedSetup && route.name === "permanentAssistant");
+  const accountSetupPending = onboardingFocus && onboarding !== "complete";
+  const onboardingIntro = useMemo(() => {
+    if (!guidedSetup || route.name !== "permanentAssistant") return undefined;
+    const profile =
+      onboardingConnectedProfile ??
+      activeCredentialProfiles.find(
+        (item) =>
+          item.id === state.settings.permanentAssistant.credentialProfileId,
+      );
+    const provider =
+      profile?.provider ??
+      (state.settings.permanentAssistant.provider === "claude-sdk"
+        ? "claude"
+        : "openai-codex");
+    return (
+      <OnboardingHistory
+        assistantName={
+          onboardingInitialName ??
+          (state.settings.permanentAssistant.name || "Larry")
+        }
+        profile={{
+          name:
+            profile?.name ??
+            (provider === "claude" ? "Claude account" : "OpenAI account"),
+          provider,
+        }}
+      />
+    );
+  }, [
+    guidedSetup,
+    route.name,
+    activeCredentialProfiles,
+    onboardingConnectedProfile,
+    onboardingInitialName,
+    state.settings.permanentAssistant.credentialProfileId,
+    state.settings.permanentAssistant.name,
+    state.settings.permanentAssistant.provider,
+  ]);
   const chatHeaderHidden =
     mobileLayout && route.name === "new" && !sessionShell.bootstrapping;
   const displaySessionTitle = onboardingFocus
@@ -5758,14 +5805,14 @@ function AppContent() {
             !state.connected ||
             routeSessionPending ||
             worktreeMissing ||
-            onboardingFocus
+            accountSetupPending
           }
           disabledPlaceholder={
-            onboardingFocus
+            accountSetupPending
               ? "Connect an account to start chatting…"
               : undefined
           }
-          disabledPreview={onboardingFocus}
+          disabledPreview={accountSetupPending}
           contextInfo={currentContextInfo}
           session={displaySession}
           models={pickerModels}
@@ -5798,7 +5845,7 @@ function AppContent() {
                 ? "Developer sessions run in a worktree — pick one to continue."
                 : credentialProfileSendBlockedReason
           }
-          sendBlocked={onboardingFocus || credentialProfileSendBlocked}
+          sendBlocked={accountSetupPending || credentialProfileSendBlocked}
           mobile={mobileLayout}
           // Mobile has no collapsed bar: the composer reports when it takes over the
           // bottom edge (so the dock's row stands down) and when a draft is waiting in
@@ -5842,13 +5889,17 @@ function AppContent() {
       </>
     );
 
-    if (onboardingFocus) {
+    if (accountSetupPending) {
       return (
         <>
           {onboarding === "required" ? (
             <OnboardingProviderStep
               assistantName={state.settings.permanentAssistant.name || "Larry"}
-              onComplete={() => {
+              onComplete={(profile) => {
+                setOnboardingConnectedProfile(profile);
+                setOnboardingInitialName(
+                  state.settings.permanentAssistant.name || "Larry",
+                );
                 setGuidedSetup(true);
                 setOnboarding("complete");
                 navigate(PERMANENT_ASSISTANT_PATH);
@@ -5886,7 +5937,7 @@ function AppContent() {
       />
     ) : null;
 
-    if (showPendingSessionPanel) {
+    if (showPendingSessionPanel && (!onboardingIntro || routeSessionFailure)) {
       return (
         <>
           {routeSessionFailure ? (
@@ -5910,7 +5961,11 @@ function AppContent() {
       );
     }
 
-    if (displayHasMessages || transcriptOnlyHasOlderMessages) {
+    if (
+      displayHasMessages ||
+      transcriptOnlyHasOlderMessages ||
+      onboardingIntro
+    ) {
       return (
         <>
           {/* Commit DURATION of the transcript subtree, for the dev HUD: the
@@ -5921,6 +5976,7 @@ function AppContent() {
               <MessageList
                 sessionId={displayCurrentId}
                 messages={displayMessagesWithPeerPromptOverrides}
+                intro={onboardingIntro}
                 timeline={state.timeline}
                 chatComments={chatComments}
                 commentDraft={chatCommentDraft}
@@ -5997,30 +6053,7 @@ function AppContent() {
     return (
       <>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-6">
-          {route.name === "permanentAssistant" && guidedSetup ? (
-            <div className="mx-auto w-full max-w-xl px-6 text-center">
-              <h2 className="text-title font-semibold text-fg">
-                Let's get you set up
-              </h2>
-              <p className="mt-2 text-body text-muted">
-                Your Personal Assistant can guide you through your profile,
-                integrations, and the other things you can configure. You can
-                take it one step at a time.
-              </p>
-              <button
-                type="button"
-                disabled={!state.connected || !displaySession}
-                onClick={() =>
-                  submitPrompt(
-                    "Help me set up my Personal Assistant. Start with the basics, then walk me through the available options one at a time. Ask before changing settings, and never ask me to paste secrets into chat.",
-                  )
-                }
-                className="mt-5 rounded-lg bg-accent px-4 py-2 text-caption font-medium text-accent-fg disabled:opacity-50"
-              >
-                Start guided setup
-              </button>
-            </div>
-          ) : showContextPicker ? (
+          {showContextPicker ? (
             <NewSessionQuickStart
               credentialProfiles={activeCredentialProfiles}
               credentialProfilesLoaded={

@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, expect, test, vi } from "vitest";
+import type { ModelOption } from "@assistant/shared";
 import {
   existsSync,
   mkdirSync,
@@ -17,8 +18,9 @@ const mocks = vi.hoisted(() => ({
     enabled: boolean;
     status: string;
   }[],
-  models: [] as { provider: string; id: string }[],
+  models: [] as ModelOption[],
   save: vi.fn(async (_patch: unknown) => ({})),
+  rotate: vi.fn(async () => {}),
 }));
 vi.mock("./db/sessionStore.ts", () => ({
   sessionStore: { list: () => mocks.sessions },
@@ -43,6 +45,9 @@ vi.mock("./settings.ts", () => ({
   }),
 }));
 vi.mock("./settingsService.ts", () => ({ saveSettings: mocks.save }));
+vi.mock("./permanentAssistant.ts", () => ({
+  rotatePermanentAssistantSession: mocks.rotate,
+}));
 
 const previousDataDir = process.env.DATA_DIR;
 const dataDir = mkdtempSync(join(tmpdir(), "onboarding-test-"));
@@ -61,6 +66,7 @@ beforeEach(() => {
   mocks.profiles = [];
   mocks.models = [];
   mocks.save.mockClear();
+  mocks.rotate.mockClear();
 });
 afterAll(() => {
   rmSync(dataDir, { recursive: true, force: true });
@@ -124,12 +130,15 @@ test("signed-in Claude enables its harness and pins the isolated account", async
       claudeSdk: { enabled: true },
       permanentAssistant: expect.objectContaining({
         provider: "claude-sdk",
-        modelId: "sonnet",
+        modelId: "opus",
+        thinkingLevel: "medium",
         credentialProfileId: "named",
       }),
     }),
   );
   expect(onboardingState()).toEqual({ required: false, guidedSetup: true });
+  expect(mocks.rotate).toHaveBeenCalledOnce();
+  expect(existsSync(pending)).toBe(true);
   await expect(completeOnboarding("named")).rejects.toThrow("already complete");
 });
 
@@ -143,7 +152,15 @@ test("signed-in OpenAI chooses an offered model and does not mark complete after
       status: "ready",
     },
   ];
-  mocks.models = [{ provider: "openai-codex", id: "some-model" }];
+  mocks.models = [
+    {
+      provider: "openai-codex",
+      id: "some-model",
+      name: "Other model",
+      reasoning: false,
+      contextWindow: 128_000,
+    },
+  ];
   mocks.save.mockRejectedValueOnce(new Error("write failed"));
   await expect(completeOnboarding("openai-named")).rejects.toThrow(
     "write failed",
@@ -155,9 +172,49 @@ test("signed-in OpenAI chooses an offered model and does not mark complete after
       permanentAssistant: expect.objectContaining({
         provider: "openai-codex",
         modelId: "some-model",
+        thinkingLevel: "off",
         credentialProfileId: "openai-named",
       }),
     }),
   );
   expect(onboardingState()).toEqual({ required: false, guidedSetup: true });
+});
+
+test("OpenAI prefers Luna with high thinking when the signed-in account offers it", async () => {
+  beginOnboarding();
+  mocks.profiles = [
+    {
+      id: "openai-named",
+      provider: "openai-codex",
+      enabled: true,
+      status: "ready",
+    },
+  ];
+  mocks.models = [
+    {
+      provider: "openai-codex",
+      id: "other-model",
+      name: "Other model",
+      reasoning: false,
+      contextWindow: 128_000,
+    },
+    {
+      provider: "openai-codex",
+      id: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      reasoning: true,
+      supportedThinkingLevels: ["off", "low", "medium", "high"],
+      contextWindow: 128_000,
+    },
+  ];
+
+  await completeOnboarding("openai-named");
+  expect(mocks.save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      permanentAssistant: expect.objectContaining({
+        modelId: "gpt-6-luna",
+        thinkingLevel: "high",
+      }),
+    }),
+  );
 });

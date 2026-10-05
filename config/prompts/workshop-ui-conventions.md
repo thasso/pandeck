@@ -664,7 +664,15 @@ Guidelines for briefs:
   provider step as a full-width card in the transcript column with the real
   Composer anchored below it, disabled with a setup hint and kept expanded even
   on mobile. The greeting and card are app UI, not fabricated durable or
-  model-generated messages; sign-in stays outside chat.
+  model-generated messages; sign-in stays outside chat. After connection, keep
+  the greeting and a completed, inert version of the same provider card inside
+  the chat scroll history, append the scripted first setup question below it,
+  and enable the real composer without revealing side panels or offering a
+  premature Finish setup action. Keep this local history above later durable
+  turns, including after reload. A returning ready account advances with one
+  Continue button; use distinct “Sign in with …” wording for creating a new
+  login so an unnamed provider-only account's Continue button is not a
+  duplicate. A completed new login advances without a second confirmation.
 - Old home routes (`/`, `/assistant`, `/workshop`) redirect to
   `/sessions/create` once the server confirms the session is empty; they keep
   their parse-level routes so programmatic `/workshop` navigation (e.g. Backlog

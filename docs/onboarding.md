@@ -5,8 +5,15 @@ sign-in step. The first account only powers the Personal Assistant while it
 helps the user finish setup; other accounts can be added or selected later in
 Settings. Onboarding never selects the protected default OpenAI or Claude
 profiles, even when `~/.pi` was imported or `~/.claude` is signed in. The user
-creates an isolated account through the existing account login flows. Secrets
-and verification codes never go into chat.
+creates an isolated account through the existing account login flows without a
+custom name; its account label is simply “Claude” or “OpenAI” until the user
+names it. Protected default profiles still have their own “Default” labels.
+Secrets and verification codes never go into chat. For Claude, a clean CLI exit
+is verified with `claude auth status --json` under that account's isolated
+`CLAUDE_CONFIG_DIR` when the legacy `.credentials.json` file is absent; a
+non-secret marker records the verified result. On account-list refresh, the same
+check recovers an earlier successful sign-in without asking for OAuth again. The
+protected default account is never used for this recovery.
 
 `GET /api/onboarding` is read-only and returns `{ required, guidedSetup }`. If
 the installation already has an app settings file or stored session, it is
@@ -15,13 +22,26 @@ chooses a provider, `POST /api/onboarding/start` creates a private
 `onboarding-pending` marker under `DATA_DIR` before creating the account. It
 remains pending through reloads and partial setup. `POST /api/onboarding`
 accepts `{ profileId }`, refuses the protected defaults, disabled or unsigned
-accounts, and picks an available model for the chosen provider. It pins that
-account to the permanent Personal Assistant through `saveSettings` (and enables
-the Claude SDK when chosen), then writes `onboarding-complete`. Only after that
-response does the client open `/assistant`. `guidedSetup` is true only when this
-install completed the provider step; existing users with an empty Assistant chat
-do not see the setup prompt. A settings or account change after onboarding uses
-normal Settings; there is no ongoing first-run lock.
+accounts, and picks an available model for the chosen provider. Claude starts
+with the `opus` alias and medium thinking. OpenAI prefers `gpt-6-luna` with high
+thinking; if that account does not offer Luna, the first available OpenAI Codex
+model is chosen with the closest supported thinking level. It pins that account
+to the permanent Personal Assistant through `saveSettings` (and enables the
+Claude SDK when chosen), retires any earlier empty Assistant binding, then
+writes `onboarding-complete`. The next acquisition receives the guided prompt
+without deleting that old session. Only after that response does the client move
+the same focused chat to `/assistant`: the sidebar stays hidden, the real
+composer becomes available, and the initial greeting and provider card remain
+above a scripted assistant message asking whether the user wants to rename
+Larry. The card becomes an inert connected receipt, not an actionable login
+again; the local-only history stays above durable turns in the same scroll owner
+across reloads. There is no Finish setup action yet: `guidedSetup` keeps the
+chat focused while more basics are developed. An older `finished` marker still
+identifies an existing installation rather than reenrolling it. Existing users
+with an empty Assistant chat are never enrolled automatically. During guided
+setup a name change does not rotate the live Assistant session, so its
+conversation stays intact; other profile/model changes retain their normal
+rotation behavior.
 
 The first screen lives in the main chat pane on `/sessions/create` (and also
 covers `/assistant` while setup is pending). The assistant defaults to the name
@@ -30,12 +50,14 @@ headed “Welcome to Pandeck” uses the shared assistant-message renderer to
 introduce Larry in the message text and explain why a provider account is
 needed; a full-width account-selection card follows it above the real composer,
 which stays visible but cannot accept text or send until an account is
-configured. The card has no redundant setup label or CLI footnote. Neither the
-greeting nor the card is stored or model-generated; account sign-in still
-happens outside chat. While that screen is visible, both side panels, the global
-topbar (including back/forward), and the mobile edge-back gesture are omitted
-without changing saved layout preferences. The chat header says “Welcome to
-Pandeck” instead of naming an unavailable session. Once setup completes the
+configured. The card has no redundant setup label or CLI footnote. A previously
+connected account appears as one Continue button, and completing a new login
+advances automatically; neither needs a second confirmation button. Neither the
+scripted greeting nor the card is stored or model-generated; account sign-in
+still happens outside chat. While that screen is visible, both side panels, the
+global topbar (including back/forward), and the mobile edge-back gesture are
+omitted without changing saved layout preferences. The chat header says “Welcome
+to Pandeck” through the guided conversation. Once the user finishes setup the
 normal shell returns. Until an account is connected, the session inspector's
 Profile section says “No account or model yet” rather than showing the draft's
 fallback model and thinking level. The desktop right-panel chooser keeps
@@ -46,5 +68,9 @@ losing the user's saved navigation order. The empty Sessions inbox does not
 direct users to New Session before it is available. Account login and retry stay
 there; only the conversational setup follows in the Personal Assistant. The
 account step is not tied to any CLI/default account, and an interrupted sign-in
-can be resumed with the same named account. The provider/model can be changed
+can be resumed with the same named account. The guided Assistant prompt asks one
+question at a time: its name, additional provider accounts (with distinct names
+when a provider has multiple accounts), then model-picker visibility via
+`models_read` and `settings_update(models.hidden)`. Sign-in stays outside chat;
+Memory stays off unless explicitly enabled. The provider/model can be changed
 later in Settings → Personal Assistant.

@@ -41,6 +41,7 @@ import {
   updateOpenAiCompatibleSettings,
 } from "./openAiCompatibleSettings.ts";
 import { getSettings, updateSettings } from "./settings.ts";
+import { guidedSetupInProgress } from "./onboardingPhase.ts";
 import {
   testSlackHuddleSettings,
   testSlackSettings,
@@ -283,6 +284,8 @@ async function settingsWritten(
         wrote("permanentAssistant") &&
         ASSISTANT_PROFILE_FIELDS.some(
           (field) =>
+            // Rotating on a name change would drop the live first-run chat.
+            !(field === "name" && guidedSetupInProgress()) &&
             assistantBefore.profile[field] !== after.permanentAssistant[field],
         );
       const memoryChanged =

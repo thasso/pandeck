@@ -73,6 +73,7 @@ afterEach(() => {
   terminal.stopClaudeLoginTerminals();
   terminal.setClaudeLoginSpawnForTests(null);
   terminal.setClaudeLoginTimeoutForTests(null);
+  terminal.setClaudeAuthStatusVerifierForTests(null);
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.ASSISTANT_TOKEN;
 });
@@ -174,6 +175,90 @@ test("streams the official profile-isolated CLI flow and never echoes the submit
     profiles.listCredentialProfiles().find((item) => item.id === profile.id)
       ?.status,
     "ready",
+  );
+});
+
+test("accepts a verified isolated CLI login without a legacy credentials file", async () => {
+  const profile = profiles.createCredentialProfile({
+    name: "Claude newer CLI",
+    provider: "claude",
+  });
+  const child = new FakeChild();
+  terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+  terminal.setClaudeAuthStatusVerifierForTests(async (id) => id === profile.id);
+  const socket = new FakeSocket();
+  terminal.attachClaudeLoginSocket(
+    socket as unknown as WebSocket,
+    request(profile.id),
+  );
+  writeFileSync(
+    join(profiles.claudeConfigDir(profile.id), ".claude.json"),
+    "{}",
+  );
+  child.stdout.write("Login successful.\n");
+  child.emit("close", 0, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal((socket.sent.at(-1) as { status?: string }).status, "ready");
+  assert.equal(
+    profiles.listCredentialProfiles().find((item) => item.id === profile.id)
+      ?.status,
+    "ready",
+  );
+  assert.equal(
+    existsSync(join(profiles.claudeConfigDir(profile.id), ".credentials.json")),
+    false,
+  );
+});
+
+test("recovers a previously successful isolated login without starting OAuth again", async () => {
+  const profile = profiles.createCredentialProfile({
+    name: "Claude recovered",
+    provider: "claude",
+  });
+  writeFileSync(
+    join(profiles.claudeConfigDir(profile.id), ".claude.json"),
+    "{}",
+  );
+  let checks = 0;
+  terminal.setClaudeAuthStatusVerifierForTests(async (id) => {
+    assert.equal(id, profile.id);
+    checks += 1;
+    return true;
+  });
+
+  await terminal.reconcileIsolatedClaudeLogins();
+  assert.equal(checks, 1);
+  assert.equal(
+    profiles.credentialProfileSummaryById(profile.id)?.status,
+    "ready",
+  );
+  await terminal.reconcileIsolatedClaudeLogins();
+  assert.equal(checks, 1);
+});
+
+test("does not mark an unverified CLI exit as a completed sign-in", async () => {
+  const profile = profiles.createCredentialProfile({
+    name: "Claude unverified",
+    provider: "claude",
+  });
+  const child = new FakeChild();
+  terminal.setClaudeLoginSpawnForTests(() => childProcess(child));
+  terminal.setClaudeAuthStatusVerifierForTests(async () => false);
+  const socket = new FakeSocket();
+  terminal.attachClaudeLoginSocket(
+    socket as unknown as WebSocket,
+    request(profile.id),
+  );
+  child.emit("close", 0, null);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const last = socket.sent.at(-1) as { status?: string; error?: string };
+  assert.equal(last.status, "error");
+  assert.match(last.error ?? "", /could not be verified/i);
+  assert.equal(
+    profiles.credentialProfileSummaryById(profile.id)?.status,
+    "error",
   );
 });
 

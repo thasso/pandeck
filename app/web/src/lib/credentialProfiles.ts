@@ -156,14 +156,17 @@ export function fetchCredentialProfilesWithModels(
 }
 
 export async function createCredentialProfile(
-  name: string,
+  name: string | undefined,
   provider: CredentialProfileProvider,
 ): Promise<CredentialProfileSummary> {
   const result = await body<{ profile: CredentialProfileSummary }>(
     await fetch(`${serverHttpOrigin()}/api/credential-profiles`, {
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
-      body: JSON.stringify({ name, provider }),
+      body: JSON.stringify({
+        ...(name === undefined ? {} : { name }),
+        provider,
+      }),
     }),
   );
   return result.profile;

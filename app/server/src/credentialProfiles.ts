@@ -27,14 +27,19 @@ export type CredentialProfileStatus =
 
 export interface CredentialProfile {
   id: string;
-  name: string;
+  /** Omitted until the user gives this account a distinct name. */
+  name?: string;
   provider: CredentialProfileProvider;
   enabled: boolean;
   createdAt: number;
   updatedAt: number;
 }
 
-export interface CredentialProfileSummary extends CredentialProfile {
+export interface CredentialProfileSummary extends Omit<
+  CredentialProfile,
+  "name"
+> {
+  name: string;
   status: CredentialProfileStatus;
   /** Safe, user-actionable setup guidance. Never contains a token. */
   setup?: {
@@ -138,7 +143,8 @@ function readRegistry(): CredentialProfile[] {
       if (
         !p.id ||
         !SAFE_ID.test(p.id) ||
-        !p.name ||
+        (p.name !== undefined &&
+          (typeof p.name !== "string" || !p.name.trim())) ||
         (p.provider !== "openai-codex" && p.provider !== "claude") ||
         !Number.isFinite(createdAt) ||
         !Number.isFinite(updatedAt)
@@ -147,7 +153,7 @@ function readRegistry(): CredentialProfile[] {
       return [
         {
           id: p.id,
-          name: p.name.slice(0, 80),
+          ...(p.name ? { name: p.name.slice(0, 80) } : {}),
           provider: p.provider,
           enabled: p.enabled !== false,
           createdAt: createdAt as number,
@@ -261,12 +267,34 @@ export function openAiProfileLoginCredentialPersisted(id: string): boolean {
 }
 
 export function claudeProfileHasCredential(id: string): boolean {
-  // Claude owns this format. Presence is enough for a non-secret readiness hint;
-  // the SDK remains the final authority when it starts a query.
-  return existsSync(join(claudeConfigDir(id), ".credentials.json"));
+  // Older CLI versions write this file. Newer ones may store OAuth outside the
+  // config directory; a successful isolated `claude auth status` then leaves a
+  // non-secret verification marker in the profile's private directory.
+  return (
+    existsSync(join(claudeConfigDir(id), ".credentials.json")) ||
+    (id !== DEFAULT_CLAUDE_PROFILE_ID &&
+      existsSync(join(profileRoot(id), ".claude-login-verified")))
+  );
+}
+
+/** Record only that the official CLI confirmed this isolated account's login. */
+export function markClaudeProfileLoginVerified(id: string): void {
+  const profile = credentialProfileById(id);
+  if (
+    !profile ||
+    profile.provider !== "claude" ||
+    id === DEFAULT_CLAUDE_PROFILE_ID
+  )
+    throw new Error("Only an isolated Claude profile can be verified.");
+  const marker = join(profileRoot(id), ".claude-login-verified");
+  writeFileSync(marker, "verified\n", { encoding: "utf8", mode: 0o600 });
+  privateFile(marker);
+  clearCredentialProfileLoginState(id);
 }
 
 function summary(profile: CredentialProfile): CredentialProfileSummary {
+  const displayName =
+    profile.name ?? (profile.provider === "claude" ? "Claude" : "OpenAI");
   const pending = transient.get(profile.id);
   const configured =
     profile.provider === "openai-codex"
@@ -294,6 +322,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
     const path = claudeConfigDir(profile.id);
     return {
       ...profile,
+      name: displayName,
       status,
       ...(pending?.error ? { error: pending.error } : {}),
       ...(status !== "ready"
@@ -315,6 +344,7 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
   }
   return {
     ...profile,
+    name: displayName,
     status,
     ...(pending?.error ? { error: pending.error } : {}),
     ...(status === "connecting"
@@ -473,16 +503,16 @@ export function listCredentialProfiles(): CredentialProfileSummary[] {
 }
 
 export function createCredentialProfile(input: {
-  name: string;
+  name?: string;
   provider: CredentialProfileProvider;
 }): CredentialProfileSummary {
-  const name = input.name.trim().replace(/\s+/g, " ").slice(0, 80);
-  if (!name) throw new Error("A profile name is required.");
+  const name = input.name?.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (name === "") throw new Error("A profile name cannot be empty.");
   const profiles = readRegistry();
   const now = Date.now();
   const profile: CredentialProfile = {
     id: `cp_${randomUUID().replace(/-/g, "").slice(0, 16)}`,
-    name,
+    ...(name === undefined ? {} : { name }),
     provider: input.provider,
     enabled: true,
     createdAt: now,
@@ -600,7 +630,7 @@ export function credentialProfileById(
 /** Resolve a profile only when it is eligible for new work. */
 export function enabledCredentialProfileById(
   id: string,
-): CredentialProfile | undefined {
+): CredentialProfileSummary | undefined {
   const profile = credentialProfileById(id);
-  return profile?.enabled ? profile : undefined;
+  return profile?.enabled ? summary(profile) : undefined;
 }
