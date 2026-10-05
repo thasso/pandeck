@@ -22,7 +22,10 @@ import {
   MAX_SKILL_NAME_CHARS,
   type SkillDiagnosticCode,
 } from "@assistant/shared";
-import { parseYamlSubset, splitYamlFrontmatter } from "../frontmatter.ts";
+import {
+  parseYamlSubset,
+  splitYamlFrontmatter,
+} from "@assistant/shared/frontmatter";
 
 /** Bound on a declared description, shared by scanning and authoring. */
 const MAX_SKILL_DESCRIPTION_CHARS = 1024;

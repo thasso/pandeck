@@ -87,6 +87,22 @@ export const storyCatalog = {
     theme: "light",
     textScale: "100",
   },
+  "markdown-file--frontmatter": {
+    title: "Markdown files with frontmatter",
+    frameWidth: 720,
+    canvasWidth: 1024,
+    canvasHeight: 900,
+    theme: "light",
+    textScale: "100",
+  },
+  "markdown-file--frontmatter-dark": {
+    title: "Markdown files with frontmatter, dark",
+    frameWidth: 720,
+    canvasWidth: 1024,
+    canvasHeight: 900,
+    theme: "dark",
+    textScale: "100",
+  },
   "prompt-queue--running": {
     title: "Composer with a queue, turn running",
     frameWidth: 720,

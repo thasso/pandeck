@@ -13,7 +13,10 @@ import {
   MAX_SKILL_BODY_BYTES,
   type SkillDetailResponse,
 } from "@assistant/shared";
-import { parseYamlSubset, splitYamlFrontmatter } from "../frontmatter.ts";
+import {
+  parseYamlSubset,
+  splitYamlFrontmatter,
+} from "@assistant/shared/frontmatter";
 import { buildSkillFileTree } from "./skillFiles.ts";
 import {
   scanSkillLibrary,

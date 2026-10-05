@@ -922,10 +922,6 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   canonical, always-valid frontmatter skeleton (enums/schema literal derived
   from the constants so agent guidance cannot drift from validation) surfaced in
   the KB write/edit tool schemas and guidance.
-- `frontmatter.ts` owns dependency-free splitting of byte-zero YAML frontmatter
-  fences and the limited YAML subset shared by server-owned storage domains:
-  maps, sequences, scalar values, and inline scalar arrays. It deliberately does
-  not implement general YAML or know any domain schema.
 - `skills/skillLibrary.ts` owns the browser-facing read of the library: it
   bootstraps the store, scans the working tree, and builds the `skills` topic's
   one `skillList` message (`libraryPath` + summaries + diagnostics), answering a

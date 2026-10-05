@@ -18,6 +18,9 @@ import {
   useDocumentNavigationRegistration,
   type DocumentNavigationRegistration,
 } from "../DocumentNavigationShell.tsx";
+// The Markdown preview is a lazy chunk; loading it up front lets a pivot click
+// render it within the click's own act() instead of a later module load.
+import "../MarkdownFile.tsx";
 
 /**
  * Zoom follows the renderer that is on screen, through the pivots. A rendered

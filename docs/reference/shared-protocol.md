@@ -483,6 +483,11 @@ vocabulary, display projection, and normalized session model types.
   server refuses.
 - `objectLinks.ts` owns generic `pa://` object-link parsing, formatting,
   canonical routes, and compact resolution types.
+- `frontmatter.ts` owns dependency-free splitting of byte-zero YAML frontmatter
+  fences and the limited YAML subset shared by server-owned storage domains
+  (skills, the KB) and the web's Markdown file header: maps, sequences, scalar
+  values, and inline scalar arrays. It deliberately does not implement general
+  YAML or know any domain schema.
 - `buildInfo.ts` owns `BuildInfo` — the version, commit, release-ness and
   dirtiness of ONE runtime — and the display rules for it
   (`buildVersionLabel`/`buildCommitLabel`/`formatBuildInfo`). Three runtimes

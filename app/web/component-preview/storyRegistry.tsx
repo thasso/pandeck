@@ -52,6 +52,11 @@ import {
   PhoneExpanded as TranscriptPhoneExpanded,
   NarrowLargeText as TranscriptNarrowLargeText,
 } from "./stories/ChatActivityTranscript.stories.tsx";
+import {
+  Frontmatter as MarkdownFrontmatter,
+  FrontmatterDark as MarkdownFrontmatterDark,
+  MarkdownFileStory,
+} from "./stories/MarkdownFile.stories.tsx";
 import type { StoryPreviewId } from "./storyCatalog.ts";
 
 function argsOf(story: {
@@ -112,6 +117,12 @@ const storyRenderers: Record<StoryPreviewId, () => ReactElement> = {
   "chat-activity--phone": () => <ChatActivityStory {...ActivityPhone.args} />,
   "chat-activity--phone-expanded": () => (
     <ChatActivityStory {...ActivityPhoneExpanded.args} />
+  ),
+  "markdown-file--frontmatter": () => (
+    <MarkdownFileStory frameWidth={MarkdownFrontmatter.args.frameWidth} />
+  ),
+  "markdown-file--frontmatter-dark": () => (
+    <MarkdownFileStory frameWidth={MarkdownFrontmatterDark.args.frameWidth} />
   ),
   "prompt-queue--running": () => (
     <PromptQueueStory {...queueArgsOf(QueueRunning)} />

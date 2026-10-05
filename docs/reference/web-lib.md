@@ -15,6 +15,10 @@ capability logic.
 ## Module ownership
 
 - `socket.ts` owns the reconnecting WebSocket wrapper.
+- `markdownFrontmatter.ts` owns `splitMarkdownFrontmatter`: a Markdown file's
+  leading frontmatter projected for a header (title, tags, label/value fields,
+  or the raw block when the shared YAML subset cannot read it) and the body with
+  the frontmatter's lines blanked so source line numbers survive.
 - `loadState.ts` owns the `LoadState<T>` union
   (`idle | loading | ready | refreshing | error`, the error retaining the last
   good data) and its pure helpers: `beginLoad` keeps data across a refetch of
