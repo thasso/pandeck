@@ -26,8 +26,11 @@ normal Settings; there is no ongoing first-run lock.
 The first screen lives in the normal app shell on `/sessions/create` (and also
 covers `/assistant` while setup is pending). Until an account is connected, the
 session inspector's Profile section says “No account or model yet” rather than
-showing the draft's fallback model and thinking level. Account login and retry stay there;
-only the conversational setup follows in the Personal Assistant. The account
-step is not tied to any CLI/default account, and an interrupted sign-in can be
-resumed with the same named account. The provider/model can be changed later in
-Settings → Personal Assistant.
+showing the draft's fallback model and thinking level. The desktop right-panel
+chooser keeps Personal Assistant disabled until its model is available on a
+signed-in account; Knowledge and Worktree panels are opt-in in Settings →
+Appearance. Account login and retry stay there; only the conversational setup
+follows in the Personal Assistant. The account step is not tied to any
+CLI/default account, and an interrupted sign-in can be resumed with the same
+named account. The provider/model can be changed later in Settings → Personal
+Assistant.

@@ -552,9 +552,11 @@ Guidelines for briefs:
   is a centered list of available panels. Its open/active state is
   `sessionStorage`-scoped, so reload restores it only in the same browser tab.
   Register a panel once in `PANEL_DEFINITIONS` rather than adding parallel panel
-  switchers. Use the existing `@dnd-kit` horizontal sortable treatment to
-  reorder open tabs in place; that order is part of the same per-tab session
-  state.
+  switchers. Gate optional panels in the host's chooser and restored tabs from
+  persisted settings; show Personal Assistant disabled (not openable) until its
+  configured model is available on a signed-in account. Use the existing
+  `@dnd-kit` horizontal sortable treatment to reorder open tabs in place; that
+  order is part of the same per-tab session state.
 - Keep opened desktop tabs mounted while another tab or the panel home is
   visible, so their local state and fetched data survive tab switches; closing a
   tab is the explicit release. The small-screen right panel remains the direct

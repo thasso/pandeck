@@ -70,6 +70,8 @@ const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   turnStatsRow: true,
   // Opt-in detail: keeps the stats row compact by default, expands for cache-miss diagnosis.
   turnStatsPerRequest: false,
+  knowledgePanelEnabled: false,
+  worktreePanelEnabled: false,
 };
 
 function normalizeAppearanceSettings(
@@ -94,6 +96,8 @@ function normalizeAppearanceSettings(
       settings?.turnStatsPerRequest,
       DEFAULT_APPEARANCE_SETTINGS.turnStatsPerRequest,
     ),
+    knowledgePanelEnabled: settings?.knowledgePanelEnabled === true,
+    worktreePanelEnabled: settings?.worktreePanelEnabled === true,
   };
 }
 const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: PermanentAssistantSettings = {

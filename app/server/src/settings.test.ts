@@ -59,6 +59,8 @@ test("updateSettings persists and normalizes the appearance patch", () => {
       separatorAtTurnEnd: true,
       turnStatsRow: true,
       turnStatsPerRequest: true,
+      knowledgePanelEnabled: false,
+      worktreePanelEnabled: false,
     },
   });
   assert.equal(updated.appearance.separatorBeforeFinalResponse, false);

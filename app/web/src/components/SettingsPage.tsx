@@ -1066,7 +1066,7 @@ function AppearanceSection({
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-heading font-semibold">Appearance</h2>
       <p className="mt-1 text-caption text-muted">
-        Adjust local interface preferences for this browser.
+        Adjust your interface and choose which optional panels to show.
       </p>
 
       <div className="mt-6 space-y-3 rounded-xl border border-line bg-panel p-4">
@@ -1148,6 +1148,30 @@ function AppearanceSection({
             description="In the Sessions inbox: slide a settled card out to the left before the rows below it close the gap, and let a card that changes place travel there instead of jumping."
           />
         </div>
+      </div>
+
+      <div className="mt-5 space-y-3 rounded-xl border border-line bg-panel p-4">
+        <h3 className="text-body font-semibold text-fg">Right panel</h3>
+        <p className="text-caption text-muted">
+          Show these optional panels in the desktop right-panel picker. Their
+          features remain available elsewhere when hidden here.
+        </p>
+        <PreferenceToggle
+          checked={appearance.knowledgePanelEnabled}
+          onChange={(checked) =>
+            saveAppearance({ knowledgePanelEnabled: checked })
+          }
+          label="Show Knowledge panel"
+          description="Add Knowledge to the right-panel picker. The Knowledge Base remains available elsewhere."
+        />
+        <PreferenceToggle
+          checked={appearance.worktreePanelEnabled}
+          onChange={(checked) =>
+            saveAppearance({ worktreePanelEnabled: checked })
+          }
+          label="Show Worktree panel"
+          description="Add Worktree to the right-panel picker. Worktrees remain available elsewhere."
+        />
       </div>
 
       <div className="mt-5 space-y-5 rounded-xl border border-line bg-panel p-4">

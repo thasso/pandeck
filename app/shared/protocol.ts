@@ -499,9 +499,8 @@ export interface ModelSettings {
 }
 
 /**
- * Purely display-level chat-transcript appearance toggles. They change how the
- * chat renders turn boundaries and usage; they never affect prompts, provider
- * requests, or the durable transcript. All are individually toggleable.
+ * Display-level appearance and panel-visibility toggles. They never affect
+ * prompts, provider requests, or durable content. All are individually toggleable.
  */
 export interface AppearanceSettings {
   /** Horizontal rule between the last tool activity of a turn and its final answer text. */
@@ -516,6 +515,10 @@ export interface AppearanceSettings {
    * of averaged into the turn sum. Only meaningful when {@link turnStatsRow} is on.
    */
   turnStatsPerRequest: boolean;
+  /** Offer Knowledge in the desktop right-panel picker; does not disable the Knowledge Base. */
+  knowledgePanelEnabled: boolean;
+  /** Offer Worktree in the desktop right-panel picker; does not disable worktrees. */
+  worktreePanelEnabled: boolean;
 }
 
 /**

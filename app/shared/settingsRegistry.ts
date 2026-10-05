@@ -258,6 +258,24 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Per-request detail in the stats row",
     BOOLEAN,
   ),
+  setting(
+    "appearance.knowledgePanelEnabled",
+    "appearance",
+    "Show Knowledge right panel",
+    BOOLEAN,
+    {
+      hint: "Only controls the desktop right-panel picker; the Knowledge Base remains available elsewhere.",
+    },
+  ),
+  setting(
+    "appearance.worktreePanelEnabled",
+    "appearance",
+    "Show Worktree right panel",
+    BOOLEAN,
+    {
+      hint: "Only controls the desktop right-panel picker; worktrees remain available elsewhere.",
+    },
+  ),
   setting("profile.displayName", "profile", "Display name", STRING),
   setting("profile.timeZone", "profile", "Time zone", STRING, {
     hint: "IANA zone such as Europe/Berlin; empty means the server's zone.",

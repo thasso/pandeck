@@ -43,6 +43,12 @@ does not hold, says what and where in `SETTINGS_OUTSIDE_REGISTRY`: Claude and
 OpenAI accounts are credential profiles, push subscriptions and port forwards
 belong to a device, and the About page has nothing to set.
 
+The Appearance section's `knowledgePanelEnabled` and `worktreePanelEnabled`
+switches default off. They control only the desktop right-panel picker and
+restored tabs, not the Knowledge Base or worktree features elsewhere. Startup
+settings include Appearance so these choices take effect without visiting
+Settings first.
+
 ## Coverage
 
 Three tests keep the registry complete:

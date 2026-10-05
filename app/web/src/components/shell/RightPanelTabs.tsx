@@ -166,6 +166,9 @@ export function RightPanelTabs({
   knowledge,
   worktree,
   visible = true,
+  personalAssistantEnabled = true,
+  knowledgeEnabled = true,
+  worktreeEnabled = true,
   openRequest,
   onActivePanelChange,
 }: {
@@ -178,6 +181,11 @@ export function RightPanelTabs({
    * and a tab nobody has looked at yet must not start working in that state.
    */
   visible?: boolean;
+  /** The assistant remains in the chooser but cannot open before an account/model is ready. */
+  personalAssistantEnabled?: boolean;
+  /** Optional panels disappear from the chooser and saved tabs while off. */
+  knowledgeEnabled?: boolean;
+  worktreeEnabled?: boolean;
   /**
    * Show this panel now, opening its tab if it is closed — an action elsewhere
    * in the app asking for a surface here (a transcript card's "Open in side
@@ -197,7 +205,20 @@ export function RightPanelTabs({
     { openTabs: ["inspector"], activeTab: "inspector" },
     decodeTabState,
   );
-  const { openTabs, activeTab } = tabState;
+  const panelEnabled = (id: PanelId) =>
+    id === "inspector" ||
+    (id === "personal-assistant" && personalAssistantEnabled) ||
+    (id === "knowledge" && knowledgeEnabled) ||
+    (id === "worktree" && worktreeEnabled);
+  // Do not mount or show stale sessionStorage tabs while their panel is off.
+  // Keep their saved order so a re-enabled panel can return to its old place.
+  const openTabs = tabState.openTabs.filter(panelEnabled);
+  const activeTab =
+    tabState.activeTab === null
+      ? null // The user explicitly opened the panel chooser with +.
+      : panelEnabled(tabState.activeTab)
+        ? tabState.activeTab
+        : (openTabs.at(-1) ?? null);
   useEffect(() => {
     onActivePanelChange?.(activeTab);
   }, [activeTab, onActivePanelChange]);
@@ -224,6 +245,7 @@ export function RightPanelTabs({
     setTabState((current) => ({ ...current, activeTab }));
   };
   const openPanel = (id: PanelId) => {
+    if (!panelEnabled(id)) return;
     setTabState((current) => ({
       openTabs: current.openTabs.includes(id)
         ? current.openTabs
@@ -238,14 +260,26 @@ export function RightPanelTabs({
   const requestedPanel = openRequest?.panel;
   const requestedNonce = openRequest?.nonce;
   useEffect(() => {
-    if (!requestedPanel || requestedNonce === undefined) return;
+    if (
+      !requestedPanel ||
+      requestedNonce === undefined ||
+      !panelEnabled(requestedPanel)
+    )
+      return;
     setTabState((current) => ({
       openTabs: current.openTabs.includes(requestedPanel)
         ? current.openTabs
         : [...current.openTabs, requestedPanel],
       activeTab: requestedPanel,
     }));
-  }, [requestedPanel, requestedNonce, setTabState]);
+  }, [
+    requestedPanel,
+    requestedNonce,
+    setTabState,
+    personalAssistantEnabled,
+    knowledgeEnabled,
+    worktreeEnabled,
+  ]);
 
   const closePanel = (id: PanelId) => {
     setTabState((current) => {
@@ -254,7 +288,7 @@ export function RightPanelTabs({
         openTabs,
         activeTab:
           current.activeTab === id
-            ? (openTabs.at(-1) ?? null)
+            ? (openTabs.filter(panelEnabled).at(-1) ?? null)
             : current.activeTab,
       };
     });
@@ -345,12 +379,22 @@ export function RightPanelTabs({
           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-5">
             <p className="text-caption text-faint">Open a panel</p>
             <div className="w-full max-w-56 space-y-1">
-              {PANEL_DEFINITIONS.map((panel) => (
+              {PANEL_DEFINITIONS.filter(
+                (panel) =>
+                  panel.id === "personal-assistant" || panelEnabled(panel.id),
+              ).map((panel) => (
                 <button
                   key={panel.id}
                   type="button"
                   onClick={() => openPanel(panel.id)}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  disabled={!panelEnabled(panel.id)}
+                  title={
+                    panel.id === "personal-assistant" &&
+                    !personalAssistantEnabled
+                      ? "Connect an AI account and choose a model first"
+                      : undefined
+                  }
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-muted"
                 >
                   <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
                     {panel.icon}

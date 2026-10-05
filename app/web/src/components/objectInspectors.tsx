@@ -1046,11 +1046,15 @@ export function SessionInspector({
         storageScope={`session:${sessionId ?? "draft"}`}
         title="Profile"
         icon={<IdCard size={13} />}
-        summary={profileFacts.length > 0 ? profileSummary : "No account or model yet"}
+        summary={
+          profileFacts.length > 0 ? profileSummary : "No account or model yet"
+        }
         defaultOpen={false}
         collapsible={profileFacts.length > 0}
       >
-        {profileFacts.length > 0 ? <InspectorFacts facts={profileFacts} /> : null}
+        {profileFacts.length > 0 ? (
+          <InspectorFacts facts={profileFacts} />
+        ) : null}
       </InspectorSection>
       {children}
       {view ? (

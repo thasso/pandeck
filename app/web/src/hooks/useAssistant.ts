@@ -365,6 +365,8 @@ const defaultSettings: AppSettings = {
     separatorAtTurnEnd: true,
     turnStatsRow: true,
     turnStatsPerRequest: false,
+    knowledgePanelEnabled: false,
+    worktreePanelEnabled: false,
   },
   // Until the server answers, "today" is the browser's day.
   profile: {

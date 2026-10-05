@@ -5819,6 +5819,9 @@ function readySettings(settings: AppSettings): Partial<AppSettings> {
     // The Session inspector must not guess whether Memory is enabled from the
     // web fallback; the full Settings snapshot is fetched only on that route.
     memory: settings.memory,
+    // Right-panel availability must reflect persisted settings without a visit
+    // to Settings; the client fallback only covers the connection gap.
+    appearance: settings.appearance,
   };
 }
 

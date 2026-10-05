@@ -6618,6 +6618,24 @@ function AppContent() {
     </SessionInspector>
   );
 
+  // Do not offer the assistant panel before its configured model is available
+  // on a signed-in account. A default model id alone is not a usable setup.
+  const assistantModelReady =
+    onboarding === "complete" &&
+    activeCredentialProfiles.some(
+      (profile) =>
+        profile.status === "ready" &&
+        profile.provider ===
+          accountProviderForModelProvider(
+            state.settings.permanentAssistant.provider,
+          ) &&
+        (credentialProfileModels[profile.id] ?? []).some(
+          (model) =>
+            model.provider === state.settings.permanentAssistant.provider &&
+            model.id === state.settings.permanentAssistant.modelId,
+        ),
+    );
+
   // Desktop right-panel surfaces live in a closeable tab host. The mobile dock
   // deliberately receives the Inspector directly, preserving its existing flip-up
   // interaction and action sheet.
@@ -6625,6 +6643,9 @@ function AppContent() {
     <InspectorChromeProvider header={false} desktopTabs>
       <RightPanelTabs
         inspector={rightPanelContent}
+        personalAssistantEnabled={assistantModelReady}
+        knowledgeEnabled={state.settings.appearance.knowledgePanelEnabled}
+        worktreeEnabled={state.settings.appearance.worktreePanelEnabled}
         knowledge={
           <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
             <KnowledgePanel
