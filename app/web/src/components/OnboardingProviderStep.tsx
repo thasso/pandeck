@@ -115,7 +115,7 @@ export function OnboardingProviderStep({
       <div className="mx-auto w-full max-w-3xl px-4 py-6">
         <article
           aria-labelledby="onboarding-account-title"
-          className="max-w-xl rounded-2xl border border-line bg-panel p-6 shadow-sm sm:p-8"
+          className="w-full rounded-2xl border border-line bg-panel p-6 shadow-sm sm:p-8"
         >
           <p className="text-caption font-medium text-accent">
             Getting started

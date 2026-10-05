@@ -659,10 +659,10 @@ Guidelines for briefs:
   centered vertically in the viewport (flex `justify-center` +
   `paddingBottom: var(--app-keyboard-inset-bottom, 0px)` for mobile keyboard
   safety). First-run account selection is the exception: render the provider
-  step as a card in the transcript column with the real Composer anchored below
-  it, disabled with a setup hint and kept expanded even on mobile. The setup
-  card is app UI, not a fabricated durable assistant message; sign-in stays
-  outside chat.
+  step as a full-width card in the transcript column with the real Composer
+  anchored below it, disabled with a setup hint and kept expanded even on
+  mobile. The setup card is app UI, not a fabricated durable assistant message;
+  sign-in stays outside chat.
 - Old home routes (`/`, `/assistant`, `/workshop`) redirect to
   `/sessions/create` once the server confirms the session is empty; they keep
   their parse-level routes so programmatic `/workshop` navigation (e.g. Backlog
