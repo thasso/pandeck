@@ -5813,6 +5813,9 @@ interface ViewedModelSelection {
 function readySettings(settings: AppSettings): Partial<AppSettings> {
   return {
     models: settings.models,
+    // The shell names the assistant and checks that its configured model is
+    // available before Settings is opened. Preserve user-chosen names as well.
+    permanentAssistant: settings.permanentAssistant,
     calendarDaySession: settings.calendarDaySession,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,

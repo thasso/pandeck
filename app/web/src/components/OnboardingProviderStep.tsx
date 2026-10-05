@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   CredentialProfileProvider,
   CredentialProfileSummary,
+  DisplayMessage,
 } from "@assistant/shared";
 import {
   createCredentialProfile,
@@ -9,22 +10,52 @@ import {
   startOpenAiProfileLogin,
 } from "../lib/credentialProfiles.ts";
 import { beginOnboarding, finishOnboarding } from "../lib/onboarding.ts";
+import { AssistantMessage } from "./AssistantMessage.tsx";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
+import type { TranscriptViewPrefs } from "./transcriptView.ts";
 import { Spinner } from "./ui/load.tsx";
 import { ProviderIcon } from "./ui/ProviderIcon.tsx";
 
+/** Local-only welcome copy, rendered by the same assistant-message UI as real replies. */
+function welcomeMessage(assistantName: string): DisplayMessage {
+  // The configured name is plain text even though the message body uses Markdown.
+  const name = assistantName
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[\\`*_{}\[\]()#+\-.!|>]/g, "\\$&");
+  return {
+    id: "onboarding-welcome",
+    role: "assistant",
+    blocks: [
+      {
+        kind: "text",
+        text: `Hey! I’m ${name}, your Personal Assistant in Pandeck. I’ll help you get settled in, then we can get to work together.\n\nTo actually chat, I need an AI provider to power my replies. Pick Claude or OpenAI below and sign in outside this conversation. You can switch providers later.`,
+      },
+    ],
+  };
+}
+const WELCOME_VIEW: TranscriptViewPrefs = {
+  showThinking: false,
+  showTools: false,
+  expandThinking: false,
+  expandTools: false,
+  wrapToolLines: false,
+};
+
 /**
  * @component OnboardingProviderStep
- * @purpose The first assistant-chat card: connect one explicitly chosen,
- * isolated AI account before conversational setup can begin.
+ * @purpose A scripted first-run greeting followed by a chat card to connect
+ * one isolated AI account before conversational setup can begin.
  * @useWhen A fresh installation has no completed onboarding and is on the new-chat landing.
  * @avoidWhen Managing established accounts; use the Settings account cards instead.
  * @intent Keep login outside chat, never reuse protected CLI/default profiles,
  * and resume an interrupted sign-in without creating another account.
  */
 export function OnboardingProviderStep({
+  assistantName = "Larry",
   onComplete,
 }: {
+  assistantName?: string;
   onComplete: () => void;
 }) {
   const [profiles, setProfiles] = useState<CredentialProfileSummary[]>([]);
@@ -113,23 +144,32 @@ export function OnboardingProviderStep({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-surface">
       <div className="mx-auto w-full max-w-3xl px-4 py-6">
+        <section
+          aria-labelledby="onboarding-welcome-title"
+          data-role="assistant"
+          className="mb-6"
+        >
+          <h1
+            id="onboarding-welcome-title"
+            className="mb-3 text-title font-semibold text-fg"
+          >
+            Welcome to Pandeck
+          </h1>
+          <AssistantMessage
+            message={welcomeMessage(assistantName)}
+            view={WELCOME_VIEW}
+          />
+        </section>
         <article
           aria-labelledby="onboarding-account-title"
           className="w-full rounded-2xl border border-line bg-panel p-6 shadow-sm sm:p-8"
         >
-          <p className="text-caption font-medium text-accent">
-            Getting started
-          </p>
-          <h1
+          <h2
             id="onboarding-account-title"
-            className="mt-2 text-title font-semibold text-fg"
+            className="text-heading font-semibold text-fg"
           >
             Connect your first AI account
-          </h1>
-          <p className="mt-3 text-body text-muted">
-            Choose an account to power your Pandeck while we get set up. You can
-            add others or switch later.
-          </p>
+          </h2>
           <div className="mt-6 grid gap-3 sm:grid-cols-2">
             {(["claude", "openai-codex"] as const).map((provider) => (
               <button
@@ -235,10 +275,6 @@ export function OnboardingProviderStep({
               {error}
             </p>
           ) : null}
-          <p className="mt-6 text-caption text-faint">
-            We won't use an existing CLI login automatically. Sign-in happens
-            outside chat.
-          </p>
         </article>
       </div>
       {claudeLogin ? (

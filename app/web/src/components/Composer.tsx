@@ -149,7 +149,7 @@ interface Props {
   streaming: boolean;
   disabled: boolean;
   /** Explain why an unavailable chat cannot accept text yet. */
-  disabledPlaceholder?: string;
+  disabledPlaceholder?: string | undefined;
   /** Non-interactive setup preview: stay expanded on mobile, with only text and Send. */
   disabledPreview?: boolean;
   contextInfo: ContextInfo | null;

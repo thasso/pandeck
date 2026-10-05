@@ -104,8 +104,8 @@ interface Props {
    * nothing left to hold — the shell then owns the top safe-area inset itself.
    */
   header?: ReactNode;
-  left?: ShellPanel;
-  right?: ShellPanel;
+  left?: ShellPanel | undefined;
+  right?: ShellPanel | undefined;
   /**
    * The screen's back action, made available as a pull from the leading screen
    * edge on small screens. The shell owns the gesture because the screen it
@@ -113,7 +113,8 @@ interface Props {
    * the host decides only whether this screen HAS a back action and whether the
    * edge is the app's to claim at all (`lib/nativeShell.ts`).
    */
-  edgeBack?: { enabled: boolean; onBack: () => void | Promise<void> };
+  edgeBack?:
+    { enabled: boolean; onBack: () => void | Promise<void> } | undefined;
   /** Main pane content. */
   children: ReactNode;
 }

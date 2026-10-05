@@ -24,23 +24,27 @@ do not see the setup prompt. A settings or account change after onboarding uses
 normal Settings; there is no ongoing first-run lock.
 
 The first screen lives in the main chat pane on `/sessions/create` (and also
-covers `/assistant` while setup is pending). Provider selection is a local
-assistant-style chat card above the real composer, which stays visible but
-cannot accept text or send until an account is configured. The card is not a
-stored/model-generated message; account sign-in still happens outside chat.
-While that screen is visible, both side panels, the global topbar (including
-back/forward), and the mobile edge-back gesture are omitted without changing
-saved layout preferences. The chat header says “Welcome to Pandeck” instead of
-naming an unavailable session. Once setup completes the normal shell returns.
-Until an account is connected, the session inspector's Profile section says “No
-account or model yet” rather than showing the draft's fallback model and
-thinking level. The desktop right-panel chooser keeps Personal Assistant
-disabled until its model is available on a signed-in account; Knowledge and
-Worktree panels are opt-in in Settings → Appearance. The sidebar bottom bar
-offers only Settings until an account and model are ready, without losing the
-user's saved navigation order. The empty Sessions inbox does not direct users to
-New Session before it is available. Account login and retry stay there; only the
-conversational setup follows in the Personal Assistant. The account step is not
-tied to any CLI/default account, and an interrupted sign-in can be resumed with
-the same named account. The provider/model can be changed later in Settings →
-Personal Assistant.
+covers `/assistant` while setup is pending). The assistant defaults to the name
+Larry (existing custom names are preserved). A scripted, app-authored greeting
+headed “Welcome to Pandeck” uses the shared assistant-message renderer to
+introduce Larry in the message text and explain why a provider account is
+needed; a full-width account-selection card follows it above the real composer,
+which stays visible but cannot accept text or send until an account is
+configured. The card has no redundant setup label or CLI footnote. Neither the
+greeting nor the card is stored or model-generated; account sign-in still
+happens outside chat. While that screen is visible, both side panels, the global
+topbar (including back/forward), and the mobile edge-back gesture are omitted
+without changing saved layout preferences. The chat header says “Welcome to
+Pandeck” instead of naming an unavailable session. Once setup completes the
+normal shell returns. Until an account is connected, the session inspector's
+Profile section says “No account or model yet” rather than showing the draft's
+fallback model and thinking level. The desktop right-panel chooser keeps
+Personal Assistant disabled until its model is available on a signed-in account;
+Knowledge and Worktree panels are opt-in in Settings → Appearance. The sidebar
+bottom bar offers only Settings until an account and model are ready, without
+losing the user's saved navigation order. The empty Sessions inbox does not
+direct users to New Session before it is available. Account login and retry stay
+there; only the conversational setup follows in the Personal Assistant. The
+account step is not tied to any CLI/default account, and an interrupted sign-in
+can be resumed with the same named account. The provider/model can be changed
+later in Settings → Personal Assistant.

@@ -2139,7 +2139,7 @@ function AppContent() {
   // lands; a missing row is unknown, not evidence that naming is in progress.
   const pendingSessionTitle =
     route.name === "permanentAssistant"
-      ? state.settings.permanentAssistant.name || "Personal Assistant"
+      ? state.settings.permanentAssistant.name || "Larry"
       : route.name === "session"
         ? (state.sessions.find((session) => session.id === route.id)?.title ??
           "session")
@@ -4048,7 +4048,7 @@ function AppContent() {
   const displaySessionTitle = onboardingFocus
     ? "Welcome to Pandeck"
     : route.name === "permanentAssistant"
-      ? state.settings.permanentAssistant.name || "Personal Assistant"
+      ? state.settings.permanentAssistant.name || "Larry"
       : isNewChatRoute
         ? sessionShell.title
         : (displaySessionListItem?.title ??
@@ -5788,9 +5788,9 @@ function AppContent() {
           // Never on mobile: the screen rests on the dock's action row, so autofocus
           // would open the keyboard over the quick-start rows before anything is picked.
           draftAutoFocus={!mobileLayout && !onboardingFocus}
-          branchInfo={onboardingFocus ? undefined : branchInfo}
+          branchInfo={onboardingFocus ? null : branchInfo}
           contextBar={onboardingFocus ? undefined : stagedContextBar}
-          contextOpenRequest={onboardingFocus ? undefined : contextSheetRequest}
+          contextOpenRequest={onboardingFocus ? null : contextSheetRequest}
           sendBlockedReason={
             onboardingFocus
               ? undefined
@@ -5837,7 +5837,7 @@ function AppContent() {
               ? switchStagedAgentType
               : undefined
           }
-          dictation={onboardingFocus ? undefined : composerDictation}
+          {...(onboardingFocus ? {} : { dictation: composerDictation })}
         />
       </>
     );
@@ -5847,6 +5847,7 @@ function AppContent() {
         <>
           {onboarding === "required" ? (
             <OnboardingProviderStep
+              assistantName={state.settings.permanentAssistant.name || "Larry"}
               onComplete={() => {
                 setGuidedSetup(true);
                 setOnboarding("complete");
@@ -6240,9 +6241,7 @@ function AppContent() {
         onSelect={openSession}
         onNavAction={runNavAction}
         onOpenBackgroundTasks={openBackgroundTasks}
-        assistantLabel={
-          state.settings.permanentAssistant.name || "Personal Assistant"
-        }
+        assistantLabel={state.settings.permanentAssistant.name || "Larry"}
         availableNavSlots={availableNavSlots}
         onArchive={archiveSession}
         onSettleSession={settleSession}

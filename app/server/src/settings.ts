@@ -101,7 +101,7 @@ function normalizeAppearanceSettings(
   };
 }
 const DEFAULT_PERMANENT_ASSISTANT_SETTINGS: PermanentAssistantSettings = {
-  name: "Personal Assistant",
+  name: "Larry",
   ...DEFAULT_HELPER_MODEL,
   thinkingLevel: "off",
   additionalInstructions: "",
