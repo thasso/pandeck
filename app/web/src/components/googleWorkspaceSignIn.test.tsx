@@ -19,7 +19,6 @@ function render() {
             enabled: false,
             oauthClientConfigured: true,
             refreshTokenConfigured: false,
-            gmailMinutesLabelName: "Minutes",
           },
         } as AppSettings
       }

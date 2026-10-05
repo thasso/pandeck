@@ -49,7 +49,7 @@ const LOG_FORMAT =
   ["%H", "%an", "%ae", "%aI", "%B"].join(FIELD_SEP) + RECORD_SEP;
 
 /** Actor attributed to a KB mutation; drives commit author + `KB-Actor` trailer. */
-export interface KbActor {
+interface KbActor {
   kind: "user" | "agent" | "system";
   id?: string;
   name: string;

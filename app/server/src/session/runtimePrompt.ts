@@ -440,35 +440,3 @@ function assistantTextAfter(
   const text = parts.join("\n").trim();
   return text ? text.slice(0, maxChars) : undefined;
 }
-
-/**
- * Drive one prompt turn on a session AND return the clean assistant text it
- * produced (Task 162: the day scan's visible synthesis turn — the session's
- * Markdown briefing becomes the durable day report). Layers over
- * `promptRuntimeSession`, capturing the accepted user-turn id via `onUserEntry`
- * and reading the completed snapshot; returns undefined if nothing was produced.
- */
-export async function promptRuntimeSessionAndCaptureText(
-  driver: RuntimePromptDriver,
-  text: string,
-  options: RuntimePromptFacadeOptions = {},
-  maxChars = 20_000,
-): Promise<string | undefined> {
-  let capturedTurnId: string | undefined;
-  await promptRuntimeSession(driver, text, {
-    ...options,
-    onUserEntry: (entryId) => {
-      capturedTurnId = entryId;
-      options.onUserEntry?.(entryId);
-    },
-  });
-  if (!capturedTurnId) return undefined;
-  try {
-    const snapshot = sessionRuntime.get(driver.id)?.getSnapshot();
-    return snapshot
-      ? assistantTextAfter(snapshot.entries, capturedTurnId, maxChars)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}

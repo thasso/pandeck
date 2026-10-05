@@ -8,7 +8,6 @@ import {
   Brain,
   Building2,
   Cable,
-  CalendarClock,
   Clock,
   Cloud,
   Cpu,
@@ -150,16 +149,6 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
       {
         id: "task-intake",
         label: "Task intake agent",
-        icon: <Bot size={15} />,
-      },
-      {
-        id: "day-scan",
-        label: "Day scanner",
-        icon: <CalendarClock size={15} />,
-      },
-      {
-        id: "minutes-scanner",
-        label: "Minutes scanner",
         icon: <Bot size={15} />,
       },
       {

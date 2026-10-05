@@ -212,34 +212,12 @@ const defaultSettings: AppSettings = {
     ...DEFAULT_HELPER_MODEL,
     thinkingLevel: "off",
   },
-  meetingMinutesScanner: {
-    ...DEFAULT_HELPER_MODEL,
-    thinkingLevel: "off",
-    maxSourceChars: 60000,
-    maxSnippetChars: 20000,
-    timeoutMs: 90000,
-  },
   pdfConversion: {
     fallbackEnabled: true,
     provider: "claude-sdk",
     modelId: "sonnet",
     thinkingLevel: "off",
     timeoutMs: 180000,
-  },
-  calendarDaySession: {
-    ...DEFAULT_HELPER_MODEL,
-    thinkingLevel: "off",
-  },
-  dayScan: {
-    identities: {},
-    taskProposalPolicy: "auto",
-    changelogIssueCap: 100,
-    maxMinutesDocsPerRun: 6,
-    schedule: {
-      enabled: false,
-      time: "07:00",
-      synthesize: true,
-    },
   },
   speechToText: {
     enabled: true,
@@ -291,7 +269,6 @@ const defaultSettings: AppSettings = {
     oauthClientConfigured: false,
     refreshTokenConfigured: false,
     gmailArchiveAuthorized: false,
-    gmailMinutesLabelName: "Minutes",
   },
   slack: {
     enabled: false,

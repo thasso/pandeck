@@ -109,7 +109,7 @@ export const INTEGRATION_PATCH_FIELDS: {
   },
   confluence: { enabled: true },
   tempo: { enabled: true, apiBaseUrl: true, clearTokens: true },
-  google: { enabled: true, clearTokens: true, gmailMinutesLabelName: true },
+  google: { enabled: true, clearTokens: true },
   slack: {
     enabled: true,
     disconnect: true,

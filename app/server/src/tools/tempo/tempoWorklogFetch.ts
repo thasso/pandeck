@@ -1,6 +1,6 @@
 /**
- * Tempo worklog retrieval shared by `tempo_list_worklogs`, the full-range
- * export and the day-scan collector: one paged fetch that never stops early
+ * Tempo worklog retrieval shared by `tempo_list_worklogs` and the full-range
+ * export: one paged fetch that never stops early
  * without saying so, server-side issue/project/author filters through Tempo's
  * worklog search, and 429/5xx retry with backoff.
  */

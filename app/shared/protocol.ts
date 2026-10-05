@@ -231,8 +231,8 @@ export function sessionModeOrDefault(mode: string | undefined): SessionMode {
  * nothing about who asked for the run.
  *
  * - `user` — a conversation the user owns. The ONLY scope a broad/default
- *   projection (sidebar, session lists, unread counts, day scan, default
- *   lookup) includes.
+ *   projection (sidebar, session lists, unread counts, default lookup)
+ *   includes.
  * - `internal` — a server-only helper run that exists to attribute token/cost
  *   usage (titles, commit messages, …). Never user-facing.
  * - `subagent` — a session PA runs on the user's behalf under a subagent
@@ -574,57 +574,12 @@ export interface PdfConversionSettings extends CredentialProfilePin {
   timeoutMs: number;
 }
 
-/** Settings for the dedicated no-tool agent that scans meeting minutes for action items. */
-export interface MeetingMinutesScannerSettings extends CredentialProfilePin {
-  provider: string;
-  modelId: string;
-  thinkingLevel: ThinkingLevel;
-  maxSourceChars: number;
-  maxSnippetChars: number;
-  timeoutMs: number;
-}
-
-/** Model used for the calendar's per-day assistant session (the day scan + chat). */
-export interface CalendarDaySessionSettings extends CredentialProfilePin {
-  provider: string;
-  modelId: string;
-  thinkingLevel: ThinkingLevel;
-}
-
-/**
- * The user's own accounts across day-scan sources, so the correlation layer can
- * resolve "me"/"mine" deterministically. All optional; unset identities degrade
- * that source's own-involvement signals instead of breaking collection.
- */
-export interface DayScanIdentities {
-  googleEmail?: string;
-  jiraAccountId?: string;
-  jiraEmail?: string;
-  githubLogin?: string;
-  tempoAccountId?: string;
-}
-
-/**
- * Automatic morning collection so the day-prep view is ready before the day
- * starts (plan phase 8). Builds on the per-day lock/coalescing and the separate
- * collection/synthesis triggers.
- */
-export interface DayScanScheduleSettings {
-  /** When true, the server runs a collection each day at `time` in the user's timezone. */
-  enabled: boolean;
-  /** Local time-of-day "HH:MM" (24h) in the user's timezone ({@link ProfileSettings}) the morning run fires. */
-  time: string;
-  /** Also run synthesis after the scheduled collection so the report is ready. */
-  synthesize: boolean;
-}
-
 /**
  * The app's user. The timezone is the ONE zone every user-local day and time
- * resolves in — the day scan and its schedule, calendar days, memory temporal
- * rules, "today" for Tasks, and the local times integration tools report.
+ * resolves in — calendar days, memory temporal rules, "today" for Tasks, and the local times integration tools report.
  */
 export interface ProfileSettings {
-  /** How prompts and comments name the user; "" leaves them unnamed. */
+  /** How comments name the user; "" falls back to "You". */
   displayName: string;
   /** IANA timezone; "" (or an invalid stored value) follows the server host's zone. */
   timeZone: string;
@@ -633,19 +588,6 @@ export interface ProfileSettings {
    * server host's zone, else "UTC". Ignored on save.
    */
   effectiveTimeZone: string;
-}
-
-/** Settings for the deterministic daily scanner (collection + synthesis pipeline). */
-export interface DayScanSettings {
-  identities: DayScanIdentities;
-  /** `auto` = high AND medium candidates auto-create Tasks (only low needs acceptance); `review` = all require acceptance. */
-  taskProposalPolicy: "auto" | "review";
-  /** Maximum issues selected for Jira changelog fetches per run. */
-  changelogIssueCap: number;
-  /** Maximum minutes documents pushed through extraction/curation per run; the rest defer. */
-  maxMinutesDocsPerRun: number;
-  /** Automatic morning collection/synthesis schedule. */
-  schedule: DayScanScheduleSettings;
 }
 
 /** Settings for the dedicated no-tool agent that refines dictated draft prompts. */
@@ -1107,15 +1049,12 @@ export interface GoogleSettings {
   refreshTokenConfigured: boolean;
   /** Whether the connected grant includes the Gmail permission needed to archive. */
   gmailArchiveAuthorized: boolean;
-  /** Gmail label used by meeting-minutes discovery. */
-  gmailMinutesLabelName: string;
 }
 
 /** Patch sent by the settings UI for runtime Google Workspace preferences/authorization state. */
 export interface GoogleSettingsPatch {
   enabled?: boolean;
   clearTokens?: boolean;
-  gmailMinutesLabelName?: string;
 }
 
 export interface GoogleConnectionStatus {
@@ -1398,10 +1337,7 @@ export interface AppSettings {
   sessionNaming: SessionNamingSettings;
   commitAgent: CommitAgentSettings;
   prAgent: PrAgentSettings;
-  meetingMinutesScanner: MeetingMinutesScannerSettings;
   pdfConversion: PdfConversionSettings;
-  calendarDaySession: CalendarDaySessionSettings;
-  dayScan: DayScanSettings;
   promptRefinement: PromptRefinementSettings;
   speechToText: SpeechToTextSettings;
   taskIntakeAgent: TaskIntakeAgentSettings;
@@ -7546,7 +7482,6 @@ export type ServerMessage =
       requestId: string;
       links: PaObjectLinkResolution[];
     }
-  | { type: "calendarDayScanProgress"; progress: CalendarDayScanProgress }
   | { type: "memoryListResult"; requestId: string; result: MemoryListResult }
   | { type: "memoryGetResult"; requestId: string; lineage: MemoryLineage }
   | {
@@ -7960,16 +7895,11 @@ export type ServerMessage =
     };
 
 /* ============================================================================
- * Calendar view (read-only Google Calendar + per-day meeting-minutes scanner)
+ * Calendar view (read-only Google Calendar + own Tempo worklogs)
  *
  * These DTOs are exchanged over the REST surface under /api/calendar/* (not the
  * WebSocket protocol) but live here so the web client and server share one
- * source of truth. The calendar view shows the primary Google Calendar; the
- * per-day meeting-minutes scan is run by the normal assistant agent (so it is
- * observable in the chat). The day read-model surfaces what that scan produced:
- * processed meeting-minutes sources (ledger), linked project Tasks, and
- * the persistent executive-summary markdown in the `daily-summaries` knowledge
- * skill.
+ * source of truth.
  * ========================================================================== */
 
 /** A detected video-conference link on an event (clickable to join). */
@@ -8050,148 +7980,4 @@ export interface CalendarWorklogsResponse {
   /** True when issue keys were enriched via Jira. */
   jiraEnriched: boolean;
   worklogs: CalendarWorklogDto[];
-}
-
-export type CalendarScanOutcome =
-  "actions_found" | "no_actions" | "unclear" | "error";
-
-/** A meeting-minutes source the scanner has already processed for a day (ledger). */
-export interface CalendarScanSource {
-  title: string;
-  sourceLink: string;
-  outcome: CalendarScanOutcome;
-  scannedAt: string | null;
-  error?: string;
-  /** CL Tasks generated from this source (the tree's child nodes). */
-  tasks: CalendarDayTaskRef[];
-}
-
-/** A CL Task linked to one of a day's meeting-minutes sources. */
-export interface CalendarDayTaskRef {
-  id: string;
-  title: string;
-  status: TaskStatus;
-}
-
-/** The persistent executive summary for a day, a first-class KB entry. */
-export interface CalendarDaySummary {
-  /** Stable KB entry id, e.g. daily-summary-2026-06-29. */
-  entryId: string;
-  /** KB entry index.md path, e.g. daily-summaries/2026-06-29/index.md. */
-  path: string;
-  markdown: string;
-  updatedAt: string | null;
-}
-
-/** Read-model for a single day: what the (agent-run) scan produced. */
-/** Disposition of one source in a day-scan run: was it even attempted? */
-export type CalendarDaySourceDisposition = "attempted" | "skipped";
-/** Result of one attempted source: did it meet its completeness criteria? */
-export type CalendarDaySourceResult = "complete" | "partial" | "failed";
-
-/** Per-source health row projected from the last collection run's manifest. */
-export interface CalendarDaySourceHealth {
-  key: string;
-  label: string;
-  disposition: CalendarDaySourceDisposition;
-  /** Skip reason when disposition is "skipped" (disabled/unconfigured/intentionally-skipped/deferred). */
-  skipReason?: string;
-  result?: CalendarDaySourceResult;
-  factCount?: number;
-  added?: number;
-  changed?: number;
-  error?: string;
-}
-
-/** Metered minutes-curation substage counts, projected from the run manifest. */
-export interface CalendarDayMinutesSummary {
-  discovered: number;
-  processed: number;
-  /** Skipped via a composite-cache-key hit (unchanged content + versions). */
-  cached: number;
-  /** Deferred past the per-run cap; a later run resumes without reprocessing. */
-  deferred: number;
-  failed: number;
-  tasksCreated: number;
-}
-
-/** Compact health header for the calendar day view, from the last run manifest. */
-export interface CalendarDayRunHealth {
-  runId: string;
-  /** ISO timestamp the run finished collecting. */
-  asOf: string;
-  schemaVersion: number;
-  sources: CalendarDaySourceHealth[];
-  /** Total added+changed across sources — the changes-since-last-scan badge. */
-  changesSinceLastRun: number;
-  /** Minutes-curation substage summary, absent when no minutes docs were discovered. */
-  minutes?: CalendarDayMinutesSummary;
-}
-
-/** A derived/pending Tempo worklog proposal row for the day (state machine in the server). */
-export interface CalendarDayTempoRow {
-  id: string;
-  issueKey: string;
-  startTime: string | null;
-  durationSeconds: number;
-  activityKey: string | null;
-  description: string | null;
-  status:
-    | "proposed"
-    | "user-edited"
-    | "dropped"
-    | "pending-approval"
-    | "executing"
-    | "executed"
-    | "partial"
-    | "failed"
-    | "cancelled"
-    | "declined";
-  resultWorklogId: string | null;
-}
-
-export interface CalendarDayState {
-  date: string;
-  /** True when Google Workspace is configured (so the UI can prompt to connect). */
-  googleConfigured: boolean;
-  /** Id of the assistant session bound to this day, if one has been created. */
-  daySessionId: string | null;
-  /** Processed meeting-minutes sources for the day, from the scan ledger. */
-  sources: CalendarScanSource[];
-  /** CL Tasks linked to the day's meeting-minutes sources. */
-  tasks: CalendarDayTaskRef[];
-  /** The persisted executive summary, if one has been written. */
-  summary: CalendarDaySummary | null;
-  /** Health of the last deterministic collection run, if one has happened. */
-  run: CalendarDayRunHealth | null;
-  /** Tempo logging proposals for the day (excludes dropped/cancelled rows). */
-  tempo: CalendarDayTempoRow[];
-}
-
-export type CalendarScanStepStatus = "pending" | "running" | "done" | "failed";
-
-/** One step of the deterministic day scan, surfaced live in the day panel. */
-export interface CalendarScanStep {
-  key: string;
-  label: string;
-  status: CalendarScanStepStatus;
-  /** Short live detail, e.g. "7/10 sources" or an error message. */
-  detail?: string;
-}
-
-/**
- * Live progress of a day scan (collect → minutes → synthesize). Broadcast to all
- * clients as the server-side deterministic pipeline advances, so the day panel
- * can show the workflow while scanning. `active` is false once the run settles.
- */
-export interface CalendarDayScanProgress {
-  date: string;
-  active: boolean;
-  steps: CalendarScanStep[];
-  /** epoch ms when the scan started. */
-  startedAt: number;
-  /** The day session bound to this scan, once created. */
-  sessionId: string | null;
-  /** Set when the whole run failed outright. */
-  error?: string;
 }

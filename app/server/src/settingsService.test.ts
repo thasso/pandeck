@@ -6,11 +6,7 @@ import {
   SETTINGS_REGISTRY,
   settingDescriptor,
 } from "@assistant/shared/settingsRegistry";
-import type {
-  AppSettings,
-  DayScanIdentities,
-  ServerMessage,
-} from "@assistant/shared";
+import type { AppSettings, ServerMessage } from "@assistant/shared";
 import { DATA_DIR } from "./config.ts";
 import { subscribeIntegrationToolChanges } from "./integrationToolChanges.ts";
 import { getSettings } from "./settings.ts";
@@ -48,21 +44,12 @@ function valueAt(root: unknown, path: string): unknown {
 /**
  * Current settings with every optional field filled in, since defaults leave
  * them out. Account pins are the slots' only optional field and
- * `listSettingsModelSlots` is tested to list every slot; the identities are
- * typed `Required`, so a new one is a type error until it is added here.
+ * `listSettingsModelSlots` is tested to list every slot.
  */
 function populatedSettings(): AppSettings {
   const settings = structuredClone(getSettings());
   for (const { slot } of listSettingsModelSlots(settings))
     slot.credentialProfileId = "cp_fixture";
-  const identities: Required<DayScanIdentities> = {
-    googleEmail: "me@example.com",
-    jiraAccountId: "jira-account",
-    jiraEmail: "me@example.com",
-    githubLogin: "me",
-    tempoAccountId: "tempo-account",
-  };
-  settings.dayScan.identities = identities;
   return settings;
 }
 
@@ -152,11 +139,11 @@ describe("settingsPatchForWrites", () => {
 
   test("several writes to one section combine", () => {
     const patch = settingsPatchForWrites([
-      { path: "dayScan.schedule.enabled", value: true },
-      { path: "dayScan.schedule.time", value: "06:30" },
+      { path: "worktrees.namingAgent.provider", value: "pi" },
+      { path: "worktrees.namingAgent.modelId", value: "model-x" },
     ]);
-    assert.equal(patch.dayScan?.schedule.enabled, true);
-    assert.equal(patch.dayScan?.schedule.time, "06:30");
+    assert.equal(patch.worktrees?.namingAgent?.provider, "pi");
+    assert.equal(patch.worktrees?.namingAgent?.modelId, "model-x");
   });
 
   test("an empty optional field is removed", () => {
@@ -421,10 +408,6 @@ describe("the settings message checks come from the registry", () => {
       [
         { backgroundWork: { ownerSessionCap: "many" } },
         "patch.backgroundWork.ownerSessionCap must be a finite number",
-      ],
-      [
-        { dayScan: { schedule: "07:00" } },
-        "patch.dayScan.schedule must be an object",
       ],
       [{ memory: "on" }, "patch.memory must be an object"],
       [{ skills: { notes: "ON" } }, 'patch.skills.notes must be "on" or "off"'],

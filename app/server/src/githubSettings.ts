@@ -119,11 +119,6 @@ export function updateGithubSettings(
   return publicSettings(next);
 }
 
-export function isGithubConfigured(): boolean {
-  const settings = readPrivate();
-  return settings.enabled && Boolean(settings.token);
-}
-
 /** Optional default owner (org/user) for tool calls that omit one. */
 export function getGithubDefaultOwner(): string {
   return readPrivate().defaultOwner;
