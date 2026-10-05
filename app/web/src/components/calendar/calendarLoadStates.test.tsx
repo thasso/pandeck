@@ -3,16 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { CalendarDayState, CalendarEventDto } from "@assistant/shared";
+import type { CalendarEventDto } from "@assistant/shared";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
 import type { Prefs } from "../../hooks/usePrefs.ts";
-import {
-  failed,
-  idle,
-  loading,
-  ready,
-  refreshing,
-} from "../../lib/loadState.ts";
+import { failed, idle, ready, refreshing } from "../../lib/loadState.ts";
 import { CalendarDetailPanel } from "./CalendarDetailPanel.tsx";
 import { CalendarPage } from "./CalendarPage.tsx";
 import { groupEventsByDay } from "./calendarDates.ts";
@@ -58,19 +52,6 @@ function event(title: string): CalendarEventDto {
   };
 }
 
-function dayState(): CalendarDayState {
-  return {
-    date: DATE,
-    googleConfigured: true,
-    daySessionId: null,
-    sources: [],
-    tasks: [],
-    summary: null,
-    run: null,
-    tempo: [],
-  };
-}
-
 /** A settled controller; each test moves only the state it is about. */
 function controller(
   overrides: Partial<CalendarController> = {},
@@ -87,8 +68,6 @@ function controller(
     eventsByDay: groupEventsByDay(shown, "Europe/Berlin"),
     worklogs: idle(),
     worklogsByDay: new Map(),
-    day: ready(dayState()),
-    dayState: dayState(),
     selectedEvent: null,
     setView: () => {},
     goPrev: () => {},
@@ -99,7 +78,6 @@ function controller(
     selectEvent: () => {},
     refreshEvents: () => {},
     refreshWorklogs: () => {},
-    refreshDay: () => {},
     ...overrides,
   };
 }
@@ -123,17 +101,7 @@ function page(calendar: CalendarController): string {
 
 function panel(calendar: CalendarController): string {
   return renderToStaticMarkup(
-    <CalendarDetailPanel
-      calendar={calendar}
-      hasDaySession={false}
-      onOpenDaySession={() => {}}
-      onNewSession={() => {}}
-      onLogTime={() => {}}
-      onOpenReport={() => {}}
-      scanProgress={null}
-      onScan={() => {}}
-      onOpenTask={() => {}}
-    />,
+    <CalendarDetailPanel calendar={calendar} onNewSession={() => {}} />,
   );
 }
 
@@ -193,14 +161,7 @@ describe("CalendarDetailPanel", () => {
         root!.render(
           <CalendarDetailPanel
             calendar={controller({ selectedEvent: selectedEvent() })}
-            hasDaySession={false}
-            onOpenDaySession={() => {}}
             onNewSession={() => {}}
-            onLogTime={() => {}}
-            onOpenReport={() => {}}
-            scanProgress={null}
-            onScan={() => {}}
-            onOpenTask={() => {}}
           />,
         ),
       );
@@ -218,27 +179,9 @@ describe("CalendarDetailPanel", () => {
     );
   });
 
-  it("reserves the report while the day loads instead of hinting at a scan", () => {
-    const html = panel(controller({ day: loading(), dayState: null }));
-    expect(html).toContain('aria-label="Loading the day report"');
-    expect(html).toContain("animate-pulse");
-    expect(html).not.toContain("Scan this day to build");
-  });
-
-  it("reports a day that failed to load", () => {
-    const html = panel(
-      controller({ day: failed("day read-model unavailable"), dayState: null }),
-    );
-    expect(html).toContain(
-      "Could not load this day: day read-model unavailable",
-    );
-    // A failure never reads as a day with nothing on it.
-    expect(html).not.toContain("Scan this day to build");
-  });
-
-  it("keeps the day on screen while it refreshes", () => {
-    const html = panel(controller({ day: refreshing(dayState()) }));
-    expect(html).toContain("Refreshing the day");
-    expect(html).toContain("Scan this day to build");
+  it("asks for an event when none is selected", () => {
+    const html = panel(controller());
+    expect(html).toContain("Select an event to see its details.");
+    expect(html).toContain("New session");
   });
 });

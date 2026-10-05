@@ -1,13 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import type {
-  CalendarDayState,
-  CalendarEventDto,
-  CalendarWorklogDto,
-} from "@assistant/shared";
+import type { CalendarEventDto, CalendarWorklogDto } from "@assistant/shared";
 import {
   fetchCalendarEvents,
   fetchCalendarWorklogs,
-  fetchDayState,
 } from "../lib/calendarApi.ts";
 import {
   dataOf,
@@ -54,14 +49,6 @@ export interface CalendarController {
   /** My logged Tempo worklogs for the visible range; `idle` while the overlay is off. */
   worklogs: LoadState<CalendarWorklogDto[]>;
   worklogsByDay: Map<string, CalendarWorklogDto[]>;
-  /**
-   * Day read-model for `selectedDate`. Switching days is a switch of OBJECT, so
-   * it drops to `loading` rather than leaving yesterday's report under today's
-   * date (R3); a failure is reported, never rendered as an empty day.
-   */
-  day: LoadState<CalendarDayState>;
-  /** `dataOf(day)` — the read-model once it arrived, retained under an error. */
-  dayState: CalendarDayState | null;
   selectedEvent: CalendarEventDto | null;
   setView: (view: CalendarView) => void;
   goPrev: () => void;
@@ -75,8 +62,6 @@ export interface CalendarController {
   refreshEvents: () => void;
   /** Refetch the Tempo overlay for the visible range. */
   refreshWorklogs: () => void;
-  /** Refetch the SAME day, keeping the panel on screen (R2). */
-  refreshDay: () => void;
 }
 
 const NO_EVENTS: CalendarEventDto[] = [];
@@ -124,14 +109,6 @@ export function useCalendar({
       async () => (await fetchCalendarEvents(range.from, range.to)).events,
       [range.from, range.to],
     ),
-    { enabled: active },
-  );
-
-  // Day read-model for the selected day: a day switch is a switch of object, so
-  // the key change drops the previous day's report (R3).
-  const { state: day, reload: refreshDay } = useFetchState(
-    selectedDate,
-    useCallback((date: string) => fetchDayState(date), []),
     { enabled: active },
   );
 
@@ -244,8 +221,6 @@ export function useCalendar({
     eventsByDay,
     worklogs,
     worklogsByDay,
-    day,
-    dayState: dataOf(day) ?? null,
     selectedEvent,
     setView,
     goPrev,
@@ -256,6 +231,5 @@ export function useCalendar({
     selectEvent,
     refreshEvents,
     refreshWorklogs,
-    refreshDay,
   };
 }

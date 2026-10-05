@@ -49,7 +49,6 @@ describe("integration tool exposure", () => {
     assert.ok(!names.has("jira_lookup"));
     assert.ok(!names.has("tempo_list_worklogs"));
     assert.ok(!names.has("google_calendar_list_events"));
-    assert.ok(!names.has("meeting_minutes_discovery"));
     assert.ok(!names.has("slack_search"));
     assert.ok(!names.has("github_list_notifications"));
     assert.ok(names.has("current_time"));
@@ -163,7 +162,6 @@ describe("integration tool exposure", () => {
 
     const google = namesFor({ ...ALL_OFF, google: true });
     assert.ok(google.has("google_calendar_list_events"));
-    assert.ok(google.has("meeting_minutes_discovery"));
     assert.ok(!google.has("slack_search"));
 
     const huddlesOnly = namesFor({ ...ALL_OFF, slackHuddles: true });

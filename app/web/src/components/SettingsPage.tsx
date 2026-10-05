@@ -403,16 +403,6 @@ export function SettingsPage({
               onTestGoogle={onTestGoogle}
             />
           )}
-          {section === "minutes-scanner" && (
-            <MeetingMinutesScannerSection
-              models={agentModels}
-              settings={settings}
-              onUpdate={onUpdate}
-            />
-          )}
-          {section === "day-scan" && (
-            <DayScanSection settings={settings} onUpdate={onUpdate} />
-          )}
           {section === "pdf-conversion" && (
             <PdfConversionSection
               models={agentModels}
@@ -995,9 +985,8 @@ function ProfileSection({
       <h2 className="text-body font-semibold">Profile</h2>
       <p className="mt-1 text-caption text-muted">
         Who the assistant works for. The timezone decides what
-        &ldquo;today&rdquo; means everywhere: the calendar, Task planning, the
-        day scan and its morning run, memory reminders, and the local times
-        tools report.
+        &ldquo;today&rdquo; means everywhere: the calendar, Task planning,
+        memory reminders, and the local times tools report.
       </p>
 
       <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
@@ -1013,9 +1002,8 @@ function ProfileSection({
             className="settings-input"
           />
           <p className="mt-1 text-caption text-faint">
-            Used to name you in meeting-minutes extraction and on your new
-            comments. Left empty, you are &ldquo;the user&rdquo; and comments
-            read &ldquo;You&rdquo;.
+            Used to name you on your new comments. Left empty, you are
+            &ldquo;the user&rdquo; and comments read &ldquo;You&rdquo;.
           </p>
         </Field>
         <Field label="Timezone">
@@ -1718,354 +1706,6 @@ function WorktreesSection({
             save({ mergeAgent: { ...worktrees.mergeAgent, ...patch } })
           }
         />
-      </div>
-    </div>
-  );
-}
-
-function MeetingMinutesScannerSection({
-  models,
-  settings,
-  onUpdate,
-}: {
-  models: AccountModelOption[];
-  settings: AppSettings;
-  onUpdate: (patch: Partial<AppSettings>) => void;
-}) {
-  const scanner = settings.meetingMinutesScanner;
-
-  const save = (patch: Partial<typeof scanner>) =>
-    onUpdate({ meetingMinutesScanner: { ...scanner, ...patch } });
-
-  const numberValue = (
-    value: string,
-    fallback: number,
-    min: number,
-    max: number,
-  ) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return fallback;
-    return Math.min(max, Math.max(min, Math.floor(parsed)));
-  };
-
-  // Separate model for the calendar's per-day assistant session (day scan + chat).
-  const day = settings.calendarDaySession;
-  const saveDay = (patch: Partial<typeof day>) =>
-    onUpdate({ calendarDaySession: { ...day, ...patch } });
-
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Minutes scanner</h2>
-      <p className="mt-1 text-caption text-muted">
-        The meeting-minutes scan tool uses a dedicated no-tool sub-agent to turn
-        one bounded minutes source into structured action candidates.
-      </p>
-
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <AgentModelFields
-          models={models}
-          provider={scanner.provider}
-          modelId={scanner.modelId}
-          thinkingLevel={scanner.thinkingLevel}
-          credentialProfileId={scanner.credentialProfileId}
-          modelLabel="Scanner model"
-          onChange={save}
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Max source chars">
-            <input
-              type="number"
-              min={settingBounds("meetingMinutesScanner.maxSourceChars").min}
-              max={settingBounds("meetingMinutesScanner.maxSourceChars").max}
-              value={scanner.maxSourceChars}
-              onChange={(e) =>
-                save({
-                  maxSourceChars: numberValue(
-                    e.target.value,
-                    scanner.maxSourceChars,
-                    settingBounds("meetingMinutesScanner.maxSourceChars").min,
-                    settingBounds("meetingMinutesScanner.maxSourceChars").max,
-                  ),
-                })
-              }
-              className="settings-input"
-            />
-          </Field>
-
-          <Field label="Max snippet chars">
-            <input
-              type="number"
-              min={settingBounds("meetingMinutesScanner.maxSnippetChars").min}
-              max={settingBounds("meetingMinutesScanner.maxSnippetChars").max}
-              value={scanner.maxSnippetChars}
-              onChange={(e) =>
-                save({
-                  maxSnippetChars: numberValue(
-                    e.target.value,
-                    scanner.maxSnippetChars,
-                    settingBounds("meetingMinutesScanner.maxSnippetChars").min,
-                    settingBounds("meetingMinutesScanner.maxSnippetChars").max,
-                  ),
-                })
-              }
-              className="settings-input"
-            />
-          </Field>
-
-          <Field label="Timeout ms">
-            <input
-              type="number"
-              min={settingBounds("meetingMinutesScanner.timeoutMs").min}
-              max={settingBounds("meetingMinutesScanner.timeoutMs").max}
-              value={scanner.timeoutMs}
-              onChange={(e) =>
-                save({
-                  timeoutMs: numberValue(
-                    e.target.value,
-                    scanner.timeoutMs,
-                    settingBounds("meetingMinutesScanner.timeoutMs").min,
-                    settingBounds("meetingMinutesScanner.timeoutMs").max,
-                  ),
-                })
-              }
-              className="settings-input"
-            />
-          </Field>
-        </div>
-
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-faint">
-          The scanner receives only the selected source text/snippets and
-          returns strict JSON. It has no tools and cannot search Drive, Gmail,
-          Calendar, or create Tasks.
-        </div>
-      </div>
-
-      <h2 className="mt-8 text-body font-semibold">Calendar day session</h2>
-      <p className="mt-1 text-caption text-muted">
-        The calendar's per-day chat (the one-click day scan and your follow-up
-        questions) runs as a full assistant session using this model. Unlike the
-        scanner above, it has the assistant's tools (Calendar, Drive, Gmail,
-        Tasks, knowledge).
-      </p>
-      <div className="mt-4 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <AgentModelFields
-          models={models}
-          provider={day.provider}
-          modelId={day.modelId}
-          thinkingLevel={day.thinkingLevel}
-          credentialProfileId={day.credentialProfileId}
-          modelLabel="Day session model"
-          onChange={saveDay}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DayScanSection({
-  settings,
-  onUpdate,
-}: {
-  settings: AppSettings;
-  onUpdate: (patch: Partial<AppSettings>) => void;
-}) {
-  const dayScan = settings.dayScan;
-  const save = (patch: Partial<typeof dayScan>) =>
-    onUpdate({ dayScan: { ...dayScan, ...patch } });
-  const saveIdentities = (patch: Partial<typeof dayScan.identities>) =>
-    save({ identities: { ...dayScan.identities, ...patch } });
-  const saveSchedule = (patch: Partial<typeof dayScan.schedule>) =>
-    save({ schedule: { ...dayScan.schedule, ...patch } });
-  const clampInt = (
-    value: string,
-    fallback: number,
-    min: number,
-    max: number,
-  ) => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) return fallback;
-    return Math.min(max, Math.max(min, Math.floor(parsed)));
-  };
-
-  const identities = dayScan.identities;
-  const schedule = dayScan.schedule;
-  const identityFields: Array<{
-    key: keyof typeof identities;
-    label: string;
-    placeholder: string;
-  }> = [
-    {
-      key: "googleEmail",
-      label: "Google email",
-      placeholder: "you@example.com",
-    },
-    { key: "jiraEmail", label: "Jira email", placeholder: "you@example.com" },
-    {
-      key: "jiraAccountId",
-      label: "Jira account id",
-      placeholder: "5b10a2844c…",
-    },
-    { key: "githubLogin", label: "GitHub login", placeholder: "octocat" },
-    {
-      key: "tempoAccountId",
-      label: "Tempo account id",
-      placeholder: "5b10a2844c…",
-    },
-  ];
-
-  return (
-    <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Day scanner</h2>
-      <p className="mt-1 text-caption text-muted">
-        The deterministic daily scan collects your day's signals (calendar,
-        Jira, GitHub, Tempo, tasks, and — where connected — Slack and email)
-        into an atomic Knowledge Base commit, then optionally synthesizes an
-        attention-first report. These settings govern how "me" is resolved, how
-        the report behaves, and when it runs automatically.
-      </p>
-
-      <h3 className="mt-6 text-body font-semibold">Identities</h3>
-      <p className="mt-1 text-caption text-muted">
-        How the scan resolves "me"/"mine" across sources. All optional — an
-        unset identity just weakens that source's own-involvement signal, it
-        never breaks collection.
-      </p>
-      <div className="mt-3 grid gap-4 rounded-xl border border-line bg-panel p-4 sm:grid-cols-2">
-        {identityFields.map((field) => (
-          <Field key={field.key} label={field.label}>
-            <input
-              type="text"
-              value={identities[field.key] ?? ""}
-              onChange={(e) =>
-                saveIdentities({
-                  [field.key]: e.target.value.trim() || undefined,
-                } as Partial<typeof identities>)
-              }
-              placeholder={field.placeholder}
-              className="settings-input"
-            />
-          </Field>
-        ))}
-      </div>
-
-      <h3 className="mt-8 text-body font-semibold">Report behavior</h3>
-      <div className="mt-3 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <Field label="Task proposal policy">
-          <select
-            value={dayScan.taskProposalPolicy}
-            onChange={(e) =>
-              save({
-                taskProposalPolicy: e.target
-                  .value as typeof dayScan.taskProposalPolicy,
-              })
-            }
-            className="settings-input"
-          >
-            <option value="auto">
-              Auto — high & medium confidence create Tasks; only low needs
-              acceptance
-            </option>
-            <option value="review">
-              Review — every task proposal requires your acceptance
-            </option>
-          </select>
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Jira changelog issue cap">
-            <input
-              type="number"
-              min={settingBounds("dayScan.changelogIssueCap").min}
-              max={settingBounds("dayScan.changelogIssueCap").max}
-              value={dayScan.changelogIssueCap}
-              onChange={(e) =>
-                save({
-                  changelogIssueCap: clampInt(
-                    e.target.value,
-                    dayScan.changelogIssueCap,
-                    settingBounds("dayScan.changelogIssueCap").min,
-                    settingBounds("dayScan.changelogIssueCap").max,
-                  ),
-                })
-              }
-              className="settings-input"
-            />
-            <p className="mt-1 text-caption text-faint">
-              Max issues selected for changelog fetches per run.
-            </p>
-          </Field>
-          <Field label="Max minutes docs per run">
-            <input
-              type="number"
-              min={settingBounds("dayScan.maxMinutesDocsPerRun").min}
-              max={settingBounds("dayScan.maxMinutesDocsPerRun").max}
-              value={dayScan.maxMinutesDocsPerRun}
-              onChange={(e) =>
-                save({
-                  maxMinutesDocsPerRun: clampInt(
-                    e.target.value,
-                    dayScan.maxMinutesDocsPerRun,
-                    settingBounds("dayScan.maxMinutesDocsPerRun").min,
-                    settingBounds("dayScan.maxMinutesDocsPerRun").max,
-                  ),
-                })
-              }
-              className="settings-input"
-            />
-            <p className="mt-1 text-caption text-faint">
-              Minutes documents extracted per run; the rest defer to a later
-              run.
-            </p>
-          </Field>
-        </div>
-      </div>
-
-      <h3 className="mt-8 text-body font-semibold">Scheduled morning run</h3>
-      <p className="mt-1 text-caption text-muted">
-        Automatically run a collection each day so the prep view is ready before
-        the day starts. It reuses the same pipeline as a manual scan, so a
-        scheduled run and a refresh you trigger never conflict.
-      </p>
-      <div className="mt-3 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-caption text-fg">
-          <input
-            type="checkbox"
-            checked={schedule.enabled}
-            onChange={(e) => saveSchedule({ enabled: e.target.checked })}
-            className="size-4 accent-accent"
-          />
-          Run a collection automatically each morning
-        </label>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Time">
-            <input
-              type="time"
-              value={schedule.time}
-              disabled={!schedule.enabled}
-              onChange={(e) => saveSchedule({ time: e.target.value })}
-              className="settings-input disabled:opacity-50"
-            />
-            <p className="mt-1 text-caption text-faint">
-              In your timezone ({settings.profile.effectiveTimeZone}), set under
-              Profile.
-            </p>
-          </Field>
-        </div>
-        <label
-          className={`flex items-center gap-2 text-caption ${schedule.enabled ? "text-fg" : "text-faint"}`}
-        >
-          <input
-            type="checkbox"
-            checked={schedule.synthesize}
-            disabled={!schedule.enabled}
-            onChange={(e) => saveSchedule({ synthesize: e.target.checked })}
-            className="size-4 accent-accent"
-          />
-          Also synthesize the report after collecting
-        </label>
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-faint">
-          You can always run or re-run the scan manually from the calendar day
-          view; the schedule is just an automatic trigger.
-        </div>
       </div>
     </div>
   );
@@ -3049,9 +2689,6 @@ export function GoogleWorkspaceSection({
 }) {
   const google = settings.google;
   const [enabled, setEnabled] = useState(google.enabled);
-  const [gmailMinutesLabelName, setGmailMinutesLabelName] = useState(
-    google.gmailMinutesLabelName || "Minutes",
-  );
   const [oauthStartedAt, setOauthStartedAt] = useState<number | null>(null);
   const [oauthPhase, setOauthPhase] = useState<"idle" | "opened" | "checking">(
     "idle",
@@ -3063,8 +2700,7 @@ export function GoogleWorkspaceSection({
 
   useEffect(() => {
     setEnabled(google.enabled);
-    setGmailMinutesLabelName(google.gmailMinutesLabelName || "Minutes");
-  }, [google.enabled, google.gmailMinutesLabelName]);
+  }, [google.enabled]);
 
   const checkedOnOpen = useRef(false);
   useEffect(() => {
@@ -3127,17 +2763,10 @@ export function GoogleWorkspaceSection({
     };
   }, [oauthStartedAt, onTestGoogle]);
 
-  const patch = (): GoogleSettingsPatch => ({
-    enabled,
-    gmailMinutesLabelName: gmailMinutesLabelName.trim() || "Minutes",
-  });
-
-  const savePreferences = () => onUpdateGoogle(patch());
-
   const toggleEnabled = () => {
     const next = !enabled;
     setEnabled(next);
-    onUpdateGoogle({ ...patch(), enabled: next });
+    onUpdateGoogle({ enabled: next });
   };
 
   const disconnect = () => {
@@ -3149,7 +2778,6 @@ export function GoogleWorkspaceSection({
     onSaveAndTestGoogle({
       enabled: false,
       clearTokens: true,
-      gmailMinutesLabelName: gmailMinutesLabelName.trim() || "Minutes",
     });
   };
 
@@ -3290,31 +2918,6 @@ export function GoogleWorkspaceSection({
             </button>
           )}
         </div>
-
-        {connected && (
-          <details className="border-t border-line pt-4 text-caption">
-            <summary className="cursor-pointer text-muted">
-              Meeting notes preference
-            </summary>
-            <Field label="Email label">
-              <div className="flex gap-2">
-                <input
-                  value={gmailMinutesLabelName}
-                  onChange={(e) => setGmailMinutesLabelName(e.target.value)}
-                  className="settings-input"
-                  placeholder="Minutes"
-                />
-                <button
-                  type="button"
-                  onClick={savePreferences}
-                  className="settings-button"
-                >
-                  Save
-                </button>
-              </div>
-            </Field>
-          </details>
-        )}
       </div>
 
       {oauthError && <ErrorNote message={oauthError} />}

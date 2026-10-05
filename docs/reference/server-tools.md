@@ -473,25 +473,15 @@ persona toolsets.
   `tempoSettings.getTempoToolConfig`, gate `tempo`): `tempo_list_worklogs` and
   `tempo_mutate_worklogs` — which stages a PENDING `ApprovalCard` via the shared
   `../../pendingApprovals.ts` subsystem (kind `tempoWorklog`) and registers the
-  `tempoWorklog` executor. UNIFIED ENGINE (time-logging-routing plan): a CREATE
-  row is given a unique day-plan row id at staging (`tempo:<date>:chat-<uuid>`,
-  travels as the Tempo `clientId`) and, on approval, is routed through the SAME
-  day-plan engine as the calendar "Log my time" (`logCreateThroughDayPlan`:
-  `upsertProposal` → serialized CAS → `submitDayTempoRow` → profile learning via
-  `dayScan/tempoProfile`), so a chat-logged entry appears on the calendar day
-  plan, reconciles on the next scan, and teaches the routing profile. An
-  `update` (existing worklog) row is not a day-plan proposal and writes
-  directly. Tempo reuses the Jira integration's creds for enrichment/author
-  resolution and degrades when Jira is off — `tempo_list_worklogs` returns raw
-  issue ids only (no key/summary/url), and `tempo_mutate_worklogs` hard-requires
-  Jira. It also exports `fetchWorklogs` (the day-scan Tempo collector's fetch
-  core), `submitDayTempoRow` (the day-scan Tempo assistant's single-row write,
-  reusing the same issue-key/activity validation + write path; the row id
-  travels as `clientId`), and `getCalendarWorklogs({from,to})` (the calendar
-  Tempo overlay's own-worklog projection → `CalendarWorklogsResponse`, reusing
-  the same fetch + author filter + Jira issue enrichment; degrades to
-  `enabled:false` instead of throwing when Tempo is off, backing the
-  `GET /api/calendar/worklogs` endpoint).
+  `tempoWorklog` executor, which writes each approved row straight to Tempo.
+  Tempo reuses the Jira integration's creds for enrichment/author resolution and
+  degrades when Jira is off — `tempo_list_worklogs` returns raw issue ids only
+  (no key/summary/url), and `tempo_mutate_worklogs` hard-requires Jira. It also
+  exports `getCalendarWorklogs({from,to})` (the calendar Tempo overlay's
+  own-worklog projection → `CalendarWorklogsResponse`, reusing the same fetch +
+  author filter + Jira issue enrichment; degrades to `enabled:false` instead of
+  throwing when Tempo is off, backing the `GET /api/calendar/worklogs`
+  endpoint).
 - `knowledge/memoryTools.ts` owns the memory tool surface shared by every
   persona: `memory_search` (deterministic lexical/metadata recall, results carry
   stable `id` + current `revision`) and the batch `memory_manage`
@@ -687,24 +677,7 @@ persona toolsets.
 - `slack/slackHuddleTools.ts` exclusively owns `slack_huddle_history`. It is the
   only tool allowed to request the browser-session projection, returns no raw
   Slack objects or secrets, bounds history/output/metadata calls, and may use
-  personal OAuth only for participant/conversation/thread enrichment. It also
-  exports the day-scan core `collectOwnHuddleAttendanceForDay` (Task 171): an
-  OWN-attendance projection (channel id, timing, my duration, self status) that
-  ALSO resolves WHO ELSE was in each huddle — participant display names via
-  bounded personal-OAuth `users.info` + status (the context for what the huddle
-  was about; names + status only, never content) — reused by the `slack-huddles`
-  day-scan collector.
-- `google/googleMeetingMinutesDiscoveryTools.ts` and
-  `google/meetingMinutesScannerTools.ts` own the
-  `meeting_minutes_discovery`/`meeting_minutes_scan_source` tools AND export
-  reusable cores consumed by the day-scan minutes pipeline
-  (`../../dayScan/minutesPipeline.ts`): `gatherMeetingMinutesCandidates`
-  (dedup/score-sorted discovery, no processed-ledger filtering),
-  `loadMinutesSource` (Drive/Gmail content fetch), and `extractMinutesActions`
-  (the metered scanner sub-agent that reads the FULL fetched minutes/transcript
-  — bounded by `maxSourceChars`, not keyword snippets — and returns a faithful
-  summary + owner action candidates). Keep the tool `execute` paths and these
-  cores behaviourally aligned.
+  personal OAuth only for participant/conversation/thread enrichment.
 
 ## Contract notes and rationale
 

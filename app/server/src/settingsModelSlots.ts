@@ -92,18 +92,6 @@ export function listSettingsModelSlots(
       slot: settings.taskIntakeAgent,
     },
     {
-      key: "meetingMinutesScanner",
-      label: "Minutes scanner",
-      section: "minutes-scanner",
-      slot: settings.meetingMinutesScanner,
-    },
-    {
-      key: "calendarDaySession",
-      label: "Calendar day session",
-      section: "minutes-scanner",
-      slot: settings.calendarDaySession,
-    },
-    {
       key: "pdfConversion",
       label: "PDF conversion fallback",
       section: "pdf-conversion",

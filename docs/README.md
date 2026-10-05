@@ -47,9 +47,6 @@ only binding rules; everything else lives here.
 - `user-profile.md` — who the app works for: the profile display name and the
   one timezone every user-local day and time resolves in, its host fallback,
   use-time resolution, and where the name appears.
-- `day-scan.md` — the Daily Scanner v2 pipeline: staged collection/synthesis,
-  the disposition-vs-result and delta contracts, origin-tagged self-exclusion,
-  per-source semantics, the privacy hybrid, and day-entry conventions.
 - `ui-shell.md` (under `app/web/docs/`) — the binding UI shell concept: the
   three-pane layout, navigation rules, object linking, the right object panel,
   and the small-screen screens model.
@@ -259,7 +256,6 @@ search them for the module you need rather than reading them whole.
 | `reference/server-claude-sdk.md`      | `app/server/src/claudeSdk/`        |
 | `reference/server-pi-sdk.md`          | `app/server/src/piSdk/`            |
 | `reference/server-memory.md`          | `app/server/src/memory/`           |
-| `reference/server-day-scan.md`        | `app/server/src/dayScan/`          |
 | `reference/server-speech.md`          | `app/server/src/speech/`           |
 | `reference/server-package-proxy.md`   | `app/server/src/packageProxy/`     |
 | `reference/native-shell.md`           | `app/shell/`                       |

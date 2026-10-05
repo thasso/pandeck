@@ -920,16 +920,6 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     },
   }),
   acknowledgeMissingWorktree: fields({ id: STRING }),
-  calendarDayActivate: fields(
-    { date: STRING },
-    {
-      scan: BOOLEAN,
-      text: STRING,
-      modelProvider: STRING,
-      modelId: STRING,
-      thinkingLevel: STRING,
-    },
-  ),
   forkSession: fields({ id: STRING, entryId: STRING, position: STRING }),
   createDraftSession: fields(
     { agentType: STRING, draftText: STRING },

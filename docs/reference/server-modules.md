@@ -480,7 +480,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   log is untouched either way: the transcript keeps every message, and the card
   marks where the model's context now starts.
 - `mcp/`, `tools/`, `session/`, `piSdk/`, `claudeSdk/`, `worktrees/`, `memory/`,
-  `dayScan/`, `speech/`, `packageProxy/`, and `db/` have child contracts.
+  `speech/`, `packageProxy/`, and `db/` have child contracts.
 - `gitExec.ts` owns the shared git CLI executor and the per-repository mutation
   lock (`withRepoLock` keyed by `repoLockKey` = the shared git common-dir, so
   the main checkout and every linked worktree serialize on ONE key); domain
@@ -1349,11 +1349,7 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `knowledgeBaseEntry.ts` owns KB entry parsing and v1 schema validation,
   deterministic Markdown/YAML/JSON/JSONL formatting, and the tool-facing
   `commitValidatedKnowledgeChanges` wrapper that validates/formats text writes
-  before the storage layer touches disk. Its `beforeApply` hook also enforces
-  the day-scan artifact guard (`dayScan/pathGuard.ts`): ordinary agent/user
-  commits cannot write day-scan-owned assets or alter a day/meeting entry's
-  generated region — only the `day-scan`/`day-synthesis` actors may (the honest
-  day-chat contract).
+  before the storage layer touches disk.
 - `knowledgeBaseStore.ts` owns the Git-backed KB storage core
   (`KnowledgeBaseStore`) over `DATA_DIR/knowledge`: repo init, path-validated
   atomic `commitChanges` with structured `KB-*` commit trailers (including
@@ -1419,13 +1415,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `tools/knowledgeBaseTools.ts` owns first-class KB v1 agent tools (`kb_tree`,
   `kb_search`, `kb_get_entry`, `kb_write_entry`, `kb_edit_entry`,
   `kb_add_asset`, `kb_move_entry`, `kb_history`, `kb_diff`, `kb_read_asset`
-  (bounded UTF-8 read of one committed entry-local asset, e.g. a day-scan
-  snapshot/rollup JSON; refuses binary), plus asset/extract helpers). Tool
-  outputs are compact JSON by default, and mutations must route through KB
-  validation/storage helpers with Git commit metadata. `kb_add_asset` accepts
-  exactly one source — inline `contentBase64`/`contentText` or
-  `sourceAttachmentId` (a `sessionAttachments` id copied server-side so raw
-  uploaded/Slack bytes bypass the model context).
+  (bounded UTF-8 read of one committed entry-local asset; refuses binary), plus
+  asset/extract helpers). Tool outputs are compact JSON by default, and
+  mutations must route through KB validation/storage helpers with Git commit
+  metadata. `kb_add_asset` accepts exactly one source — inline
+  `contentBase64`/`contentText` or `sourceAttachmentId` (a `sessionAttachments`
+  id copied server-side so raw uploaded/Slack bytes bypass the model context).
 - `contacts.ts` owns the contacts domain layer over `db/contactStore.ts`: the
   general people directory (NOT time-logging specific; time-logging routing is
   one consumer). Id derivation, field normalization/bounds, identity-based
@@ -1942,17 +1937,17 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   `clearProfilePins` drops the account's pins and reports the affected slots.
 - `settingsModelSlots.ts` owns the ONE inventory of configured model slots in
   `AppSettings` (helper one-shots, permanent assistant, memory processor,
-  worktree naming/merge, day session, PDF fallback, minutes scanner) and the
-  single resolver deciding which provider account each runs on. A slot's
-  optional `credentialProfileId` pin is validated ONCE on write
-  (`sanitizeSlotPinsDeep`, called by `updateSettings`: an unknown account or one
-  of the wrong provider is never persisted; a pin to a temporarily disabled
-  account survives). `resolveSlotAccount`/`accountForSlot` resolve at USE time
-  and NEVER fail a run: a pin that is missing, disabled, or cross-provider
-  degrades to the automatic account (first enabled account of that provider,
-  `automaticProfileIdFor`), because disabling or deleting an account must not be
-  able to break background automation. Unset means automatic. Every spawner and
-  one-shot resolves through it, and pi model handles are then looked up with
+  worktree naming/merge, PDF fallback) and the single resolver deciding which
+  provider account each runs on. A slot's optional `credentialProfileId` pin is
+  validated ONCE on write (`sanitizeSlotPinsDeep`, called by `updateSettings`:
+  an unknown account or one of the wrong provider is never persisted; a pin to a
+  temporarily disabled account survives). `resolveSlotAccount`/`accountForSlot`
+  resolve at USE time and NEVER fail a run: a pin that is missing, disabled, or
+  cross-provider degrades to the automatic account (first enabled account of
+  that provider, `automaticProfileIdFor`), because disabling or deleting an
+  account must not be able to break background automation. Unset means
+  automatic. Every spawner and one-shot resolves through it, and pi model
+  handles are then looked up with
   `findModelForProfile`/`selectPiModelWithFallback` in the SAME account that
   will run them — model availability is per account.
   `settingsModelSlots.test.ts` walks the settings tree for
@@ -2664,23 +2659,23 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   later run would execute in the app CWD — a different repository than its own
   transcript ran against. The invariant itself lives at the shared run boundary
   (`session/runtimePrompt.ts`, which throws), NOT here: peer delivery,
-  `session_send_prompt`, day scans, the post-reload continuation and the review
-  handoffs all reach a session without passing through a `connection.ts`
-  handler. `guardMissingWorktree` is the interactive half — `prompt`,
-  `runSlashCommand` and the existing-session Knowledge handoff check it UP
-  FRONT, so the user gets a clear error before any side effect rather than a
-  failed turn. `runSlashCommand` exempts the commands in
-  `CONTEXT_ONLY_SLASH_COMMANDS` (`/clear` today): they resolve no cwd, so the
-  app-CWD fallback the guard exists to prevent cannot happen, and refusing them
-  would leave a session whose checkout vanished unable to shed its context.
-  Everything else is guarded by DEFAULT, which is why the set lists the exempt
-  commands — `/compact` is on the guarded side because it spawns a provider
-  query in the session's cwd. `acknowledgeMissingWorktree` records the answer
-  per worktree id and clears `SessionListItem.worktreeMissing` /
-  `SessionState.worktreeMissing`. LOADING such a session stays allowed on
-  purpose: the banner offering the acknowledgement lives in the session view,
-  and reading a transcript starts no turn. Covered by the resume and
-  run-boundary tests in `developerWorktreeGuard.test.ts`.
+  `session_send_prompt`, the post-reload continuation and the review handoffs
+  all reach a session without passing through a `connection.ts` handler.
+  `guardMissingWorktree` is the interactive half — `prompt`, `runSlashCommand`
+  and the existing-session Knowledge handoff check it UP FRONT, so the user gets
+  a clear error before any side effect rather than a failed turn.
+  `runSlashCommand` exempts the commands in `CONTEXT_ONLY_SLASH_COMMANDS`
+  (`/clear` today): they resolve no cwd, so the app-CWD fallback the guard
+  exists to prevent cannot happen, and refusing them would leave a session whose
+  checkout vanished unable to shed its context. Everything else is guarded by
+  DEFAULT, which is why the set lists the exempt commands — `/compact` is on the
+  guarded side because it spawns a provider query in the session's cwd.
+  `acknowledgeMissingWorktree` records the answer per worktree id and clears
+  `SessionListItem.worktreeMissing` / `SessionState.worktreeMissing`. LOADING
+  such a session stays allowed on purpose: the banner offering the
+  acknowledgement lives in the session view, and reading a transcript starts no
+  turn. Covered by the resume and run-boundary tests in
+  `developerWorktreeGuard.test.ts`.
 - `provisionFirstSendWorktree` ([Task-240](pa://task/240)) is the "+ New
   worktree" arm of both first-send handlers, sitting beside
   `resolveWorktreeContext` and returning the same shape: it names the branch,
@@ -2707,9 +2702,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - Domain LIST broadcasts are addressed by topic, not fanned out.
   `hub.broadcastTopic(topic, msg)` sends only to connections whose
   `Viewer.wantsTopic(topic)` is true (`BroadcastTopic` in `@assistant/shared`:
-  `tasks`, `projects`, `worktrees`, `knowledge`, `calendar`, `skills`), and
-  every domain broadcaster seam
-  (`taskEvents`/`knowledgeBaseEvents`/`worktreeEvents`/`dayScan/scanProgress`/`skills/skillLibraryEvents`)
+  `tasks`, `projects`, `worktrees`, `knowledge`, `skills`), and every domain
+  broadcaster seam
+  (`taskEvents`/`knowledgeBaseEvents`/`worktreeEvents`/`skills/skillLibraryEvents`)
   exposes exactly one `broadcast` the hub binds to its topic; migrated Projects
   instead expose notify-with-touched-ids from `projectRegistry.ts`, which the
   hub projects into that same topic. A `broadcastAll` seam would let a domain

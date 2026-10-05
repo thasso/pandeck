@@ -238,7 +238,7 @@ function setStatus(id: number, status: TaskStatus): Task | undefined {
 
 /* -------------------------- status provenance ---------------------------- */
 
-/** Who performed a Task status change (day-scan self-exclusion needs this). */
+/** Who performed a Task status change. */
 export interface TaskStatusActor {
   kind: "user" | "agent" | "system";
   /** Session id for agents, subsystem name for system actors. */
@@ -289,20 +289,6 @@ function statusEventFromRow(row: StatusEventRow): TaskStatusEvent {
     actorId: row.actor_id,
     atMs: row.at_ms,
   };
-}
-
-/** Status events in a time window, oldest first (bounded). */
-function statusEventsInWindow(
-  fromMs: number,
-  toMs: number,
-  limit = 500,
-): TaskStatusEvent[] {
-  const rows = getDb()
-    .prepare(
-      "SELECT * FROM task_status_events WHERE at_ms >= ? AND at_ms < ? ORDER BY at_ms ASC LIMIT ?",
-    )
-    .all(fromMs, toMs, limit) as unknown as StatusEventRow[];
-  return rows.map(statusEventFromRow);
 }
 
 /** All status events for one Task, oldest first. */
@@ -700,7 +686,6 @@ export const taskStore = {
   revisions,
   // status provenance
   addStatusEvent,
-  statusEventsInWindow,
   statusEventsForTask,
   // hierarchy
   children,

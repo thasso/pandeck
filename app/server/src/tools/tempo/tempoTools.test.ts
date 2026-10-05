@@ -10,7 +10,7 @@ vi.mock("../../tempoSettings.ts", async (importActual) => ({
 const { getTempoToolConfig } = await import("../../tempoSettings.ts");
 const { tempoListWorklogsTool, tempoMutateWorklogsTool } =
   await import("./tempoTools.ts");
-const { approvalsForSession, setApprovalBroadcastForTests } =
+const { setApprovalBroadcastForTests } =
   await import("../../pendingApprovals.ts");
 
 setApprovalBroadcastForTests(() => {});
@@ -236,64 +236,5 @@ describe("tempo_mutate_worklogs hard Jira requirement", () => {
         ctx as never,
       ),
     ).rejects.toThrow(/requires the Jira integration/i);
-  });
-});
-
-describe("tempo_mutate_worklogs create staging → day plan", () => {
-  test("assigns each create row a unique day-plan row id (travels as Tempo clientId)", async () => {
-    setConfig({
-      jiraHost: "example.atlassian.net",
-      atlassianEmail: "a@b.c",
-      atlassianToken: "t",
-    });
-    globalThis.fetch = vi.fn(async (input: unknown) => {
-      const url = String(input);
-      if (url.includes("/accounts"))
-        return new Response(JSON.stringify({ results: [], metadata: {} }), {
-          status: 200,
-        });
-      if (url.includes("/myself"))
-        return new Response(JSON.stringify({ accountId: "me" }), {
-          status: 200,
-        });
-      if (url.includes("/editmeta"))
-        return new Response(
-          JSON.stringify({
-            fields: { customfield_10800: { allowedValues: [] } },
-          }),
-          { status: 200 },
-        );
-      if (/\/rest\/api\/3\/issue\/[^/]+/.test(url))
-        return new Response(
-          JSON.stringify({ id: "10001", fields: { summary: "S" } }),
-          { status: 200 },
-        );
-      return new Response("{}", { status: 200 });
-    }) as unknown as typeof fetch;
-
-    const sid = "tempo-stage-1";
-    await tempoMutateWorklogsTool.execute(
-      {
-        items: [
-          {
-            action: "create",
-            issueKey: "OPS-1",
-            date: "2026-07-13",
-            startTime: "09:00",
-            timeSpentSeconds: 3600,
-            activityKey: "MEETING",
-            description: "Sync",
-          },
-        ],
-      } as never,
-      { session: { sessionId: sid } } as never,
-    );
-    const card = approvalsForSession(sid).at(-1)!;
-    expect(card.body.kind).toBe("tempoWorklog");
-    if (card.body.kind === "tempoWorklog") {
-      expect(card.body.items[0]!.clientId).toMatch(
-        /^tempo:2026-07-13:chat-[0-9a-f]{8}$/,
-      );
-    }
   });
 });

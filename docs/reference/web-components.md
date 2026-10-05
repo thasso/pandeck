@@ -1220,14 +1220,6 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `AppSettings.profile`: the display name and the IANA timezone, both drafted
   locally and saved on blur, an invalid zone never saved, the placeholder naming
   the server zone an empty value follows (`docs/user-profile.md`).
-- `SettingsPage.tsx`'s `DayScanSection` (settings section id `day-scan`, "Day
-  scanner") owns the full day-scanner config surface backed by
-  `AppSettings.dayScan`: source identities (Google/Jira/GitHub/Tempo, all
-  optional), the task-proposal policy (auto vs review), the Jira changelog cap
-  and minutes-docs-per-run caps, and the scheduled morning run (enable + `HH:MM`
-  time in the profile timezone + optional post-collection synthesis). It writes
-  through the ordinary `updateSettings` patch; the server normalizes the
-  schedule and reconciles the timer.
 - Dictation splits "the mic is occupied" from "the row belongs to the audio":
   `isDictationBusy` (recording/starting/transcribing) disables the mic, while
   `isDictationRecording` (recording/starting) is what takes the composer's field

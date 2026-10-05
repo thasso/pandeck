@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   ApprovalCard,
   CalendarWorklogsResponse,
@@ -22,19 +21,6 @@ import {
   createApproval,
   registerApprovalExecutor,
 } from "../../pendingApprovals.ts";
-import {
-  beginExecuting,
-  finishExecuting,
-  getProposal,
-  requestApproval,
-  upsertProposal,
-} from "../../db/tempoPlanStore.ts";
-import {
-  readTempoProfile,
-  upsertProfileMapping,
-  writeTempoProfile,
-} from "../../dayScan/tempoProfile.ts";
-import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import { errorText } from "../../errors.ts";
 import {
   extractActivity,
@@ -434,13 +420,6 @@ export const tempoMutateWorklogsTool = defineAgentTool<TempoMutationParams>({
       jira,
       params.items ?? [],
     );
-    // Give each CREATE row a unique, stable day-plan row id (travels as the Tempo
-    // clientId) so approval routes it through the shared day-plan engine + learning
-    // and it reconciles with the calendar day plan — same engine as "Log my time".
-    for (const item of items) {
-      if (item.action === "create")
-        item.clientId = `tempo:${item.date}:chat-${randomUUID().slice(0, 8)}`;
-    }
     const title =
       items.length === 1
         ? `Log time on ${items[0]!.issueKey}`
@@ -472,58 +451,6 @@ export const tempoMutateWorklogsTool = defineAgentTool<TempoMutationParams>({
   },
 });
 
-/**
- * Route one CREATE worklog through the shared day-plan engine (the SAME path as
- * the calendar "Log my time" approve): insert the row, run the serialized
- * CAS state machine, submit to Tempo, and learn the description→issue mapping.
- * Keeps both entry points on one engine so a chat-logged entry reconciles with
- * the calendar day plan and teaches the routing profile.
- */
-async function logCreateThroughDayPlan(
-  store: KnowledgeBaseStore,
-  sessionId: string,
-  item: TempoWorklogMutationItemDisplay,
-): Promise<void> {
-  const rowId = item.clientId;
-  upsertProposal({
-    id: rowId,
-    date: item.date,
-    issueKey: item.issueKey,
-    startTime: item.startTime,
-    durationSeconds: item.timeSpentSeconds,
-    activityKey: item.activityKey,
-    description: item.description,
-    evidence: [`session:${sessionId}`],
-  });
-  requestApproval(rowId, null);
-  if (!beginExecuting(rowId))
-    throw new Error(
-      "This Tempo row is no longer approvable (cancelled or already submitting).",
-    );
-  try {
-    const worklogId = await submitDayTempoRow(getProposal(rowId)!);
-    finishExecuting(rowId, "executed", worklogId);
-    item.resultWorklogId = worklogId;
-    // Learn the description→issue mapping from the confirmed submission (best-effort).
-    try {
-      const profile = await readTempoProfile(store);
-      await writeTempoProfile(
-        store,
-        upsertProfileMapping(profile, {
-          titleMatch: item.description,
-          issueKey: item.issueKey,
-          activityKey: item.activityKey ?? undefined,
-        }),
-      );
-    } catch {
-      /* profile learning is best-effort */
-    }
-  } catch (err) {
-    finishExecuting(rowId, "failed");
-    throw err;
-  }
-}
-
 /** Execute an approved Tempo worklog mutation: write each row, recording per-item results. */
 registerApprovalExecutor("tempoWorklog", {
   async execute(card: ApprovalCard) {
@@ -532,26 +459,19 @@ registerApprovalExecutor("tempoWorklog", {
     const items = card.body.items;
     const config = await getTempoToolConfig();
     const authorAccountId = await resolveTempoAuthorAccountId(config);
-    const store = new KnowledgeBaseStore();
     let succeeded = 0;
     for (const item of items) {
       try {
-        if (item.action === "create") {
-          // Shared day-plan engine: reconciles with the calendar + teaches the profile.
-          await logCreateThroughDayPlan(store, card.sessionId, item);
-        } else {
-          // Updating an existing worklog is not a day-plan proposal; write directly.
-          const written = await executeMutationItem(
-            config,
-            authorAccountId,
-            item,
-          );
-          item.resultWorklogId = String(
-            written.tempoWorklogId ?? written.id ?? item.worklogId ?? "",
-          );
-          item.resultSelf =
-            typeof written.self === "string" ? written.self : null;
-        }
+        const written = await executeMutationItem(
+          config,
+          authorAccountId,
+          item,
+        );
+        item.resultWorklogId = String(
+          written.tempoWorklogId ?? written.id ?? item.worklogId ?? "",
+        );
+        item.resultSelf =
+          typeof written.self === "string" ? written.self : null;
         delete item.error;
         succeeded += 1;
       } catch (err) {
@@ -650,52 +570,6 @@ export async function getCalendarWorklogs({
   };
 }
 
-/**
- * Submit ONE worklog for the day-scan Tempo assistant, reusing the same
- * issue-key→id/activity validation (`buildMutationItems`) and write
- * (`executeMutationItem`) as the agent tool. The caller's row id travels as the
- * Tempo `clientId`. Requires Jira (issue-key/activity validation). Returns the
- * created worklog id. Throws on validation/write failure so the state machine
- * can record `failed`.
- */
-export async function submitDayTempoRow(row: {
-  id: string;
-  issueKey: string;
-  date: string;
-  startTime: string | null;
-  durationSeconds: number;
-  activityKey: string | null;
-  description: string | null;
-}): Promise<string> {
-  const config = await getTempoToolConfig();
-  if (!config.jira)
-    throw new Error(
-      "Tempo submission requires the Jira integration enabled (issue-key/activity validation).",
-    );
-  if (!row.activityKey)
-    throw new Error(
-      "This Tempo row has no activity key; set one before approving.",
-    );
-  const authorAccountId = await resolveTempoAuthorAccountId(config);
-  const { items } = await buildMutationItems(config, config.jira, [
-    {
-      action: "create",
-      clientId: row.id,
-      issueKey: row.issueKey,
-      date: row.date,
-      ...(row.startTime != null ? { startTime: row.startTime } : {}),
-      timeSpentSeconds: row.durationSeconds,
-      activityKey: row.activityKey,
-      description: row.description || row.issueKey,
-    },
-  ]);
-  const item = items[0];
-  if (!item) throw new Error("Tempo row could not be prepared for submission.");
-  const written = await executeMutationItem(config, authorAccountId, item);
-  return String(written.tempoWorklogId ?? written.id ?? "");
-}
-
-/** Paged Tempo worklog fetch; exported as the day-scan collector's shared fetch core. */
 async function executeMutationItem(
   config: TempoToolConfig,
   authorAccountId: string,

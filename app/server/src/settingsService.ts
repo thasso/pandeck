@@ -109,7 +109,7 @@ export const INTEGRATION_PATCH_FIELDS: {
   },
   confluence: { enabled: true },
   tempo: { enabled: true, apiBaseUrl: true, clearTokens: true },
-  google: { enabled: true, clearTokens: true, gmailMinutesLabelName: true },
+  google: { enabled: true, clearTokens: true },
   slack: {
     enabled: true,
     disconnect: true,
@@ -280,13 +280,6 @@ async function settingsWritten(
       const { rotatePermanentAssistantSession } =
         await import("./permanentAssistant.ts");
       await rotatePermanentAssistantSession();
-    });
-  // The schedule fires in the profile timezone, so a zone change re-arms it.
-  if (wrote("dayScan") || wrote("profile"))
-    await effect("re-arming the day scan", async () => {
-      const { reconcileDayScanSchedule } =
-        await import("./dayScan/schedule.ts");
-      reconcileDayScanSchedule();
     });
   if (wrote("slack"))
     await effect("reconnecting Slack", async () => {

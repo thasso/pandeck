@@ -22,26 +22,22 @@ ignores it.
 `effectiveTimeZone` is the only zone that user-local days and times resolve in.
 It covers:
 
-- the day scan (day windows, JQL bounds, minutes meeting dates, Tempo start
-  times) and its scheduled morning run;
 - calendar day buckets and range bounds in the web client;
 - "today" and "tomorrow" for Task due and plan filters;
 - memory temporal rules (recurring weekdays, observation snapshots);
 - the local times and `date` parameters of the Google, GitHub and Slack tools;
 - the default zone of `current_time`.
 
-`memory.timezone` and `dayScan.schedule.timeZone` no longer exist, and stale
-stored keys are ignored. A static `slack.timezone` (config file or
-`SLACK_TIMEZONE`) still pins the Slack tools to a deployment zone. It is unset
-by default, so they follow the profile too.
+`memory.timezone` no longer exists, and a stale stored key is ignored. A static
+`slack.timezone` (config file or `SLACK_TIMEZONE`) still pins the Slack tools to
+a deployment zone. It is unset by default, so they follow the profile too.
 
 The server reads the zone at use time through `userTimeZone()` in
 `app/server/src/userProfile.ts`, so a change applies without a restart. Never
 capture it in a module-level constant or hardcode a zone. The parsed profile is
 cached per version of the settings file: each call checks the file's inode, size
 and mtime, and `updateSettings` also drops the cache, so hot formatters cost no
-file read while edits still apply at once. A profile change also re-arms the
-day-scan schedule. The web client reads the zone from
+file read while edits still apply at once. The web client reads the zone from
 `settings.profile.effectiveTimeZone`, which `App` provides to components through
 `hooks/useUserTimeZone.ts`. Every zone-dependent helper in
 `components/calendar/calendarDates.ts` takes the zone explicitly. Until the
@@ -66,6 +62,3 @@ end of the gap.
   unset. Persisted comments keep the name they were stored with.
 - Worktree comments store only that the user wrote them. The projection names
   them with the current display name, or `"You"`.
-- The meeting-minutes scanner prompt is built per run. It refers to "the user",
-  followed by `(<displayName>)` when a name is set, and uses gender-neutral
-  wording.

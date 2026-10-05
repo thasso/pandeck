@@ -46,7 +46,7 @@ import {
   type NodeRef,
 } from "./db/links.ts";
 import { getForgejoBaseUrl } from "./forgejoSettings.ts";
-import { localDateForInstant } from "./dayScan/dayWindow.ts";
+import { localDateOf } from "@assistant/shared/zonedTime";
 import { userTimeZone } from "./userProfile.ts";
 
 export interface TaskListFilter {
@@ -117,7 +117,7 @@ export interface UpdateTaskInput {
   archivedAt?: number | null;
   /**
    * Who performs this mutation. Recorded as durable status-change provenance
-   * when the patch changes `status` (day-scan self-exclusion relies on it).
+   * when the patch changes `status`.
    * Defaults to a generic system actor when omitted.
    */
   actor?: TaskStatusActor;
@@ -1358,9 +1358,7 @@ export function shiftLocalDateKey(
   days: number,
   timeZone = userTimeZone(),
 ): string {
-  const date = new Date(
-    `${localDateForInstant(base.getTime(), timeZone)}T00:00:00Z`,
-  );
+  const date = new Date(`${localDateOf(base.getTime(), timeZone)}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
@@ -1370,7 +1368,7 @@ function localDateKeyOffset(days: number): string {
 }
 
 function localDateKey(date: Date): string {
-  return localDateForInstant(date.getTime(), userTimeZone());
+  return localDateOf(date.getTime(), userTimeZone());
 }
 
 function preview(markdown: string): string | undefined {

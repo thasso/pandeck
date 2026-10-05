@@ -190,29 +190,6 @@ export function getContact(id: string): Contact | null {
   return contactStore.get(id);
 }
 
-/**
- * Find a contact by an observed display name (e.g. a Meet/huddle participant):
- * exact case-insensitive full-name match first, else a unique all-tokens match.
- * Null when there is no match or the token match is ambiguous. Used by
- * deterministic participant→area routing.
- */
-export function findContactByName(displayName: string): Contact | null {
-  const name = clean(displayName, MAX_NAME);
-  if (!name) return null;
-  const lower = name.toLowerCase();
-  const all = contactStore.listAll();
-  const exact = all.filter((c) => c.name.toLowerCase() === lower);
-  if (exact.length === 1) return exact[0] ?? null;
-  if (exact.length > 1) return null; // ambiguous
-  const tokens = lower.split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return null;
-  const tokenMatches = all.filter((c) => {
-    const hay = c.name.toLowerCase();
-    return tokens.every((t) => hay.includes(t));
-  });
-  return tokenMatches.length === 1 ? (tokenMatches[0] ?? null) : null;
-}
-
 export function deleteContact(id: string): boolean {
   return contactStore.remove(id);
 }

@@ -342,7 +342,7 @@ test("acknowledging the missing worktree unblocks that session only", async () =
 
 /**
  * `promptRuntimeSessionWithRuntime` is the ONE door every run goes through —
- * queued peer delivery, `session_send_prompt`, review handoffs, day scans, the
+ * queued peer delivery, `session_send_prompt`, review handoffs, the
  * post-reload continuation, approval/question resumes and the merge agent all
  * arrive here without passing a Connection handler. The check must therefore
  * hold with no browser involved, and hold BEFORE the runtime session is created

@@ -26,7 +26,6 @@ import {
   type KbCommitResult,
   type KbFileChange,
 } from "./knowledgeBaseStore.ts";
-import { assertDayScanArtifactsProtected } from "./dayScan/pathGuard.ts";
 
 export interface KbEntryDocument {
   frontmatter: KbEntryFrontmatterV1;
@@ -42,15 +41,6 @@ export interface KbEntryValidationResult {
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const KB_ID_RE = /^[a-z0-9][a-z0-9._-]{1,127}$/;
 const WRAP_COLUMN = 80;
-
-const FRONTMATTER_BODY_RE = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)([\s\S]*)$/;
-
-/** An entry file's body: frontmatter stripped, newlines normalized, trimmed. */
-export function entryBodyText(fileContent: string): string {
-  const match = FRONTMATTER_BODY_RE.exec(fileContent);
-  const body = match ? (match[1] ?? "") : fileContent;
-  return body.replace(/\r\n?/g, "\n").trim();
-}
 
 export function parseKbEntryMarkdown(
   content: string,
@@ -168,10 +158,6 @@ export async function commitValidatedKnowledgeChanges(
   assertUniqueEntryIdsInChangeSet(entryWrites);
   const result = await store.commitChanges(prepared, meta, {
     beforeApply: async () => {
-      // Server-side day-scan artifact guard (honest day-chat contract): ordinary
-      // agent/user KB commits cannot touch day-scan-owned assets or a day/meeting
-      // entry's generated region — only the day-scan/synthesis runner may.
-      await assertDayScanArtifactsProtected(store, prepared, meta.actor);
       await assertUniqueEntryIdsInRepo(store, entryWrites, deletedEntryPaths);
     },
   });

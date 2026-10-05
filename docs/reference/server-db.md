@@ -254,35 +254,33 @@ facade.
   every migrated row becomes a `done` suggestion. `taskStore` also owns durable
   Task status-change provenance (`task_status_events`, migration
   `0021_task_status_events.sql`: from/to status + actor kind/id per change,
-  recorded by `../tasks.ts` `updateTask` from the caller-supplied `actor`); the
-  day scanner's self-exclusion reads it via
-  `statusEventsInWindow`/`statusEventsForTask`. `setParent`/`setProject` are
-  also where the "a subtask lives in its parent's project" invariant is kept
-  (`docs/tasks.md`): a move inherits the new parent's project for the node and
-  its subtree, and an assignment cascades down it. They are the only seam all
-  four write paths share — the Backlog drag reaches `setParent` through
-  `../tasks.ts` `reorderTasks` without passing `applyRelations`. Both RETURN the
-  other rows they moved (a project cascade is a write to a whole subtree), so
-  the caller can report them through the change-notification seam.
-  `nextSortOrder(parentId)` answers the other half of joining a group: the free
-  manual position a Task takes when nobody stated one, so no row ever reaches
-  the Backlog without a place of its own and the client never has to infer one
-  from a field a status change moves. The two groups take opposite ends. A Task
-  joining the ROOT is an arrival that has to be seen, so it goes strictly below
-  the smallest `sort_order` in the table — a value no live row and no archived
-  one still holding its old index can collide with, at the cost of drifting
-  negative until the next drag renumbers the tree. A Task joining a PARENT is
-  part of that parent's plan, and a plan reads top-down, so it is appended after
-  its siblings (archived ones counted, for the same reason). `../tasks.ts` asks
-  on create, on a reparent that states no position, and on unarchive.
-  `tasks.revision` (migration `0040_task_revision.sql`) is the state-event
-  revision: `stampRevisions(ids)` allocates ONE value from the persisted
-  `task_revision` sequence per notification and stamps every touched row with
-  it, including tombstoned ones (a delete event carries a revision too), and
-  `revisions()` reads the whole `{id → revision, live}` index the broadcast
-  flush diffs. The counter is persisted because a restart that handed out
-  numbers a client has already seen would emit events every subscribed browser
-  silently discards.
+  recorded by `../tasks.ts` `updateTask` from the caller-supplied `actor`;
+  `statusEventsForTask` reads it). `setParent`/`setProject` are also where the
+  "a subtask lives in its parent's project" invariant is kept (`docs/tasks.md`):
+  a move inherits the new parent's project for the node and its subtree, and an
+  assignment cascades down it. They are the only seam all four write paths share
+  — the Backlog drag reaches `setParent` through `../tasks.ts` `reorderTasks`
+  without passing `applyRelations`. Both RETURN the other rows they moved (a
+  project cascade is a write to a whole subtree), so the caller can report them
+  through the change-notification seam. `nextSortOrder(parentId)` answers the
+  other half of joining a group: the free manual position a Task takes when
+  nobody stated one, so no row ever reaches the Backlog without a place of its
+  own and the client never has to infer one from a field a status change moves.
+  The two groups take opposite ends. A Task joining the ROOT is an arrival that
+  has to be seen, so it goes strictly below the smallest `sort_order` in the
+  table — a value no live row and no archived one still holding its old index
+  can collide with, at the cost of drifting negative until the next drag
+  renumbers the tree. A Task joining a PARENT is part of that parent's plan, and
+  a plan reads top-down, so it is appended after its siblings (archived ones
+  counted, for the same reason). `../tasks.ts` asks on create, on a reparent
+  that states no position, and on unarchive. `tasks.revision` (migration
+  `0040_task_revision.sql`) is the state-event revision: `stampRevisions(ids)`
+  allocates ONE value from the persisted `task_revision` sequence per
+  notification and stamps every touched row with it, including tombstoned ones
+  (a delete event carries a revision too), and `revisions()` reads the whole
+  `{id → revision, live}` index the broadcast flush diffs. The counter is
+  persisted because a restart that handed out numbers a client has already seen
+  would emit events every subscribed browser silently discards.
 - `taskCommentStore.ts` owns the `task_comments` rows (migration
   `0020_task_comments.sql`): a flat, append-only, chronological activity trace
   per Task (`author_kind` user/agent/system, `author_name`, optional
@@ -435,26 +433,6 @@ facade.
   AUTOINCREMENT identity cannot collide with a preserved historical id. These
   are pure persistence; validation, lifecycle, scope resolution, and idempotency
   policy live in `../memory/`.
-- `daySynthesisStore.ts` owns the day-synthesis application journal (migration
-  `0022_day_synthesis_journal.sql`): `day_synthesis_runs` (run-level
-  `preflight`→`applying`→`applied` + the single run-id-tagged `kb_commit`) and
-  `day_synthesis_candidate_tasks` (the UNIQUE candidate→Task mapping).
-  `ensureCandidateTask` (INSERT OR IGNORE) makes Task creation idempotent so a
-  crash between Task creation and the KB commit resumes rather than duplicating;
-  `listUnterminatedRuns` feeds `../dayScan/synthesisApply.ts` startup
-  reconciliation. Pure persistence; the apply protocol lives in `../dayScan/`.
-- `tempoPlanStore.ts` owns the day Tempo-plan rows (migration
-  `0023_day_tempo_proposals.sql`, widened by `0024_day_tempo_declined.sql`): a
-  SERIALIZED proposal state machine where exactly one transition may win — every
-  change is a status-guarded UPDATE (`WHERE id=? AND status IN (...)`), so a
-  racing approve (`pending-approval → executing`) and cancel (`→ cancelled`)
-  cannot both succeed, and cancellation is refused once `executing`.
-  `declineProposal` (Task 144) is the user-facing deliberate terminal
-  `→ declined`, distinct from a proactive `→ cancelled`; both win only
-  pre-execution. The row id IS the Tempo `clientId`; durable linkage
-  (proposal/result entry ids + returned worklog id) lives on the row. A re-run
-  preserves `user-edited`/`dropped`/`declined`/in-flight rows by id.
-  Projection/reconcile live in `../dayScan/tempoPlan.ts`.
 - `workflowStore.ts` owns the three Workflow Run tables (migration
   `0036_workflow_runs.sql`, [Task-364](pa://task/364),
   `docs/agent-workflows.md`): `workflow_runs` (Task/Project links, recipe

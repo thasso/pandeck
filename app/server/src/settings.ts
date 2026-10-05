@@ -4,11 +4,8 @@ import { dirname, join } from "node:path";
 import type {
   AppearanceSettings,
   AppSettings,
-  CalendarDaySessionSettings,
   ClaudeSdkSettings,
   CommitAgentSettings,
-  DayScanSettings,
-  MeetingMinutesScannerSettings,
   MemoryLearningMode,
   MemorySettings,
   ModelSettings,
@@ -181,16 +178,6 @@ function normalizeSpeechToTextSettings(
   };
 }
 
-const DEFAULT_MEETING_MINUTES_SCANNER_SETTINGS: MeetingMinutesScannerSettings =
-  {
-    ...DEFAULT_HELPER_MODEL,
-    // Extraction now reads the FULL minutes/transcript, so give it room to reason.
-    thinkingLevel: "medium",
-    maxSourceChars: 60_000,
-    maxSnippetChars: 20_000,
-    timeoutMs: 90_000,
-  };
-
 const DEFAULT_PDF_CONVERSION_SETTINGS: PdfConversionSettings = {
   fallbackEnabled: true,
   provider: CLAUDE_SDK_PROVIDER,
@@ -198,44 +185,6 @@ const DEFAULT_PDF_CONVERSION_SETTINGS: PdfConversionSettings = {
   thinkingLevel: "off",
   timeoutMs: 180_000,
 };
-
-const DEFAULT_CALENDAR_DAY_SESSION_SETTINGS: CalendarDaySessionSettings = {
-  ...DEFAULT_HELPER_MODEL,
-  thinkingLevel: "off",
-};
-
-const DEFAULT_DAY_SCAN_SETTINGS: DayScanSettings = {
-  identities: {},
-  taskProposalPolicy: "auto",
-  changelogIssueCap: 100,
-  maxMinutesDocsPerRun: 6,
-  schedule: {
-    enabled: false,
-    time: "07:00",
-    synthesize: true,
-  },
-};
-
-const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
-
-/** Normalize a stored day-scan schedule (clamp/validate the time). */
-function normalizeDayScanSchedule(
-  stored: Partial<DayScanSettings["schedule"]> | undefined,
-): DayScanSettings["schedule"] {
-  const base = DEFAULT_DAY_SCAN_SETTINGS.schedule;
-  const time =
-    typeof stored?.time === "string" && TIME_OF_DAY_RE.test(stored.time.trim())
-      ? stored.time.trim()
-      : base.time;
-  return {
-    enabled: Boolean(stored?.enabled),
-    time,
-    synthesize:
-      stored?.synthesize === undefined
-        ? base.synthesize
-        : Boolean(stored.synthesize),
-  };
-}
 
 const DEFAULT_TASK_INTAKE_AGENT_SETTINGS: TaskIntakeAgentSettings = {
   ...DEFAULT_HELPER_MODEL,
@@ -542,23 +491,9 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
       ...DEFAULT_PR_AGENT_SETTINGS,
       ...(stored.prAgent ?? {}),
     },
-    meetingMinutesScanner: {
-      ...DEFAULT_MEETING_MINUTES_SCANNER_SETTINGS,
-      ...(stored.meetingMinutesScanner ?? {}),
-    },
     pdfConversion: {
       ...DEFAULT_PDF_CONVERSION_SETTINGS,
       ...(stored.pdfConversion ?? {}),
-    },
-    calendarDaySession: {
-      ...DEFAULT_CALENDAR_DAY_SESSION_SETTINGS,
-      ...(stored.calendarDaySession ?? {}),
-    },
-    dayScan: {
-      ...DEFAULT_DAY_SCAN_SETTINGS,
-      ...(stored.dayScan ?? {}),
-      identities: { ...(stored.dayScan?.identities ?? {}) },
-      schedule: normalizeDayScanSchedule(stored.dayScan?.schedule),
     },
     promptRefinement: {
       ...DEFAULT_PROMPT_REFINEMENT_SETTINGS,
@@ -624,26 +559,11 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...(patch.sessionNaming ? { sessionNaming: patch.sessionNaming } : {}),
     ...(patch.commitAgent ? { commitAgent: patch.commitAgent } : {}),
     ...(patch.prAgent ? { prAgent: patch.prAgent } : {}),
-    ...(patch.meetingMinutesScanner
-      ? { meetingMinutesScanner: patch.meetingMinutesScanner }
-      : {}),
     ...(patch.pdfConversion
       ? {
           pdfConversion: {
             ...DEFAULT_PDF_CONVERSION_SETTINGS,
             ...patch.pdfConversion,
-          },
-        }
-      : {}),
-    ...(patch.calendarDaySession
-      ? { calendarDaySession: patch.calendarDaySession }
-      : {}),
-    ...(patch.dayScan
-      ? {
-          dayScan: {
-            ...DEFAULT_DAY_SCAN_SETTINGS,
-            ...patch.dayScan,
-            schedule: normalizeDayScanSchedule(patch.dayScan.schedule),
           },
         }
       : {}),

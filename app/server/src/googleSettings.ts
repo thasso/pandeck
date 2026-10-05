@@ -53,7 +53,6 @@ const DEFAULTS = {
   oauthState: "",
   oauthStateCreatedAt: 0,
   oauthRedirectUri: "",
-  gmailMinutesLabelName: "Minutes",
 };
 
 interface GoogleSettingsFile {
@@ -66,7 +65,6 @@ interface GoogleSettingsFile {
   oauthState?: string;
   oauthStateCreatedAt?: number;
   oauthRedirectUri?: string;
-  gmailMinutesLabelName?: string;
 }
 
 type StoredGoogleSettings = Required<GoogleSettingsFile>;
@@ -144,10 +142,6 @@ function normalizeStored(
       typeof parsed?.oauthRedirectUri === "string"
         ? parsed.oauthRedirectUri
         : DEFAULTS.oauthRedirectUri,
-    gmailMinutesLabelName: cleanLabel(
-      parsed?.gmailMinutesLabelName,
-      DEFAULTS.gmailMinutesLabelName,
-    ),
   };
 }
 
@@ -188,23 +182,11 @@ function publicSettings(
     oauthClientConfigured: oauthClient.configured,
     refreshTokenConfigured: Boolean(settings.refreshToken),
     gmailArchiveAuthorized: settings.grantedScopes.includes(GMAIL_MODIFY_SCOPE),
-    gmailMinutesLabelName: cleanLabel(
-      settings.gmailMinutesLabelName,
-      DEFAULTS.gmailMinutesLabelName,
-    ),
   };
 }
 
 export function getGoogleSettings(publicBaseUrl?: string): GoogleSettings {
   return publicSettings(readPrivate(), publicBaseUrl);
-}
-
-/** True when Google Workspace is enabled, has OAuth client creds, and is authorized. */
-export function isGoogleConfigured(): boolean {
-  const settings = readPrivate();
-  return Boolean(
-    settings.enabled && googleOAuthClient().configured && settings.refreshToken,
-  );
 }
 
 export function updateGoogleSettings(
@@ -223,10 +205,6 @@ export function updateGoogleSettings(
     oauthState: clearTokens ? "" : current.oauthState,
     oauthStateCreatedAt: clearTokens ? 0 : current.oauthStateCreatedAt,
     oauthRedirectUri: clearTokens ? "" : current.oauthRedirectUri,
-    gmailMinutesLabelName: cleanLabel(
-      patch.gmailMinutesLabelName ?? current.gmailMinutesLabelName,
-      DEFAULTS.gmailMinutesLabelName,
-    ),
   };
   writePrivate(next);
   return publicSettings(next);
@@ -610,8 +588,4 @@ function cleanBaseUrl(value: string): string {
   } catch {
     return `http://localhost:${PORT}`;
   }
-}
-
-function cleanLabel(value: string | undefined, fallback: string): string {
-  return value?.trim() || fallback;
 }

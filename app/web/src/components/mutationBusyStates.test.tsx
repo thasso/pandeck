@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import type {
   ApprovalCard as ApprovalCardData,
-  CalendarDayTempoRow,
   PullRequestCard as PullRequestCardData,
   WorkflowRunSummary,
 } from "@assistant/shared";
@@ -15,7 +14,6 @@ import type {
 import { ApprovalCard } from "./ApprovalCard.tsx";
 import { PullRequestCard } from "./PullRequestCard.tsx";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
-import { TempoPlanCard } from "./calendar/TempoPlanCard.tsx";
 import { CommitWorktreeDialog } from "./worktree/WorktreeDialogs.tsx";
 import { DialogProvider } from "./ui/dialog.tsx";
 
@@ -31,20 +29,6 @@ import { DialogProvider } from "./ui/dialog.tsx";
  * failure lands: a write that has a home on screen reports it there, as an
  * `ErrorNote` (`role="alert"`), never only as a toast.
  */
-
-const tempoResult = { ok: true as const };
-const approveCalls: string[] = [];
-let releaseApprove: (() => void) | null = null;
-
-vi.mock("../lib/calendarApi.ts", () => ({
-  approveTempoRow: (date: string, rowId: string) => {
-    approveCalls.push(`${date}:${rowId}`);
-    return new Promise((resolve) => {
-      releaseApprove = () => resolve(tempoResult);
-    });
-  },
-  declineTempoRow: () => new Promise(() => {}),
-}));
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
@@ -77,8 +61,6 @@ function click(element: Element): void {
 }
 
 beforeEach(() => {
-  approveCalls.length = 0;
-  releaseApprove = null;
   document.body.innerHTML = "";
 });
 
@@ -233,46 +215,6 @@ it("renders a refused card action inline with its controls", () => {
     "not contained",
   );
   expect(button("Merge")).not.toBeNull();
-});
-
-it("keeps both Tempo decisions on the row and spins the one that was pressed", async () => {
-  const rows: CalendarDayTempoRow[] = [
-    {
-      id: "row-1",
-      issueKey: "PA-1",
-      startTime: "09:00",
-      durationSeconds: 3600,
-      activityKey: "dev",
-      description: "Phase 4",
-      status: "proposed",
-      resultWorklogId: null,
-    },
-  ];
-  const host = render(
-    <TempoPlanCard date="2026-08-12" rows={rows} onChanged={() => undefined} />,
-  );
-
-  const approve = host.querySelector<HTMLButtonElement>(
-    '[title="Log to Tempo"]',
-  )!;
-  click(approve);
-  expect(approveCalls).toEqual(["2026-08-12:row-1"]);
-
-  const busyApprove = host.querySelector<HTMLButtonElement>(
-    '[title="Log to Tempo"]',
-  )!;
-  const decline = host.querySelector<HTMLButtonElement>('[title^="Decline"]')!;
-  expect(busyApprove.getAttribute("aria-busy")).toBe("true");
-  expect(busyApprove.disabled).toBe(true);
-  // The row keeps BOTH controls while one runs: a row that drops its buttons
-  // for a bare spinner moves everything below it and forgets what it offered.
-  expect(decline).not.toBeNull();
-  expect(decline.disabled).toBe(true);
-  expect(host.textContent).toContain("PA-1");
-
-  await act(async () => {
-    releaseApprove?.();
-  });
 });
 
 const workflowRun: WorkflowRunSummary = {

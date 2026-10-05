@@ -95,34 +95,6 @@ export interface SlackToolConfig {
   source: string;
 }
 
-/**
- * Non-throwing config for the day-scan Slack SIGNAL collector (Task 140). Unlike
- * `getSlackPublicApiConfig`, it returns null when Slack is disabled/unconfigured
- * (readiness → skipped, not failed) and carries the user's own account id so the
- * collector can scope to mentions/own-authored messages/saved items only.
- */
-export interface SlackDaySignalConfig {
-  token: string;
-  accountUserId: string;
-  workspaceHost: string;
-  teamId: string;
-  timezone: string;
-}
-
-export function getSlackDaySignalConfig(): SlackDaySignalConfig | null {
-  const settings = readPrivate();
-  if (!settings.enabled) return null;
-  const token = process.env.SLACK_USER_TOKEN || settings.userToken;
-  if (!token || token.includes("your-")) return null;
-  return {
-    token,
-    accountUserId: settings.accountUserId,
-    workspaceHost: SLACK_STATIC_CONFIG.workspaceHost,
-    teamId: SLACK_STATIC_CONFIG.teamId,
-    timezone: slackTimeZone(),
-  };
-}
-
 /** Dedicated projection for the experimental Huddle tool; no other caller receives browser credentials. */
 export interface SlackHuddleConfig {
   enabled: true;

@@ -225,36 +225,6 @@ describe("viewing a stored session", () => {
     expect(JSON.stringify(ePrompt?.content)).toContain("meant for E");
   });
 
-  test("opening a calendar day shows its session without opening its harness", async () => {
-    const sent: ServerMessage[] = [];
-    const connection = new Connection(fakeSocket(sent));
-    const { acquired } = storedSession("stored-day");
-    vi.spyOn(hub, "broadcastSessions").mockResolvedValue(undefined);
-    const { setDaySessionId, clearDaySession } =
-      await import("./calendarDaySessions.ts");
-    setDaySessionId("2026-09-24", "stored-day");
-    try {
-      // A bare activation — no text, no scan, no time logging — is the calendar
-      // panel embedding the day's chat. That is a read.
-      await connection.handle({
-        type: "calendarDayActivate",
-        date: "2026-09-24",
-      } as ClientMessage);
-      await settle();
-
-      expect(acquired).toEqual([]);
-      const snapshot = sent.find((m) => m.type === "snapshot");
-      expect(snapshot?.type === "snapshot" && snapshot.snapshot.sessionId).toBe(
-        "stored-day",
-      );
-      expect(
-        (connection as unknown as { viewing: unknown }).viewing,
-      ).toBeInstanceOf(ViewSession);
-    } finally {
-      clearDaySession("2026-09-24");
-    }
-  });
-
   test("a control command cannot land on the session a queued navigation moved to", async () => {
     const sent: ServerMessage[] = [];
     const connection = new Connection(fakeSocket(sent));

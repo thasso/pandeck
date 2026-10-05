@@ -96,22 +96,19 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   corrects the state), while waiting forever would block the shell cache, which
   deliberately never persists optimistic data.
 - `useAssistant.ts` owns WebSocket lifecycle, server-message reduction,
-  optimistic runtime state, and action dispatchers. It also holds the latest
-  live day-scan progress per date (`calendarScanProgress`, from
-  `calendarDayScanProgress` broadcasts) that the calendar detail panel renders
-  as the scan-workflow widget. `pullRequestCards` is a client overlay (like
-  `approvals`) rather than part of the durable timeline: `pullRequestCardUpdate`
-  upserts a card by id (`upsertPullRequestCard`), and `withChat` restores it to
-  its issuing `/pr` tool call's position via `sourceToolCallId`
-  (`mergePullRequestCardMessages`, mirroring `mergeApprovalMessages`) — never
-  tail-appended, and reset to `[]` on every session-snapshot switch since the
-  server re-emits it on attach. Both stores hold every card of the session while
-  the timeline is a windowed suffix, so a card older than the loaded window is
-  held back (`loadedHistoryStart`) until "load earlier" brings its turn in;
-  placed by timestamp it would sort ahead of every loaded row, which stacked a
-  long session's whole card history on top of its last few turns.
-  `choosePullRequestTask` answers a `choosing-task` card's disambiguation
-  prompt, and `runPullRequestCardAction` fires a card action
+  optimistic runtime state, and action dispatchers. `pullRequestCards` is a
+  client overlay (like `approvals`) rather than part of the durable timeline:
+  `pullRequestCardUpdate` upserts a card by id (`upsertPullRequestCard`), and
+  `withChat` restores it to its issuing `/pr` tool call's position via
+  `sourceToolCallId` (`mergePullRequestCardMessages`, mirroring
+  `mergeApprovalMessages`) — never tail-appended, and reset to `[]` on every
+  session-snapshot switch since the server re-emits it on attach. Both stores
+  hold every card of the session while the timeline is a windowed suffix, so a
+  card older than the loaded window is held back (`loadedHistoryStart`) until
+  "load earlier" brings its turn in; placed by timestamp it would sort ahead of
+  every loaded row, which stacked a long session's whole card history on top of
+  its last few turns. `choosePullRequestTask` answers a `choosing-task` card's
+  disambiguation prompt, and `runPullRequestCardAction` fires a card action
   (merge/update/cleanup/Task done) as a tracked mutation: a browser-local
   `pendingAction` bridges the click to the server's durable `busyAction` (which
   still wins, so every viewer sees the same action in flight), and the

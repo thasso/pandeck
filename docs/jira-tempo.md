@@ -78,13 +78,8 @@ Runtime settings (`jira.json`, owned by `jiraSettings.ts`):
 - `testJiraSettings()` — `GET /rest/api/3/myself` with Basic auth; resolves and
   reports display name + `accountId`.
 - `isJiraConfigured()` — background-workflow predicate (`enabled` + `jiraHost` +
-  `atlassianEmail` + `atlassianToken`), mirroring `isGoogleConfigured()`. It is
-  the Jira analog of the readiness predicate the calendar day scan already
-  surfaces for Google (`dayScan.ts` currently exposes only `googleConfigured`);
-  background workflows can consume `isJiraConfigured()` where Jira readiness
-  matters. Wiring it into any specific background workflow (e.g. adding a
-  `jiraConfigured` field to day-scan state) is out of scope for the contract and
-  only happens if a later slice needs it.
+  `atlassianEmail` + `atlassianToken`) for code that needs to know whether Jira
+  is ready without throwing.
 
 Jira has no OAuth; the token approach stays for now (Atlassian OAuth deferred).
 

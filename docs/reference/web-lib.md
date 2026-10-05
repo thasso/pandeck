@@ -959,12 +959,6 @@ capability logic.
   timezone-validity errors to the modes where a timezone is actually meaningful,
   so a stale invalid value left over from editing a different mode never
   permanently blocks saving `persistent`/`until-changed`.
-- `dayHealth.ts` owns the pure day-scan health projections: `summarizeDayHealth`
-  (disposition-aware headline + tone from `CalendarDayRunHealth`, skipped never
-  counted as failed), `sourceHealthLabel` (per-source one-liner), and
-  `minutesSummaryLabel` (minutes-substage counts from `run.minutes`), backing
-  the calendar detail panel's **Data health** inspector section. All stats come
-  from the manifest via the day-state API — never markdown parsing.
 - `chartSpec.ts` owns the pure, framework-free constrained chart-spec schema +
   validator for the Markdown/KB `chart` fence (Task 139): `parseChartSpec`
   (bar/line only — no pie/doughnut/contributor rankings — with hard item limits,

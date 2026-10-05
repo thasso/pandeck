@@ -68,7 +68,6 @@ test("today only the Tempo worklog author is rendered from the registry", () => 
 
 const settings = {
   appearance: { turnStatsRow: true, density: 3 },
-  dayScan: { schedule: { time: "07:00" } },
   google: { redirectUri: "https://example.invalid/callback" },
 } as unknown as AppSettings;
 

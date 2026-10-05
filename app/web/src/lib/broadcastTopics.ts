@@ -110,8 +110,6 @@ export function topicsForSurface({
     topics.add("tasks");
   if (shownSection === "knowledge" || routeName === "knowledge")
     topics.add("knowledge");
-  if (shownSection === "calendar" || routeName === "calendar")
-    topics.add("calendar");
   // The settings BROWSER lists sections without reading any of them, so the
   // rendered section is the only thing that counts here. The session inspector
   // also reads the library to distinguish loaded from unloaded skills.
