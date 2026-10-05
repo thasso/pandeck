@@ -46,3 +46,9 @@ it("treats an image's File pivot as the picture it is", () => {
   expect(worktreeZoomMode("file", "vs-base", "raster")).toBe("text");
   expect(worktreeZoomMode("diff", "file", "raster")).toBe("text");
 });
+
+it("reads the History list as text, even for an image", () => {
+  expect(worktreeZoomMode("file", "history", "raster")).toBe("text");
+  expect(worktreeZoomMode("file", "history", "markdown")).toBe("text");
+  expect(worktreeZoomMode("file", "history", undefined)).toBe("text");
+});

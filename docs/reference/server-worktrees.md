@@ -493,6 +493,12 @@ a synthetic record (never a DB row).
   at a ref through `gitExec.gitRawStdout` so binaries survive; 20 MB cap,
   refuse-not-truncate); the `file-raw` verb streams it non-JSON for
   `<img>`/`<iframe>` sources, which authenticate via the token query parameter.
+  `getWorktreeFileLog` (`file-log` verb) is one file's History: the commits
+  reachable from HEAD that touched it, `--follow`ing renames, each with the
+  file's path in that commit and the parent its change is shown against (the
+  empty tree for a root commit), so `parentOid..oid` is an ordinary `range`
+  scope for `getWorktreeFileDiff`. It asks for one commit past the cap to say
+  `truncated` exactly.
 - `worktreeWatcher.ts` owns event-driven change detection (@parcel/watcher): an
   always-on git-state tier per main repo `.git` dir (commit/ref changes → status
   broadcasts + git-state listeners) and a refcounted per-worktree working-tree

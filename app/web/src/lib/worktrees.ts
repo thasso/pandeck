@@ -17,6 +17,7 @@ import type {
   WorktreeHostingListResponse,
   WorktreeHostingStatusResponse,
   WorktreeFileDiffResponse,
+  WorktreeFileLogResponse,
   WorktreeFileResponse,
   WorktreeGitStatus,
   WorktreeLogResponse,
@@ -105,6 +106,17 @@ export function fetchWorktreeFile(
   if (ref) params.set("ref", ref);
   return getJson(
     `/api/worktrees/${encodeURIComponent(worktreeId)}/file?${params.toString()}`,
+  );
+}
+
+/** The commits that touched one file, newest first, following renames. */
+export function fetchWorktreeFileLog(
+  worktreeId: string,
+  path: string,
+): Promise<WorktreeFileLogResponse> {
+  const params = new URLSearchParams({ path });
+  return getJson(
+    `/api/worktrees/${encodeURIComponent(worktreeId)}/file-log?${params.toString()}`,
   );
 }
 

@@ -2285,35 +2285,38 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   against a spurious cross-scope 400 is gone with it), the Review diff and the
   Files source/`vs base` pivot key on the PATH as well, so opening another file
   draws its own placeholder instead of the previous file's diff or source. The
-  worktree status `updatedAt` is an invalidation TOKEN, not part of the key
-  (`useReloadOnToken`): a watcher push refreshes what is on screen and marks it
-  with a `RefreshIndicator`, and a failed refresh keeps the diff/source readable
-  under an `ErrorNote` whose frame is rendered unconditionally (a wrapper
-  appearing with the note would remount the pierre surface — see the Knowledge
-  entry above for the same rule). Each pane marks the request that belongs to
-  IT: the rail subtitle covers the changed-file LIST, the Review toolbar the
-  shown diff, the Files header/detail bar the source or the `vs base` diff,
-  whichever is on screen. Retry counts as such a refresh, and is the case that
-  most needs the marker — the note disappears on the click. The `ErrorNote`'s
-  danger tone is reserved for actual failures: "Binary file.", "No changed file
-  selected." and the server's "not changed in this scope" (an empty answer
-  dressed as a failure, and the everyday case for the `vs base` pivot) are facts
-  about the content and stay muted notes. The file TREE is a lazily filled cache
-  of directories rather than one query, so its refresh is per DIRECTORY: a token
-  bump re-reads every directory already loaded and swaps each in when it answers
-  (`pruneVanishedTreeDirs` then drops a folder's cached children once its
-  parent's fresh listing no longer has it), leaving the rows, the expansion and
-  the list-mode folder you are standing in alone. Dropping the cache first —
-  which is what it used to do — blanked the rail to skeletons and threw list
-  mode back to the repo root on a bump that `computeWorktreeStatus` stamps on
-  every scan, i.e. shortly after every open. Reads are deduplicated per
-  directory and stamped with a tree GENERATION, so a run of pushes cannot pile
-  duplicate git reads and a read still out for the previous worktree cannot land
-  in this one's cache. The tree's error is per directory too, so its retry
-  reloads the folder that failed rather than the root, and the rail is "loading"
-  until the root has ANSWERED, never merely while a request is open, so an empty
-  first frame cannot read as an empty worktree (R1). Covered by
-  `worktree/worktreeLoadStates.test.tsx`.
+  Files view's History pivot (`worktree/FileHistoryList.tsx`) lists the commits
+  that touched the file and opens one as a Changes range (`parentOid..oid` on
+  the file's path at that commit), so a commit's change reuses the Review diff
+  surface rather than a second one. The worktree status `updatedAt` is an
+  invalidation TOKEN, not part of the key (`useReloadOnToken`): a watcher push
+  refreshes what is on screen and marks it with a `RefreshIndicator`, and a
+  failed refresh keeps the diff/source readable under an `ErrorNote` whose frame
+  is rendered unconditionally (a wrapper appearing with the note would remount
+  the pierre surface — see the Knowledge entry above for the same rule). Each
+  pane marks the request that belongs to IT: the rail subtitle covers the
+  changed-file LIST, the Review toolbar the shown diff, the Files header/detail
+  bar the source or the `vs base` diff, whichever is on screen. Retry counts as
+  such a refresh, and is the case that most needs the marker — the note
+  disappears on the click. The `ErrorNote`'s danger tone is reserved for actual
+  failures: "Binary file.", "No changed file selected." and the server's "not
+  changed in this scope" (an empty answer dressed as a failure, and the everyday
+  case for the `vs base` pivot) are facts about the content and stay muted
+  notes. The file TREE is a lazily filled cache of directories rather than one
+  query, so its refresh is per DIRECTORY: a token bump re-reads every directory
+  already loaded and swaps each in when it answers (`pruneVanishedTreeDirs` then
+  drops a folder's cached children once its parent's fresh listing no longer has
+  it), leaving the rows, the expansion and the list-mode folder you are standing
+  in alone. Dropping the cache first — which is what it used to do — blanked the
+  rail to skeletons and threw list mode back to the repo root on a bump that
+  `computeWorktreeStatus` stamps on every scan, i.e. shortly after every open.
+  Reads are deduplicated per directory and stamped with a tree GENERATION, so a
+  run of pushes cannot pile duplicate git reads and a read still out for the
+  previous worktree cannot land in this one's cache. The tree's error is per
+  directory too, so its retry reloads the folder that failed rather than the
+  root, and the rail is "loading" until the root has ANSWERED, never merely
+  while a request is open, so an empty first frame cannot read as an empty
+  worktree (R1). Covered by `worktree/worktreeLoadStates.test.tsx`.
 - `worktree/` owns the worktree detail page (lazy route page; the only static
   importer of `diff/`) plus reusable worktree file/change tree navigation; the
   sidebar has no worktree section any more (the list is on the Project page).

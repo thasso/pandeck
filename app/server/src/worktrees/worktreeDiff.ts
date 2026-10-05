@@ -18,6 +18,8 @@ import type {
   WorktreeFileDiffResponse,
   WorktreeFileResponse,
   WorktreeGitStatus,
+  WorktreeFileLogEntry,
+  WorktreeFileLogResponse,
   WorktreeLogResponse,
   WorktreeTreeEntry,
 } from "@assistant/shared";
@@ -672,6 +674,74 @@ export async function getWorktreeLog(
     });
   }
   return { worktreeId: row.id, entries };
+}
+
+/** The empty tree, what a root commit's change is shown against (SHA-1, SHA-256). */
+const EMPTY_TREE_OID = {
+  40: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+  64: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+} as const;
+
+/**
+ * The commits reachable from HEAD that touched one file, newest first,
+ * following renames so the history does not stop at the last move. Each entry
+ * names the file's path in that commit and the parent its change is shown
+ * against, so `parentOid..oid` opens that commit's diff in Changes.
+ */
+export async function getWorktreeFileLog(
+  row: WorktreeRow,
+  path: string,
+  limit: number,
+): Promise<WorktreeFileLogResponse> {
+  safePath(row.path, path);
+  const capped = Math.max(1, Math.min(limit || 50, 200));
+  const res = await gitOptional(
+    [
+      "-c",
+      "core.quotePath=false",
+      "log",
+      "--follow",
+      "--name-status",
+      "--format=%x1e%H%x00%h%x00%s%x00%an%x00%at%x00%P",
+      "-n",
+      String(capped + 1),
+      "HEAD",
+      "--",
+      path,
+    ],
+    row.path,
+  );
+  if (res.code !== 0)
+    return { worktreeId: row.id, path, entries: [], truncated: false };
+  const entries: WorktreeFileLogEntry[] = [];
+  for (const record of res.stdout.split("\x1e")) {
+    const [header, ...statusLines] = record.split("\n");
+    if (!header?.trim()) continue;
+    const [oid, shortOid, subject, author, at, parents] = header.split("\0");
+    if (!oid || !shortOid) continue;
+    // `--name-status` names the file at this commit; a rename's line ends in
+    // the new name, which is the one this commit's tree holds.
+    const status = statusLines.find((line) => line.trim());
+    const pathAtCommit = status?.split("\t").at(-1)?.trim() || path;
+    const parentOid =
+      parents?.trim().split(" ")[0] ||
+      EMPTY_TREE_OID[oid.length === 64 ? 64 : 40];
+    entries.push({
+      oid,
+      shortOid,
+      subject: subject ?? "",
+      author: author ?? "",
+      authoredAt: (Number(at) || 0) * 1000,
+      path: pathAtCommit,
+      parentOid,
+    });
+  }
+  return {
+    worktreeId: row.id,
+    path,
+    entries: entries.slice(0, capped),
+    truncated: entries.length > capped,
+  };
 }
 
 /* ---------------------------------- tree ----------------------------------- */
