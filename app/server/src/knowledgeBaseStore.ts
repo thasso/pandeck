@@ -22,11 +22,11 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { DATA_DIR } from "./config.ts";
-import { git, gitOptional, withRepoLock } from "./gitExec.ts";
+import { git, gitOptional, repoLockKey, withRepoLock } from "./gitExec.ts";
 import {
   classifyKnowledgePath,
   KB_GENERATED_DIR,
@@ -161,6 +161,9 @@ function assertGitRevision(value: string, label: string): string {
  * to {@link KB_STORE_ROOT}); tests pass a temp directory. Initialization is
  * lazy and idempotent — the first mutating or reading call ensures the repo.
  */
+/** In-flight repo initializations by resolved root (see `doInitialize`). */
+const initializing = new Map<string, Promise<void>>();
+
 export class KnowledgeBaseStore {
   readonly root: string;
   private initialized: Promise<void> | undefined;
@@ -181,12 +184,32 @@ export class KnowledgeBaseStore {
     return this.initialized;
   }
 
-  private async doInitialize(): Promise<void> {
+  /**
+   * One initialization per folder at a time, however many stores ask: the
+   * repo lock's key changes when `git init` creates `.git`, so two stores
+   * initializing the same new folder concurrently could otherwise hold
+   * different keys. Only the IN-FLIGHT run is shared — a later call re-checks
+   * the folder, which may have been removed meanwhile.
+   */
+  private doInitialize(): Promise<void> {
+    const key = resolve(this.root);
+    let pending = initializing.get(key);
+    if (!pending) {
+      pending = this.initializeRepo().finally(() => initializing.delete(key));
+      initializing.set(key, pending);
+    }
+    return pending;
+  }
+
+  private async initializeRepo(): Promise<void> {
     await mkdir(this.root, { recursive: true });
-    // Init runs under the same per-repo lock as mutations, and re-checks state
-    // inside the lock, so concurrent stores over one root never race on
-    // `git init`/`git config`/the initial `.gitignore` commit.
-    await withRepoLock(this.lockKey(), async () => {
+    // Init runs under the repo lock every git mutation of this folder takes —
+    // KB writes and the browser's Commit alike (`repoLockKey`). Before `git
+    // init` that key is the folder itself, after it the repo's `.git`; no
+    // write can fall between the two, since every write awaits this init.
+    // State is re-checked inside the lock, so concurrent stores over one root
+    // never race on `git init`/`git config`/the initial `.gitignore` commit.
+    await withRepoLock(await repoLockKey(this.root), async () => {
       if (!existsSync(join(this.root, ".git"))) {
         await git(["init", "-b", "main"], this.root);
       }
@@ -226,20 +249,6 @@ export class KnowledgeBaseStore {
         });
       }
     });
-  }
-
-  /**
-   * Stable mutation-lock key for this KB repo. The KB is a dedicated repo with a
-   * single working tree (no linked worktrees), so the resolved root path is a
-   * stable 1:1 key — unlike git-common-dir, it is identical before and after
-   * `git init`, which lets init and mutations share one lock.
-   */
-  private lockKey(): string {
-    try {
-      return `kb:${realpathSync(this.root)}`;
-    } catch {
-      return `kb:${resolve(this.root)}`;
-    }
   }
 
   private resolveSourcePath(input: string): string {
@@ -283,7 +292,7 @@ export class KnowledgeBaseStore {
     }
 
     const paths = planned.map((p) => p.rel);
-    return withRepoLock(this.lockKey(), async () => {
+    return withRepoLock(await repoLockKey(this.root), async () => {
       await options.beforeApply?.();
       // The tree is clean between mutations (each commit is atomic under this
       // lock), so a delete target must exist now; reject before any writes.
@@ -595,7 +604,7 @@ export class KnowledgeBaseStore {
       throw new KnowledgeBaseError("No paths provided to restore.");
     commit = assertGitRevision(commit, "commit");
     const rels = paths.map((p) => this.resolveSourcePath(p));
-    return withRepoLock(this.lockKey(), async () => {
+    return withRepoLock(await repoLockKey(this.root), async () => {
       try {
         for (const rel of rels) {
           // Restore an exact snapshot, not a checkout overlay: first drop the
@@ -644,7 +653,7 @@ export class KnowledgeBaseStore {
   ): Promise<KbCommitResult> {
     await this.ensureInitialized();
     commit = assertGitRevision(commit, "commit");
-    return withRepoLock(this.lockKey(), async () => {
+    return withRepoLock(await repoLockKey(this.root), async () => {
       const res = await gitOptional(
         ["revert", "--no-commit", "--end-of-options", commit],
         this.root,

@@ -372,3 +372,57 @@ test("retire is POST-only and refuses the main checkout", async () => {
   assert.equal(result.status, 400);
   assert.match((result.body as { error: string }).error, /cannot be retired/i);
 });
+
+test("the Knowledge Base reads as a checkout: files, Changes, History and Commit", async () => {
+  const { KnowledgeBaseStore } = await import("../knowledgeBaseStore.ts");
+  const store = new KnowledgeBaseStore();
+  await store.ensureInitialized();
+  const base = "/api/worktrees/knowledge";
+
+  const status = await call(`${base}/status`);
+  assert.equal(status.status, 200);
+  assert.equal((status.body as { ahead: number }).ahead, 0);
+
+  // An edit made outside the app is an uncommitted change, nothing more.
+  writeFileSync(join(store.root, "notes.md"), "# Notes\n");
+  const changes = await call(`${base}/changes`);
+  assert.deepEqual(
+    (changes.body as { files: Array<{ path: string; status: string }> }).files
+      .filter((file) => file.path === "notes.md")
+      .map((file) => file.status),
+    ["untracked"],
+  );
+  const file = await call(`${base}/file?path=notes.md`);
+  assert.equal((file.body as { content: string }).content, "# Notes\n");
+
+  const committed = await postJson(`${base}/commit`, {
+    message: "Add notes",
+    paths: ["notes.md"],
+  });
+  assert.equal(committed.status, 200);
+  const after = await call(`${base}/changes`);
+  assert.ok(
+    !(after.body as { files: Array<{ path: string }> }).files.some(
+      (item) => item.path === "notes.md",
+    ),
+  );
+  const history = await call(`${base}/file-log?path=notes.md`);
+  assert.deepEqual(
+    (history.body as { entries: Array<{ subject: string }> }).entries.map(
+      (entry) => entry.subject,
+    ),
+    ["Add notes"],
+  );
+});
+
+test("the Knowledge Base refuses every delivery and rewrite verb", async () => {
+  for (const verb of ["push", "create-pr", "merge-pr", "retire", "clean"]) {
+    const res = await postJson(`/api/worktrees/knowledge/${verb}`, {});
+    assert.equal(res.status, 404, verb);
+    assert.match(
+      (res.body as { error: string }).error,
+      /Not available for the Knowledge Base/,
+    );
+  }
+  assert.equal((await call("/api/worktrees/knowledge/hosting")).status, 404);
+});
