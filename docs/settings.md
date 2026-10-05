@@ -55,9 +55,9 @@ Three tests keep the registry complete:
   a secret's `configuredBy` flag); every descriptor points at a real value or
   patch field; every integration patch field is written by some descriptor. The
   leaves are read with every optional field filled in (an account pin on every
-  slot, all day-scan identities), since defaults leave them out.
-  `INTEGRATION_PATCH_FIELDS` lists the patch fields, so adding one to a
-  `*SettingsPatch` type is a type error until it is listed there.
+  slot), since defaults leave them out. `INTEGRATION_PATCH_FIELDS` lists the
+  patch fields, so adding one to a `*SettingsPatch` type is a type error until
+  it is listed there.
 - `app/server/src/architecture.test.ts`: no module outside `settingsService.ts`
   calls `updateSettings` or an `update*Settings` writer.
 
@@ -72,7 +72,6 @@ sections need:
 | Section written       | Effect                                                                                                  |
 | --------------------- | ------------------------------------------------------------------------------------------------------- |
 | `permanentAssistant`  | A changed name, model, thinking level or instructions rotates the Personal Assistant to a fresh session |
-| `dayScan`, `profile`  | Re-arm the daily scan schedule                                                                          |
 | `slack`               | Reconcile Socket Mode                                                                                   |
 | `github`              | Reconcile the package proxy                                                                             |
 | `openAiCompatible`    | Sync the configured model providers                                                                     |

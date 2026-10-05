@@ -32,8 +32,7 @@ orchestration, MCP/tool integrations, and runtime persistence.
   excluded on purpose, and `userRequestedStatus` is the explicit escape hatch:
   the agent's write is applied AND recorded as the claim, with agent provenance.
   One consequence to keep in mind: an unasked agent completion writes no `done`
-  `task_status_events` row, so `dayScan/collectors/pa.ts` emits its own
-  `task-done-proposed` fact or the day would lose that work entirely.
+  `task_status_events` row.
 
 - `tasks.ts`'s `resolveTriage` decides when a Task stops waiting in the Inbox.
   Triage is IMPLICIT on any USER-actor update — if you changed something about a
@@ -74,11 +73,11 @@ orchestration, MCP/tool integrations, and runtime persistence.
   and opening a Task from a link or a search would silently process it.
   `createTask` takes an explicit `triaged` input rather than inferring from
   `source.createdBy`: the browser's own save path (the one place a Task is
-  TYPED) passes it, and every other creator — agent tools, Slack shortcut
-  intake, the day scanner — is an arrival that queues. Inferring from the
-  creator kept Slack imports, which honestly record the user as creator, out of
-  the Inbox entirely. Agents can read the queue (`task_read`'s `untriaged`) but
-  never write triage: it is the user's act.
+  TYPED) passes it, and every other creator — agent tools, Slack shortcut intake
+  — is an arrival that queues. Inferring from the creator kept Slack imports,
+  which honestly record the user as creator, out of the Inbox entirely. Agents
+  can read the queue (`task_read`'s `untriaged`) but never write triage: it is
+  the user's act.
 
 ## Contract notes and rationale
 

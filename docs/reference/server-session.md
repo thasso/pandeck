@@ -160,10 +160,7 @@ harness adapters, runtime-to-wire transport, and runtime attachment helpers.
   provider-bound text while the durable app log/projection keep only the clean
   human text. `onUserEntry` reports the accepted user-turn id for the
   effective-load audit. Central callers must not wrap the prompt to inject
-  hidden context themselves. `promptRuntimeSessionAndCaptureText` layers over
-  the facade to drive one turn and return its clean assistant text (used by the
-  day scan to turn the day session's visible synthesis turn into the durable
-  report).
+  hidden context themselves.
 - `planHint.ts` rides that same seam for Plan mode ([Task-330](pa://task/330)).
   Plan is STATE, so the reminder is prepended to `contextBlock` on EVERY Plan
   turn — hidden, steering and agent-origin ones included, because they all reach
