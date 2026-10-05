@@ -52,7 +52,6 @@ const RESEARCH_TOOL_NAMES = new Set([
   "google_drive_get_file",
   "google_gmail_read",
   "google_meet_list_records",
-  "meeting_minutes_discovery",
   "slack_search",
   "slack_conversation_read",
   "slack_thread_read",

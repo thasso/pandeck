@@ -213,7 +213,7 @@ test("canonical session inspection query keeps the default load in one family", 
 
 test("an ambiguous broad search returns candidates without activation", async () => {
   const { host, activated } = makeHost();
-  const payload = await run(host, "find and inspect relevant information");
+  const payload = await run(host, "find relevant documents and messages");
   assert.deepEqual(payload.loaded, []);
   assert.ok((payload.candidates?.length ?? 0) > 0, JSON.stringify(payload));
   assert.equal(activated.length, 0);

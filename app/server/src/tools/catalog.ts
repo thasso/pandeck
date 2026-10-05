@@ -76,8 +76,6 @@ import { assistantGoogleDriveTools } from "./google/googleDriveTools.ts";
 import { assistantGoogleGmailArchiveTools } from "./google/googleGmailArchiveTools.ts";
 import { assistantGoogleGmailTools } from "./google/googleGmailTools.ts";
 import { assistantGoogleMeetTools } from "./google/googleMeetTools.ts";
-import { assistantMeetingMinutesDiscoveryTools } from "./google/googleMeetingMinutesDiscoveryTools.ts";
-import { assistantMeetingMinutesScannerTools } from "./google/meetingMinutesScannerTools.ts";
 import { assistantConfluenceTools } from "./confluence/confluenceTools.ts";
 import { assistantJiraTools } from "./jira/jiraTools.ts";
 import { assistantAttachmentTools } from "./knowledge/attachmentTools.ts";
@@ -223,8 +221,6 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   google_gmail_read: "none",
   google_gmail_archive: "external",
   google_meet_list_records: "none",
-  meeting_minutes_discovery: "none",
-  meeting_minutes_scan_source: "local",
   slack_search: "none",
   slack_conversation_read: "none",
   slack_thread_read: "none",
@@ -617,19 +613,6 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       family: "integration",
       gate: "google",
       tools: assistantGoogleMeetTools,
-    },
-    {
-      id: "google-minutes",
-      label: "Meeting minutes",
-      description:
-        "Discover and scan meeting-minutes sources across Calendar, Drive, and Gmail for action items.",
-      loading: "deferred",
-      family: "integration",
-      gate: "google",
-      tools: [
-        ...assistantMeetingMinutesDiscoveryTools,
-        ...assistantMeetingMinutesScannerTools,
-      ],
     },
     {
       id: "slack",
