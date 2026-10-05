@@ -281,13 +281,6 @@ async function settingsWritten(
         await import("./permanentAssistant.ts");
       await rotatePermanentAssistantSession();
     });
-  // The schedule fires in the profile timezone, so a zone change re-arms it.
-  if (wrote("dayScan") || wrote("profile"))
-    await effect("re-arming the day scan", async () => {
-      const { reconcileDayScanSchedule } =
-        await import("./dayScan/schedule.ts");
-      reconcileDayScanSchedule();
-    });
   if (wrote("slack"))
     await effect("reconnecting Slack", async () => {
       const { slackSocketMode } = await import("./slackSocketMode.ts");

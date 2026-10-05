@@ -5566,7 +5566,6 @@ export type BroadcastTopic =
   | "background"
   | "worktrees"
   | "knowledge"
-  | "calendar"
   | "usage"
   | "workflow"
   /** The user-owned skills library, rescanned on every subscribe. */
@@ -5579,7 +5578,6 @@ export const BROADCAST_TOPICS: readonly BroadcastTopic[] = [
   "background",
   "worktrees",
   "knowledge",
-  "calendar",
   "usage",
   "workflow",
   "skills",
@@ -6869,22 +6867,6 @@ export type ClientMessage =
    * also disappears asks again.
    */
   | { type: "acknowledgeMissingWorktree"; id: string }
-  /**
-   * Calendar: ensure the per-day assistant session exists, view it, and either
-   * run the day scan (`scan`) or send an initial `text`. When the session is
-   * created, `modelProvider`/`modelId`/`thinkingLevel` override the configured
-   * Calendar-day model (used by the pre-session composer's model picker).
-   */
-  | {
-      type: "calendarDayActivate";
-      date: string;
-      scan?: boolean;
-      logTime?: boolean;
-      text?: string;
-      modelProvider?: string;
-      modelId?: string;
-      thinkingLevel?: ThinkingLevel;
-    }
   /**
    * Branch a session at one transcript entry. `entryId` is always OUR log entry
    * id — the only id a client holds — which the server translates into the

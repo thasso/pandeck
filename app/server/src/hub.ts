@@ -36,7 +36,6 @@ import { setKnowledgeBaseBroadcaster } from "./knowledgeBaseEvents.ts";
 import { setSkillLibraryBroadcaster } from "./skills/skillLibraryEvents.ts";
 import { setMemoryBroadcaster } from "./memoryEvents.ts";
 import { setAppNotificationBroadcaster } from "./webPush.ts";
-import { setCalendarScanBroadcaster } from "./dayScan/scanProgress.ts";
 import { setUsageBroadcaster } from "./usageCache.ts";
 import { onSettingsChanged } from "./settingsService.ts";
 import {
@@ -294,9 +293,6 @@ class SessionHub {
     setCommentChangeNotifier(notifyCommentChanges);
     setCommentMetadataChangeNotifier(notifyCommentMetadataChanges);
     setMemoryBroadcaster({ broadcastAll: (msg) => this.broadcastAll(msg) });
-    setCalendarScanBroadcaster({
-      broadcast: (msg) => this.broadcastTopic("calendar", msg),
-    });
     setWorkflowBroadcaster({
       broadcast: (msg) => this.broadcastTopic("workflow", msg),
     });

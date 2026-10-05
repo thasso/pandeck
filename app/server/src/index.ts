@@ -65,17 +65,6 @@ import {
   linkPiToolBinaries,
 } from "./harnesses/boot.ts";
 import { harnessRegistry } from "./harnesses/registry.ts";
-import { getDayState } from "./dayScan/dayState.ts";
-import {
-  runDayCollection,
-  stopDayCollection,
-} from "./dayScan/collectionRun.ts";
-import { runDaySynthesis } from "./dayScan/synthesisRunner.ts";
-import {
-  startDayScanSchedule,
-  stopDayScanSchedule,
-} from "./dayScan/schedule.ts";
-import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 import {
   createGoogleOAuthStartUrl,
   handleGoogleOAuthCallback,
@@ -1204,105 +1193,6 @@ async function handleRequest(
     return;
   }
 
-  if (requestUrl.pathname === "/api/calendar/day") {
-    if (req.method !== "GET") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const date = requestUrl.searchParams.get("date") ?? "";
-      const payload = await getDayState(date);
-      res.writeHead(200, corsJsonHeaders(req));
-      res.end(JSON.stringify(payload));
-    } catch (err) {
-      res.writeHead(400, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
-  // Deterministic day-scan collection (Daily Scanner v2 phase 1). One run per
-  // day at a time; concurrent requests coalesce server-side.
-  if (requestUrl.pathname === "/api/calendar/day/collect") {
-    if (req.method !== "POST") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const date = requestUrl.searchParams.get("date") ?? "";
-      const result = await runDayCollection(date);
-      res.writeHead(200, corsJsonHeaders(req));
-      res.end(
-        JSON.stringify({
-          runId: result.runId,
-          date: result.date,
-          commit: result.commit,
-          coalesced: result.coalesced ?? false,
-          manifest: result.manifest,
-        }),
-      );
-    } catch (err) {
-      res.writeHead(400, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
-  // Approve/decline/cancel one day-scan Tempo proposal (phase 6 + Task 144).
-  // Approve drives the serialized state machine (pending-approval → executing)
-  // and the real Tempo write; decline is the user's deliberate "don't log this"
-  // terminal decision; cancel is proactive invalidation. All wins only from a
-  // pre-execution state.
-  if (
-    requestUrl.pathname === "/api/calendar/day/tempo/approve" ||
-    requestUrl.pathname === "/api/calendar/day/tempo/cancel" ||
-    requestUrl.pathname === "/api/calendar/day/tempo/decline"
-  ) {
-    if (req.method !== "POST") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const rowId = requestUrl.searchParams.get("rowId") ?? "";
-      if (!rowId) throw new Error("rowId is required.");
-      const mod = await import("./dayScan/tempoApprove.ts");
-      const result = requestUrl.pathname.endsWith("/approve")
-        ? await mod.approveAndSubmitTempoRow(new KnowledgeBaseStore(), rowId)
-        : requestUrl.pathname.endsWith("/decline")
-          ? mod.declineTempoRow(rowId)
-          : mod.cancelTempoRow(rowId);
-      res.writeHead(result.ok ? 200 : 409, corsJsonHeaders(req));
-      res.end(JSON.stringify(result));
-    } catch (err) {
-      res.writeHead(400, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
-  // Separately retryable structured synthesis over the last collection's facts
-  // (Daily Scanner v2 phase 4). Journaled + idempotent; a re-run reconciles.
-  if (requestUrl.pathname === "/api/calendar/day/synthesize") {
-    if (req.method !== "POST") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const date = requestUrl.searchParams.get("date") ?? "";
-      const result = await runDaySynthesis(date);
-      res.writeHead(result.ok ? 200 : 422, corsJsonHeaders(req));
-      res.end(JSON.stringify(result));
-    } catch (err) {
-      res.writeHead(400, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
   if (
     requestUrl.pathname.startsWith("/api/google/drive/file/") &&
     requestUrl.pathname.endsWith("/preview")
@@ -1888,8 +1778,6 @@ function requestGracefulShutdown(signal: NodeJS.Signals): void {
   void import("./worktrees/worktreeFetch.ts")
     .then((m) => m.stopBackgroundFetch())
     .catch(() => undefined);
-  stopDayCollection();
-  stopDayScanSchedule();
   hub.requestGracefulShutdown({ forceAfterMs: GRACEFUL_SHUTDOWN_TIMEOUT_MS });
 }
 
@@ -2031,39 +1919,6 @@ server.listen(PORT, HOST, () => {
       console.warn("[package-proxy] start failed:", errorText(err)),
     );
   startMemoryMaintenance();
-  // Day-scan synthesis: wire the live runner model and reconcile any run left
-  // non-terminal by a crash (resume-not-duplicate; the candidate→Task map is unique).
-  void import("./dayScan/synthesisModel.ts")
-    .then((m) => m.installDaySynthesizer())
-    .catch((err) =>
-      console.warn("[day-scan] synthesizer install failed:", errorText(err)),
-    );
-  // Day-scan minutes: wire the live Google discovery/extraction pipeline (null when unconfigured).
-  void import("./dayScan/minutesPipeline.ts")
-    .then((m) => m.installMinutesPipeline())
-    .catch((err) =>
-      console.warn(
-        "[day-scan] minutes pipeline install failed:",
-        errorText(err),
-      ),
-    );
-  void import("./dayScan/synthesisApply.ts")
-    .then((m) => m.reconcileDaySynthesisOnStartup(new KnowledgeBaseStore()))
-    .then((closed) => {
-      if (closed.length > 0)
-        console.log(
-          `[day-scan] reconciled ${closed.length} synthesis run(s) on boot`,
-        );
-    })
-    .catch((err) =>
-      console.warn(
-        "[day-scan] synthesis boot reconcile failed:",
-        errorText(err),
-      ),
-    );
-  // Scheduled morning collection (+ optional synthesis) so the prep view is
-  // ready before the day starts; a no-op until enabled in day-scan settings.
-  startDayScanSchedule();
   /**
    * The credential profile whose usage a finished run consumed. Sessions
    * created before the account was chosen carry no binding, so fall back to the

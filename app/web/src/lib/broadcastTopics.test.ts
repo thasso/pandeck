@@ -236,7 +236,7 @@ describe("topicsForSurface", () => {
         sidebarSection: "sessions",
         routeName: "calendar",
       }),
-    ).toEqual(["calendar"]);
+    ).toEqual([]);
   });
 
   it("subscribes to Tasks only while either staged-session picker is open", () => {

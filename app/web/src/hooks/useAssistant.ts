@@ -36,7 +36,6 @@ import type {
   SettableSpawnOwnership,
   AgentQuestionResponse,
   AppSettings,
-  CalendarDayScanProgress,
   ApprovalCard,
   BraveConnectionStatus,
   BraveSettingsPatch,
@@ -789,8 +788,6 @@ export interface UIState {
   reloading: DevReloadState | null;
   /** Compact title/route/existence metadata for resolved pa:// object links. */
   objectLinks: Record<string, PaObjectLinkResolution>;
-  /** Latest live day-scan progress broadcast (Task 162), keyed by day date. */
-  calendarScanProgress: Record<string, CalendarDayScanProgress>;
 }
 
 const APP_SHELL_CACHE_KEY = "assistant.appShellCache.v1";
@@ -923,7 +920,6 @@ const emptyInitial: UIState = {
   revealRequest: null,
   reloading: null,
   objectLinks: {},
-  calendarScanProgress: {},
 };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -5339,14 +5335,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ...state,
         objectLinks: mergeObjectLinks(state.objectLinks, msg.links),
       };
-    case "calendarDayScanProgress":
-      return {
-        ...state,
-        calendarScanProgress: {
-          ...state.calendarScanProgress,
-          [msg.progress.date]: msg.progress,
-        },
-      };
     case "subagentThreadRunSnapshot": {
       const revisions = taskDigestRecord(msg.revisions) ?? {};
       return {
@@ -6252,18 +6240,6 @@ export interface AssistantActions {
    */
   acknowledgeMissingWorktree: (id: string) => void;
   forkSession: (id: string, entryId: string, position: "before" | "at") => void;
-  /** Calendar: ensure/view the per-day assistant session; optionally run the day scan or send an initial message with a chosen model/thinking. */
-  calendarDayActivate: (
-    date: string,
-    opts?: {
-      scan?: boolean;
-      logTime?: boolean;
-      text?: string;
-      modelProvider?: string;
-      modelId?: string;
-      thinkingLevel?: ThinkingLevel;
-    },
-  ) => void;
   createDraftSession: (
     agentType: AgentType,
     draftText: string,
@@ -8312,8 +8288,6 @@ export function useAssistant({
         send({ type: "acknowledgeMissingWorktree", id }),
       forkSession: (id, entryId, position) =>
         send({ type: "forkSession", id, entryId, position }),
-      calendarDayActivate: (date, opts) =>
-        send({ type: "calendarDayActivate", date, ...(opts ?? {}) }),
       createDraftSession: (agentType, draftText, notice) =>
         send({
           type: "createDraftSession",

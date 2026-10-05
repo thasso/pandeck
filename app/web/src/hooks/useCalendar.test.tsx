@@ -3,7 +3,6 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
-  CalendarDayState,
   CalendarEventDto,
   CalendarEventsResponse,
   CalendarWorklogsResponse,
@@ -13,16 +12,14 @@ import { useCalendar, type CalendarController } from "./useCalendar.ts";
 /**
  * Controller-level loading behaviour for the calendar (Task-361 phase 3a).
  *
- * The three fetches this hook owns each had their own bug: the events fetch
- * cleared the grid on failure, the day read-model swallowed failures into a
- * null day (a failure that looks like a day with nothing on it), and the Tempo
- * overlay dropped its error silently. These tests are about the states the
+ * The two fetches this hook owns each had their own bug: the events fetch
+ * cleared the grid on failure, and the Tempo overlay dropped its error
+ * silently. These tests are about the states the
  * controller reports, not about pixels.
  */
 
 const deferrals = {
   events: [] as Array<Deferred<CalendarEventsResponse>>,
-  day: [] as Array<Deferred<CalendarDayState>>,
   worklogs: [] as Array<Deferred<CalendarWorklogsResponse>>,
 };
 
@@ -39,7 +36,6 @@ function defer<T>(into: Array<Deferred<T>>): Promise<T> {
 
 vi.mock("../lib/calendarApi.ts", () => ({
   fetchCalendarEvents: () => defer(deferrals.events),
-  fetchDayState: () => defer(deferrals.day),
   fetchCalendarWorklogs: () => defer(deferrals.worklogs),
 }));
 
@@ -57,7 +53,6 @@ afterEach(() => {
   container = null;
   controller = null;
   deferrals.events.length = 0;
-  deferrals.day.length = 0;
   deferrals.worklogs.length = 0;
 });
 
@@ -94,19 +89,6 @@ function eventsResponse(events: CalendarEventDto[]): CalendarEventsResponse {
   };
 }
 
-function dayState(date: string): CalendarDayState {
-  return {
-    date,
-    googleConfigured: true,
-    daySessionId: null,
-    sources: [],
-    tasks: [],
-    summary: null,
-    run: null,
-    tempo: [],
-  };
-}
-
 interface HostProps {
   date: string;
   showTempo?: boolean;
@@ -114,7 +96,7 @@ interface HostProps {
 
 let controller: CalendarController | null = null;
 
-/** Day view, so moving the date moves BOTH the events range and the day key. */
+/** Day view, so moving the date moves the events range. */
 function Host({ date, showTempo = false }: HostProps) {
   controller = useCalendar({
     active: true,
@@ -194,53 +176,6 @@ it("keeps the visible entries while a new range loads", async () => {
   expect(latest().events.status).toBe("ready");
   expect(latest().eventsByDay.get("2026-08-11")).toBeUndefined();
   expect(latest().eventsByDay.get("2026-08-12")).toHaveLength(1);
-});
-
-it("reports a day that fails to load instead of showing an empty day", async () => {
-  mount({ date: "2026-08-11" });
-  await act(async () => {
-    deferrals.day[0]!.reject(new Error("day read-model unavailable"));
-  });
-  // The old hook caught this into `setDayState(null)`, which the panel drew as
-  // a day with no report, no sources and no health.
-  expect(latest().day).toEqual({
-    status: "error",
-    error: "day read-model unavailable",
-  });
-  expect(latest().dayState).toBeNull();
-});
-
-it("drops the previous day's read-model when the day changes", async () => {
-  mount({ date: "2026-08-11" });
-  await act(async () => {
-    deferrals.day[0]!.resolve(dayState("2026-08-11"));
-  });
-  expect(latest().dayState?.date).toBe("2026-08-11");
-
-  // R3: a different day is a different object, so it gets its own placeholder.
-  await act(async () => {
-    root!.render(<Host date="2026-08-12" />);
-  });
-  expect(latest().day.status).toBe("loading");
-  expect(latest().dayState).toBeNull();
-
-  await act(async () => {
-    deferrals.day[1]!.resolve(dayState("2026-08-12"));
-  });
-  expect(latest().dayState?.date).toBe("2026-08-12");
-});
-
-it("keeps the day on screen while refreshing the same day", async () => {
-  mount({ date: "2026-08-11" });
-  await act(async () => {
-    deferrals.day[0]!.resolve(dayState("2026-08-11"));
-  });
-
-  await act(async () => {
-    latest().refreshDay();
-  });
-  expect(latest().day.status).toBe("refreshing");
-  expect(latest().dayState?.date).toBe("2026-08-11");
 });
 
 it("surfaces a failed Tempo overlay rather than showing no overlay", async () => {

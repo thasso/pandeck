@@ -751,27 +751,6 @@ describe("session view requests", () => {
     expect(acquire.session(COLD).viewers.size).toBe(1);
   });
 
-  test("an invalid calendar-day activation views nothing and cancels no load in flight", async () => {
-    const sent: ServerMessage[] = [];
-    const connection = new Connection(fakeSocket(sent));
-    const acquire = controlledAcquisitions();
-    void connection.handle({ type: "loadSession", id: B } as ClientMessage);
-    await settle();
-    await connection.handle({
-      type: "calendarDayActivate",
-      date: "not-a-date",
-    } as ClientMessage);
-    expect(
-      sent.some(
-        (m) => m.type === "error" && /calendar day session/.test(m.message),
-      ),
-    ).toBe(true);
-    // The activation failed its synchronous validation before claiming, so the
-    // session the reader opened stays on show.
-    expect(snapshots(sent)).toEqual([B]);
-    expect(acquire.session(B).viewers.size).toBe(1);
-  });
-
   test("ready describes the session viewed when it is sent, not when it was begun", async () => {
     const sent: ServerMessage[] = [];
     const DEEP = "session-deep-linked";

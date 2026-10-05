@@ -5,7 +5,6 @@ import {
   backgroundWorkBlockedReason,
   slashCommandApplies,
   isOrdinarilyCreatableAgentType,
-  CLAUDE_SDK_PROVIDER,
   isClaudeSdkModel,
   SESSION_MODES,
   projectSummaryOf,
@@ -118,30 +117,9 @@ import {
 import {
   ensureRuntimeSessionWithRuntime as ensureRuntimeSession,
   promptRuntimeSession,
-  promptRuntimeSessionAndCaptureText,
 } from "./session/runtimePrompt.ts";
 import { deliverAgentHandoff } from "./agentHandoffs.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
-import { assertValidDate } from "./dayScan/dayState.ts";
-import { runDayCollection } from "./dayScan/collectionRun.ts";
-import { runDaySynthesis } from "./dayScan/synthesisRunner.ts";
-import { writeDayBriefingNarrative } from "./dayScan/synthesisApply.ts";
-import {
-  buildDaySynthesisDigest,
-  renderDayBriefingPrompt,
-  renderLogMyTimePrompt,
-} from "./dayScan/digest.ts";
-import {
-  beginDayScanProgress,
-  endDayScanProgress,
-  reportDayScanStep,
-} from "./dayScan/scanProgress.ts";
-import {
-  clearDaySession,
-  daySessionTitle,
-  getDaySessionId,
-  setDaySessionId,
-} from "./calendarDaySessions.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
 import { subagentStore } from "./db/subagentStore.ts";
@@ -185,14 +163,12 @@ import {
   retryRun,
 } from "./workflow/engine.ts";
 import { deleteCancelledWorkflowRun } from "./workflow/runCleanup.ts";
-import { accountForSlot } from "./settingsModelSlots.ts";
 import {
   applySessionContext,
   resolveSessionContext,
   sessionContextEvidence,
   type SessionContextRequest,
 } from "./sessionContext.ts";
-import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
 import { publishSkillLibrary } from "./skills/skillLibrary.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { findSlashCommand, slashCommands } from "./slashCommands.ts";
@@ -511,39 +487,6 @@ function sessionContextRequest(
     ...(msg.knowledgeEntryId ? { knowledgeEntryId: msg.knowledgeEntryId } : {}),
     ...(worktree?.projectId ? { worktreeProjectId: worktree.projectId } : {}),
   };
-}
-
-/** Day-session creations under way, by date, shared by every connection. */
-const dayCreations = new Map<string, Promise<LiveSession>>();
-
-/**
- * Create `date`'s day session once however many activations ask at the same
- * time, and bind it. Creation yields before the binding is written, so two
- * overlapping activations would each create one, and the later binding would
- * hide the earlier conversation from the day panel. An activation that read
- * the binding before another's creation settled finds that session here.
- */
-function createDaySessionOnce(
-  date: string,
-  create: () => Promise<LiveSession>,
-): Promise<LiveSession> {
-  let pending = dayCreations.get(date);
-  if (!pending) {
-    pending = (async () => {
-      const boundId = getDaySessionId(date);
-      // A failed look-up is a stale binding, as for the activation itself:
-      // it must not fail every activation sharing this creation.
-      const bound = boundId
-        ? await hub.acquireById(boundId).catch(() => undefined)
-        : undefined;
-      if (isLiveSession(bound)) return bound;
-      const created = await create();
-      setDaySessionId(date, created.sessionId);
-      return created;
-    })().finally(() => dayCreations.delete(date));
-    dayCreations.set(date, pending);
-  }
-  return pending;
 }
 
 export class Connection implements Viewer {
@@ -997,18 +940,6 @@ export class Connection implements Viewer {
         return this.onSetSpawnOwnership(msg.id, msg.ownership);
       case "acknowledgeMissingWorktree":
         return this.onAcknowledgeMissingWorktree(msg.id);
-      case "calendarDayActivate":
-        return this.onCalendarDayActivate(msg.date, {
-          scan: msg.scan === true,
-          logTime: msg.logTime === true,
-          ...(msg.text !== undefined ? { text: msg.text } : {}),
-          ...(msg.modelProvider && msg.modelId
-            ? { model: { provider: msg.modelProvider, id: msg.modelId } }
-            : {}),
-          ...(msg.thinkingLevel !== undefined
-            ? { thinkingLevel: msg.thinkingLevel }
-            : {}),
-        });
       case "forkSession":
         return this.onForkSession(msg.id, msg.entryId, msg.position);
       case "createDraftSession":
@@ -3034,7 +2965,7 @@ export class Connection implements Viewer {
             ...(request.parentId ? { parentId: request.parentId } : {}),
             sessionRefs: sessionRef,
             // Typed here, so there is nothing to triage. Every OTHER creation
-            // path (agent tools, Slack intake, the day scanner) is an arrival
+            // path (agent tools, Slack intake) is an arrival
             // and lands in the Inbox.
             triaged: true,
             source: {
@@ -4152,225 +4083,6 @@ export class Connection implements Viewer {
         });
       }
     });
-  }
-
-  /**
-   * Calendar per-day session. Ensures a normal assistant (pi) session bound to
-   * the day exists (creating it with the configured Calendar-day model and a
-   * fixed "Calendar · <date>" name that suppresses auto-rename), views it so the
-   * calendar's right panel can embed its live chat, and optionally runs the
-   * one-click day scan in it.
-   */
-  private async onCalendarDayActivate(
-    date: string,
-    opts: {
-      scan?: boolean;
-      logTime?: boolean;
-      text?: string;
-      model?: { provider: string; id: string };
-      thinkingLevel?: ThinkingLevel;
-    },
-  ): Promise<void> {
-    try {
-      assertValidDate(date);
-      if (!this.guardKind("assistant")) return;
-      // Activating a day views its session: claimed after the synchronous
-      // checks (an invalid or guarded activation views nothing, so it must not
-      // cancel a load still acquiring) and before the first await, so a
-      // navigation the client makes while the session is resolved stays the
-      // view.
-      const boundId = getDaySessionId(date);
-      const ticket = this.claimViewRequest(boundId ?? undefined);
-      const settings = getSettings().calendarDaySession;
-      // Model/thinking come from the pre-session composer's picker when present,
-      // else the configured Calendar-day defaults.
-      const provider = opts.model?.provider ?? settings.provider;
-      const modelId = opts.model?.id ?? settings.modelId;
-      const thinkingLevel = opts.thinkingLevel ?? settings.thinkingLevel;
-      const useClaudeSdk =
-        provider === CLAUDE_SDK_PROVIDER && getSettings().claudeSdk.enabled;
-      // The composer picker may override provider/model; a pin for another
-      // provider then degrades to automatic inside resolveSlotAccount.
-      const credentialProfileId = accountForSlot({
-        provider,
-        modelId,
-        ...(settings.credentialProfileId
-          ? { credentialProfileId: settings.credentialProfileId }
-          : {}),
-      });
-      // Whether this activation will DRIVE the day session or merely show it.
-      // Opening the day panel is a read: it must not pay for the provider
-      // transcript (`viewSession.ts`), which is what embedding the day chat did
-      // on every calendar navigation.
-      const driving = Boolean(opts.text?.trim() || opts.scan || opts.logTime);
-      let driver: LiveSession | undefined;
-      let view: HarnessDriver | undefined;
-      if (boundId) {
-        if (!driving) view = hub.viewById(boundId);
-        if (!view) {
-          try {
-            driver = this.asRuntimePromptDriver(await hub.acquireById(boundId));
-          } catch {
-            driver = undefined;
-          }
-          // A bound id that can no longer be acquired is a stale binding (e.g. a
-          // day session that was never persisted); clear it so the panel falls
-          // back to the pre-session composer instead of spinning on a ghost.
-          // Asked of the ACQUIRE, not of the storage-backed view: a legacy
-          // binding with a transcript but no metadata row is reopenable, and
-          // treating it as stale would drop a day the user still has.
-          // Only the binding this activation read: another one may have
-          // replaced it meanwhile with the day's new session.
-          if (!driver && getDaySessionId(date) === boundId)
-            clearDaySession(date);
-          view = driver;
-        }
-      }
-
-      // Create a day session on real chat intent (text) OR on a scan (Task 162:
-      // the user wants a watchable session to follow up in alongside the live
-      // scan workflow). A bare open just views an existing bound session and
-      // never mints an empty one.
-      if (!driver && (opts.text?.trim() || opts.scan || opts.logTime)) {
-        driver = await createDaySessionOnce(date, async () => {
-          const start = {
-            agentType: "assistant",
-            thinkingLevel,
-            credentialProfileId,
-            title: daySessionTitle(date),
-          } as const;
-          // Chat runs in-process on the Claude SDK with the assistant persona
-          // so it gets the Google Calendar/Drive/Gmail and Tasks tools.
-          if (useClaudeSdk)
-            return createSession({ harness: "claude-sdk", modelId, ...start });
-          const model =
-            (await piModelForAccount(credentialProfileId, provider, modelId)) ??
-            undefined;
-          return createSession({ harness: "pi", model, ...start });
-        });
-      }
-
-      if (driver && !view) view = driver;
-      if (view) {
-        this.viewIfCurrent(ticket, view);
-        sessionStore.markRead(view.key, Date.now());
-        await hub.broadcastSessions();
-      }
-
-      if (opts.scan) {
-        // Deterministic collection + session-driven synthesis, with live step
-        // progress broadcast to the day panel. The day session itself produces
-        // the report (durable + watchable); committed state read via day-state.
-        void this.runDayScanWithProgress(date, driver ?? null);
-      } else if (driver && opts.logTime) {
-        // Seed the (preferably existing) day session with the user's OWN work so
-        // time-logging is grounded in what they did — not inbound/attention items.
-        const digest = await buildDaySynthesisDigest(
-          new KnowledgeBaseStore(),
-          date,
-        );
-        await promptRuntimeSession(driver, renderLogMyTimePrompt(digest));
-      } else if (driver && opts.text?.trim()) {
-        await promptRuntimeSession(driver, opts.text);
-      }
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to open the calendar day session: ${errorText(err)}`,
-      });
-    }
-  }
-
-  /**
-   * Run one day scan and broadcast live step progress (Task 162). Collection is
-   * deterministic and commits atomically. Synthesis is FOLDED into the day chat
-   * session: when a day session is bound, the session itself is the synthesizer —
-   * its visible Markdown briefing turn (grounded in the committed digest) becomes
-   * the durable day report (written as the `day-synthesis` actor), so the user
-   * watches one session do the work and can follow up in it. Without a session
-   * (headless), it falls back to the structured one-shot synthesis; the session
-   * path also falls back to it if the turn yields no text (report never empty).
-   */
-  private async runDayScanWithProgress(
-    date: string,
-    driver: LiveSession | null,
-  ): Promise<void> {
-    beginDayScanProgress(date, driver?.sessionId ?? null);
-    const store = new KnowledgeBaseStore();
-    try {
-      const result = await runDayCollection(date, {
-        onProgress: (ev) => {
-          if (ev.kind === "collect") {
-            reportDayScanStep(
-              date,
-              "collect",
-              ev.done >= ev.total ? "done" : "running",
-              `${ev.done}/${ev.total} sources`,
-            );
-          } else if (ev.kind === "minutes") {
-            const detail =
-              ev.state === "done" && ev.processed !== undefined
-                ? `${ev.processed} processed`
-                : undefined;
-            reportDayScanStep(
-              date,
-              "minutes",
-              ev.state === "done" ? "done" : "running",
-              detail,
-            );
-          }
-        },
-      });
-      if (!result.commit) {
-        // No committed run. A freshly-bound session must still get a turn so it
-        // persists (an unprompted session is a non-resumable ghost).
-        if (driver)
-          await promptRuntimeSession(
-            driver,
-            `I ran a day scan for ${date} but it produced no committed report. Tell me it did not complete and offer to re-run it or help another way.`,
-          ).catch(() => {});
-        endDayScanProgress(date);
-        return;
-      }
-      reportDayScanStep(date, "synthesize", "running");
-      let synthesized = false;
-      if (driver) {
-        // The visible session IS the synthesizer (single pass).
-        const digest = await buildDaySynthesisDigest(store, date);
-        const briefing = await promptRuntimeSessionAndCaptureText(
-          driver,
-          renderDayBriefingPrompt(digest),
-        );
-        if (briefing && briefing.trim()) {
-          await writeDayBriefingNarrative(store, date, briefing);
-          reportDayScanStep(date, "synthesize", "done");
-          synthesized = true;
-        }
-      }
-      if (!synthesized) {
-        // Headless, or the session produced no text: structured one-shot so the
-        // report is never left empty (also keeps threads/task-proposals).
-        const synth = await runDaySynthesis(date);
-        if (!synth.ok)
-          console.error(
-            `[calendar-day-scan] synthesis rejected for ${date}:`,
-            synth.errors.join("; "),
-          );
-        reportDayScanStep(
-          date,
-          "synthesize",
-          synth.ok ? "done" : "failed",
-          synth.ok ? undefined : synth.errors[0],
-        );
-      }
-      endDayScanProgress(date);
-    } catch (err) {
-      console.error(
-        "[calendar-day-scan] server-side scan failed:",
-        errorText(err),
-      );
-      endDayScanProgress(date, { error: errorText(err) });
-    }
   }
 
   /** Narrow a resolved driver to one that can be prompted through the runtime. */
@@ -5813,7 +5525,6 @@ interface ViewedModelSelection {
 function readySettings(settings: AppSettings): Partial<AppSettings> {
   return {
     models: settings.models,
-    calendarDaySession: settings.calendarDaySession,
     // The composer's mic button renders from this, so the shell needs it on connect.
     speechToText: settings.speechToText,
   };

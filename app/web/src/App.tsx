@@ -2057,18 +2057,6 @@ function AppContent() {
     setChatCommentSelection(null);
   }, [displayCurrentId]);
   const displayStreaming = shownOptimisticSession ? false : state.streaming;
-  // The session bound to the selected calendar day (server read-model). The
-  // calendar right panel is a Details inspector now (no embedded chat); "Open
-  // day session" navigates to this id, so no auto-view is needed.
-  const calendarDaySessionId = calendarRoute
-    ? (calendarController.dayState?.daySessionId ?? null)
-    : null;
-  // "Log my time" seeds the day session server-side; when the binding then
-  // surfaces in the read-model, jump into it once (covers the fresh-session case
-  // where no id exists at click time).
-  const [pendingLogTimeDate, setPendingLogTimeDate] = useState<string | null>(
-    null,
-  );
   // The windowed transcript's two halves: what precedes the rendered rows (the
   // server-computed turn-stats seed) and whether anything precedes them at all.
   // Both belong to the LIVE timeline only — a preview or a staged new-session
@@ -4796,35 +4784,6 @@ function AppContent() {
     firstSendFailed && provisionFailed ? retryFirstSend : undefined;
   const onRetryFirstSend = firstSendFailed ? retryFirstSend : undefined;
 
-  // The calendar's per-day actions run in a dedicated, date-bound assistant
-  // session (server-created, fixed name) that the calendar's right panel embeds.
-  const activateCalendarDay = (
-    date: string,
-    opts: {
-      scan?: boolean;
-      logTime?: boolean;
-      text?: string;
-      modelProvider?: string;
-      modelId?: string;
-      thinkingLevel?: ThinkingLevel;
-    },
-  ) => {
-    actions.calendarDayActivate(date, opts);
-    // The binding (daySessionId) is recorded server-side; pull it into the day
-    // read-model so the embedded chat + auto-view reconcile.
-    window.setTimeout(() => calendarController.refreshDay(), 700);
-  };
-
-  // "Log my time": open the day's chat (preferring the existing bound session)
-  // seeded with the user's own work for the day, then jump into it so the user
-  // watches the assistant propose worklogs. If a session is already bound we
-  // jump now; otherwise the pending-open effect jumps once the server binds one.
-  const logMyTimeForDay = (date: string) => {
-    activateCalendarDay(date, { logTime: true });
-    if (calendarDaySessionId) openSession(calendarDaySessionId);
-    else setPendingLogTimeDate(date);
-  };
-
   // Transcript callbacks are memoized because every message row is memoized: an
   // inline arrow here is a new prop on every App render, which defeats those
   // rows unconditionally and takes the `Markdown` memo down with them.
@@ -4848,22 +4807,6 @@ function AppContent() {
     (taskId: string, runId: string) => navigate(workflowRunPath(taskId, runId)),
     [navigate],
   );
-
-  useEffect(() => {
-    if (!pendingLogTimeDate) return;
-    if (
-      calendarController.dayState?.date === pendingLogTimeDate &&
-      calendarDaySessionId
-    ) {
-      setPendingLogTimeDate(null);
-      openSession(calendarDaySessionId);
-    }
-  }, [
-    pendingLogTimeDate,
-    calendarDaySessionId,
-    calendarController.dayState?.date,
-    openSession,
-  ]);
 
   const markPreviewInteracted = useCallback(
     () => setPreviewInteracted(true),
@@ -6017,38 +5960,13 @@ function AppContent() {
     );
   })();
 
-  // The calendar's right-side detail pane (a Details inspector, no embedded
-  // agent): the day report/health/Tempo/sources plus an actions row that scans,
-  // opens the day's bound chat, or starts a new session.
+  // The calendar's right-side detail pane: the selected event's details and a
+  // New session action.
   const calendarDetailEl = (
     <Suspense fallback={<LazySurfaceFallback label="Opening details…" />}>
       <CalendarDetailPanel
         calendar={calendarController}
-        hasDaySession={!!calendarDaySessionId}
-        onOpenDaySession={() =>
-          calendarDaySessionId &&
-          navigateFromInspector(sessionPath(calendarDaySessionId))
-        }
-        onNewSession={() => {
-          // Stage the day report as context so a fresh session starts with a
-          // reference to the day instead of a blank slate.
-          const summary = calendarController.dayState?.summary;
-          if (summary)
-            startSessionForKnowledge(
-              summary.entryId,
-              `Daily summary ${calendarController.selectedDate}`,
-            );
-          else navigate(SESSIONS_CREATE_PATH);
-        }}
-        onLogTime={logMyTimeForDay}
-        onOpenReport={(entryId) =>
-          navigateFromInspector(knowledgePath(entryId))
-        }
-        scanProgress={
-          state.calendarScanProgress[calendarController.selectedDate] ?? null
-        }
-        onScan={(date) => activateCalendarDay(date, { scan: true })}
-        onOpenTask={(id) => navigateFromInspector(taskPath(id))}
+        onNewSession={() => navigate(SESSIONS_CREATE_PATH)}
       />
     </Suspense>
   );
