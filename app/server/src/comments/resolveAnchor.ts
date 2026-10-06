@@ -1,7 +1,7 @@
 /**
  * The one anchor resolver: a stored `SelectorBundle` plus the current document
- * text in, a `ResolvedAnchor` out. Serves every commentable surface (KB entries,
- * worktree diffs, session transcripts) — see `docs/comments.md` for the model.
+ * text in, a `ResolvedAnchor` out. Serves every commentable surface (worktree
+ * diffs, session transcripts) — see `docs/comments.md` for the model.
  *
  * The ladder, first hit wins: stored position → block hint → exact quote
  * (prefix/suffix disambiguates duplicates) → bounded fuzzy quote → orphaned.

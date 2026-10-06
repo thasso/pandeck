@@ -16,8 +16,8 @@ export interface CommentWatch {
  * `unwatchComments` is NOT refcounted: it deletes the object's cached threads
  * and takes the subscription away from everyone. Two surfaces on one object is
  * the ordinary case now that the right panel reads the same objects the main
- * pane does — a KB entry open in both, a worktree whose diffs sit beside the
- * session that is writing them — and the panel closing would otherwise blank
+ * pane does — a worktree whose diffs sit beside the session that is writing
+ * them — and the panel closing would otherwise blank
  * the comments the reader is looking at in the main pane, with nothing to
  * refill them until that page remounts.
  *

@@ -131,6 +131,21 @@ function assertGitRevision(value: string, label: string): string {
 const initializing = new Map<string, Promise<void>>();
 
 /**
+ * What earlier builds wrote into the KB repository's OWN config. The identity
+ * authored every commit in the folder — the user's browser Commit included —
+ * as "Knowledge Base", so each pair is removed where it still holds exactly
+ * that value; anything the user set is left alone.
+ */
+const RETIRED_LOCAL_CONFIG: readonly (readonly [string, string])[] = [
+  ["user.name", "Knowledge Base"],
+  ["user.email", "kb@local"],
+  ["commit.gpgsign", "false"],
+  ["gc.autoDetach", "false"],
+];
+/** Roots whose retired config this process has already removed. */
+const retiredConfigCleared = new Set<string>();
+
+/**
  * Git-backed KB folder. Construct with the repo root (defaults to the folder
  * in effect, `knowledgeBaseRoot()`); tests pass a temp directory. Initialization is lazy
  * and idempotent — the first call ensures the folder is a repository.
@@ -193,7 +208,22 @@ export class KnowledgeBaseStore {
           },
           [],
         );
+      await this.clearRetiredConfig();
     });
+  }
+
+  private async clearRetiredConfig(): Promise<void> {
+    const key = resolve(this.root);
+    if (retiredConfigCleared.has(key)) return;
+    for (const [name, value] of RETIRED_LOCAL_CONFIG) {
+      const current = await gitOptional(
+        ["config", "--local", "--get", name],
+        this.root,
+      );
+      if (current.code === 0 && current.stdout.trim() === value)
+        await git(["config", "--local", "--unset", name], this.root);
+    }
+    retiredConfigCleared.add(key);
   }
 
   /** The absolute path of a KB file, for tools that hand the agent a path. */

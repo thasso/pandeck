@@ -617,8 +617,6 @@ export interface UIState {
   taskCommentsLru: string[];
   /** Task route whose ready detail/activity entries are pinned in both caches. */
   openTaskProjectionId: string | null;
-  /** Authoritative re-anchored Knowledge comment threads per entry id. */
-  /** Latest committed invalidation timestamp per Knowledge entry. */
   /** Merge-back progress per worktree id (survives dialog close). */
   worktreeMerge: Record<
     string,

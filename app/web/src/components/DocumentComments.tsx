@@ -187,7 +187,7 @@ type ComposerState =
  * @purpose Collect comments on ONE document — a passage the reader selected, or
  *   the whole document — in its browser-local tray, then send the tray to a
  *   session's composer (`docs/comments.md`).
- * @useWhen A document viewer (a Knowledge entry, a host file) wants comments.
+ * @useWhen A document viewer (a host file) wants comments.
  *   Mount it as the LAST child of the viewer's full-height column: it owns the
  *   bottom edge (composer, tray bar) and publishes the header/dock controls.
  * @avoidWhen The surface keeps server-side threads (worktree review) or is the

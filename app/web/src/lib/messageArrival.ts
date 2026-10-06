@@ -248,15 +248,13 @@ export interface FailureHomes {
    */
   stagedSend: { sessionId: string | null } | null;
   /**
-   * The projects, Tasks and Knowledge entries whose OWN surface is open AND
+   * The projects and Tasks whose OWN surface is open AND
    * visible. Such a surface renders a failure naming its object two ways, and
    * both are in place: the control that was refused (the per-object mutation
    * states), and the object's failure note for the writes no control tracks —
-   * archiving a Task, a comment on an entry.
+   * archiving a Task.
    *
-   * Usually at most one id per type, since the app opens one of each at a time.
-   * Knowledge is the exception: an entry can be read on its route and in the
-   * right panel's Knowledge tab at once, and each of those draws its own note.
+   * At most one id per type, since the app opens one of each at a time.
    *
    * Empty where nothing of that type is on screen, which includes a member that
    * is only a ROW in a list (a row has no failure surface, so a failure about it
