@@ -89,6 +89,10 @@ import {
   runExternalDocumentAction,
 } from "../../lib/documentActions.ts";
 import { FileHistoryList } from "./FileHistoryList.tsx";
+import { DocumentCommentLayer } from "../DocumentComments.tsx";
+import { DocumentTextBody } from "../DocumentTextBody.tsx";
+import type { CommentDocument } from "../../lib/chatCommentPrompt.ts";
+import type { DocumentLineSource } from "../../lib/documentCommentAnchor.ts";
 import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { dataOf, errorOf, isInitialLoad } from "../../lib/loadState.ts";
 import {
@@ -176,6 +180,15 @@ export interface WorktreeDetailPageProps {
    * line anchor still opens the source, where the line is.
    */
   markdownPreviewFirst?: boolean;
+  /**
+   * Comment on files the way any document is commented on — a passage or the
+   * whole file, collected in its browser-local tray and sent to a session
+   * (`docs/comments.md`) — naming each file by the document this returns. For
+   * a checkout without review comments (the Knowledge Base). A file's text
+   * then renders as the shared document text body, which a passage can be
+   * selected in. Keep the function's identity stable.
+   */
+  documentComments?: ((path: string) => CommentDocument) | undefined;
 }
 
 function scopeFromRoute(from?: string, to?: string): WorktreeDiffScope {
@@ -942,11 +955,14 @@ function FilePreview({
   worktreeId,
   path,
   content,
+  textRootRef,
 }: {
   kind: PreviewKind;
   worktreeId: string;
   path: string;
   content?: string | undefined;
+  /** The rendered Markdown a passage comment is selected in, when comments are on. */
+  textRootRef?: ((node: HTMLDivElement | null) => void) | undefined;
 }) {
   const rawUrl = worktreeFileRawUrl(worktreeId, path);
   if (kind === "markdown") {
@@ -954,15 +970,19 @@ function FilePreview({
     return (
       <div className="mx-auto w-full max-w-3xl p-4">
         <Suspense fallback={<PaneLoading label="Loading preview…" />}>
-          <MarkdownFileLazy
-            text={content}
-            documentTarget={{
-              kind: "worktreeFile",
-              worktreeId,
-              path,
-              view: "file",
-            }}
-          />
+          <div ref={textRootRef}>
+            <MarkdownFileLazy
+              text={content}
+              documentTarget={{
+                kind: "worktreeFile",
+                worktreeId,
+                path,
+                view: "file",
+              }}
+              // What names a passage comment's source lines.
+              sourcePositions={textRootRef !== undefined}
+            />
+          </div>
         </Suspense>
       </div>
     );
@@ -997,6 +1017,7 @@ function FilesView({
   pivot,
   onPivotChange,
   markdownPreviewFirst,
+  documentComments,
   commentsConfigFor,
 }: {
   worktree: WorktreeRecord;
@@ -1012,6 +1033,7 @@ function FilesView({
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
   markdownPreviewFirst: boolean;
+  documentComments: ((path: string) => CommentDocument) | undefined;
   commentsConfigFor: (
     path: string,
     current: boolean,
@@ -1183,6 +1205,20 @@ function FilesView({
     );
   }, [filePath, onPivotChange, worktree.id, markdownPreviewFirst, hasAnchor]);
 
+  // With document comments on, the rendered text a passage is selected in:
+  // the Markdown preview, or the file's text body. Anything else (an image, a
+  // diff, the history) takes comments on the whole file.
+  const textRoot = useRef<HTMLDivElement | null>(null);
+  const [textRootVersion, setTextRootVersion] = useState(0);
+  const attachTextRoot = useCallback((node: HTMLDivElement | null) => {
+    textRoot.current = node;
+    if (node) setTextRootVersion((version) => version + 1);
+  }, []);
+  const commentDocument = useMemo(
+    () => (filePath && documentComments ? documentComments(filePath) : null),
+    [documentComments, filePath],
+  );
+
   const pivotKey =
     filePath && pivot === "vs-base"
       ? `${worktree.id}:${filePath}:base:${worktree.baseCommit}`
@@ -1215,6 +1251,13 @@ function FilesView({
   // Raster images render as the image directly (source is meaningless); svg,
   // markdown, and html keep source as "File" and add a rendered "Preview".
   const previewKind = filePath ? previewKindForPath(filePath) : undefined;
+  const commentLineSource: DocumentLineSource | undefined = !commentDocument
+    ? undefined
+    : pivot === "preview" && previewKind === "markdown"
+      ? "markdown"
+      : pivot === "file" && previewKind !== "raster" && file && !file.binary
+        ? "code"
+        : undefined;
   // The main checkout has no fork point, so the "vs base" pivot is dropped.
   const pivots: Array<{ id: FilePivot; label: string; icon: ReactNode }> = [
     { id: "file", label: "File", icon: <File size={15} /> },
@@ -1448,6 +1491,9 @@ function FilesView({
                     worktreeId={worktree.id}
                     path={filePath}
                     content={file && !file.binary ? file.content : undefined}
+                    {...(commentDocument
+                      ? { textRootRef: attachTextRoot }
+                      : {})}
                   />
                 )
               ) : pivot === "history" ? (
@@ -1523,14 +1569,24 @@ function FilesView({
                         onRetry={fileFetch.reload}
                       />
                     ) : null}
-                    <FileSurface
-                      prefs={prefs}
-                      name={file.path}
-                      contents={file.content}
-                      cacheKey={fileCacheKey}
-                      comments={commentsConfigFor(file.path, true)}
-                      lineAnchor={anchor}
-                    />
+                    {commentDocument ? (
+                      <div ref={attachTextRoot}>
+                        <DocumentTextBody
+                          text={file.content}
+                          name={file.path}
+                          anchor={anchor}
+                        />
+                      </div>
+                    ) : (
+                      <FileSurface
+                        prefs={prefs}
+                        name={file.path}
+                        contents={file.content}
+                        cacheKey={fileCacheKey}
+                        comments={commentsConfigFor(file.path, true)}
+                        lineAnchor={anchor}
+                      />
+                    )}
                   </div>
                 )
               ) : fileFailed ? (
@@ -1543,6 +1599,18 @@ function FilesView({
                 <PaneLoading label="Loading file…" />
               )}
             </div>
+            {commentDocument ? (
+              <DocumentCommentLayer
+                document={commentDocument}
+                {...(commentLineSource
+                  ? {
+                      rootRef: textRoot,
+                      lineSource: commentLineSource,
+                      rootVersion: textRootVersion,
+                    }
+                  : {})}
+              />
+            ) : null}
           </>
         ) : (
           <div className="p-6 text-body text-muted">
@@ -1585,6 +1653,7 @@ export default function WorktreeDetailPage({
   title,
   lineComments = true,
   markdownPreviewFirst = false,
+  documentComments,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
     WorktreeGitStatus | undefined
@@ -1935,6 +2004,7 @@ export default function WorktreeDetailPage({
               pivot={filePivot}
               onPivotChange={setFilePivot}
               markdownPreviewFirst={markdownPreviewFirst}
+              documentComments={documentComments}
               commentsConfigFor={commentsConfigFor}
             />
           ) : (

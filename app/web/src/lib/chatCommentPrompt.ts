@@ -1,3 +1,4 @@
+import { knowledgeFileLink } from "@assistant/shared/objectLinks";
 import type { CommentTarget, SelectorBundle } from "@assistant/shared/comments";
 
 /** A comment on a passage of the session transcript. */
@@ -21,7 +22,10 @@ export interface PendingTranscriptComment {
  * names it here is what the agent is told, so it carries the path or id the
  * agent reads the document by.
  */
-export type CommentDocument = { kind: "hostFile"; path: string };
+export type CommentDocument =
+  | { kind: "hostFile"; path: string }
+  /** A file in the Knowledge Base, by its path there (`pa://knowledge/<path>`). */
+  | { kind: "knowledgeFile"; path: string };
 
 /** A comment on a document: a quoted passage, or the whole document. */
 export interface PendingDocumentComment {
@@ -79,7 +83,9 @@ export function commentDocumentLabel(document: CommentDocument): string {
 
 /** One key per document, shared by its tray and the prompt's grouping. */
 export function commentDocumentKey(document: CommentDocument): string {
-  return `file:${document.path}`;
+  return document.kind === "knowledgeFile"
+    ? `kb:${document.path}`
+    : `file:${document.path}`;
 }
 
 function compareTranscriptComments(
@@ -127,7 +133,9 @@ function indentBody(body: string): string {
 }
 
 function documentHeading(document: CommentDocument): string {
-  return `Comments on \`${document.path}\`:`;
+  return document.kind === "knowledgeFile"
+    ? `Comments on Knowledge Base file \`${document.path}\` (${knowledgeFileLink(document.path)}; read it with kb_read):`
+    : `Comments on \`${document.path}\`:`;
 }
 
 function documentLocator(comment: PendingDocumentComment): string {

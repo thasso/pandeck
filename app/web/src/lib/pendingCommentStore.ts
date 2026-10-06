@@ -68,7 +68,10 @@ function isSelectorBundle(value: unknown): boolean {
 function isCommentDocument(value: unknown): value is CommentDocument {
   const document = value as Partial<Record<string, unknown>> | undefined;
   if (!document || typeof document !== "object") return false;
-  return document.kind === "hostFile" && typeof document.path === "string";
+  return (
+    (document.kind === "hostFile" || document.kind === "knowledgeFile") &&
+    typeof document.path === "string"
+  );
 }
 
 function isPendingComment(value: unknown): value is PendingChatComment {

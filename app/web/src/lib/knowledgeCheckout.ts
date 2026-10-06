@@ -3,6 +3,7 @@ import {
   type WorktreeGitStatus,
   type WorktreeRecord,
 } from "@assistant/shared";
+import type { CommentDocument } from "./chatCommentPrompt.ts";
 
 /**
  * The Knowledge Base folder as the worktree page reads it: the checkout
@@ -37,4 +38,12 @@ export function knowledgeUncommittedCount(
   status: WorktreeGitStatus | undefined,
 ): number {
   return status ? status.filesChanged + status.untracked : 0;
+}
+
+/**
+ * How a Knowledge Base file is named in a comment tray and in the prompt it is
+ * sent with: by its path in the KB, which `kb_read` and `pa://knowledge` take.
+ */
+export function knowledgeCommentDocument(path: string): CommentDocument {
+  return { kind: "knowledgeFile", path };
 }

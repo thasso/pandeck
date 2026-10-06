@@ -10,7 +10,11 @@ import {
   worktreePath,
   type WorktreeView,
 } from "../../hooks/useSessionRouting.ts";
-import { knowledgeCheckoutRecord } from "../../lib/knowledgeCheckout.ts";
+import {
+  knowledgeCheckoutRecord,
+  knowledgeCommentDocument,
+} from "../../lib/knowledgeCheckout.ts";
+import { CommentActuationProvider } from "../review/CommentActuation.tsx";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
 /** Where inside the Knowledge Base the panel is looking (the route's coordinates, as panel state). */
@@ -79,49 +83,54 @@ export function KnowledgePanel({
   );
 
   return (
-    <RoutePrimaryActionProvider action={null}>
-      <WorktreeDetailPage
-        worktree={worktree}
-        status={status}
-        title="Knowledge Base"
-        lineComments={false}
-        markdownPreviewFirst
-        narrow
-        embedded
-        headerActions={
-          <button
-            type="button"
-            onClick={() =>
-              onNavigate(
-                location.path || location.view !== "files"
-                  ? worktreePath(worktree.id, location.view, {
-                      ...(location.path ? { path: location.path } : {}),
-                      ...(location.from ? { from: location.from } : {}),
-                      ...(location.to ? { to: location.to } : {}),
-                    })
-                  : knowledgePath(),
-              )
-            }
-            title="Open in Knowledge"
-            aria-label="Open in Knowledge"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <SquareArrowOutUpRight size={16} />
-          </button>
-        }
-        view={location.view}
-        filePath={location.path}
-        from={location.from}
-        to={location.to}
-        navigate={navigate}
-        prefs={prefs}
-        onUpdatePrefs={onUpdatePrefs}
-        comments={NO_COMMENTS}
-        onLoadComments={noop}
-        onUnloadComments={noop}
-        commentActions={NO_COMMENT_ACTIONS}
-        onSubmitReview={noop}
-      />
-    </RoutePrimaryActionProvider>
+    // Its own comment and primary-action channels, so the header and its
+    // comment tray speak for the file shown HERE, not the main pane's object.
+    <CommentActuationProvider>
+      <RoutePrimaryActionProvider action={null}>
+        <WorktreeDetailPage
+          worktree={worktree}
+          status={status}
+          title="Knowledge Base"
+          lineComments={false}
+          markdownPreviewFirst
+          documentComments={knowledgeCommentDocument}
+          narrow
+          embedded
+          headerActions={
+            <button
+              type="button"
+              onClick={() =>
+                onNavigate(
+                  location.path || location.view !== "files"
+                    ? worktreePath(worktree.id, location.view, {
+                        ...(location.path ? { path: location.path } : {}),
+                        ...(location.from ? { from: location.from } : {}),
+                        ...(location.to ? { to: location.to } : {}),
+                      })
+                    : knowledgePath(),
+                )
+              }
+              title="Open in Knowledge"
+              aria-label="Open in Knowledge"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              <SquareArrowOutUpRight size={16} />
+            </button>
+          }
+          view={location.view}
+          filePath={location.path}
+          from={location.from}
+          to={location.to}
+          navigate={navigate}
+          prefs={prefs}
+          onUpdatePrefs={onUpdatePrefs}
+          comments={NO_COMMENTS}
+          onLoadComments={noop}
+          onUnloadComments={noop}
+          commentActions={NO_COMMENT_ACTIONS}
+          onSubmitReview={noop}
+        />
+      </RoutePrimaryActionProvider>
+    </CommentActuationProvider>
   );
 }

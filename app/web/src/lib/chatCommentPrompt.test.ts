@@ -236,6 +236,23 @@ Comments on \`/tmp/example/deploy.md\`:
    Split this file`);
   });
 
+  it("names a Knowledge Base file by its KB path and link", () => {
+    const kb = {
+      kind: "knowledgeFile" as const,
+      path: "projects/acme/plan.md",
+    };
+    expect(
+      serializeChatCommentPrompt("", [
+        documentComment("k", kb, "Tighten this", {
+          quote: "ship soon",
+          lines: { start: 4, end: 4 },
+        }),
+      ]),
+    ).toBe(
+      "Comments on Knowledge Base file `projects/acme/plan.md` (pa://knowledge/projects/acme/plan.md; read it with kb_read):\n\n1. Line 4, “ship soon”:\n   Tighten this",
+    );
+  });
+
   it("quotes a passage without lines when the renderer could not name them", () => {
     expect(
       serializeChatCommentPrompt("", [

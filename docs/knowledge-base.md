@@ -104,13 +104,15 @@ the KB.
 The browser has no Knowledge-specific read API: it reads the KB only through
 that checkout. The `/knowledge` route (`Files` and `Uncommitted changes` in the
 sidebar) and the right panel's Knowledge tab both draw the worktree file page
-for it (`WorktreeDetailPage`, titled "Knowledge Base", no line comments, a
-Markdown file opening on its Preview with the frontmatter header). The route's
-inspector (`KnowledgeInspector`) counts the uncommitted files and offers "Commit
-changes…", which commits them all with the user's git identity. Live refresh is
-the checkout's own change watcher: a tool commit or an external edit moves its
-git status, and the open page reloads in place. A `kb_show` card opens its file
-in the panel or the main pane.
+for it (`WorktreeDetailPage`, titled "Knowledge Base", a Markdown file opening
+on its Preview with the frontmatter header). Its files take the browser-local
+document comments every document takes (`docs/comments.md`): a passage or the
+whole file, collected in a tray and sent to a session's composer; nothing is
+stored on the server. The route's inspector (`KnowledgeInspector`) counts the
+uncommitted files and offers "Commit changes…", which commits them all with the
+user's git identity. Live refresh is the checkout's own change watcher: a tool
+commit or an external edit moves its git status, and the open page reloads in
+place. A `kb_show` card opens its file in the panel or the main pane.
 
 Starting a session from a KB file stages it as a generic file context
 (`docs/document-presentation.md`, Starting a session from a document): the agent
