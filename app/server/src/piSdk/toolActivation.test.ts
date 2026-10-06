@@ -241,7 +241,7 @@ test("coding personas activate pi's search builtins; assistant personas get none
   // active-set merge. Never a `tools:` allowlist (see options.ts). `ls` stays
   // deactivated — Task-319 serves it as an app tool through the bridge instead.
   for (const agentType of ["developer", "workshop"] as const) {
-    const opts = await buildAgentOptions(agentType, process.cwd());
+    const opts = await buildAgentOptions(agentType, process.cwd(), "cp_test");
     // `ls` is the app tool, eager on the bridge side (Task-319). It SHADOWS pi's
     // same-named builtin in pi's name-keyed registry, so listing the builtin
     // here would be dead config the prompt inventory still prices — not a
@@ -262,7 +262,7 @@ test("coding personas activate pi's search builtins; assistant personas get none
     assert.equal(opts.noTools, undefined);
   }
   for (const agentType of ["assistant", "personal-assistant"] as const) {
-    const opts = await buildAgentOptions(agentType, process.cwd());
+    const opts = await buildAgentOptions(agentType, process.cwd(), "cp_test");
     assert.deepEqual(
       opts.extraBuiltinToolNames,
       [],

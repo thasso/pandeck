@@ -75,7 +75,7 @@ const broken = createCredentialProfile({
   name: "Broken",
   provider: "openai-codex",
 });
-const defaultAuth = join(piAgentDir("default"), "auth.json");
+const catalogAuth = join(piAgentDir("_catalog"), "auth.json");
 const secondaryAuth = join(piAgentDir(secondary.id), "auth.json");
 const brokenAuth = join(piAgentDir(broken.id), "auth.json");
 
@@ -91,7 +91,7 @@ test("the explicit refresh forces a fetch on every OpenAI account's runtime", as
   // inside it never reaches the network — the bug this guards.
   assert.deepEqual(
     [...refreshCalls].sort((a, b) => a.authPath.localeCompare(b.authPath)),
-    [defaultAuth, secondaryAuth, brokenAuth]
+    [catalogAuth, secondaryAuth, brokenAuth]
       .sort((a, b) => a.localeCompare(b))
       .map((authPath) => ({ authPath, force: true })),
   );
@@ -107,7 +107,7 @@ test("a catalog failure pi RESOLVES with is reported, not swallowed", async () =
     new Map([["openai-codex", new Error("catalog unreachable")]]),
   );
   resolvedErrorsByAuthPath.set(
-    defaultAuth,
+    catalogAuth,
     new Map([["openai-compatible", new Error("502 from catalog")]]),
   );
 

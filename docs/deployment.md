@@ -762,10 +762,9 @@ none of them. Later deploys retain state created by that preview.
 The preview unit inherits the host-tool PATH because previews still need the
 host toolchain. It does not inherit production's `tokenFile`,
 `extraEnvironment`, HOME, or DATA_DIR. The server mints its own browser token in
-the empty preview DATA_DIR. Default Claude now resolves against the
-preview-local HOME rather than the service user's `~/.claude`, and the legacy pi
-import points at a nonexistent preview-local path. Slack app mode and speech
-recognition remain explicitly disabled as extra guards.
+the empty preview DATA_DIR. Provider accounts require an explicit isolated login
+in the preview; neither `~/.claude` nor `~/.pi` is imported. Slack app mode and
+speech recognition remain explicitly disabled as extra guards.
 
 Independent preview credentials require deliberate host configuration. Set
 `prDeployments.credentialEnvironmentFile` to a runtime secret path such as

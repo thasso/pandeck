@@ -76,7 +76,10 @@ const { sessionSpawnTools } =
   await import("./tools/sessions/sessionSpawnTool.ts");
 const { shouldAutoNamePiSession } = await import("./piSdk/titleState.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
-const { listCredentialProfiles } = await import("./credentialProfiles.ts");
+const { createCredentialProfile, listCredentialProfiles } =
+  await import("./credentialProfiles.ts");
+const openaiAccount = createCredentialProfile({ provider: "openai-codex" });
+createCredentialProfile({ provider: "claude" });
 const { resetDirectPeerChildrenForTests } =
   await import("./peerSpawnRuntimes.ts");
 const { createSession } = await import("./harnesses/create.ts");
@@ -411,7 +414,7 @@ const pendingCard = (
           responseRequested: false,
           provider: "openai-codex",
           modelId: "gpt-5",
-          credentialProfileId: "default",
+          credentialProfileId: openaiAccount.id,
           thinkingLevel: "medium",
           ...item,
         },
@@ -438,7 +441,7 @@ test("an edit naming an account that cannot run the model is refused", async () 
   await expect(
     prepareSpawnApproval(card, {
       kind: "sessionSpawn",
-      items: [{ rowId: "row_1", credentialProfileId: "default" }],
+      items: [{ rowId: "row_1", credentialProfileId: openaiAccount.id }],
     }),
   ).rejects.toThrow(/cannot run claude-sdk models/);
 });
@@ -508,7 +511,7 @@ test("the user's pick replaces the proposal's model and clears its note", async 
         rowId,
         provider: "openai-codex",
         modelId: "gpt-5",
-        credentialProfileId: "default",
+        credentialProfileId: openaiAccount.id,
         thinkingLevel: "low",
       },
     ],

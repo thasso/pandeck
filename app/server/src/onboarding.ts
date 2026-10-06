@@ -1,12 +1,10 @@
 import { existsSync, writeFileSync } from "node:fs";
 import type { OnboardingState } from "@assistant/shared/onboarding";
-import { join } from "node:path";
 import {
   CLAUDE_SDK_PROVIDER,
   DEFAULT_HELPER_MODEL,
   clampThinkingLevelForModel,
 } from "@assistant/shared";
-import { DATA_DIR } from "./config.ts";
 import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import {
   credentialProfileById,
@@ -19,10 +17,11 @@ import { saveSettings } from "./settingsService.ts";
 import {
   guidedSetupInProgress,
   ONBOARDING_COMPLETION_FILE,
+  ONBOARDING_PENDING_FILE,
 } from "./onboardingPhase.ts";
 
 const completionFile = ONBOARDING_COMPLETION_FILE;
-const pendingFile = join(DATA_DIR, "onboarding-pending");
+const pendingFile = ONBOARDING_PENDING_FILE;
 
 /** Read-only detection: never mark an existing installation on GET. */
 export function onboardingState(): OnboardingState {

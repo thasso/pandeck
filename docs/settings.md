@@ -257,9 +257,11 @@ accounts sign in through the same card in `signIn` mode (see Accounts).
 
 The Claude and OpenAI accounts models run on are credential profiles
 (`app/server/src/credentialProfiles.ts`), kept outside the settings registry. A
-named profile created by first-run onboarding has no stored custom name; its
+profile created by first-run onboarding has no stored custom name; its
 projection displays the provider-only label “Claude” or “OpenAI” until renamed.
-The protected default profiles keep their explicit “Default” labels. The
+All installations expose only explicitly created accounts. Retired default
+records and credentials are preserved on disk for recovery but never projected,
+selected, or used as a fallback; an old session bound to one cannot run. The
 Personal Assistant reaches them through three tools in the same `settings`
 group, which call the functions the Settings page's `/api/credential-profiles`
 routes call:
@@ -273,8 +275,8 @@ routes call:
   setting shared across accounts by provider/model key; read its current value
   before updating it, and do not guess an unavailable account's catalog.
 - `accounts_update`: create, rename, enable, disable or delete. Delete refuses a
-  default account or one a session is bound to, as the page does, and unpins the
-  account from every setting through `clearProfilePins`.
+  account a session is bound to, as the page does, and unpins the account from
+  every setting through `clearProfilePins`.
 - `accounts_sign_in`: raises a `settingsInput` card in `signIn` mode
   (`path: accounts.<id>`, `account: { id, provider }`) and ends the turn. In the
   browser an OpenAI account starts its device login and shows the link and code

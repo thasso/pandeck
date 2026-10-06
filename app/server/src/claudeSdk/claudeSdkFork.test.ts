@@ -54,7 +54,6 @@ const { claudeSdkStore } = await import("./claudeSdkStore.ts");
 const { readClaudeSdkRecord } = await import("./claudeSdkRecords.ts");
 const { sessionRuntime } = await import("../session/runtimeInstance.ts");
 const { claudeProfileSessionStore } = await import("./profileSessionStore.ts");
-const { DEFAULT_CLAUDE_PROFILE_ID } = await import("../credentialProfiles.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 type ClaudeSdkMessage = import("./sdkSeam.ts").ClaudeSdkMessage;
 type ClaudeSdkSeam = import("./sdkSeam.ts").ClaudeSdkSeam;
@@ -744,8 +743,8 @@ test("forking a named-profile session cuts inside THAT profile's root", async ()
   );
   assert.notEqual(
     forkCalls.at(-1)?.options.storeRoot,
-    claudeProfileSessionStore(DEFAULT_CLAUDE_PROFILE_ID).root,
-    "and not to the protected default root, where that transcript is absent",
+    claudeProfileSessionStore("cp_other").root,
+    "and not to another account's root, where that transcript is absent",
   );
 });
 

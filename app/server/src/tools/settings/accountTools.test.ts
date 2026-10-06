@@ -106,7 +106,7 @@ describe("accounts_read and accounts_update", () => {
   test("refuses what the Settings page refuses", async () => {
     await assert.rejects(
       call("accounts_update", { operation: "delete", id: "claude-default" }),
-      /default profile cannot be deleted/,
+      /Retired account data is preserved/,
     );
     await assert.rejects(
       call("accounts_update", { operation: "rename", id: "nope", name: "x" }),

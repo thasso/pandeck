@@ -367,7 +367,7 @@ class PiSessionStore {
       const cwd = edgeCwd ?? sessionManagerCwd(sm) ?? CWD;
       const profileId =
         sessionStore.get(candidateId ?? sm.getSessionId())
-          ?.credentialProfileId ?? "default";
+          ?.credentialProfileId ?? defaultOpenAiProfileId();
       const created = await this.create(
         kind,
         sm,
@@ -517,7 +517,8 @@ class PiSessionStore {
     const cwd =
       worktreeCwdForSession(parentSessionId) ?? sessionManagerCwd(sm) ?? CWD;
     const parentMeta = sessionStore.get(parentSessionId);
-    const credentialProfileId = parentMeta?.credentialProfileId ?? "default";
+    const credentialProfileId =
+      parentMeta?.credentialProfileId ?? defaultOpenAiProfileId();
     // A fork continues the parent's conversation, so it inherits the parent's
     // frozen prompt conditions rather than recomputing against today's gates.
     const inherit = parsePromptConditions(
@@ -568,13 +569,14 @@ class PiSessionStore {
     model?: AgentSession["model"],
     thinkingLevel?: ThinkingLevel,
     cwd: string = CWD,
-    credentialProfileId = "default",
+    credentialProfileId?: string,
     promptStart?: PiPromptStart,
     requestedMode?: SessionMode,
   ): Promise<{
     session: AgentSession;
     notices: Array<{ severity: NoticeSeverity; message: string }>;
   }> {
+    credentialProfileId ??= defaultOpenAiProfileId();
     // Session-START prompt conditions (Task 287). pi rebuilds the system prompt
     // on every active-tool change and on every reopen, so this reads the frozen
     // record whenever the session already has one — creation is the only call

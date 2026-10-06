@@ -64,6 +64,10 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
 
 const { createCredentialProfile, piAgentDir } =
   await import("../credentialProfiles.ts");
+const primary = createCredentialProfile({
+  name: "Primary",
+  provider: "openai-codex",
+});
 const secondary = createCredentialProfile({
   name: "Secondary",
   provider: "openai-codex",
@@ -82,7 +86,7 @@ const secondaryModel: FakeModel = {
   reasoning: true,
   contextWindow: 100_000,
 };
-modelsByAuthPath.set(join(piAgentDir("default"), "auth.json"), [defaultModel]);
+modelsByAuthPath.set(join(piAgentDir(primary.id), "auth.json"), [defaultModel]);
 modelsByAuthPath.set(join(piAgentDir(secondary.id), "auth.json"), [
   secondaryModel,
 ]);
@@ -92,7 +96,7 @@ const { findModelForProfile, listModelsForProfile } =
 
 test("profile model projection and lookup use the selected isolated runtime", async () => {
   assert.deepEqual(
-    (await listModelsForProfile("default")).map((model) => model.id),
+    (await listModelsForProfile(primary.id)).map((model) => model.id),
     ["default-only"],
   );
   assert.deepEqual(

@@ -213,12 +213,7 @@ export function OnboardingProviderStep({
   const refresh = useCallback(async () => {
     try {
       const next = await fetchCredentialProfiles();
-      setProfiles(
-        next.filter(
-          (profile) =>
-            profile.id !== "default" && profile.id !== "claude-default",
-        ),
-      );
+      setProfiles(next);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }

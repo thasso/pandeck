@@ -167,7 +167,6 @@ export async function reconcileIsolatedClaudeLogins(): Promise<void> {
       .filter(
         (profile) =>
           profile.provider === "claude" &&
-          profile.id !== "claude-default" &&
           profile.status !== "ready" &&
           profile.status !== "connecting" &&
           existsSync(join(claudeConfigDir(profile.id), ".claude.json")),
@@ -323,10 +322,7 @@ function startRun(profileId: string): LoginRun {
           (await verifyClaudeAuthStatus(profileId));
         if (run.finished) return;
         if (verified) {
-          if (
-            profileId !== "claude-default" &&
-            !claudeProfileHasCredential(profileId)
-          )
+          if (!claudeProfileHasCredential(profileId))
             markClaudeProfileLoginVerified(profileId);
           appendOutput(run, "\nClaude login completed.\n");
           finish(run, "ready");

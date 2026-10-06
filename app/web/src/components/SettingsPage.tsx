@@ -860,8 +860,6 @@ function CredentialProfilesSection({
           ) : null}
           <div className="mt-4 space-y-2">
             {providerProfiles.map((profile) => {
-              const protectedProfile =
-                profile.id === "default" || profile.id === "claude-default";
               const connection =
                 provider === "openai-codex"
                   ? openAiProfileConnectionAction(profile.status)
@@ -943,12 +941,8 @@ function CredentialProfilesSection({
                         .then(refresh)
                         .catch(fail);
                   }}
-                  {...(!protectedProfile
-                    ? {
-                        onRename: () => void rename(),
-                        onDelete: () => void remove(),
-                      }
-                    : {})}
+                  onRename={() => void rename()}
+                  onDelete={() => void remove()}
                 />
               );
             })}

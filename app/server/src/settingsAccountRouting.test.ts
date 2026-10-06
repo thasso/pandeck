@@ -20,16 +20,15 @@ process.env.DATA_DIR = join(tmp, "data");
 const { runClaudeSdkOneShot } = await import("./claudeSdk/oneShot.ts");
 const { runPiOneShot, selectPiModelWithFallback } =
   await import("./piSdk/oneShot.ts");
-const {
-  createCredentialProfile,
-  ensureDefaultPiProfile,
-  setCredentialProfileEnabled,
-} = await import("./credentialProfiles.ts");
+const { createCredentialProfile, setCredentialProfileEnabled } =
+  await import("./credentialProfiles.ts");
 const { updateSettings } = await import("./settings.ts");
 const { generateCommitMessageJson } = await import("./commitAgent.ts");
 const { refinePromptText } = await import("./promptRefinement.ts");
 
 const dataDir = process.env.DATA_DIR;
+let primaryOpenAiId: string;
+let primaryClaudeId: string;
 const commitJson = JSON.stringify({
   status: "commit",
   subject: "Do the thing",
@@ -43,7 +42,8 @@ beforeEach(() => {
     force: true,
   });
   rmSync(join(dataDir, "settings"), { recursive: true, force: true });
-  ensureDefaultPiProfile();
+  primaryOpenAiId = createCredentialProfile({ provider: "openai-codex" }).id;
+  primaryClaudeId = createCredentialProfile({ provider: "claude" }).id;
 });
 
 test("a Claude helper agent authenticates as its pinned account", async () => {
@@ -97,7 +97,7 @@ test("a disabled pin degrades to the automatic account instead of failing the ru
 
   assert.equal(
     vi.mocked(runClaudeSdkOneShot).mock.calls[0]?.[0]?.credentialProfileId,
-    "claude-default",
+    primaryClaudeId,
   );
 });
 
@@ -156,7 +156,7 @@ test("an unpinned agent follows the automatic account", async () => {
 
   assert.equal(
     vi.mocked(runPiOneShot).mock.calls[0]?.[0]?.credentialProfileId,
-    "default",
+    primaryOpenAiId,
   );
 });
 

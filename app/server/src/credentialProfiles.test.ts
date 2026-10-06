@@ -2,211 +2,126 @@ import assert from "node:assert/strict";
 import { afterAll, beforeEach, test } from "vitest";
 import {
   existsSync,
-  mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
-  mkdtempSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The registry resolves DATA_DIR during import, so isolate it before loading the
-// module and avoid sharing any provider state with the normal test runtime.
 const tmp = mkdtempSync(join(tmpdir(), "credential-profiles-test-"));
 const previousHome = process.env.HOME;
 process.env.HOME = join(tmp, "home");
-process.env.DATA_DIR = join(tmp, "data");
+const dataDir = join(tmp, "data");
+process.env.DATA_DIR = dataDir;
 
 const {
+  automaticProfileIdFor,
+  availableAutomaticProfileIdFor,
   claudeConfigDir,
   claudeProfileEnvironment,
   createCredentialProfile,
+  credentialProfileById,
   deleteCredentialProfile,
-  defaultOpenAiProfileId,
-  ensureDefaultPiProfile,
   listCredentialProfiles,
-  migrateLegacyDefaultPiProfile,
   piAgentDir,
   renameCredentialProfile,
   setCredentialProfileEnabled,
 } = await import("./credentialProfiles.ts");
 const { setChildProcessEnvOverlay } = await import("./subprocessEnv.ts");
 
-const root = join(process.env.DATA_DIR, "credential-profiles");
+const root = join(dataDir, "credential-profiles");
 const mode = (path: string) => statSync(path).mode & 0o777;
 
 beforeEach(() => {
   rmSync(root, { recursive: true, force: true });
-  rmSync(process.env.HOME!, { recursive: true, force: true });
 });
 
-test("keeps profile metadata and provider directories private without exposing auth", () => {
-  const defaultProfile = ensureDefaultPiProfile();
-  const openai = createCredentialProfile({
-    name: "  Work   OpenAI ",
-    provider: "openai-codex",
-  });
-  const claude = createCredentialProfile({
-    name: "Claude work",
-    provider: "claude",
-  });
-  const authPath = join(piAgentDir(openai.id), "auth.json");
-  writeFileSync(
-    authPath,
-    JSON.stringify({ "openai-codex": { access: "secret-token" } }),
-    { mode: 0o600 },
-  );
-  mkdirSync(claudeConfigDir(claude.id), { recursive: true });
-  writeFileSync(
-    join(claudeConfigDir(claude.id), ".credentials.json"),
-    '{"token":"secret-token"}',
-    { mode: 0o600 },
-  );
-
-  const profiles = listCredentialProfiles();
-  assert.deepEqual(
-    profiles.map((profile) => profile.name),
-    ["Default OpenAI", "Default Claude", "Work OpenAI", "Claude work"],
-  );
-  assert.equal(
-    profiles.find((profile) => profile.id === openai.id)?.status,
-    "ready",
-  );
-  assert.equal(
-    profiles.every((profile) => profile.enabled),
-    true,
-  );
-  assert.equal(
-    profiles.find((profile) => profile.id === claude.id)?.status,
-    "ready",
-  );
-  assert.doesNotMatch(JSON.stringify(profiles), /secret-token/);
-  assert.equal(mode(root), 0o700);
-  assert.equal(mode(join(root, "profiles.json")), 0o600);
-  assert.equal(mode(piAgentDir(defaultProfile.id)), 0o700);
-  assert.equal(mode(piAgentDir(openai.id)), 0o700);
-  assert.equal(mode(claudeConfigDir(claude.id)), 0o700);
-  assert.equal(mode(authPath), 0o600);
+test("fresh installations have no accounts or ambient CLI fallbacks", () => {
+  assert.deepEqual(listCredentialProfiles(), []);
+  assert.equal(existsSync(join(root, "profiles.json")), false);
+  assert.equal(availableAutomaticProfileIdFor("claude"), undefined);
+  assert.throws(() => automaticProfileIdFor("openai-codex"), /Sign in/);
+  assert.throws(() => piAgentDir("default"), /no longer supported/);
+  assert.throws(() => claudeConfigDir("claude-default"), /no longer supported/);
 });
 
-test("unnamed accounts have provider-only labels until renamed", () => {
-  ensureDefaultPiProfile();
+test("explicit accounts are private, provider-labeled, and selected only when enabled", () => {
   const claude = createCredentialProfile({ provider: "claude" });
   const openai = createCredentialProfile({ provider: "openai-codex" });
-  assert.equal(claude.name, "Claude");
-  assert.equal(openai.name, "OpenAI");
+  assert.deepEqual(
+    listCredentialProfiles().map((profile) => profile.name),
+    ["Claude", "OpenAI"],
+  );
   const stored = JSON.parse(
     readFileSync(join(root, "profiles.json"), "utf8"),
   ) as Array<{ id: string; name?: string }>;
   assert.equal(stored.find((item) => item.id === claude.id)?.name, undefined);
-  assert.equal(stored.find((item) => item.id === openai.id)?.name, undefined);
-  assert.equal(
-    listCredentialProfiles().find((item) => item.id === claude.id)?.name,
-    "Claude",
-  );
+  assert.equal(automaticProfileIdFor("claude"), claude.id);
+  assert.equal(automaticProfileIdFor("openai-codex"), openai.id);
+  assert.equal(mode(root), 0o700);
+  assert.equal(mode(join(root, "profiles.json")), 0o600);
+  assert.equal(mode(piAgentDir(openai.id)), 0o700);
+  assert.equal(mode(claudeConfigDir(claude.id)), 0o700);
   assert.equal(
     renameCredentialProfile(claude.id, "Work Claude").name,
     "Work Claude",
   );
+  setCredentialProfileEnabled(claude.id, false);
+  assert.equal(availableAutomaticProfileIdFor("claude"), undefined);
+  assert.throws(() => automaticProfileIdFor("claude"), /Sign in/);
+  setCredentialProfileEnabled(claude.id, true);
+  deleteCredentialProfile(claude.id);
+  assert.equal(existsSync(join(root, claude.id)), false);
+  assert.equal(credentialProfileById(claude.id), undefined);
 });
 
-test("allows the protected default account to be disabled in favor of a secondary profile", () => {
-  ensureDefaultPiProfile();
-  const secondary = createCredentialProfile({
-    name: "Secondary",
-    provider: "openai-codex",
-  });
-
-  const disabled = setCredentialProfileEnabled("default", false);
-  assert.equal(disabled.enabled, false);
-  assert.equal(defaultOpenAiProfileId(), secondary.id);
-  assert.equal(
-    listCredentialProfiles().find((profile) => profile.id === "default")
-      ?.enabled,
-    false,
+test("retired records stay on disk but cannot be listed, used, or mutated", () => {
+  const account = createCredentialProfile({ provider: "claude" });
+  const path = join(root, "profiles.json");
+  const profiles = JSON.parse(readFileSync(path, "utf8")) as object[];
+  profiles.unshift(
+    {
+      id: "default",
+      name: "Default OpenAI",
+      provider: "openai-codex",
+      enabled: true,
+      createdAt: 0,
+      updatedAt: 0,
+    },
+    {
+      id: "claude-default",
+      name: "Default Claude",
+      provider: "claude",
+      enabled: true,
+      createdAt: 0,
+      updatedAt: 0,
+    },
   );
-
-  setCredentialProfileEnabled("default", true);
-  assert.equal(defaultOpenAiProfileId(), "default");
+  writeFileSync(path, JSON.stringify(profiles));
+  assert.deepEqual(
+    listCredentialProfiles().map((profile) => profile.id),
+    [account.id],
+  );
+  assert.equal(automaticProfileIdFor("claude"), account.id);
+  assert.equal(credentialProfileById("default"), undefined);
+  assert.equal(credentialProfileById("claude-default"), undefined);
+  assert.throws(
+    () => setCredentialProfileEnabled("default", true),
+    /no longer supported/,
+  );
+  assert.throws(
+    () => renameCredentialProfile("default", "New"),
+    /no longer supported/,
+  );
+  assert.throws(() => deleteCredentialProfile("default"), /preserved/);
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).length, 3);
 });
 
-test("the protected Claude default reflects the normal user login without an isolated terminal override", () => {
-  ensureDefaultPiProfile();
-  const defaultConfig = join(process.env.HOME!, ".claude");
-  const disconnected = listCredentialProfiles().find(
-    (profile) => profile.id === "claude-default",
-  );
-  assert.equal(disconnected?.status, "disconnected");
-  assert.equal(disconnected?.setup?.path, defaultConfig);
-  assert.equal(disconnected?.setup?.command, "claude");
-
-  mkdirSync(defaultConfig, { recursive: true });
-  writeFileSync(
-    join(defaultConfig, ".credentials.json"),
-    '{"token":"default-secret"}',
-    { mode: 0o600 },
-  );
-  const ready = listCredentialProfiles().find(
-    (profile) => profile.id === "claude-default",
-  );
-  assert.equal(ready?.status, "ready");
-  assert.equal(ready?.setup, undefined);
-  const environment = claudeProfileEnvironment("claude-default");
-  assert.equal(
-    environment.CLAUDE_CONFIG_DIR,
-    undefined,
-    "the SDK should use the ordinary ~/.claude resolution",
-  );
-  assert.doesNotMatch(JSON.stringify(ready), /default-secret/);
-});
-
-test("seeds a legacy pi agent directory once into the protected default profile", () => {
-  const legacy = join(tmp, "legacy-pi-agent");
-  mkdirSync(join(legacy, "extensions"), { recursive: true });
-  mkdirSync(join(legacy, "sessions"), { recursive: true });
-  writeFileSync(join(legacy, "auth.json"), '{"github-copilot":{}}', {
-    mode: 0o644,
-  });
-  writeFileSync(join(legacy, "extensions", "example.ts"), "export {};", {
-    mode: 0o644,
-  });
-  writeFileSync(
-    join(legacy, "sessions", "old.jsonl"),
-    "old terminal transcript",
-    { mode: 0o644 },
-  );
-
-  migrateLegacyDefaultPiProfile(legacy);
-  const destination = piAgentDir("default");
-  assert.equal(
-    readFileSync(join(destination, "auth.json"), "utf8"),
-    '{"github-copilot":{}}',
-  );
-  assert.equal(mode(join(destination, "auth.json")), 0o600);
-  assert.equal(mode(join(destination, "extensions")), 0o700);
-  assert.equal(mode(join(destination, "extensions", "example.ts")), 0o600);
-  assert.equal(
-    existsSync(join(destination, "sessions")),
-    false,
-    "legacy transcripts are not imported",
-  );
-
-  writeFileSync(join(legacy, "models.json"), "stale");
-  migrateLegacyDefaultPiProfile(legacy);
-  assert.equal(
-    existsSync(join(destination, "models.json")),
-    false,
-    "the completed seed never reads ~/.pi again",
-  );
-});
-
-test("scrubs ambient Claude credentials and manages non-default profile lifecycle", () => {
-  const profile = createCredentialProfile({
-    name: "Claude personal",
-    provider: "claude",
-  });
+test("Claude always scrubs ambient credentials and runs in its isolated directory", () => {
+  const profile = createCredentialProfile({ provider: "claude" });
   const previous = {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
@@ -221,7 +136,6 @@ test("scrubs ambient Claude credentials and manages non-default profile lifecycl
     assert.equal(environment.ANTHROPIC_API_KEY, undefined);
     assert.equal(environment.CLAUDE_CODE_OAUTH_TOKEN, undefined);
     assert.equal(environment.CLAUDE_CONFIG_DIR, claudeConfigDir(profile.id));
-    // One-shots, usage queries and the login terminal build on this env.
     assert.equal(environment.HTTPS_PROXY, "http://127.0.0.1:9/profile");
   } finally {
     setChildProcessEnvOverlay(null);
@@ -230,29 +144,6 @@ test("scrubs ambient Claude credentials and manages non-default profile lifecycl
       else process.env[key] = value;
     }
   }
-
-  const renamed = renameCredentialProfile(profile.id, "  Claude  personal 2 ");
-  assert.equal(renamed.name, "Claude personal 2");
-  deleteCredentialProfile(profile.id);
-  assert.equal(existsSync(join(root, profile.id)), false);
-  assert.equal(
-    listCredentialProfiles().some((item) => item.id === profile.id),
-    false,
-  );
-  assert.throws(
-    () => renameCredentialProfile("default", "Nope"),
-    /default.*renamed/i,
-  );
-  assert.throws(() => deleteCredentialProfile("default"), /default.*deleted/i);
-  assert.throws(
-    () => renameCredentialProfile("claude-default", "Nope"),
-    /default.*renamed/i,
-  );
-  assert.throws(
-    () => deleteCredentialProfile("claude-default"),
-    /default.*deleted/i,
-  );
-  assert.doesNotThrow(() => readFileSync(join(root, "profiles.json"), "utf8"));
 });
 
 afterAll(() => {

@@ -50,7 +50,7 @@ test("coding option builders load whole frozen skill folders and recreate them o
     const options = await buildAgentOptions(
       agentType,
       cwd,
-      "default",
+      "cp_test",
       undefined,
       ["whole-folder"],
     );
@@ -92,7 +92,7 @@ test("a missing frozen library skill fails option construction loudly", async ()
   await mkdir(cwd, { recursive: true });
 
   await assert.rejects(
-    buildAgentOptions("developer", cwd, "default", undefined, [
+    buildAgentOptions("developer", cwd, "cp_test", undefined, [
       "missing-frozen",
     ]),
     (error: unknown) =>
@@ -115,7 +115,7 @@ test("pi silently deduplicates a project skill and library skill with the same r
   const options = await buildAgentOptions(
     "developer",
     cwd,
-    "default",
+    "cp_test",
     undefined,
     ["same-realpath"],
   );
@@ -153,7 +153,7 @@ test("a same-name project skill shadows the library skill with pi's collision di
   const options = await buildAgentOptions(
     "developer",
     cwd,
-    "default",
+    "cp_test",
     undefined,
     ["shadowed-skill"],
   );
@@ -188,7 +188,7 @@ test("assistant personas receive neither project nor frozen library skills", asy
     const options = await buildAgentOptions(
       agentType,
       cwd,
-      "default",
+      "cp_test",
       undefined,
       ["not-even-in-the-library"],
     );

@@ -10,11 +10,8 @@ const tmp = mkdtempSync(join(tmpdir(), "settings-model-slots-test-"));
 process.env.HOME = join(tmp, "home");
 process.env.DATA_DIR = join(tmp, "data");
 
-const {
-  createCredentialProfile,
-  ensureDefaultPiProfile,
-  setCredentialProfileEnabled,
-} = await import("./credentialProfiles.ts");
+const { createCredentialProfile, setCredentialProfileEnabled } =
+  await import("./credentialProfiles.ts");
 const { getSettings, updateSettings } = await import("./settings.ts");
 const {
   accountForSlot,
@@ -26,6 +23,8 @@ const { clearProfilePins, credentialProfileUsage } =
   await import("./credentialProfileUsage.ts");
 
 const dataDir = process.env.DATA_DIR;
+let primaryOpenAiId: string;
+let primaryClaudeId: string;
 
 beforeEach(() => {
   rmSync(join(dataDir, "credential-profiles"), {
@@ -33,7 +32,8 @@ beforeEach(() => {
     force: true,
   });
   rmSync(join(dataDir, "settings"), { recursive: true, force: true });
-  ensureDefaultPiProfile();
+  primaryOpenAiId = createCredentialProfile({ provider: "openai-codex" }).id;
+  primaryClaudeId = createCredentialProfile({ provider: "claude" }).id;
 });
 
 /** Every `{ provider, modelId }` object reachable in the settings tree. */
@@ -86,20 +86,20 @@ test("an unpinned slot follows the automatic account for its provider", () => {
     provider: CLAUDE_SDK_PROVIDER,
     modelId: "sonnet",
   });
-  assert.equal(openai, "default");
-  assert.equal(claude, "claude-default");
+  assert.equal(openai, primaryOpenAiId);
+  assert.equal(claude, primaryClaudeId);
 
   // Automatic selection follows the first ENABLED account of that provider.
   const second = createCredentialProfile({
     name: "Second OpenAI",
     provider: "openai-codex",
   });
-  setCredentialProfileEnabled("default", false);
+  setCredentialProfileEnabled(primaryOpenAiId, false);
   assert.equal(
     accountForSlot({ provider: "github-copilot", modelId: "gpt-4.1" }),
     second.id,
   );
-  setCredentialProfileEnabled("default", true);
+  setCredentialProfileEnabled(primaryOpenAiId, true);
 });
 
 test("a pinned account is used, and degrades to automatic when it cannot be", () => {
@@ -117,7 +117,7 @@ test("a pinned account is used, and degrades to automatic when it cannot be", ()
 
   setCredentialProfileEnabled(second.id, false);
   assert.deepEqual(resolveSlotAccount(pinned), {
-    profileId: "default",
+    profileId: primaryOpenAiId,
     degraded: "disabled",
     pinnedProfileId: second.id,
   });
@@ -128,19 +128,23 @@ test("a pinned account is used, and degrades to automatic when it cannot be", ()
       modelId: "gpt-4.1",
       credentialProfileId: "cp_gone",
     }),
-    { profileId: "default", degraded: "missing", pinnedProfileId: "cp_gone" },
+    {
+      profileId: primaryOpenAiId,
+      degraded: "missing",
+      pinnedProfileId: "cp_gone",
+    },
   );
   // A Claude account cannot run a pi model (or the reverse).
   assert.deepEqual(
     resolveSlotAccount({
       provider: "github-copilot",
       modelId: "gpt-4.1",
-      credentialProfileId: "claude-default",
+      credentialProfileId: primaryClaudeId,
     }),
     {
-      profileId: "default",
+      profileId: primaryOpenAiId,
       degraded: "provider-mismatch",
-      pinnedProfileId: "claude-default",
+      pinnedProfileId: primaryClaudeId,
     },
   );
 });
@@ -228,19 +232,19 @@ test("account usage reports pinned slots, and deleting an account clears them", 
   assert.equal(
     usage.automaticForProvider,
     undefined,
-    "the protected default is still the automatic account",
+    "the first managed account is still automatic",
   );
   assert.equal(usage.boundSessionCount, 0);
 
-  const defaultUsage = credentialProfileUsage({
-    id: "default",
+  const primaryUsage = credentialProfileUsage({
+    id: primaryOpenAiId,
     provider: "openai-codex",
   });
-  assert.equal(defaultUsage.automaticForProvider, "openai-codex");
+  assert.equal(primaryUsage.automaticForProvider, "openai-codex");
   assert.equal(
-    defaultUsage.automaticFallback?.id,
+    primaryUsage.automaticFallback?.id,
     openai.id,
-    "disabling the default moves unpinned work to the next enabled account",
+    "disabling the first account moves unpinned work to the next enabled account",
   );
 
   const cleared = await clearProfilePins(openai.id);

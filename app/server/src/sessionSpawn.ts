@@ -40,7 +40,7 @@ import {
 import {
   credentialProfileSummaryById,
   enabledCredentialProfileById,
-  automaticProfileIdFor,
+  availableAutomaticProfileIdFor,
 } from "./credentialProfiles.ts";
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { errorText } from "./errors.ts";
@@ -193,9 +193,8 @@ function candidateProfiles(
     enabledCredentialProfileById(preferredProfileId)?.provider === family
   )
     ids.push(preferredProfileId);
-  const automatic = automaticProfileIdFor(family);
-  if (!ids.includes(automatic) && enabledCredentialProfileById(automatic))
-    ids.push(automatic);
+  const automatic = availableAutomaticProfileIdFor(family);
+  if (automatic && !ids.includes(automatic)) ids.push(automatic);
   return ids;
 }
 
@@ -208,11 +207,11 @@ async function firstAvailableRuntime(
     ...(preferredProfileId && enabledCredentialProfileById(preferredProfileId)
       ? [preferredProfileId]
       : []),
-    automaticProfileIdFor("claude"),
-    automaticProfileIdFor("openai-codex"),
+    availableAutomaticProfileIdFor("claude"),
+    availableAutomaticProfileIdFor("openai-codex"),
   ];
   for (const profileId of new Set(ordered)) {
-    if (!enabledCredentialProfileById(profileId)) continue;
+    if (!profileId || !enabledCredentialProfileById(profileId)) continue;
     const [model] = await modelsForProfile(profileId);
     if (!model) continue;
     return runtimeOf(profileId, model, level);

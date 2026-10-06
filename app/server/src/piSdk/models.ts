@@ -16,7 +16,6 @@ import { errorText } from "../errors.ts";
 import {
   clearCredentialProfileLoginState,
   credentialProfileById,
-  ensureDefaultPiProfile,
   listCredentialProfiles,
   openAiProfileHasCredential,
   openAiProfileLoginCredentialPersisted,
@@ -43,8 +42,9 @@ import {
 // './openai-codex.js'". The statically imported flows resolve the same under
 // Node and the bundle (bun-runtime-probe.mjs checks it).
 registerBunOAuthFlows();
-const defaultPiProfile = ensureDefaultPiProfile();
-const defaultAgentDir = piAgentDir(defaultPiProfile.id);
+// This catalog has no account or inherited authentication. Only an explicit
+// profile runtime can make a provider model available for work.
+const catalogAgentDir = piAgentDir("_catalog");
 function runtimeOptions(agentDir: string) {
   return {
     authPath: `${agentDir}/auth.json`,
@@ -53,10 +53,8 @@ function runtimeOptions(agentDir: string) {
   };
 }
 
-const modelRuntime = await ModelRuntime.create(runtimeOptions(defaultAgentDir));
-const profileRuntimes = new Map<string, Promise<ModelRuntime>>([
-  [defaultPiProfile.id, Promise.resolve(modelRuntime)],
-]);
+const modelRuntime = await ModelRuntime.create(runtimeOptions(catalogAgentDir));
+const profileRuntimes = new Map<string, Promise<ModelRuntime>>();
 interface ProfileLoginOperation {
   invalidated: boolean;
   agentDir: string;
@@ -70,7 +68,7 @@ setCredentialProfileDeletedHandler((id) => {
 
 /** Returns the isolated pi runtime for one OpenAI credential profile. */
 export function modelRuntimeForProfile(
-  profileId = defaultPiProfile.id,
+  profileId: string,
 ): Promise<ModelRuntime> {
   const profile = credentialProfileById(profileId);
   if (!profile || profile.provider !== "openai-codex")
@@ -190,20 +188,13 @@ function listRegistryModels(
 
 export function listModels(): ModelOption[] {
   syncConfiguredModelProviders();
-  return listRegistryModels(
-    modelRegistry,
-    openAiProfileHasCredential(defaultPiProfile.id),
-  );
+  return listRegistryModels(modelRegistry, false);
 }
 
 export async function modelRegistryForProfile(
   profileId: string,
 ): Promise<ModelRegistry> {
   const runtime = await modelRuntimeForProfile(profileId);
-  if (profileId === defaultPiProfile.id) {
-    syncConfiguredModelProviders();
-    return modelRegistry;
-  }
   const registry = new ModelRegistry(runtime);
   const config = getOpenAiCompatibleProviderConfigForRegistry();
   if (config) registry.registerProvider(OPENAI_COMPATIBLE_PROVIDER_ID, config);
@@ -253,17 +244,12 @@ export async function refreshModels(): Promise<{
   //
   // Every OpenAI credential profile refreshes too: each has its OWN isolated
   // runtime and models-store.json, and only its own login had ever fetched
-  // one, leaving a second account's picker weeks behind the default's. Their
-  // failures do not fail the button — the default runtime's projection is what
-  // this returns — but they are collected so the caller can name them.
+  // one, leaving another account's picker weeks behind. Failures from any
+  // account are collected so the caller can name them.
   const collected = await Promise.all([
     modelRuntime.refresh({ force: true }).then(refreshErrors),
     ...listCredentialProfiles()
-      .filter(
-        (profile) =>
-          profile.provider === "openai-codex" &&
-          profile.id !== defaultPiProfile.id,
-      )
+      .filter((profile) => profile.provider === "openai-codex")
       .map(async (profile) => {
         try {
           const runtime = await modelRuntimeForProfile(profile.id);
@@ -331,10 +317,7 @@ export function startOpenAiProfileLogin(profileId: string): void {
   clearCredentialProfileLoginState(profileId);
   setCredentialProfileLoginState(profileId, { status: "connecting" });
   void (async () => {
-    const runtime =
-      profileId === defaultPiProfile.id
-        ? modelRuntime
-        : await modelRuntimeForProfile(profileId);
+    const runtime = await modelRuntimeForProfile(profileId);
     const providerLogin = runOpenAiProfileLogin(runtime, {
       notify(event) {
         // Device codes/URLs are short-lived authorization instructions, not

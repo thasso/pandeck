@@ -548,7 +548,7 @@ const accountsUpdateTool = defineAgentTool<Record<string, unknown>>({
   name: "accounts_update",
   label: "Update Accounts",
   description:
-    "Create, rename, enable or disable, or delete a Claude or OpenAI account. A new account starts signed out: ask the user to sign it in with accounts_sign_in. Deleting signs it out for good and unpins it from every setting; an account a session is still bound to, or a default account, cannot be deleted.",
+    "Create, rename, enable or disable, or delete a Claude or OpenAI account. A new account starts signed out: ask the user to sign it in with accounts_sign_in. Deleting signs it out for good and unpins it from every setting; an account a session is still bound to cannot be deleted.",
   parameters: {
     type: "object",
     additionalProperties: false,

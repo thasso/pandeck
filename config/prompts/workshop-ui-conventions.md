@@ -164,6 +164,11 @@ Guidelines for briefs:
 - Render both user and assistant chat text through the shared `Markdown`
   component so sent prompts, relay prompts, and assistant prose use one
   Markdown/link/code treatment.
+- The replay icon under a human, text-only prompt submits it as a new turn to
+  the live session, rather than filling the composer. Do not offer it for
+  prompts with attachments or automated origins, or while the displayed session
+  cannot accept a send. Queue it when a running session supports a queue;
+  otherwise use its normal steering path.
 - Copy affordances inside content use `ui/CopyButton`'s `InlineCopyButton` (a
   small ghost icon that swaps to an accent check and raises the copy toast).
   Fenced Markdown code blocks carry one under the block via `CodeBlock`'s
@@ -673,6 +678,12 @@ Guidelines for briefs:
   Continue button; use distinct “Sign in with …” wording for creating a new
   login so an unnamed provider-only account's Continue button is not a
   duplicate. A completed new login advances without a second confirmation.
+  Account lists only contain explicitly created Pandeck logins, never ambient
+  CLI/default accounts. Provider sign-in dialogs should foreground one browser
+  authorization action and an optional code field, keeping raw CLI output behind
+  a troubleshooting disclosure. A close control may leave sign-in running; label
+  a separate cancellation action clearly and avoid a duplicate Close button
+  beside it.
 - Old home routes (`/`, `/assistant`, `/workshop`) redirect to
   `/sessions/create` once the server confirms the session is empty; they keep
   their parse-level routes so programmatic `/workshop` navigation (e.g. Backlog

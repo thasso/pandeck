@@ -66,7 +66,6 @@ function childProcess(child: FakeChild): ChildProcessWithoutNullStreams {
 beforeEach(() => {
   rmSync(process.env.DATA_DIR!, { recursive: true, force: true });
   rmSync(process.env.HOME!, { recursive: true, force: true });
-  profiles.ensureDefaultPiProfile();
 });
 
 afterEach(() => {

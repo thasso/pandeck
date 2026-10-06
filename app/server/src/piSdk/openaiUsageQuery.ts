@@ -53,13 +53,14 @@ export interface OpenAiUsageDeps {
 }
 
 /** Path to a PA-owned pi auth store. Tests inject `readAuth` rather than a path. */
-function piAuthPath(profileId = "default"): string {
+function piAuthPath(profileId: string): string {
   return join(piAgentDir(profileId), "auth.json");
 }
 
 async function readPiCodexAuth(
-  profileId = "default",
+  profileId?: string,
 ): Promise<PiCodexAuth | null> {
+  if (!profileId) return null;
   let raw: string;
   try {
     raw = await readFile(piAuthPath(profileId), "utf8");

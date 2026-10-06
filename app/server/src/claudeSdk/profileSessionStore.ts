@@ -28,10 +28,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  claudeConfigDir,
-  DEFAULT_CLAUDE_PROFILE_ID,
-} from "../credentialProfiles.ts";
+import { claudeConfigDir } from "../credentialProfiles.ts";
 
 /** The SDK's `SessionKey`, minimally typed (we only key on these fields). */
 interface SessionKeyLike {
@@ -87,7 +84,11 @@ function readEntries(path: string): StoreEntry[] | null {
  * nothing behind — but implement `listSubkeys` here if forks ever need it.
  */
 export function claudeProfileSessionStore(profileId: string | undefined) {
-  const root = claudeConfigDir(profileId ?? DEFAULT_CLAUDE_PROFILE_ID);
+  if (!profileId)
+    throw new Error(
+      "This session has no managed Claude account. Sign in with a Pandeck account.",
+    );
+  const root = claudeConfigDir(profileId);
   return {
     root,
     async load(key: SessionKeyLike): Promise<StoreEntry[] | null> {

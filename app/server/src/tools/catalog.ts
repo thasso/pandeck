@@ -53,6 +53,7 @@ import { assistantProjectRegistryTools } from "./core/projectRegistryTools.ts";
 import { projectCreateTool } from "./core/projectCreateTool.ts";
 import { assistantTimeTools } from "./core/timeTools.ts";
 import { settingsTools } from "./settings/settingsTools.ts";
+import { developerSetupTools } from "./settings/gitSetupTools.ts";
 import {
   githubActivityTools,
   githubCiTools,
@@ -152,6 +153,8 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   memory_search: "none",
   memory_manage: "local",
   settings_read: "none",
+  git_setup_read: "none",
+  github_pat_setup_link: "none",
   settings_update: "local",
   settings_request_input: "local",
   accounts_read: "none",
@@ -767,12 +770,12 @@ function settingsToolGroup(): UnclassifiedToolGroup {
     id: "settings",
     label: "Settings",
     description:
-      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow; ask the user for a secret or an account connection through a card; manage and sign in the Claude and OpenAI accounts models run on.",
+      "Read and change the app's settings: models, integrations and their connection tests, assistant behaviour, automation, developer workflow; check server Git installation and global identity; ask the user for a secret or an account connection through a card; manage and sign in the Claude and OpenAI accounts models run on.",
     searchHint:
-      "settings configuration configure preferences enable disable integration model account token api key connect credential profile login sign in",
+      "settings configuration configure preferences enable disable integration model account token api key connect credential profile login sign in git installation identity github PAT link",
     loading: "deferred",
     family: "shared",
-    tools: settingsTools,
+    tools: [...settingsTools, ...developerSetupTools],
   };
 }
 

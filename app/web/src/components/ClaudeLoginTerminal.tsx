@@ -1,5 +1,5 @@
 import { useMemo, useState, type SyntheticEvent } from "react";
-import { CheckCircle2, ExternalLink, Terminal, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, ExternalLink, X } from "lucide-react";
 import type { CredentialProfileSummary } from "@assistant/shared";
 import { useClaudeLoginTerminal } from "../hooks/useClaudeLoginTerminal.ts";
 import { Spinner } from "./ui/load.tsx";
@@ -12,7 +12,13 @@ export function claudeLoginAuthorizationUrl(
   )?.[0];
 }
 
-/** Mobile-safe browser terminal around the official `claude auth login` process. */
+/**
+ * @component ClaudeLoginTerminal
+ * @purpose Guides a Pandeck-managed Claude sign-in outside chat.
+ * @useWhen Connecting or reconnecting an isolated Claude account.
+ * @intent Lead with the browser authorization and optional code; keep raw CLI
+ * output behind a disclosure for troubleshooting, never in the chat transcript.
+ */
 export function ClaudeLoginTerminal({
   profile,
   onFinished,
@@ -35,8 +41,7 @@ export function ClaudeLoginTerminal({
   const submitCode = (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     const value = code.trim();
-    if (!value) return;
-    if (!submit(value)) return;
+    if (!value || !submit(value)) return;
     setCode("");
     setSubmitted(true);
   };
@@ -46,125 +51,142 @@ export function ClaudeLoginTerminal({
       className="fixed inset-0 z-[100] flex items-end justify-center bg-black/55 p-0 sm:items-center sm:p-6"
       role="dialog"
       aria-modal="true"
-      aria-label={`Connect ${profile.name}`}
+      aria-label={`Sign in with ${profile.name}`}
     >
-      <div className="flex max-h-[95dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-line bg-panel shadow-2xl sm:max-h-[85dvh] sm:rounded-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <Terminal size={17} className="shrink-0 text-accent" />
-            <div className="min-w-0">
-              <h3 className="truncate text-body font-semibold">
-                Connect {profile.name}
-              </h3>
-              <p className="text-caption text-faint">
-                Official Claude CLI · profile-isolated
-              </p>
-            </div>
+      <div className="flex max-h-[95dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-line bg-panel shadow-2xl sm:max-h-[85dvh] sm:rounded-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="text-body font-semibold text-fg">
+              Sign in with Claude
+            </h3>
+            <p className="mt-1 text-caption text-muted">
+              Connect your Claude account to Pandeck.
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-muted hover:bg-raised hover:text-fg"
-            aria-label="Close Claude login"
+            className="rounded-lg p-1.5 text-muted hover:bg-raised hover:text-fg"
+            aria-label="Close sign-in dialog"
+            title="Close (sign-in continues)"
           >
             <X size={17} />
           </button>
         </div>
 
-        <div className="min-h-0 overflow-y-auto p-4">
-          <div className="rounded-xl border border-line bg-[#111318] p-3 text-caption text-[#e5e7eb] shadow-inner">
-            <pre className="max-h-[34dvh] min-h-32 overflow-auto whitespace-pre-wrap break-all font-mono">
-              {output || "Starting Claude login…"}
-            </pre>
-          </div>
-
-          {authorizationUrl && status === "connecting" ? (
-            <a
-              href={authorizationUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-caption font-medium text-accent-fg"
-            >
-              Open Claude authorization <ExternalLink size={14} />
-            </a>
-          ) : null}
-
+        <div className="min-h-0 overflow-y-auto px-5 py-5">
           {status === "connecting" ? (
-            <form onSubmit={submitCode} className="mt-4 space-y-2">
-              <label
-                htmlFor={`claude-login-code-${profile.id}`}
-                className="text-caption font-medium text-fg"
-              >
-                Paste the authorization code
-              </label>
-              <p className="text-caption text-faint">
-                After signing in, Claude shows a code or callback URL. Paste it
-                here; PA forwards it directly to the CLI and never displays or
-                stores it.
+            <>
+              <p className="text-caption text-fg">
+                Authorize Pandeck in the Claude page, then return here.
               </p>
-              <div className="flex gap-2">
-                <input
-                  id={`claude-login-code-${profile.id}`}
-                  type="password"
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  placeholder="Authorization code or callback URL"
-                  className="settings-input min-w-0 flex-1 font-mono"
-                />
-                <button
-                  type="submit"
-                  disabled={!code.trim()}
-                  className="settings-button-primary disabled:opacity-40"
+              {authorizationUrl ? (
+                <a
+                  href={authorizationUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-caption font-medium text-accent-fg hover:opacity-90"
                 >
-                  Submit
-                </button>
-              </div>
-              {/* The CLI answers this one, not a request we could busy a button
-                  on — Submit has already emptied (and so disabled) itself — so
-                  the wait is a status region under the form. */}
-              {submitted ? (
+                  Open Claude sign-in <ExternalLink size={14} />
+                </a>
+              ) : (
                 <p
                   role="status"
-                  className="flex items-center gap-1.5 text-caption text-muted"
+                  className="mt-4 flex items-center gap-2 text-caption text-muted"
                 >
-                  <Spinner size="sm" />
-                  Code submitted; waiting for Claude…
+                  <Spinner size="sm" /> Preparing the sign-in link…
+                </p>
+              )}
+
+              <form onSubmit={submitCode} className="mt-5 space-y-2">
+                <label
+                  htmlFor={`claude-login-code-${profile.id}`}
+                  className="text-caption font-medium text-fg"
+                >
+                  Code from Claude{" "}
+                  <span className="font-normal text-muted">(if requested)</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id={`claude-login-code-${profile.id}`}
+                    type="password"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    placeholder="Paste code or callback URL"
+                    className="settings-input min-w-0 flex-1"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!code.trim()}
+                    className="settings-button-primary disabled:opacity-40"
+                  >
+                    Continue
+                  </button>
+                </div>
+                {submitted ? (
+                  <p
+                    role="status"
+                    className="flex items-center gap-1.5 text-caption text-muted"
+                  >
+                    <Spinner size="sm" /> Checking your sign-in…
+                  </p>
+                ) : null}
+              </form>
+              {error ? (
+                <p role="status" className="mt-3 text-caption text-warning">
+                  {error}
                 </p>
               ) : null}
-            </form>
+            </>
           ) : status === "ready" ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-caption text-emerald-300">
-              <CheckCircle2 size={15} />
-              Claude is connected for this profile.
+            <div className="flex items-center gap-2 rounded-lg bg-success-soft px-3 py-2 text-caption text-success">
+              <CheckCircle2 size={15} /> Claude is connected.
             </div>
           ) : (
             <div
-              className={`mt-4 rounded-lg border px-3 py-2 text-caption ${status === "cancelled" ? "border-line text-muted" : "border-danger/30 bg-danger/10 text-danger"}`}
+              role="status"
+              className={`rounded-lg px-3 py-2 text-caption ${status === "cancelled" ? "bg-raised text-muted" : "bg-danger-soft text-danger"}`}
             >
               {error ??
                 (status === "cancelled"
-                  ? "Login cancelled."
-                  : "Claude login failed.")}
+                  ? "Sign-in cancelled."
+                  : "Claude sign-in failed.")}
             </div>
           )}
+
+          {status !== "ready" ? (
+            <details className="mt-5 border-t border-line pt-3">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 text-caption text-muted hover:text-fg [&::-webkit-details-marker]:hidden">
+                Technical details <ChevronDown size={14} aria-hidden="true" />
+              </summary>
+              <pre className="mt-3 whitespace-pre-wrap break-all rounded-lg bg-surface p-3 font-mono text-caption text-muted">
+                {output || "Starting Claude sign-in…"}
+              </pre>
+            </details>
+          ) : null}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+        <div className="flex justify-end border-t border-line px-5 py-3">
           {status === "connecting" ? (
             <button
               type="button"
               onClick={cancel}
-              className="settings-button text-danger"
+              className="settings-button text-muted"
             >
-              Cancel login
+              Cancel sign-in
             </button>
-          ) : null}
-          <button type="button" onClick={onClose} className="settings-button">
-            {status === "ready" ? "Done" : "Close"}
-          </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className="settings-button-primary"
+            >
+              {status === "ready" ? "Done" : "Close"}
+            </button>
+          )}
         </div>
       </div>
     </div>

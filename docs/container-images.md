@@ -62,7 +62,8 @@ docker flag.
 
 ## Setup (least privilege)
 
-1. Settings → GitHub: enable the integration and save a personal access token.
+1. Settings → GitHub: enable the integration and save a **classic** personal
+   access token (see [GitHub token scopes](github.md)).
 2. The token needs **`read:packages`** for private GHCR images. For SSO
    organizations the token must also be **SSO-authorized** for that
    organization.

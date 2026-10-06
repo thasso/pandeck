@@ -494,8 +494,11 @@ describe("tool catalog", () => {
         "settings_update",
         "settings_request_input",
         "accounts_read",
+        "models_read",
         "accounts_update",
         "accounts_sign_in",
+        "git_setup_read",
+        "github_pat_setup_link",
       ],
     );
     for (const persona of [
@@ -518,6 +521,8 @@ describe("tool catalog", () => {
       new Set(tools.map((tool) => tool.name)),
     );
     assert.ok(plan.has("settings_read"));
+    assert.ok(plan.has("git_setup_read"));
+    assert.ok(plan.has("github_pat_setup_link"));
     assert.ok(!plan.has("settings_update"));
     assert.ok(!plan.has("settings_request_input"));
     assert.ok(plan.has("accounts_read"));
@@ -560,8 +565,11 @@ describe("tool catalog", () => {
         "settings_update",
         "settings_request_input",
         "accounts_read",
+        "models_read",
         "accounts_update",
         "accounts_sign_in",
+        "git_setup_read",
+        "github_pat_setup_link",
       ].sort(),
     );
     const workshop = new Set(

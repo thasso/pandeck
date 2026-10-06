@@ -162,6 +162,8 @@ only binding rules; everything else lives here.
   agent only through the `project_create` approval card, what approval creates
   on GitHub/Forgejo, registers and clones, and why a repository never stays
   without a commit.
+- `github.md` — GitHub PAT setup and scope rationale: why full support currently
+  needs a classic token, the prefilled setup link, and its security tradeoffs.
 - `container-images.md` — the `container_image_pull` capability: GHCR-only
   credential reuse of the GitHub token, the stdin/temporary-`DOCKER_CONFIG`/
   redaction invariants, least-privilege token setup, and troubleshooting.

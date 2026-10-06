@@ -7,7 +7,11 @@ import { listSessionArtifacts } from "../mcp/toolGroups/packRuntime.ts";
 
 test("pi output policy is loaded even for personas that disable discovered extensions", async () => {
   for (const agentType of ["assistant", "developer"] as const) {
-    const options = await buildAgentOptions(agentType, process.cwd());
+    const options = await buildAgentOptions(
+      agentType,
+      process.cwd(),
+      "cp_test",
+    );
     const loaded = options.resourceLoader.getExtensions();
     assert.ok(
       loaded.extensions.some((extension) =>

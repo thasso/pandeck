@@ -3,17 +3,18 @@
 A fresh installation begins on the new-chat landing with an explicit provider
 sign-in step. The first account only powers the Personal Assistant while it
 helps the user finish setup; other accounts can be added or selected later in
-Settings. Onboarding never selects the protected default OpenAI or Claude
-profiles, even when `~/.pi` was imported or `~/.claude` is signed in. The user
-creates an isolated account through the existing account login flows without a
-custom name; its account label is simply “Claude” or “OpenAI” until the user
-names it. Protected default profiles still have their own “Default” labels.
-Secrets and verification codes never go into chat. For Claude, a clean CLI exit
-is verified with `claude auth status --json` under that account's isolated
-`CLAUDE_CONFIG_DIR` when the legacy `.credentials.json` file is absent; a
-non-secret marker records the verified result. On account-list refresh, the same
-check recovers an earlier successful sign-in without asking for OAuth again. The
-protected default account is never used for this recovery.
+Settings. No installation creates or lists default OpenAI or Claude accounts,
+imports `~/.pi`, or adopts `~/.claude`; every runnable account needs an
+explicit, isolated Pandeck login. Retired default profile records and credential
+files remain on disk, but are not usable. Existing sessions bound to them remain
+viewable but cannot run until the user creates a managed account and starts a
+new session. The user's first isolated account has no custom name; its label is
+“Claude” or “OpenAI” until renamed. Secrets and verification codes never go into
+chat. For Claude, a clean CLI exit is verified with `claude auth status --json`
+under that account's isolated `CLAUDE_CONFIG_DIR` when the legacy
+`.credentials.json` file is absent; a non-secret marker records the verified
+result. On account-list refresh, the same check recovers an earlier successful
+sign-in without asking for OAuth again.
 
 `GET /api/onboarding` is read-only and returns `{ required, guidedSetup }`. If
 the installation already has an app settings file or stored session, it is
@@ -21,7 +22,7 @@ treated as existing and is never automatically enrolled. When the user first
 chooses a provider, `POST /api/onboarding/start` creates a private
 `onboarding-pending` marker under `DATA_DIR` before creating the account. It
 remains pending through reloads and partial setup. `POST /api/onboarding`
-accepts `{ profileId }`, refuses the protected defaults, disabled or unsigned
+accepts `{ profileId }`, refuses retired defaults, disabled or unsigned
 accounts, and picks an available model for the chosen provider. Claude starts
 with the `opus` alias and medium thinking. OpenAI prefers `gpt-6-luna` with high
 thinking; if that account does not offer Luna, the first available OpenAI Codex
@@ -68,9 +69,19 @@ losing the user's saved navigation order. The empty Sessions inbox does not
 direct users to New Session before it is available. Account login and retry stay
 there; only the conversational setup follows in the Personal Assistant. The
 account step is not tied to any CLI/default account, and an interrupted sign-in
-can be resumed with the same named account. The guided Assistant prompt asks one
+can be resumed with the same account. The guided Assistant prompt asks one
 question at a time: its name, additional provider accounts (with distinct names
-when a provider has multiple accounts), then model-picker visibility via
-`models_read` and `settings_update(models.hidden)`. Sign-in stays outside chat;
-Memory stays off unless explicitly enabled. The provider/model can be changed
-later in Settings → Personal Assistant.
+when a provider has multiple accounts), model-picker visibility via
+`models_read` and `settings_update(models.hidden)`, then the host Git check
+(`git_setup_read`) and optional GitHub connection. A GitHub username creates a
+prefilled classic PAT link (`github_pat_setup_link`) with the GitHub scopes in
+[`github.md`](github.md); the PAT is collected only by `settings_request_input`,
+never in chat. Regardless of GitHub choice, Larry shows the actual
+`projectsRoot` and, when Git is installed, `worktrees.root` before offering
+separate changes. A multi-choice `ask_questions` card then lets the user select
+Forgejo, Jira/Confluence, Google, Slack, Tempo or Brave Web Search, including
+none; chosen connections follow their Settings descriptors and secret/OAuth
+cards. Memory opt-in comes afterward. Each reply asks the next concrete question
+instead of only promising more setup. Memory stays off unless explicitly
+enabled. The provider/model can be changed later in Settings → Personal
+Assistant.

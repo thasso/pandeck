@@ -875,7 +875,7 @@ function AppContent() {
   );
 
   const [credentialProfileId, setCredentialProfileId] = useState(
-    prefs.credentialProfileId ?? "default",
+    prefs.credentialProfileId ?? "",
   );
   // A new-session profile picker change also picks that family’s first model.
   // Carry its explicit account through the same event instead of consulting a
@@ -1758,27 +1758,40 @@ function AppContent() {
     if (route.name === "settings" && state.connected) actions.requestSettings();
   }, [route.name, state.connected, actions]);
 
-  // New-session models come from the selected profile's isolated runtime; an
-  // established session keeps the global list so its immutable model remains
-  // inspectable even when another new-session profile is remembered.
-  const pickerModels = useMemo(() => {
-    if (route.name === "session")
-      return visibleModels(state.models, state.settings);
-    return visibleModels(
-      credentialProfileModels[credentialProfileId] ?? state.models,
+  // A session's picker uses ITS account's catalog, not a shared runtime that
+  // could quietly inherit a local CLI login or lack this account's models.
+  const viewedAccountId =
+    route.name === "session"
+      ? state.sessions.find((session) => session.id === route.id)
+          ?.credentialProfileId
+      : undefined;
+  const pickerModels = useMemo(
+    () =>
+      visibleModels(
+        credentialProfileModels[
+          route.name === "session"
+            ? (viewedAccountId ?? "")
+            : credentialProfileId
+        ] ?? state.models,
+        state.settings,
+      ),
+    [
+      state.models,
       state.settings,
-    );
-  }, [
-    state.models,
-    state.settings,
-    credentialProfileModels,
-    credentialProfileId,
-    route.name,
-  ]);
-  const messageModels = useMemo(
-    () => visibleModels(state.models, state.settings),
-    [state.models, state.settings],
+      credentialProfileModels,
+      credentialProfileId,
+      route.name,
+      viewedAccountId,
+    ],
   );
+  const messageModels = useMemo(() => {
+    const models = new Map(
+      [...state.models, ...Object.values(credentialProfileModels).flat()].map(
+        (model) => [`${model.provider}:${model.id}`, model] as const,
+      ),
+    );
+    return visibleModels([...models.values()], state.settings);
+  }, [state.models, state.settings, credentialProfileModels]);
   const currentSessionModel = state.session?.model
     ? (pickerModels.find(
         (m) =>
@@ -2920,17 +2933,6 @@ function AppContent() {
       actions.forkSession(forkSourceSessionId, entryId, position);
     },
     [actions, forkSourceSessionId],
-  );
-
-  // Resend a prompt into the SAME session: it lands in the composer for the user
-  // to send, which is the only safe repeat when a turn may have failed after
-  // tool calls already ran.
-  const resendPrompt = useCallback(
-    (text: string) => {
-      if (!displayCurrentId) return;
-      actions.stageSessionDraft(displayCurrentId, text);
-    },
-    [actions, displayCurrentId],
   );
 
   // The transcript's display flags as ONE memoized object: every message row is
@@ -5144,6 +5146,28 @@ function AppContent() {
         : undefined,
     [queueSessionId, sendPromptQueue],
   );
+  // A replay targets only the live session on screen, never a stale preview or
+  // a disconnected server. While a turn runs, queue it if supported; otherwise
+  // use the same steering path as the composer.
+  const replayReady = Boolean(
+    state.connected &&
+    !routeSessionPending &&
+    !worktreeMissing &&
+    !accountSetupPending &&
+    displayCurrentId &&
+    displayCurrentId === state.session?.sessionId &&
+    (!displayStreaming || queuePrompt || displaySession?.canSteer),
+  );
+  const replayPromptRef = useRef<(text: string) => void>(() => {});
+  replayPromptRef.current = (text) => {
+    if (!replayReady) return;
+    if (displayStreaming && queuePrompt) queuePrompt({ text });
+    else submitPrompt(text);
+  };
+  const replayPrompt = useCallback(
+    (text: string) => replayPromptRef.current(text),
+    [],
+  );
   const shownPromptQueue = queueSessionId
     ? displaySession?.promptQueue
     : undefined;
@@ -5997,7 +6021,7 @@ function AppContent() {
                 defaultModel={displaySession?.model}
                 defaultThinkingLevel={displaySession?.thinkingLevel}
                 onForkMessage={forkMessage}
-                onResendPrompt={resendPrompt}
+                {...(replayReady ? { onResendPrompt: replayPrompt } : {})}
                 onOpenSession={openSession}
                 onOpenChangedFile={openWorkspaceFile}
                 onOpenTask={openTaskById}

@@ -126,9 +126,9 @@ export interface SlotAccountResolution {
 }
 
 /**
- * The account a slot runs on. A pin that cannot be honored NEVER fails the run:
- * it degrades to the automatic account, because disabling or deleting an
- * account must not be able to break background automation.
+ * The account a slot runs on. An unusable pin falls back to another enabled
+ * account of the same provider. If none exists, the run fails explicitly
+ * instead of using a hidden local CLI credential.
  */
 export function resolveSlotAccount(
   slot: SettingsModelSlot,

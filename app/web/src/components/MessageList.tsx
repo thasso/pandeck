@@ -461,11 +461,9 @@ function MessageActionsBar({
   };
 
   const canComment = Boolean(onCommentMessage && message.id !== "live");
-  // Resend puts the prompt back in the composer rather than sending it: a turn
-  // can fail after tool calls have already run, so re-running it is the reader's
-  // call, not a one-click repeat. Only the text travels, so a prompt that carried
-  // files is not offered at all — a button that quietly rebuilt it without them
-  // would be worse than no button.
+  // Replay sends the text as a new turn in this session. Prompts with files
+  // cannot be replayed: silently dropping their attachments would change the
+  // request. Agent/system prompts are likewise not human actions to repeat.
   const origin = message.promptOrigin;
   const canResend = Boolean(
     text &&
@@ -498,8 +496,8 @@ function MessageActionsBar({
           <button
             type="button"
             onClick={() => onResendPrompt?.(text)}
-            title="Put this prompt back in the composer"
-            aria-label="Resend prompt"
+            title="Replay prompt in this session"
+            aria-label="Replay prompt"
             className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-accent"
           >
             <RotateCcw size={13} />

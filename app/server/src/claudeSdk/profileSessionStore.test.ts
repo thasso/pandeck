@@ -145,18 +145,14 @@ test("deleting removes the transcript from that profile root", async () => {
   );
 });
 
-test("the default profile keeps using the user's own ~/.claude root", async () => {
-  // The protected default profile deliberately follows the normal Claude login
-  // rather than a PA-private directory; a store for it must not silently
-  // redirect that.
-  const store = claudeProfileSessionStore(undefined);
-  assert.ok(
-    store.root.endsWith("/.claude"),
-    `default root should be the home config dir, got ${store.root}`,
+test("a session without a managed account cannot open an ambient Claude store", () => {
+  assert.throws(
+    () => claudeProfileSessionStore(undefined),
+    /managed Claude account/,
   );
-  assert.ok(
-    !store.root.startsWith(join(tmp, "data")),
-    "and it is NOT under the profile directory",
+  assert.throws(
+    () => claudeProfileSessionStore("claude-default"),
+    /no longer supported/,
   );
 });
 

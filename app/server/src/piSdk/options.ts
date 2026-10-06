@@ -136,10 +136,14 @@ export const PI_PLAN_RESTRICTED_BUILTIN_TOOLS = ["edit", "write"] as const;
 export async function buildAgentOptions(
   agentType: AgentType,
   cwd: string = CWD,
-  credentialProfileId = "default",
+  credentialProfileId?: string,
   conditions?: PromptConditions,
   frozenSkillNames: readonly string[] = [],
 ): Promise<AgentSessionOptions> {
+  if (!credentialProfileId)
+    throw new Error(
+      "No managed account for this session. Sign in with a Pandeck account.",
+    );
   return buildPiOptions(
     agentType,
     cwd,

@@ -15,7 +15,6 @@
  * Neither writes anything.
  */
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { DATA_DIR } from "./config.ts";
 import { objectRefsForSession } from "./db/sessionObjectStore.ts";
@@ -37,16 +36,8 @@ import {
   SessionInspectionError,
 } from "./tools/sessions/sessionInspection.ts";
 
-/** Default Claude CLI transcript root; `undefined` disables the join. */
-function defaultClaudeProjectsDir(): string {
-  return join(homedir(), ".claude", "projects");
-}
-
 export interface AuditSourceOptions {
-  /**
-   * Claude CLI transcript root. Pass `undefined` explicitly to skip the join
-   * (the app's own data dir then answers everything it can on its own).
-   */
+  /** Optional explicit transcript root; no ambient Claude CLI path is read. */
   claudeProjectsDir?: string | undefined;
 }
 
@@ -133,10 +124,7 @@ export function resolveAuditSource(
   const resolved = resolveInspectableSession(sessionId);
   const meta = resolved.meta;
   const warnings = resolved.warning ? [resolved.warning] : [];
-  const projectsDir =
-    "claudeProjectsDir" in options
-      ? options.claudeProjectsDir
-      : defaultClaudeProjectsDir();
+  const projectsDir = options.claudeProjectsDir;
   const calls = callTranscriptFor(
     meta.id,
     meta.harness,
@@ -212,10 +200,7 @@ export function resolveAuditSourceFromDataDir(
       `Session ${id} is not a user session (${row.scope}) and is not inspectable.`,
     );
 
-  const projectsDir =
-    "claudeProjectsDir" in options
-      ? options.claudeProjectsDir
-      : defaultClaudeProjectsDir();
+  const projectsDir = options.claudeProjectsDir;
   const calls = callTranscriptFor(
     id,
     row.harness,

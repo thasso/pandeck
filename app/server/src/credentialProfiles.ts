@@ -1,15 +1,12 @@
 import {
   chmodSync,
-  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { DATA_DIR } from "./config.ts";
@@ -52,8 +49,9 @@ export interface CredentialProfileSummary extends Omit<
   error?: string;
 }
 
-const DEFAULT_OPENAI_PROFILE_ID = "default";
-export const DEFAULT_CLAUDE_PROFILE_ID = "claude-default";
+// Retired ids may remain on disk in older installations. Never project,
+// authenticate, or delete their files: historical sessions can still name them.
+const RETIRED_PROFILE_IDS = new Set(["default", "claude-default"]);
 const ROOT = join(DATA_DIR, "credential-profiles");
 const REGISTRY = join(ROOT, "profiles.json");
 const SAFE_ID = /^[A-Za-z0-9_-]+$/;
@@ -121,15 +119,6 @@ function privateFile(path: string): void {
   }
 }
 
-function privateTree(path: string): void {
-  privateDir(path);
-  for (const entry of readdirSync(path, { withFileTypes: true })) {
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) privateTree(child);
-    else privateFile(child);
-  }
-}
-
 function readRegistry(): CredentialProfile[] {
   if (!existsSync(REGISTRY)) return [];
   try {
@@ -187,16 +176,22 @@ function profileRoot(id: string): string {
 }
 
 /** The whole pi agent directory is PA-owned, including models/auth/settings. */
-export function piAgentDir(profileId = "default"): string {
+export function piAgentDir(profileId: string): string {
+  if (isRetiredProfile(profileId))
+    throw new Error(
+      "This account is no longer supported. Sign in with a Pandeck account.",
+    );
   const dir = join(profileRoot(profileId), "pi-agent");
   privateDir(dir);
   return dir;
 }
 
-/** Claude CLI state: the protected default follows the user's normal ~/.claude login; named profiles stay PA-isolated. */
+/** Claude CLI state is always isolated inside a Pandeck-managed profile. */
 export function claudeConfigDir(profileId: string): string {
-  if (profileId === DEFAULT_CLAUDE_PROFILE_ID)
-    return join(homedir(), ".claude");
+  if (isRetiredProfile(profileId))
+    throw new Error(
+      "This account is no longer supported. Sign in with a Pandeck account.",
+    );
   const dir = join(profileRoot(profileId), "claude");
   privateDir(dir);
   return dir;
@@ -222,9 +217,7 @@ export function claudeProfileEnvironment(
         key !== "GOOGLE_APPLICATION_CREDENTIALS",
     ),
   ) as Record<string, string>;
-  return profileId === DEFAULT_CLAUDE_PROFILE_ID
-    ? env
-    : { ...env, CLAUDE_CONFIG_DIR: claudeConfigDir(profileId) };
+  return { ...env, CLAUDE_CONFIG_DIR: claudeConfigDir(profileId) };
 }
 
 function openAiCredentialRevision(id: string): string | undefined {
@@ -272,19 +265,14 @@ export function claudeProfileHasCredential(id: string): boolean {
   // non-secret verification marker in the profile's private directory.
   return (
     existsSync(join(claudeConfigDir(id), ".credentials.json")) ||
-    (id !== DEFAULT_CLAUDE_PROFILE_ID &&
-      existsSync(join(profileRoot(id), ".claude-login-verified")))
+    existsSync(join(profileRoot(id), ".claude-login-verified"))
   );
 }
 
 /** Record only that the official CLI confirmed this isolated account's login. */
 export function markClaudeProfileLoginVerified(id: string): void {
   const profile = credentialProfileById(id);
-  if (
-    !profile ||
-    profile.provider !== "claude" ||
-    id === DEFAULT_CLAUDE_PROFILE_ID
-  )
+  if (!profile || profile.provider !== "claude")
     throw new Error("Only an isolated Claude profile can be verified.");
   const marker = join(profileRoot(id), ".claude-login-verified");
   writeFileSync(marker, "verified\n", { encoding: "utf8", mode: 0o600 });
@@ -329,14 +317,9 @@ function summary(profile: CredentialProfile): CredentialProfileSummary {
         ? {
             setup: {
               path,
-              command:
-                profile.id === DEFAULT_CLAUDE_PROFILE_ID
-                  ? "claude"
-                  : `CLAUDE_CONFIG_DIR=${shellQuote(path)} claude`,
+              command: `CLAUDE_CONFIG_DIR=${shellQuote(path)} claude`,
               detail:
-                profile.id === DEFAULT_CLAUDE_PROFILE_ID
-                  ? "Use Connect to complete the official Claude CLI login in this browser, or run plain claude in a terminal. This profile uses normal ~/.claude."
-                  : "Use Connect to complete the official Claude CLI login in this browser. The command below remains available as a terminal fallback for this isolated profile.",
+                "Use Connect to complete the official Claude CLI login in this browser. The command below remains available as a terminal fallback for this isolated profile.",
             },
           }
         : {}),
@@ -370,115 +353,31 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/**
- * One-time compatibility seed: copies the former pi agent state into PA-owned
- * storage before the SDK is initialized. No later runtime path reads `~/.pi`.
- */
-export function migrateLegacyDefaultPiProfile(legacyAgentDir?: string): void {
-  const source =
-    legacyAgentDir ??
-    process.env.ASSISTANT_LEGACY_PI_AGENT_DIR ??
-    join(homedir(), ".pi", "agent");
-  const destination = piAgentDir(DEFAULT_OPENAI_PROFILE_ID);
-  const marker = join(
-    profileRoot(DEFAULT_OPENAI_PROFILE_ID),
-    ".legacy-pi-imported-v1",
-  );
-  if (existsSync(marker)) return;
-  if (existsSync(source) && readdirSync(destination).length === 0) {
-    // Keep login/config plus supported PA customizations, never old terminal
-    // transcripts or caches (which would bloat DATA_DIR backups).
-    for (const entry of [
-      "auth.json",
-      "models.json",
-      "models-store.json",
-      "settings.json",
-      "extensions",
-      "skills",
-      "prompt-templates",
-    ]) {
-      const from = join(source, entry);
-      if (existsSync(from))
-        cpSync(from, join(destination, entry), {
-          recursive: true,
-          force: false,
-          errorOnExist: false,
-          preserveTimestamps: true,
-        });
-    }
-    privateTree(destination);
-  }
-  writeFileSync(marker, "seeded\n", { encoding: "utf8", mode: 0o600 });
-  privateFile(marker);
+/** The first enabled, explicitly managed account for unpinned work, if any. */
+export function availableAutomaticProfileIdFor(
+  provider: CredentialProfileProvider,
+  excludeId?: string,
+): string | undefined {
+  return readRegistry().find(
+    (profile) =>
+      !isRetiredProfile(profile.id) &&
+      profile.provider === provider &&
+      profile.enabled &&
+      profile.id !== excludeId,
+  )?.id;
 }
 
-/** Ensure PA has isolated default profiles for interactive and automatic work. */
-export function ensureDefaultPiProfile(): CredentialProfile {
-  const profiles = readRegistry();
-  const now = Date.now();
-  let changed = false;
-  let openai = profiles.find(
-    (profile) => profile.id === DEFAULT_OPENAI_PROFILE_ID,
-  );
-  if (!openai) {
-    openai = {
-      id: DEFAULT_OPENAI_PROFILE_ID,
-      name: "Default OpenAI",
-      provider: "openai-codex",
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    };
-    profiles.unshift(openai);
-    changed = true;
-  }
-  if (!profiles.some((profile) => profile.id === DEFAULT_CLAUDE_PROFILE_ID)) {
-    profiles.push({
-      id: DEFAULT_CLAUDE_PROFILE_ID,
-      name: "Default Claude",
-      provider: "claude",
-      enabled: true,
-      createdAt: now,
-      updatedAt: now,
-    });
-    changed = true;
-  }
-  if (changed) writeRegistry(profiles);
-  piAgentDir(openai.id);
-  migrateLegacyDefaultPiProfile();
-  return openai;
-}
-
-let defaultProfilesEnsured = false;
-
-function ensureDefaultProfilesOnce(): void {
-  if (defaultProfilesEnsured) return;
-  ensureDefaultPiProfile();
-  defaultProfilesEnsured = true;
-}
-
-/**
- * The account automatic (unpinned) work runs on: the first enabled profile of
- * that provider in registry order, else the protected default. `excludeId`
- * answers "where would this move if that account were disabled?".
- */
+/** Refuse work instead of quietly falling back to an ambient CLI login. */
 export function automaticProfileIdFor(
   provider: CredentialProfileProvider,
   excludeId?: string,
 ): string {
-  ensureDefaultProfilesOnce();
-  const protectedId =
-    provider === "claude"
-      ? DEFAULT_CLAUDE_PROFILE_ID
-      : DEFAULT_OPENAI_PROFILE_ID;
-  return (
-    readRegistry().find(
-      (profile) =>
-        profile.provider === provider &&
-        profile.enabled &&
-        profile.id !== excludeId,
-    )?.id ?? protectedId
-  );
+  const id = availableAutomaticProfileIdFor(provider, excludeId);
+  if (!id)
+    throw new Error(
+      `No enabled ${provider === "claude" ? "Claude" : "OpenAI"} account. Sign in with a Pandeck-managed account.`,
+    );
+  return id;
 }
 
 /** Enabled OpenAI profile used by non-browser session creation paths. */
@@ -491,13 +390,13 @@ export function defaultClaudeProfileId(): string {
   return automaticProfileIdFor("claude");
 }
 
-function isProtectedProfile(id: string): boolean {
-  return id === DEFAULT_OPENAI_PROFILE_ID || id === DEFAULT_CLAUDE_PROFILE_ID;
+function isRetiredProfile(id: string): boolean {
+  return RETIRED_PROFILE_IDS.has(id);
 }
 
 export function listCredentialProfiles(): CredentialProfileSummary[] {
-  ensureDefaultPiProfile();
   return readRegistry()
+    .filter((profile) => !isRetiredProfile(profile.id))
     .map(summary)
     .sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -530,6 +429,10 @@ export function setCredentialProfileEnabled(
   id: string,
   enabled: boolean,
 ): CredentialProfileSummary {
+  if (isRetiredProfile(id))
+    throw new Error(
+      "This account is no longer supported. Sign in with a Pandeck account.",
+    );
   const profiles = readRegistry();
   const index = profiles.findIndex((profile) => profile.id === id);
   if (index < 0) throw new Error("Credential profile not found.");
@@ -544,8 +447,8 @@ export function renameCredentialProfile(
   id: string,
   rawName: string,
 ): CredentialProfileSummary {
-  if (isProtectedProfile(id))
-    throw new Error("A default profile cannot be renamed.");
+  if (isRetiredProfile(id))
+    throw new Error("This account is no longer supported.");
   const name = rawName.trim().replace(/\s+/g, " ").slice(0, 80);
   if (!name) throw new Error("A profile name is required.");
   const profiles = readRegistry();
@@ -559,8 +462,10 @@ export function renameCredentialProfile(
 }
 
 export function deleteCredentialProfile(id: string): void {
-  if (isProtectedProfile(id))
-    throw new Error("A default profile cannot be deleted.");
+  if (isRetiredProfile(id))
+    throw new Error(
+      "Retired account data is preserved; it cannot be deleted here.",
+    );
   // Every scope: a profile an internal or subagent session is still bound to is
   // just as much in use as one the user's own session holds.
   if (
@@ -624,6 +529,7 @@ export function credentialProfileSummaryById(
 export function credentialProfileById(
   id: string,
 ): CredentialProfile | undefined {
+  if (isRetiredProfile(id)) return undefined;
   return readRegistry().find((profile) => profile.id === id);
 }
 
