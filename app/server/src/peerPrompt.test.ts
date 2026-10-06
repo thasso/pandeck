@@ -2026,6 +2026,95 @@ describe("interruption notice to the sender", () => {
     );
   });
 
+  it("delivers a failure that lands while the sender's previous notice turn is running", async () => {
+    const sender = seed("BusySender");
+    const first = seed("FirstFailing");
+    const second = seed("SecondFailing");
+    const senderDriver = driverFor(sender);
+    senderDriver.behavior = { mode: "success" };
+    for (const id of [first, second])
+      driverFor(id).behavior = { mode: "error", message: `${id} refused` };
+    const a = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: first,
+      prompt: "first ask",
+      responseRequested: true,
+    });
+    const b = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: second,
+      prompt: "second ask",
+      responseRequested: true,
+    });
+
+    const release = senderDriver.holdTurns();
+    await drainRecipient(first);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(senderDriver.isRunning, true, "the first notice is mid-turn");
+    // Its owed-notice read is already behind it.
+    await drainRecipient(second);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    for (const m of [a.message, b.message])
+      assert.notEqual(
+        peerPromptStore.getById(m.id)?.senderNotifiedAt,
+        undefined,
+        "a wake that coalesced onto the running drain is not lost",
+      );
+    assert.equal(senderDriver.promptOptions.length, 2);
+    assert.ok(
+      readFileSync(canonicalSessionLogPath(sender), "utf8").includes(
+        `${second} refused`,
+      ),
+    );
+  });
+
+  it("stops a re-ask loop against a persistent failure at the hop limit", async () => {
+    const originalMaxHops = getSettings().sessionPeerPromptMaxHops;
+    updateSettings({ sessionPeerPromptMaxHops: 3 });
+    const sender = seed("LoopSender");
+    const recipient = seed("LoopRecipient");
+    const senderDriver = driverFor(sender);
+    senderDriver.behavior = { mode: "success" };
+    driverFor(recipient).behavior = { mode: "error", message: "refused" };
+    try {
+      const { message } = await sendPeerPrompt({
+        senderSessionId: sender,
+        targetSessionId: recipient,
+        prompt: "ask 0",
+        responseRequested: true,
+      });
+      const chains = new Set([message.chainId]);
+      let stopped: unknown;
+      // What an agent with no judgement does: re-ask on every notice.
+      for (let i = 1; i <= 6 && !stopped; i++) {
+        const release = senderDriver.holdTurns();
+        await drainRecipient(recipient);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(senderDriver.isRunning, true, "inside the notice turn");
+        try {
+          const next = await sendPeerPrompt({
+            senderSessionId: sender,
+            targetSessionId: recipient,
+            prompt: `ask ${i}`,
+            responseRequested: true,
+          });
+          chains.add(next.message.chainId);
+        } catch (err) {
+          stopped = err;
+        } finally {
+          release();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }
+      assert.match(String(stopped), /3-hop limit/);
+      assert.equal(chains.size, 1, "every re-ask stayed on the original chain");
+    } finally {
+      updateSettings({ sessionPeerPromptMaxHops: originalMaxHops });
+    }
+  });
+
   it("does not wake a sender that asked for no reply", async () => {
     const sender = seed("QuietSender");
     const recipient = seed("QuietRecipient");

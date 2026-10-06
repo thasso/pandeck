@@ -387,6 +387,12 @@ function firstTurnAttachments(
 
 /** One in-flight drain per recipient; concurrent calls coalesce onto it. */
 const drainLocks = new Map<string, Promise<void>>();
+/**
+ * Senders newly owed a notice while their drain was already in flight. That
+ * drain may be past its owed-notice read (or inside the notice turn itself),
+ * so coalescing onto it would lose the wake; it runs once more on release.
+ */
+const noticeWakesPending = new Set<string>();
 
 /**
  * Set on graceful shutdown (SIGTERM/deploy) so no NEW peer-prompt batch delivery
@@ -485,9 +491,11 @@ export function drainRecipient(recipientId: string): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
   const existing = drainLocks.get(recipientId);
   if (existing) return existing;
-  const run = drainRecipientOnce(recipientId).finally(() =>
-    drainLocks.delete(recipientId),
-  );
+  const run = drainRecipientOnce(recipientId).finally(() => {
+    drainLocks.delete(recipientId);
+    if (noticeWakesPending.delete(recipientId))
+      void drainRecipient(recipientId).catch(() => {});
+  });
   drainLocks.set(recipientId, run);
   return run;
 }
@@ -576,6 +584,11 @@ async function deliverInterruptionNotice(
   const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
   if (owed.length === 0) return;
   try {
+    // The notice turn continues the interrupted request's causal chain, so a
+    // sender that re-asks or forwards in response spends the same hop budget.
+    // A failure that persists then ends at the hop limit instead of cycling
+    // failure, notice, re-ask on a fresh chain each time.
+    activeContexts.set(sessionId, noticeContext(owed));
     // Deliberately NO `clientRequestId`. An ordinary prompt claims that dedup key
     // BEFORE reaching the provider and keeps it when the provider then fails
     // (only the steer-only path releases it), so a stable key would answer the
@@ -598,7 +611,26 @@ async function deliverInterruptionNotice(
       err instanceof Error ? err.message : String(err),
     );
     scheduleInterruptionNoticeRetry(sessionId);
+  } finally {
+    activeContexts.delete(sessionId);
   }
+}
+
+/**
+ * The chain a notice turn speaks in. One notice can cover several chains; the
+ * deepest (then newest) wins, so the budget closest to running out is the one
+ * a recovery send spends. A send to another recipient in the notice inherits it
+ * as a forward.
+ */
+function noticeContext(owed: PeerPromptRecord[]): ActiveDeliveryContext {
+  const anchor = owed.reduce((a, b) =>
+    b.hop > a.hop || (b.hop === a.hop && b.createdAt > a.createdAt) ? b : a,
+  );
+  return {
+    senderSessionId: anchor.recipientSessionId,
+    conversationId: anchor.conversationId,
+    chainId: anchor.chainId,
+  };
 }
 
 /**
@@ -930,7 +962,10 @@ function wakeSendersOwingNotice(
       .filter((m) => m.responseRequested && m.senderSessionId !== recipientId)
       .map((m) => m.senderSessionId),
   );
-  for (const id of senders) void drainRecipient(id).catch(() => {});
+  for (const id of senders) {
+    if (drainLocks.has(id)) noticeWakesPending.add(id);
+    void drainRecipient(id).catch(() => {});
+  }
 }
 
 const STRANDED_ADMISSION_REASON =
