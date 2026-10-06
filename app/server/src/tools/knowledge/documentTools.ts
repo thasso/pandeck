@@ -9,6 +9,7 @@
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import { convertPdfToMarkdown, PDF_MIME } from "../../documentConversion.ts";
 import { readSessionAttachmentBytes } from "../../sessionAttachments.ts";
+import { knowledgeBaseEnabled } from "../../knowledgeBaseSettings.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 
 const DEFAULT_MAX_CHARS = 40_000;
@@ -102,6 +103,8 @@ export const convertPdfTool = defineAgentTool<ConvertPdfParams>({
         name: attachment.record.name,
       };
     } else {
+      if (!knowledgeBaseEnabled())
+        throw new Error("The Knowledge Base is turned off in Settings.");
       const read = await storeFactory().readBytes(
         params.kbPath!.trim(),
         KB_READ_MAX_BYTES,

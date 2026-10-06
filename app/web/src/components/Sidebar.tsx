@@ -183,6 +183,8 @@ interface Props {
   onOpenPullRequest: (target: PullRequestTarget) => void;
   /** Worktree id currently open in the detail route, for highlighting. */
   selectedWorktreeId?: string | null;
+  /** The Knowledge Base is turned on; off, its section is not offered. */
+  knowledgeEnabled?: boolean;
   /** The Knowledge Base view the route is on, for highlighting. */
   knowledgeView?: KnowledgeView | null;
   /** Files with uncommitted edits in the Knowledge Base folder. */
@@ -439,6 +441,7 @@ function SidebarImpl({
   selectedPullRequest,
   onOpenPullRequest,
   selectedWorktreeId,
+  knowledgeEnabled = true,
   knowledgeView,
   knowledgeUncommitted = 0,
   onOpenKnowledge,
@@ -612,7 +615,10 @@ function SidebarImpl({
   // reference. Settled history renders compact rows with no dirty marker and
   // must not turn every reconnect into one forced git scan per old worktree.
   useWorktreeWatches({
-    ids: sidebarWorktreeWatchIds(section, sessions, visibleProjectWorktreeIds),
+    ids:
+      section === "knowledge" && !knowledgeEnabled
+        ? []
+        : sidebarWorktreeWatchIds(section, sessions, visibleProjectWorktreeIds),
     connected: state.connected,
     actions,
   });
@@ -632,13 +638,13 @@ function SidebarImpl({
 
   // Sections and actions are one flat, user-ordered row: same slot width, same
   // treatment. Only the handler differs, and only the assistant's label is dynamic.
-  const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots.map(
-    (id) => ({
+  const navSlots: Array<PrimaryNavSection<NavSlot>> = prefs.navSlots
+    .filter((id) => id !== "knowledge" || knowledgeEnabled)
+    .map((id) => ({
       id,
       ...PRIMARY_NAV_SLOTS[id],
       ...(id === "assistant" ? { label: assistantLabel } : {}),
-    }),
-  );
+    }));
 
   return (
     // `relative` because on a phone the nav bar is a `BottomCard` positioned in
@@ -725,6 +731,10 @@ function SidebarImpl({
             // thumb-sized rows, the rail keeps its tight ones.
             density={mobile ? "comfortable" : "tight"}
           />
+        ) : section === "knowledge" && !knowledgeEnabled ? (
+          <p className="px-2.5 py-2 text-caption text-faint">
+            The Knowledge Base is turned off in Settings.
+          </p>
         ) : section === "knowledge" ? (
           <KnowledgeBrowser
             active={knowledgeView ?? null}

@@ -96,6 +96,11 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
         icon: <Bot size={15} />,
       },
       { id: "memory", label: "Memory", icon: <Sparkles size={15} /> },
+      {
+        id: "knowledge-base",
+        label: "Knowledge Base",
+        icon: <BookOpen size={15} />,
+      },
       { id: "naming", label: "Session naming", icon: <Brain size={15} /> },
       {
         id: "refinement",

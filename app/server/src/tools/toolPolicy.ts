@@ -20,6 +20,7 @@ import {
 } from "../slackSettings.ts";
 import { getTempoSettings } from "../tempoSettings.ts";
 import { getBrowserToolSettings } from "../browserSettings.ts";
+import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
 
 /** Integration gates (Settings-driven) that switch optional tool groups. */
 export interface IntegrationToolGates {
@@ -35,6 +36,8 @@ export interface IntegrationToolGates {
   forgejo: boolean;
   /** Raw Playwright MCP passthrough escape hatch (workshop/developer only). */
   browserRawMcp: boolean;
+  /** The Knowledge Base is turned on (`AppSettings.knowledgeBase`). */
+  knowledgeBase: boolean;
 }
 
 /** Current values of every integration gate (reads Settings). */
@@ -54,6 +57,7 @@ export function currentIntegrationToolGates(): IntegrationToolGates {
     github: getGithubSettings().enabled,
     forgejo: isForgejoConfigured(),
     browserRawMcp: getBrowserToolSettings().rawMcpEnabled,
+    knowledgeBase: knowledgeBaseEnabled(),
   };
 }
 

@@ -397,6 +397,7 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       // round trip.
       loading: "deferred",
       family: "integration",
+      gate: "knowledgeBase",
       tools: knowledgeCoreTools(),
     },
     {
@@ -408,6 +409,7 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
         "knowledge base kb file folder write edit move history diff durable documentation",
       loading: "deferred",
       family: "integration",
+      gate: "knowledgeBase",
       tools: knowledgeManagementTools(),
     },
     {

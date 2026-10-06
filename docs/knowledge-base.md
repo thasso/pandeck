@@ -8,10 +8,21 @@ in the browser. Path rules live in `app/server/src/knowledgeBaseContract.ts`;
 
 ## The folder
 
-`DATA_DIR/knowledge/` is the KB, a Git repository of its own, independent of the
-application's source repository. The server makes it a repository on first use
-(`git init` plus an empty first commit when the branch is unborn) and otherwise
-leaves its configuration and `.gitignore` alone.
+The KB is a folder that is a Git repository of its own, independent of the
+application's source repository: `DATA_DIR/knowledge/` unless Settings →
+Knowledge Base names another (`AppSettings.knowledgeBase.path`; `~` expands, a
+relative path is under `DATA_DIR`). The server makes it a repository on first
+use (`git init` plus an empty first commit when the branch is unborn) and
+otherwise leaves its configuration and `.gitignore` alone. It never pushes or
+pulls; syncing the folder is the user's business.
+
+`knowledgeBase.enabled` (on by default) is the one switch for all of it
+(`app/server/src/knowledgeBaseSettings.ts`). Off, the `kb_*` tool groups are
+gated out (the `knowledgeBase` integration gate, reconciled live), new sessions
+start without the eager pointer and project-context KB line, the checkout and
+its routes do not exist, `pa://knowledge` links resolve as unknown, the link
+migration waits, the Knowledge sidebar section and panel tab are not offered,
+and the `/knowledge` route says it is off. The folder itself is not touched.
 
 - Any layout and any file type. Markdown is what knowledge is written in; PDFs,
   images, spreadsheets and other files sit beside it.

@@ -12,6 +12,7 @@ import { KNOWLEDGE_WORKTREE_ID } from "@assistant/shared";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import { gitOptional } from "../gitExec.ts";
 import { KnowledgeBaseStore } from "../knowledgeBaseStore.ts";
+import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
 import { resolveWorktreeRow } from "./worktreeResolve.ts";
 
 /**
@@ -20,6 +21,8 @@ import { resolveWorktreeRow } from "./worktreeResolve.ts";
  * edits.
  */
 async function resolveKnowledgeCheckoutRow(): Promise<WorktreeRow | undefined> {
+  // Off, the checkout does not exist: its routes answer 404.
+  if (!knowledgeBaseEnabled()) return undefined;
   const store = new KnowledgeBaseStore();
   await store.ensureInitialized();
   const res = await gitOptional(

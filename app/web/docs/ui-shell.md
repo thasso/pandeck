@@ -737,28 +737,29 @@ drawing, so it is mounted whenever its tab is open. Closing every tab leaves the
 panel open on a centered list of available panels; **Personal Assistant** is the
 second panel and opens an independent view of the server-owned permanent
 conversation, so it can remain beside the routed main-session chat.
-**Knowledge** is the third: the Knowledge Base folder as the SAME Files and
-Review page the `/knowledge` route draws — file tree, File/Preview/History,
-uncommitted changes — in a narrow column. Moving inside it is panel state, like
-the Worktree panel below, and its one action hands the file or view it is on to
-the main pane. A panel surface is opened from elsewhere by request: `kb_show`'s
-transcript card opens its file here. **Worktree** is the fourth, and it is the
-only panel that addresses no object of its own: it follows the OPEN SESSION to
-the worktree that session executes in, drawing the same Review and Files page
-the `/worktrees/:id` route draws — diffs, file tree, commenting and review
-submission included — so the changes can be read beside the chat producing them.
-It is a narrow column, so it takes the list→detail layout and the unified diffs
-a phone takes — but only the LAYOUT: its scope picker and jump list open as
-anchored popovers, since a viewport-wide sheet dropped over the app is a phone
-affordance, and this panel exists to sit beside what the reader is comparing
-against. Moving inside it (a view, a file, a diff scope) is panel state and
-never touches the address bar, which keeps naming the main pane's object; its
-one action hands the worktree, at the view it is on, to the main pane. A session
-with no worktree, and one whose worktree is gone, each say so rather than
-drawing an empty page. The tab bar is panel chrome, not a second object-title
-row. On small layouts none of this tab state exists: the right panel remains the
-direct flip-up Inspector dock, and a Knowledge card there offers its route
-alone. Top to bottom, for the current main-pane object:
+**Knowledge** is the third (offered only while the Knowledge Base is on in
+Settings, as is the sidebar section): the Knowledge Base folder as the SAME
+Files and Review page the `/knowledge` route draws — file tree,
+File/Preview/History, uncommitted changes — in a narrow column. Moving inside it
+is panel state, like the Worktree panel below, and its one action hands the file
+or view it is on to the main pane. A panel surface is opened from elsewhere by
+request: `kb_show`'s transcript card opens its file here. **Worktree** is the
+fourth, and it is the only panel that addresses no object of its own: it follows
+the OPEN SESSION to the worktree that session executes in, drawing the same
+Review and Files page the `/worktrees/:id` route draws — diffs, file tree,
+commenting and review submission included — so the changes can be read beside
+the chat producing them. It is a narrow column, so it takes the list→detail
+layout and the unified diffs a phone takes — but only the LAYOUT: its scope
+picker and jump list open as anchored popovers, since a viewport-wide sheet
+dropped over the app is a phone affordance, and this panel exists to sit beside
+what the reader is comparing against. Moving inside it (a view, a file, a diff
+scope) is panel state and never touches the address bar, which keeps naming the
+main pane's object; its one action hands the worktree, at the view it is on, to
+the main pane. A session with no worktree, and one whose worktree is gone, each
+say so rather than drawing an empty page. The tab bar is panel chrome, not a
+second object-title row. On small layouts none of this tab state exists: the
+right panel remains the direct flip-up Inspector dock, and a Knowledge card
+there offers its route alone. Top to bottom, for the current main-pane object:
 
 1. **Summary** — type, title, key status.
 2. **Related objects** — the object's references resolved and rendered as links

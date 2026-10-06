@@ -42,6 +42,7 @@ export const SETTINGS_SECTION_IDS = [
   "openai-compatible",
   "personal-assistant",
   "memory",
+  "knowledge-base",
   "naming",
   "refinement",
   "dictation",
@@ -266,6 +267,19 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     path: "profile.effectiveTimeZone",
     section: "profile",
     label: "Time zone in effect",
+    access: "readonly",
+    value: STRING,
+  },
+
+  // Knowledge Base
+  setting("knowledgeBase.enabled", "knowledge-base", "Knowledge Base", BOOLEAN),
+  setting("knowledgeBase.path", "knowledge-base", "Folder", STRING, {
+    hint: "Empty means <data folder>/knowledge; a relative path is under the data folder. Made a Git repository if it is not one; never pushed or pulled.",
+  }),
+  {
+    path: "knowledgeBase.effectivePath",
+    section: "knowledge-base",
+    label: "Folder in effect",
     access: "readonly",
     value: STRING,
   },

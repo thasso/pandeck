@@ -9,6 +9,7 @@ import { basename, isAbsolute, resolve } from "node:path";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
 import { stageSessionArtifact } from "../../mcp/toolGroups/packRuntime.ts";
 import { readSessionAttachmentBytes } from "../../sessionAttachments.ts";
+import { knowledgeBaseEnabled } from "../../knowledgeBaseSettings.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import { isXlsx, readXlsx, type XlsxSheet } from "../../xlsxConversion.ts";
 import { csvLine } from "../../csv.ts";
@@ -116,6 +117,8 @@ export const convertXlsxTool = defineAgentTool<ConvertXlsxParams>({
       name = basename(resolved);
       source = { kind: "file", path: resolved };
     } else {
+      if (!knowledgeBaseEnabled())
+        throw new Error("The Knowledge Base is turned off in Settings.");
       const read = await new KnowledgeBaseStore().readBytes(
         params.kbPath!.trim(),
         MAX_WORKBOOK_BYTES,

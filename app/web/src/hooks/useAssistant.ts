@@ -348,6 +348,7 @@ const defaultSettings: AppSettings = {
     timeZone: "",
     effectiveTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   },
+  knowledgeBase: { enabled: true, path: "", effectivePath: "" },
 };
 
 export interface ForkDraft {

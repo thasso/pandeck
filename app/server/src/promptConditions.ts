@@ -53,6 +53,8 @@ export interface PromptConditions {
   google: boolean;
   /** Tempo integration was enabled at session start. */
   tempo: boolean;
+  /** The Knowledge Base was on at session start: its eager pointer ships. */
+  knowledgeBase: boolean;
   /**
    * The session started WITHOUT a known Project's context attached, so it needs
    * the eager Project Registry pointer.
@@ -76,6 +78,7 @@ export const PROMPT_CONDITION_KEYS: readonly PromptConditionKey[] = [
   "slack",
   "google",
   "tempo",
+  "knowledgeBase",
   "projectRegistryPointer",
   "memoryWrite",
 ];
@@ -91,6 +94,7 @@ const ALL_PROMPT_CONDITIONS: PromptConditions = {
   slack: true,
   google: true,
   tempo: true,
+  knowledgeBase: true,
   projectRegistryPointer: true,
   memoryWrite: true,
 };
@@ -143,6 +147,7 @@ export function computePromptConditions(
     slack: gates.slack,
     google: gates.google,
     tempo: gates.tempo,
+    knowledgeBase: gates.knowledgeBase,
     projectRegistryPointer: !knownProject,
     memoryWrite: personaWritesMemory(agentType),
   };

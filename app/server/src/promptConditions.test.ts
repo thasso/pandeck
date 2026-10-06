@@ -59,6 +59,7 @@ describe("session-start prompt conditions", () => {
       slack: true,
       google: true,
       tempo: true,
+      knowledgeBase: true,
       projectRegistryPointer: true,
       memoryWrite: true,
     });
@@ -308,6 +309,7 @@ describe("session-start prompt conditions", () => {
       slack: false,
       google: true,
       tempo: true,
+      knowledgeBase: true,
       projectRegistryPointer: true,
       memoryWrite: true,
     });

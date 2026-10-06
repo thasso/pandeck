@@ -55,6 +55,11 @@ import { getSlackSettings } from "./slackSettings.ts";
 import { getTempoSettings } from "./tempoSettings.ts";
 import { sanitizeSlotPinsDeep } from "./settingsModelSlots.ts";
 import {
+  invalidateKnowledgeBaseSettingsCache,
+  knowledgeBaseSettingsProjection,
+  normalizeKnowledgeBaseSettings,
+} from "./knowledgeBaseSettings.ts";
+import {
   invalidateUserProfileCache,
   normalizeProfileSettings,
   profileSettingsProjection,
@@ -520,6 +525,7 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
     skills: normalizeSkillToggles(stored.skills),
     appearance: normalizeAppearanceSettings(stored.appearance),
     profile: profileSettingsProjection(stored.profile),
+    knowledgeBase: knowledgeBaseSettingsProjection(stored.knowledgeBase),
     // Integration settings and secrets have dedicated private storage under
     // DATA_DIR/settings and their own update functions, so they are read here
     // rather than from the app-settings file.
@@ -641,6 +647,15 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
           }),
         }
       : {}),
+    // Merged like the profile; the folder in effect is a projection.
+    ...(patch.knowledgeBase
+      ? {
+          knowledgeBase: normalizeKnowledgeBaseSettings({
+            ...stored.knowledgeBase,
+            ...patch.knowledgeBase,
+          }),
+        }
+      : {}),
   };
   // Account pins are validated once, here on write: a pin naming an unknown
   // account or one of the wrong provider is never persisted. A pin to a
@@ -668,5 +683,6 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   writeFileSync(tmp, out, "utf8");
   renameSync(tmp, APP_SETTINGS_PATH);
   invalidateUserProfileCache();
+  invalidateKnowledgeBaseSettingsCache();
   return getSettings();
 }

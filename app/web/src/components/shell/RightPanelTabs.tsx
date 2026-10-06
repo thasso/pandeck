@@ -170,7 +170,8 @@ export function RightPanelTabs({
   onActivePanelChange,
 }: {
   inspector: ReactNode;
-  knowledge: ReactNode;
+  /** Absent while the app offers no Knowledge Base: the tab is not offered. */
+  knowledge?: ReactNode;
   worktree: ReactNode;
   /**
    * The right panel is open, so its active tab is actually on screen. The host
@@ -197,7 +198,16 @@ export function RightPanelTabs({
     { openTabs: ["inspector"], activeTab: "inspector" },
     decodeTabState,
   );
-  const { openTabs, activeTab } = tabState;
+  // A panel the app does not offer right now (the Knowledge Base turned off)
+  // keeps its place in the stored layout, so it comes back where it was, but
+  // is neither shown nor offered.
+  const offered = (id: PanelId) =>
+    id !== "knowledge" || knowledge !== undefined;
+  const openTabs = tabState.openTabs.filter(offered);
+  const activeTab =
+    tabState.activeTab && offered(tabState.activeTab)
+      ? tabState.activeTab
+      : null;
   useEffect(() => {
     onActivePanelChange?.(activeTab);
   }, [activeTab, onActivePanelChange]);
@@ -345,21 +355,23 @@ export function RightPanelTabs({
           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-5">
             <p className="text-caption text-faint">Open a panel</p>
             <div className="w-full max-w-56 space-y-1">
-              {PANEL_DEFINITIONS.map((panel) => (
-                <button
-                  key={panel.id}
-                  type="button"
-                  onClick={() => openPanel(panel.id)}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
-                    {panel.icon}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-body font-medium">
-                    {panel.label}
-                  </span>
-                </button>
-              ))}
+              {PANEL_DEFINITIONS.filter((panel) => offered(panel.id)).map(
+                (panel) => (
+                  <button
+                    key={panel.id}
+                    type="button"
+                    onClick={() => openPanel(panel.id)}
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
+                      {panel.icon}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-body font-medium">
+                      {panel.label}
+                    </span>
+                  </button>
+                ),
+              )}
             </div>
           </div>
         ) : null}
