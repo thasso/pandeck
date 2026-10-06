@@ -1966,24 +1966,82 @@ describe("interruption notice to the sender", () => {
     );
   });
 
-  it("says nothing when the provider refused, because re-asking reproduces the refusal", async () => {
+  it("wakes the sender with the provider's error when the recipient's turn failed", async () => {
     const sender = seed("LimitSender");
     const recipient = seed("LimitRecipient");
-    driverFor(sender).behavior = { mode: "success" };
-    strandedRow(sender, recipient, "run the suite", "failure");
+    const driver = driverFor(sender);
+    driver.behavior = { mode: "success" };
+    const m = strandedRow(sender, recipient, "run the suite", "failure");
 
     await drainRecipient(sender);
 
+    const delivered = readFileSync(canonicalSessionLogPath(sender), "utf8");
+    assert.ok(delivered.includes(recipient));
+    assert.ok(delivered.includes("run the suite"));
+    assert.ok(
+      delivered.includes("failed with a provider error"),
+      "the notice says it was a failure, not a restart",
+    );
+    assert.ok(
+      delivered.includes("Error: the process died"),
+      "and quotes the failure reason, which decides what to do next",
+    );
+    assert.ok(!delivered.includes("server restarted"));
+    assert.equal(driver.promptOptions.length, 1);
     assert.equal(
-      peerPromptStore.interruptedOwingSenderNotice(sender).length,
-      0,
-      "a provider failure never owes a notice",
+      peerPromptStore.getById(m.id)?.senderNotifiedAt !== undefined,
+      true,
+    );
+  });
+
+  it("notifies a waiting sender as soon as a delivered turn fails", async () => {
+    const sender = seed("FailSender");
+    const recipient = seed("FailRecipient");
+    driverFor(sender).behavior = { mode: "success" };
+    driverFor(recipient).behavior = {
+      mode: "error",
+      message:
+        "Provider refused the content (openai-codex/gpt-6.1-sol): flagged for possible cybersecurity risk",
+    };
+    const { message } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "review the IAM cutoff",
+      responseRequested: true,
+    });
+
+    await drainRecipient(recipient);
+    // The wake is fire-and-forget from the recipient's drain.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(peerPromptStore.getById(message.id)?.status, "interrupted");
+    const delivered = readFileSync(canonicalSessionLogPath(sender), "utf8");
+    assert.ok(
+      delivered.includes("flagged for possible cybersecurity risk"),
+      "the sender learns the provider's reason without anyone draining it",
     );
     assert.equal(
-      driverFor(sender).promptOptions.length,
-      0,
-      "and the sender is never woken for one",
+      peerPromptStore.getById(message.id)?.senderNotifiedAt !== undefined,
+      true,
     );
+  });
+
+  it("does not wake a sender that asked for no reply", async () => {
+    const sender = seed("QuietSender");
+    const recipient = seed("QuietRecipient");
+    driverFor(sender).behavior = { mode: "success" };
+    driverFor(recipient).behavior = { mode: "error", message: "boom" };
+    await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "fyi",
+      responseRequested: false,
+    });
+
+    await drainRecipient(recipient);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(driverFor(sender).promptOptions.length, 0);
   });
 
   it("never notifies twice, even across a second boot", async () => {

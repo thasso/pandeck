@@ -4017,6 +4017,7 @@ export type ProviderErrorKind =
   | "auth"
   | "server"
   | "network"
+  | "content_policy"
   | "aborted"
   | "unknown";
 

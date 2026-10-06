@@ -16,6 +16,8 @@ interface Classification {
   detail: string;
 }
 
+const CONTENT_POLICY_RE =
+  /flagged for possible cybersecurity risk|flagged as potentially violating|violat\w* (our |the )?usage polic|content[_ ]policy|content[_ ]filter|invalid_prompt|cyber_policy/i;
 const QUOTA_RE =
   /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|usage limit|plan limit|subscription limit|subscription.*(expired|inactive|required|quota|limit)|available balance|insufficient[_ -]?quota|out of budget|quota exceeded|credit balance|billing|payment required|spend(ing)? limit|exceeded your current quota/i;
 const RATE_LIMIT_RE = /rate.?limit|too many requests|\b429\b|retry after/i;
@@ -57,10 +59,26 @@ export function analyzeProviderError(
   };
 }
 
+const RAW_DISPLAY_LIMIT = 400;
+
 export function providerErrorDisplayText(info: ProviderErrorInfo): string {
   const model =
     [info.provider, info.model].filter(Boolean).join("/") || "selected model";
-  return `${info.title} (${model}): ${info.summary}`;
+  // An unclassified summary says nothing on its own, and a refusal's reason
+  // decides what to do next, so both show what the provider actually said.
+  const text =
+    info.kind === "unknown"
+      ? truncate(info.rawMessage)
+      : info.kind === "content_policy"
+        ? `${info.summary} Provider message: ${truncate(info.rawMessage)}`
+        : info.summary;
+  return `${info.title} (${model}): ${text}`;
+}
+
+function truncate(text: string): string {
+  return text.length > RAW_DISPLAY_LIMIT
+    ? `${text.slice(0, RAW_DISPLAY_LIMIT - 1)}…`
+    : text;
 }
 
 export function shouldSuppressProviderRetry(
@@ -73,6 +91,17 @@ function classify(
   raw: string,
   parsed?: Partial<ProviderErrorInfo>,
 ): Classification {
+  if (CONTENT_POLICY_RE.test(raw)) {
+    return {
+      kind: "content_policy",
+      title: "Provider refused the content",
+      summary:
+        "The provider's safety filter flagged this conversation. Every retry resends the same context, so it will likely be refused again.",
+      retryable: false,
+      detail:
+        "Start a fresh session with a short handoff that leaves out the flagged material, or switch to a different model/provider.",
+    };
+  }
   if (parsed?.kind === "quota" || QUOTA_RE.test(raw)) {
     const reset = parsed?.resetInSeconds
       ? ` Resets ${formatDuration(parsed.resetInSeconds)} from the error timestamp.`

@@ -35,12 +35,14 @@ export type PeerPromptStatus =
  *
  * `restart` — the OS process died under a turn that was otherwise healthy. The
  * recipient's context survived, so the work is usually resumable and a sender
- * waiting on a reply is worth waking: it can re-ask or poke the recipient.
+ * waiting on a reply can re-ask or poke the recipient.
  *
- * `failure` — the provider or harness refused (usage limit, 529, a non-zero
- * exit). Re-asking reproduces the refusal, so waking a sender to retry is worse
- * than staying quiet; the durable row and its card carry the reason for whoever
- * looks.
+ * `failure` — the provider or harness refused (usage limit, content refusal,
+ * 529, a non-zero exit). Re-asking the same session often reproduces the
+ * refusal, but a sender left waiting is worse: it is the one agent that can
+ * route around it (a fresh session, another model, the user). Both kinds wake
+ * a sender that asked for a reply; the notice says which one happened and
+ * carries `failureReason`.
  */
 type PeerPromptInterruptionKind = "restart" | "failure";
 
@@ -952,29 +954,28 @@ function pendingDeliveryRecipientIds(): string[] {
   ).map((r) => r.recipient_session_id);
 }
 
+const OWING_NOTICE_WHERE =
+  "status = 'interrupted' AND interruption_kind IS NOT NULL" +
+  " AND response_requested = 1 AND sender_notified_at_ms IS NULL";
+
 /**
  * The rows that still owe their sender a "this never finished" notice: a reply
- * was requested, the process died under the delivered turn, and nobody has been
- * told yet. Ordered oldest-first so one notice reads as a timeline.
- *
- * `interruption_kind = 'restart'` is the whole gate. A provider refusal is
- * deliberately excluded — see {@link PeerPromptInterruptionKind}.
+ * was requested, the delivered turn was interrupted (restart or provider
+ * failure), and nobody has been told yet. Ordered oldest-first so one notice
+ * reads as a timeline.
  */
 function interruptedOwingSenderNotice(
   senderSessionId?: string,
 ): PeerPromptRecord[] {
-  const where =
-    "status = 'interrupted' AND interruption_kind = 'restart'" +
-    " AND response_requested = 1 AND sender_notified_at_ms IS NULL";
   const rows = senderSessionId
     ? (getDb()
         .prepare(
-          `SELECT * FROM peer_prompts WHERE ${where} AND sender_session_id = ? ORDER BY created_at_ms`,
+          `SELECT * FROM peer_prompts WHERE ${OWING_NOTICE_WHERE} AND sender_session_id = ? ORDER BY created_at_ms`,
         )
         .all(senderSessionId) as unknown as Row[])
     : (getDb()
         .prepare(
-          `SELECT * FROM peer_prompts WHERE ${where} ORDER BY created_at_ms`,
+          `SELECT * FROM peer_prompts WHERE ${OWING_NOTICE_WHERE} ORDER BY created_at_ms`,
         )
         .all() as unknown as Row[]);
   return rows.map(map);
@@ -985,9 +986,7 @@ function senderIdsOwingNotice(): string[] {
   return (
     getDb()
       .prepare(
-        "SELECT DISTINCT sender_session_id FROM peer_prompts" +
-          " WHERE status = 'interrupted' AND interruption_kind = 'restart'" +
-          " AND response_requested = 1 AND sender_notified_at_ms IS NULL",
+        `SELECT DISTINCT sender_session_id FROM peer_prompts WHERE ${OWING_NOTICE_WHERE}`,
       )
       .all() as { sender_session_id: string }[]
   ).map((r) => r.sender_session_id);

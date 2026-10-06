@@ -51,6 +51,8 @@ export const ENVELOPE_OVERHEAD_MAX = 300;
 const SENDER_TITLE_MAX = 80;
 /** How much of an interrupted prompt an interruption notice quotes back. */
 const NOTICE_PROMPT_EXCERPT_MAX = 120;
+/** How much of a provider failure reason an interruption notice quotes. */
+const NOTICE_ERROR_MAX = 1_200;
 const LEASE_MS = 60_000;
 /** Unresolved reply expectations expire after 30 days. */
 const RESPONSE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -553,7 +555,8 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
 }
 
 /**
- * Tell a session that a prompt IT sent was cut off mid-turn by a restart.
+ * Tell a session that a prompt IT sent was cut off mid-turn, by a restart or by
+ * a provider failure.
  *
  * Without this the sender simply waits: `interrupted` is terminal, the prompt
  * is never re-injected (it is already in the recipient's log), and the only
@@ -601,25 +604,50 @@ async function deliverInterruptionNotice(
 /**
  * The notice envelope. Names the recipient SESSION ID, not just its title: the
  * one useful action is poking that session directly, and a title needs a
- * `session_lookup` round trip and can be ambiguous.
+ * `session_lookup` round trip and can be ambiguous. A provider failure quotes
+ * the error, because what the sender should do next depends on it.
  */
 function buildInterruptionNotice(owed: PeerPromptRecord[]): string {
-  const lines = owed.map((m) => {
-    const title = clip(
-      sessionStore.get(m.recipientSessionId)?.title ?? "a session",
-      SENDER_TITLE_MAX,
-    );
-    return `- ${title} (session \`${m.recipientSessionId}\`): "${clip(m.prompt, NOTICE_PROMPT_EXCERPT_MAX)}"`;
-  });
-  const subject = owed.length === 1 ? "A prompt" : `${owed.length} prompts`;
-  return [
+  const restarts = owed.filter((m) => m.interruptionKind !== "failure");
+  const failures = owed.filter((m) => m.interruptionKind === "failure");
+  const lines = [
     "Peer-prompt interruption notice (server-generated; no session sent this).",
-    "",
-    `${subject} you sent asked for a reply, and the server restarted while the recipient's turn was still running. That turn may not have completed, and no reply is coming on its own:`,
-    ...lines,
-    "",
-    "Whatever the recipient had already done is still in its own context. Decide whether to ask it for a status, re-send, or drop it — nothing further happens automatically.",
-  ].join("\n");
+  ];
+  if (restarts.length > 0) {
+    lines.push(
+      "",
+      `${promptCount(restarts)} you sent asked for a reply, and the server restarted while the recipient's turn was still running. That turn may not have completed, and no reply is coming on its own:`,
+      ...restarts.map(noticeLine),
+      "",
+      "Whatever the recipient had already done is still in its own context. Decide whether to ask it for a status, re-send, or drop it.",
+    );
+  }
+  if (failures.length > 0) {
+    lines.push(
+      "",
+      `${promptCount(failures)} you sent asked for a reply, and the recipient's turn failed with a provider error. No reply is coming on its own:`,
+      ...failures.flatMap((m) => [
+        noticeLine(m),
+        `  Error: ${clip(m.failureReason ?? "unknown provider error", NOTICE_ERROR_MAX)}`,
+      ]),
+      "",
+      "The prompt is in the recipient's context, but its turn ended without an answer. A usage limit or content refusal applies to the whole conversation, so re-sending to the same session usually fails the same way. Depending on the error: wait and retry, hand the work to a fresh session with a short summary that leaves the flagged material out, switch model, or tell the user.",
+    );
+  }
+  lines.push("", "Nothing further happens automatically.");
+  return lines.join("\n");
+}
+
+function promptCount(rows: PeerPromptRecord[]): string {
+  return rows.length === 1 ? "A prompt" : `${rows.length} prompts`;
+}
+
+function noticeLine(m: PeerPromptRecord): string {
+  const title = clip(
+    sessionStore.get(m.recipientSessionId)?.title ?? "a session",
+    SENDER_TITLE_MAX,
+  );
+  return `- ${title} (session \`${m.recipientSessionId}\`): "${clip(m.prompt, NOTICE_PROMPT_EXCERPT_MAX)}"`;
 }
 
 /**
@@ -880,6 +908,9 @@ async function deliverBatch(
       if (admitted) peerPromptStore.markInterrupted(m.id, reason, "failure");
       else retryOrFail(m.id, m.attempts, reason);
     }
+    // A sender waiting on a reply is usually idle, so no idle edge of its own
+    // will come to collect the notice it is now owed.
+    if (admitted) wakeSendersOwingNotice(batch, driver.sessionId);
   } finally {
     activeContexts.delete(driver.sessionId);
   }
@@ -888,6 +919,18 @@ async function deliverBatch(
   // snapshot from claimBatch, so broadcasting it directly would always report
   // the stale "dispatching" state instead of the actual final outcome.
   await broadcastBatchCardUpdates(batch.map((m) => m.id));
+}
+
+function wakeSendersOwingNotice(
+  batch: PeerPromptRecord[],
+  recipientId: string,
+): void {
+  const senders = new Set(
+    batch
+      .filter((m) => m.responseRequested && m.senderSessionId !== recipientId)
+      .map((m) => m.senderSessionId),
+  );
+  for (const id of senders) void drainRecipient(id).catch(() => {});
 }
 
 const STRANDED_ADMISSION_REASON =
