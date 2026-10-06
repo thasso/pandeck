@@ -106,6 +106,7 @@ import { documentTargetHref } from "@assistant/shared/documentTargets";
 import { fileSessionStart } from "./lib/fileSessionStart.ts";
 import {
   knowledgeCheckoutRecord,
+  knowledgeCommentDocument,
   knowledgeUncommittedCount,
 } from "./lib/knowledgeCheckout.ts";
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
@@ -3749,8 +3750,14 @@ function AppContent() {
         const document = comment.anchor.document;
         navigate(
           documentTargetHref({
-            kind: "hostFile",
-            path: document.path,
+            ...(document.kind === "knowledgeFile"
+              ? {
+                  kind: "worktreeFile" as const,
+                  worktreeId: KNOWLEDGE_WORKTREE_ID,
+                  path: document.path,
+                  view: "file" as const,
+                }
+              : { kind: "hostFile" as const, path: document.path }),
             ...(comment.lines
               ? {
                   anchor: {
@@ -6778,6 +6785,7 @@ function AppContent() {
                     title="Knowledge Base"
                     lineComments={false}
                     markdownPreviewFirst
+                    documentComments={knowledgeCommentDocument}
                     narrow={mobileLayout}
                     view={route.view ?? "files"}
                     filePath={route.path}

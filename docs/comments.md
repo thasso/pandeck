@@ -5,7 +5,7 @@ names a TARGET and carries a BUNDLE of redundant selectors. Decided in Task-424;
 the vocabulary and the resolver land in Task-425. This document is the contract
 for the selector bundle, the resolution ladder and the lifetimes; it governs
 worktree review comments, Task comments, and the browser-local comments
-collected on transcripts and documents (host files).
+collected on transcripts and documents (host files, Knowledge Base files).
 
 Two families share that vocabulary and nothing else:
 
@@ -177,11 +177,11 @@ exact/fuzzy fallback and orphaning.
 
 The lifetime class of the TARGET decides how much machinery a domain needs:
 
-| class              | domain                | kept                          | resolver                            | storage                |
-| ------------------ | --------------------- | ----------------------------- | ----------------------------------- | ---------------------- |
-| **Object-bounded** | worktree review       | until the worktree dies       | yes — commits move lines            | SQLite                 |
-| **Send-bounded**   | documents (host file) | until sent or discarded       | none — painted by quote, sent by it | browser `localStorage` |
-| **Turn-ephemeral** | chat transcript       | until the next prompt is sent | none — the transcript is immutable  | browser `localStorage` |
+| class              | domain               | kept                          | resolver                            | storage                |
+| ------------------ | -------------------- | ----------------------------- | ----------------------------------- | ---------------------- |
+| **Object-bounded** | worktree review      | until the worktree dies       | yes — commits move lines            | SQLite                 |
+| **Send-bounded**   | documents (file, KB) | until sent or discarded       | none — painted by quote, sent by it | browser `localStorage` |
+| **Turn-ephemeral** | chat transcript      | until the next prompt is sent | none — the transcript is immutable  | browser `localStorage` |
 
 Knowledge entries used to be the one **Durable** class: threads in a git JSONL
 log under `.kb/comments/`, re-anchored on every read. That was retired — the
@@ -249,8 +249,11 @@ ends.
 A document collects its comments in its own TRAY
 (`assistant.documentComments:<document key>`), the same browser-local list kind,
 through `DocumentCommentLayer` mounted at the bottom of its viewer: the
-host-file viewer. A Knowledge Base file is read on the worktree file page, which
-takes no comments for that checkout. A comment is either on a PASSAGE — the
+host-file viewer, and the worktree file page for the Knowledge Base checkout
+(`documentComments` on `WorktreeDetailPage`; route and side panel share one tray
+per file). There a Markdown Preview renders with source positions and the File
+view renders the shared `CodeBlock` text body instead of the diff surface, so a
+passage can be selected in either. A comment is either on a PASSAGE — the
 reader's selection, with its rendered quote, its selector bundle for painting,
 and the SOURCE lines the renderer names (Markdown blocks' `data-source-line-*`,
 or exact lines counted inside a `CodeBlock` window from its
@@ -265,9 +268,10 @@ opens its comment for editing.
 Sending a tray MOVES its comments into a session composer's outbox — the session
 on screen is offered first, a new session receives them on the new-session page
 — and takes the reader there. They ride the next prompt with any transcript
-comments: one section per document, headed by the file path, each comment as its
-lines and quote or "the whole document", numbered across every section. The
-agent reads the document itself; no comment tool exists or is needed.
+comments: one section per document, headed by the file path (a KB file by its KB
+path, its `pa://knowledge` link and `kb_read`), each comment as its lines and
+quote or "the whole document", numbered across every section. The agent reads
+the document itself; no comment tool exists or is needed.
 
 Every pending comment is its own localStorage record, `<list key>#<comment id>`,
 never an element of one shared array: tabs share that storage with no lock of
