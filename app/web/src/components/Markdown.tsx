@@ -91,18 +91,10 @@ interface MarkdownProps {
   onOpenChangedFile?: ((path: string) => void) | undefined;
   onOpenPaObject?: ((link: PaObjectLinkResolution) => void) | undefined;
   /**
-   * Optional resolver for relative link/image URLs (e.g. KB entry-local
-   * `assets/...` paths). Return an absolute URL to use it, or null/undefined to
-   * fall back to the default URL transform. `pa://` links are handled first and
-   * never reach this hook.
-   */
-  onResolveUrl?: (url: string) => string | null | undefined;
-  /**
    * Absolute directory of the document being rendered. Set it when the text
    * came from a FILE (the `/files/...` viewer): a relative image then loads
    * from beside that file and a relative link opens the viewer on it, as a
-   * browser would resolve them. `onResolveUrl` is the hook for a caller whose
-   * relative references are not host paths (the KB's entry-local assets).
+   * browser would resolve them.
    */
   documentDirectory?: string;
   /** Typed source identity used to keep relative document links in-app. */
@@ -242,7 +234,6 @@ export const Markdown = memo(function Markdown({
   onOpenSession,
   onOpenChangedFile,
   onOpenPaObject,
-  onResolveUrl,
   documentDirectory,
   documentTarget,
   sourcePositions = false,
@@ -356,21 +347,6 @@ export const Markdown = memo(function Markdown({
     ],
   );
 
-  // NOT held behind a ref, unlike the click handlers above: a handler runs when
-  // the reader acts, so the latest one is always the one that fires, but a URL
-  // is resolved WHILE THE TREE IS BUILT and then frozen into an `href`/`src`.
-  // A resolver that answers differently (the KB's entry-local assets, a file
-  // preview's worktree and path) therefore has to rebuild the tree, or the
-  // rendered image is the previous entry's.
-  const urlTransform = useCallback(
-    (url: string) => {
-      if (parsePaObjectLink(url)) return url;
-      const resolved = onResolveUrl?.(url);
-      return resolved != null ? resolved : defaultUrlTransform(url);
-    },
-    [onResolveUrl],
-  );
-
   // Runs after the parse that sets `sawMath`, so the chunk is requested only
   // once a formula has actually been seen. Kicked on every commit rather than
   // on `text` alone: a streaming reply grows through many commits and the math
@@ -396,11 +372,10 @@ export const Markdown = memo(function Markdown({
   );
 
   // The parse → sanitize → element-tree pipeline runs only when what it reads
-  // changed: the text, the reference-bearing remark plugins, and the resolver.
+  // changed: the text and the reference-bearing remark plugins.
   // `MARKDOWN_COMPONENTS` is fixed, so everything else about this render (a new
   // handler identity, a parent re-render) reaches the rendered links through the
-  // context instead of rebuilding the tree. A caller that passes `onResolveUrl`
-  // owns its identity for the same reason every other prop here is owned.
+  // context instead of rebuilding the tree.
   const rendered = useMemo(
     () => (
       <ReactMarkdown
@@ -412,7 +387,7 @@ export const Markdown = memo(function Markdown({
         {text}
       </ReactMarkdown>
     ),
-    [remarkPlugins, rehypePlugins, text, urlTransform],
+    [remarkPlugins, rehypePlugins, text],
   );
 
   return (
@@ -850,6 +825,11 @@ function MarkdownCode({
       {children}
     </code>
   );
+}
+
+/** `pa://` links pass through for the object-link renderer; everything else is sanitized. */
+function urlTransform(url: string): string {
+  return parsePaObjectLink(url) ? url : defaultUrlTransform(url);
 }
 
 const MARKDOWN_COMPONENTS: Components = {

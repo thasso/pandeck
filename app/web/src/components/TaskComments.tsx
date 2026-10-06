@@ -22,8 +22,8 @@ import {
  * `taskComments` broadcasts and are added via a `useAssistant` action.
  * @intent Presentational and flat: oldest-first list, author kind badge, no
  * threading/resolve/edit/delete (an auditable trace). The composer is the shared
- * `ui/CommentComposer` — the same one row a Knowledge entry's comments use.
- * @related TaskManagementPage, KnowledgeComments.
+ * `ui/CommentComposer` — the same one row a document's comment tray uses.
+ * @related TaskManagementPage, DocumentComments.
  */
 export function TaskComments({
   state,

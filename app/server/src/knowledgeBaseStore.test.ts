@@ -66,6 +66,27 @@ describe("initialization", () => {
     );
   });
 
+  test("removes the identity earlier builds wrote, and nothing the user set", async () => {
+    await git(["init", "-b", "main"], root);
+    for (const [key, value] of [
+      ["user.name", "Knowledge Base"],
+      ["user.email", "kb@local"],
+      ["commit.gpgsign", "false"],
+      ["gc.autoDetach", "true"],
+    ])
+      await git(["config", "--local", key!, value!], root);
+    await store.ensureInitialized();
+    const local = async (key: string) =>
+      (
+        await git(["config", "--local", "--get", key], root).catch(() => null)
+      )?.stdout.trim() ?? null;
+    assert.equal(await local("user.name"), null);
+    assert.equal(await local("user.email"), null);
+    assert.equal(await local("commit.gpgsign"), null);
+    // Not the value an earlier build wrote: the user's own, so it stays.
+    assert.equal(await local("gc.autoDetach"), "true");
+  });
+
   test("serializes concurrent first-use init across store instances", async () => {
     const stores = Array.from(
       { length: 6 },

@@ -161,7 +161,7 @@ function WorktreeCard({
  * composer chips/sheet use (which also switches to the coding agent), and the
  * model/thinking rows drive the same staged runtime as the composer pickers.
  * @avoidWhen Any surface with messages, or flows that stage their own context
- * (Knowledge entry starts, the permanent Assistant).
+ * (starting from a document, the permanent Assistant).
  * @intent Native swipe on mobile (snap scroll), wheel/drag on desktop. Tapping
  * the selected worktree card clears it again; "More…" opens the full context
  * sheet without focusing the composer afterwards.

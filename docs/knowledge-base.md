@@ -78,7 +78,10 @@ frozen map current and says so, and the agent updates the links it finds.
   browser's Commit takes. Concurrent stores initializing one new folder share a
   single in-flight init, since the key changes when `git init` creates `.git`.
 - Identity, signing and GC settings are passed per commit, never written to the
-  repository config. Hooks do not run for tool commits (`--no-verify`).
+  repository config. Earlier builds did write them there, which authored the
+  user's own browser commits as "Knowledge Base"; the store removes exactly
+  those values where they still hold. Hooks do not run for tool commits
+  (`--no-verify`).
 - A tool commit's subject is the caller's reason; its trailers record the actor,
   session, task and changed paths (`KB-Actor`, `KB-Session`, `KB-Task`,
   `KB-Paths`). Commits made by the user carry none.

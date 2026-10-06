@@ -18,7 +18,7 @@ what it is connected to, and makes it easy to continue from there.
 ## Objects
 
 The shell is built around first-class object types (e.g. session, task, project,
-worktree, knowledge entry). Objects reference each other; each object type
+worktree, Knowledge Base file). Objects reference each other; each object type
 defines which references it carries (e.g. a session may reference a task, a
 project, and the worktree it executes in).
 

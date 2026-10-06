@@ -30,7 +30,7 @@ only binding rules; everything else lives here.
   viewer, source scanning diagnostics, the global on/off map and the insert-only
   per-session freeze, injection into both coding harnesses, and deterministic
   shared runtime layouts with their source-of-truth/garbage-collection boundary.
-- `comments.md` — the one comment anchor model shared by KB entries, worktree
+- `comments.md` — the one comment anchor model shared by documents, worktree
   diffs and chat: the selector bundle, the resolution ladder and its two
   refusals (ambiguity, the short-quote guard), the raw-offsets/normalized-
   comparison contract, derived lines, and the lifetime class per target.

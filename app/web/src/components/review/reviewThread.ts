@@ -1,10 +1,9 @@
 /**
  * The domain-neutral view of one review comment thread, plus the pure list math
- * over it. Knowledge entries and worktree diffs anchor comments to completely
- * different things (a body line range vs a `path:line` in a commit) but the
- * REVIEW work is identical — triage what is open, dispatch some of it to an
- * agent, keep the rest as history — so the list that does that work speaks this
- * shape and neither domain's types.
+ * over it. A worktree review anchors comments to a `path:line` in a commit, but
+ * the REVIEW work is not about diffs — triage what is open, dispatch some of it
+ * to an agent, keep the rest as history — so the list that does that work
+ * speaks this shape rather than the worktree's types.
  */
 
 type ReviewThreadState = "open" | "resolved";

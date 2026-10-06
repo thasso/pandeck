@@ -20,7 +20,7 @@ export interface SendCommentsSession {
  * @purpose SUBMIT a review: hand a bundle of comments to a fresh agent session or
  *   to one already running, with an optional message covering the batch.
  * @useWhen Submitting from `CommentBar` (everything pending) or a hand-picked
- *   `ReviewCommentList` selection (Knowledge entry or worktree review).
+ *   `ReviewCommentList` selection (a worktree review).
  * @avoidWhen Sending a single thread from inside the content; that keeps its own
  *   inline affordance.
  * @intent Domain-neutral: the caller resolves which sessions exist and which are

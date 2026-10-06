@@ -302,33 +302,6 @@ describe("Markdown re-renders", () => {
     await act(async () => setTitle("Second title"));
     expect(container.textContent).toContain("Second title");
   });
-
-  it("rebuilds the tree when the resolver answers differently for the same text", async () => {
-    // A URL is resolved once, WHILE the tree is built, and then frozen into the
-    // rendered `src` — so unlike a click handler, a new resolver has to rebuild
-    // it. Reusing one Markdown instance across two KB entries (or two file
-    // previews) with identical bodies is how that shows: the same relative asset
-    // path belongs to a different entry now.
-    let setBase = (_: string) => {};
-    function Host() {
-      const [base, setNext] = useState("/entries/one");
-      setBase = setNext;
-      const resolve = (url: string) =>
-        url.startsWith("assets/") ? `${base}/${url}` : null;
-      return (
-        <Markdown text="![shot](assets/shot.png)" onResolveUrl={resolve} />
-      );
-    }
-    await act(async () => reactRoot.render(<Host />));
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(
-      "/entries/one/assets/shot.png",
-    );
-
-    await act(async () => setBase("/entries/two"));
-    expect(container.querySelector("img")?.getAttribute("src")).toBe(
-      "/entries/two/assets/shot.png",
-    );
-  });
 });
 
 /**
