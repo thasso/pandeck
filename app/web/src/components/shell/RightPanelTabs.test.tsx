@@ -197,3 +197,27 @@ it("leaves an open tab behind another one unbuilt until it is selected", async (
   await act(async () => worktreeTab.click());
   expect(container.textContent).toContain("Worktree body");
 });
+
+it("offers no Knowledge tab while the Knowledge Base is off, and keeps its place", async () => {
+  const render = (knowledge: boolean) =>
+    root.render(
+      <RightPanelTabs
+        inspector={<div>Inspector body</div>}
+        {...(knowledge ? { knowledge: <div>Knowledge body</div> } : {})}
+        worktree={<div>Worktree body</div>}
+        openRequest={{ panel: "knowledge", nonce: 1 }}
+      />,
+    );
+  await act(async () => render(true));
+  expect(button("Close Knowledge")).toBeTruthy();
+
+  await act(async () => render(false));
+  expect(button("Close Knowledge")).toBeUndefined();
+  expect(container.textContent).not.toContain("Knowledge body");
+  await act(async () => button("Open a right panel").click());
+  expect(container.textContent).not.toContain("Knowledge");
+
+  // Turned back on, the tab is where it was.
+  await act(async () => render(true));
+  expect(button("Close Knowledge")).toBeTruthy();
+});

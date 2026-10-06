@@ -29,7 +29,6 @@ import {
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { DATA_DIR } from "./config.ts";
 import {
   git,
   gitBoundedStdout,
@@ -39,12 +38,9 @@ import {
 } from "./gitExec.ts";
 import {
   isHiddenKnowledgePath,
-  KB_REPO_DIR_NAME,
   normalizeKnowledgeRelativePath,
 } from "./knowledgeBaseContract.ts";
-
-/** Default KB repo root: `DATA_DIR/knowledge`. */
-const KB_STORE_ROOT = join(DATA_DIR, KB_REPO_DIR_NAME);
+import { knowledgeBaseRoot } from "./knowledgeBaseSettings.ts";
 
 const HISTORY_LIMIT_DEFAULT = 50;
 // Unit/record separators keep git log parsing robust against arbitrary text.
@@ -135,15 +131,15 @@ function assertGitRevision(value: string, label: string): string {
 const initializing = new Map<string, Promise<void>>();
 
 /**
- * Git-backed KB folder. Construct with the repo root (defaults to
- * {@link KB_STORE_ROOT}); tests pass a temp directory. Initialization is lazy
+ * Git-backed KB folder. Construct with the repo root (defaults to the folder
+ * in effect, `knowledgeBaseRoot()`); tests pass a temp directory. Initialization is lazy
  * and idempotent — the first call ensures the folder is a repository.
  */
 export class KnowledgeBaseStore {
   readonly root: string;
   private initialized: Promise<void> | undefined;
 
-  constructor(root: string = KB_STORE_ROOT) {
+  constructor(root: string = knowledgeBaseRoot()) {
     this.root = root;
   }
 

@@ -281,7 +281,15 @@ function personaLayers(
       : []),
     resolveAsset("chat-files", CHAT_FILES_FILE, promptsDir),
     resolveAsset("chat-math", CHAT_MATH_FILE, promptsDir),
-    layerOf("kb-guidance", knowledgeBaseBehaviorGuidance(), "builtin-code"),
+    ...(on("knowledgeBase")
+      ? [
+          layerOf(
+            "kb-guidance",
+            knowledgeBaseBehaviorGuidance(),
+            "builtin-code",
+          ),
+        ]
+      : []),
     layerOf(
       "memory-guidance",
       // Undefined conditions fall back to the persona's own write capability

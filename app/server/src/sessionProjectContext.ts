@@ -6,6 +6,7 @@ import {
   type ProjectRecord,
 } from "./projectRegistry.ts";
 import { projectStore } from "./db/projectStore.ts";
+import { knowledgeBaseEnabled } from "./knowledgeBaseSettings.ts";
 import { findOriginTask, readTask } from "./tasks.ts";
 
 export interface SessionProjectContextInfo {
@@ -81,8 +82,11 @@ function formatLocalPath(path: ProjectLocalPath): string {
  * this block has to carry is the Project's own coordinates — the tag to search
  * and the link form to write.
  */
-function projectKnowledgeLine(projectId: string): string {
-  return `- Durable Project knowledge lives in the Knowledge Base (kb_* tools, tool search "knowledge base"): tag ${inlineCode(`project:${projectId}`)}, link ${inlineCode(`pa://project/${projectId}`)}.`;
+function projectKnowledgeLines(projectId: string): string[] {
+  if (!knowledgeBaseEnabled()) return [];
+  return [
+    `- Durable Project knowledge lives in the Knowledge Base (kb_* tools, tool search "knowledge base"): tag ${inlineCode(`project:${projectId}`)}, link ${inlineCode(`pa://project/${projectId}`)}.`,
+  ];
 }
 
 /**
@@ -106,7 +110,7 @@ export function buildProjectContext(projectId: string): string {
       "## Project context",
       "",
       `- Warning: Session is linked to projectId ${inlineCode(id)}, but it is not currently in the project registry.`,
-      projectKnowledgeLine(id),
+      ...projectKnowledgeLines(id),
     ].join("\n");
   }
 
@@ -149,7 +153,7 @@ export function buildProjectContext(projectId: string): string {
     // job: naming the two deferred tools. Without it the session would have no
     // eager hint that the registry covers anything beyond this Project.
     '- The registry also holds the user\'s OTHER Projects. Load its tools with a tool search for "project registry": `project_registry_read` before assuming any mapping, `project_registry_write` only when the user explicitly asks.',
-    projectKnowledgeLine(project.id),
+    ...projectKnowledgeLines(project.id),
   );
 
   if (jira.length) sections.push("", "### Jira links", jira.join("\n"));

@@ -578,6 +578,23 @@ export interface PdfConversionSettings extends CredentialProfilePin {
  * The app's user. The timezone is the ONE zone every user-local day and time
  * resolves in — calendar days, memory temporal rules, "today" for Tasks, and the local times integration tools report.
  */
+/**
+ * The Knowledge Base: a folder of files in a Git repository
+ * (docs/knowledge-base.md). Off, the app offers none of it — no `kb_*` tools,
+ * no prompt pointer, no Knowledge browser — and the folder is left as it is.
+ */
+export interface KnowledgeBaseSettings {
+  enabled: boolean;
+  /**
+   * The folder; "" is `<data folder>/knowledge`. `~` expands, and a relative
+   * path is taken under the data folder. Made a Git repository if it is not
+   * one; never pushed or pulled.
+   */
+  path: string;
+  /** Read-only projection: the absolute folder in effect. Ignored on save. */
+  effectivePath: string;
+}
+
 export interface ProfileSettings {
   /** How comments name the user; "" falls back to "You". */
   displayName: string;
@@ -1380,6 +1397,7 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   /** Who the app works for: display name and the timezone local days resolve in. */
   profile: ProfileSettings;
+  knowledgeBase: KnowledgeBaseSettings;
 }
 
 /** Slash commands offered by the server. */

@@ -26,6 +26,7 @@ import { knowledgeLinkStore } from "./db/knowledgeLinkStore.ts";
 import { knowledgeFiles } from "./knowledgeBaseIndex.ts";
 import { KnowledgeBaseStore, type KbFileChange } from "./knowledgeBaseStore.ts";
 import { editMemory } from "./memory/memoryService.ts";
+import { knowledgeBaseEnabled } from "./knowledgeBaseSettings.ts";
 import { notifyTaskChange } from "./tasks.ts";
 
 const LEGACY_LINK_RE = /pa:\/\/knowledge\/([\w.%~:+-]+)/g;
@@ -79,7 +80,9 @@ interface KnowledgeLinkMigrationSummary {
 export async function migrateKnowledgeLinks(
   store = new KnowledgeBaseStore(),
 ): Promise<KnowledgeLinkMigrationSummary | null> {
-  if (knowledgeLinkStore.migrationDone()) return null;
+  // Off, the folder is left alone; the first boot with it on migrates.
+  if (!knowledgeBaseEnabled() || knowledgeLinkStore.migrationDone())
+    return null;
 
   // 1. Every id the folder still knows. Paths are walked in order, so of two
   //    files claiming one id the first keeps it.

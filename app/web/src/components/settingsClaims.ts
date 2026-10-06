@@ -51,6 +51,10 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "memory.processor.credentialProfileId",
   "memory.maxCallsPerHour",
   "memory.maxCostPerDayUsd",
+  // knowledge-base
+  "knowledgeBase.enabled",
+  "knowledgeBase.path",
+  "knowledgeBase.effectivePath",
   // naming
   "sessionNaming.enabled",
   "sessionNaming.provider",

@@ -403,6 +403,9 @@ export function SettingsPage({
               onTestGoogle={onTestGoogle}
             />
           )}
+          {section === "knowledge-base" && (
+            <KnowledgeBaseSection settings={settings} onUpdate={onUpdate} />
+          )}
           {section === "pdf-conversion" && (
             <PdfConversionSection
               models={agentModels}
@@ -1706,6 +1709,70 @@ function WorktreesSection({
             save({ mergeAgent: { ...worktrees.mergeAgent, ...patch } })
           }
         />
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeBaseSection({
+  settings,
+  onUpdate,
+}: {
+  settings: AppSettings;
+  onUpdate: (patch: Partial<AppSettings>) => void;
+}) {
+  const kb = settings.knowledgeBase;
+  const [path, setPath] = useState(kb.path);
+  useEffect(() => setPath(kb.path), [kb.path]);
+  const save = (patch: Partial<typeof kb>) =>
+    onUpdate({ knowledgeBase: { ...kb, ...patch } });
+
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-6">
+      <h2 className="text-body font-semibold">Knowledge Base</h2>
+      <p className="mt-1 text-caption text-muted">
+        A folder of notes and files in its own Git repository. Agents search,
+        read and write it with the <code>kb_*</code> tools and commit what they
+        change; you browse it under Knowledge and can edit it with any editor.
+        Turned off, agents get no Knowledge Base tools and the Knowledge view is
+        hidden; the folder itself is left as it is.
+      </p>
+
+      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+        <label className="flex items-center gap-2 text-caption text-fg">
+          <input
+            type="checkbox"
+            checked={kb.enabled}
+            onChange={(e) => save({ enabled: e.target.checked })}
+            className="size-4 accent-accent"
+          />
+          Use a Knowledge Base
+        </label>
+
+        <div>
+          <label className="mb-1 block text-caption font-medium text-fg">
+            Folder
+          </label>
+          <input
+            value={path}
+            onChange={(event) => setPath(event.target.value)}
+            onBlur={() => {
+              if (path.trim() !== kb.path) save({ path: path.trim() });
+            }}
+            placeholder="<data folder>/knowledge"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-caption text-faint">
+            Empty uses the data folder&apos;s <code>knowledge</code> folder; a
+            relative path is taken under the data folder. A folder that is not a
+            Git repository yet becomes one. Nothing is ever pushed or pulled.
+          </p>
+          {kb.effectivePath ? (
+            <p className="mt-1 text-caption text-faint">
+              In use: <span className="font-mono">{kb.effectivePath}</span>
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );

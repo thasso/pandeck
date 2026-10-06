@@ -76,6 +76,7 @@ sections need:
 | `github`              | Reconcile the package proxy                                                                             |
 | `openAiCompatible`    | Sync the configured model providers                                                                     |
 | any other integration | `notifyIntegrationToolsChanged` (live `tools/list_changed`)                                             |
+| `knowledgeBase`       | `notifyIntegrationToolsChanged`: the setting gates the `kb_*` tool groups                               |
 
 The service imports no engine (`docs/agent-harnesses.md`): the model-provider
 sync is the engine's `syncConfiguredModelProviders`, installed at boot by

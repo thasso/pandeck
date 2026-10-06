@@ -15,6 +15,7 @@ import { hub } from "./hub.ts";
 import { resolveWorktreeRow } from "./worktrees/worktreeResolve.ts";
 import { knowledgeFiles, type KbFileInfo } from "./knowledgeBaseIndex.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
+import { knowledgeBaseEnabled } from "./knowledgeBaseSettings.ts";
 import { knowledgeLegacyPath } from "./knowledgeLegacyLinks.ts";
 
 /**
@@ -34,11 +35,12 @@ export async function resolvePaObjectLinks(
   )
     ? await hub.listSessions({ includeArchived: true })
     : [];
-  const knowledge = unique.some(
-    (uri) => parsePaObjectLink(uri)?.objectType === "knowledge",
-  )
-    ? await knowledgeFiles(new KnowledgeBaseStore()).catch(() => null)
-    : null;
+  // Off, the Knowledge Base answers nothing: its links read as unknown.
+  const knowledge =
+    knowledgeBaseEnabled() &&
+    unique.some((uri) => parsePaObjectLink(uri)?.objectType === "knowledge")
+      ? await knowledgeFiles(new KnowledgeBaseStore()).catch(() => null)
+      : null;
   return Promise.all(unique.map((uri) => resolveOne(uri, sessions, knowledge)));
 }
 

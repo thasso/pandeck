@@ -40,6 +40,7 @@ const ALL_OFF = {
   github: false,
   forgejo: false,
   browserRawMcp: false,
+  knowledgeBase: false,
 } as const;
 
 describe("integration tool exposure", () => {
@@ -52,7 +53,25 @@ describe("integration tool exposure", () => {
     assert.ok(!names.has("slack_search"));
     assert.ok(!names.has("github_list_notifications"));
     assert.ok(names.has("current_time"));
-    assert.ok(names.has("kb_search"));
+    assert.ok(!names.has("kb_search"));
+  });
+
+  test("the Knowledge Base setting switches every kb_* tool", () => {
+    const kb = (gates: typeof ALL_OFF | { knowledgeBase: true }) =>
+      [...namesFor({ ...ALL_OFF, ...gates })]
+        .filter((name) => name.startsWith("kb_"))
+        .sort();
+    assert.deepEqual(kb(ALL_OFF), []);
+    assert.deepEqual(kb({ knowledgeBase: true }), [
+      "kb_edit",
+      "kb_history",
+      "kb_list",
+      "kb_move",
+      "kb_read",
+      "kb_search",
+      "kb_show",
+      "kb_write",
+    ]);
   });
 
   test("registers the optional universe while keeping disabled tools inactive", () => {

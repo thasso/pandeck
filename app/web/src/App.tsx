@@ -343,7 +343,13 @@ import {
   useShortcuts,
   type ShortcutGroup,
 } from "./components/ui/shortcuts.tsx";
-import { ErrorNote, PaneLoading, Skeleton } from "./components/ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  PaneLoading,
+  Skeleton,
+} from "./components/ui/load.tsx";
+import { Button } from "./components/ui/Button.tsx";
 import { useDialogs } from "./components/ui/dialog.tsx";
 
 const SIDEBAR_MIN_WIDTH = 220;
@@ -1667,16 +1673,22 @@ function AppContent() {
   // refcounted registry as every other watch: the Worktrees browser lists this
   // worktree too, and whichever of the two let go first used to take the
   // other's watch with it.
+  // Off in Settings, the app offers no Knowledge Base: no section, no panel
+  // tab, and the route says so instead of reading a checkout that is not there.
+  const knowledgeEnabled = state.settings.knowledgeBase.enabled;
   const watchedWorktreeId =
     route.name === "worktrees"
       ? (route.id ?? null)
-      : route.name === "knowledge"
+      : route.name === "knowledge" && knowledgeEnabled
         ? KNOWLEDGE_WORKTREE_ID
         : null;
   // The right panel's Knowledge tab reads the KB checkout beside the route,
   // and needs its live status as much as the route does.
   const knowledgePanelVisible =
-    !mobileLayout && inspectorOpen && activeRightPanel === "knowledge";
+    knowledgeEnabled &&
+    !mobileLayout &&
+    inspectorOpen &&
+    activeRightPanel === "knowledge";
   const routeWorktreeIds = useMemo(
     () =>
       [
@@ -5983,6 +5995,7 @@ function AppContent() {
         knowledgeView={
           route.name === "knowledge" ? (route.view ?? "files") : null
         }
+        knowledgeEnabled={knowledgeEnabled}
         knowledgeUncommitted={knowledgeUncommittedCount(
           state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
         )}
@@ -6209,11 +6222,12 @@ function AppContent() {
     ) : (
       <Inspector relations={[]} actions={[]} />
     )
-  ) : route.name === "knowledge" ? (
+  ) : route.name === "knowledge" && knowledgeEnabled ? (
     <KnowledgeInspector
       status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
     />
   ) : route.name === "settings" ||
+    route.name === "knowledge" ||
     route.name === "usage" ||
     route.name === "backgroundTasks" ||
     route.name === "files" ||
@@ -6415,15 +6429,17 @@ function AppContent() {
       <RightPanelTabs
         inspector={rightPanelContent}
         knowledge={
-          <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
-            <KnowledgePanel
-              status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
-              prefs={prefs}
-              onUpdatePrefs={update}
-              openRequest={knowledgePanelOpenRequest}
-              onNavigate={navigate}
-            />
-          </Suspense>
+          knowledgeEnabled ? (
+            <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
+              <KnowledgePanel
+                status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
+                prefs={prefs}
+                onUpdatePrefs={update}
+                openRequest={knowledgePanelOpenRequest}
+                onNavigate={navigate}
+              />
+            </Suspense>
+          ) : undefined
         }
         worktree={
           <Suspense fallback={<PaneLoading label="Opening worktree…" />}>
@@ -6734,6 +6750,21 @@ function AppContent() {
                     );
                   })()}
                 </Suspense>
+              ) : route.name === "knowledge" && !knowledgeEnabled ? (
+                <EmptyBox
+                  className="m-6"
+                  action={
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => openSettingsSection("knowledge-base")}
+                    >
+                      Open Knowledge Base settings
+                    </Button>
+                  }
+                >
+                  The Knowledge Base is turned off.
+                </EmptyBox>
               ) : route.name === "knowledge" ? (
                 <Suspense
                   fallback={<LazySurfaceFallback label="Opening Knowledge…" />}
