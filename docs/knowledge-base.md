@@ -48,7 +48,8 @@ Links written before links were paths name an entry's retired `kb.id`
   (`DATA_DIR/app.sqlite3.pre-knowledge-path-links.bak`, `VACUUM INTO`) and
   recorded what it changed in `knowledge_link_migration`, which keeps it from
   running again. A run that fails part-way records nothing; the next boot
-  finishes it.
+  finishes it. A file or card it left alone (uncommitted edits, a refused memory
+  edit) keeps its old links, which resolve through the map like history's.
 
 Every `kb_*` path parameter also takes a `pa://knowledge/...` link, an old id
 link included. Moving a file does not rewrite links to it: `kb_move` keeps the
