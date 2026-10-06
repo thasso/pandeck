@@ -1368,6 +1368,12 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   from a document: it resolves the staged viewer route through
   `documentGrantTargets.resolveDocumentTargetPath` and attaches the file's name,
   absolute path and route, never its content.
+- `knowledgeLinkMigration.ts` is the one-time boot move of
+  `pa://knowledge/<kb.id>` links to path links (`rewriteLegacyKnowledgeLinks`,
+  `migrateKnowledgeLinks`); `knowledgeLegacyLinks.ts` answers what a retired id
+  names from the frozen `knowledge_legacy_links` map, and
+  `db/knowledgeLinkStore.ts` holds that map, the done-marker and the row
+  rewrites.
 - `tools/knowledge/knowledgeBaseTools.ts` owns the KB agent tools: `kb_search`,
   `kb_read` (windowed text, binary files answered with their path), `kb_list`,
   `kb_write` (text, base64, or a `sessionAttachments` id copied server-side),

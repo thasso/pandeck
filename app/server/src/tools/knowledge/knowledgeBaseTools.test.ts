@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, test } from "vitest";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { KnowledgeBaseStore } from "../../knowledgeBaseStore.ts";
 import { stageSessionAttachment } from "../../sessionAttachments.ts";
+import { knowledgeLinkStore } from "../../db/knowledgeLinkStore.ts";
+import { knowledgeLegacyPath } from "../../knowledgeLegacyLinks.ts";
 import {
   kbEditTool,
   kbHistoryTool,
@@ -220,6 +222,32 @@ describe("writing", () => {
       kbWriteTool.execute({ path: "x.md", content: "x", reason: " " }, ctx),
       /reason is required/,
     );
+  });
+});
+
+describe("links", () => {
+  test("takes a pa://knowledge link, old id links included, and follows moves", async () => {
+    await write("old/plan.md", "# Plan\n");
+    knowledgeLinkStore.putLegacyLinks(
+      new Map([["kb-tools-plan", "old/plan.md"]]),
+    );
+    for (const path of [
+      "pa://knowledge/old/plan.md",
+      "pa://knowledge/kb-tools-plan",
+    ])
+      assert.equal(
+        payload(await kbReadTool.execute({ path }, ctx)).path,
+        "old/plan.md",
+      );
+    await assert.rejects(
+      kbReadTool.execute({ path: "pa://task/1" }, ctx),
+      /not a pa:\/\/knowledge link/,
+    );
+    await kbMoveTool.execute(
+      { from: "old", to: "archive", reason: "archive" },
+      ctx,
+    );
+    assert.equal(knowledgeLegacyPath("kb-tools-plan"), "archive/plan.md");
   });
 });
 

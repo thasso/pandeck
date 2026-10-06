@@ -15,6 +15,7 @@ import { hub } from "./hub.ts";
 import { resolveWorktreeRow } from "./worktrees/worktreeResolve.ts";
 import { knowledgeFiles, type KbFileInfo } from "./knowledgeBaseIndex.ts";
 import { KnowledgeBaseStore } from "./knowledgeBaseStore.ts";
+import { knowledgeLegacyPath } from "./knowledgeLegacyLinks.ts";
 
 /**
  * Compact resolver for first-class `pa://` object links.
@@ -94,10 +95,12 @@ async function resolveOne(
       // say "unknown" rather than draw a broken link.
       if (!knowledge)
         return { ...fallbackPaObjectResolution(parsed), existence: "unknown" };
-      const file =
-        knowledge.find((candidate) => candidate.path === parsed.id) ??
-        // A link from before links were paths names the entry's `kb.id`.
-        knowledge.find((candidate) => candidate.legacyId === parsed.id);
+      // A link from before links were paths names a retired entry id.
+      const legacyPath = knowledgeLegacyPath(parsed.id, knowledge);
+      const file = knowledge.find(
+        (candidate) =>
+          candidate.path === parsed.id || candidate.path === legacyPath,
+      );
       if (!file) return resolved(parsed, undefined, false);
       return {
         ...resolved(parsed, file.title, true),

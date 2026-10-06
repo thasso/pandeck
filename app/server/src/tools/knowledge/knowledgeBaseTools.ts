@@ -5,9 +5,16 @@ import {
   type ToolResult,
 } from "../../mcp/tool.ts";
 import type { KnowledgeEntryCard } from "@assistant/shared";
-import { knowledgeFileLink } from "@assistant/shared/objectLinks";
+import {
+  knowledgeFileLink,
+  parsePaObjectLink,
+} from "@assistant/shared/objectLinks";
 import { readSessionAttachmentBytes } from "../../sessionAttachments.ts";
 import { normalizeKnowledgeRelativePath } from "../../knowledgeBaseContract.ts";
+import {
+  followKnowledgeMove,
+  knowledgeLegacyPath,
+} from "../../knowledgeLegacyLinks.ts";
 import {
   knowledgeFile,
   knowledgeFiles,
@@ -67,10 +74,21 @@ function clampLimit(
   return Math.min(Math.floor(value), cap);
 }
 
+/**
+ * A KB path from the caller: a relative path, or a `pa://knowledge/...` link —
+ * one that names a path, or an older one that names a retired entry id.
+ */
 function requiredPath(value: string | undefined, name = "path"): string {
+  let raw = value?.trim() ?? "";
+  if (raw.startsWith("pa://")) {
+    const link = parsePaObjectLink(raw);
+    if (link?.objectType !== "knowledge")
+      throw new KnowledgeBaseError(`${name} is not a pa://knowledge link.`);
+    raw = knowledgeLegacyPath(link.id) ?? link.id;
+  }
   let path: string;
   try {
-    path = normalizeKnowledgeRelativePath(value ?? "");
+    path = normalizeKnowledgeRelativePath(raw);
   } catch (err) {
     throw new KnowledgeBaseError((err as Error).message);
   }
@@ -226,7 +244,7 @@ export const kbReadTool = defineAgentTool<{
   label: "KB: Read",
   searchHint: "knowledge base kb read file note entry content",
   description:
-    "Read one Knowledge Base text file, from startLine, up to maxChars; a longer file says where to continue (nextStartLine). Read-only. A binary file (PDF, image, spreadsheet) returns its size and absolute path instead: convert a PDF with convert_pdf or a spreadsheet with convert_xlsx (kbPath).",
+    "Read one Knowledge Base text file (by path or pa://knowledge link), from startLine, up to maxChars; a longer file says where to continue (nextStartLine). Read-only. A binary file (PDF, image, spreadsheet) returns its size and absolute path instead: convert a PDF with convert_pdf or a spreadsheet with convert_xlsx (kbPath).",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -493,6 +511,7 @@ export const kbMoveTool = defineAgentTool<{
     const from = requiredPath(params.from, "from");
     const to = requiredPath(params.to, "to");
     const commit = await store().move(from, to, commitMeta(ctx, params));
+    followKnowledgeMove(from, to);
     return jsonResult({ action: "move", from, to, ...commitRow(commit) });
   },
 });

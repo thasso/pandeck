@@ -33,9 +33,27 @@ The knowledge type is the one `pa://` type whose id may span several segments;
 (`docs/document-presentation.md`).
 
 Links written before links were paths name an entry's retired `kb.id`
-(`pa://knowledge/kb-acme-plan`). The resolver (`objectLinkResolver.ts`) finds
-them through the file whose frontmatter still carries that id. Moving a file
-does not rewrite links to it: `kb_move` says so, and the agent updates them.
+(`pa://knowledge/kb-acme-plan`). A one-time boot task
+(`app/server/src/knowledgeLinkMigration.ts`) moved them to paths:
+
+- it froze every id → path pair the KB's frontmatter carried in the
+  `knowledge_legacy_links` table, which keeps the links left in HISTORY —
+  session transcripts, memory snapshots, workflow state, PR cards — resolving
+  (`knowledgeLegacyLinks.ts`), whatever later happens to the frontmatter;
+- it rewrote the links in the text people and agents still edit: the KB's own
+  files (one commit, skipping any file with uncommitted edits), Task
+  descriptions and comments (a revision bump, not an edit: `updated_at` is
+  kept), and active memory cards (an ordinary memory edit);
+- it took a consistent copy of the database first
+  (`DATA_DIR/app.sqlite3.pre-knowledge-path-links.bak`, `VACUUM INTO`) and
+  recorded what it changed in `knowledge_link_migration`, which keeps it from
+  running again. A run that fails part-way records nothing; the next boot
+  finishes it. A file or card it left alone (uncommitted edits, a refused memory
+  edit) keeps its old links, which resolve through the map like history's.
+
+Every `kb_*` path parameter also takes a `pa://knowledge/...` link, an old id
+link included. Moving a file does not rewrite links to it: `kb_move` keeps the
+frozen map current and says so, and the agent updates the links it finds.
 
 ## Git
 

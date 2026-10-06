@@ -398,6 +398,25 @@ export class KnowledgeBaseStore {
     await gitOptional(["clean", "-fdq", "--", ...paths], this.root);
   }
 
+  /** Every path with uncommitted changes, untracked files included. */
+  async uncommittedPaths(): Promise<Set<string>> {
+    await this.ensureInitialized();
+    const status = await git(
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      this.root,
+    );
+    const paths = new Set<string>();
+    const records = status.stdout.split("\0");
+    for (let i = 0; i < records.length; i++) {
+      const record = records[i] ?? "";
+      if (record.length < 4) continue;
+      paths.add(record.slice(3));
+      // A rename's record is followed by its source path.
+      if (record[0] === "R" || record[0] === "C") paths.add(records[++i] ?? "");
+    }
+    return paths;
+  }
+
   /** Read a file's text. */
   async readText(path: string): Promise<string> {
     await this.ensureInitialized();

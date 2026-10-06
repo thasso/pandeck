@@ -176,6 +176,7 @@ import {
 import { registerPdfClaudeFallback } from "./pdfClaudeFallback.ts";
 import { startPackageProxyIfEnabled } from "./packageProxy/packageProxy.ts";
 import { bootStep } from "./bootStep.ts";
+import { migrateKnowledgeLinks } from "./knowledgeLinkMigration.ts";
 import {
   reconcileBackgroundWorkOnBoot,
   sweepBackgroundTaskOutputTemps,
@@ -1888,6 +1889,18 @@ server.listen(PORT, HOST, () => {
     );
   }
   registerPdfClaudeFallback();
+  // One-time: Knowledge links from entry ids to file paths. Best-effort; a
+  // failure is retried on the next start.
+  void migrateKnowledgeLinks()
+    .then((summary) => {
+      if (summary)
+        console.log(
+          `[knowledge] links now name file paths: ${JSON.stringify(summary)}`,
+        );
+    })
+    .catch((err) =>
+      console.warn("[knowledge] link migration failed:", errorText(err)),
+    );
   void warmCredentialProfileModelRuntimes().catch((err) =>
     console.warn("[models] credential profile warm-up failed:", errorText(err)),
   );
