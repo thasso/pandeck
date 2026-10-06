@@ -51,7 +51,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,104 |
 | `tools:eager:schemas` | tools | yes | 8,451 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 131,664 |
+| `tools:deferred:universe` | tools | no | 131,697 |
 
 ## assistant — claude
 
@@ -73,7 +73,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,732 |
 | `tools:eager:schemas` | tools | yes | 8,058 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 132,483 |
+| `tools:deferred:universe` | tools | no | 132,516 |
 
 ## personal-assistant — pi
 
@@ -99,7 +99,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,104 |
 | `tools:eager:schemas` | tools | yes | 8,451 |
 | `tools:eager:harness-builtin` | tools | yes | 0 |
-| `tools:deferred:universe` | tools | no | 136,044 |
+| `tools:deferred:universe` | tools | no | 136,077 |
 
 ## personal-assistant — claude
 
@@ -120,7 +120,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 1,732 |
 | `tools:eager:schemas` | tools | yes | 8,058 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 136,917 |
+| `tools:deferred:universe` | tools | no | 136,950 |
 
 ## workshop — pi
 
@@ -145,7 +145,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,905 |
 | `tools:eager:schemas` | tools | yes | 10,743 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 161,636 |
+| `tools:deferred:universe` | tools | no | 161,669 |
 
 ## workshop — claude
 
@@ -165,7 +165,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,411 |
 | `tools:eager:schemas` | tools | yes | 9,206 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 162,815 |
+| `tools:deferred:universe` | tools | no | 162,848 |
 
 ## workflow-coordinator — pi
 
@@ -225,7 +225,7 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 5,731 |
 | `tools:eager:schemas` | tools | yes | 10,457 |
 | `tools:eager:harness-builtin` | tools | yes | 3,583 |
-| `tools:deferred:universe` | tools | no | 160,453 |
+| `tools:deferred:universe` | tools | no | 160,486 |
 
 ## developer — claude
 
@@ -245,4 +245,4 @@ sizes only.
 | `tools:eager:descriptions` | tools | yes | 2,237 |
 | `tools:eager:schemas` | tools | yes | 8,920 |
 | `tools:eager:harness-builtin` | tools | no | 0 |
-| `tools:deferred:universe` | tools | no | 161,623 |
+| `tools:deferred:universe` | tools | no | 161,656 |
