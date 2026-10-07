@@ -13,6 +13,11 @@ export interface ComposerLedgeProps {
    * above it; `bottom` mirrors it under the card, tucked behind its lower edge.
    */
   edge?: "top" | "bottom";
+  /**
+   * A top strip that is part of typing (the slash-command menu) stays up while
+   * the phone keyboard is; the resting strips step aside for it.
+   */
+  keepWithKeyboard?: boolean;
   children: ReactNode;
 }
 
@@ -37,13 +42,14 @@ export interface ComposerLedgeProps {
 export function ComposerLedge({
   joined,
   edge = "top",
+  keepWithKeyboard = false,
   children,
 }: ComposerLedgeProps) {
   const edgeClass =
     edge === "top"
       ? // Stepped aside while the phone keyboard is up: nothing on the shelf
         // is needed mid-sentence, and that height is the transcript's.
-        `rounded-t-xl border-b-0 in-data-[keyboard-open]:hidden ${joined ? "-mb-4 pb-4" : ""}`
+        `rounded-t-xl border-b-0 ${keepWithKeyboard ? "" : "in-data-[keyboard-open]:hidden"} ${joined ? "-mb-4 pb-4" : ""}`
       : `rounded-b-xl border-t-0 ${joined ? "-mt-4 pt-4" : ""}`;
   return (
     <div

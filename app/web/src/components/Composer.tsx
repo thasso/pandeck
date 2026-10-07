@@ -2122,7 +2122,56 @@ export const Composer = memo(function Composer({
             />
           </ChatDockPanel>
         ) : null}
-        {ledge ? <ComposerLedge joined={!hidden}>{ledge}</ComposerLedge> : null}
+        {slashMenuOpen ? (
+          // The command menu is a strip of its own on the shelf while a slash
+          // is typed, standing in for the resting strips rather than floating
+          // over them; it stays up with the phone keyboard, which it is for.
+          <ComposerLedge joined={!hidden} keepWithKeyboard>
+            <Command
+              shouldFilter={false}
+              value={slash.items[slashIndex]?.name ?? ""}
+              onValueChange={(name) => {
+                const index = slash.items.findIndex((cmd) => cmd.name === name);
+                if (index >= 0) setSlashIndex(index);
+              }}
+              className="h-auto rounded-none! bg-transparent p-0"
+            >
+              <div className="h-7 shrink-0 truncate border-b px-2.5 text-xs leading-7 text-muted-foreground">
+                ↑↓ to navigate · ↵ to select · esc to dismiss ·&nbsp;
+                <span className="font-mono">//</span>&nbsp;sends a literal slash
+              </div>
+              <CommandList className="max-h-64 divide-y">
+                {slash.items.map((cmd, index) => (
+                  <CommandItem
+                    key={cmd.name}
+                    value={cmd.name}
+                    onSelect={() => applySlash(cmd)}
+                    onMouseEnter={() => setSlashIndex(index)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applySlash(cmd);
+                    }}
+                    className="items-start gap-3 rounded-none px-2.5"
+                  >
+                    <span className="mt-0.5 font-mono text-sm text-primary">
+                      /{cmd.name}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm text-foreground">
+                        {cmd.description}
+                      </span>
+                      <span className="block truncate font-mono text-sm text-muted-foreground">
+                        {cmd.usage}
+                      </span>
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          </ComposerLedge>
+        ) : ledge ? (
+          <ComposerLedge joined={!hidden}>{ledge}</ComposerLedge>
+        ) : null}
         <InputGroup
           ref={composerRef}
           onPointerDownCapture={(e) => {
@@ -2260,52 +2309,6 @@ export const Composer = memo(function Composer({
                 }
                 className={COMPOSER_FIELD_CLASS}
               />
-
-              {slashMenuOpen && (
-                <Command
-                  shouldFilter={false}
-                  value={slash.items[slashIndex]?.name ?? ""}
-                  onValueChange={(name) => {
-                    const index = slash.items.findIndex(
-                      (cmd) => cmd.name === name,
-                    );
-                    if (index >= 0) setSlashIndex(index);
-                  }}
-                  className="absolute bottom-full left-3 right-3 z-40 mb-2 h-auto w-auto"
-                >
-                  <div className="text-xs text-muted-foreground">
-                    ↑↓ to navigate · ↵ to select · esc to dismiss ·{" "}
-                    <span className="font-mono">//</span> sends a literal slash
-                  </div>
-                  <CommandList>
-                    {slash.items.map((cmd, index) => (
-                      <CommandItem
-                        key={cmd.name}
-                        value={cmd.name}
-                        onSelect={() => applySlash(cmd)}
-                        onMouseEnter={() => setSlashIndex(index)}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          applySlash(cmd);
-                        }}
-                        className="items-start gap-3"
-                      >
-                        <span className="mt-0.5 font-mono text-sm text-primary">
-                          /{cmd.name}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm text-foreground">
-                            {cmd.description}
-                          </span>
-                          <span className="block truncate font-mono text-sm text-muted-foreground">
-                            {cmd.usage}
-                          </span>
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandList>
-                </Command>
-              )}
 
               {attachments.length > 0 && (
                 // `pt-1.5 pr-1.5` leaves room for each tile's remove button,
