@@ -197,7 +197,9 @@ export const TurnStatsRow = memo(function TurnStatsRow({
           <Button
             variant="ghost"
             size="sm"
-            className="h-auto w-full flex-col items-start gap-0.5"
+            // Open is not a hover state: ghost styles `aria-expanded` like
+            // one, so reset it and keep only the real hover.
+            className="h-auto w-full flex-col items-start gap-0.5 aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50"
           />
         }
       >
@@ -290,8 +292,10 @@ export const TurnStatsRow = memo(function TurnStatsRow({
         </div>
       </CollapsibleTrigger>
 
+      {/* The trigger's own `px-2.5` plus its rows' `pl-4`, so the detail
+          lines up with the Session and Context lines above it. */}
       {expanded && (
-        <CollapsibleContent className="mt-0.5 flex flex-col gap-0.5 pl-4">
+        <CollapsibleContent className="mt-0.5 flex flex-col gap-0.5 pr-2.5 pl-6.5">
           <SectionLabel>Turn</SectionLabel>
           <Detail
             label="billed input"
