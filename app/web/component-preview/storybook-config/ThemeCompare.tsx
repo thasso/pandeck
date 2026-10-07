@@ -5,7 +5,9 @@ import {
 } from "../PaPreviewRoot.tsx";
 import type { PreviewTheme } from "../storyCatalog.ts";
 
-export const PALETTES = [
+type Options = [string, ...string[]];
+
+export const PALETTES: Options = [
   "app",
   "neutral",
   "zinc",
@@ -17,7 +19,7 @@ export const PALETTES = [
   "mist",
   "taupe",
 ];
-export const ACCENTS = [
+export const ACCENTS: Options = [
   "none",
   "blue",
   "indigo",
@@ -27,7 +29,7 @@ export const ACCENTS = [
   "orange",
   "rose",
 ];
-export const RADII = ["app", "0", "0.25", "0.375", "0.5", "0.75", "1"];
+export const RADII: Options = ["app", "0", "0.25", "0.375", "0.5", "0.75", "1"];
 
 export type CompareMode = "off" | "modes" | "palettes" | "accents" | "all";
 

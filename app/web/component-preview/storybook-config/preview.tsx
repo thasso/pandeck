@@ -11,7 +11,11 @@ import {
 } from "./ThemeCompare.tsx";
 import "../preview.css";
 
-function pick<T extends string>(value: unknown, options: readonly T[]): T {
+/** `value` when it is one of `options`, else the first option (the default). */
+function pick<T extends string>(
+  value: unknown,
+  options: readonly [T, ...T[]],
+): T {
   return options.includes(value as T) ? (value as T) : options[0];
 }
 

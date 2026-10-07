@@ -14,7 +14,7 @@ export interface PreviewAppearance {
   radius: string;
 }
 
-export const APP_APPEARANCE: PreviewAppearance = {
+const APP_APPEARANCE: PreviewAppearance = {
   palette: "app",
   accent: "none",
   radius: "app",
