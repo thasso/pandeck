@@ -132,7 +132,6 @@ import { useLocationHash } from "./hooks/useLocationHash.ts";
 import { workflowRunPath } from "./lib/workflowRunRoutes.ts";
 import {
   backgroundTasksPath,
-  calendarPath,
   isSectionIndexRoute,
   knowledgePath,
   PERMANENT_ASSISTANT_PATH,
@@ -183,9 +182,7 @@ import {
   reviewContextForSession,
   sessionContextForWorktree,
 } from "./lib/sessionHandoff.ts";
-import { useCalendar } from "./hooks/useCalendar.ts";
 import type { BacklogState } from "./hooks/useBacklog.ts";
-import { todayIso } from "./components/calendar/calendarDates.ts";
 import { UserTimeZoneContext } from "./hooks/useUserTimeZone.ts";
 import {
   hasModeAxis,
@@ -487,11 +484,6 @@ const KnowledgePanel = lazy(() =>
     default: module.KnowledgePanel,
   })),
 );
-const CalendarPage = lazy(() =>
-  import("./components/calendar/CalendarPage.tsx").then((module) => ({
-    default: module.CalendarPage,
-  })),
-);
 const UsagePage = lazy(() =>
   import("./components/UsagePage.tsx").then((module) => ({
     default: module.UsagePage,
@@ -510,11 +502,6 @@ const FileViewerPage = lazy(() =>
 const SessionArtifactViewer = lazy(() =>
   import("./components/SessionArtifactViewer.tsx").then((module) => ({
     default: module.SessionArtifactViewer,
-  })),
-);
-const CalendarDetailPanel = lazy(() =>
-  import("./components/calendar/CalendarDetailPanel.tsx").then((module) => ({
-    default: module.CalendarDetailPanel,
   })),
 );
 const PullRequestDetailPage = lazy(() =>
@@ -1226,39 +1213,7 @@ function AppContent() {
     void notifyWindowReady(prefs.theme);
   }, [state.hydrated, prefs.theme]);
   useApnsRegistration();
-
-  const calendarRoute = route.name === "calendar";
-  // The view is route-driven, but a bare /calendar (no view in the URL) falls
-  // back to the last-used view (persisted), and every explicit view in the URL
-  // is remembered so reopening the calendar restores it.
-  const calendarView =
-    route.name === "calendar"
-      ? (route.view ?? prefs.calendarView)
-      : prefs.calendarView;
   const userTimeZone = state.settings.profile.effectiveTimeZone;
-  const calendarController = useCalendar({
-    active: calendarRoute,
-    view: calendarView,
-    selectedDate:
-      route.name === "calendar"
-        ? (route.date ?? todayIso(userTimeZone))
-        : todayIso(userTimeZone),
-    timeZone: userTimeZone,
-    showTempo: prefs.calendarShowTempo,
-    onNavigate: useCallback(
-      (view: "month" | "week" | "day", date: string) =>
-        navigate(calendarPath(view, date)),
-      [navigate],
-    ),
-  });
-  useEffect(() => {
-    if (
-      route.name === "calendar" &&
-      route.view &&
-      route.view !== prefs.calendarView
-    )
-      update({ calendarView: route.view });
-  }, [route, prefs.calendarView, update]);
 
   // Sidebar section selection is shell UI state, decoupled from the route
   // (ui-shell.md navigation rules). The entry route only seeds it when nothing
@@ -1614,12 +1569,12 @@ function AppContent() {
   );
 
   // Index routes (nav-bar taps, back from an object screen, typed URLs) address a
-  // section itself, so they reveal it; Settings and Calendar reveal from any of
-  // their routes because their browsers are the section's own view list. Object
+  // section itself, so they reveal it; Settings reveals from any of its
+  // routes because its browser is the section's own view list. Object
   // detail links deliberately do NOT move the sidebar (navigation rule 2:
   // content links preserve sidebar state).
   const revealedSection: SidebarSection | null =
-    browserScreenRoute || route.name === "settings" || route.name === "calendar"
+    browserScreenRoute || route.name === "settings"
       ? canonicalSidebarSection(route)
       : null;
   useEffect(() => {
@@ -2145,8 +2100,8 @@ function AppContent() {
 
   // Primary-nav selection. On mobile the nav bar lives on the browser screen, so
   // picking a section stays in the browser: it navigates to that section's index
-  // route. On desktop the sidebar and main pane are decoupled, so Settings and
-  // Calendar (full main-pane surfaces) navigate and object sections only change
+  // route. On desktop the sidebar and main pane are decoupled, so Settings
+  // navigates and object sections only change
   // what the sidebar browses; leaving Settings (or the sectionless Usage surface)
   // returns to the chat we were in.
   const handleSidebarSectionChange = useCallback(
@@ -2156,8 +2111,6 @@ function AppContent() {
         navigate(sectionIndexPath(section));
       } else if (section === "settings") {
         if (route.name !== "settings") navigate(settingsPath("appearance"));
-      } else if (section === "calendar") {
-        if (route.name !== "calendar") navigate(calendarPath());
       } else if (section === "knowledge") {
         if (route.name === "settings" || route.name === "usage")
           navigate(knowledgePath());
@@ -2377,11 +2330,6 @@ function AppContent() {
   // The sidebar is memoized, so every handler it takes must be stable — an
   // inline arrow re-renders the whole left pane on each App render, which
   // during a streaming turn means up to ~60 times a second.
-  const openCalendarView = useCallback(
-    (view: "month" | "week" | "day") =>
-      navigate(calendarPath(view, todayIso(userTimeZone))),
-    [navigate, userTimeZone],
-  );
   const openProject = useCallback(
     (id: string) => navigate(projectPath(id)),
     [navigate],
@@ -5601,9 +5549,7 @@ function AppContent() {
     );
   }
 
-  // The chat surface (Composer + MessageList / pending / hero), hoisted so it can
-  // render either in the main column (normal routes) or inside the Calendar
-  // page's Assistant tab (reusing the same active session — see calendar-view).
+  // The chat surface includes the composer, transcript and pending/hero states.
   const chatSurface = (() => {
     const composerEl = (
       <>
@@ -5924,17 +5870,6 @@ function AppContent() {
     );
   })();
 
-  // The calendar's right-side detail pane: the selected event's details and a
-  // New session action.
-  const calendarDetailEl = (
-    <Suspense fallback={<LazySurfaceFallback label="Opening details…" />}>
-      <CalendarDetailPanel
-        calendar={calendarController}
-        onNewSession={() => navigate(SESSIONS_CREATE_PATH)}
-      />
-    </Suspense>
-  );
-
   // The left sidebar's navigation callbacks. Opening an object just navigates: on
   // mobile that object route IS what replaces the browser screen (ui-shell.md,
   // Small Screens), and on desktop the panel stays open beside it.
@@ -5961,7 +5896,6 @@ function AppContent() {
         section={sidebarSection}
         onSectionChange={handleSidebarSectionChange}
         mobile={mobileLayout}
-        onOpenCalendarView={openCalendarView}
         onStartSessionForProject={startSessionForProject}
         tasksFresh={state.taskListFresh}
         projectsFresh={state.projectListFresh}
@@ -6086,348 +6020,353 @@ function AppContent() {
     route.name === "tasks" && route.id
       ? backlogTasks.find((t) => t.id === route.id)
       : undefined;
-  const rightPanelContent = calendarRoute ? (
-    calendarDetailEl
-  ) : route.name === "tasks" && route.id ? (
-    <TaskInspector
-      task={inspectedTask}
-      tasks={backlogTasks}
-      sessions={state.sessions}
-      openers={inspectorOpeners}
-      onStartSession={startSessionForTask}
-      // Only a Task with a Project can have a run worktree provisioned; the
-      // server still owns the real git-backed check and refuses with a
-      // readable error inside the sheet.
-      onRunWorkflow={
-        inspectedTask?.projectId
-          ? (taskId) => setWorkflowStartTaskId(taskId)
-          : undefined
-      }
-      onArchive={(taskId) => {
-        if (runTaskArchive([taskId], taskArchiveContext, actions))
-          openSidebarSection("tasks");
-      }}
-      onDelete={(taskId) => {
-        if (!inspectedTask) return;
-        // The same act as the Backlog's, through the same rules: subtree-shaped
-        // and deepest first, with the count declared in the question
-        // (`lib/taskDelete.ts`). Deleting the head alone from here would scatter
-        // the subtasks the tree's own delete removes.
-        const doomed = deleteSet(taskArchiveContext.tasks, [taskId]);
-        const { title, body } = deleteConfirmation(
-          taskArchiveContext.tasks,
-          [taskId],
-          doomed,
-        );
-        void dialogs
-          .confirm({ title, body, confirmLabel: "Delete", danger: true })
-          .then((confirmed) => {
-            if (!confirmed) return;
-            for (const id of doomed) actions.deleteTask(id);
+  const rightPanelContent =
+    route.name === "tasks" && route.id ? (
+      <TaskInspector
+        task={inspectedTask}
+        tasks={backlogTasks}
+        sessions={state.sessions}
+        openers={inspectorOpeners}
+        onStartSession={startSessionForTask}
+        // Only a Task with a Project can have a run worktree provisioned; the
+        // server still owns the real git-backed check and refuses with a
+        // readable error inside the sheet.
+        onRunWorkflow={
+          inspectedTask?.projectId
+            ? (taskId) => setWorkflowStartTaskId(taskId)
+            : undefined
+        }
+        onArchive={(taskId) => {
+          if (runTaskArchive([taskId], taskArchiveContext, actions))
             openSidebarSection("tasks");
-          });
-      }}
-    >
-      {inspectedTask && (
-        <TaskContextSections
-          task={inspectedTask}
-          projects={projects.filter((p) => p.status !== "archived")}
-          projectsById={projectsById}
-          jiraHost={state.settings.jira.jiraHost}
-          forgejoBaseUrl={state.settings.forgejo.baseUrl}
-          onPatch={(patch) =>
-            actions.saveTask({
-              id: inspectedTask.id,
-              status: inspectedTask.status,
-              ...patch,
-            })
-          }
-          onOpenProject={(id) => navigateFromInspector(projectPath(id))}
-        />
-      )}
-    </TaskInspector>
-  ) : route.name === "projects" && route.id ? (
-    <ProjectInspector
-      project={
-        selectedProjectDetailState
-          ? (dataOf(selectedProjectDetailState) ?? undefined)
-          : undefined
-      }
-      projects={projects}
-      tasks={backlogTasks}
-      sessions={state.sessions}
-      worktreeState={selectedProjectWorktreeState}
-      onReloadWorktrees={reloadWorktrees}
-      openers={inspectorOpeners}
-      onStartSession={startSessionForProject}
-      onSave={(patch) => actions.saveProject(route.id!, patch)}
-      mutationStates={projectPageMutationCache.current.value}
-      onArchive={() => {
-        actions.archiveProject(route.id!);
-      }}
-      onDelete={() => {
-        const project = projects.find((candidate) => candidate.id === route.id);
-        void dialogs
-          .confirm({
-            title: `Delete Project “${project?.name ?? route.id}”?`,
-            body: "This removes it from the registry and cannot be undone.",
-            confirmLabel: "Delete",
-            danger: true,
-          })
-          .then((confirmed) => {
-            if (confirmed) actions.deleteProject(route.id!);
-          });
-      }}
-    />
-  ) : route.name === "worktrees" && route.id ? (
-    <WorktreeInspector
-      // Keyed by the worktree it inspects. The panel survives navigation
-      // otherwise, and its flows hold per-worktree state — a retirement's
-      // consent-bearing refusal above all, which under another branch would
-      // enable a forced retirement there (`worktree/useWorktreeRetire.tsx`).
-      key={route.id}
-      worktree={state.worktrees?.find((item) => item.id === route.id)}
-      status={state.worktreeStatuses[route.id]}
-      projects={projects}
-      sessions={state.sessions}
-      sessionsFresh={state.sessionListFresh}
-      comments={state.worktreeComments[route.id] ?? NO_WORKTREE_COMMENTS}
-      reviewSets={state.worktreeReviewSets[route.id] ?? NO_WORKTREE_REVIEW_SETS}
-      onOpenComment={(commentId) => openWorktreeComment(route.id!, commentId)}
-      openers={inspectorOpeners}
-      onStartSession={startSessionInWorktree}
-      onMerge={(id) =>
-        setWorktreeOverlay({
-          createForProjectId: null,
-          mergeWorktreeId: id,
-          removeWorktreeId: null,
-        })
-      }
-      onRemove={(id) =>
-        setWorktreeOverlay({
-          createForProjectId: null,
-          mergeWorktreeId: null,
-          removeWorktreeId: id,
-        })
-      }
-    />
-  ) : route.name === "pullRequests" ? (
-    pullRequestTarget ? (
-      <PullRequestInspector
-        // Keyed by the pull request it inspects: the merge flow's refusal is
-        // consent-bearing, and under another pull request it would arm a
-        // forced checkout removal there
-        // (`pullRequest/usePullRequestMergeCleanup.tsx`).
-        key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
-        state={pullRequestDetail}
+        }}
+        onDelete={(taskId) => {
+          if (!inspectedTask) return;
+          // The same act as the Backlog's, through the same rules: subtree-shaped
+          // and deepest first, with the count declared in the question
+          // (`lib/taskDelete.ts`). Deleting the head alone from here would scatter
+          // the subtasks the tree's own delete removes.
+          const doomed = deleteSet(taskArchiveContext.tasks, [taskId]);
+          const { title, body } = deleteConfirmation(
+            taskArchiveContext.tasks,
+            [taskId],
+            doomed,
+          );
+          void dialogs
+            .confirm({ title, body, confirmLabel: "Delete", danger: true })
+            .then((confirmed) => {
+              if (!confirmed) return;
+              for (const id of doomed) actions.deleteTask(id);
+              openSidebarSection("tasks");
+            });
+        }}
+      >
+        {inspectedTask && (
+          <TaskContextSections
+            task={inspectedTask}
+            projects={projects.filter((p) => p.status !== "archived")}
+            projectsById={projectsById}
+            jiraHost={state.settings.jira.jiraHost}
+            forgejoBaseUrl={state.settings.forgejo.baseUrl}
+            onPatch={(patch) =>
+              actions.saveTask({
+                id: inspectedTask.id,
+                status: inspectedTask.status,
+                ...patch,
+              })
+            }
+            onOpenProject={(id) => navigateFromInspector(projectPath(id))}
+          />
+        )}
+      </TaskInspector>
+    ) : route.name === "projects" && route.id ? (
+      <ProjectInspector
+        project={
+          selectedProjectDetailState
+            ? (dataOf(selectedProjectDetailState) ?? undefined)
+            : undefined
+        }
         projects={projects}
-        joins={pullRequestJoins}
+        tasks={backlogTasks}
+        sessions={state.sessions}
+        worktreeState={selectedProjectWorktreeState}
+        onReloadWorktrees={reloadWorktrees}
+        openers={inspectorOpeners}
+        onStartSession={startSessionForProject}
+        onSave={(patch) => actions.saveProject(route.id!, patch)}
+        mutationStates={projectPageMutationCache.current.value}
+        onArchive={() => {
+          actions.archiveProject(route.id!);
+        }}
+        onDelete={() => {
+          const project = projects.find(
+            (candidate) => candidate.id === route.id,
+          );
+          void dialogs
+            .confirm({
+              title: `Delete Project “${project?.name ?? route.id}”?`,
+              body: "This removes it from the registry and cannot be undone.",
+              confirmLabel: "Delete",
+              danger: true,
+            })
+            .then((confirmed) => {
+              if (confirmed) actions.deleteProject(route.id!);
+            });
+        }}
+      />
+    ) : route.name === "worktrees" && route.id ? (
+      <WorktreeInspector
+        // Keyed by the worktree it inspects. The panel survives navigation
+        // otherwise, and its flows hold per-worktree state — a retirement's
+        // consent-bearing refusal above all, which under another branch would
+        // enable a forced retirement there (`worktree/useWorktreeRetire.tsx`).
+        key={route.id}
+        worktree={state.worktrees?.find((item) => item.id === route.id)}
+        status={state.worktreeStatuses[route.id]}
+        projects={projects}
+        sessions={state.sessions}
+        sessionsFresh={state.sessionListFresh}
+        comments={state.worktreeComments[route.id] ?? NO_WORKTREE_COMMENTS}
+        reviewSets={
+          state.worktreeReviewSets[route.id] ?? NO_WORKTREE_REVIEW_SETS
+        }
+        onOpenComment={(commentId) => openWorktreeComment(route.id!, commentId)}
         openers={inspectorOpeners}
         onStartSession={startSessionInWorktree}
-        onReview={startPullRequestReviewDraft}
-        onReload={pullRequestInventory.reload}
-      />
-    ) : (
-      <Inspector relations={[]} actions={[]} />
-    )
-  ) : route.name === "knowledge" && knowledgeEnabled ? (
-    <KnowledgeInspector
-      status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
-    />
-  ) : route.name === "settings" ||
-    route.name === "knowledge" ||
-    route.name === "usage" ||
-    route.name === "backgroundTasks" ||
-    route.name === "files" ||
-    route.name === "artifacts" ? (
-    <Inspector relations={[]} actions={[]} />
-  ) : (
-    <SessionInspector
-      sessionId={displayCurrentId}
-      originTask={sessionOriginTask}
-      relatedTasks={relatedGlobalTasks}
-      sessionTasks={sessionTasks}
-      forkOrigin={displaySession?.forkOrigin}
-      credentialProfile={(() => {
-        const profileId =
-          displaySessionListItem?.credentialProfileId ??
-          (!runtimeHasStarted ? credentialProfileId : undefined);
-        const profile = credentialProfiles.find(
-          (item) => item.id === profileId,
-        );
-        return profile
-          ? { name: profile.name, provider: profile.provider }
-          : undefined;
-      })()}
-      // Before the first prompt the runtime is still the staged selection, the
-      // same one the composer's pickers show.
-      model={
-        displaySession?.model ??
-        (runtimeHasStarted ? undefined : defaultNewSessionModel)
-      }
-      thinkingLevel={
-        displaySession?.thinkingLevel ??
-        (runtimeHasStarted ? undefined : defaultNewSessionThinking)
-      }
-      sessions={state.sessions}
-      projects={projects}
-      worktree={(() => {
-        const id = displaySession?.worktreeId;
-        if (!id) return undefined;
-        return (
-          state.worktrees?.find((item) => item.id === id) ?? {
-            id,
-            branch: displayWorktreeStatus?.branch ?? "worktree",
-          }
-        );
-      })()}
-      worktreeStatus={displayWorktreeStatus}
-      stagedRefs={stagedContextRefs}
-      openers={inspectorOpeners}
-      // Settling from the panel is the same command the inbox card sends,
-      // guarded by the same shared reason — the CLUSTER's, since the command
-      // shelves the peers this session coordinates along with it.
-      onSettle={
-        displaySessionListItem
-          ? () =>
-              settleSession(
-                displaySessionListItem.id,
-                displaySessionListItem.settledAt === undefined,
-              )
-          : undefined
-      }
-      settled={displaySessionListItem?.settledAt !== undefined}
-      {...(displaySessionListItem
-        ? (() => {
-            const { blocked } = sessionSettleCascade(
-              displaySessionListItem.id,
-              state.sessions,
-              state.workflowRuns,
-              state.workflowCards,
-            );
-            return blocked ? { settleBlockedReason: blocked } : {};
-          })()
-        : {})}
-      onRename={
-        displaySessionListItem
-          ? () => promptRenameSession(displaySessionListItem.id)
-          : undefined
-      }
-      onArchive={
-        displaySessionListItem
-          ? () => archiveSession(displaySessionListItem.id)
-          : undefined
-      }
-      onDelete={
-        displaySessionListItem
-          ? () => confirmDeleteSession(displaySessionListItem.id)
-          : undefined
-      }
-      // On mobile the dock is the session's action home, so the chat header's two
-      // controls fold in here: the worktree-diff button as an action and the
-      // transcript toggles as the View section. Desktop keeps its `⋯` menu.
-      onOpenWorktreeChanges={
-        mobileLayout && displayWorktreeId
-          ? () => navigate(worktreePath(displayWorktreeId, "changes"))
-          : undefined
-      }
-      // Mirrors the composer's /review guards: something to review, and never
-      // while the agent is streaming (a second agent on a live working tree).
-      onReviewWork={
-        displayHasUserPrompt && !displayStreaming
-          ? () => {
-              const error = startReviewSessionForSession();
-              if (error) showToast(error);
-            }
-          : undefined
-      }
-      // Taking a spawned peer over is explicit: messaging it is a poke and
-      // leaves its coordinator in charge.
-      onSetSpawnOwnership={
-        displaySessionListItem?.spawnedBySessionId
-          ? (ownership: SettableSpawnOwnership) =>
-              actions.setSpawnOwnership(displaySessionListItem.id, ownership)
-          : undefined
-      }
-      view={
-        mobileLayout && displayHasMessages
-          ? { ...transcriptView, onChange: updateTranscriptView }
-          : undefined
-      }
-    >
-      <SessionContextSections
-        sessionId={displaySession?.sessionId}
-        toolExposure={displaySession?.toolExposure}
-        activeSkills={displaySession?.activeSkills}
-        skillInvocations={displaySession?.skillInvocations}
-        skillLibrary={state.skillLibrary}
-        artifacts={sessionArtifacts}
-        pendingPostReloadContinuation={pendingPostReloadContinuation}
-        browserRuntimes={browserRuntimes}
-        peerPrompts={peerPrompts}
-        onExpandPeerPromptHistory={actions.requestPeerPromptHistory}
-        onOpenSession={openSession}
-        onRevealPeerPromptMessage={actions.revealPeerPromptMessage}
-        {...(peerPromptRevealPendingKey ? { peerPromptRevealPendingKey } : {})}
-        onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
-        approvalGrants={approvalGrants}
-        onRevokeApprovalGrant={actions.revokeApprovalGrant}
-      />
-      <BackgroundWorkSection
-        sessionId={displaySessionListItem?.id}
-        items={state.backgroundWorkItems}
-        activity={displaySessionListItem?.backgroundActivity}
-        artifacts={sessionArtifacts}
-        stopPending={backgroundStopPending}
-        onStop={actions.stopBackgroundWork}
-        onStopAll={actions.stopAllBackgroundWork}
-        onOpenRegistry={() => navigateFromInspector(backgroundTasksPath())}
-        protectedTurnWait={
-          displaySessionListItem
-            ? state.backgroundHostCloseWaiting.includes(
-                displaySessionListItem.id,
-              )
-            : false
+        onMerge={(id) =>
+          setWorktreeOverlay({
+            createForProjectId: null,
+            mergeWorktreeId: id,
+            removeWorktreeId: null,
+          })
+        }
+        onRemove={(id) =>
+          setWorktreeOverlay({
+            createForProjectId: null,
+            mergeWorktreeId: null,
+            removeWorktreeId: id,
+          })
         }
       />
-      <LoadedMemorySection
-        sessionId={displaySession?.sessionId}
-        hasAcceptedUserTurn={runtimeHasStarted}
-        stagedScope={{
-          persona: displayAgentType,
-          ...(pendingProjectContext
-            ? { projectId: pendingProjectContext }
-            : pendingTaskAttach
-              ? (() => {
-                  // Resolve the ACTUAL project from the authoritative task list rather
-                  // than just showing the Task's title (a title is not a scope).
-                  const task = backlogTasks.find(
-                    (t) => t.id === pendingTaskAttach.taskId,
-                  );
-                  if (!task)
-                    return {
-                      pendingTaskTitle: pendingTaskAttach.title,
-                      projectUnresolved: true as const,
-                    };
-                  return task.projectId
-                    ? {
-                        projectId: task.projectId,
-                        pendingTaskTitle: pendingTaskAttach.title,
-                      }
-                    : {
-                        projectIsGlobal: true as const,
-                        pendingTaskTitle: pendingTaskAttach.title,
-                      };
-                })()
-              : {}),
-        }}
-        memory={memory}
-        loadingEnabled={state.settings.memory.loadingEnabled}
-        maxCards={state.settings.memory.maxCards}
-        onOpenManager={() => navigateFromInspector(settingsPath("memory"))}
+    ) : route.name === "pullRequests" ? (
+      pullRequestTarget ? (
+        <PullRequestInspector
+          // Keyed by the pull request it inspects: the merge flow's refusal is
+          // consent-bearing, and under another pull request it would arm a
+          // forced checkout removal there
+          // (`pullRequest/usePullRequestMergeCleanup.tsx`).
+          key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
+          state={pullRequestDetail}
+          projects={projects}
+          joins={pullRequestJoins}
+          openers={inspectorOpeners}
+          onStartSession={startSessionInWorktree}
+          onReview={startPullRequestReviewDraft}
+          onReload={pullRequestInventory.reload}
+        />
+      ) : (
+        <Inspector relations={[]} actions={[]} />
+      )
+    ) : route.name === "knowledge" && knowledgeEnabled ? (
+      <KnowledgeInspector
+        status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
       />
-    </SessionInspector>
-  );
+    ) : route.name === "settings" ||
+      route.name === "knowledge" ||
+      route.name === "usage" ||
+      route.name === "backgroundTasks" ||
+      route.name === "files" ||
+      route.name === "artifacts" ? (
+      <Inspector relations={[]} actions={[]} />
+    ) : (
+      <SessionInspector
+        sessionId={displayCurrentId}
+        originTask={sessionOriginTask}
+        relatedTasks={relatedGlobalTasks}
+        sessionTasks={sessionTasks}
+        forkOrigin={displaySession?.forkOrigin}
+        credentialProfile={(() => {
+          const profileId =
+            displaySessionListItem?.credentialProfileId ??
+            (!runtimeHasStarted ? credentialProfileId : undefined);
+          const profile = credentialProfiles.find(
+            (item) => item.id === profileId,
+          );
+          return profile
+            ? { name: profile.name, provider: profile.provider }
+            : undefined;
+        })()}
+        // Before the first prompt the runtime is still the staged selection, the
+        // same one the composer's pickers show.
+        model={
+          displaySession?.model ??
+          (runtimeHasStarted ? undefined : defaultNewSessionModel)
+        }
+        thinkingLevel={
+          displaySession?.thinkingLevel ??
+          (runtimeHasStarted ? undefined : defaultNewSessionThinking)
+        }
+        sessions={state.sessions}
+        projects={projects}
+        worktree={(() => {
+          const id = displaySession?.worktreeId;
+          if (!id) return undefined;
+          return (
+            state.worktrees?.find((item) => item.id === id) ?? {
+              id,
+              branch: displayWorktreeStatus?.branch ?? "worktree",
+            }
+          );
+        })()}
+        worktreeStatus={displayWorktreeStatus}
+        stagedRefs={stagedContextRefs}
+        openers={inspectorOpeners}
+        // Settling from the panel is the same command the inbox card sends,
+        // guarded by the same shared reason — the CLUSTER's, since the command
+        // shelves the peers this session coordinates along with it.
+        onSettle={
+          displaySessionListItem
+            ? () =>
+                settleSession(
+                  displaySessionListItem.id,
+                  displaySessionListItem.settledAt === undefined,
+                )
+            : undefined
+        }
+        settled={displaySessionListItem?.settledAt !== undefined}
+        {...(displaySessionListItem
+          ? (() => {
+              const { blocked } = sessionSettleCascade(
+                displaySessionListItem.id,
+                state.sessions,
+                state.workflowRuns,
+                state.workflowCards,
+              );
+              return blocked ? { settleBlockedReason: blocked } : {};
+            })()
+          : {})}
+        onRename={
+          displaySessionListItem
+            ? () => promptRenameSession(displaySessionListItem.id)
+            : undefined
+        }
+        onArchive={
+          displaySessionListItem
+            ? () => archiveSession(displaySessionListItem.id)
+            : undefined
+        }
+        onDelete={
+          displaySessionListItem
+            ? () => confirmDeleteSession(displaySessionListItem.id)
+            : undefined
+        }
+        // On mobile the dock is the session's action home, so the chat header's two
+        // controls fold in here: the worktree-diff button as an action and the
+        // transcript toggles as the View section. Desktop keeps its `⋯` menu.
+        onOpenWorktreeChanges={
+          mobileLayout && displayWorktreeId
+            ? () => navigate(worktreePath(displayWorktreeId, "changes"))
+            : undefined
+        }
+        // Mirrors the composer's /review guards: something to review, and never
+        // while the agent is streaming (a second agent on a live working tree).
+        onReviewWork={
+          displayHasUserPrompt && !displayStreaming
+            ? () => {
+                const error = startReviewSessionForSession();
+                if (error) showToast(error);
+              }
+            : undefined
+        }
+        // Taking a spawned peer over is explicit: messaging it is a poke and
+        // leaves its coordinator in charge.
+        onSetSpawnOwnership={
+          displaySessionListItem?.spawnedBySessionId
+            ? (ownership: SettableSpawnOwnership) =>
+                actions.setSpawnOwnership(displaySessionListItem.id, ownership)
+            : undefined
+        }
+        view={
+          mobileLayout && displayHasMessages
+            ? { ...transcriptView, onChange: updateTranscriptView }
+            : undefined
+        }
+      >
+        <SessionContextSections
+          sessionId={displaySession?.sessionId}
+          toolExposure={displaySession?.toolExposure}
+          activeSkills={displaySession?.activeSkills}
+          skillInvocations={displaySession?.skillInvocations}
+          skillLibrary={state.skillLibrary}
+          artifacts={sessionArtifacts}
+          pendingPostReloadContinuation={pendingPostReloadContinuation}
+          browserRuntimes={browserRuntimes}
+          peerPrompts={peerPrompts}
+          onExpandPeerPromptHistory={actions.requestPeerPromptHistory}
+          onOpenSession={openSession}
+          onRevealPeerPromptMessage={actions.revealPeerPromptMessage}
+          {...(peerPromptRevealPendingKey
+            ? { peerPromptRevealPendingKey }
+            : {})}
+          onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
+          approvalGrants={approvalGrants}
+          onRevokeApprovalGrant={actions.revokeApprovalGrant}
+        />
+        <BackgroundWorkSection
+          sessionId={displaySessionListItem?.id}
+          items={state.backgroundWorkItems}
+          activity={displaySessionListItem?.backgroundActivity}
+          artifacts={sessionArtifacts}
+          stopPending={backgroundStopPending}
+          onStop={actions.stopBackgroundWork}
+          onStopAll={actions.stopAllBackgroundWork}
+          onOpenRegistry={() => navigateFromInspector(backgroundTasksPath())}
+          protectedTurnWait={
+            displaySessionListItem
+              ? state.backgroundHostCloseWaiting.includes(
+                  displaySessionListItem.id,
+                )
+              : false
+          }
+        />
+        <LoadedMemorySection
+          sessionId={displaySession?.sessionId}
+          hasAcceptedUserTurn={runtimeHasStarted}
+          stagedScope={{
+            persona: displayAgentType,
+            ...(pendingProjectContext
+              ? { projectId: pendingProjectContext }
+              : pendingTaskAttach
+                ? (() => {
+                    // Resolve the ACTUAL project from the authoritative task list rather
+                    // than just showing the Task's title (a title is not a scope).
+                    const task = backlogTasks.find(
+                      (t) => t.id === pendingTaskAttach.taskId,
+                    );
+                    if (!task)
+                      return {
+                        pendingTaskTitle: pendingTaskAttach.title,
+                        projectUnresolved: true as const,
+                      };
+                    return task.projectId
+                      ? {
+                          projectId: task.projectId,
+                          pendingTaskTitle: pendingTaskAttach.title,
+                        }
+                      : {
+                          projectIsGlobal: true as const,
+                          pendingTaskTitle: pendingTaskAttach.title,
+                        };
+                  })()
+                : {}),
+          }}
+          memory={memory}
+          loadingEnabled={state.settings.memory.loadingEnabled}
+          maxCards={state.settings.memory.maxCards}
+          onOpenManager={() => navigateFromInspector(settingsPath("memory"))}
+        />
+      </SessionInspector>
+    );
 
   // Desktop right-panel surfaces live in a closeable tab host. The mobile dock
   // deliberately receives the Inspector directly, preserving its existing flip-up
@@ -6863,18 +6802,6 @@ function AppContent() {
                     onSaveAndTestForgejo={actions.saveAndTestForgejoSettings}
                     onTestForgejo={actions.testForgejoSettings}
                     forgejoStatus={state.forgejoStatus}
-                  />
-                </Suspense>
-              ) : route.name === "calendar" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Calendar…" />}
-                >
-                  <CalendarPage
-                    back={screenBack}
-                    calendar={calendarController}
-                    prefs={prefs}
-                    onUpdatePrefs={update}
-                    onFocusDay={() => setInspectorOpen(true)}
                   />
                 </Suspense>
               ) : route.name === "usage" ? (

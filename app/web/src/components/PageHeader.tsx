@@ -59,7 +59,7 @@ export interface PageHeaderBack {
  * on a phone) but yields to a functional `leading` control such as the Task
  * detail's status toggle, which it then precedes.
  */
-export function PageHeaderBackButton({ label, onClick }: PageHeaderBack) {
+function PageHeaderBackButton({ label, onClick }: PageHeaderBack) {
   return (
     <IconButton
       label={`Back to ${label}`}

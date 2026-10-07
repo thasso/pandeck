@@ -75,40 +75,40 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   from its shell cache sends `loadSession` before `ready`, and that newer
   navigation must win over a slow reopen. Every handler that creates, forks,
   reopens or hands off to a session (new session, both harnesses' first send,
-  draft, fork, the post-reload continuation, the comment handoffs, the calendar
-  day) claims at the point it commits to viewing — before its first await — and
-  attaches through `viewIfCurrent`, so intent order is ARRIVAL order, never
-  completion order (the claim goes ahead of the model lookup and the worktree
-  resolution too — any await ahead of it is a window in which a newer load
-  completes and the older operation would take the view back; `viewIfCurrent`'s
-  doc is the rule, `sessionCreateRace.test.ts` holds those awaits open against a
-  newer load); the session is still created (and a first send's prompt still
-  runs) when a newer navigation keeps the view, but no route message tries to
-  move the client to it. A claim follows synchronous validation, so an invalid
-  or guarded request (a bad calendar date) cancels nothing. A claim names the
-  session it is for when its claimant knows it (`viewRequestTarget`: a load, the
-  deep link, a send into an existing session, every attach; a creation or fork
-  names none). A LEAVE — deleting or archiving a session — supersedes only a
-  newest claim for THAT session, on show or still acquiring: the attach itself,
-  a reload of it (the client's snapshot fallback), or a cold load of it from
-  another session, any of which would otherwise bring back what was just
-  archived or deleted; otherwise `clearSessionView` only detaches, so a load of
-  another session that arrived before OR during the delete's blocker check keeps
-  its claim and attaches when it completes, and a delete refused for background
-  work claims nothing at all. The client is told (`sessionViewCleared`, with its
-  `reason`) whether the session was on show or only loading, so a route naming
-  it can leave. Deletion is HUB-WIDE (`hub.clearSessionViews`): every registered
-  connection viewing or loading the session leaves it in the same synchronous
-  run as the tombstone and eviction, before the shared driver is disposed — a
-  viewer left on it would keep routing commands into it — while archiving is per
-  connection, since an archived session can still be viewed on purpose (a later
-  deliberate open is a new claim). `ready` gathers what it awaits first and
-  captures `state` and `contextInfo` together, so they describe the session the
-  client's snapshot holds. `dispose` claims and `view` refuses after disposal,
-  so a load completing after the socket closed attaches no ghost transport or
-  viewer (a pi session's idle eviction and read marks key off its viewers); on
-  the pi side `piStore.track` arms the zero-view idle clock on registration, so
-  an acquisition nobody ends up viewing is evicted like any idle session,
+  draft, fork, the post-reload continuation, the comment handoffs) claims at the
+  point it commits to viewing — before its first await — and attaches through
+  `viewIfCurrent`, so intent order is ARRIVAL order, never completion order (the
+  claim goes ahead of the model lookup and the worktree resolution too — any
+  await ahead of it is a window in which a newer load completes and the older
+  operation would take the view back; `viewIfCurrent`'s doc is the rule,
+  `sessionCreateRace.test.ts` holds those awaits open against a newer load); the
+  session is still created (and a first send's prompt still runs) when a newer
+  navigation keeps the view, but no route message tries to move the client to
+  it. A claim follows synchronous validation, so an invalid or guarded request
+  cancels nothing. A claim names the session it is for when its claimant knows
+  it (`viewRequestTarget`: a load, the deep link, a send into an existing
+  session, every attach; a creation or fork names none). A LEAVE — deleting or
+  archiving a session — supersedes only a newest claim for THAT session, on show
+  or still acquiring: the attach itself, a reload of it (the client's snapshot
+  fallback), or a cold load of it from another session, any of which would
+  otherwise bring back what was just archived or deleted; otherwise
+  `clearSessionView` only detaches, so a load of another session that arrived
+  before OR during the delete's blocker check keeps its claim and attaches when
+  it completes, and a delete refused for background work claims nothing at all.
+  The client is told (`sessionViewCleared`, with its `reason`) whether the
+  session was on show or only loading, so a route naming it can leave. Deletion
+  is HUB-WIDE (`hub.clearSessionViews`): every registered connection viewing or
+  loading the session leaves it in the same synchronous run as the tombstone and
+  eviction, before the shared driver is disposed — a viewer left on it would
+  keep routing commands into it — while archiving is per connection, since an
+  archived session can still be viewed on purpose (a later deliberate open is a
+  new claim). `ready` gathers what it awaits first and captures `state` and
+  `contextInfo` together, so they describe the session the client's snapshot
+  holds. `dispose` claims and `view` refuses after disposal, so a load
+  completing after the socket closed attaches no ghost transport or viewer (a pi
+  session's idle eviction and read marks key off its viewers); on the pi side
+  `piStore.track` arms the zero-view idle clock on registration, so an
+  acquisition nobody ends up viewing is evicted like any idle session,
   concurrent reopens of one session share one open, and a cold reopen the delete
   beat to registration (record tombstoned, `evict` found nothing yet) is refused
   at the ownership boundary: nothing is tracked, what `create` built is disposed
@@ -2671,10 +2671,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   unsubscribed while an agent/tool changed a checkout; retaining an old browser
   array and waiting for the NEXT mutation would leave the UI stale. A connection
   that never subscribes receives none of the ongoing traffic. Purely
-  event-shaped `knowledge` invalidations and `calendar` scan progress have no
-  subscribe snapshot; their mounted surfaces issue authoritative HTTP reads.
-  Memory invalidations stay `broadcastAll`: they are a handful of ids, and their
-  consumers are ad-hoc panels rather than a list surface.
+  event-shaped `knowledge` invalidations have no subscribe snapshot; their
+  mounted surfaces issue authoritative HTTP reads. Memory invalidations stay
+  `broadcastAll`: they are a handful of ids, and their consumers are ad-hoc
+  panels rather than a list surface.
 - `buildInfo.ts` resolves which build this process IS — declared version plus
   the commit it came from — and is also imported by `app/web/vite.config.ts` to
   bake the same answer into the browser bundle, so Settings → About compares two

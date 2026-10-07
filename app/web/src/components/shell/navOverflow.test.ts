@@ -9,7 +9,7 @@ const SECTIONS = [
   "worktrees",
   "projects",
   "knowledge",
-  "calendar",
+  "reports",
   "usage",
   "settings",
 ] as const;
@@ -26,7 +26,7 @@ describe("planNavSlots", () => {
         "worktrees",
         "projects",
         "knowledge",
-        "calendar",
+        "reports",
         "usage",
         "settings",
       ],
@@ -36,7 +36,7 @@ describe("planNavSlots", () => {
   it("shows the active pill and two slots at the default sidebar width", () => {
     expect(plan(256)).toEqual({
       visible: ["sessions", "tasks", "worktrees"],
-      overflow: ["projects", "knowledge", "calendar", "usage", "settings"],
+      overflow: ["projects", "knowledge", "reports", "usage", "settings"],
     });
   });
 
@@ -51,7 +51,7 @@ describe("planNavSlots", () => {
   it("keeps the active section visible in its configured position when it would otherwise overflow", () => {
     expect(plan(256, "usage")).toEqual({
       visible: ["sessions", "tasks", "usage"],
-      overflow: ["worktrees", "projects", "knowledge", "calendar", "settings"],
+      overflow: ["worktrees", "projects", "knowledge", "reports", "settings"],
     });
   });
 
@@ -61,7 +61,7 @@ describe("planNavSlots", () => {
         width: 256,
         sectionIds: [
           "knowledge",
-          "calendar",
+          "reports",
           "sessions",
           "tasks",
           "worktrees",
@@ -72,7 +72,7 @@ describe("planNavSlots", () => {
         activeId: "sessions",
       }),
     ).toEqual({
-      visible: ["knowledge", "calendar", "sessions"],
+      visible: ["knowledge", "reports", "sessions"],
       overflow: ["tasks", "worktrees", "projects", "usage", "settings"],
     });
   });
@@ -85,7 +85,7 @@ describe("planNavSlots", () => {
         "worktrees",
         "projects",
         "knowledge",
-        "calendar",
+        "reports",
         "usage",
         "settings",
       ],
@@ -97,7 +97,7 @@ describe("planNavSlots", () => {
         "worktrees",
         "projects",
         "knowledge",
-        "calendar",
+        "reports",
         "usage",
         "settings",
       ],
@@ -140,7 +140,7 @@ describe("the shipped default order", () => {
   // 374px, not 390: on a phone the bar is a `BottomCard` header, and the card's side
   // gutter costs about what the removed More trigger gave back — so the row shows the
   // same seven slots it did with a trigger, and what the card buys is the gesture.
-  it("shows seven of its eleven slots in the phone's bottom card", () => {
+  it("shows seven of its ten slots in the phone's bottom card", () => {
     const plan = planNavSlots({
       width: 374,
       sectionIds: [...DEFAULT_NAV_SLOTS],
@@ -156,12 +156,7 @@ describe("the shipped default order", () => {
       "projects",
       "knowledge",
     ]);
-    expect(plan.overflow).toEqual([
-      "calendar",
-      "settings",
-      "usage",
-      "background-tasks",
-    ]);
+    expect(plan.overflow).toEqual(["settings", "usage", "background-tasks"]);
   });
 
   it("gives one of those slots up when a wide layout reserves a More trigger", () => {

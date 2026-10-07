@@ -2,7 +2,6 @@ import {
   Activity,
   BookOpen,
   Bot,
-  CalendarDays,
   ClipboardList,
   FolderKanban,
   Gauge,
@@ -43,7 +42,6 @@ export const PRIMARY_NAV_SLOTS: Record<
   },
   projects: { label: "Projects", icon: <FolderKanban size={17} /> },
   knowledge: { label: "Knowledge", icon: <BookOpen size={17} /> },
-  calendar: { label: "Calendar", icon: <CalendarDays size={17} /> },
   settings: { label: "Settings", icon: <Settings size={17} /> },
   usage: { label: "Usage", icon: <Gauge size={17} /> },
   "background-tasks": {

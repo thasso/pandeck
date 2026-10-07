@@ -1410,17 +1410,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   a phone) but yields to a functional custom `leading`, which it then precedes.
   Every main-pane surface takes `back` and forwards it to its own header
   (`App.tsx`'s chat header, Task detail, Project detail, Worktree detail,
-  Knowledge entry/file/state views, Settings, Usage; `calendar/CalendarPage.tsx`
-  renders `PageHeaderBackButton` directly in its toolbar, which is its page
-  header). App supplies ONE object for all of them and only on mobile, so back
-  stays a single rule rather than per-surface behavior; it never calls
-  `history.back()` (see `../docs/ui-shell.md`, Small Screens). It is also
-  `undefined` on the screens whose object dock carries back in its action row
-  instead, which is most of them — a surface must therefore still look right
-  with `back` absent, falling back to its own leading control or icon box. And
-  on a phone a surface may render NO header at all when its content already says
-  what it is (the new-session screen; see `../CLAUDE.md`), so nothing may depend
-  on this row existing for layout or offsets.
+  Knowledge entry/file/state views, Settings, Usage). App supplies ONE object
+  for all of them and only on mobile, so back stays a single rule rather than
+  per-surface behavior; it never calls `history.back()` (see
+  `../docs/ui-shell.md`, Small Screens). It is also `undefined` on the screens
+  whose object dock carries back in its action row instead, which is most of
+  them — a surface must therefore still look right with `back` absent, falling
+  back to its own leading control or icon box. And on a phone a surface may
+  render NO header at all when its content already says what it is (the
+  new-session screen; see `../CLAUDE.md`), so nothing may depend on this row
+  existing for layout or offsets.
 - `agentTypeDisplay.ts` owns `AGENT_TYPE_DISPLAY`, the per-persona
   label/icon/tone/description registry: ONE definition of what an agent looks
   like, shared by the composer's persona picker, the new-session Agent row and
@@ -2199,7 +2198,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
     the same applicability condition. A missing/expired pi login degrades to a
     friendly `available: false` message (read-only; the app never refreshes the
     token).
-- `shell/`, `calendar/`, `tools/`, `diff/`, and `ui/` have child contracts.
+- `shell/`, `tools/`, `diff/`, and `ui/` have child contracts.
 - `worktree/WorktreeDetailPage.tsx` has two hosts — the `/worktrees/:id` route
   and the right panel's Worktree tab — and `narrow` (not "mobile") is what picks
   its compact single-column layout, since the panel is a column of a phone's

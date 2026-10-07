@@ -43,7 +43,7 @@ describe("api paths that carry their own credential", () => {
       "/api/session-artifacts/s/page.png",
       "/api/knowledge/asset",
       "/api/worktrees/list",
-      "/api/calendar/day",
+      "/api/google/drive/file/example/preview",
       "/mcp/browser",
       "/api/file-grantsX/abc/page.html",
     ])

@@ -9,7 +9,7 @@ paths in the body are relative to the original subtree.
 ## Purpose
 
 React client source for routing, socket state, chat rendering, settings,
-tasks/projects, calendar, and browser-side helpers.
+tasks/projects and browser-side helpers.
 
 ## Module ownership
 
@@ -158,10 +158,10 @@ tasks/projects, calendar, and browser-side helpers.
   `sessionListRef` sessions feed its session-claim rule.
 - `navigateFromInspector` is the ONE way App navigates from inside the object
   panel (inspector relation openers, and the links its section children render —
-  Task project row, calendar day report/task, the memory manager): on mobile it
-  collapses the dock first, so the result is visible instead of hidden behind
-  the sheet. The `Inspector` frame applies the same rule to its own
-  relations/actions via `InspectorChromeProvider`'s `onAct`.
+  Task project row, the memory manager): on mobile it collapses the dock first,
+  so the result is visible instead of hidden behind the sheet. The `Inspector`
+  frame applies the same rule to its own relations/actions via
+  `InspectorChromeProvider`'s `onAct`.
 - `openBacklogRowLink` is the matching one-way-in for a Backlog row's second
   line (`components/TaskRowBody.tsx`): those links name a Task, a session, a
   worktree or a Project and each carries its own route, so App hands the list
@@ -245,14 +245,12 @@ tasks/projects, calendar, and browser-side helpers.
   `shell/ObjectDock`'s `DockAction`: back leading, then the object's primary
   action trailing ("Start session" — the same action the inspector leads with,
   which the dock then hoists OUT of the sheet's Actions list so it is not
-  offered twice). Calendar resolves its own title inside its inspector, so its
-  primary action stays in the sheet's list and its row carries back alone; a
-  Knowledge ENTRY route now fills its row instead (see above), and the dock
-  hoists the primary out of the sheet's list automatically whenever a row has
-  actions. A TASK route's row also carries the status control (`TaskStatusIcon`
-  as its face, cycling on tap): it is the thing you most often open a Task to
-  change, and the page's own title block therefore shows the state without
-  offering to change it — one control, in the action home.
+  offered twice). A Knowledge ENTRY route fills its row (see above), and the
+  dock hoists the primary out of the sheet's list automatically whenever a row
+  has actions. A TASK route's row also carries the status control
+  (`TaskStatusIcon` as its face, cycling on tap): it is the thing you most often
+  open a Task to change, and the page's own title block therefore shows the
+  state without offering to change it — one control, in the action home.
 - A SESSION screen's row is `components/SessionDockActions.tsx` — the bottom bar
   the composer used to collapse into, dictation included, and shaped like the
   composer it rests as: a bordered field bookended by two controls a side, so it
@@ -459,7 +457,7 @@ tasks/projects, calendar, and browser-side helpers.
   `worktreeWatchAudit.test.ts` fails on it.
 - The left pane is MEMOIZED and App keeps it that way. `Sidebar` re-renders only
   when its own props move, so App hands it stable `useCallback` handlers
-  (`openSession`, `openCalendarView`, `openProject`,
+  (`openSession`, `openProject`,
   `openKnowledgeEntry`/`openInvalidKnowledgeEntry`/`openKnowledgeFile`,
   `openSettingsSection`, …), memoized `projects`, and `backlogState` — the
   narrow `hooks/useBacklog.ts` slice — instead of the whole `UIState`. Without
@@ -530,11 +528,11 @@ tasks/projects, calendar, and browser-side helpers.
 - Clean up timers, subscriptions, and browser event listeners in React effects.
 - Routes are canonical per `app/web/docs/ui-shell.md`: one shape per object type
   plus section index routes (`/sessions`, `/tasks`, `/projects`, `/worktrees`,
-  `/knowledge`, `/calendar`, `/settings` — a bare `/settings` is the INDEX, not
-  a shorthand for the first section), no aliases. An index route must render a
-  real main-pane surface with a page header rather than falling through to the
-  chat surface: the router does not own the chat URL there, so a prompt sent
-  from it would leave the address bar behind. Path building/parsing lives in
+  `/knowledge`, `/settings` — a bare `/settings` is the INDEX, not a shorthand
+  for the first section), no aliases. An index route must render a real
+  main-pane surface with a page header rather than falling through to the chat
+  surface: the router does not own the chat URL there, so a prompt sent from it
+  would leave the address bar behind. Path building/parsing lives in
   `hooks/useSessionRouting.ts` and `lib/sessionRoutes.ts`; the server learns a
   deep-linked session only via the WebSocket `sessionId` query parameter. The
   cached transcript in `lib/sessionPreviewStore.ts` is read ONCE, for the route
