@@ -55,8 +55,8 @@ export function CommitCard({
   commit: CommitDisplay;
   onAccept?: ((entryId: string) => void) | undefined;
 }) {
+  // A long file list starts folded so the message stays the card's lead.
   const [filesOpen, setFilesOpen] = useState(commit.files.length <= 8);
-  const shownFiles = filesOpen ? commit.files : commit.files.slice(0, 6);
   return (
     <Card size="sm" className="my-1.5">
       <CardHeader>
@@ -130,41 +130,40 @@ export function CommitCard({
 
         {commit.files.length > 0 && (
           <div>
+            {/* Reads as the section label it replaces ("Commit message"
+                above): flush with the content edge, no pill, no open fill. */}
             <Button
               variant="ghost"
               size="xs"
-              className="-ml-2"
+              className="mb-1 h-auto gap-1 p-0 text-xs font-medium text-muted-foreground hover:bg-transparent hover:text-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:text-foreground dark:hover:bg-transparent"
               aria-expanded={filesOpen}
               onClick={() => setFilesOpen((open) => !open)}
             >
               <ChevronDown className={filesOpen ? "" : "-rotate-90"} />
               Files
             </Button>
-            <ul className="mt-1 divide-y rounded-lg border">
-              {shownFiles.map((file) => (
-                <li
-                  key={file.path}
-                  className="flex items-center gap-2 px-2 py-1.5 text-sm"
-                >
-                  {fileIcon(file)}
-                  <span className="min-w-0 flex-1 truncate font-mono">
-                    {file.path}
-                  </span>
-                  {file.sessionTouched && (
-                    <Badge variant="secondary">session</Badge>
-                  )}
-                  <span className="text-success">+{file.additions ?? 0}</span>
-                  <span className="text-destructive">
-                    -{file.deletions ?? 0}
-                  </span>
-                </li>
-              ))}
-              {!filesOpen && commit.files.length > shownFiles.length && (
-                <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                  + {commit.files.length - shownFiles.length} more files
-                </li>
-              )}
-            </ul>
+            {filesOpen && (
+              <ul className="divide-y rounded-lg border">
+                {commit.files.map((file) => (
+                  <li
+                    key={file.path}
+                    className="flex items-center gap-2 px-2 py-1.5 text-sm"
+                  >
+                    {fileIcon(file)}
+                    <span className="min-w-0 flex-1 truncate font-mono">
+                      {file.path}
+                    </span>
+                    {file.sessionTouched && (
+                      <Badge variant="secondary">session</Badge>
+                    )}
+                    <span className="text-success">+{file.additions ?? 0}</span>
+                    <span className="text-destructive">
+                      -{file.deletions ?? 0}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
