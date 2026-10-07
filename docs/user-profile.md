@@ -22,7 +22,6 @@ ignores it.
 `effectiveTimeZone` is the only zone that user-local days and times resolve in.
 It covers:
 
-- calendar day buckets and range bounds in the web client;
 - "today" and "tomorrow" for Task due and plan filters;
 - memory temporal rules (recurring weekdays, observation snapshots);
 - the local times and `date` parameters of the Google, GitHub and Slack tools;
@@ -39,9 +38,9 @@ cached per version of the settings file: each call checks the file's inode, size
 and mtime, and `updateSettings` also drops the cache, so hot formatters cost no
 file read while edits still apply at once. The web client reads the zone from
 `settings.profile.effectiveTimeZone`, which `App` provides to components through
-`hooks/useUserTimeZone.ts`. Every zone-dependent helper in
-`components/calendar/calendarDates.ts` takes the zone explicitly. Until the
-server answers, the web client uses the browser's zone.
+`hooks/useUserTimeZone.ts`. `lib/taskDates.ts` resolves today's date in that
+zone and reuses shared date arithmetic for Task planning and Focus filters.
+Until the server answers, the web client uses the browser's zone.
 
 ## Local days
 

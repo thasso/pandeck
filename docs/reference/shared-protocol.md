@@ -677,14 +677,14 @@ vocabulary, display projection, and normalized session model types.
 - `protocol.ts` owns `BroadcastTopic`/`BROADCAST_TOPICS` and the
   `subscribe`/`unsubscribe` client commands: the single session socket's domain
   LISTS (`tasks`, `projects`, `subagents`, `background`, `worktrees`,
-  `knowledge`, `calendar`, `usage`, `workflow`, `skills`) are fanned out per
-  subscribed connection rather than to everyone, and subscribing to a stateful
-  list is also the authoritative read — which is why `ready` carries no
-  `taskList`. Held subagent thread detail is a separate authorized
-  per-connection topic with bounded snapshots and revisioned run events. The
-  session list is deliberately NOT a topic (every surface's sidebar shows it),
-  and neither are per-object streams (worktree status/changes, comment traces),
-  which are addressed by the object a connection has open.
+  `knowledge`, `usage`, `workflow`, `skills`) are fanned out per subscribed
+  connection rather than to everyone, and subscribing to a stateful list is also
+  the authoritative read — which is why `ready` carries no `taskList`. Held
+  subagent thread detail is a separate authorized per-connection topic with
+  bounded snapshots and revisioned run events. The session list is deliberately
+  NOT a topic (every surface's sidebar shows it), and neither are per-object
+  streams (worktree status/changes, comment traces), which are addressed by the
+  object a connection has open.
 - The first production socket frame is `webBuild` (and `ready.webBuildId`
   repeats it): it identifies the browser bundle currently served with the
   server. A production client remembers the id and reloads when it changes

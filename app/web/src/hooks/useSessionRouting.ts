@@ -45,7 +45,6 @@ import {
  *   /projects/:id        → Project detail
  *   /pull-requests       → Pull Requests section index (a real surface)
  *   /pull-requests/:projectId/:provider/:repositoryKey/:number → one PR
- *   /calendar            → calendar surface (optionally /calendar/:view/:date)
  *   /knowledge           → the Knowledge Base folder (files)
  *   /knowledge/files?path=…      → one KB file
  *   /knowledge/changes?path=…    → uncommitted edits, or a commit range (from/to)
@@ -97,7 +96,6 @@ export type Route =
       to?: string;
       anchor?: DocumentLineAnchor;
     }
-  | { name: "calendar"; view?: "month" | "week" | "day"; date?: string }
   | {
       /** The KB folder, browsed as the checkout `knowledge` (same coordinates as a worktree). */
       name: "knowledge";
@@ -235,18 +233,6 @@ export function worktreePath(
   if (query?.to) params.set("to", query.to);
   const search = params.toString();
   return search ? `${base}?${search}` : base;
-}
-
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Calendar surface, deep-linked to a view + user-local day for stable links. */
-export function calendarPath(
-  view?: "month" | "week" | "day",
-  date?: string,
-): string {
-  if (view && date && ISO_DATE_RE.test(date))
-    return `/calendar/${view}/${date}`;
-  return "/calendar";
 }
 
 const SETTINGS_SECTION_RE = new RegExp(
@@ -389,20 +375,6 @@ export function parseRoute(pathAndSearch: string): Route {
       ...(anchored ? { taskId: anchored } : {}),
     };
   }
-  if (pathname === "/calendar" || pathname === "/calendar/")
-    return { name: "calendar" };
-  const calendarFull = pathname.match(
-    /^\/calendar\/(month|week|day)\/(\d{4}-\d{2}-\d{2})\/?$/,
-  );
-  if (calendarFull?.[1] && calendarFull[2])
-    return {
-      name: "calendar",
-      view: calendarFull[1] as "month" | "week" | "day",
-      date: calendarFull[2],
-    };
-  const calendarDay = pathname.match(/^\/calendar\/(\d{4}-\d{2}-\d{2})\/?$/);
-  if (calendarDay?.[1])
-    return { name: "calendar", view: "day", date: calendarDay[1] };
   if (pathname === "/settings" || pathname === "/settings/")
     return { name: "settings" };
   const settings = pathname.match(SETTINGS_SECTION_RE);
@@ -438,9 +410,6 @@ export function isSectionIndexRoute(route: Route): boolean {
       return false;
     case "knowledge":
       return !route.view && !route.path;
-    case "calendar":
-      // A bare /calendar is the index; a view+date addresses the calendar itself.
-      return !route.date;
     case "settings":
       return !route.section;
     default:
@@ -465,10 +434,6 @@ function routeKey(route: Route): string {
     return route.id
       ? `worktrees:${route.id}:${route.view ?? "changes"}`
       : "worktrees";
-  if (route.name === "calendar")
-    return route.date
-      ? `calendar:${route.view ?? "month"}:${route.date}`
-      : "calendar";
   if (route.name === "knowledge") return `knowledge:${route.view ?? "files"}`;
   if (route.name === "usage") return "usage";
   if (route.name === "backgroundTasks")
@@ -531,7 +496,6 @@ function routeMatchesServer(
     route.name === "projects" ||
     route.name === "pullRequests" ||
     route.name === "worktrees" ||
-    route.name === "calendar" ||
     route.name === "knowledge" ||
     route.name === "usage" ||
     route.name === "backgroundTasks" ||
@@ -635,7 +599,6 @@ export function useSessionRouting({
       route.name === "projects" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
-      route.name === "calendar" ||
       route.name === "knowledge" ||
       route.name === "usage" ||
       route.name === "backgroundTasks" ||
@@ -696,7 +659,6 @@ export function useSessionRouting({
       route.name === "projects" ||
       route.name === "pullRequests" ||
       route.name === "worktrees" ||
-      route.name === "calendar" ||
       route.name === "knowledge" ||
       route.name === "usage" ||
       route.name === "backgroundTasks" ||

@@ -187,7 +187,7 @@ describe("topicsForSurface", () => {
     expect(
       topicsForSurface({
         sidebarVisible: false,
-        sidebarSection: "calendar",
+        sidebarSection: "settings",
         routeName: "permanentAssistant",
       }),
     ).toEqual([]);
@@ -228,13 +228,6 @@ describe("topicsForSurface", () => {
         sidebarVisible: false,
         sidebarSection: "sessions",
         routeName: "knowledge",
-      }),
-    ).toEqual([]);
-    expect(
-      topicsForSurface({
-        sidebarVisible: false,
-        sidebarSection: "sessions",
-        routeName: "calendar",
       }),
     ).toEqual([]);
   });

@@ -1,7 +1,7 @@
 /**
  * HTTP surface for worktrees, dispatched from `index.ts` under
  * `/api/worktrees/:id/<verb>`. Heavy read payloads (file contents, diffs,
- * trees, logs) go over HTTP GET like the calendar/workspace surfaces; light
+ * trees, logs) go over HTTP GET like the workspace surfaces; light
  * state and broadcasts stay on the WebSocket. User-initiated commit,
  * auto-commit, clean, push, synchronization, create-PR and merge-PR writes are
  * HTTP POSTs (the caller needs the direct result). Auth/CORS are applied

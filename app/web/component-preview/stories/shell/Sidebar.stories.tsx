@@ -58,7 +58,6 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         onOpenBackgroundTasks={noop}
         assistantLabel="Personal Assistant"
         mobile={mobile}
-        onOpenCalendarView={noop}
         onStartSessionForProject={noop}
         tasksFresh
         projectsFresh
@@ -119,7 +118,7 @@ const meta = {
     scenario: { control: "inline-radio", options: ["attention", "quiet-list"] },
     section: {
       control: "select",
-      options: ["sessions", "projects", "knowledge", "calendar", "settings"],
+      options: ["sessions", "projects", "knowledge", "settings"],
     },
     width: { control: { type: "range", min: 220, max: 480, step: 1 } },
   },

@@ -475,12 +475,7 @@ persona toolsets.
   `tempoWorklog` executor, which writes each approved row straight to Tempo.
   Tempo reuses the Jira integration's creds for enrichment/author resolution and
   degrades when Jira is off — `tempo_list_worklogs` returns raw issue ids only
-  (no key/summary/url), and `tempo_mutate_worklogs` hard-requires Jira. It also
-  exports `getCalendarWorklogs({from,to})` (the calendar Tempo overlay's
-  own-worklog projection → `CalendarWorklogsResponse`, reusing the same fetch +
-  author filter + Jira issue enrichment; degrades to `enabled:false` instead of
-  throwing when Tempo is off, backing the `GET /api/calendar/worklogs`
-  endpoint).
+  (no key/summary/url), and `tempo_mutate_worklogs` hard-requires Jira.
 - `knowledge/memoryTools.ts` owns the memory tool surface shared by every
   persona: `memory_search` (deterministic lexical/metadata recall, results carry
   stable `id` + current `revision`) and the batch `memory_manage`

@@ -17,7 +17,7 @@ import {
   type BacklogProjectFilter,
 } from "../lib/backlogTreeModel.ts";
 import { FOCUS_STATUS_OPTIONS, BacklogToolbar } from "./BacklogToolbar.tsx";
-import { todayIso } from "./calendar/calendarDates.ts";
+import { todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { BacklogTreePane } from "./BacklogTreePane.tsx";
 import { BacklogFocusList } from "./BacklogFocusList.tsx";

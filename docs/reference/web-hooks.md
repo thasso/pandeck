@@ -9,7 +9,7 @@ paths in the body are relative to the original subtree.
 ## Purpose
 
 Reusable React hooks for assistant WebSocket state, routing, preferences,
-backlog/task interaction, calendar data, and drag/reorder behavior.
+backlog/task interaction and drag/reorder behavior.
 
 ## Module ownership
 
@@ -595,8 +595,7 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   `NAV_ACTIONS`/`NavAction`/`NavSlot` + `isNavAction` (the app-level actions
   share that bar with the sections, per ui-shell.md) plus its order defaults
   (`DEFAULT_NAV_SLOTS` + `normalizeNavSlots`, consumed by `usePrefs.ts`).
-- Backlog/calendar hooks own their feature-specific API calls and derived client
-  state.
+- Backlog hooks own their feature-specific API calls and derived client state.
 - `useSelectionAnchor.ts` owns domain-neutral, touch-capable text-selection
   snapshotting. Its 150 ms-debounced document `selectionchange` listener accepts
   only a non-collapsed range inside the current root and captures the quote,

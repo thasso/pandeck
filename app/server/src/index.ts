@@ -34,7 +34,6 @@ import { verifyRequiredHostTools } from "./hostTools.ts";
 import { Connection } from "./connection.ts";
 import { getGoogleDriveFileTextPreview } from "./tools/google/googleDriveTools.ts";
 import { getGmailThreadTextPreview } from "./tools/google/googleGmailTools.ts";
-import { getCalendarEvents } from "./calendarService.ts";
 import { redeemOpenAiResetCredit } from "./harnesses/usage.ts";
 import { modelsForAccount } from "./harnesses/models.ts";
 import {
@@ -1121,64 +1120,6 @@ async function handleRequest(
         audioMs: Math.round((samples.length / sampleRate) * 1000),
         decodeMs: result.decodeMs,
       };
-      res.writeHead(200, corsJsonHeaders(req));
-      res.end(JSON.stringify(payload));
-    } catch (err) {
-      res.writeHead(500, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/calendar/events") {
-    if (req.method !== "GET") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const from = requestUrl.searchParams.get("from") ?? "";
-      const to = requestUrl.searchParams.get("to") ?? "";
-      if (!from || !to) {
-        res.writeHead(400, corsJsonHeaders(req));
-        res.end(
-          JSON.stringify({
-            error: "from and to query parameters are required (RFC3339).",
-          }),
-        );
-        return;
-      }
-      const payload = await getCalendarEvents({ from, to });
-      res.writeHead(200, corsJsonHeaders(req));
-      res.end(JSON.stringify(payload));
-    } catch (err) {
-      res.writeHead(500, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: errorText(err) }));
-    }
-    return;
-  }
-
-  if (requestUrl.pathname === "/api/calendar/worklogs") {
-    if (req.method !== "GET") {
-      res.writeHead(405, corsJsonHeaders(req));
-      res.end(JSON.stringify({ error: "Method not allowed" }));
-      return;
-    }
-    try {
-      const from = requestUrl.searchParams.get("from") ?? "";
-      const to = requestUrl.searchParams.get("to") ?? "";
-      if (!from || !to) {
-        res.writeHead(400, corsJsonHeaders(req));
-        res.end(
-          JSON.stringify({
-            error: "from and to query parameters are required.",
-          }),
-        );
-        return;
-      }
-      const { getCalendarWorklogs } =
-        await import("./tools/tempo/tempoTools.ts");
-      const payload = await getCalendarWorklogs({ from, to });
       res.writeHead(200, corsJsonHeaders(req));
       res.end(JSON.stringify(payload));
     } catch (err) {

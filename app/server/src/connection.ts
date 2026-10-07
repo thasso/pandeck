@@ -1657,8 +1657,8 @@ export class Connection implements Viewer {
    * list here: the web
    * client only uses that shape, and a snapshot is required after reconnecting
    * or re-subscribing because broadcasts intentionally go only to active
-   * subscribers. Purely event-shaped Knowledge invalidations and calendar scan
-   * progress have no snapshot here; their mounted surfaces issue HTTP reads.
+   * subscribers. Purely event-shaped Knowledge invalidations have no snapshot
+   * here; their mounted surfaces issue HTTP reads.
    */
   private onSubscribe(
     topics: BroadcastTopic[],

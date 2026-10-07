@@ -9,7 +9,6 @@ export type SidebarSection =
   | "projects"
   | "pull-requests"
   | "knowledge"
-  | "calendar"
   | "settings";
 
 const SIDEBAR_SECTION_KEY = "assistant.sidebarSection.v1";
@@ -20,7 +19,6 @@ const PERSISTED_SECTIONS: readonly SidebarSection[] = [
   "projects",
   "pull-requests",
   "knowledge",
-  "calendar",
 ];
 
 /**
@@ -47,8 +45,7 @@ export function isNavAction(id: NavSlot): id is NavAction {
 /**
  * Default order of the sidebar's primary-navigation bar, front (always visible)
  * to back (first to fold into More). The two actions used constantly lead, then
- * the real object browsers; Calendar sits behind them because its browser is
- * still a placeholder view list, and Settings/Usage/Background come last. Users
+ * the real object browsers; Settings/Usage/Background come last. Users
  * reorder this in Settings → Appearance.
  */
 export const DEFAULT_NAV_SLOTS: readonly NavSlot[] = [
@@ -59,7 +56,6 @@ export const DEFAULT_NAV_SLOTS: readonly NavSlot[] = [
   "pull-requests",
   "projects",
   "knowledge",
-  "calendar",
   "settings",
   "usage",
   "background-tasks",
@@ -132,8 +128,6 @@ export function canonicalSidebarSection(route: Route): SidebarSection {
     // section that used to list them is gone.
     case "worktrees":
       return "projects";
-    case "calendar":
-      return "calendar";
     case "knowledge":
       return "knowledge";
     case "settings":

@@ -831,11 +831,11 @@ of a phone screen is the worst place to spend on chrome. The shell owns the top
 safe-area inset in its place, so an installed PWA still clears the notch.
 
 - A **browser screen** is a section index route (`/sessions`, `/tasks`,
-  `/projects`, `/pull-requests`, `/knowledge`, `/calendar`, `/settings`): the
-  left sidebar fills the viewport — object browser above, and the nav bar at the
-  bottom as the resting header of the same bottom card every other screen has,
-  its folded slots one drag up. Nothing competes with it there, since the
-  composer only exists on session routes.
+  `/projects`, `/pull-requests`, `/knowledge`, `/settings`): the left sidebar
+  fills the viewport — object browser above, and the nav bar at the bottom as
+  the resting header of the same bottom card every other screen has, its folded
+  slots one drag up. Nothing competes with it there, since the composer only
+  exists on session routes.
 - An **object screen** is any other route: the main pane fills the viewport and
   carries a **back** control. Its own header is not automatic: on a phone a
   surface earns one only if it says something the content does not. Identity

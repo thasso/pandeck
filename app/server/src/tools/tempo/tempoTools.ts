@@ -1,6 +1,5 @@
 import type {
   ApprovalCard,
-  CalendarWorklogsResponse,
   TempoWorklogMutationItemDisplay,
 } from "@assistant/shared";
 import { defineAgentTool } from "../../mcp/tool.ts";
@@ -498,77 +497,6 @@ export const assistantTempoTools = [
   tempoListWorklogsTool,
   tempoMutateWorklogsTool,
 ];
-
-/**
- * Own logged Tempo worklogs for a date range, projected for the calendar overlay
- * (Task: Tempo in calendar). Reuses the same fetch + author-filter + Jira issue
- * enrichment as `tempo_list_worklogs`. Degrades to `enabled: false` (never
- * throws) when Tempo is off/unauthorized so the calendar simply shows no
- * overlay. Only the user's own worklogs are returned (cached/resolved author).
- */
-export async function getCalendarWorklogs({
-  from,
-  to,
-}: {
-  from: string;
-  to: string;
-}): Promise<CalendarWorklogsResponse> {
-  let config: TempoToolConfig;
-  try {
-    config = await getTempoToolConfig();
-  } catch {
-    return { from, to, enabled: false, jiraEnriched: false, worklogs: [] };
-  }
-  const jira = config.jira;
-  let authorAccountId: string | undefined;
-  if (config.authorAccountId) authorAccountId = config.authorAccountId;
-  else if (jira) {
-    try {
-      authorAccountId = await resolveTempoAuthorAccountId(config);
-    } catch {
-      authorAccountId = undefined;
-    }
-  }
-  const { worklogs } = await fetchWorklogs({
-    apiBaseUrl: config.apiBaseUrl,
-    accessToken: config.accessToken,
-    from,
-    to,
-    maxResults: 500,
-    ...(authorAccountId !== undefined ? { authorAccountId } : {}),
-  });
-  const issues = jira
-    ? await resolveJiraIssues(jira, worklogs)
-    : new Map<string, JiraIssueInfo>();
-  const jiraHost = jira?.jiraHost ?? null;
-  const rows: CalendarWorklogsResponse["worklogs"] = worklogs.map((worklog) => {
-    const issueId =
-      worklog.issue?.id !== undefined ? String(worklog.issue.id) : null;
-    const info = issueId ? issues.get(issueId) : undefined;
-    const issueKey =
-      jiraHost != null ? (info?.key ?? worklog.issue?.key ?? null) : null;
-    return {
-      id: String(
-        worklog.tempoWorklogId ??
-          worklog.id ??
-          `${issueId ?? "?"}-${worklog.startDate ?? ""}-${worklog.startTime ?? ""}`,
-      ),
-      issueKey,
-      issueUrl: issueKey && jiraHost ? jiraIssueUrl(jiraHost, issueKey) : null,
-      description: worklog.description ?? "",
-      startDate: worklog.startDate ?? from,
-      startTime: worklog.startTime ? worklog.startTime.slice(0, 5) : null,
-      seconds: worklog.timeSpentSeconds ?? 0,
-    };
-  });
-  return {
-    from,
-    to,
-    enabled: true,
-    jiraEnriched: jiraHost != null,
-    worklogs: rows,
-  };
-}
 
 async function executeMutationItem(
   config: TempoToolConfig,

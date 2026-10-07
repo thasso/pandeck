@@ -118,16 +118,6 @@ export interface Prefs {
   backlogViewMode: BacklogViewMode;
   /** Backlog project filter: which project(s) the list is narrowed to. */
   backlogProjectFilter: BacklogProjectFilter;
-  /** Calendar: the last-selected view, restored when the calendar is reopened. */
-  calendarView: "month" | "week" | "day";
-  /** Calendar: include Saturday/Sunday in month + week views. */
-  calendarShowWeekends: boolean;
-  /** Calendar: overlay my logged Tempo time alongside events. */
-  calendarShowTempo: boolean;
-  /** Calendar: pixels per hour in the week/day time grid (vertical zoom). */
-  calendarHourPx: number;
-  /** Calendar right panel: height (px) of the day-details region above the chat. */
-  calendarDetailHeight: number;
   /** Worktree detail views: width of the local navigator rail. */
   worktreeChangesRailWidth: number;
   /** Worktree detail views: whether the local navigator rail is collapsed. */
@@ -176,6 +166,22 @@ export interface Prefs {
   workflowRunLimits?: WorkflowRunLimits;
 }
 
+type OptionalPrefKey = {
+  [K in keyof Prefs]-?: Pick<Prefs, K> extends Required<Pick<Prefs, K>>
+    ? never
+    : K;
+}[keyof Prefs];
+
+// Adding an optional preference must also add it to the persisted-key inventory.
+const OPTIONAL_PREF_KEYS = {
+  worktreeReviewMode: true,
+  lastModelKey: true,
+  credentialProfileId: true,
+  lastThinkingLevel: true,
+  workflowRoleRuntimes: true,
+  workflowRunLimits: true,
+} satisfies Record<OptionalPrefKey, true>;
+
 const KEY = "assistant.prefs";
 
 const defaults: Prefs = {
@@ -197,11 +203,6 @@ const defaults: Prefs = {
   backlogView: "backlog",
   backlogViewMode: "normal",
   backlogProjectFilter: ALL_PROJECT_FILTER,
-  calendarView: "month",
-  calendarShowWeekends: false,
-  calendarShowTempo: true,
-  calendarHourPx: 48,
-  calendarDetailHeight: 300,
   worktreeChangesRailWidth: 300,
   worktreeChangesRailCollapsed: false,
   worktreeNavigatorViewMode: "tree",
@@ -212,21 +213,31 @@ const defaults: Prefs = {
   diffExpandContext: false,
 };
 
+/** Drop unknown and retired keys rather than persisting them again on reload. */
+export function normalizeStoredPrefs(parsed: Partial<Prefs>): Prefs {
+  const known = Object.fromEntries(
+    Object.entries(parsed).filter(
+      ([key]) =>
+        Object.hasOwn(defaults, key) || Object.hasOwn(OPTIONAL_PREF_KEYS, key),
+    ),
+  ) as Partial<Prefs>;
+  const workflowRoleRuntimes = normalizeWorkflowRoleRuntimes(
+    known.workflowRoleRuntimes,
+  );
+  return {
+    ...applyPatch(defaults, known),
+    textScale: normalizeTextScale(known.textScale),
+    navSlots: normalizeNavSlots(known.navSlots),
+    backlogView: normalizeBacklogView(known.backlogView),
+    ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
+  };
+}
+
 function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaults;
-    const parsed = JSON.parse(raw) as Partial<Prefs>;
-    const workflowRoleRuntimes = normalizeWorkflowRoleRuntimes(
-      parsed.workflowRoleRuntimes,
-    );
-    return {
-      ...applyPatch(defaults, parsed),
-      textScale: normalizeTextScale(parsed.textScale),
-      navSlots: normalizeNavSlots(parsed.navSlots),
-      backlogView: normalizeBacklogView(parsed.backlogView),
-      ...(workflowRoleRuntimes !== undefined ? { workflowRoleRuntimes } : {}),
-    };
+    return normalizeStoredPrefs(JSON.parse(raw) as Partial<Prefs>);
   } catch {
     return defaults;
   }

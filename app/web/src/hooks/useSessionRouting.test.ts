@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SessionListItem } from "@assistant/shared";
 import {
   backgroundTasksPath,
-  calendarPath,
   canonicalizeEmptySessionToCreate,
   fileViewerPath,
   isSectionIndexRoute,
@@ -53,18 +52,14 @@ describe("parseRoute", () => {
     });
   });
 
-  it("parses calendar routes", () => {
-    expect(parseRoute("/calendar")).toEqual({ name: "calendar" });
-    expect(parseRoute("/calendar/week/2026-07-05")).toEqual({
-      name: "calendar",
-      view: "week",
-      date: "2026-07-05",
-    });
-    expect(parseRoute("/calendar/2026-07-05")).toEqual({
-      name: "calendar",
-      view: "day",
-      date: "2026-07-05",
-    });
+  it("rejects removed calendar routes", () => {
+    for (const path of [
+      "/calendar",
+      "/calendar/week/2026-07-05",
+      "/calendar/2026-07-05",
+    ]) {
+      expect(parseRoute(path)).toEqual({ name: "new" });
+    }
   });
 
   it("parses knowledge routes as the knowledge checkout", () => {
@@ -231,11 +226,6 @@ describe("path helpers round-trip through parseRoute", () => {
       name: "settings",
       section: "jira",
     });
-    expect(parseRoute(calendarPath("day", "2026-07-05"))).toEqual({
-      name: "calendar",
-      view: "day",
-      date: "2026-07-05",
-    });
     expect(parseRoute(knowledgePath())).toEqual({ name: "knowledge" });
     expect(
       parseRoute(fileViewerPath("/tmp/example/a b.md", { start: 3 })),
@@ -280,7 +270,6 @@ describe("section index routes", () => {
     "projects",
     "pull-requests",
     "knowledge",
-    "calendar",
     "settings",
   ];
 
@@ -310,9 +299,6 @@ describe("section index routes", () => {
     ).toBe(false);
     expect(
       isSectionIndexRoute(parseRoute("/knowledge/files?path=a%2Fb.json")),
-    ).toBe(false);
-    expect(
-      isSectionIndexRoute(parseRoute(calendarPath("week", "2026-07-05"))),
     ).toBe(false);
     expect(isSectionIndexRoute(parseRoute(settingsPath("jira")))).toBe(false);
     expect(isSectionIndexRoute(parseRoute(sessionPath("s1")))).toBe(false);
