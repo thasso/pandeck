@@ -2150,7 +2150,9 @@ export const Composer = memo(function Composer({
           // Zero-height rather than unmounted when hidden: the textarea has to stay in
           // the DOM so the dock's compose control can focus it INSIDE its own gesture,
           // which is the only way iOS raises the keyboard on the first tap.
-          className={`relative z-10 h-auto flex-col items-stretch ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
+          // Opaque: InputGroup's own fill is transparent (dark: `bg-input/30`),
+          // which lets the transcript scrolling underneath show through.
+          className={`relative z-10 h-auto flex-col items-stretch bg-background dark:bg-card ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
             barless mobile composer, which collapses to nothing and lets the object
