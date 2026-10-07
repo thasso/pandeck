@@ -22,6 +22,9 @@ import { showToast } from "../../lib/toast.ts";
 import { usePublishCommentActuation } from "../review/CommentActuation.tsx";
 import { CommentBody } from "../common/CommentBody.tsx";
 import { CommentComposer as CommentComposerRow } from "../common/CommentComposer.tsx";
+import { IconButton } from "../common/IconButton.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { Button } from "../ui/button.tsx";
 
 /** Callbacks the surfaces need to mutate comments (wired to WS actions). */
 export interface CommentActions {
@@ -324,18 +327,16 @@ export interface LineCommentsConfig {
 
 function AuthorChip({ comment }: { comment: WorktreeComment }) {
   return comment.author.kind === "agent" ? (
-    <span
-      className="rounded bg-accent px-1 py-0.5 text-xs font-medium text-primary"
+    <Badge
+      variant="secondary"
       title={[comment.author.sessionId, comment.author.thinkingLevel]
         .filter(Boolean)
         .join(" · ")}
     >
       {comment.author.model ?? "agent"} · {comment.author.sessionId.slice(0, 8)}
-    </span>
+    </Badge>
   ) : (
-    <span className="rounded bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground">
-      you
-    </span>
+    <Badge variant="outline">you</Badge>
   );
 }
 
@@ -373,15 +374,11 @@ export function CommentThread({
           className="min-w-0 flex-1 text-foreground"
         />
         {root.severity ? (
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
-            {root.severity}
-          </span>
+          <Badge variant="outline">{root.severity}</Badge>
         ) : null}
         {/* A badge only when the anchor is in trouble; an ordinary one says nothing. */}
         {root.anchorState === "moved" ? (
-          <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-500">
-            moved
-          </span>
+          <Badge variant="warning">moved</Badge>
         ) : null}
       </div>
       {replies.map((reply) => (
@@ -415,83 +412,54 @@ export function CommentThread({
         </div>
       ) : null}
       <div className="mt-1.5 flex items-center gap-0.5">
-        <ThreadAction
-          icon={<Reply size={13} />}
+        <IconButton
           label={replying ? "Cancel reply" : "Reply"}
-          active={replying}
+          aria-pressed={replying || undefined}
           onClick={() => setReplying((value) => !value)}
-        />
-        <ThreadAction
-          icon={resolved ? <RotateCcw size={13} /> : <Check size={13} />}
+        >
+          <Reply />
+        </IconButton>
+        <IconButton
           label={resolved ? "Reopen thread" : "Resolve thread"}
           onClick={() => actions.onResolveComment(root.id, !resolved)}
-        />
+        >
+          {resolved ? <RotateCcw /> : <Check />}
+        </IconButton>
         {/* Deleting a thread was one unguarded tap here while every other delete in
             the app confirms; it now asks like the rest. */}
         {confirmingDelete ? (
-          <span className="ml-auto flex items-center gap-1.5 text-sm">
-            <span className="text-muted-foreground">Delete?</span>
-            <button
-              type="button"
+          <span className="ml-auto flex items-center gap-1 text-sm text-muted-foreground">
+            Delete?
+            <Button
+              variant="destructive"
+              size="xs"
               onClick={() => {
                 actions.onDeleteComment(root.id);
                 setConfirmingDelete(false);
               }}
-              className="text-destructive hover:underline"
             >
               Yes
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => setConfirmingDelete(false)}
-              className="text-muted-foreground hover:text-foreground"
             >
               No
-            </button>
+            </Button>
           </span>
         ) : (
           <span className="ml-auto">
-            <ThreadAction
-              danger
-              icon={<Trash2 size={13} />}
+            <IconButton
               label="Delete thread"
               onClick={() => setConfirmingDelete(true)}
-            />
+            >
+              <Trash2 />
+            </IconButton>
           </span>
         )}
       </div>
     </div>
-  );
-}
-
-/** One icon action in a thread's bottom row (the app-wide row-action shape). */
-function ThreadAction({
-  icon,
-  label,
-  onClick,
-  active = false,
-  danger = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  danger?: boolean;
-}) {
-  const tone = danger
-    ? "hover:bg-destructive/10 hover:text-destructive"
-    : "hover:bg-muted hover:text-foreground";
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active || undefined}
-      className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${active ? "text-primary" : "text-muted-foreground"} ${tone}`}
-    >
-      {icon}
-    </button>
   );
 }
 

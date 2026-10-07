@@ -19,19 +19,18 @@
  * @related usePullRequestMergeCleanup, RemoveWorktreeDialog, pullRequestInbox
  */
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import {
   PULL_REQUEST_MERGE_METHODS,
   type PullRequestInventoryItem,
   type PullRequestMergeMethod,
 } from "@assistant/shared";
 import { ConfirmDialog } from "../common/dialogs.tsx";
-
-const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
-  squash: "Squash — one commit on the base branch",
-  merge: "Merge commit — keep individual commits",
-  rebase: "Rebase — replay the commits onto the base",
-};
+import {
+  CheckRow,
+  ChoiceGroup,
+  ForceConsent,
+  MERGE_METHOD_LABELS,
+} from "../worktree/WorktreeDialogs.tsx";
 
 export interface PullRequestMergeChoice {
   method?: PullRequestMergeMethod;
@@ -203,12 +202,12 @@ export function PullRequestMergeDialog({
           {conflicts ? (
             // As TEXT under the row, in place of the controls' own sentences: a
             // tooltip on a disabled button reaches neither keyboard nor phone.
-            <p className="text-sm text-amber-500">
+            <p className="text-sm text-warning">
               #{item.number} conflicts with {item.baseBranch}, so no merge is
               offered and nothing here can run. Update the branch first.
             </p>
           ) : offered.length === 0 ? (
-            <p className="text-sm text-amber-500">
+            <p className="text-sm text-warning">
               {supported
                 ? "This repository allows no merge method for pull requests, so nothing can be merged here."
                 : `The merge methods this repository allows could not be read${
@@ -218,39 +217,25 @@ export function PullRequestMergeDialog({
                   }, so no merge is offered.`}
             </p>
           ) : (
-            <div className="flex flex-col gap-1">
-              {offered.map((id) => (
-                <label
-                  key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${selected === id ? "border-primary bg-accent text-foreground" : "border-border text-muted-foreground hover:bg-muted"}`}
-                >
-                  <input
-                    type="radio"
-                    name="pull-request-merge-method"
-                    checked={selected === id}
-                    disabled={busy}
-                    onChange={() => setMethod(id)}
-                  />
-                  {MERGE_METHOD_LABELS[id]}
-                </label>
-              ))}
-            </div>
+            <ChoiceGroup
+              options={offered}
+              labels={MERGE_METHOD_LABELS}
+              value={selected}
+              disabled={busy}
+              onChange={setMethod}
+            />
           )}
 
           {/* ---------------------- the remote branch ---------------------- */}
           {canDeleteRemoteBranch ? (
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={deleteRemoteBranch}
-                disabled={busy || conflicts}
-                onChange={(event) =>
-                  setDeleteRemoteBranch(event.target.checked)
-                }
-              />
+            <CheckRow
+              checked={deleteRemoteBranch}
+              disabled={busy || conflicts}
+              onChange={setDeleteRemoteBranch}
+            >
               Delete the remote branch{" "}
               <span className="font-mono">{item.headBranch}</span>
-            </label>
+            </CheckRow>
           ) : null}
           {conflicts ? null : (
             <p className="mt-1 text-sm text-muted-foreground">
@@ -267,16 +252,15 @@ export function PullRequestMergeDialog({
       {/* -------------------------- the checkout --------------------------- */}
       {hasCheckout && !outcomeUnknown ? (
         <div className="mt-3">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={removeWorktree}
-              disabled={busy}
-              onChange={(event) => setRemoveWorktree(event.target.checked)}
-            />
+          <CheckRow
+            checked={removeWorktree}
+            disabled={busy}
+            onChange={setRemoveWorktree}
+            className=""
+          >
             Remove the local worktree and delete the branch{" "}
             <span className="font-mono">{item.headBranch}</span>
-          </label>
+          </CheckRow>
           <p className="mt-1 text-sm text-muted-foreground">
             {removeWorktree
               ? `The checkout of ${item.headBranch} is removed once delivery into ${item.baseBranch} is verified, its local branch deleted, and the sessions working in it are settled — one that is running, or waiting on an answer or approval, refuses the removal instead.`
@@ -295,25 +279,20 @@ export function PullRequestMergeDialog({
 
       {/* -------------------------- the consent ---------------------------- */}
       {needsForce ? (
-        <div className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5">
-          <p className="flex items-start gap-1.5 text-sm text-red-400">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            {/* The server's own words: this consent answers the refusal its
-                refreshed verification actually produced, which is what makes
-                the answer match the question. */}
+        <ForceConsent
+          consent="remove it anyway"
+          checked={confirmForce}
+          disabled={busy}
+          onChange={setConfirmForce}
+        >
+          {/* The server's own words: this consent answers the refusal its
+              refreshed verification actually produced, which is what makes
+              the answer match the question. */}
+          <p>
             The cleanup was refused: {refusal} Removing it anyway may LOSE every
             commit on <span className="font-mono">{item.headBranch}</span>.
           </p>
-          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={confirmForce}
-              disabled={busy}
-              onChange={(event) => setConfirmForce(event.target.checked)}
-            />
-            I understand, remove it anyway
-          </label>
-        </div>
+        </ForceConsent>
       ) : null}
 
       {!merging && !hasCheckout && !outcomeUnknown ? (

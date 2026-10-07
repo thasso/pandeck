@@ -53,6 +53,7 @@ import {
 } from "./review/SendCommentsSheet.tsx";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import { ErrorNote } from "./common/load.tsx";
+import { Button } from "./ui/button.tsx";
 import {
   CommentComposer,
   type CommentDictationOptions,
@@ -558,14 +559,10 @@ function DocumentCommentLayerBody({
               onClear={() => void tray.clear()}
               onReveal={selectable ? reveal : undefined}
               action={
-                <button
-                  type="button"
-                  onClick={openSend}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10"
-                >
-                  <SendHorizontal size={14} />
+                <Button size="sm" onClick={openSend}>
+                  <SendHorizontal data-icon="inline-start" />
                   Send to session
-                </button>
+                </Button>
               }
             />
           </div>

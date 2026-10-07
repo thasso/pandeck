@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, FileCode2, Folder } from "lucide-react";
 import type {
   WorktreeChangeFile,
@@ -7,6 +7,7 @@ import type {
 } from "@assistant/shared";
 import { Tree, type TreeNode, type TreeNodeState } from "../common/Tree.tsx";
 import { Skeleton, Spinner } from "../common/load.tsx";
+import { Item, ItemContent, ItemDescription, ItemTitle } from "../ui/item.tsx";
 
 /**
  * @component WorktreeFileNavigator
@@ -410,9 +411,9 @@ export function ancestorDirectoryPaths(path: string): string[] {
 }
 
 function statusClass(status: NavigatorNodeData["status"]): string {
-  if (status === "deleted") return "text-red-400";
-  if (status === "added" || status === "untracked") return "text-emerald-400";
-  if (status) return "text-amber-400";
+  if (status === "deleted") return "text-destructive";
+  if (status === "added" || status === "untracked") return "text-success";
+  if (status) return "text-warning";
   return "text-muted-foreground";
 }
 
@@ -467,12 +468,58 @@ function ChangeStats({
     <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
       {isDir ? <span>{data.files}</span> : null}
       {data.additions > 0 ? (
-        <span className="ml-1 text-emerald-400">+{data.additions}</span>
+        <span className="ml-1 text-success">+{data.additions}</span>
       ) : null}
       {data.deletions > 0 ? (
-        <span className="ml-1 text-red-400">−{data.deletions}</span>
+        <span className="ml-1 text-destructive">−{data.deletions}</span>
       ) : null}
     </span>
+  );
+}
+
+/**
+ * One entry's row content, shared by the tree and the list: icon and status
+ * glyph, then the name (`children`), then loading, drill-down and stats.
+ */
+function EntryParts({
+  data,
+  showChangeStats,
+  loading,
+  drillDown = false,
+  children,
+}: {
+  data: NavigatorNodeData;
+  showChangeStats: boolean;
+  loading: boolean;
+  drillDown?: boolean;
+  children: ReactNode;
+}) {
+  const isDir = data.kind === "dir";
+  const Icon = isDir ? Folder : FileCode2;
+  return (
+    <>
+      <Icon size={13} className="shrink-0 text-muted-foreground" />
+      {showChangeStats && !isDir ? (
+        <span
+          className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
+        >
+          {statusGlyph(data.status)}
+        </span>
+      ) : null}
+      {children}
+      {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
+      {isDir && drillDown && !loading ? (
+        <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
+      ) : null}
+      {showChangeStats &&
+      (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
+        <ChangeStats data={data} isDir={isDir} />
+      ) : data.size != null && !isDir ? (
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {data.size.toLocaleString()}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -501,34 +548,18 @@ function NavigatorRow({
       </span>
     );
   }
-  const isDir = data.kind === "dir";
   return (
     <span
       className={`flex min-w-0 items-center gap-2 text-sm ${state.selected ? "text-foreground" : "text-muted-foreground"}`}
       title={data.path}
     >
-      {isDir ? (
-        <Folder size={13} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <FileCode2 size={13} className="shrink-0 text-muted-foreground" />
-      )}
-      {showChangeStats && !isDir ? (
-        <span
-          className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
-        >
-          {statusGlyph(data.status)}
-        </span>
-      ) : null}
-      <span className="min-w-0 flex-1 truncate">{data.name}</span>
-      {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
-      {showChangeStats &&
-      (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
-        <ChangeStats data={data} isDir={isDir} />
-      ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {data.size.toLocaleString()}
-        </span>
-      ) : null}
+      <EntryParts
+        data={data}
+        showChangeStats={showChangeStats}
+        loading={loading}
+      >
+        <span className="min-w-0 flex-1 truncate">{data.name}</span>
+      </EntryParts>
     </span>
   );
 }
@@ -551,49 +582,35 @@ function NavigatorListRow({
   onSelect: () => void;
 }) {
   const data = dataFromEntry(entry);
-  const isDir = data.kind === "dir";
   const dir = parentPath(data.path);
   return (
-    <button
-      type="button"
+    <Item
+      size="xs"
+      variant={selected ? "muted" : "default"}
+      render={<button type="button" />}
       onClick={onSelect}
       title={data.path || "/"}
       aria-current={selected ? "true" : undefined}
-      className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${selected ? "bg-accent/70 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+      className="flex-nowrap text-left"
     >
-      {isDir ? (
-        <Folder size={13} className="shrink-0 text-muted-foreground" />
-      ) : (
-        <FileCode2 size={13} className="shrink-0 text-muted-foreground" />
-      )}
-      {showChangeStats && !isDir ? (
-        <span
-          className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
-        >
-          {statusGlyph(data.status)}
-        </span>
-      ) : null}
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm">{data.name}</span>
-        {showParentPath && dir ? (
-          <span className="block truncate font-mono text-xs text-muted-foreground">
-            {dir}
-          </span>
-        ) : null}
-      </span>
-      {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
-      {isDir && directoryDrillDown && !loading ? (
-        <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
-      ) : null}
-      {showChangeStats &&
-      (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
-        <ChangeStats data={data} isDir={isDir} />
-      ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground">
-          {data.size.toLocaleString()}
-        </span>
-      ) : null}
-    </button>
+      <EntryParts
+        data={data}
+        showChangeStats={showChangeStats}
+        loading={loading}
+        drillDown={directoryDrillDown}
+      >
+        <ItemContent className="min-w-0">
+          <ItemTitle className="w-full">
+            <span className="truncate">{data.name}</span>
+          </ItemTitle>
+          {showParentPath && dir ? (
+            <ItemDescription className="truncate font-mono">
+              {dir}
+            </ItemDescription>
+          ) : null}
+        </ItemContent>
+      </EntryParts>
+    </Item>
   );
 }
 
@@ -763,20 +780,23 @@ export function WorktreeFileNavigator({
     return (
       <div role="list" aria-label={ariaLabel} className={className}>
         {listNavigatesDirectories && listDirectoryPath ? (
-          <button
-            type="button"
-            title={`Back to ${parentPath(listDirectoryPath) || "root"}`}
+          <Item
+            size="xs"
+            variant="outline"
+            render={<button type="button" />}
             aria-label={`Back to ${parentPath(listDirectoryPath) || "root"}`}
             onClick={() =>
               onListDirectoryPathChange(parentPath(listDirectoryPath))
             }
-            className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-border/70 px-2 py-2 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="mb-1 flex-nowrap text-left"
           >
-            <ChevronLeft size={14} className="shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1 truncate font-mono text-sm">
-              {listDirectoryPath}
-            </span>
-          </button>
+            <ChevronLeft size={14} className="shrink-0" />
+            <ItemContent className="min-w-0">
+              <ItemTitle className="w-full font-mono">
+                <span className="truncate">{listDirectoryPath}</span>
+              </ItemTitle>
+            </ItemContent>
+          </Item>
         ) : null}
         {currentDirectoryLoading && listEntries.length === 0 ? (
           <NavigatorSkeletonRows label="Loading folder" rows={4} />

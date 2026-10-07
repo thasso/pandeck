@@ -23,6 +23,8 @@ import type { LineCommentsConfig } from "../diff/comments.tsx";
 import { fetchWorktreeFileDiff, hashContent } from "../../lib/worktrees.ts";
 import { useNearViewport } from "../common/useNearViewport.ts";
 import { Spinner } from "../common/load.tsx";
+import { IconButton } from "../common/IconButton.tsx";
+import { Toggle } from "../ui/toggle.tsx";
 
 /** Diffs beyond this many changed lines start collapsed. */
 const LARGE_DIFF_LINES = 600;
@@ -169,18 +171,14 @@ function ChangesetFileSection({
       className={`overflow-hidden border-b border-border last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
     >
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          title={collapsed ? "Expand diff" : "Collapse diff"}
-          aria-label={
-            collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`
-          }
+        <IconButton
+          size="icon-xs"
+          label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
           aria-expanded={!collapsed}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={() => setCollapsed((value) => !value)}
         >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        </button>
+          {collapsed ? <ChevronRight /> : <ChevronDown />}
+        </IconButton>
         <span className="min-w-0 flex-1 truncate text-sm">
           <span className="font-medium text-foreground">{parts.name}</span>
           {parts.dir ? (
@@ -191,21 +189,21 @@ function ChangesetFileSection({
         </span>
         <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
           {file.additions > 0 ? (
-            <span className="text-emerald-400">+{file.additions}</span>
+            <span className="text-success">+{file.additions}</span>
           ) : null}
           {file.deletions > 0 ? (
-            <span className="ml-1 text-red-400">−{file.deletions}</span>
+            <span className="ml-1 text-destructive">−{file.deletions}</span>
           ) : null}
         </span>
-        <button
-          type="button"
-          onClick={toggleViewed}
+        <Toggle
+          variant="outline"
+          size="sm"
+          pressed={viewed}
+          onPressedChange={toggleViewed}
           title={viewed ? "Mark as not viewed" : "Mark as viewed"}
-          aria-pressed={viewed}
-          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
-          <Check size={11} /> Viewed
-        </button>
+          <Check data-icon="inline-start" /> Viewed
+        </Toggle>
       </div>
       {collapsed ? null : file.binary ? (
         <div className="p-4 text-sm text-muted-foreground">Binary file.</div>

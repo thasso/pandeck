@@ -17,17 +17,15 @@
  * @intent Range semantics match the old History view: from = the older commit
  *   (exclusive), to = the newer one.
  */
-import { useCallback, useState } from "react";
-import {
-  Check,
-  ChevronDown,
-  FileDiff,
-  GitCommitHorizontal,
-  GitCompareArrows,
-} from "lucide-react";
+import { cloneElement, useCallback, useState } from "react";
+import { Check, ChevronDown, FileDiff, GitCompareArrows } from "lucide-react";
 import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
-import { Popover } from "../Popover.tsx";
+import { Button } from "../ui/button.tsx";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "../ui/item.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import { Toggle } from "../ui/toggle.tsx";
+import { CommitItem } from "./FileHistoryList.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
 import { ErrorNote, PaneLoading } from "../common/load.tsx";
@@ -77,62 +75,54 @@ export function WorktreeScopePicker({
   onPick: (from?: string, to?: string) => void;
 }) {
   const phone = useMobileLayout();
-  const [sheetOpen, setSheetOpen] = useState(false);
+  const [open, setOpen] = useState(false);
   const label = worktreeScopeLabel(worktree, from, to);
   const trigger = (
-    <>
+    <Button
+      variant="secondary"
+      size="sm"
+      className="min-w-0 shrink"
+      title={`Reviewing: ${label}`}
+    >
       {/* The chevron already says "picker", so a phone spends its width on the
           LABEL instead of a second glyph. */}
-      {narrow ? null : <GitCompareArrows size={13} className="shrink-0" />}
+      {narrow ? null : <GitCompareArrows data-icon="inline-start" />}
       <span className="min-w-0 max-w-48 truncate">{label}</span>
-      <ChevronDown size={12} className="shrink-0 text-muted-foreground" />
-    </>
+      <ChevronDown data-icon="inline-end" />
+    </Button>
   );
-  const triggerClass =
-    "flex min-w-0 shrink items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-sm font-medium text-foreground";
-
-  const body = (close: () => void) => (
+  const body = (
     <ScopePanel
       worktree={worktree}
       refreshToken={refreshToken}
       from={from}
       to={to}
-      onPick={(pickedFrom, pickedTo) => onPick(pickedFrom, pickedTo)}
-      onClose={close}
+      onPick={onPick}
+      onClose={() => setOpen(false)}
     />
   );
 
   if (phone) {
     return (
       <>
-        <button
-          type="button"
-          title={`Reviewing: ${label}`}
-          onClick={() => setSheetOpen(true)}
-          className={triggerClass}
-        >
-          {trigger}
-        </button>
+        {cloneElement(trigger, { onClick: () => setOpen(true) })}
         <EdgeSheet
-          open={sheetOpen}
+          open={open}
           title="What to review"
-          onClose={() => setSheetOpen(false)}
+          onClose={() => setOpen(false)}
         >
-          {body(() => setSheetOpen(false))}
+          {body}
         </EdgeSheet>
       </>
     );
   }
 
   return (
-    <Popover
-      align="left"
-      placement="bottom"
-      title="What to review"
-      className={triggerClass}
-      button={trigger}
-    >
-      {(close) => <div className="w-[380px] max-w-[80vw]">{body(close)}</div>}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger render={trigger} />
+      <PopoverContent align="start" className="w-96 p-1">
+        {body}
+      </PopoverContent>
     </Popover>
   );
 }
@@ -166,25 +156,31 @@ function ScopePanel({
   ) => {
     const Icon = icon;
     return (
-      <button
-        type="button"
+      <Item
+        size="xs"
+        variant={active === id ? "muted" : "default"}
+        render={<button type="button" />}
         onClick={() => {
           pick();
           onClose();
         }}
-        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${active === id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+        className="flex-nowrap text-left"
       >
-        <Icon size={13} className="shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        {active === id ? (
-          <Check size={13} className="shrink-0 text-primary" />
-        ) : null}
-      </button>
+        <ItemMedia variant="icon">
+          <Icon />
+        </ItemMedia>
+        <ItemContent className="min-w-0">
+          <ItemTitle className="w-full">
+            <span className="truncate">{label}</span>
+          </ItemTitle>
+        </ItemContent>
+        {active === id ? <Check size={13} className="text-primary" /> : null}
+      </Item>
     );
   };
   return (
-    <div className="flex max-h-[70vh] flex-col">
-      <div className="flex flex-col gap-px border-b border-border p-1">
+    <div className="flex flex-col">
+      <div className="flex flex-col gap-1 border-b border-border p-1">
         {preset("uncommitted", "Uncommitted changes", FileDiff, () => onPick())}
         {worktree.isMain
           ? null
@@ -262,24 +258,24 @@ function CommitListPanel({
   };
 
   return (
-    <div className="flex max-h-[60vh] flex-col">
+    <div className="flex max-h-96 flex-col">
       <div className="flex items-center justify-between gap-2 px-2 py-1.5">
         <p className="text-sm text-muted-foreground">
           {rangeStart
             ? "Pick the other end of the range."
             : "Tap a commit for its diff. Shift-click compares a range."}
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            setRangeMode((value) => !value);
+        <Toggle
+          variant="outline"
+          size="sm"
+          pressed={rangeMode}
+          onPressedChange={(pressed) => {
+            setRangeMode(pressed);
             setRangeStart(null);
           }}
-          aria-pressed={rangeMode}
-          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
           Range
-        </button>
+        </Toggle>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {entries === undefined ? (
@@ -295,7 +291,7 @@ function CommitListPanel({
         ) : entries.length === 0 ? (
           <div className="p-4 text-sm text-muted-foreground">No commits.</div>
         ) : (
-          <div className="flex flex-col gap-px p-1">
+          <div className="flex flex-col gap-1 p-1">
             {/* R2: the commits stay pickable while a failed refresh says so. */}
             {error !== undefined ? (
               <ErrorNote
@@ -305,29 +301,17 @@ function CommitListPanel({
               />
             ) : null}
             {entries.map((entry) => (
-              <button
+              <CommitItem
                 key={entry.oid}
-                type="button"
+                subject={entry.subject}
+                shortOid={entry.shortOid}
+                selected={rangeStart === entry.oid}
+                dimmed={entry.onBase}
                 onClick={(event) => pick(entry, event.shiftKey)}
-                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left ${rangeStart === entry.oid ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"} ${entry.onBase ? "opacity-50" : ""}`}
               >
-                <GitCommitHorizontal
-                  size={13}
-                  className="mt-0.5 shrink-0 text-muted-foreground"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium">
-                    {entry.subject}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {entry.author} ·{" "}
-                    {new Date(entry.authoredAt).toLocaleDateString()}
-                  </span>
-                </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  {entry.shortOid}
-                </span>
-              </button>
+                {entry.author} ·{" "}
+                {new Date(entry.authoredAt).toLocaleDateString()}
+              </CommitItem>
             ))}
           </div>
         )}

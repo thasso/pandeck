@@ -60,7 +60,14 @@ import {
   DocumentNavigationMarker,
   useDocumentScrollRestoration,
 } from "../DocumentNavigationShell.tsx";
-import { Popover } from "../Popover.tsx";
+import { Button } from "../ui/button.tsx";
+import { Field, FieldLabel } from "../ui/field.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import { Separator } from "../ui/separator.tsx";
+import { Tabs, TabsList, TabsTrigger } from "../ui/tabs.tsx";
+import { Toggle } from "../ui/toggle.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 import { DiffModeToolbar } from "../diff/DiffModeToolbar.tsx";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
@@ -83,6 +90,7 @@ import { pendingWorktreeReviewIds } from "./worktreeReview.tsx";
 import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
 import { EdgeSheet } from "../common/EdgeSheet.tsx";
+import { IconButton } from "../common/IconButton.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "../common/load.tsx";
 import {
   externalDocumentActionEnabled,
@@ -249,29 +257,23 @@ function NavigatorViewToggle({
   onChange: (mode: WorktreeNavigatorViewMode) => void;
 }) {
   return (
-    <div
-      className="flex items-center rounded-lg border border-border bg-card/40 p-0.5"
+    <ToggleGroup
+      variant="outline"
+      size="sm"
+      spacing={0}
       aria-label="Navigator view"
+      value={[mode]}
+      onValueChange={(next) => {
+        if (next[0]) onChange(next[0] as WorktreeNavigatorViewMode);
+      }}
     >
-      {(
-        [
-          { id: "list", label: "Folder list", icon: <List size={13} /> },
-          { id: "tree", label: "Tree", icon: <FolderTree size={13} /> },
-        ] as const
-      ).map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          title={option.label}
-          aria-label={option.label}
-          aria-pressed={mode === option.id}
-          onClick={() => onChange(option.id)}
-          className={`rounded-md p-1 ${mode === option.id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-        >
-          {option.icon}
-        </button>
-      ))}
-    </div>
+      <ToggleGroupItem value="list" aria-label="Folder list">
+        <List />
+      </ToggleGroupItem>
+      <ToggleGroupItem value="tree" aria-label="Tree">
+        <FolderTree />
+      </ToggleGroupItem>
+    </ToggleGroup>
   );
 }
 
@@ -282,17 +284,13 @@ function NavigatorVisibilityToggle({
   collapsed: boolean;
   onChange: (collapsed: boolean) => void;
 }) {
-  const label = collapsed ? "Show navigator" : "Collapse navigator";
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
+    <IconButton
+      label={collapsed ? "Show navigator" : "Collapse navigator"}
       onClick={() => onChange(!collapsed)}
-      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
     >
-      {collapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
-    </button>
+      {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+    </IconButton>
   );
 }
 
@@ -366,6 +364,19 @@ function WorktreeRailLayout({
     [onUpdatePrefs, railWidth],
   );
 
+  const railHeading = (
+    <div className="min-w-0 border-b border-border px-2 py-1.5">
+      <div className="truncate text-sm font-medium text-muted-foreground">
+        {title}
+      </div>
+      {subtitle ? (
+        <div className="truncate font-mono text-xs text-muted-foreground">
+          {subtitle}
+        </div>
+      ) : null}
+    </div>
+  );
+
   // Mobile is list→detail: the navigator IS the screen until a detail is
   // selected, then the content pane replaces it behind a back bar. The rail
   // collapse/width prefs are desktop concepts and don't apply.
@@ -373,20 +384,7 @@ function WorktreeRailLayout({
     if (!detailActive) {
       return (
         <div className="flex min-h-0 flex-1 flex-col bg-background/40">
-          {narrowListHeader ? (
-            <div className="border-b border-border p-2">
-              <div className="mb-2 min-w-0">
-                <div className="truncate text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                  {title}
-                </div>
-                {subtitle ? (
-                  <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                    {subtitle}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
+          {narrowListHeader ? railHeading : null}
           <div className="min-h-0 flex-1 overflow-y-auto p-1.5">{rail}</div>
         </div>
       );
@@ -395,15 +393,13 @@ function WorktreeRailLayout({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
         <div className="flex items-center gap-2 border-b border-border bg-background/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
           {onBack ? (
-            <button
-              type="button"
+            <IconButton
+              label={`Back to ${title.toLowerCase()}`}
+              size="icon"
               onClick={onBack}
-              title={`Back to ${title.toLowerCase()}`}
-              aria-label={`Back to ${title.toLowerCase()}`}
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
             >
-              <ChevronLeft size={16} />
-            </button>
+              <ChevronLeft />
+            </IconButton>
           ) : null}
           {collapsedSummary ?? (
             <span className="min-w-0 flex-1 truncate font-medium text-foreground">
@@ -426,16 +422,7 @@ function WorktreeRailLayout({
           className="relative flex shrink-0 flex-col border-r border-border bg-background/40"
           style={{ width: railWidth }}
         >
-          <div className="border-b border-border px-2 py-1.5">
-            <div className="truncate text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              {title}
-            </div>
-            {subtitle ? (
-              <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                {subtitle}
-              </div>
-            ) : null}
-          </div>
+          {railHeading}
           <div className="min-h-0 flex-1 overflow-y-auto p-1.5">{rail}</div>
           <ResizableSeparator
             edge="right"
@@ -637,8 +624,8 @@ function ChangesView({
     <>
       {changes.totals.files} file
       {changes.totals.files === 1 ? "" : "s"} ·{" "}
-      <span className="text-emerald-400">+{changes.totals.additions}</span>{" "}
-      <span className="text-red-400">−{changes.totals.deletions}</span>
+      <span className="text-success">+{changes.totals.additions}</span>{" "}
+      <span className="text-destructive">−{changes.totals.deletions}</span>
       {changesFetch.state.status === "refreshing" ? (
         <RefreshIndicator className="ml-1.5" label="Refreshing changed files" />
       ) : null}
@@ -679,7 +666,7 @@ function ChangesView({
     // why this row survives a 390px viewport with words instead of six glyphs.
     <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5">
       {navigationControls}
-      <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+      <Separator orientation="vertical" className="mx-1 h-4" />
       <WorktreeScopePicker
         worktree={worktree}
         narrow={narrow}
@@ -706,28 +693,31 @@ function ChangesView({
         ) : null}
         {narrow && reviewMode === "changeset" && changeFiles.length > 0 ? (
           phone ? (
-            <button
-              type="button"
-              title="Jump to file"
-              aria-label="Jump to file"
+            <IconButton
+              label="Jump to file"
               onClick={() => setJumpSheetOpen(true)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
             >
-              <FolderTree size={14} />
-            </button>
+              <FolderTree />
+            </IconButton>
           ) : (
-            <Popover
-              align="right"
-              placement="bottom"
-              title="Jump to file"
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
-              button={<FolderTree size={14} />}
-            >
-              {(close) => (
-                <div className="max-h-[60vh] w-[19rem] max-w-[80vw] overflow-y-auto">
-                  {jumpNavigator(close)}
-                </div>
-              )}
+            <Popover open={jumpSheetOpen} onOpenChange={setJumpSheetOpen}>
+              <PopoverTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Jump to file"
+                  />
+                }
+              >
+                <FolderTree />
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                className="max-h-96 w-80 overflow-y-auto"
+              >
+                {jumpNavigator(() => setJumpSheetOpen(false))}
+              </PopoverContent>
             </Popover>
           )
         ) : null}
@@ -994,7 +984,7 @@ function FilePreview({
       <SandboxedDocument
         target={{ kind: "worktreeFile", worktreeId, path, view: "file" }}
         title={path}
-        className="document-visual-content h-full min-h-[60vh] w-full"
+        className="document-visual-content h-full min-h-96 w-full"
       />
     );
   }
@@ -1262,11 +1252,13 @@ function FilesView({
         : undefined;
   // The main checkout has no fork point, so the "vs base" pivot is dropped.
   const pivots: Array<{ id: FilePivot; label: string; icon: ReactNode }> = [
-    { id: "file", label: "File", icon: <File size={15} /> },
+    { id: "file", label: "File", icon: <File /> },
     ...(previewKind && previewKind !== "raster"
-      ? ([
-          { id: "preview", label: "Preview", icon: <Eye size={15} /> },
-        ] as Array<{ id: FilePivot; label: string; icon: ReactNode }>)
+      ? ([{ id: "preview", label: "Preview", icon: <Eye /> }] as Array<{
+          id: FilePivot;
+          label: string;
+          icon: ReactNode;
+        }>)
       : []),
     ...(worktree.isMain
       ? []
@@ -1274,10 +1266,10 @@ function FilesView({
           {
             id: "vs-base",
             label: "Changes vs base",
-            icon: <GitCompareArrows size={15} />,
+            icon: <GitCompareArrows />,
           },
         ] as Array<{ id: FilePivot; label: string; icon: ReactNode }>)),
-    { id: "history", label: "History", icon: <History size={15} /> },
+    { id: "history", label: "History", icon: <History /> },
   ];
   // Content/diff-derived, memoized pierre cache keys (see ChangesView).
   const pivotDiffPath = pivotDiff?.path;
@@ -1323,24 +1315,22 @@ function FilesView({
           : null;
   const pivotControls =
     pivots.length > 1 ? (
-      <div
-        className="flex items-center rounded-lg border border-border p-0.5"
+      <ToggleGroup
+        variant="outline"
+        size="sm"
+        spacing={0}
         aria-label="File view"
+        value={[pivot]}
+        onValueChange={(next) => {
+          if (next[0]) onPivotChange(next[0] as FilePivot);
+        }}
       >
         {pivots.map(({ id, label, icon }) => (
-          <button
-            key={id}
-            type="button"
-            title={label}
-            aria-label={label}
-            aria-pressed={pivot === id}
-            onClick={() => onPivotChange(id)}
-            className={`flex items-center justify-center rounded-md ${narrow ? "size-8" : "px-2 py-1 text-sm"} ${pivot === id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-          >
+          <ToggleGroupItem key={id} value={id} aria-label={label}>
             {narrow ? icon : label}
-          </button>
+          </ToggleGroupItem>
         ))}
-      </div>
+      </ToggleGroup>
     ) : null;
 
   return (
@@ -1348,16 +1338,21 @@ function FilesView({
       <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
         {navigationControls}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            title={ignoredVisibilityLabel}
-            aria-label={ignoredVisibilityLabel}
-            aria-pressed={includeIgnored}
-            onClick={() => setIncludeIgnored((current) => !current)}
-            className={`flex size-7 shrink-0 items-center justify-center rounded-md hover:text-foreground ${includeIgnored ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted"}`}
-          >
-            <Eye size={14} />
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  size="sm"
+                  aria-label={ignoredVisibilityLabel}
+                  pressed={includeIgnored}
+                  onPressedChange={setIncludeIgnored}
+                />
+              }
+            >
+              <Eye />
+            </TooltipTrigger>
+            <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
+          </Tooltip>
           {!narrow ? pivotControls : null}
           {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
             <NavigatorViewToggle
@@ -1382,7 +1377,7 @@ function FilesView({
         collapsedSummary={
           selectedParts ? (
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="min-w-0 max-w-[55%] truncate font-medium text-foreground">
+              <span className="min-w-0 max-w-1/2 truncate font-medium text-foreground">
                 {selectedParts.name}
               </span>
               {selectedParts.dir ? (
@@ -1809,16 +1804,15 @@ export default function WorktreeDetailPage({
     [comments, commentActions, focusComment, focusRequest, lineComments],
   );
 
-  const navigationControls = VIEW_TABS.map((tab) => (
-    <button
-      key={tab.id}
-      type="button"
-      onClick={() =>
+  const navigationControls = (
+    <Tabs
+      value={view}
+      onValueChange={(next: WorktreeView) =>
         navigate(
           worktreePath(
             worktree.id,
-            tab.id,
-            tab.id === "changes"
+            next,
+            next === "changes"
               ? {
                   ...(from !== undefined ? { from } : {}),
                   ...(to !== undefined ? { to } : {}),
@@ -1827,59 +1821,62 @@ export default function WorktreeDetailPage({
           ),
         )
       }
-      className={`shrink-0 rounded-lg px-2.5 py-1 text-sm ${view === tab.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
     >
-      {tab.label}
-    </button>
-  ));
+      <TabsList variant="line">
+        {VIEW_TABS.map((tab) => (
+          <TabsTrigger key={tab.id} value={tab.id}>
+            {tab.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
   const viewOptionsControl = (
-    <Popover
-      align="right"
-      placement="bottom"
-      title="Diff view options"
-      className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
-      button={<SlidersHorizontal size={14} />}
-    >
-      {() => (
-        <div className="p-1.5">
-          {/* By-file vs changeset is a RENDERING choice like unified vs split, so
-                it belongs in here rather than as a second segmented control in the
-                toolbar competing with the tabs and the scope. */}
-          {view === "changes" && !filePath ? (
-            <div className="mb-1.5 border-b border-border pb-1.5">
-              <p className="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Review layout
-              </p>
-              <div className="flex items-center rounded-lg border border-border p-0.5">
-                {(
-                  [
-                    { id: "by-file", label: "By file" },
-                    { id: "changeset", label: "All files" },
-                  ] as const
-                ).map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() =>
-                      onUpdatePrefs({ worktreeReviewMode: option.id })
-                    }
-                    aria-pressed={reviewLayout === option.id}
-                    className={`flex flex-1 items-center justify-center rounded-md px-2 py-1 text-sm ${reviewLayout === option.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          <DiffModeToolbar
-            prefs={effectivePrefs}
-            onUpdate={onUpdatePrefs}
-            stacked
-            showStyleToggle={!narrow}
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Diff view options"
           />
-        </div>
-      )}
+        }
+      >
+        <SlidersHorizontal />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-auto">
+        {/* By-file vs changeset is a RENDERING choice like unified vs split, so
+            it belongs in here rather than as a second segmented control in the
+            toolbar competing with the tabs and the scope. */}
+        {view === "changes" && !filePath ? (
+          <Field>
+            <FieldLabel>Review layout</FieldLabel>
+            <ToggleGroup
+              variant="outline"
+              size="sm"
+              spacing={0}
+              className="w-full"
+              value={[reviewLayout]}
+              onValueChange={(next) => {
+                if (next[0])
+                  onUpdatePrefs({ worktreeReviewMode: next[0] as ReviewMode });
+              }}
+            >
+              <ToggleGroupItem value="by-file" className="flex-1">
+                By file
+              </ToggleGroupItem>
+              <ToggleGroupItem value="changeset" className="flex-1">
+                All files
+              </ToggleGroupItem>
+            </ToggleGroup>
+          </Field>
+        ) : null}
+        <DiffModeToolbar
+          prefs={effectivePrefs}
+          onUpdate={onUpdatePrefs}
+          showStyleToggle={!narrow}
+        />
+      </PopoverContent>
     </Popover>
   );
 

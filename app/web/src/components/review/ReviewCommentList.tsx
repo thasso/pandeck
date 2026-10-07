@@ -5,6 +5,10 @@ import {
   groupReviewThreads,
   type ReviewThreadView,
 } from "./reviewThread.ts";
+import { IconButton } from "../common/IconButton.tsx";
+import { Button } from "../ui/button.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
+import { Item, ItemContent, ItemDescription, ItemTitle } from "../ui/item.tsx";
 
 /**
  * @component ReviewCommentList
@@ -84,7 +88,7 @@ export function ReviewCommentList({
     if (rows.length === 0) return null;
     return (
       <div className="flex flex-col">
-        <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-medium text-muted-foreground">
           <span className="flex size-4 items-center justify-center">
             {icon}
           </span>
@@ -123,12 +127,15 @@ export function ReviewCommentList({
   // Just "All" here: the host's CommentBar submits the pending set, and a second
   // control for the same set was noise.
   const quickSelect = selectable ? (
-    <QuickSelect
-      label="All"
+    <Button
+      variant="ghost"
+      size="xs"
       onClick={() =>
         setSelected(new Set(dispatchable.map((thread) => thread.id)))
       }
-    />
+    >
+      All
+    </Button>
   ) : undefined;
 
   return (
@@ -142,56 +149,37 @@ export function ReviewCommentList({
       {group(
         "Unanchored",
         groups.orphaned,
-        <Unlink size={12} className="text-amber-500" />,
+        <Unlink size={12} className="text-warning" />,
       )}
       {group(
         "Resolved",
         groups.resolved,
-        <CheckCircle2 size={12} className="text-emerald-500" />,
+        <CheckCircle2 size={12} className="text-success" />,
       )}
       {onSend && activeSelection.length > 0 ? (
         <div className="sticky bottom-0 flex items-center gap-2 border-t border-border bg-card/95 px-1 py-1.5 backdrop-blur">
           <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {activeSelection.length} selected
           </span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => setSelected(new Set())}
-            className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             Clear
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="sm"
             onClick={() => {
               onSend(activeSelection);
               setSelected(new Set());
             }}
-            className="rounded-lg bg-primary px-2.5 py-1 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             Send to agent…
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>
-  );
-}
-
-function QuickSelect({
-  label,
-  onClick,
-}: {
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded px-1.5 py-0.5 text-xs font-medium normal-case tracking-normal text-primary transition-colors hover:bg-accent"
-    >
-      {label}
-    </button>
   );
 }
 
@@ -215,55 +203,57 @@ function Row({
   const link = renderThread == null;
   return (
     <div>
-      <div
-        className={`group flex items-start gap-1.5 rounded-lg px-1 py-1 transition-colors ${expanded ? "bg-muted" : "hover:bg-muted"}`}
-      >
+      <div className="group flex items-start gap-1.5">
         {onToggleSelected ? (
-          <input
-            type="checkbox"
+          <Checkbox
             checked={selected}
-            onChange={onToggleSelected}
+            onCheckedChange={onToggleSelected}
             aria-label={`Select comment: ${thread.firstLine}`}
-            className="mt-1 size-3.5 shrink-0 accent-[var(--primary)]"
+            className="mt-2.5 ml-1"
           />
         ) : null}
-        <button
-          type="button"
+        <Item
+          size="xs"
+          variant={expanded ? "muted" : "default"}
+          render={<button type="button" />}
           onClick={onActivate}
-          className="min-w-0 flex-1 text-left"
           aria-expanded={link ? undefined : expanded}
+          className="min-w-0 flex-1 flex-nowrap text-left hover:bg-muted"
         >
-          <span
-            className={`block truncate text-sm ${thread.state === "resolved" ? "text-muted-foreground" : "text-foreground"}`}
-          >
-            {thread.firstLine || "(empty comment)"}
-          </span>
-          <span className="block truncate text-xs text-muted-foreground">
-            {[
-              thread.anchorLabel,
-              thread.author,
-              thread.replies
-                ? `${thread.replies} ${thread.replies === 1 ? "reply" : "replies"}`
-                : null,
-              thread.moved ? "moved" : null,
-              thread.sent ? "sent" : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-        </button>
+          <ItemContent className="min-w-0">
+            <ItemTitle
+              className={`w-full font-normal ${thread.state === "resolved" ? "text-muted-foreground" : ""}`}
+            >
+              <span className="truncate">
+                {thread.firstLine || "(empty comment)"}
+              </span>
+            </ItemTitle>
+            <ItemDescription className="truncate">
+              {[
+                thread.anchorLabel,
+                thread.author,
+                thread.replies
+                  ? `${thread.replies} ${thread.replies === 1 ? "reply" : "replies"}`
+                  : null,
+                thread.moved ? "moved" : null,
+                thread.sent ? "sent" : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </ItemDescription>
+          </ItemContent>
+        </Item>
         {/* In link mode the whole row is already the jump, so it carries no
             separate control for it. */}
         {!link && thread.locate ? (
-          <button
-            type="button"
+          <IconButton
+            label="Jump to text"
+            size="icon-xs"
             onClick={thread.locate}
-            title="Jump to text"
-            aria-label="Jump to text"
-            className="mt-0.5 shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            className="mt-1 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           >
-            <Crosshair size={12} />
-          </button>
+            <Crosshair />
+          </IconButton>
         ) : null}
       </div>
       {renderThread && expanded ? (

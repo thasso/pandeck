@@ -39,6 +39,13 @@ import {
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
+import { Badge } from "./ui/badge.tsx";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "./ui/input-group.tsx";
+import { Item, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx";
 
 const PULL_REQUEST_SHORTCUTS: ShortcutGroup = {
   title: "Pull Requests",
@@ -81,7 +88,7 @@ function StateIcon({ item }: { item: PullRequestInventoryItem }) {
   const size = 13;
   if (item.state === "merged")
     return (
-      <GitMerge size={size} className="shrink-0 text-purple-400" aria-hidden />
+      <GitMerge size={size} className="shrink-0 text-primary" aria-hidden />
     );
   if (item.state === "closed")
     return (
@@ -129,7 +136,9 @@ const PullRequestRow = memo(function PullRequestRow({
   const state = pullRequestStateLabel(item);
   const open = () => onOpen(pullRequestTargetOf(item));
   return (
-    <div
+    <Item
+      size="xs"
+      variant={active ? "muted" : "default"}
       data-pull-request-row
       data-list-row-id={pullRequestRowId(item)}
       data-pull-request-row-active={active ? "true" : undefined}
@@ -147,64 +156,58 @@ const PullRequestRow = memo(function PullRequestRow({
           onFocusSibling?.(event.key === "ArrowDown" ? 1 : -1);
         }
       }}
-      className={`group flex min-w-0 cursor-pointer select-none flex-col gap-0.5 rounded-md px-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        density === "comfortable" ? "py-2" : "py-1.5"
-      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
+      className={`cursor-pointer select-none ${active ? "" : "hover:bg-muted"} ${density === "comfortable" ? "py-2" : "py-1.5"}`}
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        <StateIcon item={item} />
-        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-          #{item.number}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-          {item.title}
-        </span>
-      </div>
-      <div className="flex min-w-0 items-center gap-1.5 pl-[1.15rem]">
-        {project ? (
-          <span
-            className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
-            title={project.name}
-          >
+      <ItemContent className="min-w-0 gap-0.5">
+        <ItemTitle className="w-full min-w-0 gap-1.5 font-normal">
+          <StateIcon item={item} />
+          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+            #{item.number}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{item.title}</span>
+        </ItemTitle>
+        <ItemDescription className="flex min-w-0 items-center gap-1.5 pl-5">
+          {project ? (
             <span
-              className="size-1.5 rounded-full"
-              style={{ backgroundColor: project.color }}
-              aria-hidden
-            />
-            {project.key}
+              className="flex shrink-0 items-center gap-1"
+              title={project.name}
+            >
+              <span
+                className="size-1.5 rounded-full"
+                style={{ backgroundColor: project.color }}
+                aria-hidden
+              />
+              {project.key}
+            </span>
+          ) : null}
+          <span className="min-w-0 flex-1 truncate font-mono">
+            {item.headBranch}
           </span>
-        ) : null}
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-          {item.headBranch}
-        </span>
-        {item.draft ? (
-          <span className="shrink-0 text-xs font-medium text-muted-foreground">
-            Draft
+          {item.draft ? <Badge variant="outline">Draft</Badge> : null}
+          {item.worktreeId ? (
+            // The one relation a ROW states: this pull request has a checkout on
+            // this machine, which is what makes it actionable from here.
+            <Badge
+              variant="secondary"
+              title="A local worktree holds this branch"
+            >
+              local
+            </Badge>
+          ) : null}
+          <span className={`shrink-0 ${CI_CLASS[ci.tone]}`} title={ci.label}>
+            <CircleDot size={11} aria-hidden />
+            <span className="sr-only">{ci.label}</span>
           </span>
-        ) : null}
-        {item.worktreeId ? (
-          // The one relation a ROW states: this pull request has a checkout on
-          // this machine, which is what makes it actionable from here.
           <span
-            className="shrink-0 text-xs font-medium text-primary"
-            title="A local worktree holds this branch"
+            className={`shrink-0 ${REVIEW_CLASS[review.tone]}`}
+            title={review.label}
           >
-            local
+            <MessageSquare size={11} aria-hidden />
+            <span className="sr-only">{review.label}</span>
           </span>
-        ) : null}
-        <span className={`shrink-0 ${CI_CLASS[ci.tone]}`} title={ci.label}>
-          <CircleDot size={11} aria-hidden />
-          <span className="sr-only">{ci.label}</span>
-        </span>
-        <span
-          className={`shrink-0 ${REVIEW_CLASS[review.tone]}`}
-          title={review.label}
-        >
-          <MessageSquare size={11} aria-hidden />
-          <span className="sr-only">{review.label}</span>
-        </span>
-      </div>
-    </div>
+        </ItemDescription>
+      </ItemContent>
+    </Item>
   );
 });
 
@@ -310,22 +313,19 @@ export function PullRequestBrowser({
   const error = errorOf(inventory);
   return (
     <div className="flex flex-col gap-px">
-      <div className="relative mb-1 flex items-center gap-1 px-0.5">
-        <div className="relative min-w-0 flex-1">
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <input
+      <div className="mb-1 flex items-center gap-1 px-0.5">
+        <InputGroup className="flex-1">
+          <InputGroupAddon>
+            <Search aria-hidden />
+          </InputGroupAddon>
+          <InputGroupInput
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pull requests…"
             aria-label="Search pull requests"
-            className="w-full rounded-lg border border-border bg-background py-1.5 pl-8 pr-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"
           />
-        </div>
+        </InputGroup>
         {/* R2: a poll keeps the rows and says so here, rather than replacing
             them with the skeletons above. */}
         {isPending(inventory) ? (
@@ -354,7 +354,7 @@ export function PullRequestBrowser({
         >
           <h2
             id={`pull-requests-${group.id}`}
-            className={`px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide ${
+            className={`px-2 pb-0.5 text-xs font-medium ${
               group.id === "needs-review"
                 ? "text-primary"
                 : "text-muted-foreground"

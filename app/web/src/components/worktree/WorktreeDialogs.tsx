@@ -3,7 +3,7 @@
  * HEAD-scoped clean, PR creation, PR merge, local merge back, and guarded
  * removal.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, GitMerge, RefreshCw } from "lucide-react";
 import { PULL_REQUEST_MERGE_METHODS } from "@assistant/shared";
 import type {
@@ -15,6 +15,15 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { ErrorNote, Spinner } from "../common/load.tsx";
+import { IconButton } from "../common/IconButton.tsx";
+import { Alert, AlertDescription } from "../ui/alert.tsx";
+import { Button } from "../ui/button.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
+import { Field, FieldLabel } from "../ui/field.tsx";
+import { Input } from "../ui/input.tsx";
+import { Label } from "../ui/label.tsx";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group.tsx";
+import { Textarea } from "../ui/textarea.tsx";
 import {
   ConfirmDialog,
   DialogAction,
@@ -22,6 +31,108 @@ import {
   DialogHeader,
   DialogOverlay as Overlay,
 } from "../common/dialogs.tsx";
+
+/* ------------------------------ shared controls ----------------------------- */
+
+/** A checkbox and the sentence it answers, the whole row clickable. */
+export function CheckRow({
+  checked,
+  onChange,
+  disabled = false,
+  className,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Label className={className ?? "mt-2"}>
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(next) => onChange(next === true)}
+      />
+      <span>{children}</span>
+    </Label>
+  );
+}
+
+/** One radio card per option, labelled by its sentence. */
+export function ChoiceGroup<T extends string>({
+  options,
+  labels,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  options: readonly T[];
+  labels: Record<T, string>;
+  value: T | undefined;
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <RadioGroup
+      value={value ?? null}
+      disabled={disabled}
+      onValueChange={(next) => onChange(next as T)}
+    >
+      {options.map((id) => (
+        <FieldLabel key={id}>
+          <Field orientation="horizontal">
+            <RadioGroupItem value={id} />
+            {labels[id]}
+          </Field>
+        </FieldLabel>
+      ))}
+    </RadioGroup>
+  );
+}
+
+/**
+ * The one alarm a destructive flow raises when it would lose work: what is at
+ * stake, then the consent that unlocks the confirming button.
+ */
+export function ForceConsent({
+  consent,
+  checked,
+  onChange,
+  disabled = false,
+  children,
+}: {
+  /** What the checkbox agrees to, after "I understand, ". */
+  consent: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Alert variant="destructive" className="mt-2">
+      <AlertTriangle />
+      <AlertDescription className="flex flex-col gap-1.5">
+        {children}
+        <CheckRow
+          checked={checked}
+          onChange={onChange}
+          disabled={disabled}
+          className=""
+        >
+          I understand, {consent}
+        </CheckRow>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+export const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
+  squash: "Squash — one commit on the base branch",
+  merge: "Merge commit — keep individual commits",
+  rebase: "Rebase — replay the commits onto the base",
+};
 
 /* ---------------------------------- create --------------------------------- */
 
@@ -57,7 +168,7 @@ export function CreateWorktreeDialog({
         proposes one; edit freely.
       </p>
       <div className="mt-3 flex items-center gap-2">
-        <input
+        <Input
           autoFocus
           value={name}
           onChange={(event) => {
@@ -70,7 +181,7 @@ export function CreateWorktreeDialog({
           placeholder={
             proposal === null ? "Proposing a name…" : "worktree-name"
           }
-          className="w-full flex-1 rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
+          className="flex-1 font-mono"
         />
         {/* Deliberately NOT a busy control, unlike `DialogAction` below: the
             spinner reports the naming AGENT's outstanding proposal, and this
@@ -79,24 +190,18 @@ export function CreateWorktreeDialog({
             arrive. It therefore carries no `aria-busy` either — the pending
             state is announced by the input's "Proposing a name…" placeholder,
             and a button that says "busy" while it is the retry would be a lie.
-            One 14px slot for both glyphs so it does not resize. */}
-        <button
-          type="button"
-          title="Propose another name"
+            The icon button's fixed size keeps both glyphs in one slot. */}
+        <IconButton
+          label="Propose another name"
+          variant="outline"
+          size="icon"
           onClick={() => {
             edited.current = false;
             onPropose();
           }}
-          className="rounded-lg border border-border p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          <span className="flex size-3.5 items-center justify-center">
-            {proposal === null ? (
-              <Spinner size="sm" />
-            ) : (
-              <RefreshCw size={14} />
-            )}
-          </span>
-        </button>
+          {proposal === null ? <Spinner size="sm" /> : <RefreshCw />}
+        </IconButton>
       </div>
       <div className="mt-3 flex justify-end gap-2">
         <DialogCancelButton onClick={onClose} />
@@ -143,7 +248,7 @@ export function CommitWorktreeDialog({
           : "everything changed"}{" "}
         in {scopeLabel} with your git identity.
       </p>
-      <textarea
+      <Textarea
         autoFocus
         rows={3}
         value={message}
@@ -157,7 +262,7 @@ export function CommitWorktreeDialog({
             onCommit(message.trim());
         }}
         placeholder="Commit message"
-        className="mt-3 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+        className="mt-3"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -220,7 +325,7 @@ export function AutoCommitResultDialog({
       ) : null}
       {result.warnings.length ? (
         <div className="mt-3">
-          <p className="text-sm font-semibold text-amber-400">Warnings</p>
+          <p className="text-sm font-semibold text-warning">Warnings</p>
           <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
             {result.warnings.map((warning, index) => (
               <li key={index}>{warning}</li>
@@ -307,19 +412,19 @@ export function CreatePullRequestDialog({
         <span className="font-mono">{worktree.baseBranch}</span>. Push your
         commits first — the PR is created from the remote branch.
       </p>
-      <input
+      <Input
         autoFocus
         value={title}
         onChange={(event) => setTitle(event.target.value)}
         placeholder="Title"
-        className="mt-3 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+        className="mt-3"
       />
-      <textarea
+      <Textarea
         rows={4}
         value={body}
         onChange={(event) => setBody(event.target.value)}
         placeholder="Description (optional)"
-        className="mt-2 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+        className="mt-2"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -337,12 +442,6 @@ export function CreatePullRequestDialog({
 }
 
 /* -------------------------------- merge PR --------------------------------- */
-
-const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
-  squash: "Squash — one commit on the base branch",
-  merge: "Merge commit — keep individual commits",
-  rebase: "Rebase — replay the commits onto the base",
-};
 
 /**
  * Merge the branch's PULL REQUEST on the hosting provider — not the local
@@ -410,39 +509,30 @@ export function MergePullRequestDialog({
           : "The remote branch is kept"}
         ; this worktree stays until you clean it up.
       </p>
-      <div className="mt-3 flex flex-col gap-1">
+      <div className="mt-3">
         {offered.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {supportedMethods
               ? "This repository allows no merge method for pull requests."
               : "The merge methods this repository allows could not be read; nothing can be chosen."}
           </p>
-        ) : null}
-        {offered.map((id) => (
-          <label
-            key={id}
-            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${selected === id ? "border-primary bg-accent text-foreground" : "border-border text-muted-foreground hover:bg-muted"}`}
-          >
-            <input
-              type="radio"
-              name="pr-merge-method"
-              checked={selected === id}
-              onChange={() => setMethod(id)}
-            />
-            {MERGE_METHOD_LABELS[id]}
-          </label>
-        ))}
+        ) : (
+          <ChoiceGroup
+            options={offered}
+            labels={MERGE_METHOD_LABELS}
+            value={selected}
+            onChange={setMethod}
+          />
+        )}
       </div>
-      <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">
-        <input
-          type="checkbox"
-          checked={deleteBranch}
-          disabled={busy}
-          onChange={(event) => setDeleteBranch(event.target.checked)}
-        />
+      <CheckRow
+        checked={deleteBranch}
+        disabled={busy}
+        onChange={setDeleteBranch}
+      >
         Delete the remote branch{" "}
-        <span className="font-mono text-sm">{worktree.branch}</span>
-      </label>
+        <span className="font-mono">{worktree.branch}</span>
+      </CheckRow>
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
         <DialogCancelButton disabled={busy} onClick={onClose} />
@@ -531,35 +621,25 @@ export function MergeWorktreeDialog({
       />
       {phase === "idle" || phase === "failed" ? (
         <>
-          {warnings.map((warning) => (
-            <p
-              key={warning}
-              className="mb-1.5 flex items-start gap-1.5 text-sm text-amber-500"
-            >
-              <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {warning}
-            </p>
-          ))}
+          {warnings.length > 0 ? (
+            <Alert variant="warning" className="mb-2">
+              <AlertTriangle />
+              <AlertDescription>
+                {warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {phase === "failed" && merge?.message ? (
             <ErrorNote message={merge.message} className="mb-2" />
           ) : null}
-          <div className="mt-1 flex flex-col gap-1">
-            {(Object.keys(STRATEGY_LABELS) as WorktreeMergeStrategy[]).map(
-              (id) => (
-                <label
-                  key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${strategy === id ? "border-primary bg-accent text-foreground" : "border-border text-muted-foreground hover:bg-muted"}`}
-                >
-                  <input
-                    type="radio"
-                    name="merge-strategy"
-                    checked={strategy === id}
-                    onChange={() => setStrategy(id)}
-                  />
-                  {STRATEGY_LABELS[id]}
-                </label>
-              ),
-            )}
-          </div>
+          <ChoiceGroup
+            options={Object.keys(STRATEGY_LABELS) as WorktreeMergeStrategy[]}
+            labels={STRATEGY_LABELS}
+            value={strategy}
+            onChange={setStrategy}
+          />
           <div className="mt-3 flex justify-end gap-2">
             <DialogCancelButton onClick={onClose} />
             <DialogAction
@@ -596,13 +676,13 @@ export function MergeWorktreeDialog({
           ) : null}
           {merge?.agentSessionId &&
           (phase === "agent_resolving" || phase === "conflicts") ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              className="mt-2 px-0"
               onClick={() => onOpenSession(merge.agentSessionId!)}
-              className="mt-2 text-sm text-primary hover:underline"
             >
               Open the merge agent's session →
-            </button>
+            </Button>
           ) : null}
           <div className="mt-3 flex justify-end">
             <DialogCancelButton onClick={onClose}>
@@ -750,23 +830,21 @@ export function RemoveWorktreeDialog({
         )
       }
     >
-      <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-foreground">
-        <input
-          type="checkbox"
-          checked={deleteBranch}
-          onChange={(event) => setDeleteBranch(event.target.checked)}
-        />
+      <CheckRow checked={deleteBranch} onChange={setDeleteBranch}>
         Also delete the branch{" "}
-        <span className="font-mono text-sm">{worktree.branch}</span>
-      </label>
+        <span className="font-mono">{worktree.branch}</span>
+      </CheckRow>
       {needsForce ? (
-        <div className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5">
-          {/* One force covers every risk below, so every risk it covers is
-              stated: a dirty tree used to speak for an unverifiable branch too,
-              and the consent then bought more than the sentence admitted. */}
+        // One force covers every risk below, so every risk it covers is
+        // stated: a dirty tree used to speak for an unverifiable branch too,
+        // and the consent then bought more than the sentence admitted.
+        <ForceConsent
+          consent={consent}
+          checked={confirmForce}
+          onChange={setConfirmForce}
+        >
           {losesWork ? (
-            <p className="flex items-start gap-1.5 text-sm text-red-400">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <p>
               {retire ? (
                 <>
                   {lostWorkSentence} will be LOST. Force retirement also permits
@@ -786,8 +864,7 @@ export function RemoveWorktreeDialog({
             </p>
           ) : null}
           {unverifiable ? (
-            <p className="mt-1.5 flex items-start gap-1.5 text-sm text-red-400">
-              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+            <p>
               {retire ? (
                 // The server's own words: this consent answers the refusal that
                 // its refreshed verification actually produced, so quoting it is
@@ -810,15 +887,7 @@ export function RemoveWorktreeDialog({
               )}
             </p>
           ) : null}
-          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={confirmForce}
-              onChange={(event) => setConfirmForce(event.target.checked)}
-            />
-            I understand, {consent}
-          </label>
-        </div>
+        </ForceConsent>
       ) : null}
     </ConfirmDialog>
   );

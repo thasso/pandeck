@@ -4,6 +4,14 @@ import {
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Button } from "./ui/button.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
 
 /**
  * @component MarkdownFile
@@ -51,54 +59,61 @@ function MarkdownFrontmatterHeader({
   const { title, tags, fields, parsed, raw } = frontmatter;
   if (!parsed) {
     return (
-      <details
-        className={`rounded-xl border border-border bg-card/60 px-4 py-2 text-sm ${className ?? ""}`}
-      >
-        <summary className="cursor-pointer text-muted-foreground">
-          Frontmatter
-        </summary>
-        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-foreground">
-          {raw}
-        </pre>
-      </details>
+      <Collapsible className={className}>
+        <Card size="sm">
+          <CardHeader>
+            <CollapsibleTrigger
+              render={
+                <Button variant="ghost" size="sm" className="justify-start" />
+              }
+            >
+              Frontmatter
+            </CollapsibleTrigger>
+          </CardHeader>
+          <CollapsibleContent keepMounted>
+            <CardContent>
+              <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">
+                {raw}
+              </pre>
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
     );
   }
   if (!title && tags.length === 0 && fields.length === 0) return null;
   return (
-    <header
-      aria-label="Document metadata"
-      className={`flex flex-col gap-2 rounded-xl border border-border bg-card/60 px-4 py-3 ${className ?? ""}`}
-    >
-      {title ? (
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-      ) : null}
-      {tags.length > 0 ? (
-        <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
-          {tags.map((tag, index) => (
-            <li
-              key={`${index}:${tag}`}
-              className="rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground"
-            >
-              {tag}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {fields.length > 0 ? (
-        <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
-          {fields.map((field) => (
-            <div key={field.key} className="contents">
-              <dt className="text-muted-foreground">{field.key}</dt>
-              <dd
-                className="min-w-0 break-words text-muted-foreground"
-                title={field.full}
-              >
-                {field.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
+    <header aria-label="Document metadata" className={className}>
+      <Card size="sm">
+        {title ? (
+          <CardHeader>
+            <CardTitle>{title}</CardTitle>
+          </CardHeader>
+        ) : null}
+        <CardContent className="flex flex-col gap-2">
+          {tags.length > 0 ? (
+            <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
+              {tags.map((tag, index) => (
+                <li key={`${index}:${tag}`}>
+                  <Badge variant="outline">{tag}</Badge>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {fields.length > 0 ? (
+            <dl className="flex flex-col gap-1 text-muted-foreground">
+              {fields.map((field) => (
+                <div key={field.key} className="flex min-w-0 gap-3">
+                  <dt className="w-28 shrink-0 truncate">{field.key}</dt>
+                  <dd className="min-w-0 break-words" title={field.full}>
+                    {field.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </CardContent>
+      </Card>
     </header>
   );
 }
