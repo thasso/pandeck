@@ -8,6 +8,11 @@ export interface ComposerLedgeProps {
    * ledge is the bottom edge itself and sits flush on the row below.
    */
   joined: boolean;
+  /**
+   * Which edge of the card the strip rests on. `top` (the default) is a shelf
+   * above it; `bottom` mirrors it under the card, tucked behind its lower edge.
+   */
+  edge?: "top" | "bottom";
   children: ReactNode;
 }
 
@@ -29,7 +34,15 @@ export interface ComposerLedgeProps {
  * transcript's bottom inset accounts for it.
  * @related Composer, ChatDockPanel, BackgroundWorkLedge, SpawnedSessionsLedge
  */
-export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
+export function ComposerLedge({
+  joined,
+  edge = "top",
+  children,
+}: ComposerLedgeProps) {
+  const edgeClass =
+    edge === "top"
+      ? `rounded-t-xl border-b-0 ${joined ? "-mb-4 pb-4" : ""}`
+      : `rounded-b-xl border-t-0 ${joined ? "-mt-4 pt-4" : ""}`;
   return (
     <div
       data-composer-ledge
@@ -37,7 +50,7 @@ export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
       // IS the composer's corner radius (20px, `rounded-[1.25rem]`): the strip
       // starts exactly where the curve ends. Less and the tucked-in bottom
       // shows through the curve; change the two together.
-      className={`relative z-1 mx-5 divide-y overflow-hidden rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
+      className={`relative z-1 mx-5 divide-y overflow-hidden border bg-card ${edgeClass}`}
     >
       {children}
     </div>

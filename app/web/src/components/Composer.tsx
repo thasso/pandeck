@@ -2707,15 +2707,27 @@ export const Composer = memo(function Composer({
             </div>
           </div>
         </InputGroup>
+        {/* The runtime as a strip under the card, the same object as the
+            ledges above it: what the session runs on, resting where the
+            composer ends. A statement, not a control — nothing to unfold. */}
+        {runtimeLine && !hidden && !commentMode ? (
+          <ComposerLedge joined edge="bottom">
+            <div
+              className="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground"
+              title={runtimeLine}
+            >
+              {model ? (
+                <ProviderIcon
+                  provider={model.provider}
+                  size={14}
+                  className="shrink-0"
+                />
+              ) : null}
+              <span className="min-w-0 truncate">{runtimeLine}</span>
+            </div>
+          </ComposerLedge>
+        ) : null}
       </div>
-      {runtimeLine && !hidden && !commentMode ? (
-        <p
-          className="mt-1 truncate px-2 text-center text-xs text-muted-foreground"
-          title={runtimeLine}
-        >
-          {runtimeLine}
-        </p>
-      ) : null}
       {attachmentError ? (
         <div className="mt-1.5 px-2 text-sm text-destructive">
           {attachmentError}
