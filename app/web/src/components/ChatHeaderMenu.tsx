@@ -4,7 +4,7 @@ import {
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
-  MoreHorizontal,
+  EllipsisVertical,
   Terminal,
   WrapText,
 } from "lucide-react";
@@ -134,7 +134,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
             setSheetOpen(true);
           }}
         >
-          <MoreHorizontal />
+          <EllipsisVertical />
         </IconButton>
         <EdgeSheet
           open={sheetOpen}
@@ -195,7 +195,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
           <Button variant="ghost" size="icon-sm" aria-label="Chat options" />
         }
       >
-        <MoreHorizontal />
+        <EllipsisVertical />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
         {view ? (

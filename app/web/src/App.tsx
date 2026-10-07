@@ -336,7 +336,6 @@ import { ToastViewport } from "./components/ToastViewport.tsx";
 import { AppStatus } from "./components/AppStatus.tsx";
 import { WorkflowRunStartSheet } from "./components/WorkflowRunStartSheet.tsx";
 import { settleBackgroundWorkflowStarts } from "./lib/workflowStart.ts";
-import { UnreadDot } from "./components/UnreadDot.tsx";
 import {
   useShortcuts,
   type ShortcutGroup,
@@ -4022,16 +4021,28 @@ function AppContent() {
       state.worktrees?.find((worktree) => worktree.id === displayWorktreeId)
         ?.branch)
     : undefined;
-  const sessionTitleHeading = (
-    <div className="min-w-0">
-      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-        <SessionTitleText
-          title={displaySessionTitle}
-          pending={displaySessionTitleGenerationPending}
-        />
-      </h2>
-      {displayWorktreeBranch ? (
-        <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+  const sessionTitleText = (
+    <SessionTitleText
+      title={displaySessionTitle}
+      pending={displaySessionTitleGenerationPending}
+    />
+  );
+  const sessionTitleHeading = displayWorktreeBranch ? (
+    // In a worktree the whole title block is the way there (to its changes,
+    // which is what the subtitle's counts are about) — the header keeps no
+    // separate worktree button.
+    <h2 className="min-w-0 text-sm font-semibold tracking-tight text-foreground">
+      <Button
+        variant="ghost"
+        className="-mx-1.5 h-auto max-w-full min-w-0 flex-col items-start gap-0 px-1.5 py-0.5 text-left font-semibold"
+        title="Open this session's worktree changes"
+        onClick={() =>
+          displayWorktreeId &&
+          navigate(worktreePath(displayWorktreeId, "changes"))
+        }
+      >
+        <span className="w-full truncate">{sessionTitleText}</span>
+        <span className="flex w-full min-w-0 items-center gap-1 text-xs font-normal text-muted-foreground">
           <GitBranch className="size-3 shrink-0" aria-hidden />
           <span className="min-w-0 truncate font-mono">
             {displayWorktreeBranch}
@@ -4051,9 +4062,13 @@ function AppContent() {
               </span>
             </span>
           ) : null}
-        </p>
-      ) : null}
-    </div>
+        </span>
+      </Button>
+    </h2>
+  ) : (
+    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+      {sessionTitleText}
+    </h2>
   );
   const stagedContextBar: StagedContextData | undefined = showContextPicker
     ? {
@@ -5164,13 +5179,13 @@ function AppContent() {
     submitComposerRef.current?.();
   }, [mobileLayout, setInspectorOpen]);
 
-  // The dock row's comment press, when a transcript selection has taken over its
-  // Send slot. Capturing the anchor alone leaves nothing on screen on a phone: the
-  // comment box lives in the composer, which is HIDDEN there until something opens
-  // it. So the composer is opened inside this tap — synchronously, like compose and
-  // the paperclip, or iOS keeps the keyboard down — and the anchor is captured after,
+  // The session header's Comment press, on a captured transcript selection.
+  // Capturing the anchor alone leaves nothing on screen on a phone: the comment
+  // box lives in the composer, which is HIDDEN there until something opens it. So
+  // the composer is opened inside this tap — synchronously, like compose and the
+  // paperclip, or iOS keeps the keyboard down — and the anchor is captured after,
   // since opening focuses the textarea and comment mode wants that caret.
-  const commentFromDock = useCallback(() => {
+  const commentOnSelection = useCallback(() => {
     if (mobileLayout) setInspectorOpen(false);
     openComposerRef.current?.();
     chatCommentSelection?.onComment();
@@ -5421,8 +5436,6 @@ function AppContent() {
               draft={composerDraft}
               onCompose={openComposer}
               onSubmit={submitFromDock}
-              commentSelection={chatCommentSelection}
-              onComment={chatCommentSelection ? commentFromDock : undefined}
               // Beside back: what this conversation is about. A session that has not
               // been sent yet is about nothing yet, so there the slot carries the same
               // staged-context picker the composer's `+` opens (exactly while that
@@ -5510,8 +5523,6 @@ function AppContent() {
     composerDraft,
     openComposer,
     submitFromDock,
-    chatCommentSelection,
-    commentFromDock,
     actions,
     dockSessionContext,
     showContextPicker,
@@ -5709,7 +5720,6 @@ function AppContent() {
           chatComments={chatComments}
           commentDraft={chatCommentDraft}
           onCommentDraftChange={setChatCommentDraft}
-          onAddComment={chatCommentSelection?.onComment}
           onRevealComment={revealChatComment}
           draft={
             pendingWorktreeReview?.draft ??
@@ -6999,43 +7009,38 @@ function AppContent() {
                       }
                       objectOverflow={false}
                       title={sessionTitleHeading}
-                      // Mobile folds both of these into the object dock (ui-shell.md, Small
-                      // Screens), leaving this row to identity alone.
+                      // Exactly two actions, on every layout: Comment on the
+                      // transcript selection, and ⋮ for the rest. The worktree
+                      // is reached through the title block itself.
                       actions={
-                        mobileLayout ? undefined : (
-                          <div className="flex items-center gap-1">
-                            {displayWorktreeId && (
-                              <IconButton
-                                label="View this session's worktree changes"
-                                size="icon"
-                                onClick={() =>
-                                  navigate(
-                                    worktreePath(displayWorktreeId, "changes"),
-                                  )
-                                }
-                                className="relative"
-                              >
-                                {/* Same rule as the dock's row and the inspector's action: the
-                      glyph is the worktree this leaves for, not the diff it opens on. */}
-                                <GitBranch />
-                                {displayWorktreeStatus?.dirty && (
-                                  <UnreadDot title="Worktree has uncommitted changes" />
-                                )}
-                              </IconButton>
-                            )}
-                            <ChatHeaderMenu
-                              mobile={mobileLayout}
-                              view={
-                                displayHasMessages
-                                  ? {
-                                      ...transcriptView,
-                                      onChange: updateTranscriptView,
-                                    }
-                                  : undefined
-                              }
-                            />
-                          </div>
-                        )
+                        <div className="flex items-center gap-1">
+                          <IconButton
+                            label="Add comment"
+                            title={
+                              chatCommentSelection
+                                ? "Add comment"
+                                : "Select text to comment"
+                            }
+                            // Keep the transcript selection the comment anchors to.
+                            onPointerDown={(event) => event.preventDefault()}
+                            onClick={commentOnSelection}
+                            data-comment-actuation
+                            disabled={!chatCommentSelection}
+                          >
+                            <MessageSquareQuote />
+                          </IconButton>
+                          <ChatHeaderMenu
+                            mobile={mobileLayout}
+                            view={
+                              displayHasMessages
+                                ? {
+                                    ...transcriptView,
+                                    onChange: updateTranscriptView,
+                                  }
+                                : undefined
+                            }
+                          />
+                        </div>
                       }
                     />
                   )}

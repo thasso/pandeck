@@ -31,7 +31,6 @@ import {
   Plus,
   SendHorizontal,
   Square,
-  MessageSquareQuote,
   Trash2,
   WandSparkles,
   X,
@@ -297,12 +296,8 @@ interface Props {
   onCommentDraftChange?: (
     draft: Omit<NewPendingChatComment, "body"> | null,
   ) => void;
-  /** Opens comment mode from the currently captured transcript selection. */
-  onAddComment?: (() => void) | undefined;
   /** Take the reader to the passage a pending comment annotates. */
   onRevealComment?: (comment: PendingChatComment) => void;
-  /** Why Add comment is disabled while no transcript selection is captured. */
-  commentDisabledReason?: string;
   /**
    * Always use the focus-driven collapse regardless of viewport (the inspector
    * footer composer, which must stay compact on desktop too). The main chat
@@ -932,9 +927,7 @@ export const Composer = memo(function Composer({
   chatComments,
   commentDraft,
   onCommentDraftChange,
-  onAddComment,
   onRevealComment,
-  commentDisabledReason = "Select text to comment",
   collapseWhenBlurred = false,
   dictation,
 }: Props) {
@@ -2515,20 +2508,6 @@ export const Composer = memo(function Composer({
                           {branchCount}
                         </Badge>
                       )}
-                    </IconButton>
-                  )}
-                  {commentMode ? null : (
-                    <IconButton
-                      label="Add comment"
-                      onPointerDown={(event) => event.preventDefault()}
-                      onClick={onAddComment}
-                      data-comment-actuation
-                      disabled={disabled || !onAddComment}
-                      title={
-                        onAddComment ? "Add comment" : commentDisabledReason
-                      }
-                    >
-                      <MessageSquareQuote />
                     </IconButton>
                   )}
                   <IconButton

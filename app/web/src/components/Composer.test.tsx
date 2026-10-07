@@ -550,7 +550,6 @@ describe("Composer comment mode", () => {
             chatComments={chatComments}
             commentDraft={draft}
             onCommentDraftChange={setDraft}
-            onAddComment={() => {}}
           />
         </>
       );
@@ -728,11 +727,7 @@ describe("Composer comment mode", () => {
         blockIndex: 0,
       },
     };
-    act(() =>
-      root!.render(
-        composer({ chatComments: controller(), onAddComment: () => {} }),
-      ),
-    );
+    act(() => root!.render(composer({ chatComments: controller() })));
     expect(labelled("Add comment")).toBeTruthy();
     expect(
       container.querySelector('[title="Attach files or images"]'),
@@ -742,7 +737,6 @@ describe("Composer comment mode", () => {
       root!.render(
         composer({
           chatComments: controller(),
-          onAddComment: () => {},
           commentDraft: draft,
         }),
       ),
