@@ -64,7 +64,7 @@ function SessionRowContentImpl({
         className={`relative flex size-5 shrink-0 items-center justify-center rounded-md ${
           isWorkspaceAware(identity)
             ? "bg-amber-400/10 text-amber-500"
-            : "bg-accent-soft text-accent"
+            : "bg-accent text-primary"
         }`}
         aria-hidden
       >
@@ -91,7 +91,7 @@ function SessionRowContentImpl({
       </span>
       {awaitingInput ? (
         <span
-          className="flex size-4 shrink-0 items-center justify-center rounded bg-accent/15 text-accent"
+          className="flex size-4 shrink-0 items-center justify-center rounded bg-primary/15 text-primary"
           title={`This session is waiting for ${awaitingWhat}`}
           aria-label={`Waiting for ${awaitingWhat}`}
         >

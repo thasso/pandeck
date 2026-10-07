@@ -20,11 +20,11 @@ import { Spinner } from "./ui/load.tsx";
 
 /** Tone → theme tokens. Text only: this sits inside rows that own their fill. */
 const TONE_CLASS: Record<SessionDeliveryTone, string> = {
-  accent: "text-accent",
+  accent: "text-primary",
   warning: "text-warning",
   danger: "text-danger",
   success: "text-success",
-  muted: "text-muted",
+  muted: "text-muted-foreground",
 };
 
 /**

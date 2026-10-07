@@ -230,9 +230,9 @@ function CalendarBrowser({
           key={view.id}
           type="button"
           onClick={() => onOpenView(view.id)}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
             <CalendarDays size={15} />
           </span>
           {view.label}
@@ -274,14 +274,14 @@ function KnowledgeBrowser({
           type="button"
           aria-current={active === view.id ? "page" : undefined}
           onClick={() => onOpen(view.id)}
-          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active === view.id ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active === view.id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
             {view.icon}
           </span>
           <span className="min-w-0 flex-1 truncate">{view.label}</span>
           {view.id === "changes" && uncommitted > 0 ? (
-            <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-micro font-medium text-accent">
+            <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-micro font-medium text-primary">
               {uncommitted}
             </span>
           ) : null}
@@ -348,14 +348,14 @@ function SettingsSectionList({
                 key={section.id}
                 type="button"
                 onClick={() => onOpenSection?.(section.id)}
-                className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                   activeSection === section.id
-                    ? "bg-accent-soft text-fg"
-                    : "text-muted hover:bg-raised hover:text-fg"
+                    ? "bg-accent text-fg"
+                    : "text-muted-foreground hover:bg-raised hover:text-fg"
                 }`}
               >
                 <span
-                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${activeSection === section.id ? "bg-surface text-accent" : "bg-raised text-muted"}`}
+                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${activeSection === section.id ? "bg-surface text-primary" : "bg-raised text-muted-foreground"}`}
                 >
                   {section.icon}
                 </span>

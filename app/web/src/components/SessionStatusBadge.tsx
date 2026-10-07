@@ -17,11 +17,11 @@ import { Spinner } from "./ui/load.tsx";
 
 /** Badge colors shared by full session cards and their compact child rows. */
 export const SESSION_BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent-soft text-accent",
+  accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
   danger: "bg-danger-soft text-danger",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted",
+  muted: "bg-line text-muted-foreground",
 };
 
 const STATUS_ICON: Partial<Record<SessionInboxStatus, LucideIcon>> = {

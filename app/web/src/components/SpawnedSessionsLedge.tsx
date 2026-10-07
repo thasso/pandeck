@@ -18,11 +18,11 @@ import { useElapsedNow } from "./useElapsedNow.ts";
 
 /** Same semantic tones the cards and rows use, at the bubble badge's weight. */
 const BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent-soft text-accent",
+  accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
   danger: "bg-danger-soft text-danger",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted",
+  muted: "bg-line text-muted-foreground",
 };
 
 export interface SpawnedSessionsLedgeProps {
@@ -105,7 +105,7 @@ export function SpawnedSessionsLedge({
         onClick={() => {
           if (view.stall) onOpenSession(stallTarget(view.stall).id);
         }}
-        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${BADGE_TONE.warning}`}
+        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${BADGE_TONE.warning}`}
       >
         <Hourglass size={10} className="shrink-0" aria-hidden="true" />
         {stallParts(view.stall).before ? (
@@ -143,8 +143,10 @@ export function SpawnedSessionsLedge({
         // to coordinate one the user now drives would be a relation that no
         // longer holds.
         aria-label={`${open ? "Hide" : "Show"} the sessions this chat spawned — ${summary}`}
-        className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-          working ? "text-accent hover:text-accent" : "text-muted hover:text-fg"
+        className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+          working
+            ? "text-primary hover:text-primary"
+            : "text-muted-foreground hover:text-fg"
         }`}
       >
         {/* Same treatment as the cluster card's fold: while a peer runs, the
@@ -169,7 +171,7 @@ export function SpawnedSessionsLedge({
             type="button"
             title={`Open “${bubbleTitle}”`}
             onClick={() => onOpenSession(bubbled.session.id)}
-            className={`flex min-w-0 items-center rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            className={`flex min-w-0 items-center rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               BADGE_TONE[bubbleTone ?? "accent"]
             }`}
           >
@@ -187,7 +189,7 @@ export function SpawnedSessionsLedge({
               title={`Dismiss — settle “${bubbleTitle}”`}
               aria-label={`Dismiss the failure in “${bubbleTitle}”`}
               onClick={() => onSettleSession(bubbled.session.id, true)}
-              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <X size={12} aria-hidden />
             </button>
@@ -228,7 +230,7 @@ export function SpawnedSessionsLedge({
               type="button"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
-              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
             >
               <ChevronDown
                 size={13}

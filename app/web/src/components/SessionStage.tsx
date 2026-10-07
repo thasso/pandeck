@@ -27,14 +27,14 @@ export function PendingSessionPanel({ title }: { title: string }) {
           className="rounded-2xl border border-line bg-panel p-4 shadow-sm"
         >
           <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-primary">
               <Spinner size="md" />
             </div>
             <div className="min-w-0">
               <div className="truncate text-body font-semibold text-fg">
                 Opening {title}
               </div>
-              <div className="mt-0.5 text-caption text-muted">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 Keeping the app shell stable while the transcript catches up.
               </div>
             </div>
@@ -116,7 +116,7 @@ export function SessionBootstrapNarration({
       ) : (
         <div
           role="status"
-          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-caption text-muted"
+          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-caption text-muted-foreground"
         >
           <Spinner size="sm" />
           <span>{narration.label}</span>

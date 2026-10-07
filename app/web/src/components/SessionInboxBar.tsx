@@ -112,8 +112,8 @@ export function SessionInboxBar({
 type ChipTone = "accent" | "live" | "quiet";
 
 const TONE_CLASS: Record<ChipTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  live: "text-muted",
+  accent: "bg-accent text-primary",
+  live: "text-muted-foreground",
   quiet: "text-faint",
 };
 
@@ -179,7 +179,7 @@ function Chip({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={`${shape} transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+      className={`${shape} transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
     >
       {glyph}
       {number}

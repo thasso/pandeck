@@ -45,7 +45,7 @@ function DismissButton({ active, busy, onDismiss }: ControlProps) {
       onClick={onDismiss}
       disabled={!active}
       aria-busy={busy === "dismiss" || undefined}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
     >
       {busy === "dismiss" ? <Spinner size="sm" /> : <XCircle size={12} />}
       Dismiss
@@ -111,7 +111,7 @@ function SecretControls(
           onClick={submit}
           disabled={!active || !value.trim()}
           aria-busy={busy === "submit" || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           {busy === "submit" ? <Spinner size="sm" /> : <Save size={12} />}
           Save
@@ -161,7 +161,7 @@ function ConnectControls(props: ControlProps) {
           onClick={() => void connect()}
           disabled={!active || !connectPath || opening}
           aria-busy={opening || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           {opening ? <Spinner size="sm" /> : <ExternalLink size={12} />}
           {connecting ? "Open again" : "Connect"}
@@ -247,7 +247,7 @@ function SignInControls(props: ControlProps) {
               href={verification}
               target="_blank"
               rel="noreferrer"
-              className="text-accent hover:underline"
+              className="text-primary hover:underline"
             >
               {verification}
             </a>{" "}
@@ -275,7 +275,7 @@ function SignInControls(props: ControlProps) {
           type="button"
           onClick={signIn}
           disabled={!active || !account?.enabled}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           <LogIn size={12} />
           {account?.status === "connecting" ? "Sign in again" : "Sign in"}

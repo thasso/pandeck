@@ -192,7 +192,7 @@ function PeerPromptBubble({
         aria-busy={busy || undefined}
         className={`block min-w-0 max-w-[85%] rounded-xl px-2 py-1 transition-colors ${
           sent
-            ? "bg-accent-soft hover:bg-accent/15"
+            ? "bg-accent hover:bg-primary/15"
             : "border border-line bg-panel/60 hover:bg-surface"
         } ${busy ? "opacity-60" : ""}`}
         onClick={(event) => {
@@ -214,7 +214,7 @@ function PeerPromptBubble({
         <p className="line-clamp-2 break-words text-caption text-fg">
           {message.message}
         </p>
-        <p className="mt-0.5 text-micro text-muted">
+        <p className="mt-0.5 text-micro text-muted-foreground">
           {PEER_PROMPT_STATE_LABEL[message.state]} ·{" "}
           {relativeTime(message.createdAt)}
         </p>
@@ -312,7 +312,7 @@ export function PeerPromptsSection({
             <button
               type="button"
               onClick={() => onExpand()}
-              className="w-full rounded-lg border border-line px-2 py-1.5 text-caption text-muted transition-colors hover:bg-surface hover:text-fg"
+              className="w-full rounded-lg border border-line px-2 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-surface hover:text-fg"
             >
               Load more history
             </button>
@@ -335,7 +335,7 @@ function PostReloadContinuationCard({
   onCancel?: (() => void) | undefined;
 }) {
   return (
-    <section className="rounded-xl border border-accent/30 bg-accent-soft p-3 text-caption text-accent">
+    <section className="rounded-xl border border-primary/30 bg-accent p-3 text-caption text-primary">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-semibold">Post-reload continuation queued</h3>
@@ -347,7 +347,7 @@ function PostReloadContinuationCard({
           type="button"
           onClick={onCancel}
           disabled={!onCancel}
-          className="rounded-md border border-accent/30 px-2 py-1 text-caption transition-colors hover:bg-accent/10 disabled:opacity-50"
+          className="rounded-md border border-primary/30 px-2 py-1 text-caption transition-colors hover:bg-primary/10 disabled:opacity-50"
         >
           Cancel
         </button>
@@ -481,7 +481,7 @@ export function ActiveSkillsSection({
           })}
         </ul>
       ) : !libraryPending && !libraryError ? (
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           No library skills were available when this session started.
         </p>
       ) : null}
@@ -569,7 +569,7 @@ function ToolsSection({
                 type="button"
                 onClick={() => setExpandedGroupId(expanded ? null : group.id)}
                 aria-expanded={expanded}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 <div
                   title={
@@ -598,7 +598,7 @@ function ToolsSection({
                         tool.loaded
                           ? "border-emerald-500/40 bg-emerald-500/10 text-fg"
                           : tool.usable
-                            ? "border-line text-muted"
+                            ? "border-line text-muted-foreground"
                             : "border-line text-faint line-through"
                       }`}
                     >
@@ -675,7 +675,7 @@ function ApprovalGrantsSection({
               <button
                 type="button"
                 onClick={() => onRevoke(sessionId, grant.key)}
-                className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted hover:bg-surface hover:text-fg"
+                className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
               >
                 Revoke
               </button>
@@ -708,13 +708,13 @@ function BrowserRuntimesSection({
       <div className="rounded-xl border border-line bg-surface p-2.5">
         <div className="flex items-center gap-2">
           <div
-            className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-accent" : runtime.status === "error" ? "bg-danger" : "bg-line-strong"}`}
+            className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-primary" : runtime.status === "error" ? "bg-danger" : "bg-line-strong"}`}
           />
           <p className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
             Playwright MCP
           </p>
           <span
-            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${runtime.agentStatus === "running" ? "border-accent/30 text-accent" : "border-line text-faint"}`}
+            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-line text-faint"}`}
           >
             agent {runtime.agentStatus}
           </span>
@@ -788,7 +788,7 @@ function ArtifactsSection({
               key={artifact.id}
               type="button"
               onClick={() => setSelectedId(artifact.id)}
-              className={`overflow-hidden rounded-xl border bg-surface text-left transition-colors ${active ? "border-accent/50 ring-1 ring-accent/30" : "border-line hover:border-line-strong"}`}
+              className={`overflow-hidden rounded-xl border bg-surface text-left transition-colors ${active ? "border-primary/50 ring-1 ring-primary/30" : "border-line hover:border-line-strong"}`}
             >
               {artifact.mimeType.startsWith("image/") ? (
                 <img
@@ -797,7 +797,7 @@ function ArtifactsSection({
                   className="h-24 w-full object-cover"
                 />
               ) : (
-                <div className="flex h-24 items-center justify-center bg-panel text-muted">
+                <div className="flex h-24 items-center justify-center bg-panel text-muted-foreground">
                   <ImageIcon size={22} />
                 </div>
               )}
@@ -867,7 +867,7 @@ function ArtifactPreview({
             type="button"
             onClick={onCopyUrl}
             title="Copy artifact URL"
-            className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg"
+            className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
           >
             <Clipboard size={12} />
           </button>
@@ -876,7 +876,7 @@ function ArtifactPreview({
               type="button"
               onClick={onCopyImage}
               title="Copy image"
-              className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg"
+              className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
             >
               <ImageIcon size={12} />
             </button>
@@ -886,7 +886,7 @@ function ArtifactPreview({
             target="_blank"
             rel="noreferrer"
             title="Open artifact"
-            className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg"
+            className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
           >
             <ExternalLink size={12} />
           </a>
@@ -929,12 +929,12 @@ function ArtifactPreview({
         ) : text === undefined ? (
           <PaneLoading className="py-8" label="Loading preview…" />
         ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-micro text-muted">
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-micro text-muted-foreground">
             {text}
           </pre>
         )
       ) : (
-        <div className="p-3 text-caption text-muted">
+        <div className="p-3 text-caption text-muted-foreground">
           No inline preview for this artifact type. Open it in a new tab to
           inspect it.
         </div>

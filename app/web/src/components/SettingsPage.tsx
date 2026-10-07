@@ -497,7 +497,7 @@ export function SettingsPage({
           )}
           {/* Index route: the section list is the browser, not this page. */}
           {!currentSection && (
-            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted">
+            <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted-foreground">
               Pick a settings section in the Settings browser.
             </div>
           )}
@@ -518,12 +518,12 @@ function ClaudeSdkSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Claude SDK</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Enable Claude via the Agent SDK — an in-process Claude agent driven
         through the normal chat composer: prompts, model, and thinking level are
         sent straight to the SDK session with full tool access.
       </p>
-      <p className="mt-2 text-caption text-muted">
+      <p className="mt-2 text-caption text-muted-foreground">
         Authentication uses the isolated Claude profiles configured below.
         Follow a profile's setup command to sign in with the intended account.
         Model, thinking level, and profile lock after the session's first turn.
@@ -537,11 +537,11 @@ function ClaudeSdkSection({
             onChange={(e) =>
               onUpdate({ claudeSdk: { ...sdk, enabled: e.target.checked } })
             }
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable Claude SDK sessions
         </label>
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           When enabled, a new Claude SDK session can be started from the sidebar
           and appears in the Sessions list alongside Assistant and Workshop
           sessions.
@@ -555,7 +555,7 @@ function OpenAiSection() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">OpenAI</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Connect one or more OpenAI/Codex subscription accounts for pi-powered
         assistant sessions. Each profile keeps its credentials isolated and can
         be selected before a session starts.
@@ -610,7 +610,7 @@ export function CredentialProfileCard({
               <button
                 type="button"
                 onClick={onRename}
-                className="rounded-lg p-2 text-muted hover:bg-raised hover:text-fg"
+                className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
                 aria-label={`Rename ${profile.name}`}
                 title="Rename profile"
               >
@@ -638,7 +638,7 @@ export function CredentialProfileCard({
           aria-checked={profile.enabled}
           aria-label={`${profile.enabled ? "Disable" : "Enable"} ${profile.name}`}
           onClick={onToggle}
-          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${profile.enabled ? "bg-accent" : "bg-line"}`}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${profile.enabled ? "bg-primary" : "bg-line"}`}
         >
           <span
             className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${profile.enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -659,14 +659,14 @@ export function CredentialProfileCard({
         </button>
       </div>
       {profile.setup ? (
-        <div className="mt-2 rounded bg-raised p-2 text-caption text-muted">
+        <div className="mt-2 rounded bg-raised p-2 text-caption text-muted-foreground">
           <p>{profile.setup.detail}</p>
           {profile.setup.verificationUri ? (
             <a
               href={profile.setup.verificationUri}
               target="_blank"
               rel="noreferrer"
-              className="mt-1 block text-accent underline"
+              className="mt-1 block text-primary underline"
             >
               {profile.setup.verificationUri}
             </a>
@@ -722,7 +722,7 @@ function CredentialProfileUsageBlock({
   )
     return null;
   return (
-    <div className="mt-2 rounded bg-raised p-2 text-caption text-muted">
+    <div className="mt-2 rounded bg-raised p-2 text-caption text-muted-foreground">
       <p className="font-medium text-fg">Used by</p>
       {automaticForProvider ? (
         <p className="mt-1">
@@ -814,7 +814,7 @@ function CredentialProfilesSection({
               <h3 className="text-body font-semibold">
                 {providerLabel} profiles
               </h3>
-              <p className="mt-1 text-caption text-muted">
+              <p className="mt-1 text-caption text-muted-foreground">
                 Profiles are isolated under PA data. Tokens never enter the
                 browser or app settings.
               </p>
@@ -822,7 +822,7 @@ function CredentialProfilesSection({
             <button
               type="button"
               onClick={() => void refresh()}
-              className="rounded-lg p-2 text-muted hover:bg-raised hover:text-fg"
+              className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
               title={`Refresh ${providerLabel} profiles`}
             >
               <RefreshCw size={14} />
@@ -839,7 +839,7 @@ function CredentialProfilesSection({
               type="button"
               onClick={() => void add()}
               disabled={!name.trim()}
-              className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg disabled:opacity-40"
+              className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground disabled:opacity-40"
             >
               Add {providerLabel} profile
             </button>
@@ -986,7 +986,7 @@ function ProfileSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Profile</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Who the assistant works for. The timezone decides what
         &ldquo;today&rdquo; means everywhere: the calendar, Task planning,
         memory reminders, and the local times tools report.
@@ -1056,13 +1056,13 @@ function AppearanceSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-heading font-semibold">Appearance</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Adjust local interface preferences for this browser.
       </p>
 
       <div className="mt-6 space-y-3 rounded-xl border border-line bg-panel p-4">
         <h3 className="text-body font-semibold text-fg">Theme</h3>
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           The color theme for this browser. On a wide layout the header's
           sun/moon button flips the same preference; a phone has no app header,
           so this is the only place.
@@ -1083,7 +1083,7 @@ function AppearanceSection({
 
       <div className="mt-5 space-y-3 rounded-xl border border-line bg-panel p-4">
         <h3 className="text-body font-semibold text-fg">Text size</h3>
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           Scale the interface typography for this browser only. Larger sizes
           affect text alone — panel widths, spacing, and icons stay the same.
           Saved locally and applied instantly.
@@ -1098,7 +1098,7 @@ function AppearanceSection({
         <h3 className="text-body font-semibold text-fg">
           Navigation bar order
         </h3>
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           Order the sidebar's bottom navigation bar — the sections and the
           app-level actions (New Session, the Personal Assistant, Usage) share
           it. It shows as many entries as fit at its current width and folds the
@@ -1115,7 +1115,7 @@ function AppearanceSection({
       <div className="mt-5 space-y-5 rounded-xl border border-line bg-panel p-4">
         <div className="space-y-3">
           <h3 className="text-body font-semibold text-fg">Panel animations</h3>
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Slide side panels in quickly when they open. These settings are
             separate so the navigation sidebar and the object panel can be tuned
             independently.
@@ -1146,7 +1146,7 @@ function AppearanceSection({
           <h3 className="text-caption font-semibold text-fg">
             Chat transcript
           </h3>
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Make turn boundaries and token/cost usage visible in the chat. These
             are display-only and shared across your browsers; they never change
             prompts or the stored conversation.
@@ -1247,7 +1247,7 @@ function NavOrderControl({
             </div>
           ) : null}
           <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
-            <span className="flex size-5 shrink-0 items-center justify-center text-muted">
+            <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
               {PRIMARY_NAV_SLOTS[section].icon}
             </span>
             <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
@@ -1259,7 +1259,7 @@ function NavOrderControl({
               disabled={index === 0}
               title="Move up"
               aria-label={`Move ${PRIMARY_NAV_SLOTS[section].label} up`}
-              className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
             >
               <ChevronUp size={15} />
             </button>
@@ -1269,7 +1269,7 @@ function NavOrderControl({
               disabled={index === order.length - 1}
               title="Move down"
               aria-label={`Move ${PRIMARY_NAV_SLOTS[section].label} down`}
-              className="flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
             >
               <ChevronDown size={15} />
             </button>
@@ -1297,11 +1297,11 @@ function PreferenceToggle({
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 size-4 shrink-0 accent-accent"
+        className="mt-0.5 size-4 shrink-0 accent-primary"
       />
       <span className="min-w-0">
         <span className="block font-medium">{label}</span>
-        <span className="mt-0.5 block text-caption text-muted">
+        <span className="mt-0.5 block text-caption text-muted-foreground">
           {description}
         </span>
       </span>
@@ -1324,7 +1324,7 @@ function PermanentAssistantSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Permanent Personal Assistant</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         This identity and model power one durable conversation shared by the web
         app and private Slack messages. Messages are processed in arrival order.
       </p>
@@ -1335,7 +1335,7 @@ function PermanentAssistantSection({
             value={profile.name}
             onChange={(event) => save({ name: event.target.value })}
             maxLength={80}
-            className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-accent"
+            className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-primary"
           />
         </label>
         <AgentModelFields
@@ -1356,14 +1356,14 @@ function PermanentAssistantSection({
             }
             rows={7}
             placeholder="Optional preferences, communication style, or durable role instructions…"
-            className="mt-1.5 w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-accent"
+            className="mt-1.5 w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-primary"
           />
-          <span className="mt-1 block text-caption font-normal text-muted">
+          <span className="mt-1 block text-caption font-normal text-muted-foreground">
             Added to the standard Personal Assistant instructions for both pi
             and Claude SDK. Do not enter credentials or secrets.
           </span>
         </label>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-muted">
+        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-muted-foreground">
           Changing the name, provider, model, thinking level, or additional
           instructions starts a new permanent conversation the next time you
           open the Personal Assistant. The previous conversation remains
@@ -1391,12 +1391,12 @@ function SessionNamingSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Session naming</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         After the first prompt, a dedicated no-tool agent asynchronously
         replaces the temporary first-prompt title with a concise session name.
         It only receives that initial user prompt.
       </p>
-      <p className="mt-2 text-caption text-muted">
+      <p className="mt-2 text-caption text-muted-foreground">
         Recommendation:{" "}
         <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
         <span className="text-fg"> Thinking off</span>. It is non-reasoning,
@@ -1409,7 +1409,7 @@ function SessionNamingSection({
             type="checkbox"
             checked={naming.enabled}
             onChange={(e) => save({ enabled: e.target.checked })}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Automatically name sessions after the first prompt
         </label>
@@ -1451,12 +1451,12 @@ function CommitAgentSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Commit agent</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The coding-session <span className="font-mono text-fg">/commit</span>{" "}
         command uses a dedicated no-tool agent to review the diff for safety and
         return a structured commit message decision.
       </p>
-      <p className="mt-2 text-caption text-muted">
+      <p className="mt-2 text-caption text-muted-foreground">
         Recommendation:{" "}
         <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
         <span className="text-fg"> Thinking off</span>. It is fast and
@@ -1508,12 +1508,12 @@ function PrAgentSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Pull request agent</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The coding-session <span className="font-mono text-fg">/pr</span>{" "}
         command uses a dedicated no-tool agent to draft a structured pull
         request title and body after committing and pushing the branch.
       </p>
-      <p className="mt-2 text-caption text-muted">
+      <p className="mt-2 text-caption text-muted-foreground">
         By default this uses the same fast model profile as the commit agent.
       </p>
 
@@ -1562,7 +1562,7 @@ function WorktreesSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Worktrees</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Worktrees are spawned from a Project's main git checkout as
         <span className="font-mono text-fg"> &lt;folder&gt;-&lt;name&gt;</span>;
         the name is also the branch. A Project can override the root folder on
@@ -1585,7 +1585,7 @@ function WorktreesSection({
                 onUpdate({ projectsRoot: projectsRoot.trim() });
             }}
             placeholder="~/projects"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-accent"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-primary"
           />
           <p className="mt-1 text-caption text-faint">
             Projects are cloned into{" "}
@@ -1608,7 +1608,7 @@ function WorktreesSection({
                 save({ root: root.trim() });
             }}
             placeholder="~/worktrees"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-accent"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-primary"
           />
           <p className="mt-1 text-caption text-faint">
             New worktree folders are created under this directory.
@@ -1730,7 +1730,7 @@ function KnowledgeBaseSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Knowledge Base</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         A folder of notes and files in its own Git repository. Agents search,
         read and write it with the <code>kb_*</code> tools and commit what they
         change; you browse it under Knowledge and can edit it with any editor.
@@ -1744,7 +1744,7 @@ function KnowledgeBaseSection({
             type="checkbox"
             checked={kb.enabled}
             onChange={(e) => save({ enabled: e.target.checked })}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Use a Knowledge Base
         </label>
@@ -1760,7 +1760,7 @@ function KnowledgeBaseSection({
               if (path.trim() !== kb.path) save({ path: path.trim() });
             }}
             placeholder="<data folder>/knowledge"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-accent"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-caption text-fg outline-none focus:border-primary"
           />
           <p className="mt-1 text-caption text-faint">
             Empty uses the data folder&apos;s <code>knowledge</code> folder; a
@@ -1807,7 +1807,7 @@ function PdfConversionSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">PDF conversion</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The <code>convert_pdf</code> tool converts born-digital PDFs to Markdown
         offline (no model, no settings). When a PDF has no text layer
         (scanned/image), it can fall back to Claude, which transcribes the pages
@@ -1820,7 +1820,7 @@ function PdfConversionSection({
             type="checkbox"
             checked={pdf.fallbackEnabled}
             onChange={(e) => save({ fallbackEnabled: e.target.checked })}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable the Claude fallback for scanned PDFs
         </label>
@@ -1957,7 +1957,7 @@ function DictationSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Dictation</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The composer mic button transcribes speech locally on this machine — no
         audio leaves the server, and no external service is involved. Hold the
         button to talk, or tap it to keep recording hands-free; the transcript
@@ -1968,7 +1968,7 @@ function DictationSection({
         <div
           className={`mt-4 rounded-lg border px-3 py-2 text-caption ${
             status.configured
-              ? "border-line bg-surface text-muted"
+              ? "border-line bg-surface text-muted-foreground"
               : "border-warning/40 bg-warning/10 text-fg"
           }`}
         >
@@ -1996,7 +1996,9 @@ function DictationSection({
 
         {models.length > 1 && (
           <div className="space-y-1">
-            <label className="text-caption font-medium text-muted">Model</label>
+            <label className="text-caption font-medium text-muted-foreground">
+              Model
+            </label>
             <select
               value={speech.modelId || models[0]}
               onChange={(e) => save({ modelId: e.target.value })}
@@ -2020,7 +2022,7 @@ function DictationSection({
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-caption font-medium">Vocabulary</div>
-            <div className="mt-0.5 text-caption text-muted">
+            <div className="mt-0.5 text-caption text-muted-foreground">
               Fix words the recognizer reliably gets wrong — names, products,
               jargon. Each rule rewrites a spoken phrase to its written form
               after transcription. Matching is whole-word and ignores case; the
@@ -2030,7 +2032,7 @@ function DictationSection({
           <button
             type="button"
             onClick={addRule}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
           >
             <Plus size={12} />
             Add rule
@@ -2047,7 +2049,7 @@ function DictationSection({
               <div key={keyFor(index)} className="flex items-end gap-2">
                 <div className="min-w-0 flex-1 space-y-1">
                   {index === 0 && (
-                    <label className="text-caption font-medium text-muted">
+                    <label className="text-caption font-medium text-muted-foreground">
                       Heard as
                     </label>
                   )}
@@ -2064,7 +2066,7 @@ function DictationSection({
                 </div>
                 <div className="min-w-0 flex-1 space-y-1">
                   {index === 0 && (
-                    <label className="text-caption font-medium text-muted">
+                    <label className="text-caption font-medium text-muted-foreground">
                       Written as
                     </label>
                   )}
@@ -2082,7 +2084,7 @@ function DictationSection({
                   onClick={() => removeRule(index)}
                   aria-label="Remove rule"
                   title="Remove rule"
-                  className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                  className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-danger/10 hover:text-danger"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -2092,7 +2094,9 @@ function DictationSection({
         )}
 
         <div className="mt-4 space-y-1">
-          <label className="text-caption font-medium text-muted">Try it</label>
+          <label className="text-caption font-medium text-muted-foreground">
+            Try it
+          </label>
           <input
             ref={sampleRef}
             type="text"
@@ -2105,7 +2109,7 @@ function DictationSection({
             <div
               className={`rounded-lg border px-3 py-2 text-caption ${
                 previewChanged
-                  ? "border-accent/40 bg-accent-soft text-fg"
+                  ? "border-primary/40 bg-accent text-fg"
                   : "border-line bg-surface text-faint"
               }`}
             >
@@ -2125,7 +2129,7 @@ function DictationSection({
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-caption font-medium">Recent dictations</div>
-              <div className="mt-0.5 text-caption text-muted">
+              <div className="mt-0.5 text-caption text-muted-foreground">
                 What the recognizer actually wrote, so you can see the wording a
                 rule needs to match. Tap one to load it above and check a rule
                 against it. Kept in this browser only — the server stores no
@@ -2138,7 +2142,7 @@ function DictationSection({
                 clearRecentTranscripts();
                 setRecent([]);
               }}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
             >
               <Trash2 size={12} />
               Clear
@@ -2151,7 +2155,7 @@ function DictationSection({
                 type="button"
                 onClick={() => applyAsSample(entry.text)}
                 title="Load into Try it"
-                className="flex w-full items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-left text-caption text-fg transition-colors hover:border-accent/40 hover:bg-accent-soft"
+                className="flex w-full items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-left text-caption text-fg transition-colors hover:border-primary/40 hover:bg-accent"
               >
                 <span className="min-w-0 flex-1 break-words">{entry.text}</span>
                 <span className="shrink-0 tabular-nums text-faint">
@@ -2166,7 +2170,7 @@ function DictationSection({
       <Disclosure header="Advanced">
         <div className="space-y-3 p-1">
           <div className="space-y-1">
-            <label className="text-caption font-medium text-muted">
+            <label className="text-caption font-medium text-muted-foreground">
               Recognizer threads
             </label>
             <input
@@ -2183,7 +2187,7 @@ function DictationSection({
             </p>
           </div>
           <div className="space-y-1">
-            <label className="text-caption font-medium text-muted">
+            <label className="text-caption font-medium text-muted-foreground">
               Release memory after (seconds idle)
             </label>
             <input
@@ -2202,7 +2206,7 @@ function DictationSection({
             </p>
           </div>
           <div className="space-y-1">
-            <label className="text-caption font-medium text-muted">
+            <label className="text-caption font-medium text-muted-foreground">
               Maximum utterance (seconds)
             </label>
             <input
@@ -2242,13 +2246,13 @@ function PromptRefinementSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Prompt refinement</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The composer refine button uses a dedicated no-tool agent to clean up
         dictated or rough draft prompts before they are sent. It receives the
         draft plus recent visible user/assistant context only; tool calls, tool
         results, and thinking blocks are excluded.
       </p>
-      <p className="mt-2 text-caption text-muted">
+      <p className="mt-2 text-caption text-muted-foreground">
         Recommendation:{" "}
         <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
         <span className="text-fg"> Thinking off</span> or minimal. The task is
@@ -2306,7 +2310,7 @@ function TaskIntakeAgentSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Task intake agent</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Slack message shortcuts save a Task first, then this dedicated agent
         turns the Slack context into a concrete action. It can use enabled
         integrations for bounded, read-only research when that makes the Task
@@ -2445,7 +2449,7 @@ function JiraCard({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Jira</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Jira uses your Atlassian email and an API token (Basic auth). The token
         is stored server-side and never sent back to the browser. The Atlassian
         host is set by the deployment.
@@ -2456,7 +2460,7 @@ function JiraCard({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable Jira tools for the Assistant agent
         </label>
@@ -2545,7 +2549,7 @@ function ConfluenceCard({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Confluence</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Confluence is the same Atlassian site as Jira and uses the email and API
         token saved there. The host is set by the deployment.
       </p>
@@ -2555,7 +2559,7 @@ function ConfluenceCard({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable Confluence tools for the Assistant agent
         </label>
@@ -2669,7 +2673,7 @@ function TempoCard({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Tempo</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Tempo authorizes via OAuth against your Atlassian site. It also needs
         the Jira integration for worklog issue enrichment and author resolution
         {jira.enabled
@@ -2686,7 +2690,7 @@ function TempoCard({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable Tempo tools for the Assistant agent
         </label>
@@ -2698,12 +2702,12 @@ function TempoCard({
             placeholder="https://api.tempo.io/4"
             className="settings-input"
           />
-          <span className="mt-1 block text-caption text-muted">
+          <span className="mt-1 block text-caption text-muted-foreground">
             Moving to another host disconnects Tempo.
           </span>
         </Field>
 
-        <div className="text-caption text-muted">
+        <div className="text-caption text-muted-foreground">
           {connected
             ? "Connected to Tempo. If authorization stops working, reauthorize below."
             : "Not authorized yet."}
@@ -2890,7 +2894,7 @@ export function GoogleWorkspaceSection({
         </div>
         <div>
           <h2 className="text-prose font-semibold">Google Workspace</h2>
-          <p className="mt-1 text-caption text-muted">
+          <p className="mt-1 text-caption text-muted-foreground">
             Connect Google to use Calendar, Gmail, Drive, and Meet with the
             Assistant.
           </p>
@@ -2912,7 +2916,7 @@ export function GoogleWorkspaceSection({
             aria-label="Enable Google Workspace"
             disabled={!connected}
             onClick={toggleEnabled}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-accent" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-line"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -2951,7 +2955,7 @@ export function GoogleWorkspaceSection({
         {oauthStartedAt !== null && (
           <div
             role="status"
-            className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-caption text-accent"
+            className="flex items-center gap-2 rounded-lg border border-primary/30 bg-accent px-3 py-2 text-caption text-primary"
           >
             {oauthPhase === "checking" ? (
               <Spinner size="sm" />
@@ -3103,7 +3107,7 @@ function SlackSection({
             aria-label="Enable Slack"
             disabled={!connected}
             onClick={toggleEnabled}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-accent" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-line"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -3144,7 +3148,7 @@ function SlackSection({
         {oauthStartedAt !== null && (
           <div
             role="status"
-            className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent-soft px-3 py-2 text-caption text-accent"
+            className="flex items-center gap-2 rounded-lg border border-primary/30 bg-accent px-3 py-2 text-caption text-primary"
           >
             <Spinner size="sm" />
             Complete Slack authorization in the opened tab.
@@ -3259,7 +3263,7 @@ function SlackHuddlesSection({
             role="switch"
             aria-checked={enabled}
             onClick={() => setEnabled(!enabled)}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${enabled ? "bg-accent" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${enabled ? "bg-primary" : "bg-line"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -3350,7 +3354,7 @@ function SlackSettingsHeader({
       </div>
       <div>
         <h2 className="text-prose font-semibold">{title}</h2>
-        <p className="mt-1 text-caption text-muted">{subtitle}</p>
+        <p className="mt-1 text-caption text-muted-foreground">{subtitle}</p>
       </div>
     </div>
   );
@@ -3388,7 +3392,7 @@ function Context7Section({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Context7</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The <span className="font-mono">context7_resolve_library</span> and{" "}
         <span className="font-mono">context7_get_docs</span> agent tools fetch
         up-to-date library documentation from{" "}
@@ -3412,7 +3416,7 @@ function Context7Section({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable the Context7 docs-search tools for agents
         </label>
@@ -3500,7 +3504,7 @@ function GithubSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">GitHub</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The GitHub agent tools read from GitHub using a{" "}
         <a
           href="https://github.com/settings/tokens"
@@ -3528,7 +3532,7 @@ function GithubSection({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable the GitHub tools for agents
         </label>
@@ -3541,7 +3545,7 @@ function GithubSection({
         />
 
         <div className="space-y-1">
-          <label className="text-caption font-medium text-muted">
+          <label className="text-caption font-medium text-muted-foreground">
             Default owner (optional)
           </label>
           <input
@@ -3559,11 +3563,11 @@ function GithubSection({
               type="checkbox"
               checked={packageProxyEnabled}
               onChange={(e) => setPackageProxyEnabled(e.target.checked)}
-              className="size-4 accent-accent"
+              className="size-4 accent-primary"
             />
             Let builds read private GitHub packages
           </label>
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Runs a local proxy that adds this token to requests for GitHub
             package registries (<span className="font-mono">maven</span>,{" "}
             <span className="font-mono">npm</span>,{" "}
@@ -3604,7 +3608,7 @@ function GithubSection({
             {status.message}
           </div>
           {status.scopes && status.scopes.length > 0 && (
-            <div className="mt-1 text-muted">
+            <div className="mt-1 text-muted-foreground">
               Token scopes:{" "}
               <span className="font-mono">{status.scopes.join(", ")}</span>
             </div>
@@ -3653,7 +3657,7 @@ function ForgejoSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Forgejo</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The Forgejo agent tools and worktree pull-request/CI integration talk to
         your self-hosted Forgejo (Gitea-compatible) instance using an{" "}
         <span className="font-mono">access token</span> with repository
@@ -3671,13 +3675,13 @@ function ForgejoSection({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable the Forgejo integration
         </label>
 
         <div className="space-y-1">
-          <label className="text-caption font-medium text-muted">
+          <label className="text-caption font-medium text-muted-foreground">
             Instance base URL
           </label>
           <input
@@ -3687,7 +3691,7 @@ function ForgejoSection({
             placeholder="https://git.example.com"
             className="settings-input w-full"
           />
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Moving to another host clears the saved token.
           </p>
         </div>
@@ -3700,7 +3704,7 @@ function ForgejoSection({
         />
 
         <div className="space-y-1">
-          <label className="text-caption font-medium text-muted">
+          <label className="text-caption font-medium text-muted-foreground">
             Default owner (optional)
           </label>
           <input
@@ -3743,7 +3747,7 @@ function ForgejoSection({
             {status.message}
           </div>
           {status.version && (
-            <div className="mt-1 text-muted">
+            <div className="mt-1 text-muted-foreground">
               Server version:{" "}
               <span className="font-mono">{status.version}</span>
             </div>
@@ -3786,7 +3790,7 @@ function BraveSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Web Search</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         The <span className="font-mono">web_search</span> agent tool uses the{" "}
         <a
           href="https://brave.com/search/api/"
@@ -3808,7 +3812,7 @@ function BraveSection({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable the web_search tool for agents
         </label>
@@ -3917,7 +3921,7 @@ function OpenAiCompatibleSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">OpenAI-compatible endpoint</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Add the models of any server that speaks the OpenAI chat completions API
         — a self-hosted llama.cpp, vLLM or Ollama, or a hosted gateway. The
         provider is registered directly with pi at runtime from{" "}
@@ -3936,7 +3940,7 @@ function OpenAiCompatibleSection({
             type="checkbox"
             checked={enabled}
             onChange={(e) => setEnabled(e.target.checked)}
-            className="size-4 accent-accent"
+            className="size-4 accent-primary"
           />
           Enable these models in the model picker
         </label>
@@ -3957,7 +3961,7 @@ function OpenAiCompatibleSection({
             placeholder="https://llm.example.net/v1"
             className="settings-input font-mono text-caption"
           />
-          <span className="mt-1 block text-caption text-muted">
+          <span className="mt-1 block text-caption text-muted-foreground">
             Moving to another host clears the saved API key.
           </span>
         </Field>
@@ -4091,7 +4095,7 @@ function BrowserToolsSettingsSection({
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
       <h2 className="text-body font-semibold">Browser tools</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Workshop/Developer sessions can use curated Playwright MCP browser tools
         for local UI verification — an ordinary tool group like Jira or Slack,
         discovered on demand rather than requiring a separate enable step.
@@ -4099,7 +4103,7 @@ function BrowserToolsSettingsSection({
       <div className="mt-6 space-y-4">
         <section className="rounded-xl border border-line bg-panel p-4">
           <h3 className="text-body font-semibold text-fg">Browser testing</h3>
-          <p className="mt-1 text-caption text-muted">
+          <p className="mt-1 text-caption text-muted-foreground">
             Curated Playwright MCP tools (navigate, snapshot, click, fill,
             screenshot, console, network). Screenshots/traces are stored as
             session artifacts, not in the repo.
@@ -4109,14 +4113,14 @@ function BrowserToolsSettingsSection({
               type="checkbox"
               checked={browserTools.headed}
               onChange={(e) => save({ headed: e.target.checked })}
-              className="size-4 accent-accent"
+              className="size-4 accent-primary"
             />
             Launch browser in headed/debug mode instead of headless
           </label>
         </section>
         <section className="rounded-xl border border-line bg-panel p-4">
           <h3 className="text-body font-semibold text-fg">Raw browser MCP</h3>
-          <p className="mt-1 text-caption text-muted">
+          <p className="mt-1 text-caption text-muted-foreground">
             Advanced escape hatch for direct Playwright MCP tool calls by name,
             for capabilities missing from the standard browser tools. Off by
             default.
@@ -4126,7 +4130,7 @@ function BrowserToolsSettingsSection({
               type="checkbox"
               checked={browserTools.rawMcpEnabled}
               onChange={(e) => save({ rawMcpEnabled: e.target.checked })}
-              className="size-4 accent-accent"
+              className="size-4 accent-primary"
             />
             Enable raw browser MCP
           </label>
@@ -4290,8 +4294,8 @@ function TextSizeControl({
               onClick={() => onChange(option)}
               className={`rounded-md px-3 py-1.5 text-caption font-medium transition-colors ${
                 selected
-                  ? "bg-accent text-accent-fg"
-                  : "text-muted hover:text-fg"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:text-fg"
               }`}
             >
               {option}%
@@ -4306,10 +4310,10 @@ function TextSizeControl({
         <p className="mt-1 text-body text-fg">
           Sample interface text jumps over the lazy dog at your selected size.
         </p>
-        <p className="mt-1 text-caption text-muted">
+        <p className="mt-1 text-caption text-muted-foreground">
           Secondary metadata stays legible.
         </p>
-        <p className="mt-2 font-mono text-caption text-muted">
+        <p className="mt-2 font-mono text-caption text-muted-foreground">
           const scale = {value};
         </p>
       </div>
@@ -4448,14 +4452,14 @@ export function ModelsSection({
           size="sm"
           busy={refreshing}
           onClick={onRefresh}
-          className="gap-1.5 rounded-lg px-2.5 text-caption text-muted"
+          className="gap-1.5 rounded-lg px-2.5 text-caption text-muted-foreground"
           title="Fetch provider model definitions again"
         >
           {refreshing ? null : <RefreshCw size={13} />}
           Refresh
         </Button>
       </div>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Drag a row by its grip to reorder — models appear in the picker
         top-to-bottom in this order. Hidden models stay usable if already
         selected; they just drop out of the list. Refresh fetches the model
@@ -4487,7 +4491,7 @@ export function ModelsSection({
                   key={key}
                   className={`flex select-none items-center gap-2 rounded-lg border bg-panel px-3 py-2 transition-colors ${
                     draggingKey === key
-                      ? "border-accent/50 shadow-sm"
+                      ? "border-primary/50 shadow-sm"
                       : "border-line hover:border-line-strong"
                   }`}
                 >
@@ -4499,7 +4503,7 @@ export function ModelsSection({
                   <button
                     type="button"
                     aria-label={`Reorder ${m.name} (${m.provider}), position ${i + 1} of ${items.length} — drag, or use the arrow keys`}
-                    className={`-ml-1 shrink-0 cursor-grab rounded-md p-1 text-faint transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent ${
+                    className={`-ml-1 shrink-0 cursor-grab rounded-md p-1 text-faint transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
                       draggingKey === key ? "cursor-grabbing text-fg" : ""
                     }`}
                     {...handleProps(i)}
@@ -4542,7 +4546,7 @@ export function ModelsSection({
                 className="flex items-center gap-2 rounded-lg border border-line bg-panel/50 px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-caption text-muted">
+                  <div className="truncate text-caption text-muted-foreground">
                     {m.name}
                   </div>
                   <div className="text-micro text-faint">{m.provider}</div>

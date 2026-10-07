@@ -122,7 +122,7 @@ export function SkillsSettingsSection({
         <h2 className="text-body font-semibold">Skills</h2>
         {refreshing ? <RefreshIndicator label="Rescanning skills" /> : null}
       </div>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Reusable agent skills you write yourself. Each skill is a folder with a{" "}
         <code>SKILL.md</code> whose frontmatter declares a name and a
         description. The library is read here and never written: you own the
@@ -181,7 +181,7 @@ function SkillList({
     <>
       <div className="mt-6 rounded-xl border border-line bg-panel p-4">
         <div className="text-caption font-medium">Available skills</div>
-        <div className="mt-0.5 text-caption text-muted">
+        <div className="mt-0.5 text-caption text-muted-foreground">
           A skill you turn on here is on everywhere; a new skill starts off
           until you say otherwise. Per-project and per-session choices come
           later, as does handing the enabled skills to a running agent. Select a
@@ -220,7 +220,7 @@ function SkillList({
           <div className="text-caption font-medium">
             Folders that need a fix
           </div>
-          <div className="mt-0.5 text-caption text-muted">
+          <div className="mt-0.5 text-caption text-muted-foreground">
             These folders cannot be used as skills. They stay listed here so a
             typo does not simply make a skill disappear.
           </div>
@@ -259,7 +259,7 @@ function SkillRow({
   return (
     <li
       className={`flex items-start justify-between gap-3 rounded-lg border bg-surface px-3 py-2.5 ${
-        open ? "border-accent" : "border-line"
+        open ? "border-primary" : "border-line"
       }`}
     >
       <button
@@ -270,19 +270,19 @@ function SkillRow({
         className="min-w-0 flex-1 text-left"
       >
         <div className="text-caption font-medium">{skill.name}</div>
-        <div className="mt-0.5 text-caption text-muted">
+        <div className="mt-0.5 text-caption text-muted-foreground">
           {skill.description}
         </div>
         <div className="mt-1 text-caption text-faint">
           <code>{skill.path}</code>
         </div>
       </button>
-      <label className="flex shrink-0 items-center gap-2 text-caption text-muted">
+      <label className="flex shrink-0 items-center gap-2 text-caption text-muted-foreground">
         <input
           type="checkbox"
           checked={on}
           onChange={(event) => onToggle(skill.name, event.target.checked)}
-          className="size-4 accent-accent"
+          className="size-4 accent-primary"
           aria-label={`Enable skill ${skill.name}`}
         />
         On
@@ -368,13 +368,17 @@ function SkillDetailPane({
       {detail?.kind === "invalid" ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
           <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-          <div className="min-w-0 text-caption text-muted">{detail.error}</div>
+          <div className="min-w-0 text-caption text-muted-foreground">
+            {detail.error}
+          </div>
         </div>
       ) : null}
 
       {detail?.kind === "skill" ? (
         <div className="mt-3">
-          <div className="text-caption text-muted">{detail.description}</div>
+          <div className="text-caption text-muted-foreground">
+            {detail.description}
+          </div>
           <SkillFileBrowser
             detail={detail}
             selectedPath={selectedPath}
@@ -413,7 +417,7 @@ function SkillFileBrowser({
     <div className="mt-3 overflow-hidden rounded-lg border border-line bg-surface">
       <div className="border-b border-line p-3">
         <div className="text-caption font-medium">Files</div>
-        <div className="mt-0.5 text-caption text-muted">
+        <div className="mt-0.5 text-caption text-muted-foreground">
           {detail.files.entryCount}{" "}
           {detail.files.entryCount === 1 ? "entry" : "entries"}
           {detail.files.truncated ? ", bounded listing" : ""}
@@ -471,7 +475,7 @@ function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
         : File;
   return (
     <div className="flex min-w-0 items-center gap-2 py-1 text-caption">
-      <Icon size={13} className="shrink-0 text-muted" />
+      <Icon size={13} className="shrink-0 text-muted-foreground" />
       <span className="truncate">{entry.name}</span>
       {entry.type === "file" && entry.bytes !== undefined ? (
         <span className="ml-auto shrink-0 text-faint">
@@ -520,7 +524,7 @@ function SkillFileViewer({
               rel="noreferrer"
               aria-label={`Open raw ${path}`}
               title="Open raw file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
             >
               <ExternalLink size={14} />
             </a>
@@ -529,7 +533,7 @@ function SkillFileViewer({
               download={entry.name}
               aria-label={`Download ${path}`}
               title="Download file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
             >
               <Download size={14} />
             </a>
@@ -661,7 +665,7 @@ function UnsupportedSkillFile({
         <a
           href={rawUrl}
           download={entry.name}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground"
         >
           <Download size={13} /> Download
         </a>
@@ -731,7 +735,9 @@ function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
       <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
       <div className="min-w-0">
         <div className="text-caption font-medium">{diagnostic.folder}</div>
-        <div className="mt-0.5 text-caption text-muted">{diagnostic.error}</div>
+        <div className="mt-0.5 text-caption text-muted-foreground">
+          {diagnostic.error}
+        </div>
         <div className="mt-1 text-caption text-faint">
           <code>{diagnostic.path}</code>
         </div>

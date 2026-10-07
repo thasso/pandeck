@@ -121,10 +121,10 @@ describe("the composer's spawned-session ledge", () => {
     // The session you are typing into is usually quiet while its peers run, so
     // this strip is the only place that run is visible.
     expect(working).toContain("animate-spin");
-    expect(working).toContain("text-accent hover:text-accent");
+    expect(working).toContain("text-primary hover:text-primary");
     const idle = renderToStaticMarkup(ledge([session("a")]));
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted hover:text-fg");
+    expect(idle).toContain("text-muted-foreground hover:text-fg");
   });
 
   it("offers to dismiss a bubbled peer failure, and settles that peer", () => {
