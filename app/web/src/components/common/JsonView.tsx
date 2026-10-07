@@ -40,7 +40,7 @@ function Primitive({ value }: { value: unknown }) {
     return <span className="text-primary">{String(value)}</span>;
   }
   // null / undefined / functions etc.
-  return <span className="text-faint">null</span>;
+  return <span className="text-muted-foreground">null</span>;
 }
 
 function entriesOf(
@@ -75,8 +75,8 @@ function Node({
 
   const keyPart = showKey ? (
     <>
-      <span className="text-fg">&quot;{keyName}&quot;</span>
-      <span className="text-faint">: </span>
+      <span className="text-foreground">&quot;{keyName}&quot;</span>
+      <span className="text-muted-foreground">: </span>
     </>
   ) : null;
 
@@ -98,7 +98,7 @@ function Node({
     return (
       <div>
         {keyPart}
-        <span className="text-faint">{open_b + close_b}</span>
+        <span className="text-muted-foreground">{open_b + close_b}</span>
       </div>
     );
   }
@@ -109,26 +109,26 @@ function Node({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-1 rounded text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="inline-flex items-center gap-1 rounded text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <ChevronDown
           aria-hidden="true"
           size={12}
           className={cx(
-            "shrink-0 text-faint transition-transform",
+            "shrink-0 text-muted-foreground transition-transform",
             !open && "-rotate-90",
           )}
         />
         {keyPart}
-        <span className="text-faint">{open_b}</span>
+        <span className="text-muted-foreground">{open_b}</span>
         {!open && (
-          <span className="text-faint">
+          <span className="text-muted-foreground">
             … {close_b} <span className="italic">{countLabel(value)}</span>
           </span>
         )}
       </button>
       {open && (
-        <div className="ml-2 border-l border-line pl-3">
+        <div className="ml-2 border-l border-border pl-3">
           {entries.map(([k, v]) => (
             <Node
               key={k}
@@ -141,7 +141,7 @@ function Node({
           ))}
         </div>
       )}
-      {open && <span className="text-faint">{close_b}</span>}
+      {open && <span className="text-muted-foreground">{close_b}</span>}
     </div>
   );
 }
@@ -169,7 +169,10 @@ export function JsonView({
 
   return (
     <div
-      className={cx("group relative font-mono text-sm text-fg", className)}
+      className={cx(
+        "group relative font-mono text-sm text-foreground",
+        className,
+      )}
       {...props}
     >
       {serialized && (

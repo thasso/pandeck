@@ -77,28 +77,28 @@ export function FileHistoryList({
           key={entry.oid}
           type="button"
           onClick={() => onOpenCommit(entry)}
-          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-muted-foreground hover:bg-raised hover:text-fg"
+          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <GitCommitHorizontal
             size={13}
-            className="mt-0.5 shrink-0 text-faint"
+            className="mt-0.5 shrink-0 text-muted-foreground"
           />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium">
               {entry.subject}
             </span>
-            <span className="block truncate text-xs text-faint">
+            <span className="block truncate text-xs text-muted-foreground">
               {entry.author} · {relativeTime(entry.authoredAt)}
               {entry.path !== path ? ` · as ${entry.path}` : ""}
             </span>
           </span>
-          <span className="shrink-0 font-mono text-xs text-faint">
+          <span className="shrink-0 font-mono text-xs text-muted-foreground">
             {entry.shortOid}
           </span>
         </button>
       ))}
       {log.truncated ? (
-        <p className="px-2 py-1.5 text-xs text-faint">
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
           Showing the {log.entries.length} most recent commits.
         </p>
       ) : null}

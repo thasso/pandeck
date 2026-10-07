@@ -185,7 +185,7 @@ export function ToolCallBlock({
           <CircleDashed
             aria-hidden="true"
             size={14}
-            className="shrink-0 text-faint"
+            className="shrink-0 text-muted-foreground"
           />
         ) : (
           <Wrench

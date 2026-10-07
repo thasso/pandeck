@@ -169,8 +169,10 @@ function UsageCycleRow({
       }`}
     >
       {/* Fixed label column so the rows line up across cards. */}
-      <span className={`${COL.label} shrink-0 text-faint`}>{label}</span>
-      <span className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-line">
+      <span className={`${COL.label} shrink-0 text-muted-foreground`}>
+        {label}
+      </span>
+      <span className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-border">
         {kind === "meter" ? (
           <span
             className={`block h-full rounded-full ${meterFill(pct as number)} ${stale ? "opacity-50" : ""}`}
@@ -198,12 +200,14 @@ function UsageCycleRow({
           <span
             className={`${COL.reading} shrink-0 text-right text-muted-foreground`}
           >
-            {stale ? <span className="text-faint">⟳</span> : null}
+            {stale ? <span className="text-muted-foreground">⟳</span> : null}
             {reading}
           </span>
           {/* Reserved even when empty: a row without a countdown must not let
               the meter grow into the space the row beside it uses. */}
-          <span className={`${COL.reset} shrink-0 text-right text-faint`}>
+          <span
+            className={`${COL.reset} shrink-0 text-right text-muted-foreground`}
+          >
             {resetLabel}
           </span>
         </>
@@ -215,7 +219,7 @@ function UsageCycleRow({
 /** Green under 70, amber to 90, red above — the thresholds the Usage page uses. */
 function meterFill(pct: number): string {
   const level = usageLevel(pct);
-  if (level === "critical") return "bg-danger";
+  if (level === "critical") return "bg-destructive";
   if (level === "warn") return "bg-warning";
   return "bg-primary";
 }

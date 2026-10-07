@@ -50,8 +50,8 @@ export function OverflowList<Id extends string>({
             }}
             className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               active
-                ? "bg-accent text-fg"
-                : "text-muted-foreground hover:bg-raised hover:text-fg"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             <span
@@ -65,14 +65,14 @@ export function OverflowList<Id extends string>({
       })}
       {onCustomize ? (
         <>
-          <div className="my-1 border-t border-line" role="presentation" />
+          <div className="my-1 border-t border-border" role="presentation" />
           <button
             type="button"
             onClick={() => {
               onCustomize();
               close();
             }}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <span className="flex size-5 shrink-0 items-center justify-center">
               <SlidersHorizontal size={15} />
@@ -107,7 +107,8 @@ export function SectionOverflow<Id extends string>({
 }: Props<Id>) {
   const triggerIcon = <MoreHorizontal size={17} />;
   const label = "More sections";
-  const stateClass = "text-muted-foreground hover:bg-raised hover:text-fg";
+  const stateClass =
+    "text-muted-foreground hover:bg-muted hover:text-foreground";
 
   return (
     <Popover

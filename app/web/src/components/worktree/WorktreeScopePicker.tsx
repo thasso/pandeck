@@ -85,11 +85,11 @@ export function WorktreeScopePicker({
           LABEL instead of a second glyph. */}
       {narrow ? null : <GitCompareArrows size={13} className="shrink-0" />}
       <span className="min-w-0 max-w-48 truncate">{label}</span>
-      <ChevronDown size={12} className="shrink-0 text-faint" />
+      <ChevronDown size={12} className="shrink-0 text-muted-foreground" />
     </>
   );
   const triggerClass =
-    "flex min-w-0 shrink items-center gap-1.5 rounded-md bg-raised px-2 py-1 text-sm font-medium text-fg";
+    "flex min-w-0 shrink items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-sm font-medium text-foreground";
 
   const body = (close: () => void) => (
     <ScopePanel
@@ -172,9 +172,9 @@ function ScopePanel({
           pick();
           onClose();
         }}
-        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${active === id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${active === id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
       >
-        <Icon size={13} className="shrink-0 text-faint" />
+        <Icon size={13} className="shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {active === id ? (
           <Check size={13} className="shrink-0 text-primary" />
@@ -184,7 +184,7 @@ function ScopePanel({
   };
   return (
     <div className="flex max-h-[70vh] flex-col">
-      <div className="flex flex-col gap-px border-b border-line p-1">
+      <div className="flex flex-col gap-px border-b border-border p-1">
         {preset("uncommitted", "Uncommitted changes", FileDiff, () => onPick())}
         {worktree.isMain
           ? null
@@ -264,7 +264,7 @@ function CommitListPanel({
   return (
     <div className="flex max-h-[60vh] flex-col">
       <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-        <p className="text-sm text-faint">
+        <p className="text-sm text-muted-foreground">
           {rangeStart
             ? "Pick the other end of the range."
             : "Tap a commit for its diff. Shift-click compares a range."}
@@ -276,7 +276,7 @@ function CommitListPanel({
             setRangeStart(null);
           }}
           aria-pressed={rangeMode}
-          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
           Range
         </button>
@@ -309,22 +309,22 @@ function CommitListPanel({
                 key={entry.oid}
                 type="button"
                 onClick={(event) => pick(entry, event.shiftKey)}
-                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left ${rangeStart === entry.oid ? "bg-accent text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"} ${entry.onBase ? "opacity-50" : ""}`}
+                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left ${rangeStart === entry.oid ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"} ${entry.onBase ? "opacity-50" : ""}`}
               >
                 <GitCommitHorizontal
                   size={13}
-                  className="mt-0.5 shrink-0 text-faint"
+                  className="mt-0.5 shrink-0 text-muted-foreground"
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">
                     {entry.subject}
                   </span>
-                  <span className="block truncate text-xs text-faint">
+                  <span className="block truncate text-xs text-muted-foreground">
                     {entry.author} ·{" "}
                     {new Date(entry.authoredAt).toLocaleDateString()}
                   </span>
                 </span>
-                <span className="shrink-0 font-mono text-xs text-faint">
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
                   {entry.shortOid}
                 </span>
               </button>

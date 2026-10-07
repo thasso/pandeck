@@ -413,7 +413,7 @@ function statusClass(status: NavigatorNodeData["status"]): string {
   if (status === "deleted") return "text-red-400";
   if (status === "added" || status === "untracked") return "text-emerald-400";
   if (status) return "text-amber-400";
-  return "text-faint";
+  return "text-muted-foreground";
 }
 
 function statusGlyph(status: NavigatorNodeData["status"]): string {
@@ -464,7 +464,7 @@ function ChangeStats({
   isDir: boolean;
 }) {
   return (
-    <span className="shrink-0 whitespace-nowrap font-mono text-xs text-faint">
+    <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
       {isDir ? <span>{data.files}</span> : null}
       {data.additions > 0 ? (
         <span className="ml-1 text-emerald-400">+{data.additions}</span>
@@ -504,13 +504,13 @@ function NavigatorRow({
   const isDir = data.kind === "dir";
   return (
     <span
-      className={`flex min-w-0 items-center gap-2 text-sm ${state.selected ? "text-fg" : "text-muted-foreground"}`}
+      className={`flex min-w-0 items-center gap-2 text-sm ${state.selected ? "text-foreground" : "text-muted-foreground"}`}
       title={data.path}
     >
       {isDir ? (
-        <Folder size={13} className="shrink-0 text-faint" />
+        <Folder size={13} className="shrink-0 text-muted-foreground" />
       ) : (
-        <FileCode2 size={13} className="shrink-0 text-faint" />
+        <FileCode2 size={13} className="shrink-0 text-muted-foreground" />
       )}
       {showChangeStats && !isDir ? (
         <span
@@ -520,12 +520,12 @@ function NavigatorRow({
         </span>
       ) : null}
       <span className="min-w-0 flex-1 truncate">{data.name}</span>
-      {loading ? <Spinner size="sm" className="text-faint" /> : null}
+      {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
       {showChangeStats &&
       (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-faint">
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
           {data.size.toLocaleString()}
         </span>
       ) : null}
@@ -559,12 +559,12 @@ function NavigatorListRow({
       onClick={onSelect}
       title={data.path || "/"}
       aria-current={selected ? "true" : undefined}
-      className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${selected ? "bg-accent/70 text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+      className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${selected ? "bg-accent/70 text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
     >
       {isDir ? (
-        <Folder size={13} className="shrink-0 text-faint" />
+        <Folder size={13} className="shrink-0 text-muted-foreground" />
       ) : (
-        <FileCode2 size={13} className="shrink-0 text-faint" />
+        <FileCode2 size={13} className="shrink-0 text-muted-foreground" />
       )}
       {showChangeStats && !isDir ? (
         <span
@@ -576,20 +576,20 @@ function NavigatorListRow({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{data.name}</span>
         {showParentPath && dir ? (
-          <span className="block truncate font-mono text-xs text-faint">
+          <span className="block truncate font-mono text-xs text-muted-foreground">
             {dir}
           </span>
         ) : null}
       </span>
-      {loading ? <Spinner size="sm" className="text-faint" /> : null}
+      {loading ? <Spinner size="sm" className="text-muted-foreground" /> : null}
       {isDir && directoryDrillDown && !loading ? (
-        <ChevronRight size={13} className="shrink-0 text-faint" />
+        <ChevronRight size={13} className="shrink-0 text-muted-foreground" />
       ) : null}
       {showChangeStats &&
       (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-xs text-faint">
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
           {data.size.toLocaleString()}
         </span>
       ) : null}
@@ -751,7 +751,11 @@ export function WorktreeFileNavigator({
 
   if (loading) return <NavigatorSkeletonRows label="Loading files" />;
   if (entries.length === 0 || items.length === 0)
-    return <div className="px-2 py-4 text-sm text-faint">{emptyLabel}</div>;
+    return (
+      <div className="px-2 py-4 text-sm text-muted-foreground">
+        {emptyLabel}
+      </div>
+    );
 
   if (viewMode === "list") {
     const currentDirectoryLoading =
@@ -766,9 +770,9 @@ export function WorktreeFileNavigator({
             onClick={() =>
               onListDirectoryPathChange(parentPath(listDirectoryPath))
             }
-            className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-line/70 px-2 py-2 text-left text-muted-foreground hover:bg-raised hover:text-fg"
+            className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-border/70 px-2 py-2 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <ChevronLeft size={14} className="shrink-0 text-faint" />
+            <ChevronLeft size={14} className="shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate font-mono text-sm">
               {listDirectoryPath}
             </span>
@@ -777,7 +781,9 @@ export function WorktreeFileNavigator({
         {currentDirectoryLoading && listEntries.length === 0 ? (
           <NavigatorSkeletonRows label="Loading folder" rows={4} />
         ) : listEntries.length === 0 ? (
-          <div className="px-2 py-4 text-sm text-faint">{emptyLabel}</div>
+          <div className="px-2 py-4 text-sm text-muted-foreground">
+            {emptyLabel}
+          </div>
         ) : (
           listEntries.map((entry) => (
             <NavigatorListRow

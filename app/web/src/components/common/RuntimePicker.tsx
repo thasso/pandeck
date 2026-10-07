@@ -98,7 +98,7 @@ export function ProviderAccountRow({
             className={`flex w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-60 ${
               selected
                 ? "border-primary/40 bg-accent"
-                : "border-line bg-panel hover:border-line-strong hover:bg-raised"
+                : "border-border bg-card hover:border-input hover:bg-muted"
             }`}
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
@@ -113,7 +113,7 @@ export function ProviderAccountRow({
                 }
               />
               <span
-                className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
+                className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
               >
                 {account.name}
               </span>
@@ -163,7 +163,9 @@ export function ModelQuickRow<M extends ModelOption>({
               provider={model.provider}
               size={13}
               className={
-                isSelected ? "shrink-0 text-primary" : "shrink-0 text-faint"
+                isSelected
+                  ? "shrink-0 text-primary"
+                  : "shrink-0 text-muted-foreground"
               }
             />
             <span className="min-w-0 truncate">{model.name}</span>
@@ -207,7 +209,7 @@ export function ThinkingSlider({
         disabled={disabled}
       />
       <div
-        className="mt-0.5 text-center text-sm font-medium text-fg"
+        className="mt-0.5 text-center text-sm font-medium text-foreground"
         aria-hidden
       >
         {THINKING_LABELS[value]}
@@ -250,7 +252,7 @@ export function DiscreteSlider({
   return (
     <div className="relative h-10">
       {/* Track, fill, and stops are inset by half the 20px thumb so they align with its travel. */}
-      <div className="absolute inset-x-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
+      <div className="absolute inset-x-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-border" />
       <div
         className="absolute left-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-primary"
         style={{ width: `calc((100% - 1.25rem) * ${percent / 100})` }}
@@ -260,7 +262,7 @@ export function DiscreteSlider({
           <span
             key={min + step}
             aria-hidden
-            className={`size-2 rounded-full ${min + step <= value ? "bg-primary" : "bg-line-strong"}`}
+            className={`size-2 rounded-full ${min + step <= value ? "bg-primary" : "bg-input"}`}
           />
         ))}
       </div>
@@ -338,7 +340,7 @@ export function QuickRow({
 
   return (
     <div className="w-full">
-      <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
+      <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       {/* The gutter lives INSIDE the scroller (padding + matching scroll-padding
@@ -382,7 +384,7 @@ export function QuickRowSplit({
     <div className="flex w-full flex-wrap justify-center gap-x-7 gap-y-3 px-4 pb-1.5">
       {groups.map((group) => (
         <div key={group.label} className="flex flex-col">
-          <div className="mb-1.5 text-center text-sm font-medium uppercase tracking-wide text-faint">
+          <div className="mb-1.5 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
             {group.label}
           </div>
           <div role="listbox" aria-label={group.label} className="flex gap-2">
@@ -420,7 +422,7 @@ export function QuickPill({
       className={`flex h-9 max-w-[13rem] shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors disabled:opacity-60 ${
         selected
           ? "border-primary/40 bg-accent text-primary"
-          : "border-line bg-panel text-fg hover:border-line-strong hover:bg-raised"
+          : "border-border bg-card text-foreground hover:border-input hover:bg-muted"
       }`}
     >
       {children}

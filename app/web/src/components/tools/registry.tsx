@@ -141,7 +141,7 @@ const LazyPushToolCard = lazy(() =>
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm text-muted-foreground">
+    <div className="my-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
       {label}
     </div>
   );
@@ -347,7 +347,9 @@ function defaultToolBody(block: ToolBlock): ReactNode {
       {showInput && (
         <section className="flex flex-col gap-1">
           {labeled && (
-            <span className="text-sm font-medium text-faint">Input</span>
+            <span className="text-sm font-medium text-muted-foreground">
+              Input
+            </span>
           )}
           <JsonView value={block.args} defaultExpandedDepth={1} />
         </section>
@@ -355,7 +357,9 @@ function defaultToolBody(block: ToolBlock): ReactNode {
       {showOutput && (
         <section className="flex flex-col gap-1">
           {labeled && (
-            <span className="text-sm font-medium text-faint">Output</span>
+            <span className="text-sm font-medium text-muted-foreground">
+              Output
+            </span>
           )}
           {!block.done ? (
             // Streaming: incomplete output may not parse — show plain text and

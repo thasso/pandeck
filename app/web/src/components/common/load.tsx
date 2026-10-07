@@ -105,7 +105,7 @@ export function Spinner({
         aria-hidden
         style={RING_STYLE[size]}
         className={cx(
-          "inline-block shrink-0 rounded-full border-2 border-line border-t-primary motion-safe:animate-spin",
+          "inline-block shrink-0 rounded-full border-2 border-border border-t-primary motion-safe:animate-spin",
           className,
         )}
       />
@@ -147,7 +147,7 @@ export function PaneLoading({
     <div
       role="status"
       className={cx(
-        "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-faint",
+        "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground",
         className,
       )}
     >
@@ -179,10 +179,7 @@ export function Skeleton({
   return (
     <Tag
       aria-hidden
-      className={cx(
-        "rounded-md bg-raised motion-safe:animate-pulse",
-        className,
-      )}
+      className={cx("rounded-md bg-muted motion-safe:animate-pulse", className)}
       {...rest}
     />
   );
@@ -207,7 +204,10 @@ export function RefreshIndicator({
   return (
     <span
       role="status"
-      className={cx("inline-flex items-center text-faint", className)}
+      className={cx(
+        "inline-flex items-center text-muted-foreground",
+        className,
+      )}
     >
       <Spinner size={size} />
       <span className="sr-only">{label}</span>
@@ -227,9 +227,9 @@ export function RefreshIndicator({
 type EmptyBoxVariant = "box" | "inline" | "item";
 
 const EMPTY_BOX_CLASS: Record<EmptyBoxVariant, string> = {
-  box: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-6 text-center text-sm text-faint`,
-  inline: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-2 text-sm text-faint`,
-  item: `flex min-w-[9.5rem] shrink-0 snap-start flex-col rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-sm text-faint`,
+  box: `rounded-xl border ${DASHED_EDGE} border-border px-3 py-6 text-center text-sm text-muted-foreground`,
+  inline: `rounded-xl border ${DASHED_EDGE} border-border px-3 py-2 text-sm text-muted-foreground`,
+  item: `flex min-w-[9.5rem] shrink-0 snap-start flex-col rounded-xl border ${DASHED_EDGE} border-border px-3 py-2.5 text-sm text-muted-foreground`,
 };
 
 /** The message wrapper, where the variant needs one of its own. */
@@ -289,7 +289,7 @@ export function ErrorNote({
     <div
       role="alert"
       className={cx(
-        "flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2 text-sm text-danger",
+        "flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-sm text-destructive",
         className,
       )}
     >

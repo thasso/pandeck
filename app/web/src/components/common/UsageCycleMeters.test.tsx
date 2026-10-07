@@ -38,7 +38,7 @@ describe("UsageCycleMeters", () => {
     ).toContain("bg-warning");
     expect(
       render(indicator({ short: { usedPct: 95, resetsAt: null } })),
-    ).toContain("bg-danger");
+    ).toContain("bg-destructive");
   });
 
   it("shows a placeholder, never a number, before the first snapshot arrives", () => {

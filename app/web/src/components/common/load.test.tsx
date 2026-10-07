@@ -36,7 +36,7 @@ function render(element: ReactElement): HTMLDivElement {
 }
 
 it("hides the spinner glyph from assistive tech and animates motion-safely", () => {
-  const host = render(<Spinner size="lg" className="text-faint" />);
+  const host = render(<Spinner size="lg" className="text-muted-foreground" />);
   const svg = host.querySelector("svg")!;
   expect(svg.getAttribute("aria-hidden")).toBe("true");
   expect(svg.getAttribute("width")).toBe("22");

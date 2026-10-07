@@ -64,7 +64,7 @@ export function WorktreeChangesetList({
     );
   }
   return (
-    <div className="border-y border-line">
+    <div className="border-y border-border">
       {files.map((file) => (
         <ChangesetFileSection
           key={file.path}
@@ -166,9 +166,9 @@ function ChangesetFileSection({
   return (
     <div
       ref={sectionRef}
-      className={`overflow-hidden border-b border-line last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
+      className={`overflow-hidden border-b border-border last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-surface px-2 py-1.5">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background px-2 py-1.5">
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
@@ -177,19 +177,19 @@ function ChangesetFileSection({
             collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`
           }
           aria-expanded={!collapsed}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-raised hover:text-fg"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
         <span className="min-w-0 flex-1 truncate text-sm">
-          <span className="font-medium text-fg">{parts.name}</span>
+          <span className="font-medium text-foreground">{parts.name}</span>
           {parts.dir ? (
-            <span className="ml-1.5 font-mono text-xs text-faint">
+            <span className="ml-1.5 font-mono text-xs text-muted-foreground">
               {parts.dir}
             </span>
           ) : null}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-faint">
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
           {file.additions > 0 ? (
             <span className="text-emerald-400">+{file.additions}</span>
           ) : null}
@@ -202,7 +202,7 @@ function ChangesetFileSection({
           onClick={toggleViewed}
           title={viewed ? "Mark as not viewed" : "Mark as viewed"}
           aria-pressed={viewed}
-          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
           <Check size={11} /> Viewed
         </button>

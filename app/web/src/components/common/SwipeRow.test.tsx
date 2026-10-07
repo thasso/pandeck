@@ -387,7 +387,7 @@ describe("SwipeRow", () => {
     });
     expect(panel(host)?.dataset.swipeState).toBe("pending");
     expect(panel(host)?.dataset.swipeTone).toBe("danger");
-    expect(panel(host)?.className).toContain("bg-danger");
+    expect(panel(host)?.className).toContain("bg-destructive");
   });
 
   it("commits a flick that never travelled far enough to arm", () => {

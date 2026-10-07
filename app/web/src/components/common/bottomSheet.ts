@@ -20,7 +20,7 @@ export const BOTTOM_SHEET_GUTTER = "px-2";
 
 /** Applied to the card itself. Carries no padding: each surface sets its own. */
 export const BOTTOM_SHEET_SURFACE_CLASS =
-  "rounded-t-2xl border border-b-0 border-line bg-panel/95 shadow-lg shadow-black/10 backdrop-blur";
+  "rounded-t-2xl border border-b-0 border-border bg-card/95 shadow-lg shadow-black/10 backdrop-blur";
 
 /** Height cap shared by every bottom sheet, so none of them hides the page entirely. */
 export const BOTTOM_SHEET_MAX_HEIGHT_CLASS = "max-h-[85vh]";
@@ -59,4 +59,4 @@ export const BOTTOM_SHEET_BOTTOM_PADDING_CLASS =
  * card travels.
  */
 export const BOTTOM_SHEET_SKIRT_CLASS =
-  "border-x border-line bg-panel/95 backdrop-blur";
+  "border-x border-border bg-card/95 backdrop-blur";

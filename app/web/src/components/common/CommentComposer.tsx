@@ -389,7 +389,7 @@ export function CommentComposer({
       className={
         card
           ? COMPOSER_FIELD_CLASS
-          : "max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-faint"
+          : "max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
       }
     />
   );
@@ -528,7 +528,7 @@ export function CommentComposer({
     <div className="flex flex-col gap-2">
       {header}
       <form
-        className={`relative z-10 flex items-end gap-1 rounded-2xl border border-line px-2 py-1.5 transition-colors focus-within:border-line-strong ${disabled ? "bg-panel" : "bg-surface"}`}
+        className={`relative z-10 flex items-end gap-1 rounded-2xl border border-border px-2 py-1.5 transition-colors focus-within:border-input ${disabled ? "bg-card" : "bg-background"}`}
         onSubmit={(event) => {
           event.preventDefault();
           submit();

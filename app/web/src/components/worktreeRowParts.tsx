@@ -64,7 +64,7 @@ export function AxesSummary({
       // apply to them and they keep their static position out at the untruncated
       // end of the axes text — pushing the sidebar's scrollWidth ~110px past its
       // client width and letting the whole pane pan sideways on a phone.
-      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-xs tabular-nums text-faint ${dim}`}
+      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-xs tabular-nums text-muted-foreground ${dim}`}
     >
       {axes.base ? (
         <span

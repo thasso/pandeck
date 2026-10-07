@@ -250,7 +250,7 @@ function NavigatorViewToggle({
 }) {
   return (
     <div
-      className="flex items-center rounded-lg border border-line bg-panel/40 p-0.5"
+      className="flex items-center rounded-lg border border-border bg-card/40 p-0.5"
       aria-label="Navigator view"
     >
       {(
@@ -266,7 +266,7 @@ function NavigatorViewToggle({
           aria-label={option.label}
           aria-pressed={mode === option.id}
           onClick={() => onChange(option.id)}
-          className={`rounded-md p-1 ${mode === option.id ? "bg-raised text-fg" : "text-faint hover:bg-raised hover:text-fg"}`}
+          className={`rounded-md p-1 ${mode === option.id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
           {option.icon}
         </button>
@@ -289,7 +289,7 @@ function NavigatorVisibilityToggle({
       title={label}
       aria-label={label}
       onClick={() => onChange(!collapsed)}
-      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-raised hover:text-fg"
+      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
     >
       {collapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
     </button>
@@ -372,15 +372,15 @@ function WorktreeRailLayout({
   if (narrow) {
     if (!detailActive) {
       return (
-        <div className="flex min-h-0 flex-1 flex-col bg-surface/40">
+        <div className="flex min-h-0 flex-1 flex-col bg-background/40">
           {narrowListHeader ? (
-            <div className="border-b border-line p-2">
+            <div className="border-b border-border p-2">
               <div className="mb-2 min-w-0">
-                <div className="truncate text-sm font-semibold uppercase tracking-wide text-faint">
+                <div className="truncate text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                   {title}
                 </div>
                 {subtitle ? (
-                  <div className="min-w-0 truncate font-mono text-xs text-faint">
+                  <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
                     {subtitle}
                   </div>
                 ) : null}
@@ -392,21 +392,21 @@ function WorktreeRailLayout({
       );
     }
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
-        <div className="flex items-center gap-2 border-b border-line bg-surface/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
+        <div className="flex items-center gap-2 border-b border-border bg-background/40 py-1.5 pl-1 pr-3 text-sm text-muted-foreground">
           {onBack ? (
             <button
               type="button"
               onClick={onBack}
               title={`Back to ${title.toLowerCase()}`}
               aria-label={`Back to ${title.toLowerCase()}`}
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-faint hover:bg-raised hover:text-fg"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <ChevronLeft size={16} />
             </button>
           ) : null}
           {collapsedSummary ?? (
-            <span className="min-w-0 flex-1 truncate font-medium text-fg">
+            <span className="min-w-0 flex-1 truncate font-medium text-foreground">
               {title}
             </span>
           )}
@@ -423,15 +423,15 @@ function WorktreeRailLayout({
     <div ref={paneRef} className="flex min-h-0 flex-1">
       {!railCollapsed ? (
         <div
-          className="relative flex shrink-0 flex-col border-r border-line bg-surface/40"
+          className="relative flex shrink-0 flex-col border-r border-border bg-background/40"
           style={{ width: railWidth }}
         >
-          <div className="border-b border-line px-2 py-1.5">
-            <div className="truncate text-sm font-semibold uppercase tracking-wide text-faint">
+          <div className="border-b border-border px-2 py-1.5">
+            <div className="truncate text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               {title}
             </div>
             {subtitle ? (
-              <div className="min-w-0 truncate font-mono text-xs text-faint">
+              <div className="min-w-0 truncate font-mono text-xs text-muted-foreground">
                 {subtitle}
               </div>
             ) : null}
@@ -449,9 +449,9 @@ function WorktreeRailLayout({
           />
         </div>
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
         {railCollapsed && collapsedSummary ? (
-          <div className="flex items-center gap-2 border-b border-line bg-surface/40 px-3 py-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 border-b border-border bg-background/40 px-3 py-2 text-sm text-muted-foreground">
             {collapsedSummary}
           </div>
         ) : null}
@@ -677,9 +677,9 @@ function ChangesView({
     // Two kinds of thing only: WHERE you are (the tabs) and WHAT you are looking at
     // (the scope). How it is rendered lives in the view-options popover, which is
     // why this row survives a 390px viewport with words instead of six glyphs.
-    <div className="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1.5">
+    <div className="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1.5">
       {navigationControls}
-      <span className="mx-1 h-4 w-px shrink-0 bg-line" aria-hidden="true" />
+      <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
       <WorktreeScopePicker
         worktree={worktree}
         narrow={narrow}
@@ -711,7 +711,7 @@ function ChangesView({
               title="Jump to file"
               aria-label="Jump to file"
               onClick={() => setJumpSheetOpen(true)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-fg"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
             >
               <FolderTree size={14} />
             </button>
@@ -720,7 +720,7 @@ function ChangesView({
               align="right"
               placement="bottom"
               title="Jump to file"
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
               button={<FolderTree size={14} />}
             >
               {(close) => (
@@ -777,7 +777,7 @@ function ChangesView({
             title="Changed files"
             subtitle={totalsSummary}
             collapsedSummary={
-              <span className="font-medium text-fg">All files</span>
+              <span className="font-medium text-foreground">All files</span>
             }
             prefs={prefs}
             onUpdatePrefs={onUpdatePrefs}
@@ -821,13 +821,15 @@ function ChangesView({
         collapsedSummary={
           selectedParts ? (
             <>
-              <span className="font-medium text-fg">{selectedParts.name}</span>
+              <span className="font-medium text-foreground">
+                {selectedParts.name}
+              </span>
               {selectedParts.dir ? (
-                <span className="min-w-0 truncate font-mono text-sm text-faint">
+                <span className="min-w-0 truncate font-mono text-sm text-muted-foreground">
                   {selectedParts.dir}
                 </span>
               ) : null}
-              <span className="ml-auto shrink-0 font-mono text-xs text-faint">
+              <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
                 {totalsSummary}
               </span>
             </>
@@ -1322,7 +1324,7 @@ function FilesView({
   const pivotControls =
     pivots.length > 1 ? (
       <div
-        className="flex items-center rounded-lg border border-line p-0.5"
+        className="flex items-center rounded-lg border border-border p-0.5"
         aria-label="File view"
       >
         {pivots.map(({ id, label, icon }) => (
@@ -1333,7 +1335,7 @@ function FilesView({
             aria-label={label}
             aria-pressed={pivot === id}
             onClick={() => onPivotChange(id)}
-            className={`flex items-center justify-center rounded-md ${narrow ? "size-8" : "px-2 py-1 text-sm"} ${pivot === id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
+            className={`flex items-center justify-center rounded-md ${narrow ? "size-8" : "px-2 py-1 text-sm"} ${pivot === id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
           >
             {narrow ? icon : label}
           </button>
@@ -1343,7 +1345,7 @@ function FilesView({
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3 py-1.5">
+      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
         {navigationControls}
         <div className="ml-auto flex shrink-0 items-center gap-1">
           <button
@@ -1352,7 +1354,7 @@ function FilesView({
             aria-label={ignoredVisibilityLabel}
             aria-pressed={includeIgnored}
             onClick={() => setIncludeIgnored((current) => !current)}
-            className={`flex size-7 shrink-0 items-center justify-center rounded-md hover:text-fg ${includeIgnored ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised"}`}
+            className={`flex size-7 shrink-0 items-center justify-center rounded-md hover:text-foreground ${includeIgnored ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted"}`}
           >
             <Eye size={14} />
           </button>
@@ -1380,11 +1382,11 @@ function FilesView({
         collapsedSummary={
           selectedParts ? (
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span className="min-w-0 max-w-[55%] truncate font-medium text-fg">
+              <span className="min-w-0 max-w-[55%] truncate font-medium text-foreground">
                 {selectedParts.name}
               </span>
               {selectedParts.dir ? (
-                <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint">
+                <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
                   {selectedParts.dir}
                 </span>
               ) : null}
@@ -1455,7 +1457,7 @@ function FilesView({
         {filePath ? (
           <>
             {!narrow ? (
-              <div className="flex items-center gap-2 border-b border-line px-3 py-2">
+              <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
                   {filePath}
                 </span>
@@ -1825,7 +1827,7 @@ export default function WorktreeDetailPage({
           ),
         )
       }
-      className={`shrink-0 rounded-lg px-2.5 py-1 text-sm ${view === tab.id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
+      className={`shrink-0 rounded-lg px-2.5 py-1 text-sm ${view === tab.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
     >
       {tab.label}
     </button>
@@ -1835,7 +1837,7 @@ export default function WorktreeDetailPage({
       align="right"
       placement="bottom"
       title="Diff view options"
-      className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
+      className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
       button={<SlidersHorizontal size={14} />}
     >
       {() => (
@@ -1844,11 +1846,11 @@ export default function WorktreeDetailPage({
                 it belongs in here rather than as a second segmented control in the
                 toolbar competing with the tabs and the scope. */}
           {view === "changes" && !filePath ? (
-            <div className="mb-1.5 border-b border-line pb-1.5">
-              <p className="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-faint">
+            <div className="mb-1.5 border-b border-border pb-1.5">
+              <p className="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Review layout
               </p>
-              <div className="flex items-center rounded-lg border border-line p-0.5">
+              <div className="flex items-center rounded-lg border border-border p-0.5">
                 {(
                   [
                     { id: "by-file", label: "By file" },
@@ -1862,7 +1864,7 @@ export default function WorktreeDetailPage({
                       onUpdatePrefs({ worktreeReviewMode: option.id })
                     }
                     aria-pressed={reviewLayout === option.id}
-                    className={`flex flex-1 items-center justify-center rounded-md px-2 py-1 text-sm ${reviewLayout === option.id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
+                    className={`flex flex-1 items-center justify-center rounded-md px-2 py-1 text-sm ${reviewLayout === option.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     {option.label}
                   </button>

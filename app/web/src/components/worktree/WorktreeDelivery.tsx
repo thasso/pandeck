@@ -705,7 +705,7 @@ export function WorktreeDeliverySection({
                         ) : (
                           ciDisplay.label
                         )}
-                        <span className="text-faint">
+                        <span className="text-muted-foreground">
                           · {ci.total} check{ci.total === 1 ? "" : "s"}
                         </span>
                       </span>
@@ -733,7 +733,9 @@ export function WorktreeDeliverySection({
           ]}
         />
       ) : (
-        <p className="px-1 text-sm text-faint">Loading git status…</p>
+        <p className="px-1 text-sm text-muted-foreground">
+          Loading git status…
+        </p>
       )}
     </InspectorSection>
   );

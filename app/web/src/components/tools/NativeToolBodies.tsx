@@ -56,7 +56,9 @@ export function FileExcerptBody({
         wrap={wrap}
       />
       {parsed?.notice ? (
-        <div className="mt-1 px-1 text-sm text-faint">{parsed.notice}</div>
+        <div className="mt-1 px-1 text-sm text-muted-foreground">
+          {parsed.notice}
+        </div>
       ) : null}
     </>
   );
@@ -205,7 +207,7 @@ export function BashBody({
 
   if (!hasOutput) {
     return shell(
-      <span className="tool-code-row text-faint">
+      <span className="tool-code-row text-muted-foreground">
         {running ? "Running…" : "(no output)"}
       </span>,
     );
