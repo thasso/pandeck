@@ -1,5 +1,11 @@
-import { LoaderCircle } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import { cn } from "cn";
+
+import { Alert, AlertAction, AlertDescription } from "../ui/alert.tsx";
+import { Button } from "../ui/button.tsx";
+import { Empty } from "../ui/empty.tsx";
+import { Spinner as ShadcnSpinner } from "../ui/spinner.tsx";
 
 /**
  * The app's loading, empty and error presentation (Task-361 / Task-383).
@@ -8,9 +14,8 @@ import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
  * `loadingStateAudit.test.ts` forbids `animate-spin`, `animate-pulse`,
  * `LoaderCircle`/`Loader2` and `border-dashed` everywhere else with no
  * exceptions, so a surface gets its five states from here or not at all. The
- * two treatments that are NOT loading states — a dashed edge that means
- * something other than empty, a pulse that means live — are named class tokens
- * here (`DASHED_EDGE`, `LIVE_PULSE`) rather than an audit bypass. Sizes are
+ * one treatment that is NOT a loading state — a pulse that means live — is a
+ * named class token here (`LIVE_PULSE`) rather than an audit bypass. Sizes are
  * tokens, not per-caller numbers — the pre-Task-383 code used every value
  * between 9 and 22 and no two spinners matched.
  *
@@ -18,26 +23,6 @@ import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
  * `role="status"` with a label, so a fetch is announced without any surface
  * having to remember to. The model is `app/web/docs/loading-states.md`.
  */
-
-function cx(...classes: Array<string | false | undefined>): string {
-  return classes.filter(Boolean).join(" ");
-}
-
-/**
- * The dashed edge itself, for the surfaces that draw one and are NOT empty
- * states. `EmptyBox` is the empty state; a dashed border anywhere else in this
- * app means one of exactly three other things, and each takes the token from
- * here so the audit still has ONE owner and a reviewer sees the import:
- *
- *  - a FILLABLE SLOT — the outline of something you can make
- *    (`NewSessionQuickStart`'s "New worktree" and "More…");
- *  - a PROVISIONAL object — a prompt that exists but has not been sent yet
- *    (`MessageList`'s queued bubble, `PeerPromptCard`);
- *  - an UNRESOLVED reference — `ProjectBadge`'s unknown project id.
- *
- * A region with nothing in it is not on that list: it uses `EmptyBox`.
- */
-export const DASHED_EDGE = "border-dashed";
 
 /**
  * The pulse of something LIVE, which is not a loading state and must not be
@@ -57,9 +42,16 @@ type SpinnerSize = "xs" | "sm" | "md" | "lg";
  */
 const SPINNER_PX: Record<SpinnerSize, number> = {
   xs: 10,
-  sm: 13,
+  sm: 14,
   md: 16,
-  lg: 22,
+  lg: 24,
+};
+
+const SPINNER_SIZE_CLASS: Record<SpinnerSize, string> = {
+  xs: "size-2.5",
+  sm: "size-3.5",
+  md: "size-4",
+  lg: "size-6",
 };
 
 /**
@@ -104,7 +96,7 @@ export function Spinner({
       <span
         aria-hidden
         style={RING_STYLE[size]}
-        className={cx(
+        className={cn(
           "inline-block shrink-0 rounded-full border-2 border-border border-t-primary motion-safe:animate-spin",
           className,
         )}
@@ -112,10 +104,11 @@ export function Spinner({
     );
   }
   return (
-    <LoaderCircle
-      size={SPINNER_PX[size]}
+    <ShadcnSpinner
+      role="presentation"
       aria-hidden
-      className={cx("shrink-0 motion-safe:animate-spin", className)}
+      aria-label={undefined}
+      className={cn("shrink-0", SPINNER_SIZE_CLASS[size], className)}
     />
   );
 }
@@ -146,7 +139,7 @@ export function PaneLoading({
   return (
     <div
       role="status"
-      className={cx(
+      className={cn(
         "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground",
         className,
       )}
@@ -179,7 +172,7 @@ export function Skeleton({
   return (
     <Tag
       aria-hidden
-      className={cx("rounded-md bg-muted motion-safe:animate-pulse", className)}
+      className={cn("rounded-md bg-muted motion-safe:animate-pulse", className)}
       {...rest}
     />
   );
@@ -204,7 +197,7 @@ export function RefreshIndicator({
   return (
     <span
       role="status"
-      className={cx(
+      className={cn(
         "inline-flex items-center text-muted-foreground",
         className,
       )}
@@ -227,14 +220,10 @@ export function RefreshIndicator({
 type EmptyBoxVariant = "box" | "inline" | "item";
 
 const EMPTY_BOX_CLASS: Record<EmptyBoxVariant, string> = {
-  box: `rounded-xl border ${DASHED_EDGE} border-border px-3 py-6 text-center text-sm text-muted-foreground`,
-  inline: `rounded-xl border ${DASHED_EDGE} border-border px-3 py-2 text-sm text-muted-foreground`,
-  item: `flex min-w-[9.5rem] shrink-0 snap-start flex-col rounded-xl border ${DASHED_EDGE} border-border px-3 py-2.5 text-sm text-muted-foreground`,
-};
-
-/** The message wrapper, where the variant needs one of its own. */
-const EMPTY_BOX_BODY: Partial<Record<EmptyBoxVariant, string>> = {
-  item: "flex w-full min-w-0 flex-col items-start gap-1",
+  box: "border text-sm text-muted-foreground",
+  inline:
+    "items-start gap-2 border px-3 py-2 text-left text-sm text-muted-foreground",
+  item: "min-w-[9.5rem] flex-none snap-start items-start gap-1 border px-3 py-2.5 text-left text-sm text-muted-foreground",
 };
 
 export interface EmptyBoxProps {
@@ -258,10 +247,10 @@ export function EmptyBox({
   className,
 }: EmptyBoxProps) {
   return (
-    <div className={cx(EMPTY_BOX_CLASS[variant], className)}>
-      <div className={EMPTY_BOX_BODY[variant]}>{children}</div>
-      {action ? <div className="mt-3 flex justify-center">{action}</div> : null}
-    </div>
+    <Empty className={cn(EMPTY_BOX_CLASS[variant], className)}>
+      <div className="flex w-full min-w-0 flex-col gap-1">{children}</div>
+      {action}
+    </Empty>
   );
 }
 
@@ -286,23 +275,16 @@ export function ErrorNote({
   className,
 }: ErrorNoteProps) {
   return (
-    <div
-      role="alert"
-      className={cx(
-        "flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-sm text-destructive",
-        className,
-      )}
-    >
-      <span className="min-w-0 flex-1 text-left">{message}</span>
+    <Alert variant="destructive" className={className}>
+      <CircleAlert />
+      <AlertDescription>{message}</AlertDescription>
       {onRetry ? (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="shrink-0 font-medium underline underline-offset-2 hover:opacity-80"
-        >
-          {retryLabel}
-        </button>
+        <AlertAction>
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            {retryLabel}
+          </Button>
+        </AlertAction>
       ) : null}
-    </div>
+    </Alert>
   );
 }

@@ -24,7 +24,12 @@ const VENDORED_DIR = join(HERE, "components", "ui");
 
 /** Each rule names what to use instead; the doc lists the full mapping. */
 const RULES: Record<string, { pattern: RegExp; use: string }> = {
-  "raw-button": { pattern: /<button\b/g, use: "ui/button (Button)" },
+  // `render={<button … />}` is how a shadcn part (an `Item` row) becomes a
+  // button, not a hand-styled control.
+  "raw-button": {
+    pattern: /(?<!render=\{\s*)<button\b/g,
+    use: "ui/button (Button), or `render={<button />}` on an Item",
+  },
   "raw-input": {
     pattern: /<input\b/g,
     use: "ui/input, ui/checkbox, ui/switch, ui/radio-group, ui/slider",

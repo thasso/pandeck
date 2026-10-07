@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import { Button } from "@/components/ui/button";
-import { GhostIconButton } from "./GhostIconButton.tsx";
+import { IconButton } from "./IconButton.tsx";
 import { copyTextToClipboard, copyWithToast } from "../../lib/clipboard.ts";
 
 export interface CopyButtonProps extends Omit<
@@ -109,11 +109,17 @@ export function InlineCopyButton({
   }, [value]);
 
   return (
-    <GhostIconButton
-      icon={copied ? <Check size={13} /> : <Copy size={13} />}
+    <IconButton
       label={copied ? copiedLabel : label}
+      size="icon-xs"
       onClick={handleCopy}
-      className={cx(copied && "text-primary", className)}
-    />
+      className={cx(
+        "text-muted-foreground",
+        copied && "text-primary",
+        className,
+      )}
+    >
+      {copied ? <Check /> : <Copy />}
+    </IconButton>
   );
 }

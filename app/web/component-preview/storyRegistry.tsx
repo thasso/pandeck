@@ -13,7 +13,7 @@ import {
   PhoneQuietList,
   SessionInboxStory,
   type SessionInboxStoryProps,
-} from "./stories/SessionInbox.stories.tsx";
+} from "./stories/shell/SessionInbox.stories.tsx";
 import {
   Comment as JiraComment,
   Create as JiraCreate,
@@ -21,29 +21,29 @@ import {
   Executed as JiraExecuted,
   JiraIssueApprovalStory,
   type JiraIssueApprovalStoryProps,
-} from "./stories/JiraIssueApproval.stories.tsx";
+} from "./stories/cards/JiraIssueApproval.stories.tsx";
 import {
   AllCards as GithubAllCards,
   GithubApprovalStory,
-} from "./stories/GithubApproval.stories.tsx";
+} from "./stories/cards/GithubApproval.stories.tsx";
 import {
   ApprovalSessionGrantStory,
   Lifecycle as GrantLifecycle,
-} from "./stories/ApprovalSessionGrant.stories.tsx";
+} from "./stories/cards/ApprovalSessionGrant.stories.tsx";
 import {
   Paused as QueuePaused,
   Phone as QueuePhone,
   PromptQueueStory,
   Running as QueueRunning,
   type PromptQueueStoryProps,
-} from "./stories/PromptQueue.stories.tsx";
+} from "./stories/cards/PromptQueue.stories.tsx";
 import {
   ChatActivityStory,
   Desktop as ActivityDesktop,
   Expanded as ActivityExpanded,
   Phone as ActivityPhone,
   PhoneExpanded as ActivityPhoneExpanded,
-} from "./stories/ChatActivity.stories.tsx";
+} from "./stories/cards/ChatActivity.stories.tsx";
 import {
   ChatActivityTranscript,
   Desktop as TranscriptDesktop,
@@ -51,12 +51,12 @@ import {
   Phone as TranscriptPhone,
   PhoneExpanded as TranscriptPhoneExpanded,
   NarrowLargeText as TranscriptNarrowLargeText,
-} from "./stories/ChatActivityTranscript.stories.tsx";
+} from "./stories/chat/ChatActivityTranscript.stories.tsx";
 import {
   Frontmatter as MarkdownFrontmatter,
   FrontmatterDark as MarkdownFrontmatterDark,
   MarkdownFileStory,
-} from "./stories/MarkdownFile.stories.tsx";
+} from "./stories/worktree/MarkdownFile.stories.tsx";
 import type { StoryPreviewId } from "./storyCatalog.ts";
 
 function argsOf(story: {

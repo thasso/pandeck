@@ -37,8 +37,8 @@ function readChartFonts(): ChartFonts {
       getComputedStyle(document.body).fontFamily || "system-ui, sans-serif";
     return {
       family,
-      tickPx: pxOf(probe, "--text-caption"),
-      titlePx: pxOf(probe, "--text-body"),
+      tickPx: pxOf(probe, "--text-xs"),
+      titlePx: pxOf(probe, "--text-sm"),
     };
   } finally {
     probe.remove();

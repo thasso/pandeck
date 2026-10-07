@@ -22,15 +22,18 @@ import {
   COMPOSER_CARD_COLLAPSED_CLASS,
   COMPOSER_CARD_SKIN_CLASS,
   composerFoldClass,
-  COMPOSER_DANGER_ACTION_CLASS,
   COMPOSER_FIELD_CLASS,
   COMPOSER_FIELD_MAX_HEIGHT,
-  COMPOSER_ICON_ACTION_CLASS,
-  COMPOSER_PRIMARY_ACTION_CLASS,
-  COMPOSER_SEND_TONE_CLASS,
   autosizeComposerField,
 } from "./composerShell.ts";
-import { ErrorNote, Spinner } from "./load.tsx";
+import { Button } from "../ui/button.tsx";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupTextarea,
+} from "../ui/input-group.tsx";
+import { IconButton } from "./IconButton.tsx";
+import { ErrorNote } from "./load.tsx";
 
 export interface CommentRefineOptions extends RefineTextOptions {
   /** Keep the control visible but disabled, explaining why in its tooltip. */
@@ -362,7 +365,7 @@ export function CommentComposer({
         : undefined);
 
   const field = (
-    <textarea
+    <InputGroupTextarea
       ref={draftRef}
       value={draft}
       readOnly={disabled}
@@ -386,28 +389,22 @@ export function CommentComposer({
         event.preventDefault();
         submit();
       }}
-      className={
-        card
-          ? COMPOSER_FIELD_CLASS
-          : "max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-      }
+      className={card ? COMPOSER_FIELD_CLASS : "max-h-40 min-h-8 py-1.5"}
     />
   );
 
   const refineControl = refine ? (
-    <button
-      type="button"
+    <IconButton
+      label="Refine comment"
       onClick={() => void runRefinement()}
       disabled={
         disabled || isRefining || Boolean(refinementDisabledReason) || !dirty
       }
-      aria-busy={isRefining || undefined}
-      title={refinementDisabledReason ?? "Refine comment"}
-      aria-label="Refine comment"
-      className={COMPOSER_ICON_ACTION_CLASS}
+      busy={isRefining}
+      {...(refinementDisabledReason ? { title: refinementDisabledReason } : {})}
     >
-      {isRefining ? <Spinner size="md" /> : <WandSparkles size={16} />}
-    </button>
+      <WandSparkles />
+    </IconButton>
   ) : null;
 
   // Cancel, delete and submit sit together at the trailing end: the surface's own
@@ -415,32 +412,24 @@ export function CommentComposer({
   const surfaceActions = (
     <>
       {onCancel && !hideCancel ? (
-        <button
-          type="button"
-          onClick={onCancel}
-          title="Cancel"
-          aria-label="Cancel comment"
-          className={COMPOSER_ICON_ACTION_CLASS}
-        >
-          <X size={16} />
-        </button>
+        <IconButton label="Cancel comment" onClick={onCancel}>
+          <X />
+        </IconButton>
       ) : null}
       {onDelete ? (
-        <button
-          type="button"
+        <IconButton
+          label={deleteLabel}
           onClick={onDelete}
-          title={deleteLabel}
-          aria-label={deleteLabel}
-          className={COMPOSER_DANGER_ACTION_CLASS}
+          className="hover:bg-destructive/10 hover:text-destructive"
         >
-          <Trash2 size={16} />
-        </button>
+          <Trash2 />
+        </IconButton>
       ) : null}
-      <button
+      <Button
         type="submit"
-        disabled={disabled || !dirty || busy || (card && recording)}
-        aria-busy={busy || undefined}
-        className={`${COMPOSER_PRIMARY_ACTION_CLASS} ${COMPOSER_SEND_TONE_CLASS}`}
+        size="icon-sm"
+        disabled={disabled || !dirty || (card && recording)}
+        busy={busy}
         title={
           touch
             ? (submitLabel ?? "Send")
@@ -448,12 +437,8 @@ export function CommentComposer({
         }
         aria-label={submitLabel ?? ariaLabel}
       >
-        {busy ? (
-          <Spinner size="sm" />
-        ) : (
-          <SendHorizontal size={card ? 16 : 15} />
-        )}
-      </button>
+        <SendHorizontal />
+      </Button>
     </>
   );
 
@@ -528,24 +513,27 @@ export function CommentComposer({
     <div className="flex flex-col gap-2">
       {header}
       <form
-        className={`relative z-10 flex items-end gap-1 rounded-2xl border border-border px-2 py-1.5 transition-colors focus-within:border-input ${disabled ? "bg-card" : "bg-background"}`}
+        className="relative z-10"
         onSubmit={(event) => {
           event.preventDefault();
           submit();
         }}
       >
-        {recording ? (
-          <>
-            <DictationTrace dictation={dictationControls} />
-            {speech.phase === "recording" ? (
-              <DictationDiscardButton onCancel={speech.cancel} />
-            ) : null}
-            <DictationToggleButton dictation={dictationControls} />
-          </>
-        ) : (
-          <>
-            {field}
-            {disabled ? null : (
+        <InputGroup className="items-end">
+          {recording ? (
+            <InputGroupAddon align="inline-start" className="flex-1">
+              <DictationTrace dictation={dictationControls} />
+              {speech.phase === "recording" ? (
+                <DictationDiscardButton onCancel={speech.cancel} />
+              ) : null}
+            </InputGroupAddon>
+          ) : (
+            field
+          )}
+          <InputGroupAddon align="inline-end" className="gap-1">
+            {recording ? (
+              <DictationToggleButton dictation={dictationControls} />
+            ) : disabled ? null : (
               <>
                 {refineControl}
                 {dictationVisible ? (
@@ -557,9 +545,11 @@ export function CommentComposer({
                 {surfaceActions}
               </>
             )}
-          </>
-        )}
-        {dictationVisible ? <DictationLiveRegion phase={speech.phase} /> : null}
+          </InputGroupAddon>
+          {dictationVisible ? (
+            <DictationLiveRegion phase={speech.phase} />
+          ) : null}
+        </InputGroup>
       </form>
       {refinementError ? <ErrorNote message={refinementError} /> : null}
       {error ? <ErrorNote message={error} /> : null}

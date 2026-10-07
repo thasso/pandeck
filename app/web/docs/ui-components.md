@@ -23,8 +23,14 @@ the same parts a shadcn example would.
   listed here:
   - `button.tsx`: `busy` prop (spinner, disabled, `aria-busy`;
     `loading-states.md` R5).
-  - `spinner.tsx`: `motion-safe:animate-spin` (R6).
+  - `spinner.tsx`, `skeleton.tsx`: `motion-safe:` animations (R6).
   - `sonner.tsx`: reads the `.dark` class instead of `next-themes`.
+  - `input-group.tsx`: dims only when its text control is disabled, not when any
+    addon button is.
+  - `slider.tsx`: `thumbProps` (accessible name and value text belong on the
+    thumb) and one thumb for a scalar `value`.
+  - `badge.tsx`, `alert.tsx`: `success` and `warning` variants on the app's
+    status tokens.
   - Overlays sit in the layer bands of `ui-shell.md` instead of `z-50`: dialog,
     sheet, drawer and command at `z-[70]`; alert-dialog at `z-[90]`; popover,
     dropdown-menu, context-menu, hover-card, select, combobox and tooltip at
@@ -36,27 +42,36 @@ the same parts a shadcn example would.
 
 ## Which component
 
-| Need                                       | Use                                                                        |
-| ------------------------------------------ | -------------------------------------------------------------------------- |
-| Any clickable action                       | `Button` (`variant`, `size`; `size="icon*"` for icon-only, with `Tooltip`) |
-| Grouped or segmented actions               | `ButtonGroup`, `ToggleGroup`                                               |
-| Text entry                                 | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)        |
-| Choice                                     | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`   |
-| Form rows, labels, help and errors         | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`      |
-| A list row (session, task, file, setting)  | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)            |
-| A bounded surface                          | `Card`                                                                     |
-| Status or count                            | `Badge`                                                                    |
-| Menu of actions                            | `DropdownMenu`, `ContextMenu`                                              |
-| Floating panel or hint                     | `Popover`, `HoverCard`, `Tooltip`                                          |
-| Modal                                      | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`        |
-| Edge panel                                 | `Sheet`, `Drawer`                                                          |
-| Show/hide a region                         | `Collapsible`, `Accordion`                                                 |
-| Views of one object                        | `Tabs`                                                                     |
-| Nothing to show yet                        | `Empty` (via `common/load.tsx` where an async region owns it)              |
-| A failure on its object                    | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)       |
-| Transient notice                           | `showToast()` (`lib/toast.ts`), rendered by Sonner                         |
-| Tables, separators, kbd hints, breadcrumbs | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                  |
-| Search-and-pick lists                      | `Command`                                                                  |
+| Need                                       | Use                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Any clickable action                       | `Button` (`variant`, `size`)                                                          |
+| An icon-only action                        | `common/IconButton` (`label` is the aria-label and the tooltip)                       |
+| A link that looks like a button            | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`) |
+| Grouped or segmented actions               | `ButtonGroup`, `ToggleGroup`                                                          |
+| Text entry                                 | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                   |
+| Choice                                     | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`              |
+| Form rows, labels, help and errors         | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                 |
+| A list row (session, task, file, setting)  | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                       |
+| A bounded surface                          | `Card`                                                                                |
+| Status or count                            | `Badge`                                                                               |
+| Menu of actions                            | `DropdownMenu`, `ContextMenu`                                                         |
+| Floating panel or hint                     | `Popover`, `HoverCard`, `Tooltip`                                                     |
+| Modal                                      | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                   |
+| Edge panel                                 | `Sheet`, `Drawer`                                                                     |
+| Show/hide a region                         | `Collapsible`, `Accordion`                                                            |
+| Views of one object                        | `Tabs`                                                                                |
+| Nothing to show yet                        | `Empty` (via `common/load.tsx` where an async region owns it)                         |
+| A failure on its object                    | `Alert variant="destructive"` (via `ErrorNote` in `common/load.tsx`)                  |
+| Transient notice                           | `showToast()` (`lib/toast.ts`), rendered by Sonner                                    |
+| Tables, separators, kbd hints, breadcrumbs | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                             |
+| Search-and-pick lists                      | `Command`                                                                             |
+
+A clickable row is an `Item` rendered as the element it is:
+`<Item render={<button type="button" onClick={…} />}>` (or an `<a>` for a link).
+The audit does not count a `render={<button` target.
+
+`Alert` carries `role="alert"`; a notice that is not a failure passes
+`role="status"` (or `role="note"`) so it is not announced as one.
 
 ## Styling rules
 

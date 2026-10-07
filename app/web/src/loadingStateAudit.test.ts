@@ -38,12 +38,6 @@ import { describe, expect, test } from "vitest";
  *  - `LIVE_PULSE` — the dictation `Mic` arming and a row's streaming
  *    underline. Nothing has been ASKED for in either, so a spinner would pose a
  *    question the user cannot answer.
- *  - `DASHED_EDGE` — a fillable slot (`NewSessionQuickStart`'s "New worktree"
- *    and "More…"), a provisional object (the queued-prompt bubble in
- *    `MessageList` and `PeerPromptCard`, the pending reply in
- *    `KnowledgeComments`), and an unresolved reference (`ProjectBadge`'s
- *    unknown project). A region with nothing in it is none of those: it uses
- *    `EmptyBox`.
  *
  * The scroller empty item Phase 5 flagged — `NewSessionQuickStart`'s "No
  * worktrees / in <project>" card, which has to carry the snapping and two-line

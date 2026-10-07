@@ -39,7 +39,7 @@ it("hides the spinner glyph from assistive tech and animates motion-safely", () 
   const host = render(<Spinner size="lg" className="text-muted-foreground" />);
   const svg = host.querySelector("svg")!;
   expect(svg.getAttribute("aria-hidden")).toBe("true");
-  expect(svg.getAttribute("width")).toBe("22");
+  expect(svg.getAttribute("class")).toContain("size-6");
   expect(svg.getAttribute("class")).toContain("motion-safe:animate-spin");
 });
 
@@ -53,7 +53,7 @@ it("draws the ring variant as a single decorative element at the token size", ()
   expect(ring.tagName).toBe("SPAN");
   expect(ring.querySelector("svg")).toBeNull();
   expect(ring.getAttribute("aria-hidden")).toBe("true");
-  expect(ring.style.width).toBe("13px");
+  expect(ring.style.width).toBe("14px");
   expect(ring.className).toContain("border-t-primary");
   expect(ring.className).toContain("motion-safe:animate-spin");
 });
@@ -145,7 +145,7 @@ it("gives every empty-state variant the dashed edge and its own geometry", () =>
     .firstElementChild as HTMLElement;
   expect(box.className).toContain("border-dashed");
   expect(box.className).toContain("text-center");
-  expect(box.className).toContain("py-6");
+  expect(box.getAttribute("data-slot")).toBe("empty");
 
   const inline = render(<EmptyBox variant="inline">No children.</EmptyBox>)
     .firstElementChild as HTMLElement;
@@ -158,12 +158,11 @@ it("gives every empty-state variant the dashed edge and its own geometry", () =>
   expect(item.className).toContain("border-dashed");
   // A scroller row: it snaps and it does not shrink, like the cards beside it.
   expect(item.className).toContain("snap-start");
-  expect(item.className).toContain("shrink-0");
+  expect(item.className).toContain("flex-none");
 });
 
-// The `item` body stacks its lines; the other two do not need a layout of their
-// own, so the wrapper carries no classes and cannot fight the caller's.
-it("stacks the item variant's lines and leaves the other bodies bare", () => {
+// The body stacks its lines, so a two-line `item` reads like the cards beside it.
+it("stacks the item variant's lines", () => {
   const item = render(
     <EmptyBox variant="item">
       <span>No worktrees</span>
@@ -173,10 +172,6 @@ it("stacks the item variant's lines and leaves the other bodies bare", () => {
   const itemBody = item.firstElementChild!.firstElementChild as HTMLElement;
   expect(itemBody.className).toContain("flex-col");
   expect(itemBody.childElementCount).toBe(2);
-
-  const box = render(<EmptyBox>No tasks yet.</EmptyBox>);
-  const boxBody = box.firstElementChild!.firstElementChild as HTMLElement;
-  expect(boxBody.getAttribute("class")).toBeNull();
 });
 
 it("offers a retry on an error note only when there is something to retry", () => {
