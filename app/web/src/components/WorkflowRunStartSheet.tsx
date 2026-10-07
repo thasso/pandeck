@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import {
   ChevronDown,
+  ChevronRight,
   GitBranch,
   Plus,
   RotateCcw,
@@ -41,8 +41,31 @@ import { carryOverRuntimeSelection } from "../lib/newSessionRuntime.ts";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import { showToast } from "../lib/toast.ts";
 import { workflowStartOutcomeToast } from "../lib/workflowStart.ts";
-import { Disclosure } from "./Disclosure.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldDescription,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Textarea } from "@/components/ui/textarea";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import {
@@ -388,8 +411,6 @@ export function preferredWorkflowBaseBranch(
 }
 
 export interface WorkflowRunStartLayerProps {
-  /** Small-screen layout: a full-screen flow instead of a centered dialog. */
-  mobile: boolean;
   task: { id: string; title: string };
   models: AccountModelOption[];
   /**
@@ -438,10 +459,9 @@ export interface WorkflowRunStartLayerProps {
 
 /**
  * @component WorkflowRunStartLayer
- * @purpose The whole visible start surface, portal-free so the DOM-less test
- * suite can render it: a FULL-SCREEN flow on small screens (per the
- * `ui-shell.md` screens model — one pane fills the viewport) and a bounded
- * centered dialog on wide layouts. It rests as a compact CONFIGURATION SUMMARY
+ * @purpose The whole start surface's content, portal-free so the DOM-less test
+ * suite can render it; {@link WorkflowRunStartSheet} puts it in a full-screen
+ * sheet on small screens and a dialog on wide ones. It rests as a compact CONFIGURATION SUMMARY
  * — one line per runtime — and expands exactly one runtime row at a time for
  * editing, so the whole run stays readable at a glance on a phone. While a
  * start is pending it is not dismissible ({@link canDismissWorkflowStart}); the
@@ -449,7 +469,6 @@ export interface WorkflowRunStartLayerProps {
  * @useWhen Rendered by {@link WorkflowRunStartSheet}; render directly in tests.
  */
 export function WorkflowRunStartLayer({
-  mobile,
   task,
   models,
   usageIndicators = null,
@@ -485,17 +504,6 @@ export function WorkflowRunStartLayer({
   // configuration collapses the open row, since the row keys are positional and
   // a kept expansion would silently move to a different configuration.
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
-
-  // Escape follows the same dismissal rule as every other way out.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (!canDismissWorkflowStart(pending)) return;
-      onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [pending, onClose]);
 
   const accounts = useMemo(() => accountsOf(models), [models]);
   const ready =
@@ -551,42 +559,31 @@ export function WorkflowRunStartLayer({
     ),
   ];
 
-  const header = (
-    <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold text-foreground">
-          Run workflow
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-3 border-b px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-medium">Run workflow</h2>
+          <div className="mt-0.5 flex items-center gap-2 text-muted-foreground">
+            <TaskIdBadge id={task.id} />
+            <span className="min-w-0 flex-1 truncate" title={task.title}>
+              {task.title}
+            </span>
+          </div>
         </div>
-        <div className="mt-0.5 flex items-center gap-2 text-sm text-muted-foreground">
-          <TaskIdBadge id={task.id} />
-          <span className="min-w-0 flex-1 truncate" title={task.title}>
-            {task.title}
-          </span>
-        </div>
+        {canDismissWorkflowStart(pending) ? (
+          <IconButton label="Close" onClick={onClose}>
+            <X />
+          </IconButton>
+        ) : null}
       </div>
-      {canDismissWorkflowStart(pending) ? (
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close"
-          aria-label="Close"
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X size={15} />
-        </button>
-      ) : null}
-    </div>
-  );
 
-  const body = (
-    <div className="flex flex-col gap-3">
-      <section className="rounded-xl border border-border p-3">
-        <label className="block">
-          <span className="mb-1 block text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            Base branch
-          </span>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        <Field>
+          <FieldLabel htmlFor="workflow-base-branch">Base branch</FieldLabel>
           {defaultBaseBranch ? (
-            <select
+            <NativeSelect
+              id="workflow-base-branch"
               aria-label="Base branch"
               value={effectiveBaseBranch}
               disabled={pending}
@@ -597,293 +594,270 @@ export function WorkflowRunStartLayer({
                     : event.target.value,
                 )
               }
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
             >
               {baseBranches.map((option) => (
-                <option key={option.branch} value={option.branch}>
+                <NativeSelectOption key={option.branch} value={option.branch}>
                   {option.branch}
                   {option.isMain ? " (main checkout)" : ""}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           ) : (
-            <span className="block text-sm text-muted-foreground">
+            <p className="text-muted-foreground">
               Main checkout branch (default)
-            </span>
+            </p>
           )}
-        </label>
-        <p className="mt-1.5 text-sm text-muted-foreground">
-          This run only. Active worktree branches in the Task&apos;s Project can
-          be selected as epic bases.
-        </p>
-      </section>
+          <FieldDescription>
+            This run only. Active worktree branches in the Task&apos;s Project
+            can be selected as epic bases.
+          </FieldDescription>
+        </Field>
 
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-          Runtimes
-        </span>
-        <button
-          type="button"
-          onClick={onResetDefaults}
-          disabled={pending}
-          title="Put every runtime, limit and override back to the recommended run"
-          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-        >
-          <RotateCcw size={12} className="shrink-0" />
-          Reset to recommended defaults
-        </button>
-      </div>
-
-      {rows.map(({ key, row, label, hint, state, onRemove }) => {
-        const open = expandedRow === key;
-        const accountId = state.model?.credentialProfileId;
-        const accountModels = models.filter(
-          (candidate) => candidate.credentialProfileId === accountId,
-        );
-        const thinkingLevels = supportedThinkingLevelsForModel(state.model);
-        return (
-          <section
-            key={key}
-            className="overflow-hidden rounded-xl border border-border"
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-medium text-muted-foreground">Runtimes</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onResetDefaults}
+            disabled={pending}
+            title="Put every runtime, limit and override back to the recommended run"
           >
-            {/* The remove control is a SIBLING of the expander, never nested
-                inside it: one button may not contain another. */}
-            <div className="flex items-stretch">
-              <button
-                type="button"
-                aria-expanded={open}
-                aria-controls={`workflow-runtime-${key}`}
-                disabled={pending}
-                onClick={() => setExpandedRow(open ? null : key)}
-                title={open ? `Collapse ${label}` : hint}
-                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 disabled:hover:bg-transparent"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-foreground">
-                    {label}
-                  </span>
-                  <span className="block truncate text-sm text-muted-foreground">
-                    {roleSummary(state)}
-                  </span>
-                </span>
-                <ChevronDown
-                  size={15}
-                  className={`shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
-                />
-              </button>
-              {onRemove ? (
-                <button
-                  type="button"
-                  onClick={onRemove}
-                  disabled={pending}
-                  title={`Remove ${label}`}
-                  aria-label={`Remove ${label}`}
-                  className="flex w-10 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-60 disabled:hover:bg-transparent"
-                >
-                  <Trash2 size={14} />
-                </button>
-              ) : null}
-            </div>
-            {open ? (
-              <div
-                id={`workflow-runtime-${key}`}
-                className="flex flex-col gap-3 border-t border-border py-3"
-              >
-                <p className="px-3 text-sm text-muted-foreground">{hint}</p>
-                {accounts.length > 0 ? (
-                  <ProviderAccountRow
-                    accounts={accounts}
-                    selectedId={accountId}
-                    usageIndicators={usageIndicators}
-                    disabled={pending}
-                    onSelect={(nextAccountId) => {
-                      if (nextAccountId === accountId) return;
-                      const next = carryOverRuntimeSelection({
-                        model: state.model,
-                        thinkingLevel: state.thinkingLevel,
-                        fromModels: accountModels,
-                        toModels: models.filter(
-                          (candidate) =>
-                            candidate.credentialProfileId === nextAccountId,
-                        ),
-                      });
-                      onChangeRole(row, {
-                        ...next,
-                        family: familyForModel(next.model),
-                      });
-                    }}
-                  />
-                ) : null}
-                <ModelQuickRow
-                  models={accountModels}
-                  selected={state.model}
-                  disabled={pending}
-                  onSelect={(model) =>
-                    onChangeRole(row, {
-                      model,
-                      thinkingLevel: clampThinkingLevelForModel(
-                        model,
-                        state.thinkingLevel,
-                      ),
-                      family: familyForModel(model),
-                    })
-                  }
-                />
-                {thinkingLevels.length > 1 ? (
-                  <div className="w-full">
-                    <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
-                      Thinking
-                    </div>
-                    <ThinkingSlider
-                      levels={thinkingLevels}
-                      value={state.thinkingLevel}
-                      disabled={pending}
-                      onChange={(thinkingLevel) =>
-                        onChangeRole(row, { thinkingLevel })
-                      }
+            <RotateCcw />
+            Reset to recommended defaults
+          </Button>
+        </div>
+
+        {rows.map(({ key, row, label, hint, state, onRemove }) => {
+          const open = expandedRow === key;
+          const accountId = state.model?.credentialProfileId;
+          const accountModels = models.filter(
+            (candidate) => candidate.credentialProfileId === accountId,
+          );
+          const thinkingLevels = supportedThinkingLevelsForModel(state.model);
+          return (
+            <Collapsible
+              key={key}
+              open={open}
+              onOpenChange={(next) => setExpandedRow(next ? key : null)}
+              disabled={pending}
+              className="rounded-lg border"
+            >
+              {/* The remove control is a SIBLING of the expander, never nested
+                  inside it: one button may not contain another. */}
+              <div className="flex items-center gap-1 p-1">
+                <CollapsibleTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      className="h-auto min-w-0 flex-1 justify-start py-1.5 text-left"
                     />
-                  </div>
-                ) : null}
-                {row !== "coordinator" ? (
-                  <div className="grid gap-3 px-3 sm:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-sm font-medium text-muted-foreground">
-                        Model family
-                      </span>
-                      <input
-                        value={state.family}
-                        maxLength={WORKFLOW_ROLE_FAMILY_MAX_CHARS}
-                        disabled={pending}
-                        onChange={(event) =>
-                          onChangeRole(row, { family: event.target.value })
-                        }
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-sm font-medium text-muted-foreground">
-                        Selection notes (optional)
-                      </span>
-                      <input
-                        value={state.notes}
-                        maxLength={WORKFLOW_ROLE_NOTES_MAX_CHARS}
-                        disabled={pending}
-                        onChange={(event) =>
-                          onChangeRole(row, { notes: event.target.value })
-                        }
-                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
-                      />
-                    </label>
-                  </div>
+                  }
+                  title={open ? `Collapse ${label}` : hint}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block">{label}</span>
+                    <span className="block truncate font-normal text-muted-foreground">
+                      {roleSummary(state)}
+                    </span>
+                  </span>
+                  <ChevronDown className={open ? "rotate-180" : ""} />
+                </CollapsibleTrigger>
+                {onRemove ? (
+                  <IconButton
+                    label={`Remove ${label}`}
+                    onClick={onRemove}
+                    disabled={pending}
+                  >
+                    <Trash2 />
+                  </IconButton>
                 ) : null}
               </div>
-            ) : null}
-          </section>
-        );
-      })}
+              <CollapsibleContent>
+                <div className="flex flex-col gap-3 border-t py-3">
+                  <p className="px-3 text-muted-foreground">{hint}</p>
+                  {accounts.length > 0 ? (
+                    <ProviderAccountRow
+                      accounts={accounts}
+                      selectedId={accountId}
+                      usageIndicators={usageIndicators}
+                      disabled={pending}
+                      onSelect={(nextAccountId) => {
+                        if (nextAccountId === accountId) return;
+                        const next = carryOverRuntimeSelection({
+                          model: state.model,
+                          thinkingLevel: state.thinkingLevel,
+                          fromModels: accountModels,
+                          toModels: models.filter(
+                            (candidate) =>
+                              candidate.credentialProfileId === nextAccountId,
+                          ),
+                        });
+                        onChangeRole(row, {
+                          ...next,
+                          family: familyForModel(next.model),
+                        });
+                      }}
+                    />
+                  ) : null}
+                  <ModelQuickRow
+                    models={accountModels}
+                    selected={state.model}
+                    disabled={pending}
+                    onSelect={(model) =>
+                      onChangeRole(row, {
+                        model,
+                        thinkingLevel: clampThinkingLevelForModel(
+                          model,
+                          state.thinkingLevel,
+                        ),
+                        family: familyForModel(model),
+                      })
+                    }
+                  />
+                  {thinkingLevels.length > 1 ? (
+                    <div className="w-full">
+                      <p className="mb-1.5 px-4 text-center font-medium text-muted-foreground">
+                        Thinking
+                      </p>
+                      <ThinkingSlider
+                        levels={thinkingLevels}
+                        value={state.thinkingLevel}
+                        disabled={pending}
+                        onChange={(thinkingLevel) =>
+                          onChangeRole(row, { thinkingLevel })
+                        }
+                      />
+                    </div>
+                  ) : null}
+                  {row !== "coordinator" ? (
+                    <div className="grid gap-3 px-3 sm:grid-cols-2">
+                      <Field>
+                        <FieldLabel htmlFor={`workflow-family-${key}`}>
+                          Model family
+                        </FieldLabel>
+                        <Input
+                          id={`workflow-family-${key}`}
+                          value={state.family}
+                          maxLength={WORKFLOW_ROLE_FAMILY_MAX_CHARS}
+                          disabled={pending}
+                          onChange={(event) =>
+                            onChangeRole(row, { family: event.target.value })
+                          }
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor={`workflow-notes-${key}`}>
+                          Selection notes (optional)
+                        </FieldLabel>
+                        <Input
+                          id={`workflow-notes-${key}`}
+                          value={state.notes}
+                          maxLength={WORKFLOW_ROLE_NOTES_MAX_CHARS}
+                          disabled={pending}
+                          onChange={(event) =>
+                            onChangeRole(row, { notes: event.target.value })
+                          }
+                        />
+                      </Field>
+                    </div>
+                  ) : null}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          );
+        })}
 
-      <div className="grid grid-cols-2 gap-2">
-        {CANDIDATE_ROLES.map((role) => (
-          <button
-            key={role}
-            type="button"
-            onClick={() => onAddConfiguration(role)}
-            disabled={
-              pending || !canAddConfiguration(role, roles.sets[role].length)
-            }
-            title={`Add a candidate to the ${role} role set`}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60 disabled:hover:bg-transparent"
-          >
-            <Plus size={13} className="shrink-0" />
-            Add {role} configuration
-          </button>
-        ))}
-      </div>
+        <div className="grid grid-cols-2 gap-2">
+          {CANDIDATE_ROLES.map((role) => (
+            <Button
+              key={role}
+              variant="outline"
+              onClick={() => onAddConfiguration(role)}
+              disabled={
+                pending || !canAddConfiguration(role, roles.sets[role].length)
+              }
+              title={`Add a candidate to the ${role} role set`}
+            >
+              <Plus />
+              Add {role} configuration
+            </Button>
+          ))}
+        </div>
 
-      <p className="text-sm text-muted-foreground">
-        Implementer and reviewer require at least one candidate. Empty fixer
-        falls back to the implementer; empty verdict skips post-fix judgment.
-      </p>
+        <p className="text-muted-foreground">
+          Implementer and reviewer require at least one candidate. Empty fixer
+          falls back to the implementer; empty verdict skips post-fix judgment.
+        </p>
 
-      {/* Every one of these is a CEILING the run stops at; each hint says who
-          decides the actual number. */}
-      <div className="flex flex-col gap-4 rounded-xl border border-border p-3">
-        <div>
-          <span className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            Upper limits
-          </span>
-          <p className="text-sm text-muted-foreground">
+        {/* Every one of these is a CEILING the run stops at; each hint says who
+            decides the actual number. */}
+        <FieldSet className="rounded-lg border p-3">
+          <FieldLegend>Upper limits</FieldLegend>
+          <FieldDescription>
             Ceilings, not targets: the run uses what the work needs and stops
             here.
-          </p>
-        </div>
-        <label className="flex items-start gap-2 text-sm text-muted-foreground">
-          <input
-            type="checkbox"
+          </FieldDescription>
+          <CheckboxField
+            id="workflow-custom-limits"
             checked={customLimits}
             disabled={pending}
-            onChange={(event) => onChangeCustomLimits(event.target.checked)}
-          />
-          <span>
+            onChange={onChangeCustomLimits}
+          >
             Set ceilings myself. Otherwise the coordinator's low, medium, or
             high complexity plan sizes both ceilings before implementation.
-          </span>
-        </label>
-        {customLimits ? (
-          <>
-            <LimitSlider
-              label="Max revision rounds"
-              bounds={WORKFLOW_RUN_LIMIT_BOUNDS.maxIterations}
-              value={limits.maxIterations}
-              unit={limits.maxIterations === 1 ? "round" : "rounds"}
-              hint={`The reviewer sends work back as often as it judges necessary; after ${String(
-                limits.maxIterations,
-              )} ${limits.maxIterations === 1 ? "round" : "rounds"} the run asks you whether to allow more.`}
-              disabled={pending}
-              onChange={(maxIterations) => onChangeLimits({ maxIterations })}
-            />
-            <LimitSlider
-              label="Max review passes"
-              bounds={WORKFLOW_RUN_LIMIT_BOUNDS.maxReviewPasses}
-              value={limits.maxReviewPasses}
-              unit={limits.maxReviewPasses === 1 ? "pass" : "passes"}
-              hint={
-                limits.maxReviewPasses === 1
-                  ? "The work is reviewed once before it may be delivered."
-                  : `The work is reviewed at least once; after each review the coordinator decides whether another is warranted, up to ${String(
-                      limits.maxReviewPasses,
-                    )} passes. The run opens the sessions those passes need — there is nothing else to size.`
-              }
-              disabled={pending}
-              onChange={(maxReviewPasses) =>
-                onChangeLimits({ maxReviewPasses })
-              }
-            />
-          </>
-        ) : null}
-      </div>
+          </CheckboxField>
+          {customLimits ? (
+            <>
+              <LimitSlider
+                label="Max revision rounds"
+                bounds={WORKFLOW_RUN_LIMIT_BOUNDS.maxIterations}
+                value={limits.maxIterations}
+                unit={limits.maxIterations === 1 ? "round" : "rounds"}
+                hint={`The reviewer sends work back as often as it judges necessary; after ${String(
+                  limits.maxIterations,
+                )} ${limits.maxIterations === 1 ? "round" : "rounds"} the run asks you whether to allow more.`}
+                disabled={pending}
+                onChange={(maxIterations) => onChangeLimits({ maxIterations })}
+              />
+              <LimitSlider
+                label="Max review passes"
+                bounds={WORKFLOW_RUN_LIMIT_BOUNDS.maxReviewPasses}
+                value={limits.maxReviewPasses}
+                unit={limits.maxReviewPasses === 1 ? "pass" : "passes"}
+                hint={
+                  limits.maxReviewPasses === 1
+                    ? "The work is reviewed once before it may be delivered."
+                    : `The work is reviewed at least once; after each review the coordinator decides whether another is warranted, up to ${String(
+                        limits.maxReviewPasses,
+                      )} passes. The run opens the sessions those passes need — there is nothing else to size.`
+                }
+                disabled={pending}
+                onChange={(maxReviewPasses) =>
+                  onChangeLimits({ maxReviewPasses })
+                }
+              />
+            </>
+          ) : null}
+        </FieldSet>
 
-      <Disclosure header={<span>Advanced: CI machine verification</span>}>
-        <div className="flex flex-col gap-3 p-3">
-          <label className="flex items-start gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={ciSettings.earlyPush}
-              disabled={pending}
-              onChange={(event) =>
-                onChangeCiSettings({ earlyPush: event.target.checked })
-              }
-            />
-            <span>
-              Push each exact review commit and open one draft pull request.
-              Disable this for local/no-remote runs; delivery will create the PR
-              after review instead.
-            </span>
-          </label>
+        <Advanced title="Advanced: CI machine verification">
+          <CheckboxField
+            id="workflow-early-push"
+            checked={ciSettings.earlyPush}
+            disabled={pending}
+            onChange={(earlyPush) => onChangeCiSettings({ earlyPush })}
+          >
+            Push each exact review commit and open one draft pull request.
+            Disable this for local/no-remote runs; delivery will create the PR
+            after review instead.
+          </CheckboxField>
           <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1 text-sm text-muted-foreground">
-              CI timeout (seconds)
-              <input
+            <Field>
+              <FieldLabel htmlFor="workflow-ci-timeout">
+                CI timeout (seconds)
+              </FieldLabel>
+              <Input
+                id="workflow-ci-timeout"
                 type="number"
                 min={30}
                 max={1_800}
@@ -894,12 +868,14 @@ export function WorkflowRunStartLayer({
                     timeoutSeconds: Number(event.target.value),
                   })
                 }
-                className="rounded-lg border border-border bg-transparent px-2 py-1.5 text-foreground"
               />
-            </label>
-            <label className="flex flex-col gap-1 text-sm text-muted-foreground">
-              Poll interval (seconds)
-              <input
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="workflow-ci-poll">
+                Poll interval (seconds)
+              </FieldLabel>
+              <Input
+                id="workflow-ci-poll"
                 type="number"
                 min={1}
                 max={60}
@@ -910,151 +886,163 @@ export function WorkflowRunStartLayer({
                     pollIntervalSeconds: Number(event.target.value),
                   })
                 }
-                className="rounded-lg border border-border bg-transparent px-2 py-1.5 text-foreground"
               />
-            </label>
+            </Field>
           </div>
-        </div>
-      </Disclosure>
+        </Advanced>
 
-      <Disclosure
-        header={
-          <span className="flex items-center gap-2">
-            <span>Advanced: prompt overrides</span>
-            {overrideCount > 0 ? (
-              <span className="rounded-md bg-accent px-1.5 py-0.5 text-sm font-medium text-primary">
-                {overrideCount === 1 ? "1 override" : "2 overrides"}
-              </span>
-            ) : null}
-          </span>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <p className="text-sm text-muted-foreground">
+        <Advanced
+          title="Advanced: prompt overrides"
+          badge={
+            overrideCount > 0
+              ? overrideCount === 1
+                ? "1 override"
+                : "2 overrides"
+              : undefined
+          }
+        >
+          <p className="text-muted-foreground">
             These apply to this run only — the next Task starts without them, so
             instructions for one Task cannot leak into unrelated work.
           </p>
           {OVERRIDE_ROLES.map((role) => (
-            <label key={role} className="block">
-              <span className="mb-1 block text-sm font-medium text-muted-foreground">
+            <Field key={role}>
+              <FieldLabel htmlFor={`workflow-override-${role}`}>
                 {OVERRIDE_LABEL[role]} instructions (optional)
-              </span>
-              <textarea
+              </FieldLabel>
+              <Textarea
+                id={`workflow-override-${role}`}
                 value={overrides[role]}
                 maxLength={WORKFLOW_PROMPT_OVERRIDE_MAX_CHARS}
-                rows={3}
                 disabled={pending}
                 placeholder={`Extra instructions appended to the ${role}'s assignment.`}
                 onChange={(e) => onChangeOverride(role, e.target.value)}
-                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
               />
-            </label>
+            </Field>
           ))}
-        </div>
-      </Disclosure>
+        </Advanced>
 
-      {/* The authorization summary is the contract of the Start button, so it
-          is plain, always-visible text — readable at any width, never behind
-          hover (docs/agent-workflows.md, "Concurrency and safety"). */}
-      <div className="rounded-xl border border-border bg-card/60 px-3 py-2.5 text-sm">
-        <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
-          <ShieldCheck size={14} className="text-primary" />
-          What starting allows
-        </div>
-        <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
-          <li>
-            Coordinator plus implementer and reviewer sessions for this run
-          </li>
-          <li>
-            One new worktree and branch for this Task, forked from{` `}
-            {effectiveBaseBranch ? (
-              <span className="font-mono">{effectiveBaseBranch}</span>
-            ) : (
-              "the main checkout branch"
-            )}
-          </li>
-          <li>Commits inside that worktree</li>
-          <li>Push and a pull request — only after review passes</li>
-        </ul>
-        <p className="mt-1.5 text-muted-foreground">
-          It does not merge, complete the Task, or remove the worktree or
-          branches — those stay your decisions.
-        </p>
+        {/* The authorization summary is the contract of the Start button, so it
+            is plain, always-visible text — readable at any width, never behind
+            hover (docs/agent-workflows.md, "Concurrency and safety"). */}
+        <Alert role="note">
+          <ShieldCheck />
+          <AlertTitle>What starting allows</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc pl-5">
+              <li>
+                Coordinator plus implementer and reviewer sessions for this run
+              </li>
+              <li>
+                One new worktree and branch for this Task, forked from{` `}
+                {effectiveBaseBranch ? (
+                  <span className="font-mono">{effectiveBaseBranch}</span>
+                ) : (
+                  "the main checkout branch"
+                )}
+              </li>
+              <li>Commits inside that worktree</li>
+              <li>Push and a pull request — only after review passes</li>
+            </ul>
+            <p className="mt-1.5">
+              It does not merge, complete the Task, or remove the worktree or
+              branches — those stay your decisions.
+            </p>
+          </AlertDescription>
+        </Alert>
+
+        {error ? <ErrorNote message={error} /> : null}
       </div>
 
-      {error ? <ErrorNote message={error} /> : null}
-    </div>
-  );
-
-  const footer = (
-    <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-      {pending ? (
-        <>
-          <span
-            role="status"
-            className="mr-auto inline-flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground"
-          >
-            <Spinner size="sm" />
-            <span className="truncate">
-              {phase && phase !== "failed" ? PHASE_LABEL[phase] : "Starting…"}
-            </span>
-            {branch ? (
-              <span className="inline-flex min-w-0 items-center gap-1 font-mono text-muted-foreground">
-                <GitBranch size={12} className="shrink-0" />
-                <span className="truncate">{branch}</span>
+      <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
+        {pending ? (
+          <>
+            <span
+              role="status"
+              className="mr-auto inline-flex min-w-0 items-center gap-1.5 text-muted-foreground"
+            >
+              <Spinner size="sm" />
+              <span className="truncate">
+                {phase && phase !== "failed" ? PHASE_LABEL[phase] : "Starting…"}
               </span>
-            ) : null}
-          </span>
-          <Button variant="ghost" onClick={onContinueInBackground}>
-            Run in background
-          </Button>
-        </>
-      ) : (
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={onStart} disabled={!ready}>
-            Start run
-          </Button>
-        </>
-      )}
+              {branch ? (
+                <span className="inline-flex min-w-0 items-center gap-1 font-mono">
+                  <GitBranch className="size-3 shrink-0" />
+                  <span className="truncate">{branch}</span>
+                </span>
+              ) : null}
+            </span>
+            <Button variant="ghost" onClick={onContinueInBackground}>
+              Run in background
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={onStart} disabled={!ready}>
+              Start run
+            </Button>
+          </>
+        )}
+      </div>
     </div>
   );
+}
 
-  if (mobile) {
-    // A full-screen flow, per the screens model: one pane fills the viewport,
-    // with the safe-area insets owned here since no shell chrome is behind it.
-    return (
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Run workflow"
-        className="fixed inset-0 z-[70] flex flex-col bg-background pt-[var(--app-safe-area-top,0px)]"
-      >
-        {header}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{body}</div>
-        <div className="pb-[var(--app-safe-area-bottom,0px)]">{footer}</div>
-      </div>
-    );
-  }
+/** A checkbox with its sentence-long label. */
+function CheckboxField({
+  id,
+  checked,
+  disabled,
+  onChange,
+  children,
+}: {
+  id: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-      onClick={canDismissWorkflowStart(pending) ? onClose : undefined}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Run workflow"
-        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
+    <Field orientation="horizontal">
+      <Checkbox
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
+      <FieldLabel htmlFor={id} className="font-normal">
+        {children}
+      </FieldLabel>
+    </Field>
+  );
+}
+
+/** A collapsed advanced section. */
+function Advanced({
+  title,
+  badge,
+  children,
+}: {
+  title: string;
+  badge?: string | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible className="rounded-lg border">
+      <CollapsibleTrigger
+        render={<Button variant="ghost" className="w-full justify-start" />}
       >
-        {header}
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{body}</div>
-        {footer}
-      </div>
-    </div>
+        <ChevronRight className="in-aria-expanded:rotate-90" />
+        {title}
+        {badge ? <Badge variant="secondary">{badge}</Badge> : null}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-3 border-t p-3">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -1086,11 +1074,9 @@ function LimitSlider({
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-sm font-medium text-muted-foreground">
-          {label}
-        </span>
-        <span className="text-sm font-medium text-foreground">
-          <span className="text-sm text-muted-foreground">{"up to "}</span>
+        <span className="font-medium text-muted-foreground">{label}</span>
+        <span className="font-medium">
+          <span className="text-muted-foreground">{"up to "}</span>
           <span className="tabular-nums">{value}</span>
         </span>
       </div>
@@ -1103,7 +1089,7 @@ function LimitSlider({
         valueText={`up to ${String(value)} ${unit}`}
         disabled={disabled}
       />
-      <p className="text-sm text-muted-foreground">{hint}</p>
+      <p className="text-muted-foreground">{hint}</p>
     </div>
   );
 }
@@ -1349,7 +1335,6 @@ export function WorkflowRunStartSheet({
 
   const layer: ReactNode = (
     <WorkflowRunStartLayer
-      mobile={mobile}
       task={task}
       models={models}
       usageIndicators={usageIndicators}
@@ -1449,5 +1434,40 @@ export function WorkflowRunStartSheet({
       onContinueInBackground={continueInBackground}
     />
   );
-  return createPortal(layer, document.body);
+  // Every way out — Escape, the backdrop, the close button — follows the same
+  // dismissal rule.
+  const onOpenChange = (open: boolean) => {
+    if (!open && canDismissWorkflowStart(pending)) close();
+  };
+  // A full-screen flow on a phone, per the screens model: one pane fills the
+  // viewport, with the safe-area insets owned here since no shell chrome is
+  // behind it.
+  if (mobile)
+    return (
+      <Sheet open onOpenChange={onOpenChange}>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          aria-label="Run workflow"
+          className="h-dvh gap-0"
+          style={{
+            paddingTop: "var(--app-safe-area-top, 0px)",
+            paddingBottom: "var(--app-safe-area-bottom, 0px)",
+          }}
+        >
+          {layer}
+        </SheetContent>
+      </Sheet>
+    );
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent
+        showCloseButton={false}
+        aria-label="Run workflow"
+        className="flex max-h-11/12 flex-col gap-0 p-0 sm:max-w-xl"
+      >
+        {layer}
+      </DialogContent>
+    </Dialog>
+  );
 }

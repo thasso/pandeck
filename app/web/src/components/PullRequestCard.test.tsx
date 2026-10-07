@@ -43,7 +43,7 @@ describe("PullRequestCard", () => {
     const html = renderToStaticMarkup(<PullRequestCard pullRequest={card()} />);
     expect(html).toContain("Pull request reused");
     expect(html).toContain("Merged");
-    expect(html).not.toContain("border-success");
+    expect(html).not.toContain("bg-success-soft");
     expect(html).toContain("no new pull request was created");
   });
 
@@ -51,7 +51,7 @@ describe("PullRequestCard", () => {
     const html = renderToStaticMarkup(
       <PullRequestCard pullRequest={card({ status: "open", warnings: [] })} />,
     );
-    expect(html).toContain("border-success");
+    expect(html).toContain("bg-success-soft");
     expect(html).toContain(">Open<");
   });
 
