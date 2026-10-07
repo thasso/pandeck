@@ -34,10 +34,10 @@ function Primitive({ value }: { value: unknown }) {
     return <span className="text-success break-all">&quot;{value}&quot;</span>;
   }
   if (typeof value === "number") {
-    return <span className="text-accent">{String(value)}</span>;
+    return <span className="text-primary">{String(value)}</span>;
   }
   if (typeof value === "boolean") {
-    return <span className="text-accent">{String(value)}</span>;
+    return <span className="text-primary">{String(value)}</span>;
   }
   // null / undefined / functions etc.
   return <span className="text-faint">null</span>;
@@ -109,7 +109,7 @@ function Node({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-1 rounded text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="inline-flex items-center gap-1 rounded text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <ChevronDown
           aria-hidden="true"

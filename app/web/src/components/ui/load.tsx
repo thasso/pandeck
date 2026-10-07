@@ -105,7 +105,7 @@ export function Spinner({
         aria-hidden
         style={RING_STYLE[size]}
         className={cx(
-          "inline-block shrink-0 rounded-full border-2 border-line border-t-accent motion-safe:animate-spin",
+          "inline-block shrink-0 rounded-full border-2 border-line border-t-primary motion-safe:animate-spin",
           className,
         )}
       />

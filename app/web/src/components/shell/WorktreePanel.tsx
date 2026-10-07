@@ -160,7 +160,7 @@ export function WorktreePanel({
               }
               title="Open in Worktrees"
               aria-label="Open in Worktrees"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <SquareArrowOutUpRight size={16} />
             </button>

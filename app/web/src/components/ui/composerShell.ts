@@ -40,8 +40,7 @@ export const COMPOSER_CARD_CLASS =
 export const COMPOSER_CARD_SKIN_CLASS = "border border-line bg-panel/70";
 
 /** The card under a file being dragged onto it. */
-export const COMPOSER_CARD_DRAG_SKIN_CLASS =
-  "border border-accent bg-accent-soft";
+export const COMPOSER_CARD_DRAG_SKIN_CLASS = "border border-primary bg-accent";
 
 /**
  * The card holding no space at all. The field stays MOUNTED behind it: focusing
@@ -113,11 +112,11 @@ export const COMPOSER_ACTION_CLUSTER_CLASS = "flex shrink-0 items-center gap-1";
 
 /** A secondary control in the row (attach, refine, dictate, cancel). */
 export const COMPOSER_ICON_ACTION_CLASS =
-  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-30";
+  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-30";
 
 /** The same control where the act it runs destroys something. */
 export const COMPOSER_DANGER_ACTION_CLASS =
-  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-30";
+  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-30";
 
 /** The row's filled primary button, minus its tone. */
 export const COMPOSER_PRIMARY_ACTION_CLASS =
@@ -125,4 +124,4 @@ export const COMPOSER_PRIMARY_ACTION_CLASS =
 
 /** Its tone when the primary act is sending what was typed. */
 export const COMPOSER_SEND_TONE_CLASS =
-  "bg-accent text-accent-fg hover:bg-accent/90";
+  "bg-primary text-primary-foreground hover:bg-primary/90";

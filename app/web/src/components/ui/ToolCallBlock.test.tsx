@@ -49,7 +49,7 @@ test("a running block spins the shared ring and names the status in text", () =>
     </ToolCallBlock>,
   );
   expect(html).toContain("motion-safe:animate-spin");
-  expect(html).toContain("border-t-accent");
+  expect(html).toContain("border-t-primary");
   // The chevron is the header's ONLY icon: the ring is a bordered box, not a
   // second lucide module pulled onto the transcript's hottest path.
   expect(html.split("<svg").length - 1).toBe(1);

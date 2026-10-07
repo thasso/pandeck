@@ -61,8 +61,8 @@ function cx(...classes: Array<string | false | undefined>): string {
 }
 
 const controlClasses =
-  "rounded px-1 py-0.5 text-caption font-medium text-muted transition-colors " +
-  "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  "rounded px-1 py-0.5 text-caption font-medium text-muted-foreground transition-colors " +
+  "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 interface LineRange {
   /** 1-based, inclusive. */
@@ -179,7 +179,7 @@ export function CollapsibleOutput({
         {renderContent ? (
           renderContent(visibleText, from)
         ) : (
-          <pre className="overflow-x-auto whitespace-pre font-mono text-caption text-muted">
+          <pre className="overflow-x-auto whitespace-pre font-mono text-caption text-muted-foreground">
             {visibleText}
           </pre>
         )}

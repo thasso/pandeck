@@ -135,7 +135,7 @@ function SortablePanelTab({
         transform: CSS.Transform.toString(transform),
         transition,
       }}
-      className={`group flex shrink-0 items-center rounded-lg border-r border-line/70 pr-1 last:border-r-0 ${active ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"} ${isDragging ? "z-10 opacity-50" : ""}`}
+      className={`group flex shrink-0 items-center rounded-lg border-r border-line/70 pr-1 last:border-r-0 ${active ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised/60 hover:text-fg"} ${isDragging ? "z-10 opacity-50" : ""}`}
     >
       <button
         type="button"
@@ -153,7 +153,7 @@ function SortablePanelTab({
         onClick={onClose}
         title={`Close ${panel.label}`}
         aria-label={`Close ${panel.label}`}
-        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <X size={13} />
       </button>
@@ -325,7 +325,7 @@ export function RightPanelTabs({
             onClick={() => selectTab(null)}
             title="Open a right panel"
             aria-label="Open a right panel"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <Plus size={16} />
           </button>
@@ -361,7 +361,7 @@ export function RightPanelTabs({
                     key={panel.id}
                     type="button"
                     onClick={() => openPanel(panel.id)}
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
                       {panel.icon}

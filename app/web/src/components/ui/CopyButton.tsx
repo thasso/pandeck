@@ -59,7 +59,7 @@ export function CopyButton({
       aria-label={copied ? copiedLabel : label}
       title={copied ? copiedLabel : label}
       onClick={handleCopy}
-      className={cx(copied && "text-accent", className)}
+      className={cx(copied && "text-primary", className)}
       {...props}
     >
       {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -109,7 +109,7 @@ export function InlineCopyButton({
       icon={copied ? <Check size={13} /> : <Copy size={13} />}
       label={copied ? copiedLabel : label}
       onClick={handleCopy}
-      className={cx(copied && "text-accent", className)}
+      className={cx(copied && "text-primary", className)}
     />
   );
 }

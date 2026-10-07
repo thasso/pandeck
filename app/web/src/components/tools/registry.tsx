@@ -141,7 +141,7 @@ const LazyPushToolCard = lazy(() =>
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted">
+    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted-foreground">
       {label}
     </div>
   );

@@ -136,7 +136,7 @@ export function ReviewCommentList({
       {group(
         "Open",
         groups.open,
-        <CircleDot size={12} className="text-accent" />,
+        <CircleDot size={12} className="text-primary" />,
         quickSelect,
       )}
       {group(
@@ -151,13 +151,13 @@ export function ReviewCommentList({
       )}
       {onSend && activeSelection.length > 0 ? (
         <div className="sticky bottom-0 flex items-center gap-2 border-t border-line bg-panel/95 px-1 py-1.5 backdrop-blur">
-          <span className="min-w-0 flex-1 truncate text-caption text-muted">
+          <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
             {activeSelection.length} selected
           </span>
           <button
             type="button"
             onClick={() => setSelected(new Set())}
-            className="rounded-md px-2 py-1 text-caption text-muted transition-colors hover:bg-raised hover:text-fg"
+            className="rounded-md px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
           >
             Clear
           </button>
@@ -167,7 +167,7 @@ export function ReviewCommentList({
               onSend(activeSelection);
               setSelected(new Set());
             }}
-            className="rounded-lg bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-colors hover:bg-accent/90"
+            className="rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             Send to agent…
           </button>
@@ -188,7 +188,7 @@ function QuickSelect({
     <button
       type="button"
       onClick={onClick}
-      className="rounded px-1.5 py-0.5 text-micro font-medium normal-case tracking-normal text-accent transition-colors hover:bg-accent-soft"
+      className="rounded px-1.5 py-0.5 text-micro font-medium normal-case tracking-normal text-primary transition-colors hover:bg-accent"
     >
       {label}
     </button>
@@ -224,7 +224,7 @@ function Row({
             checked={selected}
             onChange={onToggleSelected}
             aria-label={`Select comment: ${thread.firstLine}`}
-            className="mt-1 size-3.5 shrink-0 accent-[var(--accent)]"
+            className="mt-1 size-3.5 shrink-0 accent-[var(--primary)]"
           />
         ) : null}
         <button
@@ -234,7 +234,7 @@ function Row({
           aria-expanded={link ? undefined : expanded}
         >
           <span
-            className={`block truncate text-caption ${thread.state === "resolved" ? "text-muted" : "text-fg"}`}
+            className={`block truncate text-caption ${thread.state === "resolved" ? "text-muted-foreground" : "text-fg"}`}
           >
             {thread.firstLine || "(empty comment)"}
           </span>

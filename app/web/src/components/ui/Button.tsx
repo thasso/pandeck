@@ -26,13 +26,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const baseClasses =
   "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 " +
   "disabled:cursor-not-allowed disabled:opacity-50";
 
 const variantClasses: Record<ButtonVariant, string> = {
-  primary: "bg-accent text-accent-fg hover:opacity-90",
+  primary: "bg-primary text-primary-foreground hover:opacity-90",
   secondary: "border border-line bg-raised text-fg hover:border-line-strong",
-  ghost: "text-muted hover:bg-panel hover:text-fg",
+  ghost: "text-muted-foreground hover:bg-panel hover:text-fg",
   // Prominent but un-colored: a high-contrast neutral fill (no accent hue).
   neutral: "bg-fg text-surface hover:opacity-90",
 };

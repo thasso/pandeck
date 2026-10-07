@@ -23,7 +23,7 @@ interface Props<Id extends string> {
 
 /** Shared geometry of the 36px icon slots; mirrored by `navOverflow.ts`. */
 const SLOT_CLASS =
-  "flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  "flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
  * Space the sidebar's browser must keep clear on a phone, where this bar is the
@@ -100,9 +100,9 @@ export function PrimaryNav<Id extends string>({
             aria-current="true"
             onClick={() => select(section.id)}
             title={section.label}
-            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent-soft px-1 text-caption font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent px-1 text-caption font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
-            <span className="flex size-5 shrink-0 items-center justify-center text-accent">
+            <span className="flex size-5 shrink-0 items-center justify-center text-primary">
               {section.icon}
             </span>
             <span className="min-w-0 flex-1 truncate text-left">
@@ -116,7 +116,7 @@ export function PrimaryNav<Id extends string>({
             onClick={() => select(section.id)}
             title={section.label}
             aria-label={section.label}
-            className={`${SLOT_CLASS} text-muted hover:bg-raised hover:text-fg`}
+            className={`${SLOT_CLASS} text-muted-foreground hover:bg-raised hover:text-fg`}
           >
             {section.icon}
           </button>

@@ -161,7 +161,7 @@ it("stays one band when a document anchor region wraps the block", async () => {
   for (const node of lines) {
     expect(node.dataset.documentAnchor).toBe("true");
     expect(node.className).not.toContain("ring-");
-    expect(node.className).not.toContain("bg-accent-soft");
+    expect(node.className).not.toContain("bg-accent");
     expect(node.className).not.toContain("rounded-sm");
   }
   expect(container.querySelectorAll(".cb-anchored-start")).toHaveLength(1);

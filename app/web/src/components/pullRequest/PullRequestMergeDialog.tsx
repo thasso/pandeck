@@ -193,7 +193,9 @@ export function PullRequestMergeDialog({
       }
     >
       {/* What a check ACCOUNTED for, above the decision it hands back. */}
-      {note ? <p className="mt-2 text-caption text-muted">{note}</p> : null}
+      {note ? (
+        <p className="mt-2 text-caption text-muted-foreground">{note}</p>
+      ) : null}
 
       {/* --------------------------- the merge ---------------------------- */}
       {merging ? (
@@ -220,7 +222,7 @@ export function PullRequestMergeDialog({
               {offered.map((id) => (
                 <label
                   key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-accent bg-accent-soft text-fg" : "border-line text-muted hover:bg-raised"}`}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
                 >
                   <input
                     type="radio"

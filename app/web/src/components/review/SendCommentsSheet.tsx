@@ -133,7 +133,7 @@ export function SendCommentsSheet({
               startWithout.onRun();
               onClose();
             }}
-            className="mr-auto rounded-lg px-3 py-1.5 text-left text-caption text-muted transition-colors hover:bg-raised hover:text-fg"
+            className="mr-auto rounded-lg px-3 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
           >
             {startWithout.label}
           </button>
@@ -141,14 +141,14 @@ export function SendCommentsSheet({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg"
+          className="rounded-lg px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={send}
-          className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:bg-accent/90"
+          className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
           {target.kind === "new" && newSubmitLabel
             ? newSubmitLabel
@@ -199,10 +199,10 @@ function TargetRow({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className={`flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${selected ? "bg-accent-soft text-accent" : "text-muted hover:bg-raised hover:text-fg"}`}
+      className={`flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${selected ? "bg-accent text-primary" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
     >
       <span
-        className={`size-2 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-line"}`}
+        className={`size-2 shrink-0 rounded-full ${selected ? "bg-primary" : "bg-line"}`}
         aria-hidden
       />
       <span className="min-w-0 flex-1">

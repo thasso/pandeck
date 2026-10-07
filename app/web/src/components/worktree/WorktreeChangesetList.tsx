@@ -58,7 +58,9 @@ export function WorktreeChangesetList({
 }: WorktreeChangesetListProps) {
   if (files.length === 0) {
     return (
-      <div className="p-6 text-body text-muted">No changes in this scope.</div>
+      <div className="p-6 text-body text-muted-foreground">
+        No changes in this scope.
+      </div>
     );
   }
   return (
@@ -200,15 +202,17 @@ function ChangesetFileSection({
           onClick={toggleViewed}
           title={viewed ? "Mark as not viewed" : "Mark as viewed"}
           aria-pressed={viewed}
-          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted hover:bg-raised hover:text-fg"}`}
+          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
           <Check size={11} /> Viewed
         </button>
       </div>
       {collapsed ? null : file.binary ? (
-        <div className="p-4 text-caption text-muted">Binary file.</div>
+        <div className="p-4 text-caption text-muted-foreground">
+          Binary file.
+        </div>
       ) : failed ? (
-        <div className="p-4 text-caption text-muted">
+        <div className="p-4 text-caption text-muted-foreground">
           This file is no longer changed in this scope.
         </div>
       ) : !diff ? (
@@ -217,7 +221,7 @@ function ChangesetFileSection({
         // will be. The deferral above it is the perf contract, untouched.
         <div
           role="status"
-          className="flex items-center gap-2 p-4 text-caption text-muted"
+          className="flex items-center gap-2 p-4 text-caption text-muted-foreground"
         >
           <Spinner size="sm" /> Loading diff…
         </div>

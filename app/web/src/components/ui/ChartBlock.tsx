@@ -183,7 +183,10 @@ function ChartFigure({ spec }: { spec: ChartSpec }) {
           />
         </div>
       )}
-      <details className="mt-1 text-caption text-muted" open={failed}>
+      <details
+        className="mt-1 text-caption text-muted-foreground"
+        open={failed}
+      >
         <summary className="cursor-pointer select-none text-faint">
           {failed ? "Chart unavailable — data table" : "Data table"}
         </summary>
@@ -199,13 +202,13 @@ function ChartDataTable({ spec }: { spec: ChartSpec }) {
       <table className="w-full border-collapse text-caption">
         <thead>
           <tr>
-            <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
+            <th className="border-b border-line px-2 py-1 text-left font-medium text-muted-foreground">
               {" "}
             </th>
             {spec.series.map((series) => (
               <th
                 key={series.label}
-                className="border-b border-line px-2 py-1 text-right font-medium text-muted"
+                className="border-b border-line px-2 py-1 text-right font-medium text-muted-foreground"
               >
                 {series.label}
               </th>
@@ -224,7 +227,7 @@ function ChartDataTable({ spec }: { spec: ChartSpec }) {
               {spec.series.map((series) => (
                 <td
                   key={series.label}
-                  className="border-b border-line/50 px-2 py-1 text-right tabular-nums text-muted"
+                  className="border-b border-line/50 px-2 py-1 text-right tabular-nums text-muted-foreground"
                 >
                   {series.data[row]}
                 </td>

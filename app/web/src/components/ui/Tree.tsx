@@ -691,7 +691,7 @@ function RowBody<T>({
         elevated
           ? "border border-line bg-panel shadow-lg"
           : selected
-            ? "bg-accent-soft/60"
+            ? "bg-accent/60"
             : "hover:bg-raised",
       )}
       style={{ paddingLeft: depth * indentWidth }}
@@ -716,7 +716,7 @@ function RowBody<T>({
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className={cx(
-            "flex shrink-0 justify-center rounded text-muted hover:bg-raised",
+            "flex shrink-0 justify-center rounded text-muted-foreground hover:bg-raised",
             // Narrow and TALL when stretched: a wide chevron would carve swipe-
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
@@ -751,7 +751,7 @@ function RowBody<T>({
         {content}
       </div>
       {badge != null && (
-        <span className="ml-1 shrink-0 self-center rounded-full bg-accent px-1.5 text-caption font-semibold text-accent-fg">
+        <span className="ml-1 shrink-0 self-center rounded-full bg-primary px-1.5 text-caption font-semibold text-primary-foreground">
           {badge}
         </span>
       )}
@@ -806,7 +806,7 @@ function StaticRow<T>(props: RowProps<T>) {
       onClick={props.onSelect}
       onKeyDown={props.onKeyDown}
       className={cx(
-        "list-none scroll-my-1 outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+        "list-none scroll-my-1 outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         props.rowClassName,
       )}
     >
@@ -872,7 +872,7 @@ function SortableRow<T>(
       }}
       style={style}
       className={cx(
-        "relative list-none scroll-my-1 touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+        "relative list-none scroll-my-1 touch-manipulation outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         props.rowClassName,
       )}
     >

@@ -253,7 +253,7 @@ function taskStatusIcon(status: TaskStatus): ReactNode {
   if (status === "done")
     return <CheckCircle2 size={16} className="text-emerald-500" />;
   if (status === "doing")
-    return <Circle size={16} className="fill-accent text-accent" />;
+    return <Circle size={16} className="fill-primary text-primary" />;
   return <Circle size={16} className="text-faint" />;
 }
 
@@ -1398,19 +1398,21 @@ function WorktreeReviewSection({
               className="rounded-md border border-line px-2 py-1.5"
             >
               <div className="flex items-center gap-1.5 text-caption">
-                <span className="rounded bg-accent-soft px-1 py-0.5 text-micro font-medium text-accent">
+                <span className="rounded bg-accent px-1 py-0.5 text-micro font-medium text-primary">
                   {set.authorModel ?? "agent"} ·{" "}
                   {set.authorSessionId.slice(0, 8)}
                 </span>
                 <span className="font-medium text-fg">
                   {set.verdict ?? "review in progress"}
                 </span>
-                <span className="ml-auto text-micro text-muted">
+                <span className="ml-auto text-micro text-muted-foreground">
                   {set.openCount} open · {set.addressedCount} addressed
                 </span>
               </div>
               {set.summary ? (
-                <p className="mt-1 text-caption text-muted">{set.summary}</p>
+                <p className="mt-1 text-caption text-muted-foreground">
+                  {set.summary}
+                </p>
               ) : null}
             </div>
           ))}

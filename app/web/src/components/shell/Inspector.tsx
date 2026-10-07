@@ -200,7 +200,7 @@ export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
             // ellipsis to the start), with the value itself back in ltr so the
             // path still reads forwards.
             {...(fact.truncate === "start" ? { dir: "rtl" as const } : {})}
-            className={`min-w-0 truncate text-caption ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted" : "text-fg"}`}
+            className={`min-w-0 truncate text-caption ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted-foreground" : "text-fg"}`}
             title={fact.title}
           >
             {fact.truncate === "start" ? (
@@ -284,7 +284,7 @@ export function InspectorSection({
 
   return (
     <section className="border-t border-line pt-3 first:border-t-0 first:pt-0">
-      <div className="mb-2 flex w-full items-center gap-2 py-0.5 text-caption font-semibold uppercase tracking-wide text-muted">
+      <div className="mb-2 flex w-full items-center gap-2 py-0.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
         <button
           type="button"
           onClick={toggleOpen}
@@ -298,14 +298,14 @@ export function InspectorSection({
           // the panel. From a content basis both give way, so a long summary no
           // longer pushes the row. Growth is unchanged: this is still the only
           // growing item.
-          className="flex min-w-0 grow items-center gap-2 rounded-lg text-left transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:hover:text-muted"
+          className="flex min-w-0 grow items-center gap-2 rounded-lg text-left transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-default disabled:hover:text-muted-foreground"
         >
           <ChevronRight
             size={13}
             className={`shrink-0 transition-transform ${open ? "rotate-90" : ""} ${collapsible ? "" : "text-faint opacity-35"}`}
           />
           {icon ? (
-            <span className="flex shrink-0 items-center text-muted">
+            <span className="flex shrink-0 items-center text-muted-foreground">
               {icon}
             </span>
           ) : null}
@@ -359,7 +359,7 @@ function RelationRows({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="w-full rounded-md px-2 py-1 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="w-full rounded-md px-2 py-1 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           Show {hidden} more
         </button>
@@ -390,7 +390,7 @@ function RelationRow({
           onAct?.();
         }}
         title={title}
-        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <span
           aria-hidden="true"
@@ -399,7 +399,7 @@ function RelationRow({
           {depth > 0 ? "↳" : ""}
         </span>
         {item.icon && (
-          <span className="flex size-5 shrink-0 items-center justify-center text-muted">
+          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
             {item.icon}
           </span>
         )}
@@ -562,7 +562,7 @@ export function Inspector({
                 // of the way — unless the action opted out.
                 if (!action.keepOpen) onAct?.();
               }}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted"
+              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
             >
               {action.busy ? (
                 <span className="flex size-5 shrink-0 items-center justify-center">
@@ -590,7 +590,7 @@ export function Inspector({
     >
       {showHeader && (
         <header className="flex min-h-11 items-center gap-2 border-b border-line px-3">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
             <ScanSearch size={16} />
           </span>
           <h2 className="min-w-0 flex-1 truncate text-body font-semibold tracking-tight text-fg">

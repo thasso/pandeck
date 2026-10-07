@@ -722,7 +722,7 @@ export function WorktreeDeliverySection({
                         href={hosting.pr.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-accent hover:underline"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         <GitPullRequest size={12} /> #{hosting.pr.number}
                       </a>

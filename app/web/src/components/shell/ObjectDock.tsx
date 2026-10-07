@@ -188,13 +188,13 @@ export function DockAction({
         onClick={onRun}
         disabled={disabled}
         aria-label={label}
-        className="relative flex size-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+        className="relative flex size-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
       >
         {icon}
         {/* A count is news; a zero is not. An action whose badge is 0 wears
             whatever it would wear without one. */}
         {badge ? (
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent px-1 text-micro font-semibold text-accent-fg">
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
             {badge}
           </span>
         ) : marked ? (

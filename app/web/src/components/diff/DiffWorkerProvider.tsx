@@ -141,9 +141,9 @@ function DiffWorkerProgressIndicator({ stats }: { stats: WorkerStats | null }) {
   return (
     <div
       role="status"
-      className="pointer-events-none fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full border border-line bg-panel/95 px-3 py-1.5 text-caption text-muted shadow-lg backdrop-blur"
+      className="pointer-events-none fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full border border-line bg-panel/95 px-3 py-1.5 text-caption text-muted-foreground shadow-lg backdrop-blur"
     >
-      <Spinner size="sm" className="text-accent" />
+      <Spinner size="sm" className="text-primary" />
       <span>{label}</span>
       {active > 0 ? (
         <span className="font-mono text-faint">{active} queued</span>

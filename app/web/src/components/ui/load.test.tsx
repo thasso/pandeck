@@ -54,7 +54,7 @@ it("draws the ring variant as a single decorative element at the token size", ()
   expect(ring.querySelector("svg")).toBeNull();
   expect(ring.getAttribute("aria-hidden")).toBe("true");
   expect(ring.style.width).toBe("13px");
-  expect(ring.className).toContain("border-t-accent");
+  expect(ring.className).toContain("border-t-primary");
   expect(ring.className).toContain("motion-safe:animate-spin");
 });
 

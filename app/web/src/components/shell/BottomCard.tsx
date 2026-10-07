@@ -483,7 +483,7 @@ export function BottomCard({
             }
             className="group flex w-full items-center justify-center py-2 disabled:cursor-default"
           >
-            <span className="h-1 w-10 rounded-full bg-line-strong transition-colors group-hover:bg-muted" />
+            <span className="h-1 w-10 rounded-full bg-line-strong transition-colors group-hover:bg-muted-foreground" />
           </button>
           {header}
         </div>

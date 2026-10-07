@@ -169,8 +169,8 @@ export function ToolCallBlock({
         aria-controls={bodyId}
         className={cx(
           "inline-flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 pr-2 text-body transition-colors",
-          "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-          isError ? "text-danger" : "text-muted",
+          "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+          isError ? "text-danger" : "text-muted-foreground",
         )}
       >
         {status === "running" ? (

@@ -54,7 +54,7 @@ export function GhostIconButton({
       aria-busy={busy || undefined}
       title={label}
       aria-label={label}
-      className={`flex size-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed ${hover} ${reveal} ${className}`}
+      className={`flex size-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed ${hover} ${reveal} ${className}`}
     >
       {busy ? <Spinner size="sm" /> : icon}
     </button>

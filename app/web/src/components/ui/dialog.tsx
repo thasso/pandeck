@@ -81,7 +81,7 @@ export function DialogHeader({
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="rounded-lg p-1 text-muted hover:bg-raised hover:text-fg"
+        className="rounded-lg p-1 text-muted-foreground hover:bg-raised hover:text-fg"
       >
         <X size={14} />
       </button>
@@ -124,7 +124,7 @@ export function DialogAction({
       aria-busy={busy || undefined}
       onClick={onClick}
       className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-caption font-medium disabled:opacity-40 ${
-        danger ? "bg-danger text-white" : "bg-accent text-accent-fg"
+        danger ? "bg-danger text-white" : "bg-primary text-primary-foreground"
       }`}
     >
       {busy ? <Spinner size="sm" /> : icon}
@@ -147,7 +147,7 @@ export function DialogCancelButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="rounded-lg border border-line px-3 py-1.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+      className="rounded-lg border border-line px-3 py-1.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:opacity-40"
     >
       {children}
     </button>
@@ -262,16 +262,16 @@ export function ConfirmDialog({
                 size={16}
                 className="mt-0.5 shrink-0 text-danger"
               />
-              <div className="text-caption text-muted">{body}</div>
+              <div className="text-caption text-muted-foreground">{body}</div>
             </div>
           ) : (
-            <div className="text-caption text-muted">{body}</div>
+            <div className="text-caption text-muted-foreground">{body}</div>
           )
         ) : null}
         {input ? (
           <label className="mt-3 block">
             {input.label ? (
-              <span className="mb-1 block text-caption text-muted">
+              <span className="mb-1 block text-caption text-muted-foreground">
                 {input.label}
               </span>
             ) : null}
@@ -281,7 +281,7 @@ export function ConfirmDialog({
               value={value}
               placeholder={input.placeholder}
               onChange={(event) => setValue(event.target.value)}
-              className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none placeholder:text-faint focus:border-accent"
+              className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none placeholder:text-faint focus:border-primary"
             />
           </label>
         ) : null}

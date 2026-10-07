@@ -97,7 +97,7 @@ export function ProviderAccountRow({
             // nothing on the strip would line up.
             className={`flex w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-60 ${
               selected
-                ? "border-accent/40 bg-accent-soft"
+                ? "border-primary/40 bg-accent"
                 : "border-line bg-panel hover:border-line-strong hover:bg-raised"
             }`}
           >
@@ -107,11 +107,13 @@ export function ProviderAccountRow({
                 title={providerLabel}
                 size={16}
                 className={
-                  selected ? "shrink-0 text-accent" : "shrink-0 text-muted"
+                  selected
+                    ? "shrink-0 text-primary"
+                    : "shrink-0 text-muted-foreground"
                 }
               />
               <span
-                className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
+                className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
               >
                 {account.name}
               </span>
@@ -161,7 +163,7 @@ export function ModelQuickRow<M extends ModelOption>({
               provider={model.provider}
               size={13}
               className={
-                isSelected ? "shrink-0 text-accent" : "shrink-0 text-faint"
+                isSelected ? "shrink-0 text-primary" : "shrink-0 text-faint"
               }
             />
             <span className="min-w-0 truncate">{model.name}</span>
@@ -250,7 +252,7 @@ export function DiscreteSlider({
       {/* Track, fill, and stops are inset by half the 20px thumb so they align with its travel. */}
       <div className="absolute inset-x-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-line" />
       <div
-        className="absolute left-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-accent"
+        className="absolute left-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-primary"
         style={{ width: `calc((100% - 1.25rem) * ${percent / 100})` }}
       />
       <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-between">
@@ -258,7 +260,7 @@ export function DiscreteSlider({
           <span
             key={min + step}
             aria-hidden
-            className={`size-2 rounded-full ${min + step <= value ? "bg-accent" : "bg-line-strong"}`}
+            className={`size-2 rounded-full ${min + step <= value ? "bg-primary" : "bg-line-strong"}`}
           />
         ))}
       </div>
@@ -276,7 +278,7 @@ export function DiscreteSlider({
         aria-label={ariaLabel}
         aria-valuetext={valueText}
         title={title ?? `${ariaLabel}: ${valueText}`}
-        className="absolute inset-0 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-60 [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-accent [&::-moz-range-track]:bg-transparent [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent"
+        className="absolute inset-0 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-60 [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-primary [&::-moz-range-track]:bg-transparent [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
       />
     </div>
   );
@@ -417,7 +419,7 @@ export function QuickPill({
       onClick={onClick}
       className={`flex h-9 max-w-[13rem] shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3 text-caption font-medium transition-colors disabled:opacity-60 ${
         selected
-          ? "border-accent/40 bg-accent-soft text-accent"
+          ? "border-primary/40 bg-accent text-primary"
           : "border-line bg-panel text-fg hover:border-line-strong hover:bg-raised"
       }`}
     >

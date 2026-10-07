@@ -48,14 +48,14 @@ export function OverflowList<Id extends string>({
               onSelect(item.id);
               close();
             }}
-            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               active
-                ? "bg-accent-soft text-fg"
-                : "text-muted hover:bg-raised hover:text-fg"
+                ? "bg-accent text-fg"
+                : "text-muted-foreground hover:bg-raised hover:text-fg"
             }`}
           >
             <span
-              className={`flex size-5 shrink-0 items-center justify-center ${active ? "text-accent" : ""}`}
+              className={`flex size-5 shrink-0 items-center justify-center ${active ? "text-primary" : ""}`}
             >
               {item.icon}
             </span>
@@ -72,7 +72,7 @@ export function OverflowList<Id extends string>({
               onCustomize();
               close();
             }}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <span className="flex size-5 shrink-0 items-center justify-center">
               <SlidersHorizontal size={15} />
@@ -107,7 +107,7 @@ export function SectionOverflow<Id extends string>({
 }: Props<Id>) {
   const triggerIcon = <MoreHorizontal size={17} />;
   const label = "More sections";
-  const stateClass = "text-muted hover:bg-raised hover:text-fg";
+  const stateClass = "text-muted-foreground hover:bg-raised hover:text-fg";
 
   return (
     <Popover

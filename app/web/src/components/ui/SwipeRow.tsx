@@ -559,7 +559,7 @@ export function SwipeRow({
             armed
               ? danger
                 ? "bg-danger font-semibold text-white"
-                : "bg-accent font-semibold text-accent-fg"
+                : "bg-primary font-semibold text-primary-foreground"
               : danger
                 ? "bg-danger/25 font-medium text-danger"
                 : "bg-line-strong font-medium text-fg"

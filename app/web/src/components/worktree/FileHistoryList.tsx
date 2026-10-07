@@ -77,7 +77,7 @@ export function FileHistoryList({
           key={entry.oid}
           type="button"
           onClick={() => onOpenCommit(entry)}
-          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-muted hover:bg-raised hover:text-fg"
+          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-muted-foreground hover:bg-raised hover:text-fg"
         >
           <GitCommitHorizontal
             size={13}

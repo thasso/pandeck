@@ -286,7 +286,7 @@ function ShortcutsHelpOverlay({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-caption text-muted hover:bg-raised hover:text-fg"
+            className="rounded-md px-2 py-1 text-caption text-muted-foreground hover:bg-raised hover:text-fg"
           >
             Esc
           </button>
@@ -318,7 +318,7 @@ function ShortcutsHelpOverlay({
                           {displayCombo(shortcut).map((combo, i) => (
                             <kbd
                               key={i}
-                              className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-caption text-muted shadow-sm"
+                              className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-caption text-muted-foreground shadow-sm"
                             >
                               {combo}
                             </kbd>

@@ -123,7 +123,7 @@ type SelectVariant = "pill" | "field";
 const PILL_TRIGGER =
   "inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-caption text-fg transition-colors hover:bg-raised data-[open=true]:bg-raised disabled:cursor-not-allowed disabled:opacity-50";
 const FIELD_TRIGGER =
-  "flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-left text-body text-fg transition-colors hover:border-line-strong data-[open=true]:border-accent disabled:cursor-not-allowed disabled:opacity-60";
+  "flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-left text-body text-fg transition-colors hover:border-line-strong data-[open=true]:border-primary disabled:cursor-not-allowed disabled:opacity-60";
 
 export interface ModelSelectProps<M extends ModelOption = ModelOption> {
   models: M[];
@@ -258,12 +258,12 @@ export function ModelSelect<M extends ModelOption>({
                       <span
                         className={cx(
                           "block truncate text-caption font-medium",
-                          active ? "text-accent" : "text-fg",
+                          active ? "text-primary" : "text-fg",
                         )}
                       >
                         {m.name}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-2 text-caption text-muted">
+                      <span className="mt-0.5 flex items-center gap-2 text-caption text-muted-foreground">
                         <span>
                           {formatContextTokens(m.contextWindow)} context
                         </span>
@@ -275,7 +275,7 @@ export function ModelSelect<M extends ModelOption>({
                       </span>
                     </span>
                     {active && (
-                      <Check size={14} className="shrink-0 text-accent" />
+                      <Check size={14} className="shrink-0 text-primary" />
                     )}
                   </button>
                 );
@@ -393,16 +393,18 @@ export function ThinkingSelect({
                   <span
                     className={cx(
                       "block text-caption font-medium",
-                      active ? "text-accent" : "text-fg",
+                      active ? "text-primary" : "text-fg",
                     )}
                   >
                     {THINKING_LABELS[lvl]}
                   </span>
-                  <span className="mt-0.5 block text-caption text-muted">
+                  <span className="mt-0.5 block text-caption text-muted-foreground">
                     {THINKING_DESCRIPTIONS[lvl]}
                   </span>
                 </span>
-                {active && <Check size={14} className="shrink-0 text-accent" />}
+                {active && (
+                  <Check size={14} className="shrink-0 text-primary" />
+                )}
               </button>
             );
           })}
@@ -422,7 +424,7 @@ export function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-caption font-medium text-muted">
+      <span className="mb-1 block text-caption font-medium text-muted-foreground">
         {label}
       </span>
       {children}

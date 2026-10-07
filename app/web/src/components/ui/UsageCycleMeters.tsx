@@ -189,13 +189,15 @@ function UsageCycleRow({
         // is prose, and splitting it across the number columns would either
         // truncate it or push the meter around.
         <span
-          className={`${COL.reason} shrink-0 truncate text-right text-muted`}
+          className={`${COL.reason} shrink-0 truncate text-right text-muted-foreground`}
         >
           {reasonInTitleOnly ? "" : reading}
         </span>
       ) : (
         <>
-          <span className={`${COL.reading} shrink-0 text-right text-muted`}>
+          <span
+            className={`${COL.reading} shrink-0 text-right text-muted-foreground`}
+          >
             {stale ? <span className="text-faint">⟳</span> : null}
             {reading}
           </span>
@@ -215,7 +217,7 @@ function meterFill(pct: number): string {
   const level = usageLevel(pct);
   if (level === "critical") return "bg-danger";
   if (level === "warn") return "bg-warning";
-  return "bg-accent";
+  return "bg-primary";
 }
 
 /** `14:00` for the short cycle, `Mon 00:00` for the long one — tooltip only. */

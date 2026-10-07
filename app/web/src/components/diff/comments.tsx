@@ -325,7 +325,7 @@ export interface LineCommentsConfig {
 function AuthorChip({ comment }: { comment: WorktreeComment }) {
   return comment.author.kind === "agent" ? (
     <span
-      className="rounded bg-accent-soft px-1 py-0.5 text-micro font-medium text-accent"
+      className="rounded bg-accent px-1 py-0.5 text-micro font-medium text-primary"
       title={[comment.author.sessionId, comment.author.thinkingLevel]
         .filter(Boolean)
         .join(" · ")}
@@ -333,7 +333,7 @@ function AuthorChip({ comment }: { comment: WorktreeComment }) {
       {comment.author.model ?? "agent"} · {comment.author.sessionId.slice(0, 8)}
     </span>
   ) : (
-    <span className="rounded bg-raised px-1 py-0.5 text-micro font-medium text-muted">
+    <span className="rounded bg-raised px-1 py-0.5 text-micro font-medium text-muted-foreground">
       you
     </span>
   );
@@ -364,13 +364,13 @@ export function CommentThread({
 
   return (
     <div
-      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-line opacity-70" : "border-accent/50"}`}
+      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-line opacity-70" : "border-primary/50"}`}
     >
       <div className="flex items-start gap-1.5">
         <AuthorChip comment={root} />
         <CommentBody body={root.body} className="min-w-0 flex-1 text-fg" />
         {root.severity ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-micro font-medium text-muted">
+          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-micro font-medium text-muted-foreground">
             {root.severity}
           </span>
         ) : null}
@@ -438,7 +438,7 @@ export function CommentThread({
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
-              className="text-muted hover:text-fg"
+              className="text-muted-foreground hover:text-fg"
             >
               No
             </button>
@@ -482,7 +482,7 @@ function ThreadAction({
       title={label}
       aria-label={label}
       aria-pressed={active || undefined}
-      className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${active ? "text-accent" : "text-muted"} ${tone}`}
+      className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${active ? "text-primary" : "text-muted-foreground"} ${tone}`}
     >
       {icon}
     </button>
@@ -522,7 +522,7 @@ export function CommentComposer({
     typeof window !== "undefined" &&
     window.matchMedia("(pointer: fine)").matches;
   return (
-    <div className="mx-1 my-1 border-l-2 border-accent pl-2 font-sans">
+    <div className="mx-1 my-1 border-l-2 border-primary pl-2 font-sans">
       <CommentComposerRow
         onSubmit={onSubmit}
         onCancel={onCancel}
@@ -583,10 +583,10 @@ export function useFocusComment(
         return;
       }
       marker.scrollIntoView({ behavior: "smooth", block: "center" });
-      marker.classList.add("rounded-lg", "ring-2", "ring-accent");
+      marker.classList.add("rounded-lg", "ring-2", "ring-primary");
       marked = marker;
       timer = window.setTimeout(() => {
-        marker.classList.remove("rounded-lg", "ring-2", "ring-accent");
+        marker.classList.remove("rounded-lg", "ring-2", "ring-primary");
         marked = null;
       }, FOCUS_FLASH_MS);
     };
@@ -594,7 +594,7 @@ export function useFocusComment(
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (timer) window.clearTimeout(timer);
-      marked?.classList.remove("rounded-lg", "ring-2", "ring-accent");
+      marked?.classList.remove("rounded-lg", "ring-2", "ring-primary");
     };
     // One object per (commentId, nonce), built above: a new nonce re-fires this
     // for the same comment, and nothing else can.

@@ -94,7 +94,7 @@ function Block({
 }) {
   return (
     <section className="rounded-xl border border-line bg-panel/40 p-3">
-      <h2 className="mb-2 flex items-center gap-1.5 text-caption font-semibold text-muted">
+      <h2 className="mb-2 flex items-center gap-1.5 text-caption font-semibold text-muted-foreground">
         <span className="text-faint" aria-hidden>
           {icon}
         </span>
@@ -132,7 +132,7 @@ function RelationRow({
     <button
       type="button"
       onClick={onOpen}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <span className="shrink-0 text-faint" aria-hidden>
         {icon}
@@ -364,7 +364,7 @@ export function PullRequestDetailPage({
                 href={item.ci.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent underline underline-offset-2"
+                className="text-primary underline underline-offset-2"
               >
                 inspect
               </a>

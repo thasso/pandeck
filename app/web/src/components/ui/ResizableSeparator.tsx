@@ -129,8 +129,8 @@ export function ResizableSeparator({
       <span
         className={`my-2 w-px rounded-full transition-colors ${
           resizing
-            ? "bg-accent"
-            : "bg-transparent group-hover:bg-accent/70 group-focus-visible:bg-accent"
+            ? "bg-primary"
+            : "bg-transparent group-hover:bg-primary/70 group-focus-visible:bg-primary"
         } ${indicatorClassName}`}
       />
     </div>
