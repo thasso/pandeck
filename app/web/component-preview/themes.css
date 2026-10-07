@@ -1,0 +1,257 @@
+/* Storybook-only theme experiments. The app's own tokens in src/index.css are
+   the "app" palette; everything here is derived from Tailwind's built-in color
+   scales with the same shade mapping shadcn uses for its base colors, so a
+   palette or accent that wins here can be ported to index.css as plain values.
+
+   A theme applies to the element carrying `data-palette` / `data-accent` (and
+   `.dark`): <html> normally, or each frame in the compare grid. */
+
+[data-palette="neutral"] {
+  --base-50: var(--color-neutral-50);
+  --base-100: var(--color-neutral-100);
+  --base-200: var(--color-neutral-200);
+  --base-300: var(--color-neutral-300);
+  --base-400: var(--color-neutral-400);
+  --base-500: var(--color-neutral-500);
+  --base-700: var(--color-neutral-700);
+  --base-800: var(--color-neutral-800);
+  --base-900: var(--color-neutral-900);
+  --base-950: var(--color-neutral-950);
+}
+[data-palette="zinc"] {
+  --base-50: var(--color-zinc-50);
+  --base-100: var(--color-zinc-100);
+  --base-200: var(--color-zinc-200);
+  --base-300: var(--color-zinc-300);
+  --base-400: var(--color-zinc-400);
+  --base-500: var(--color-zinc-500);
+  --base-700: var(--color-zinc-700);
+  --base-800: var(--color-zinc-800);
+  --base-900: var(--color-zinc-900);
+  --base-950: var(--color-zinc-950);
+}
+[data-palette="slate"] {
+  --base-50: var(--color-slate-50);
+  --base-100: var(--color-slate-100);
+  --base-200: var(--color-slate-200);
+  --base-300: var(--color-slate-300);
+  --base-400: var(--color-slate-400);
+  --base-500: var(--color-slate-500);
+  --base-700: var(--color-slate-700);
+  --base-800: var(--color-slate-800);
+  --base-900: var(--color-slate-900);
+  --base-950: var(--color-slate-950);
+}
+[data-palette="gray"] {
+  --base-50: var(--color-gray-50);
+  --base-100: var(--color-gray-100);
+  --base-200: var(--color-gray-200);
+  --base-300: var(--color-gray-300);
+  --base-400: var(--color-gray-400);
+  --base-500: var(--color-gray-500);
+  --base-700: var(--color-gray-700);
+  --base-800: var(--color-gray-800);
+  --base-900: var(--color-gray-900);
+  --base-950: var(--color-gray-950);
+}
+[data-palette="stone"] {
+  --base-50: var(--color-stone-50);
+  --base-100: var(--color-stone-100);
+  --base-200: var(--color-stone-200);
+  --base-300: var(--color-stone-300);
+  --base-400: var(--color-stone-400);
+  --base-500: var(--color-stone-500);
+  --base-700: var(--color-stone-700);
+  --base-800: var(--color-stone-800);
+  --base-900: var(--color-stone-900);
+  --base-950: var(--color-stone-950);
+}
+[data-palette="mauve"] {
+  --base-50: var(--color-mauve-50);
+  --base-100: var(--color-mauve-100);
+  --base-200: var(--color-mauve-200);
+  --base-300: var(--color-mauve-300);
+  --base-400: var(--color-mauve-400);
+  --base-500: var(--color-mauve-500);
+  --base-700: var(--color-mauve-700);
+  --base-800: var(--color-mauve-800);
+  --base-900: var(--color-mauve-900);
+  --base-950: var(--color-mauve-950);
+}
+[data-palette="olive"] {
+  --base-50: var(--color-olive-50);
+  --base-100: var(--color-olive-100);
+  --base-200: var(--color-olive-200);
+  --base-300: var(--color-olive-300);
+  --base-400: var(--color-olive-400);
+  --base-500: var(--color-olive-500);
+  --base-700: var(--color-olive-700);
+  --base-800: var(--color-olive-800);
+  --base-900: var(--color-olive-900);
+  --base-950: var(--color-olive-950);
+}
+[data-palette="mist"] {
+  --base-50: var(--color-mist-50);
+  --base-100: var(--color-mist-100);
+  --base-200: var(--color-mist-200);
+  --base-300: var(--color-mist-300);
+  --base-400: var(--color-mist-400);
+  --base-500: var(--color-mist-500);
+  --base-700: var(--color-mist-700);
+  --base-800: var(--color-mist-800);
+  --base-900: var(--color-mist-900);
+  --base-950: var(--color-mist-950);
+}
+[data-palette="taupe"] {
+  --base-50: var(--color-taupe-50);
+  --base-100: var(--color-taupe-100);
+  --base-200: var(--color-taupe-200);
+  --base-300: var(--color-taupe-300);
+  --base-400: var(--color-taupe-400);
+  --base-500: var(--color-taupe-500);
+  --base-700: var(--color-taupe-700);
+  --base-800: var(--color-taupe-800);
+  --base-900: var(--color-taupe-900);
+  --base-950: var(--color-taupe-950);
+}
+
+/* shadcn's base-color mapping. `[data-palette].dark` outranks index.css's
+   `.dark`, and the light rule wins over its `:root` by source order. */
+[data-palette] {
+  --background: oklch(1 0 0);
+  --foreground: var(--base-950);
+  --card: oklch(1 0 0);
+  --card-foreground: var(--base-950);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--base-950);
+  --primary: var(--base-900);
+  --primary-foreground: var(--base-50);
+  --secondary: var(--base-100);
+  --secondary-foreground: var(--base-900);
+  --muted: var(--base-100);
+  --muted-foreground: var(--base-500);
+  --accent: var(--base-100);
+  --accent-foreground: var(--base-900);
+  --border: var(--base-200);
+  --input: var(--base-200);
+  --ring: var(--base-400);
+  --sidebar: var(--base-50);
+  --sidebar-foreground: var(--base-950);
+  --sidebar-primary: var(--base-900);
+  --sidebar-primary-foreground: var(--base-50);
+  --sidebar-accent: var(--base-100);
+  --sidebar-accent-foreground: var(--base-900);
+  --sidebar-border: var(--base-200);
+  --sidebar-ring: var(--base-400);
+}
+[data-palette].dark {
+  --background: var(--base-950);
+  --foreground: var(--base-50);
+  --card: var(--base-900);
+  --card-foreground: var(--base-50);
+  --popover: var(--base-900);
+  --popover-foreground: var(--base-50);
+  --primary: var(--base-200);
+  --primary-foreground: var(--base-900);
+  --secondary: var(--base-800);
+  --secondary-foreground: var(--base-50);
+  --muted: var(--base-800);
+  --muted-foreground: var(--base-400);
+  --accent: var(--base-800);
+  --accent-foreground: var(--base-50);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: var(--base-500);
+  --sidebar: var(--base-900);
+  --sidebar-foreground: var(--base-50);
+  --sidebar-primary: var(--base-200);
+  --sidebar-primary-foreground: var(--base-900);
+  --sidebar-accent: var(--base-800);
+  --sidebar-accent-foreground: var(--base-50);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: var(--base-500);
+}
+
+/* Accent: a colored primary/ring/chart on top of any palette. */
+[data-accent="blue"] {
+  --tint-50: var(--color-blue-50);
+  --tint-300: var(--color-blue-300);
+  --tint-400: var(--color-blue-400);
+  --tint-500: var(--color-blue-500);
+  --tint-600: var(--color-blue-600);
+  --tint-700: var(--color-blue-700);
+}
+[data-accent="indigo"] {
+  --tint-50: var(--color-indigo-50);
+  --tint-300: var(--color-indigo-300);
+  --tint-400: var(--color-indigo-400);
+  --tint-500: var(--color-indigo-500);
+  --tint-600: var(--color-indigo-600);
+  --tint-700: var(--color-indigo-700);
+}
+[data-accent="violet"] {
+  --tint-50: var(--color-violet-50);
+  --tint-300: var(--color-violet-300);
+  --tint-400: var(--color-violet-400);
+  --tint-500: var(--color-violet-500);
+  --tint-600: var(--color-violet-600);
+  --tint-700: var(--color-violet-700);
+}
+[data-accent="teal"] {
+  --tint-50: var(--color-teal-50);
+  --tint-300: var(--color-teal-300);
+  --tint-400: var(--color-teal-400);
+  --tint-500: var(--color-teal-500);
+  --tint-600: var(--color-teal-600);
+  --tint-700: var(--color-teal-700);
+}
+[data-accent="green"] {
+  --tint-50: var(--color-green-50);
+  --tint-300: var(--color-green-300);
+  --tint-400: var(--color-green-400);
+  --tint-500: var(--color-green-500);
+  --tint-600: var(--color-green-600);
+  --tint-700: var(--color-green-700);
+}
+[data-accent="orange"] {
+  --tint-50: var(--color-orange-50);
+  --tint-300: var(--color-orange-300);
+  --tint-400: var(--color-orange-400);
+  --tint-500: var(--color-orange-500);
+  --tint-600: var(--color-orange-600);
+  --tint-700: var(--color-orange-700);
+}
+[data-accent="rose"] {
+  --tint-50: var(--color-rose-50);
+  --tint-300: var(--color-rose-300);
+  --tint-400: var(--color-rose-400);
+  --tint-500: var(--color-rose-500);
+  --tint-600: var(--color-rose-600);
+  --tint-700: var(--color-rose-700);
+}
+
+/* Two classes so an accent outranks `[data-palette].dark` and index.css. */
+[data-accent]:not(.dark) {
+  --primary: var(--tint-600);
+  --primary-foreground: var(--tint-50);
+  --ring: var(--tint-400);
+  --sidebar-primary: var(--tint-600);
+  --sidebar-primary-foreground: var(--tint-50);
+  --sidebar-ring: var(--tint-400);
+  --chart-1: var(--tint-300);
+  --chart-2: var(--tint-500);
+  --chart-3: var(--tint-600);
+  --chart-4: var(--tint-700);
+}
+[data-accent].dark {
+  --primary: var(--tint-500);
+  --primary-foreground: var(--tint-50);
+  --ring: var(--tint-700);
+  --sidebar-primary: var(--tint-500);
+  --sidebar-primary-foreground: var(--tint-50);
+  --sidebar-ring: var(--tint-700);
+  --chart-1: var(--tint-300);
+  --chart-2: var(--tint-400);
+  --chart-3: var(--tint-500);
+  --chart-4: var(--tint-600);
+}

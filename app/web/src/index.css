@@ -745,7 +745,7 @@ body {
 
 /* Shiki output (CodeBlock + Markdown fences) is themed with
    Catppuccin Latte/Mocha as dual light/dark CSS variables (`defaultColor:
-   false`); pick the right one off the `html.dark` class. The `.cb-numbered`
+   false`); pick the right one off the nearest `.dark` ancestor. The `.cb-numbered`
    wrapper turns on a line-number gutter via CSS counters on Shiki's per-line
    `.line` spans. Ported from the v2 tailwind.config.js `codeBlocks` rules. */
 .shiki {
@@ -763,11 +763,11 @@ body {
 .shiki span {
   color: var(--shiki-light);
 }
-html.dark .shiki {
+.dark .shiki {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }
-html.dark .shiki span {
+.dark .shiki span {
   color: var(--shiki-dark);
 }
 .cb-numbered .shiki code {
@@ -834,7 +834,7 @@ html.dark .shiki span {
   line-height: var(--text-sm--line-height);
   white-space: pre;
 }
-html.dark .tool-code {
+.dark .tool-code {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }

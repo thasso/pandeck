@@ -1,4 +1,5 @@
 @import "../src/index.css";
+@import "./themes.css";
 
 /* Tailwind's automatic scan is rooted at this preview entry, while the classes
    under review live in the production source tree. Include that tree explicitly
