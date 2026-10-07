@@ -230,7 +230,7 @@ function CalendarBrowser({
           key={view.id}
           type="button"
           onClick={() => onOpenView(view.id)}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
             <CalendarDays size={15} />
@@ -274,14 +274,14 @@ function KnowledgeBrowser({
           type="button"
           aria-current={active === view.id ? "page" : undefined}
           onClick={() => onOpen(view.id)}
-          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active === view.id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active === view.id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
             {view.icon}
           </span>
           <span className="min-w-0 flex-1 truncate">{view.label}</span>
           {view.id === "changes" && uncommitted > 0 ? (
-            <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-micro font-medium text-primary">
+            <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-primary">
               {uncommitted}
             </span>
           ) : null}
@@ -338,7 +338,7 @@ function SettingsSectionList({
         <section key={group.id} aria-labelledby={`settings-group-${group.id}`}>
           <h2
             id={`settings-group-${group.id}`}
-            className="px-2.5 pb-1 text-micro font-semibold uppercase tracking-wide text-faint"
+            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-faint"
           >
             {group.label}
           </h2>
@@ -359,9 +359,7 @@ function SettingsSectionList({
                 >
                   {section.icon}
                 </span>
-                <span className="text-caption font-medium">
-                  {section.label}
-                </span>
+                <span className="text-sm font-medium">{section.label}</span>
               </button>
             ))}
           </div>
@@ -732,7 +730,7 @@ function SidebarImpl({
             density={mobile ? "comfortable" : "tight"}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
-          <p className="px-2.5 py-2 text-caption text-faint">
+          <p className="px-2.5 py-2 text-sm text-faint">
             The Knowledge Base is turned off in Settings.
           </p>
         ) : section === "knowledge" ? (

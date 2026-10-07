@@ -116,7 +116,7 @@ function Detail({
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="mt-1.5 text-micro font-medium uppercase tracking-wide text-faint/70">
+    <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-faint/70">
       {children}
     </div>
   );
@@ -182,7 +182,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
   return (
     <div
       data-turn-stats-row=""
-      className="flex flex-col gap-0.5 px-1 text-caption text-faint"
+      className="flex flex-col gap-0.5 px-1 text-sm text-faint"
     >
       <button
         type="button"

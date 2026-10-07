@@ -217,7 +217,7 @@ function WorkflowRunInboxCardImpl({
         className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
       >
         <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-faint`}
         >
           <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
             {projectKey ? (
@@ -273,13 +273,13 @@ function WorkflowRunInboxCardImpl({
               </span>
             )}
           </span>
-          <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
             {title}
           </span>
         </div>
 
         <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
         >
           {/* Signals show whole or not at all; DOM order is the drop order, so
               the role session that needs you outlasts the phase. */}

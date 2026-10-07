@@ -119,17 +119,17 @@ export function SkillsSettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <div className="flex items-start justify-between gap-3">
-        <h2 className="text-body font-semibold">Skills</h2>
+        <h2 className="text-sm font-semibold">Skills</h2>
         {refreshing ? <RefreshIndicator label="Rescanning skills" /> : null}
       </div>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <p className="mt-1 text-sm text-muted-foreground">
         Reusable agent skills you write yourself. Each skill is a folder with a{" "}
         <code>SKILL.md</code> whose frontmatter declares a name and a
         description. The library is read here and never written: you own the
         files and their Git history.
       </p>
       {list ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-faint">
           Library folder: <code>{list.libraryPath}</code>
         </p>
       ) : null}
@@ -180,8 +180,8 @@ function SkillList({
   return (
     <>
       <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <div className="text-caption font-medium">Available skills</div>
-        <div className="mt-0.5 text-caption text-muted-foreground">
+        <div className="text-sm font-medium">Available skills</div>
+        <div className="mt-0.5 text-sm text-muted-foreground">
           A skill you turn on here is on everywhere; a new skill starts off
           until you say otherwise. Per-project and per-session choices come
           later, as does handing the enabled skills to a running agent. Select a
@@ -217,10 +217,8 @@ function SkillList({
 
       {list.diagnostics.length > 0 ? (
         <div className="mt-4 rounded-xl border border-line bg-panel p-4">
-          <div className="text-caption font-medium">
-            Folders that need a fix
-          </div>
-          <div className="mt-0.5 text-caption text-muted-foreground">
+          <div className="text-sm font-medium">Folders that need a fix</div>
+          <div className="mt-0.5 text-sm text-muted-foreground">
             These folders cannot be used as skills. They stay listed here so a
             typo does not simply make a skill disappear.
           </div>
@@ -269,15 +267,15 @@ function SkillRow({
         aria-controls="skill-detail"
         className="min-w-0 flex-1 text-left"
       >
-        <div className="text-caption font-medium">{skill.name}</div>
-        <div className="mt-0.5 text-caption text-muted-foreground">
+        <div className="text-sm font-medium">{skill.name}</div>
+        <div className="mt-0.5 text-sm text-muted-foreground">
           {skill.description}
         </div>
-        <div className="mt-1 text-caption text-faint">
+        <div className="mt-1 text-sm text-faint">
           <code>{skill.path}</code>
         </div>
       </button>
-      <label className="flex shrink-0 items-center gap-2 text-caption text-muted-foreground">
+      <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
         <input
           type="checkbox"
           checked={on}
@@ -327,11 +325,11 @@ function SkillDetailPane({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-caption font-medium">{name}</div>
+          <div className="text-sm font-medium">{name}</div>
           {/* The source path comes from the answer: a skill's folder need not
               be named after it, so there is nothing honest to show before. */}
           {detail?.path ? (
-            <div className="mt-0.5 text-caption text-faint">
+            <div className="mt-0.5 text-sm text-faint">
               <code>{detail.path}</code>
             </div>
           ) : null}
@@ -366,7 +364,7 @@ function SkillDetailPane({
       {detail?.kind === "invalid" ? (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
           <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-          <div className="min-w-0 text-caption text-muted-foreground">
+          <div className="min-w-0 text-sm text-muted-foreground">
             {detail.error}
           </div>
         </div>
@@ -374,7 +372,7 @@ function SkillDetailPane({
 
       {detail?.kind === "skill" ? (
         <div className="mt-3">
-          <div className="text-caption text-muted-foreground">
+          <div className="text-sm text-muted-foreground">
             {detail.description}
           </div>
           <SkillFileBrowser
@@ -414,20 +412,20 @@ function SkillFileBrowser({
   return (
     <div className="mt-3 overflow-hidden rounded-lg border border-line bg-surface">
       <div className="border-b border-line p-3">
-        <div className="text-caption font-medium">Files</div>
-        <div className="mt-0.5 text-caption text-muted-foreground">
+        <div className="text-sm font-medium">Files</div>
+        <div className="mt-0.5 text-sm text-muted-foreground">
           {detail.files.entryCount}{" "}
           {detail.files.entryCount === 1 ? "entry" : "entries"}
           {detail.files.truncated ? ", bounded listing" : ""}
         </div>
         {detail.files.truncated ? (
-          <div className="mt-2 flex items-start gap-2 text-caption text-warning">
+          <div className="mt-2 flex items-start gap-2 text-sm text-warning">
             <TriangleAlert className="mt-0.5 shrink-0" size={13} />
             <span>{skillTreeLimitDiagnostic(detail.files.limits)}</span>
           </div>
         ) : null}
         {detail.files.diagnostics.map((diagnostic) => (
-          <div key={diagnostic} className="mt-2 text-caption text-warning">
+          <div key={diagnostic} className="mt-2 text-sm text-warning">
             {diagnostic}
           </div>
         ))}
@@ -472,7 +470,7 @@ function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
         ? ExternalLink
         : File;
   return (
-    <div className="flex min-w-0 items-center gap-2 py-1 text-caption">
+    <div className="flex min-w-0 items-center gap-2 py-1 text-sm">
       <Icon size={13} className="shrink-0 text-muted-foreground" />
       <span className="truncate">{entry.name}</span>
       {entry.type === "file" && entry.bytes !== undefined ? (
@@ -561,7 +559,7 @@ function SkillMarkdown({ detail }: { detail: SkillDetail }) {
   return (
     <div className="p-3">
       {detail.truncated ? (
-        <div className="mb-3 text-caption text-faint">
+        <div className="mb-3 text-sm text-faint">
           Showing the first {formatBytes(MAX_SKILL_BODY_BYTES)} of this{" "}
           {formatBytes(detail.bytes)} file. Open it raw to read the rest.
         </div>
@@ -626,7 +624,7 @@ function SkillTextFile({
     <div className="space-y-3 p-3">
       {error ? <ErrorNote message={error} onRetry={reload} /> : null}
       {preview.truncated ? (
-        <div className="text-caption text-faint">
+        <div className="text-sm text-faint">
           Showing the first {formatBytes(MAX_SKILL_FILE_PREVIEW_BYTES)} of this{" "}
           {formatBytes(preview.bytes)} file.
         </div>
@@ -663,7 +661,7 @@ function UnsupportedSkillFile({
         <a
           href={rawUrl}
           download={entry.name}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
         >
           <Download size={13} /> Download
         </a>
@@ -732,11 +730,11 @@ function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
     <li className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
       <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
       <div className="min-w-0">
-        <div className="text-caption font-medium">{diagnostic.folder}</div>
-        <div className="mt-0.5 text-caption text-muted-foreground">
+        <div className="text-sm font-medium">{diagnostic.folder}</div>
+        <div className="mt-0.5 text-sm text-muted-foreground">
           {diagnostic.error}
         </div>
-        <div className="mt-1 text-caption text-faint">
+        <div className="mt-1 text-sm text-faint">
           <code>{diagnostic.path}</code>
         </div>
       </div>

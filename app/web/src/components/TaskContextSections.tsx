@@ -218,11 +218,11 @@ function JiraTicketsSection({
           const summary = summaries[key];
           const label = (
             <>
-              <span className="block truncate font-mono text-caption text-primary">
+              <span className="block truncate font-mono text-sm text-primary">
                 {key}
               </span>
               {summary ? (
-                <span className="block truncate text-caption text-fg">
+                <span className="block truncate text-sm text-fg">
                   {summary}
                 </span>
               ) : null}
@@ -271,13 +271,13 @@ function JiraTicketsSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="ABC-123"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-caption text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-fg outline-none placeholder:text-faint"
             />
             <button
               type="button"
               onClick={add}
               disabled={normalizeJiraKeys([draft]).length === 0}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -380,11 +380,11 @@ function GithubIssuesSection({
                 className="min-w-0 flex-1 hover:[&>span]:underline"
                 title={`Open ${ref}${issue ? ` — ${issue.title} (${issue.state})` : ""} on GitHub`}
               >
-                <span className="block truncate font-mono text-caption text-primary">
+                <span className="block truncate font-mono text-sm text-primary">
                   {ref}
                 </span>
                 {issue?.title ? (
-                  <span className="block truncate text-caption text-fg">
+                  <span className="block truncate text-sm text-fg">
                     {issue.title}
                   </span>
                 ) : null}
@@ -411,13 +411,13 @@ function GithubIssuesSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="owner/repo#123 or issue URL"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-caption text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-fg outline-none placeholder:text-faint"
             />
             <button
               type="button"
               onClick={add}
               disabled={!normalizeGithubIssueRef(draft)}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -474,7 +474,7 @@ function LinksSection({
         {links.map((link) => (
           <div
             key={link.url}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-raised"
+            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-raised"
           >
             <ProviderIcon source={link.source} size={13} />
             <a
@@ -487,7 +487,7 @@ function LinksSection({
               {link.title?.trim() || link.url.replace(/^https?:\/\//, "")}
             </a>
             {link.type === "source" ? (
-              <span className="shrink-0 rounded bg-raised px-1 py-0.5 text-micro uppercase tracking-wide text-faint">
+              <span className="shrink-0 rounded bg-raised px-1 py-0.5 text-xs uppercase tracking-wide text-faint">
                 src
               </span>
             ) : null}
@@ -511,7 +511,7 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="https://…"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-primary"
+              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-sm text-fg outline-none focus:border-primary"
             />
             <input
               value={title}
@@ -521,14 +521,14 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="Optional label"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-primary"
+              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-sm text-fg outline-none focus:border-primary"
             />
             <div className="flex justify-end gap-1.5">
               <button
                 type="button"
                 onClick={() => add("source")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Link2 size={11} /> Source
               </button>
@@ -536,7 +536,7 @@ function LinksSection({
                 type="button"
                 onClick={() => add("related")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Plus size={11} /> Related
               </button>

@@ -172,7 +172,7 @@ export function ThinkingBlock({
         aria-expanded={isOpen}
         aria-controls={bodyId}
         className={cx(
-          "inline-flex w-fit items-center gap-1.5 rounded-md py-1 pr-2 text-body font-medium text-muted-foreground transition-colors",
+          "inline-flex w-fit items-center gap-1.5 rounded-md py-1 pr-2 text-sm font-medium text-muted-foreground transition-colors",
           "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         )}
       >

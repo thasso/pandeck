@@ -56,7 +56,7 @@ export function TaskComments({
       {error ? <ErrorNote message={error} onRetry={onRetry} /> : null}
       {comments ? (
         comments.length === 0 ? (
-          <p className="text-body text-faint">
+          <p className="text-sm text-faint">
             No activity yet. Add the first comment below.
           </p>
         ) : (
@@ -97,18 +97,18 @@ function CommentCard({ comment }: { comment: TaskComment }) {
         {comment.author.kind === "agent" && comment.author.sessionId ? (
           <a
             href={sessionPath(comment.author.sessionId)}
-            className="min-w-0 truncate text-caption font-medium text-primary hover:underline"
+            className="min-w-0 truncate text-sm font-medium text-primary hover:underline"
             title={`Open ${comment.author.name}'s session`}
           >
             {comment.author.name}
           </a>
         ) : (
-          <span className="truncate text-caption font-medium text-fg">
+          <span className="truncate text-sm font-medium text-fg">
             {comment.author.name}
           </span>
         )}
         <time
-          className="ml-auto shrink-0 text-micro text-faint"
+          className="ml-auto shrink-0 text-xs text-faint"
           dateTime={dateTimeWhen(comment.createdAt)}
         >
           {formatWhen(comment.createdAt)}

@@ -138,7 +138,7 @@ export function TaskManageToolCard({
 
   return (
     <section className="my-2 rounded-xl border border-line bg-panel/60 px-3 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-micro font-medium text-muted-foreground">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <ClipboardList size={11} className="text-primary" />
         <span>Tasks</span>
       </div>
@@ -167,22 +167,22 @@ export function TaskManageToolCard({
         {commentOnly.map((id) => (
           <li key={`comment-${id}`}>
             <TaskChip id={id} label={`Task-${id}`} onOpenTask={onOpenTask} />
-            <span className="ml-1.5 text-micro text-muted-foreground">
+            <span className="ml-1.5 text-xs text-muted-foreground">
               comment added
             </span>
           </li>
         ))}
         {deletedIds.map((id) => (
-          <li key={`deleted-${id}`} className="text-caption text-faint">
+          <li key={`deleted-${id}`} className="text-sm text-faint">
             <span className="line-through">Task-{id}</span>
-            <span className="ml-1.5 text-micro">deleted</span>
+            <span className="ml-1.5 text-xs">deleted</span>
           </li>
         ))}
       </ul>
       {warnings.map((warning) => (
         <p
           key={warning}
-          className="mt-1 flex items-start gap-1.5 text-micro text-amber-500"
+          className="mt-1 flex items-start gap-1.5 text-xs text-amber-500"
         >
           <TriangleAlert size={11} className="mt-0.5 shrink-0" aria-hidden />
           <span className="min-w-0 break-words">{warning}</span>
@@ -220,7 +220,7 @@ function TaskRow({
         />
         <TaskChip id={task.id} label={task.title} onOpenTask={onOpenTask} />
         {summary ? (
-          <span className="shrink-0 text-micro text-muted-foreground">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {summary}
           </span>
         ) : null}
@@ -255,14 +255,14 @@ function SuggestionRow({
   const done = suggestion.to === "done";
   if (confirmed)
     return (
-      <span className="ml-[22px] inline-flex items-center gap-1 text-micro text-emerald-500">
+      <span className="ml-[22px] inline-flex items-center gap-1 text-xs text-emerald-500">
         <Check size={11} aria-hidden />
         {done ? "Confirmed done" : "Put back on the to-do pile"}
       </span>
     );
   return (
     <span className="ml-[22px] flex min-w-0 items-center gap-1.5">
-      <span className="min-w-0 truncate text-micro text-amber-500">
+      <span className="min-w-0 truncate text-xs text-amber-500">
         {done ? "says done" : "says not done"}
         {suggestion.reason ? `: ${suggestion.reason}` : ""}
       </span>
@@ -270,7 +270,7 @@ function SuggestionRow({
         <button
           type="button"
           onClick={() => onConfirm(suggestion.to)}
-          className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${
+          className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${
             done
               ? "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
               : "border-primary/50 text-primary hover:bg-primary/10"
@@ -309,7 +309,7 @@ function TaskChip({
     </>
   );
   const className =
-    "inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-md px-1 py-0.5 text-caption text-fg";
+    "inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-md px-1 py-0.5 text-sm text-fg";
   return onOpenTask ? (
     <button
       type="button"

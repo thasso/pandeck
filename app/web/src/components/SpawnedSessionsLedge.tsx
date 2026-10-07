@@ -105,7 +105,7 @@ export function SpawnedSessionsLedge({
         onClick={() => {
           if (view.stall) onOpenSession(stallTarget(view.stall).id);
         }}
-        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${BADGE_TONE.warning}`}
+        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-xs font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${BADGE_TONE.warning}`}
       >
         <Hourglass size={10} className="shrink-0" aria-hidden="true" />
         {stallParts(view.stall).before ? (
@@ -143,7 +143,7 @@ export function SpawnedSessionsLedge({
         // to coordinate one the user now drives would be a relation that no
         // longer holds.
         aria-label={`${open ? "Hide" : "Show"} the sessions this chat spawned — ${summary}`}
-        className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           working
             ? "text-primary hover:text-primary"
             : "text-muted-foreground hover:text-fg"
@@ -171,7 +171,7 @@ export function SpawnedSessionsLedge({
             type="button"
             title={`Open “${bubbleTitle}”`}
             onClick={() => onOpenSession(bubbled.session.id)}
-            className={`flex min-w-0 items-center rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+            className={`flex min-w-0 items-center rounded-full px-1.5 py-px text-xs font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               BADGE_TONE[bubbleTone ?? "accent"]
             }`}
           >
@@ -230,7 +230,7 @@ export function SpawnedSessionsLedge({
               type="button"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
-              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
             >
               <ChevronDown
                 size={13}

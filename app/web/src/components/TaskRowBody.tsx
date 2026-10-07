@@ -193,7 +193,7 @@ export function TaskRowBody({
       ? { ...meta, session: null }
       : meta;
   const empty = !line2 || taskRowMetaEmpty(line2);
-  const titleClass = `min-w-0 flex-1 truncate text-caption ${done ? "text-faint line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-fg" : "text-fg"}`;
+  const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-faint line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-fg" : "text-fg"}`;
   return (
     <>
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -225,7 +225,7 @@ export function TaskRowBody({
         {line2 ? null : <TaskIdBadge id={task.id} onNavigate={onNavigate} />}
       </span>
       {line2 ? (
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-micro">
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
           {/* The id OPENS line 2, in every two-line view: a left-hand column the
               eye scans down, and the one item on a clipping line that must never
               be the thing that clips. */}

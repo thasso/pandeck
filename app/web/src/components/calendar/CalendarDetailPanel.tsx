@@ -89,7 +89,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
   const duration = durationLabel(event.start, event.end);
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-surface p-3">
-      <div className="flex items-center gap-1.5 text-caption text-fg">
+      <div className="flex items-center gap-1.5 text-sm text-fg">
         <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
         <span className="tabular-nums">
           {event.allDay
@@ -100,14 +100,14 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           <span className="text-muted-foreground">· {duration}</span>
         )}
         {event.selfResponse && event.selfResponse !== "accepted" && (
-          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-micro capitalize text-muted-foreground">
+          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-xs capitalize text-muted-foreground">
             {event.selfResponse}
           </span>
         )}
       </div>
 
       {event.location && (
-        <div className="flex items-start gap-1.5 text-caption text-muted-foreground">
+        <div className="flex items-start gap-1.5 text-sm text-muted-foreground">
           <MapPin size={13} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{event.location}</span>
         </div>
@@ -123,7 +123,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
 
       {event.attendees.length > 0 && (
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1.5 text-caption font-medium text-faint">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-faint">
             <Users size={12} />
             {event.attendeeCount} guest{event.attendeeCount === 1 ? "" : "s"}
           </div>
@@ -131,7 +131,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
             {event.attendees.slice(0, 12).map((attendee, attendeeIndex) => (
               <div
                 key={attendee.email ?? attendee.name ?? attendeeIndex}
-                className="flex items-center gap-1.5 text-caption"
+                className="flex items-center gap-1.5 text-sm"
               >
                 <span
                   className={`size-1.5 shrink-0 rounded-full ${
@@ -151,14 +151,12 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
                   {attendee.name ?? attendee.email}
                 </span>
                 {attendee.organizer && (
-                  <span className="shrink-0 text-micro text-faint">
-                    organizer
-                  </span>
+                  <span className="shrink-0 text-xs text-faint">organizer</span>
                 )}
               </div>
             ))}
             {event.attendees.length > 12 && (
-              <span className="text-micro text-faint">
+              <span className="text-xs text-faint">
                 +{event.attendees.length - 12} more
               </span>
             )}
@@ -167,7 +165,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
       )}
 
       {event.description && (
-        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-caption text-muted-foreground">
+        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-sm text-muted-foreground">
           {event.description}
         </div>
       )}
@@ -177,7 +175,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           href={event.htmlLink}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-caption text-muted-foreground hover:text-primary"
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-primary"
         >
           <ExternalLink size={11} />
           Open in Google Calendar
@@ -199,7 +197,7 @@ function ConferenceButton({ link }: { link: CalendarConferenceLink }) {
       href={link.uri}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-caption font-medium transition-colors ${tone}`}
+      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${tone}`}
     >
       <Video size={13} />
       Join {link.label}

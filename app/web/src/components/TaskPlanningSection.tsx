@@ -69,7 +69,7 @@ export function TaskPlanningSection({
     >
       <div className="space-y-3 px-1">
         <div>
-          <div className="mb-1 text-micro text-faint">Priority</div>
+          <div className="mb-1 text-xs text-faint">Priority</div>
           <div
             className="flex flex-wrap items-center gap-1"
             role="group"
@@ -86,7 +86,7 @@ export function TaskPlanningSection({
                   // Same geometry as `QuickPick` below: two rows of chips in one
                   // section at different heights read as two kinds of control,
                   // and the shorter one was a ~24px target on a phone.
-                  className={`cursor-pointer rounded-lg border px-2 py-1 text-caption capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                  className={`cursor-pointer rounded-lg border px-2 py-1 text-sm capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                     active
                       ? PRIORITY_TONE[value]
                       : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"
@@ -148,7 +148,7 @@ function DateRow({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1.5 text-micro text-faint">
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-faint">
         {icon}
         <span>{label}</span>
       </div>
@@ -175,7 +175,7 @@ function DateRow({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-caption text-fg outline-none focus:border-primary"
+        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-sm text-fg outline-none focus:border-primary"
       />
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {quickPicks ? (
@@ -199,7 +199,7 @@ function DateRow({
             active={false}
           />
         ) : null}
-        <p className="ml-auto text-micro text-faint">{hint}</p>
+        <p className="ml-auto text-xs text-faint">{hint}</p>
       </div>
     </div>
   );
@@ -219,7 +219,7 @@ function QuickPick({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         active
           ? "border-primary/60 bg-accent text-fg"
           : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"

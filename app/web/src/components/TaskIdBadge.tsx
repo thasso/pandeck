@@ -27,7 +27,7 @@ export function TaskIdBadge({
   /** In-app navigation, when the host has one; see `TaskRowBody`. */
   onNavigate?: ((path: string) => void) | undefined;
 }) {
-  const className = "shrink-0 font-mono text-micro tabular-nums text-faint";
+  const className = "shrink-0 font-mono text-xs tabular-nums text-faint";
   if (!onNavigate)
     return (
       <span className={className} title={`Task-${id}`}>

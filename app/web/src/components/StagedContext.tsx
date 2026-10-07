@@ -228,7 +228,7 @@ function ContextChip({
       : "border-line bg-raised text-muted-foreground";
   return (
     <span
-      className={`flex min-w-0 max-w-[14rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-caption font-medium ${toneClass} ${dimmed ? "opacity-70" : ""}`}
+      className={`flex min-w-0 max-w-[14rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-sm font-medium ${toneClass} ${dimmed ? "opacity-70" : ""}`}
     >
       {onOpen ? (
         <button
@@ -327,7 +327,7 @@ export function StagedContextPanel({
     setOpen((cur) => (cur === field ? null : field));
 
   return (
-    <div className="flex flex-col gap-1 text-caption">
+    <div className="flex flex-col gap-1 text-sm">
       <FieldRow
         icon={<FolderKanban size={14} />}
         label="Project"
@@ -473,7 +473,7 @@ function FieldRow({
         <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
           {icon}
         </span>
-        <span className="w-16 shrink-0 text-caption font-semibold uppercase tracking-wide text-faint">
+        <span className="w-16 shrink-0 text-sm font-semibold uppercase tracking-wide text-faint">
           {label}
         </span>
         <span
@@ -561,7 +561,7 @@ function OptionList({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter…"
-            className="min-w-0 flex-1 bg-transparent text-caption text-fg outline-none placeholder:text-faint"
+            className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
           />
         </div>
       ) : null}
@@ -570,7 +570,7 @@ function OptionList({
           type="button"
           onClick={leadingAction.onSelect}
           aria-pressed={leadingAction.selected}
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition-colors hover:bg-raised ${
+          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-raised ${
             leadingAction.selected ? "text-primary" : "text-fg"
           }`}
         >
@@ -582,7 +582,7 @@ function OptionList({
         <button
           type="button"
           onClick={onClear}
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption text-faint transition-colors hover:bg-raised hover:text-danger"
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-faint transition-colors hover:bg-raised hover:text-danger"
         >
           <X size={13} className="shrink-0" />
           {clearLabel}
@@ -605,7 +605,7 @@ function OptionList({
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-2.5 py-3 text-center text-caption text-faint">
+          <div className="px-2.5 py-3 text-center text-sm text-faint">
             {items.length === 0 ? emptyLabel : "No matches."}
           </div>
         ) : (
@@ -638,7 +638,7 @@ function OptionList({
                 ) : null}
                 <span className="min-w-0 flex-1 truncate">{item.label}</span>
                 {item.hint ? (
-                  <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-micro font-medium tracking-wide text-faint">
+                  <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-xs font-medium tracking-wide text-faint">
                     {item.hint}
                   </span>
                 ) : null}

@@ -49,7 +49,7 @@ export function WorktreeProvisionCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               {phaseLabel(provision)}
             </div>
             {provision.branch &&
@@ -57,20 +57,20 @@ export function WorktreeProvisionCard({
                 <button
                   type="button"
                   onClick={() => onOpenWorktree(provision.worktreeId!)}
-                  className="min-w-0 truncate font-mono text-caption text-faint hover:text-fg hover:underline"
+                  className="min-w-0 truncate font-mono text-sm text-faint hover:text-fg hover:underline"
                 >
                   {provision.branch}
                 </button>
               ) : (
                 // Until the checkout exists there is nothing to open, so the
                 // name is just a name.
-                <span className="min-w-0 truncate font-mono text-caption text-faint">
+                <span className="min-w-0 truncate font-mono text-sm text-faint">
                   {provision.branch}
                 </span>
               ))}
           </div>
           {provision.baseBranch && (
-            <div className="mt-1 text-caption text-muted-foreground">
+            <div className="mt-1 text-sm text-muted-foreground">
               forked from{" "}
               <span className="font-mono text-faint">
                 {provision.baseBranch}
@@ -78,7 +78,7 @@ export function WorktreeProvisionCard({
             </div>
           )}
           {provision.error && (
-            <div className="mt-2 rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-caption text-fg">
+            <div className="mt-2 rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
               {provision.error}
             </div>
           )}
@@ -86,7 +86,7 @@ export function WorktreeProvisionCard({
             <button
               type="button"
               onClick={onRetry}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-caption font-medium text-fg hover:border-line-strong hover:bg-raised"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm font-medium text-fg hover:border-line-strong hover:bg-raised"
             >
               <RotateCw size={13} />
               Retry

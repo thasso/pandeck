@@ -36,7 +36,7 @@ const VERDICT_TONE = {
 } as const;
 
 const CONTROL_CLASS =
-  "min-h-9 rounded-lg border border-line px-3 py-1.5 text-caption font-medium text-muted-foreground hover:bg-panel hover:text-fg";
+  "min-h-9 rounded-lg border border-line px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-panel hover:text-fg";
 
 /** A touch-friendly N-more choice; absolute targets remain on the wire/API. */
 function CeilingRaiseControl({
@@ -131,7 +131,7 @@ function SessionButton({
           ? `${label}: ${title} — session is running`
           : undefined
       }
-      className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-line px-3 py-2 text-left text-caption text-muted-foreground hover:bg-panel hover:text-fg"
+      className="flex min-h-10 w-full items-center gap-2 rounded-lg border border-line px-3 py-2 text-left text-sm text-muted-foreground hover:bg-panel hover:text-fg"
     >
       {session?.isStreaming ? (
         <Spinner size="sm" className="text-primary" />
@@ -229,7 +229,7 @@ function DeliveryControls({
     return null;
 
   return (
-    <div className="mt-3 space-y-2 rounded-lg border border-line bg-surface/60 px-3 py-2.5 text-caption">
+    <div className="mt-3 space-y-2 rounded-lg border border-line bg-surface/60 px-3 py-2.5 text-sm">
       {delivery.canMerge ? (
         <>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -294,7 +294,7 @@ function DeliveryControls({
               Merge
             </button>
           </div>
-          <p className="text-micro text-faint">
+          <p className="text-xs text-faint">
             Merging records this run's decision and completes it
             {deleteBranch && branch
               ? `, and deletes the remote branch ${branch}; the local checkout stays until you clean it up.`
@@ -323,7 +323,7 @@ function DeliveryControls({
             </span>
             Clean up
           </button>
-          <p className="text-micro text-faint">
+          <p className="text-xs text-faint">
             Removes this run's worktree and its local branch — only once the
             base branch is confirmed to contain it — settles every session on
             that checkout, and settles the run itself, which takes it out of the
@@ -514,20 +514,20 @@ export function WorkflowRunCard({
   return (
     <article className="rounded-xl border border-line bg-panel/40 p-4">
       <div className="flex items-center gap-2">
-        <h3 className="shrink-0 text-body font-semibold text-fg">Workflow</h3>
+        <h3 className="shrink-0 text-sm font-semibold text-fg">Workflow</h3>
         {run.branch ? (
-          <span className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
             {run.branch}
           </span>
         ) : null}
         <span
-          className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-micro font-medium uppercase tracking-wide ${LIFECYCLE_TONE[run.lifecycle]}`}
+          className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${LIFECYCLE_TONE[run.lifecycle]}`}
         >
           {run.lifecycle}
         </span>
       </div>
 
-      <p className="mt-2 text-caption text-muted-foreground">
+      <p className="mt-2 text-sm text-muted-foreground">
         <span className="font-medium text-fg">
           {WORKFLOW_PHASE_LABEL[phase]}
         </span>
@@ -538,13 +538,13 @@ export function WorkflowRunCard({
       </p>
 
       {run.lifecycle === "paused" ? (
-        <p className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-caption text-warning">
+        <p className="mt-3 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">
           {run.lifecycleReason || "Paused"}
         </p>
       ) : null}
 
       {blockedSummary && blocked ? (
-        <p className="mt-2 break-words text-caption text-muted-foreground">
+        <p className="mt-2 break-words text-sm text-muted-foreground">
           <span className="font-medium text-fg">
             {blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"}{" "}
             {blocked.status}
@@ -554,7 +554,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {run.lifecycle === "paused" && blocked?.rebaseConflict ? (
-        <div className="mt-2 rounded-lg border border-warning/30 px-3 py-2 text-caption text-muted-foreground">
+        <div className="mt-2 rounded-lg border border-warning/30 px-3 py-2 text-sm text-muted-foreground">
           <p className="font-medium text-fg">Rebase conflict</p>
           {blocked.rebaseConflict.files.length > 0 ? (
             <ul className="mt-1 list-disc space-y-0.5 pl-4">
@@ -583,7 +583,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {run.lifecycle === "paused" && blocked?.operationTriage ? (
-        <div className="mt-2 rounded-lg border border-warning/30 px-3 py-2 text-caption text-muted-foreground">
+        <div className="mt-2 rounded-lg border border-warning/30 px-3 py-2 text-sm text-muted-foreground">
           <p className="font-medium text-fg">Automatic triage already spent</p>
           <p className="mt-1 break-words">
             The {WORKFLOW_PHASE_LABEL[blocked.operationTriage.phase]} step
@@ -600,7 +600,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {repeatedAttempts ? (
-        <p className="mt-2 break-words text-caption text-muted-foreground">
+        <p className="mt-2 break-words text-sm text-muted-foreground">
           <span className="font-medium text-fg">
             Retry re-runs the same assignment
           </span>{" "}
@@ -612,7 +612,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.workPlan ? (
-        <div className="mt-3 rounded-lg border border-line px-3 py-2 text-caption text-muted-foreground">
+        <div className="mt-3 rounded-lg border border-line px-3 py-2 text-sm text-muted-foreground">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="font-medium capitalize text-fg">
               {card.workPlan.complexity} complexity
@@ -635,7 +635,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.reviewDecision ? (
-        <div className="mt-3 text-caption text-muted-foreground">
+        <div className="mt-3 text-sm text-muted-foreground">
           <p>
             After review pass {card.reviewDecision.afterPass}, the run{" "}
             <span className="font-medium text-fg">
@@ -673,7 +673,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.latestAssessment ? (
-        <div className="mt-3 text-caption text-muted-foreground">
+        <div className="mt-3 text-sm text-muted-foreground">
           <p>
             Reviewed commit{" "}
             <span className="font-mono text-fg">
@@ -721,7 +721,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.pullRequest ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-caption">
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm">
           <a
             href={card.pullRequest.url}
             target="_blank"
@@ -800,14 +800,14 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.cancelRequested ? (
-        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-caption text-amber-600">
+        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
           Cancelling — waiting for the step in flight to finish. Nothing further
           will be started.
         </p>
       ) : null}
 
       {card?.ceilingDecision ? (
-        <div className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-caption text-amber-600">
+        <div className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-600">
           <p>
             The run reached its{" "}
             {card.ceilingDecision.blocked === "iterations"
@@ -880,14 +880,14 @@ export function WorkflowRunCard({
       ) : null}
 
       {card?.mergeDecisionReady ? (
-        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-caption text-emerald-500">
+        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-500">
           Reviewed head passed CI and is mergeable. Merge below to record this
           run's decision, or cancel the run.
         </p>
       ) : null}
 
       {run.lifecycle === "completed" ? (
-        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-caption text-emerald-500">
+        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-sm text-emerald-500">
           Pull request merged.
           {delivery?.canCleanUp
             ? " Clean up below to retire the checkout and settle the run."
@@ -910,7 +910,7 @@ export function WorkflowRunCard({
 
       {run.lifecycle === "cancelled" ? (
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-3">
-          <p className="min-w-0 flex-1 text-caption text-muted-foreground">
+          <p className="min-w-0 flex-1 text-sm text-muted-foreground">
             No more work will run. Delete this attempt when you no longer need
             its history.
           </p>
@@ -925,7 +925,7 @@ export function WorkflowRunCard({
       ) : null}
 
       {showNextAction ? (
-        <p className="mt-3 text-caption text-fg">
+        <p className="mt-3 text-sm text-fg">
           {card?.nextAction ??
             (run.lifecycle === "paused"
               ? // No card means this build has no decision function for the
@@ -1004,7 +1004,7 @@ export function WorkflowRunCard({
           }}
           onCancel={() => setDeleteRunOpen(false)}
         >
-          <div className="mt-3 space-y-2 text-caption text-muted-foreground">
+          <div className="mt-3 space-y-2 text-sm text-muted-foreground">
             {run.worktreeId ? (
               <label className="flex items-start gap-2">
                 <input
