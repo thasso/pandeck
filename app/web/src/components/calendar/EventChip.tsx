@@ -1,4 +1,5 @@
 import type { CalendarEventDto } from "@assistant/shared";
+import { Button } from "../ui/button.tsx";
 import { hm } from "./calendarDates.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
 
@@ -16,16 +17,16 @@ export function EventChip({
   const timeZone = useUserTimeZone();
   const declined = event.selfResponse === "declined";
   return (
-    <button
+    <Button
       type="button"
+      variant={selected ? "secondary" : "ghost"}
+      size="sm"
       onClick={(e) => {
         e.stopPropagation();
         onSelect(event.id);
       }}
       title={`${event.allDay ? "All day" : hm(event.start, timeZone)} · ${event.title}`}
-      className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-sm transition-colors ${
-        selected ? "bg-primary text-primary-foreground" : "hover:bg-accent"
-      } ${declined && !selected ? "text-muted-foreground line-through" : selected ? "" : "text-foreground"}`}
+      className={`group w-full justify-start truncate ${declined ? "line-through" : ""}`}
     >
       <span
         className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-primary-foreground" : event.meetingUrl ? "bg-primary" : "bg-input"}`}
@@ -38,6 +39,6 @@ export function EventChip({
         </span>
       )}
       <span className="min-w-0 truncate">{event.title}</span>
-    </button>
+    </Button>
   );
 }
