@@ -121,17 +121,21 @@ function WorktreeCard({
       onClick={onSelect}
       className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors ${
         selected
-          ? "border-accent/40 bg-accent-soft"
+          ? "border-primary/40 bg-accent"
           : "border-line bg-panel hover:border-line-strong hover:bg-raised"
       }`}
     >
       <span className="flex w-full min-w-0 items-center gap-1.5">
         <WorktreeIcon
           size={13}
-          className={selected ? "shrink-0 text-accent" : "shrink-0 text-muted"}
+          className={
+            selected
+              ? "shrink-0 text-primary"
+              : "shrink-0 text-muted-foreground"
+          }
         />
         <span
-          className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
+          className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
         >
           {label}
         </span>
@@ -329,7 +333,7 @@ export function NewSessionQuickStart({
             >
               <option.Icon
                 size={14}
-                className={selected ? "text-accent" : "text-muted"}
+                className={selected ? "text-primary" : "text-muted-foreground"}
               />
               <span className="min-w-0 truncate">{option.label}</span>
             </QuickPill>
@@ -428,7 +432,7 @@ export function NewSessionQuickStart({
               onClick={() => onSelectNewWorktree(!newWorktreeStaged)}
               className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border ${DASHED_EDGE} px-3 py-2.5 text-left transition-colors ${
                 newWorktreeStaged
-                  ? "border-accent/40 bg-accent-soft"
+                  ? "border-primary/40 bg-accent"
                   : "border-line bg-panel hover:border-line-strong hover:bg-raised"
               }`}
             >
@@ -437,12 +441,12 @@ export function NewSessionQuickStart({
                   size={13}
                   className={
                     newWorktreeStaged
-                      ? "shrink-0 text-accent"
-                      : "shrink-0 text-muted"
+                      ? "shrink-0 text-primary"
+                      : "shrink-0 text-muted-foreground"
                   }
                 />
                 <span
-                  className={`min-w-0 flex-1 truncate text-caption font-medium ${newWorktreeStaged ? "text-accent" : "text-fg"}`}
+                  className={`min-w-0 flex-1 truncate text-caption font-medium ${newWorktreeStaged ? "text-primary" : "text-fg"}`}
                 >
                   New worktree
                 </span>
@@ -492,7 +496,7 @@ export function NewSessionQuickStart({
               type="button"
               onClick={onOpenPicker}
               title="More worktrees to select — open the full picker"
-              className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-muted transition-colors hover:border-line-strong hover:bg-raised hover:text-fg`}
+              className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg`}
             >
               <Ellipsis size={14} />
               <span className="text-caption font-medium">More…</span>

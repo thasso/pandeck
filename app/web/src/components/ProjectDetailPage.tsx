@@ -203,14 +203,14 @@ function ProjectDetailPageView({
               submitState={mutationStates[`${selected.id}:name`]}
               onSubmit={(name) => onSave(selected.id, { name: name.trim() })}
               ariaLabel="Project name"
-              editorClassName="w-full rounded-md border border-line bg-surface px-2 py-1 text-body font-semibold text-fg outline-none focus:border-accent"
+              editorClassName="w-full rounded-md border border-line bg-surface px-2 py-1 text-body font-semibold text-fg outline-none focus:border-primary"
               renderDisplay={(begin) => {
                 beginRename.current = begin;
                 return (
                   <h2 className="truncate text-body">
                     {selected.key ? (
                       <>
-                        <span className="select-all font-mono text-muted">
+                        <span className="select-all font-mono text-muted-foreground">
                           {selected.key}
                         </span>
                         <span className="text-faint"> - </span>
@@ -238,7 +238,7 @@ function ProjectDetailPageView({
           selected ? (
             <div className="flex items-center gap-1">
               {selected.status === "archived" ? (
-                <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-caption text-muted">
+                <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-caption text-muted-foreground">
                   archived
                 </span>
               ) : null}
@@ -453,7 +453,7 @@ function ProjectDetail({
           allowEmpty
           ariaLabel="Project description"
           placeholder="Add a description…"
-          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-accent"
+          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => {
             // Editing is triggered only by the section's ghost edit button
             // (clicking prose selected text and entered edit mode too easily).
@@ -801,7 +801,7 @@ function RepositorySection({
               allowEmpty
               ariaLabel="Repository URL"
               placeholder="git@host:owner/repo.git"
-              editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-accent"
+              editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
               renderDisplay={(begin) => (
                 <RepoRow
                   label="Clone from"
@@ -823,7 +823,7 @@ function RepositorySection({
                     ? "Clone it under the Projects root and use it as this project's main checkout"
                     : "Set a repository URL first"
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
               >
                 {provisioning === "clone" ? <Spinner size="sm" /> : null}
                 {provisioning === "clone" ? "Cloning…" : "Clone"}
@@ -862,7 +862,7 @@ function RepoRow({
           `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
           read or copy out on a phone. */}
       <span
-        className={`min-w-0 flex-1 select-all break-all font-mono text-caption ${value ? (muted ? "text-muted" : "text-fg") : "text-faint"}`}
+        className={`min-w-0 flex-1 select-all break-all font-mono text-caption ${value ? (muted ? "text-muted-foreground" : "text-fg") : "text-faint"}`}
       >
         {value || placeholder}
       </span>
@@ -925,7 +925,7 @@ function EmptyProjectsMessage({
             <button
               type="button"
               onClick={onAction}
-              className="rounded-lg border border-line px-3 py-1.5 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg"
+              className="rounded-lg border border-line px-3 py-1.5 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
             >
               {actionLabel}
             </button>

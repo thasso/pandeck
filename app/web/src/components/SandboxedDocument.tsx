@@ -207,13 +207,13 @@ export function SandboxedDocument({
           action={
             <a
               {...openProps}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:opacity-90"
             >
               <ExternalLink size={13} /> Open PDF
             </a>
           }
         >
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent text-primary">
             <FileText size={22} />
           </div>
           <h1 className="text-prose font-semibold text-fg">
@@ -224,7 +224,7 @@ export function SandboxedDocument({
               {formatFileSize(sizeBytes)}
             </p>
           )}
-          <p className="mt-2 text-body text-muted">
+          <p className="mt-2 text-body text-muted-foreground">
             This PDF opens in your browser: iPhone and iPad can't scroll one
             inside the app.
           </p>
@@ -264,7 +264,7 @@ export function SandboxedDocument({
         <a
           {...openProps}
           aria-label={openProps.title}
-          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted transition-colors hover:text-fg"
+          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground transition-colors hover:text-fg"
         >
           <ExternalLink size={14} />
         </a>

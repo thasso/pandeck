@@ -334,7 +334,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                         SESSION_LIMIT_STEP,
                     }));
                   }}
-                  className="w-full rounded-md px-1 py-0.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  className="w-full rounded-md px-1 py-0.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
                   session
@@ -431,7 +431,7 @@ function WorktreeRowContentImpl({
       title={`${branch}\n${worktree.path}`}
     >
       <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-surface text-accent" : "bg-raised text-muted"}`}
+        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-surface text-primary" : "bg-raised text-muted-foreground"}`}
         aria-hidden
       >
         {worktree.isMain ? <House size={12} /> : <GitBranch size={12} />}

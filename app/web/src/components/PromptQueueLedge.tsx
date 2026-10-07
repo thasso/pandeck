@@ -27,9 +27,9 @@ export interface PromptQueueLedgeProps {
 }
 
 const ROW_ACTION_CLASS =
-  "flex size-7 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-30";
+  "flex size-7 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-30";
 const HEADER_ACTION_CLASS =
-  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-caption transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-caption transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
  * @component PromptQueueLedge
@@ -97,12 +97,12 @@ export function PromptQueueLedge({
         ) : (
           <ListOrdered
             size={13}
-            className="shrink-0 text-accent"
+            className="shrink-0 text-primary"
             aria-hidden="true"
           />
         )}
         <span
-          className={`min-w-0 flex-1 truncate ${queue.paused ? "text-warning" : "text-muted"}`}
+          className={`min-w-0 flex-1 truncate ${queue.paused ? "text-warning" : "text-muted-foreground"}`}
         >
           {queue.paused
             ? `Queue paused · ${count} ${count === 1 ? "message" : "messages"}`
@@ -116,7 +116,7 @@ export function PromptQueueLedge({
         <button
           type="button"
           onClick={onClear}
-          className={`${HEADER_ACTION_CLASS} text-muted hover:text-fg`}
+          className={`${HEADER_ACTION_CLASS} text-muted-foreground hover:text-fg`}
         >
           Clear
         </button>
@@ -124,7 +124,7 @@ export function PromptQueueLedge({
           <button
             type="button"
             onClick={onResume}
-            className={`${HEADER_ACTION_CLASS} text-accent`}
+            className={`${HEADER_ACTION_CLASS} text-primary`}
           >
             <Play size={11} className="fill-current" aria-hidden="true" />
             Send next
@@ -151,19 +151,19 @@ export function PromptQueueLedge({
                     Math.max(1, editing.text.split("\n").length),
                   )}
                   aria-label="Edit queued message"
-                  className="min-w-0 flex-1 resize-none rounded-md border border-line-strong bg-surface px-2 py-1 text-body text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  className="min-w-0 flex-1 resize-none rounded-md border border-line-strong bg-surface px-2 py-1 text-body text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 />
                 <button
                   type="button"
                   onClick={saveEdit}
-                  className={`${HEADER_ACTION_CLASS} text-accent`}
+                  className={`${HEADER_ACTION_CLASS} text-primary`}
                 >
                   Save
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditing(null)}
-                  className={`${HEADER_ACTION_CLASS} text-muted`}
+                  className={`${HEADER_ACTION_CLASS} text-muted-foreground`}
                 >
                   Cancel
                 </button>
@@ -210,7 +210,7 @@ function QueuedRow({
   return (
     <div className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-line bg-surface px-1 text-micro font-semibold text-muted">
+        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-line bg-surface px-1 text-micro font-semibold text-muted-foreground">
           {index + 1}
         </span>
         <span

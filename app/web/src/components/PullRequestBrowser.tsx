@@ -53,7 +53,7 @@ interface RowProject {
 const CI_CLASS: Record<PullRequestCiTone, string> = {
   success: "text-success",
   failure: "text-danger",
-  pending: "text-accent",
+  pending: "text-primary",
   error: "text-danger",
   none: "text-faint",
   unknown: "text-faint",
@@ -62,7 +62,7 @@ const CI_CLASS: Record<PullRequestCiTone, string> = {
 const REVIEW_CLASS: Record<PullRequestReviewTone, string> = {
   "changes-requested": "text-danger",
   unresolved: "text-warning",
-  requested: "text-accent",
+  requested: "text-primary",
   clear: "text-success",
   unknown: "text-faint",
 };
@@ -142,9 +142,9 @@ const PullRequestRow = memo(function PullRequestRow({
           onFocusSibling?.(event.key === "ArrowDown" ? 1 : -1);
         }
       }}
-      className={`group flex min-w-0 cursor-pointer select-none flex-col gap-0.5 rounded-md px-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`group flex min-w-0 cursor-pointer select-none flex-col gap-0.5 rounded-md px-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
         density === "comfortable" ? "py-2" : "py-1.5"
-      } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <StateIcon item={item} />
@@ -181,7 +181,7 @@ const PullRequestRow = memo(function PullRequestRow({
           // The one relation a ROW states: this pull request has a checkout on
           // this machine, which is what makes it actionable from here.
           <span
-            className="shrink-0 text-micro font-medium text-accent"
+            className="shrink-0 text-micro font-medium text-primary"
             title="A local worktree holds this branch"
           >
             local
@@ -318,7 +318,7 @@ export function PullRequestBrowser({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pull requests…"
             aria-label="Search pull requests"
-            className="w-full rounded-lg border border-line bg-surface py-1.5 pl-8 pr-2 text-caption text-fg outline-none placeholder:text-faint focus:border-accent"
+            className="w-full rounded-lg border border-line bg-surface py-1.5 pl-8 pr-2 text-caption text-fg outline-none placeholder:text-faint focus:border-primary"
           />
         </div>
         {/* R2: a poll keeps the rows and says so here, rather than replacing
@@ -350,7 +350,7 @@ export function PullRequestBrowser({
           <h2
             id={`pull-requests-${group.id}`}
             className={`px-2 pb-0.5 text-micro font-semibold uppercase tracking-wide ${
-              group.id === "needs-review" ? "text-accent" : "text-faint"
+              group.id === "needs-review" ? "text-primary" : "text-faint"
             }`}
           >
             {group.title} ({group.items.length})

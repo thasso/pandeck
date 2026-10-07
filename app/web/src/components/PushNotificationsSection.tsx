@@ -83,7 +83,7 @@ function NativeNotificationsPanel() {
 
   return (
     <>
-      <p className="text-caption text-muted">
+      <p className="text-caption text-muted-foreground">
         {push
           ? "This device is registered for Apple push, so alerts arrive even when the app is closed."
           : ios
@@ -93,7 +93,7 @@ function NativeNotificationsPanel() {
       </p>
 
       {ios && state && (
-        <ul className="space-y-1 text-caption text-muted">
+        <ul className="space-y-1 text-caption text-muted-foreground">
           <li className="flex items-center gap-2">
             {state.registration?.allowed ? (
               <CheckCircle2 size={14} className="shrink-0 text-success" />
@@ -286,19 +286,19 @@ export function PushNotificationsSection() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-heading font-semibold">Notifications</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Receive an alert when an assistant session finishes a turn. This setting
         applies only to this installation.
       </p>
 
       <div className="mt-6 space-y-4 rounded-xl border border-line bg-panel p-4">
         <div className="flex items-start gap-3">
-          <Bell size={18} className="mt-0.5 shrink-0 text-accent" />
+          <Bell size={18} className="mt-0.5 shrink-0 text-primary" />
           <div>
             <h3 className="text-body font-semibold text-fg">
               Session turn notifications
             </h3>
-            <p className="mt-1 text-caption text-muted">
+            <p className="mt-1 text-caption text-muted-foreground">
               Notifications show whether the turn finished, failed, or stopped,
               together with the session name. Tapping one opens that session
               directly.
@@ -311,7 +311,7 @@ export function PushNotificationsSection() {
         {!native && !state && (
           <div
             role="status"
-            className="flex items-center gap-2 text-caption text-muted"
+            className="flex items-center gap-2 text-caption text-muted-foreground"
           >
             <Spinner size="sm" />
             Checking this installation…

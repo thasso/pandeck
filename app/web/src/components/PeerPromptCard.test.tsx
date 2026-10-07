@@ -226,7 +226,7 @@ describe("PeerPromptCardView", () => {
   it.each([
     ["retrying", "Retrying", "lucide-refresh-cw", "text-warning"],
     ["interrupted", "Interrupted", "lucide-triangle-alert", "text-warning"],
-    ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted"],
+    ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted-foreground"],
     ["expired", "Expired", "lucide-clock-alert", "text-warning"],
     ["failed", "Failed", "lucide-circle-x", "text-danger"],
   ] as const)(

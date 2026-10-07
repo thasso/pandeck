@@ -29,7 +29,7 @@ import { Popover } from "./Popover.tsx";
 export type PageHeaderIconTone = "accent" | "workshop" | "developer";
 
 const ICON_TONE_CLASS: Record<PageHeaderIconTone, string> = {
-  accent: "bg-accent-soft text-accent",
+  accent: "bg-accent text-primary",
   workshop: "bg-amber-400/10 text-amber-500",
   developer: "bg-emerald-400/10 text-emerald-500",
 };
@@ -57,7 +57,7 @@ export function PageHeaderBackButton({ label, onClick }: PageHeaderBack) {
       onClick={onClick}
       title={`Back to ${label}`}
       aria-label={`Back to ${label}`}
-      className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <ArrowLeft size={18} />
     </button>
@@ -165,7 +165,9 @@ export function PageHeader({
             it is dropped rather than squeezed. */}
         {subtitle != null && !compact ? (
           typeof subtitle === "string" ? (
-            <p className="truncate text-caption text-muted">{subtitle}</p>
+            <p className="truncate text-caption text-muted-foreground">
+              {subtitle}
+            </p>
           ) : (
             subtitle
           )
@@ -179,7 +181,7 @@ export function PageHeader({
 }
 
 const HEADER_ACTION_CLASS =
-  "relative flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-30";
+  "relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30";
 
 /**
  * What this page's OBJECT offers, in the wide header: Add comment where the
@@ -237,7 +239,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
           className={HEADER_ACTION_CLASS}
         >
           <SendHorizontal size={16} />
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent px-1 text-micro font-semibold text-accent-fg">
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
             {pendingCount}
           </span>
         </button>
@@ -273,7 +275,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
                     close();
                     action.onRun();
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40"
                 >
                   {action.icon ? (
                     <span className="flex size-4 shrink-0 items-center justify-center">

@@ -99,7 +99,7 @@ export function MemorySettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Memory</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         A small long-term memory of scoped preferences, facts, constraints, and
         near-term working state. Processing is asynchronous and never blocks a
         reply. Coding personas (Developer/Workshop) load memory but do not
@@ -129,11 +129,11 @@ export function MemorySettingsSection({
                   name="learning-mode"
                   checked={m.learningMode === mode.id}
                   onChange={() => save({ learningMode: mode.id })}
-                  className="mt-0.5 size-4 accent-accent"
+                  className="mt-0.5 size-4 accent-primary"
                 />
                 <span>
                   <span className="font-medium">{mode.label}</span>
-                  <span className="block text-caption text-muted">
+                  <span className="block text-caption text-muted-foreground">
                     {mode.help}
                   </span>
                 </span>
@@ -168,7 +168,7 @@ export function MemorySettingsSection({
       </div>
 
       <h3 className="mt-8 text-body font-semibold">Processor</h3>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         A small, cheap model extracts and maintains memories in the background.
       </p>
       <div className="mt-3 space-y-5 rounded-xl border border-line bg-panel p-4">
@@ -216,7 +216,7 @@ export function MemorySettingsSection({
             onChange={(v) => save({ maxCostPerDayUsd: v })}
           />
         </div>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-muted">
+        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-muted-foreground">
           These global safety ceilings apply across every session and mode —
           including Every turn, high-signal triggers, retries, and maintenance.
           They cannot be bypassed by a learning mode. Set calls/hour to 0 to
@@ -303,7 +303,7 @@ function MemoryManager({
           <RefreshIndicator label="Refreshing memories" />
         ) : null}
       </div>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Search, correct, pin, and archive existing memories. There is no review
         inbox — automatic changes are already applied.
       </p>
@@ -312,7 +312,7 @@ function MemoryManager({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Search text…"
-          className="min-w-40 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-caption outline-none focus:border-accent"
+          className="min-w-40 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-caption outline-none focus:border-primary"
         />
         <select
           value={state}
@@ -341,24 +341,24 @@ function MemoryManager({
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
           placeholder="Project id…"
-          className="w-32 rounded-lg border border-line bg-surface px-2 py-1.5 text-caption outline-none focus:border-accent"
+          className="w-32 rounded-lg border border-line bg-surface px-2 py-1.5 text-caption outline-none focus:border-primary"
           aria-label="Project id"
         />
-        <label className="flex items-center gap-1.5 text-caption text-muted">
+        <label className="flex items-center gap-1.5 text-caption text-muted-foreground">
           <input
             type="checkbox"
             checked={pinnedOnly}
             onChange={(e) => setPinnedOnly(e.target.checked)}
-            className="size-3.5 accent-accent"
+            className="size-3.5 accent-primary"
           />
           Pinned
         </label>
-        <label className="flex items-center gap-1.5 text-caption text-muted">
+        <label className="flex items-center gap-1.5 text-caption text-muted-foreground">
           <input
             type="checkbox"
             checked={activeNow}
             onChange={(e) => setActiveNow(e.target.checked)}
-            className="size-3.5 accent-accent"
+            className="size-3.5 accent-primary"
           />
           Active now
         </label>
@@ -367,13 +367,13 @@ function MemoryManager({
         {MEMORY_KINDS.map((k) => (
           <label
             key={k}
-            className="flex items-center gap-1 text-caption text-muted"
+            className="flex items-center gap-1 text-caption text-muted-foreground"
           >
             <input
               type="checkbox"
               checked={kinds.includes(k)}
               onChange={() => toggleKind(k)}
-              className="size-3.5 accent-accent"
+              className="size-3.5 accent-primary"
             />
             {k}
           </label>
@@ -592,7 +592,7 @@ function MemoryRow({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={2}
-              className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
+              className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-primary"
             />
             <div className="flex flex-wrap gap-2">
               <select
@@ -614,7 +614,7 @@ function MemoryRow({
                 value={draftProjectId}
                 onChange={(e) => setDraftProjectId(e.target.value)}
                 placeholder="Project id (any if empty)"
-                className="w-40 rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
+                className="w-40 rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-primary"
                 aria-label="Project scope"
               />
               <select
@@ -633,7 +633,7 @@ function MemoryRow({
             </div>
             {draftTemporal.mode === "window" && (
               <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1 text-caption text-muted">
+                <label className="flex items-center gap-1 text-caption text-muted-foreground">
                   From
                   <input
                     type="datetime-local"
@@ -661,7 +661,7 @@ function MemoryRow({
                     aria-label="Valid from"
                   />
                 </label>
-                <label className="flex items-center gap-1 text-caption text-muted">
+                <label className="flex items-center gap-1 text-caption text-muted-foreground">
                   Until
                   <input
                     type="datetime-local"
@@ -693,7 +693,7 @@ function MemoryRow({
                   value={tzText}
                   onChange={(e) => setTemporalTimezone(e.target.value)}
                   placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-accent ${tzValid ? "border-line" : "border-red-500"}`}
+                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-primary ${tzValid ? "border-line" : "border-red-500"}`}
                   aria-label="Window timezone"
                 />
               </div>
@@ -708,7 +708,7 @@ function MemoryRow({
                 {WEEKDAY_LABELS.map((label, day) => (
                   <label
                     key={day}
-                    className="flex items-center gap-1 text-caption text-muted"
+                    className="flex items-center gap-1 text-caption text-muted-foreground"
                   >
                     <input
                       type="checkbox"
@@ -731,7 +731,7 @@ function MemoryRow({
                           };
                         })
                       }
-                      className="size-3.5 accent-accent"
+                      className="size-3.5 accent-primary"
                     />
                     {label}
                   </label>
@@ -740,7 +740,7 @@ function MemoryRow({
                   value={tzText}
                   onChange={(e) => setTemporalTimezone(e.target.value)}
                   placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-accent ${tzValid ? "border-line" : "border-red-500"}`}
+                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-primary ${tzValid ? "border-line" : "border-red-500"}`}
                   aria-label="Recurrence timezone"
                 />
               </div>
@@ -749,7 +749,7 @@ function MemoryRow({
               <button
                 onClick={save}
                 disabled={!tzValid}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption text-white disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-caption text-white disabled:opacity-50"
               >
                 <Check size={12} />
                 Save{draft !== card.text ? " (supersede)" : ""}
@@ -777,7 +777,7 @@ function MemoryRow({
                 {scopeLabel}
               </span>
               {card.pinned && (
-                <span className="rounded bg-panel px-1.5 py-0.5 text-accent">
+                <span className="rounded bg-panel px-1.5 py-0.5 text-primary">
                   pinned
                 </span>
               )}
@@ -795,7 +795,7 @@ function MemoryRow({
               <div className="mt-1 text-caption text-amber-500">{conflict}</div>
             )}
             {showLineage && (
-              <div className="mt-1.5 rounded-md border border-line bg-panel px-2 py-1.5 text-caption text-muted">
+              <div className="mt-1.5 rounded-md border border-line bg-panel px-2 py-1.5 text-caption text-muted-foreground">
                 {!lineage ? (
                   // The per-id slot is deliberate (`useMemory`): each expanded
                   // row loads on its own, so each draws its own placeholder.
@@ -834,7 +834,7 @@ function MemoryRow({
                         Source session:{" "}
                         <a
                           href={sessionPath(card.provenance.sessionId)}
-                          className="text-accent underline decoration-dotted"
+                          className="text-primary underline decoration-dotted"
                         >
                           {card.provenance.sessionId.slice(0, 8)}
                         </a>
@@ -979,12 +979,14 @@ function Toggle({
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          className="size-4 accent-accent"
+          className="size-4 accent-primary"
         />
         {label}
       </span>
       {help && (
-        <span className="mt-1 block pl-6 text-caption text-muted">{help}</span>
+        <span className="mt-1 block pl-6 text-caption text-muted-foreground">
+          {help}
+        </span>
       )}
     </label>
   );
@@ -1015,7 +1017,7 @@ function NumberField({
         max={max}
         step={step ?? 1}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-accent"
+        className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-primary"
       />
     </label>
   );
@@ -1035,7 +1037,7 @@ function IconBtn({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted hover:text-fg"
+      className="rounded-md border border-line bg-panel p-1.5 text-muted-foreground hover:text-fg"
     >
       {children}
     </button>

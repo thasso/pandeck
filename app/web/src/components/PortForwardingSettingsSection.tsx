@@ -255,14 +255,14 @@ export function PortForwardingSettingsSection() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Port forwarding</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Reach a service running on the Pandeck server, such as a dev server an
         agent started, at the same port on this Mac.
       </p>
 
       {!supported ? (
         <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Port forwarding needs the macOS app: it listens on this machine,
             which a browser tab cannot do. Open Settings in the desktop app to
             start one.
@@ -359,7 +359,7 @@ export function PortForwardingSettingsSection() {
                           <div className="truncate font-mono text-body text-fg">
                             {status.localUrl}
                           </div>
-                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-caption text-muted">
+                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-caption text-muted-foreground">
                             <span>to {serverHost(status.serverOrigin)}</span>
                             <span>
                               {connectionsLabel(status.activeConnections)}

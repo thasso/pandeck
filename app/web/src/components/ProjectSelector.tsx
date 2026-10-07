@@ -24,7 +24,7 @@ export function ProjectSelector({
   triggerTitle,
   includeCurrentWhenMissing = true,
   placement = "auto",
-  className = "rounded-lg px-1.5 py-1 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
+  className = "rounded-lg px-1.5 py-1 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
 }: {
   currentId: string | null | undefined;
   projects: ProjectRecord[];
@@ -67,7 +67,7 @@ export function ProjectSelector({
       size="md"
     />
   ) : (
-    <span className="inline-flex items-center gap-1.5 text-caption text-faint hover:text-muted">
+    <span className="inline-flex items-center gap-1.5 text-caption text-faint hover:text-muted-foreground">
       <FolderKanban size={13} />
       {emptyLabel}
     </span>
@@ -129,7 +129,7 @@ export function ProjectSelector({
                         onChange(p.id);
                         close();
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption hover:bg-raised ${selectedId === p.id ? "font-medium text-fg" : "text-muted"}`}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption hover:bg-raised ${selectedId === p.id ? "font-medium text-fg" : "text-muted-foreground"}`}
                     >
                       <span
                         className="size-2 shrink-0 rounded-full"

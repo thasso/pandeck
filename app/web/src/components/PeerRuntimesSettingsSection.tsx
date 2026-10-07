@@ -97,7 +97,7 @@ export function PeerRuntimesSettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Peer sessions</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Control how agents coordinate with ordinary peer sessions and which
         runtimes they may start without asking you first.
       </p>
@@ -128,7 +128,7 @@ export function PeerRuntimesSettingsSection({
         </p>
       </div>
 
-      <p className="mt-6 text-caption text-muted">
+      <p className="mt-6 text-caption text-muted-foreground">
         Approving a runtime permits paid sessions on exactly that account, model
         and thinking level. Anything else still comes to you as an approval
         card. Spawned sessions appear in your sidebar, where you can read,
@@ -139,7 +139,7 @@ export function PeerRuntimesSettingsSection({
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-caption font-medium">Approved runtimes</div>
-            <div className="mt-0.5 text-caption text-muted">
+            <div className="mt-0.5 text-caption text-muted-foreground">
               Two thinking levels for one model are two rows. Cost and the
               description help agents choose; changes apply to the next session
               an agent starts and never change a running one.
@@ -149,7 +149,7 @@ export function PeerRuntimesSettingsSection({
             type="button"
             onClick={addRuntime}
             disabled={noModels || rows.length >= MAX_PEER_SPAWN_RUNTIMES}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
           >
             <Plus size={12} />
             Add runtime
@@ -225,7 +225,9 @@ function RuntimeRow({
     <li className="rounded-lg border border-line bg-surface p-3">
       <div className="flex items-start justify-between gap-2">
         <label className="min-w-0 flex-1 space-y-1">
-          <span className="text-caption font-medium text-muted">Name</span>
+          <span className="text-caption font-medium text-muted-foreground">
+            Name
+          </span>
           <input
             ref={nameRef}
             type="text"
@@ -240,7 +242,7 @@ function RuntimeRow({
           onClick={() => onRemove(row.id)}
           aria-label={`Remove runtime ${row.name?.trim() || row.modelId}`}
           title="Remove runtime"
-          className="mt-6 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          className="mt-6 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-danger/10 hover:text-danger"
         >
           <Trash2 size={13} />
         </button>
@@ -287,7 +289,7 @@ function RuntimeRow({
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="block text-caption font-medium text-muted">
+        <label className="block text-caption font-medium text-muted-foreground">
           Cost
           <select
             value={row.relativeCost}
@@ -305,7 +307,7 @@ function RuntimeRow({
             ))}
           </select>
         </label>
-        <label className="flex items-end gap-2 pb-2 text-caption text-muted">
+        <label className="flex items-end gap-2 pb-2 text-caption text-muted-foreground">
           <input
             type="checkbox"
             checked={row.enabled}
@@ -317,7 +319,7 @@ function RuntimeRow({
         </label>
       </div>
 
-      <label className="mt-3 block text-caption font-medium text-muted">
+      <label className="mt-3 block text-caption font-medium text-muted-foreground">
         Description
         <input
           type="text"

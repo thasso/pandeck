@@ -46,7 +46,7 @@ function Label({ descriptor }: { descriptor: SettingDescriptor }) {
     <span className="min-w-0">
       <span className="block font-medium">{descriptor.label}</span>
       {descriptor.hint && (
-        <span className="mt-0.5 block text-caption text-muted">
+        <span className="mt-0.5 block text-caption text-muted-foreground">
           {descriptor.hint}
         </span>
       )}
@@ -180,7 +180,7 @@ function Field({
     return (
       <div className="space-y-1 text-caption text-fg">
         <Label descriptor={descriptor} />
-        <div className="break-all font-mono text-caption text-muted">
+        <div className="break-all font-mono text-caption text-muted-foreground">
           {readonlyText(value)}
         </div>
       </div>
@@ -192,7 +192,7 @@ function Field({
           type="checkbox"
           checked={value === true}
           onChange={(event) => onWrite(event.target.checked)}
-          className="mt-0.5 size-4 shrink-0 accent-accent"
+          className="mt-0.5 size-4 shrink-0 accent-primary"
         />
         <Label descriptor={descriptor} />
       </label>

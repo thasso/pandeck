@@ -103,7 +103,7 @@ function chatCommentHighlightStyle(anchor: string): string {
   /* The composer-owned anchor; live selections use only the browser's paint. */
   ::highlight(${anchor}) {
     color: inherit;
-    background-color: color-mix(in oklab, var(--accent) 32%, transparent);
+    background-color: color-mix(in oklab, var(--primary) 32%, transparent);
   }
   ::highlight(${CHAT_COMMENT_HIGHLIGHT}) {
     color: inherit;
@@ -303,12 +303,12 @@ function AttachmentChip({
       </>
     );
     const cls =
-      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-accent/30 bg-accent-soft px-2.5 py-1.5 text-caption text-accent";
+      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-primary/30 bg-accent px-2.5 py-1.5 text-caption text-primary";
     return taskId && onOpenTask ? (
       <button
         type="button"
         onClick={() => onOpenTask(taskId)}
-        className={`${cls} hover:bg-accent/15`}
+        className={`${cls} hover:bg-primary/15`}
         title="Open task details"
       >
         {inner}
@@ -320,10 +320,10 @@ function AttachmentChip({
   if (attachment.role === "project-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted-foreground"
         title="Project context was attached to this first prompt."
       >
-        <FolderKanban size={13} className="shrink-0 text-accent" />
+        <FolderKanban size={13} className="shrink-0 text-primary" />
         <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
           {attachment.name}
         </span>
@@ -333,10 +333,10 @@ function AttachmentChip({
   if (attachment.role === "file-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted-foreground"
         title="This session was started from this file."
       >
-        <FileText size={13} className="shrink-0 text-accent" />
+        <FileText size={13} className="shrink-0 text-primary" />
         <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
           {attachment.name}
         </span>
@@ -360,11 +360,11 @@ function AttachmentChip({
           className="max-h-72 max-w-full object-contain"
         />
       ) : null}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-caption text-muted">
+      <div className="flex items-center gap-2 px-2.5 py-1.5 text-caption text-muted-foreground">
         {attachment.mimeType.startsWith("image/") ? (
-          <ImageIcon size={14} className="text-accent" />
+          <ImageIcon size={14} className="text-primary" />
         ) : (
-          <FileText size={14} className="text-accent" />
+          <FileText size={14} className="text-primary" />
         )}
         <span className="min-w-0 flex-1 truncate font-medium text-fg">
           {attachment.name}
@@ -498,7 +498,7 @@ function MessageActionsBar({
             onClick={() => onResendPrompt?.(text)}
             title="Put this prompt back in the composer"
             aria-label="Resend prompt"
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-accent"
+            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-primary"
           >
             <RotateCcw size={13} />
           </button>
@@ -509,7 +509,7 @@ function MessageActionsBar({
             onClick={() => onForkMessage?.(forkEntryId, forkPosition)}
             title={forkTitle}
             aria-label={forkTitle}
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-accent"
+            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-primary"
           >
             <GitFork size={13} />
           </button>
@@ -531,7 +531,7 @@ function MessageActionsBar({
                 }}
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption text-fg hover:bg-raised"
               >
-                <MessageSquarePlus size={14} className="text-accent" />
+                <MessageSquarePlus size={14} className="text-primary" />
                 Comment on this message
               </button>
             )}
@@ -668,7 +668,7 @@ const UserMessage = memo(function UserMessage({
     return (
       <div className="group/message min-w-0">
         <ChatActivityRow icon={Bot} title={originLabel} preview={preview}>
-          <p className="mb-2 break-words text-caption text-muted">
+          <p className="mb-2 break-words text-caption text-muted-foreground">
             {originLabel}
           </p>
           {message.promptDelivery ? (
@@ -715,7 +715,7 @@ const PROMPT_QUEUE_LABEL: Record<PromptQueueState, string> = {
 
 function PromptQueueCondition({ state }: { state: PromptQueueState }) {
   return (
-    <div className="mr-1 mt-1 flex items-center gap-1.5 text-caption text-muted">
+    <div className="mr-1 mt-1 flex items-center gap-1.5 text-caption text-muted-foreground">
       <Spinner size="xs" />
       <span>{PROMPT_QUEUE_LABEL[state]}</span>
     </div>
@@ -742,7 +742,7 @@ const ForkBoundaryMarker = memo(function ForkBoundaryMarker({
         type="button"
         onClick={onOpen}
         title="Open the message this session was forked from"
-        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <GitFork size={12} className="shrink-0" />
         <span className="truncate">Forked from {parentTitle}</span>
@@ -765,7 +765,7 @@ function PromptDeliveryNote({
   return (
     <div
       className={`mb-0.5 mr-1 inline-flex items-center gap-1 text-micro ${
-        delivery === "steer" ? "text-accent" : "text-warning"
+        delivery === "steer" ? "text-primary" : "text-warning"
       }`}
     >
       <CornerDownRight size={11} aria-hidden />
@@ -1861,7 +1861,7 @@ export function MessageList({
             <button
               type="button"
               onClick={showEarlierRows}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
               {hiddenRowCount === 1 ? "message" : "messages"}
@@ -1876,7 +1876,7 @@ export function MessageList({
               type="button"
               onClick={loadOlderMessages}
               disabled={loadingOlderMessages}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
             >
               {loadingOlderMessages
                 ? "Loading earlier messages…"

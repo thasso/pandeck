@@ -171,7 +171,7 @@ describe("PullRequestCard", () => {
     );
     expect(html).not.toContain("Merging deletes the remote branch");
     expect(isDisabled(html, "Update with main")).toBe(false);
-    expect(button(html, "Update with main")).toContain("bg-accent");
+    expect(button(html, "Update with main")).toContain("bg-primary");
     // The reason is TEXT: a disabled button's tooltip reaches neither a
     // keyboard nor a phone.
     expect(html).toContain(
@@ -229,7 +229,7 @@ describe("PullRequestCard", () => {
       />,
     );
     expect(isDisabled(resolved, ">Merge<")).toBe(false);
-    expect(button(resolved, "Update with main")).not.toContain("bg-accent");
+    expect(button(resolved, "Update with main")).not.toContain("bg-primary");
     expect(resolved).not.toContain("so it cannot be merged");
   });
 
@@ -356,7 +356,7 @@ describe("PullRequestCard", () => {
     expect(running).not.toContain("Update with main rebases it");
     expect(running).toContain("agent was asked to resolve the conflicts");
     // Not the primary button either: there is nothing to press.
-    expect(button(running, "Agent is rebasing")).not.toContain("bg-accent");
+    expect(button(running, "Agent is rebasing")).not.toContain("bg-primary");
 
     // An agent that gave up must not leave a card with no button to press, so
     // the offer returns with its turn.

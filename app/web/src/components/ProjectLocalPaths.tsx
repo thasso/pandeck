@@ -134,13 +134,13 @@ export function ProjectLocalPathsSection({
                   replace(index, { ...item, path: path.trim() })
                 }
                 ariaLabel="Local path"
-                editorClassName="w-full rounded-md border border-line bg-panel px-2 py-0.5 font-mono text-caption text-fg outline-none focus:border-accent"
+                editorClassName="w-full rounded-md border border-line bg-panel px-2 py-0.5 font-mono text-caption text-fg outline-none focus:border-primary"
                 renderDisplay={(begin) => (
                   <button
                     type="button"
                     onClick={begin}
                     title="Click to edit this path"
-                    className="min-w-0 flex-1 break-all text-left font-mono text-caption text-fg hover:text-accent"
+                    className="min-w-0 flex-1 break-all text-left font-mono text-caption text-fg hover:text-primary"
                   >
                     {item.path}
                   </button>
@@ -199,7 +199,7 @@ export function ProjectLocalPathsSection({
             onBlur={commitDraft}
             placeholder="/absolute/path"
             aria-label="New local path"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-accent"
+            className="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
           />
         ) : null}
         {mutationError ? (

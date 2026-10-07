@@ -38,12 +38,12 @@ export function ProjectSettingsFields({
           onSubmit={(key) => onSave({ key: normalizeProjectKey(key) })}
           ariaLabel="Project Key"
           placeholder="KEY"
-          editorClassName="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-caption font-semibold uppercase text-fg outline-none focus:border-accent"
+          editorClassName="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-caption font-semibold uppercase text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
               onClick={begin}
-              className="rounded-md px-1 font-mono text-caption font-semibold text-fg hover:bg-raised hover:text-accent"
+              className="rounded-md px-1 font-mono text-caption font-semibold text-fg hover:bg-raised hover:text-primary"
               title="Click to edit key"
             >
               {project.key || "KEY"}
@@ -75,7 +75,7 @@ export function ProjectSettingsFields({
           allowEmpty
           ariaLabel="Worktree root override"
           placeholder="Settings → Worktrees root"
-          editorClassName="mt-0.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-accent"
+          editorClassName="mt-0.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
@@ -127,7 +127,7 @@ function ProjectColorRow({
           disabled={pending}
           aria-busy={pending || undefined}
           onClick={() => setOpen((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-caption text-muted hover:bg-raised hover:text-fg"
+          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg"
           title="Change Project color"
           aria-label="Change Project color"
           aria-expanded={open}
@@ -157,7 +157,7 @@ function ProjectColorRow({
                     submit(color);
                     setOpen(false);
                   }}
-                  className={`size-6 rounded-full border transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${selected ? "border-fg ring-2 ring-fg/30" : "border-white/50"}`}
+                  className={`size-6 rounded-full border transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${selected ? "border-fg ring-2 ring-fg/30" : "border-white/50"}`}
                   style={{ backgroundColor: color }}
                   title={`Use ${color}`}
                   aria-label={`Use Project color ${color}`}
@@ -166,7 +166,7 @@ function ProjectColorRow({
               );
             })}
           </div>
-          <label className="mt-2 flex items-center justify-between gap-2 text-caption text-muted">
+          <label className="mt-2 flex items-center justify-between gap-2 text-caption text-muted-foreground">
             <span>Custom</span>
             <input
               type="color"

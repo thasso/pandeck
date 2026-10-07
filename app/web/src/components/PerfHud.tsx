@@ -57,7 +57,7 @@ export function PerfHud() {
   if (!enabled || !snapshot) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-2 left-2 z-[100] max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-line bg-panel/95 p-2 font-mono text-micro text-muted shadow-2xl">
+    <div className="pointer-events-none fixed bottom-2 left-2 z-[100] max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-line bg-panel/95 p-2 font-mono text-micro text-muted-foreground shadow-2xl">
       <div className="mb-1 flex items-center justify-between text-fg">
         <span>perf · {snapshot.windowMs}ms</span>
         <span>

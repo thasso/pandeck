@@ -89,7 +89,7 @@ function StatusBadge({ card }: { card: PullRequestCardData }) {
     );
   if (status === "closed")
     return (
-      <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
+      <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
         Closed
       </span>
     );
@@ -147,7 +147,7 @@ function MergeabilityBadge({ card }: { card: PullRequestCardData }) {
   // already says that.
   if (card.mergeable === null && !card.draft)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
+      <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
         <CircleDot size={9} />
         Checking mergeability…
       </span>
@@ -178,7 +178,7 @@ function TaskChooser({
   const candidates = card.taskCandidates ?? [];
   return (
     <div className="space-y-2 px-3 py-3">
-      <div className="text-caption text-muted">
+      <div className="text-caption text-muted-foreground">
         Several linked Tasks qualify. Which one does this pull request address?
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -206,7 +206,7 @@ function TaskChooser({
             setBusy("none");
             onChooseTask?.(card.id, null);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface disabled:opacity-50"
         >
           {busy === "none" && <Spinner size="sm" />}
           None of these
@@ -254,7 +254,7 @@ function ActionButton({
         danger
           ? "border-danger/40 bg-raised text-danger hover:bg-danger/10"
           : primary
-            ? "border-accent bg-accent font-medium text-white hover:bg-accent/90"
+            ? "border-primary bg-primary font-medium text-white hover:bg-primary/90"
             : "border-line bg-raised text-fg hover:bg-surface"
       }`}
     >
@@ -369,8 +369,8 @@ function CardActions({
                     onClick={() => setMethod(id)}
                     className={`px-2 py-1 text-caption transition-colors disabled:opacity-40 ${
                       selectedMethod === id
-                        ? "bg-accent text-white"
-                        : "bg-raised text-muted hover:bg-surface"
+                        ? "bg-primary text-white"
+                        : "bg-raised text-muted-foreground hover:bg-surface"
                     }`}
                   >
                     {MERGE_METHOD_LABELS[id]}
@@ -385,7 +385,7 @@ function CardActions({
               </span>
             )}
             <label
-              className={`inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted ${
+              className={`inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground ${
                 running || conflicted
                   ? "opacity-40"
                   : "cursor-pointer hover:bg-surface"
@@ -393,7 +393,7 @@ function CardActions({
             >
               <input
                 type="checkbox"
-                className="size-3.5 accent-accent"
+                className="size-3.5 accent-primary"
                 checked={deleteBranch}
                 disabled={Boolean(running) || conflicted}
                 onChange={(event) => setDeleteBranch(event.target.checked)}
@@ -499,13 +499,15 @@ function CardActions({
         </p>
       )}
       {card.cleanedUp && (
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           Worktree removed and {card.headBranch} deleted locally.
         </p>
       )}
       {card.actionError && <ErrorNote message={card.actionError} />}
       {card.actionMessage && !card.actionError && (
-        <p className="text-caption text-muted">{card.actionMessage}</p>
+        <p className="text-caption text-muted-foreground">
+          {card.actionMessage}
+        </p>
       )}
     </div>
   );
@@ -588,7 +590,7 @@ export function PullRequestCard({
             href={card.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-accent/90"
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-primary/90"
           >
             Open
             <ExternalLink size={12} />
@@ -621,7 +623,7 @@ export function PullRequestCard({
         card.linkedTask) && (
         <div className="space-y-3 px-3 py-3">
           {card.linkedTask && (
-            <div className="text-caption text-muted">
+            <div className="text-caption text-muted-foreground">
               Linked to{" "}
               <span className="font-medium text-fg">
                 Task-{card.linkedTask.id}: {card.linkedTask.title}

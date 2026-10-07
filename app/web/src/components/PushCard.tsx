@@ -10,7 +10,7 @@ import type { PushDisplay } from "@assistant/shared";
 
 function tone(push: PushDisplay): string {
   if (push.status === "pushed") return "border-success/30 bg-success-soft";
-  if (push.status === "up-to-date") return "border-accent/30 bg-accent-soft";
+  if (push.status === "up-to-date") return "border-primary/30 bg-accent";
   return "border-danger/30 bg-danger-soft";
 }
 
@@ -18,7 +18,7 @@ function statusIcon(push: PushDisplay) {
   if (push.status === "pushed")
     return <CheckCircle2 size={16} className="text-success" />;
   if (push.status === "up-to-date")
-    return <CloudCheck size={16} className="text-accent" />;
+    return <CloudCheck size={16} className="text-primary" />;
   return <XCircle size={16} className="text-danger" />;
 }
 
@@ -48,12 +48,12 @@ export function PushCard({ push }: { push: PushDisplay }) {
               <div className="font-mono text-caption text-faint">{target}</div>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-2 text-caption text-muted">
+          <div className="mt-1 flex flex-wrap gap-2 text-caption text-muted-foreground">
             {push.repoRoot && (
               <span className="font-mono text-faint">{push.repoRoot}</span>
             )}
             {push.setUpstream && (
-              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-accent">
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
                 set upstream
               </span>
             )}
@@ -91,7 +91,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
               <button
                 type="button"
                 onClick={() => setOutputOpen((open) => !open)}
-                className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted"
+                className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
               >
                 <ChevronDown
                   size={12}
