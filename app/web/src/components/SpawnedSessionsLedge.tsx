@@ -1,4 +1,14 @@
-import { ChevronDown, ChevronRight, Hourglass, Users, X } from "lucide-react";
+import { memo, useState } from "react";
+import {
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  Hourglass,
+  Users,
+  X,
+} from "lucide-react";
+import type { SessionListItem } from "@assistant/shared";
 import {
   clusterBubbleDismissible,
   sessionClusterBubbleLabel,
@@ -9,16 +19,36 @@ import {
   stallTarget,
   stallTitle,
   sessionStatusBadge,
+  type SessionInboxCard,
   type SpawnedSessionsView,
 } from "../lib/sessionInbox.ts";
-import { ClusterChildRow } from "./ClusterChildRow.tsx";
+import { relativeAge } from "../lib/relativeTime.ts";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
+import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
+import { SessionTitleText } from "./SessionTitleText.tsx";
+import { Item, ItemActions } from "@/components/ui/item";
 import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "./common/IconButton.tsx";
 
+/** What the host can resolve about a peer beyond its list row. */
+export interface SpawnedSessionDetails {
+  /** The account (credential profile) name it runs on. */
+  account?: string | undefined;
+  /** Its worktree's branch, when it has one and the host knows it. */
+  branch?: string | undefined;
+}
+
 export interface SpawnedSessionsLedgeProps {
   sessionId: string;
+  /**
+   * Account and branch for a peer's expanded details. Must be referentially
+   * stable while its answers are: the rows are memoized on it.
+   */
+  describeSession?:
+    ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
   /** The peers of this session; the ledge exists only while it has some. */
   view: SpawnedSessionsView;
   open: boolean;
@@ -73,6 +103,7 @@ export function SpawnedSessionsLedge({
   onOpenSession,
   onToggleSettled,
   onSettleSession,
+  describeSession,
 }: SpawnedSessionsLedgeProps) {
   const working = view.counts.working > 0;
   const now = useElapsedNow(working);
@@ -197,18 +228,17 @@ export function SpawnedSessionsLedge({
             data-spawned-sessions-rows
             className="max-h-72 overflow-y-auto border-b"
           >
-            {view.rows.map((card) => (
-              <ClusterChildRow
-                key={card.session.id}
-                card={card}
-                now={now}
-                active={false}
-                relation="spawned"
-                tabbable
-                flush
-                onOpen={onOpenSession}
-              />
-            ))}
+            <ul className="divide-y">
+              {view.rows.map((card) => (
+                <SpawnedSessionLedgeRow
+                  key={card.session.id}
+                  card={card}
+                  now={now}
+                  onOpen={onOpenSession}
+                  describeSession={describeSession}
+                />
+              ))}
+            </ul>
           </div>
           {/* Under the list, always in view: the rows above are what is
               going on now, and this is where what already ended is. */}
@@ -237,3 +267,120 @@ export function SpawnedSessionsLedge({
     </div>
   );
 }
+
+/**
+ * One peer in the composer strip, styled like the background-work rows: a
+ * chevron and the title (with its state glyph) that unfold the peer's runtime
+ * and worktree, how long ago it moved, and Open. Indented by its depth in the
+ * spawn tree, so the strip still reads as a tree.
+ */
+const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
+  card,
+  now,
+  onOpen,
+  describeSession,
+}: {
+  card: SessionInboxCard;
+  now: number;
+  onOpen: (sessionId: string) => void;
+  describeSession?:
+    ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const { session, status } = card;
+  const title = session.title.trim() || "Untitled session";
+  const badge = sessionStatusBadge(session, status, now);
+  const details = describeSession?.(session) ?? {};
+  const model = session.model;
+  const runtime = [
+    details.account,
+    model ? (model.name ?? model.id) : undefined,
+    session.thinkingLevel && session.thinkingLevel !== "off"
+      ? THINKING_LABELS[session.thinkingLevel]
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const depth = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <li data-list-row-id={session.id} className="min-w-0">
+      <Item
+        size="xs"
+        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0"
+        style={{ paddingLeft: `${0.75 * depth}rem` }}
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          // As the background rows: square, filled under the transparent
+          // border, and open is not a hover state.
+          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          title={open ? "Hide details" : "Show details"}
+        >
+          <Chevron aria-hidden="true" />
+          {badge ? (
+            <SessionStatusBadge
+              badge={badge}
+              status={status}
+              display="icon-only"
+            />
+          ) : null}
+          <span
+            className={`min-w-0 truncate text-foreground ${status === "unread" ? "font-semibold" : ""}`}
+          >
+            <SessionTitleText
+              title={title}
+              pending={session.titleGenerationPending}
+            />
+          </span>
+        </Button>
+        <ItemActions className="gap-1.5">
+          <span className="text-xs whitespace-nowrap tabular-nums">
+            {relativeAge(session.updatedAt, now)}
+          </span>
+          <IconButton
+            label={`Open ${title}`}
+            title="Open session"
+            size="icon-xs"
+            onClick={() => onOpen(session.id)}
+          >
+            <ArrowUpRight />
+          </IconButton>
+        </ItemActions>
+      </Item>
+      {open ? (
+        // Aligned under the title, like a background row's command.
+        <div
+          className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-2 text-xs text-muted-foreground"
+          style={{ paddingLeft: `calc(${0.75 * depth}rem + 1.75rem)` }}
+        >
+          {runtime ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              {model ? (
+                <ProviderIcon
+                  provider={model.provider}
+                  size={12}
+                  className="shrink-0"
+                />
+              ) : null}
+              <span className="min-w-0 truncate">{runtime}</span>
+            </span>
+          ) : null}
+          {details.branch ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <GitBranch className="size-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate font-mono">
+                {details.branch}
+              </span>
+            </span>
+          ) : session.worktreeId ? null : (
+            <span>No worktree</span>
+          )}
+        </div>
+      ) : null}
+    </li>
+  );
+});

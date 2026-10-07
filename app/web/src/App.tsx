@@ -4901,6 +4901,25 @@ function AppContent() {
       ),
     [ledgeSessionId],
   );
+  // A spawned peer's account and branch, for its expanded row in the strip. The
+  // branch comes from the worktree status cache first (held without the
+  // worktrees topic, as the Sessions inbox reads it), the list second.
+  const describeSpawnedSession = useCallback(
+    (session: SessionListItem) => {
+      const worktreeId = session.worktreeId;
+      return {
+        account: credentialProfiles.find(
+          (profile) => profile.id === session.credentialProfileId,
+        )?.name,
+        branch: worktreeId
+          ? (state.worktreeStatuses[worktreeId]?.branch ??
+            state.worktrees?.find((worktree) => worktree.id === worktreeId)
+              ?.branch)
+          : undefined,
+      };
+    },
+    [credentialProfiles, state.worktreeStatuses, state.worktrees],
+  );
   // Gated on what the strip DRAWS (`spawnedSessionsKey`), exactly as the
   // Backlog's session slice is: the projection above is rebuilt on every
   // rebroadcast, `Composer` is memoized, and a ledge node rebuilt with it would
@@ -4921,6 +4940,7 @@ function AppContent() {
       ledgeSessionId ? (
         <SpawnedSessionsLedge
           sessionId={ledgeSessionId}
+          describeSession={describeSpawnedSession}
           view={spawnedLedgeView}
           open={spawnedLedgeOpen}
           onToggle={toggleSpawnedLedge}
@@ -4937,6 +4957,7 @@ function AppContent() {
       openSession,
       toggleSpawnedSettled,
       settleSession,
+      describeSpawnedSession,
     ],
   );
   // The composer's pending-approval strip: the cards the viewed session is

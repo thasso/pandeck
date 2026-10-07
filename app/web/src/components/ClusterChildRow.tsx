@@ -49,11 +49,6 @@ export interface ClusterChildRowProps {
    */
   tabbable?: boolean;
   /**
-   * Inside a strip that frames it edge to edge (the composer ledge): square,
-   * so the hover fill meets the strip's sides instead of floating in them.
-   */
-  flush?: boolean;
-  /**
    * The row's `data-list-row-id`, when it must differ from the session id: a
    * settled peer listed as a fold's history is ALSO a row of the Settled
    * shelf, and two rows with one id would send a scroll restore to the wrong
@@ -100,7 +95,6 @@ function ClusterChildRowImpl({
   active,
   relation = "coordinated",
   tabbable = false,
-  flush = false,
   listRowId,
   onOpen,
   onSettle,
@@ -181,7 +175,7 @@ function ClusterChildRowImpl({
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      className={`cursor-pointer select-none flex-nowrap text-left hover:bg-muted ${flush ? "rounded-none" : ""}`}
+      className="cursor-pointer select-none flex-nowrap text-left hover:bg-muted"
     >
       <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
         <AgentIcon />
