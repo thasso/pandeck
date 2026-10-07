@@ -79,7 +79,7 @@ import {
   type SettingsChange,
 } from "./settingsService.ts";
 import { describeSttAvailability } from "./speech/sttConfig.ts";
-import { testSlackHuddleSettings, testSlackSettings } from "./slackSettings.ts";
+import { testSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings } from "./tempoSettings.ts";
 import { testConfluenceSettings } from "./confluenceSettings.ts";
 import { testJiraSettings } from "./jiraSettings.ts";
@@ -1006,10 +1006,6 @@ export class Connection implements Viewer {
         return this.onSaveAndTestSlackSettings(msg.patch);
       case "testSlackSettings":
         return this.onTestSlackSettings();
-      case "saveAndTestSlackHuddleSettings":
-        return this.onSaveAndTestSlackHuddleSettings(msg.patch);
-      case "testSlackHuddleSettings":
-        return this.onTestSlackHuddleSettings();
       case "updateOpenAiCompatibleSettings":
         return this.onUpdateOpenAiCompatibleSettings(msg.patch);
       case "saveAndTestOpenAiCompatibleSettings":
@@ -3733,39 +3729,6 @@ export class Connection implements Viewer {
       this.send({
         type: "error",
         message: `Failed to test Slack settings: ${errorText(err)}`,
-      });
-    }
-  }
-
-  private async onSaveAndTestSlackHuddleSettings(
-    patch: SlackSettingsPatch,
-  ): Promise<void> {
-    try {
-      await saveSettings({ slack: patch });
-      this.send({
-        type: "slackHuddleStatus",
-        status: await testSlackHuddleSettings(),
-        settings: getSettings(),
-      });
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to save/test Slack Huddle settings: ${errorText(err)}`,
-      });
-    }
-  }
-
-  private async onTestSlackHuddleSettings(): Promise<void> {
-    try {
-      this.send({
-        type: "slackHuddleStatus",
-        status: await testSlackHuddleSettings(),
-        settings: getSettings(),
-      });
-    } catch (err) {
-      this.send({
-        type: "error",
-        message: `Failed to test Slack Huddle settings: ${errorText(err)}`,
       });
     }
   }

@@ -1092,9 +1092,6 @@ export interface SlackSettings {
   botTokenConfigured: boolean;
   /** The workspace is connected: OAuth stores the user and bot tokens together. */
   connected: boolean;
-  huddlesEnabled: boolean;
-  clientTokenConfigured: boolean;
-  clientCookieConfigured: boolean;
 }
 
 /** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */
@@ -1104,23 +1101,11 @@ export interface SlackSettingsPatch {
   disconnect?: boolean;
   userToken?: string;
   botToken?: string;
-  huddlesEnabled?: boolean;
-  clientToken?: string;
-  clientCookieD?: string;
   clearUserToken?: boolean;
   clearBotToken?: boolean;
-  clearClientToken?: boolean;
-  clearClientCookie?: boolean;
 }
 
 export interface SlackConnectionStatus {
-  ok: boolean;
-  checkedAt: number;
-  message: string;
-}
-
-/** Independent health for the experimental browser-backed Huddle capability. */
-export interface SlackHuddleConnectionStatus {
   ok: boolean;
   checkedAt: number;
   message: string;
@@ -6933,10 +6918,6 @@ export type ClientMessage =
   | { type: "saveAndTestSlackSettings"; patch: SlackSettingsPatch }
   /** Test saved Slack credentials without exposing secret values. */
   | { type: "testSlackSettings" }
-  /** Persist and independently test the experimental Slack Huddle browser session. */
-  | { type: "saveAndTestSlackHuddleSettings"; patch: SlackSettingsPatch }
-  /** Test only the experimental Slack Huddle browser session. */
-  | { type: "testSlackHuddleSettings" }
   /** Persist OpenAI-compatible provider settings. Secret fields are stored server-side and not echoed. */
   | {
       type: "updateOpenAiCompatibleSettings";
@@ -7485,11 +7466,6 @@ export type ServerMessage =
   | {
       type: "slackStatus";
       status: SlackConnectionStatus;
-      settings: AppSettings;
-    }
-  | {
-      type: "slackHuddleStatus";
-      status: SlackHuddleConnectionStatus;
       settings: AppSettings;
     }
   | {

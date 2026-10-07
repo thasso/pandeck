@@ -47,7 +47,6 @@ import {
   type ProjectRecord,
   type SkillLibraryList,
   type SlackConnectionStatus,
-  type SlackHuddleConnectionStatus,
   type SlackSettingsPatch,
   type SpeechToTextStatus,
   type SpeechVocabularyEntry,
@@ -197,9 +196,6 @@ interface Props {
   onSaveAndTestSlack: (patch: SlackSettingsPatch) => void;
   onTestSlack: () => void;
   slackStatus: SlackConnectionStatus | null;
-  onSaveAndTestSlackHuddles: (patch: SlackSettingsPatch) => void;
-  onTestSlackHuddles: () => void;
-  slackHuddleStatus: SlackHuddleConnectionStatus | null;
   onSaveAndTestOpenAiCompatible: (patch: OpenAiCompatibleSettingsPatch) => void;
   onTestOpenAiCompatible: () => void;
   openAiCompatibleStatus: OpenAiCompatibleConnectionStatus | null;
@@ -257,9 +253,6 @@ export function SettingsPage({
   onSaveAndTestSlack,
   onTestSlack,
   slackStatus,
-  onSaveAndTestSlackHuddles,
-  onTestSlackHuddles,
-  slackHuddleStatus,
   onSaveAndTestOpenAiCompatible,
   onTestOpenAiCompatible,
   openAiCompatibleStatus,
@@ -457,14 +450,6 @@ export function SettingsPage({
               status={slackStatus}
               onSaveAndTestSlack={onSaveAndTestSlack}
               onTestSlack={onTestSlack}
-            />
-          )}
-          {section === "slack-huddles" && (
-            <SlackHuddlesSection
-              settings={settings}
-              status={slackHuddleStatus}
-              onSaveAndTestSlack={onSaveAndTestSlackHuddles}
-              onTestSlack={onTestSlackHuddles}
             />
           )}
           {section === "openai-compatible" && (
@@ -3006,129 +2991,6 @@ function SlackSection({
   );
 }
 
-function SlackHuddlesSection({
-  settings,
-  status,
-  onSaveAndTestSlack,
-  onTestSlack,
-}: {
-  settings: AppSettings;
-  status: SlackHuddleConnectionStatus | null;
-  onSaveAndTestSlack: (patch: SlackSettingsPatch) => void;
-  onTestSlack: () => void;
-}) {
-  const slack = settings.slack;
-  const [enabled, setEnabled] = useState(slack.huddlesEnabled);
-  const [pasteStatus, setPasteStatus] = useState<{
-    tone: "ok" | "error";
-    message: string;
-  } | null>(null);
-  useEffect(() => setEnabled(slack.huddlesEnabled), [slack.huddlesEnabled]);
-  const checkedOnOpen = useRef(false);
-  useEffect(() => {
-    if (
-      checkedOnOpen.current ||
-      !slack.huddlesEnabled ||
-      !slack.clientTokenConfigured ||
-      !slack.clientCookieConfigured
-    )
-      return;
-    checkedOnOpen.current = true;
-    onTestSlack();
-  }, [
-    onTestSlack,
-    slack.clientCookieConfigured,
-    slack.clientTokenConfigured,
-    slack.huddlesEnabled,
-  ]);
-  const onPaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
-    const text = event.clipboardData.getData("text");
-    if (!text.trim()) return;
-    event.preventDefault();
-    const parsed = parseSlackBrowserCurl(text);
-    if (parsed.error) {
-      setPasteStatus({ tone: "error", message: parsed.error });
-      return;
-    }
-    setPasteStatus({
-      tone: "ok",
-      message: `Extracted ${parsed.found.join(", ")}; saved and testing now.`,
-    });
-    onSaveAndTestSlack({ ...parsed.patch, huddlesEnabled: enabled });
-  };
-  const clear = () => {
-    setEnabled(false);
-    onSaveAndTestSlack({
-      huddlesEnabled: false,
-      clearClientToken: true,
-      clearClientCookie: true,
-    });
-  };
-  return (
-    <div className="mx-auto max-w-xl px-6 py-8">
-      <SlackSettingsHeader
-        title="Slack Huddles"
-        subtitle="Experimental personal Huddle attendance through Slack’s undocumented browser API."
-      />
-      <SettingsCard className="mt-6">
-        <Alert variant="warning" role="note">
-          <AlertDescription>
-            This capability may break when Slack changes its web client. Browser
-            credentials are isolated from normal Slack reads, OAuth, Task
-            intake, and bot conversations.
-          </AlertDescription>
-        </Alert>
-        <PreferenceToggle
-          label="Enable experimental Huddle history"
-          description="Expose only the dedicated Huddle attendance tool."
-          checked={enabled}
-          onChange={setEnabled}
-        />
-        <div>
-          <div className="text-sm font-medium">Refresh browser session</div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            In Slack DevTools, right-click a{" "}
-            <span className="font-mono">huddles.history</span> request, choose{" "}
-            <strong>Copy as cURL</strong>, and paste it below.
-          </p>
-          <Input
-            type="password"
-            value=""
-            onPaste={onPaste}
-            onChange={() => undefined}
-            placeholder="Paste copied huddles.history cURL"
-            className="mt-3"
-          />
-        </div>
-        {pasteStatus &&
-          (pasteStatus.tone === "ok" ? (
-            <Alert variant="success" role="status">
-              <AlertDescription>{pasteStatus.message}</AlertDescription>
-            </Alert>
-          ) : (
-            <ErrorNote message={pasteStatus.message} />
-          ))}
-        <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() => onSaveAndTestSlack({ huddlesEnabled: enabled })}
-          >
-            Save and test
-          </Button>
-          <Button variant="outline" onClick={onTestSlack}>
-            Test saved session
-          </Button>
-          {(slack.clientTokenConfigured || slack.clientCookieConfigured) && (
-            <Button variant="outline" onClick={clear}>
-              Clear browser session
-            </Button>
-          )}
-        </div>
-      </SettingsCard>
-      <IntegrationStatusBanner status={status} />
-    </div>
-  );
-}
-
 function SlackSettingsHeader({
   title,
   subtitle,
@@ -3752,133 +3614,6 @@ function BrowserToolsSettingsSection({ settings, onUpdate }: SectionProps) {
       </div>
     </div>
   );
-}
-
-export type SlackBrowserCurlParseResult =
-  | { patch: SlackSettingsPatch; found: string[]; error?: undefined }
-  | { patch: SlackSettingsPatch; found: string[]; error: string };
-
-export function parseSlackBrowserCurl(
-  text: string,
-): SlackBrowserCurlParseResult {
-  const patch: SlackSettingsPatch = {};
-  const found: string[] = [];
-  const requestUrl = firstSlackApiUrl(text);
-  if (!requestUrl || requestUrl.pathname !== "/api/huddles.history") {
-    return {
-      patch,
-      found,
-      error:
-        "This is not a copied Slack huddles.history request. In Slack DevTools, copy a huddles.history request as cURL.",
-    };
-  }
-
-  for (const header of copiedCurlHeaders(text)) {
-    const separator = header.indexOf(":");
-    if (separator === -1) continue;
-    const name = header.slice(0, separator).trim().toLowerCase();
-    const value = header.slice(separator + 1).trim();
-    if (name === "authorization") {
-      const match = value.match(/^Bearer\s+(.+)$/i);
-      if (match?.[1]) {
-        patch.clientToken = match[1].trim();
-        found.push("browser token");
-      }
-    } else if (name === "cookie") {
-      applyCopiedCookie(value, patch, found);
-    }
-  }
-
-  if (!patch.clientToken) {
-    const formToken = copiedCurlFormField(text, "token");
-    if (formToken) {
-      patch.clientToken = formToken;
-      found.push("browser token");
-    }
-  }
-  if (!patch.clientToken) {
-    const tokenMatch =
-      text.match(/authorization:\s*Bearer\s+([^'"\s\\]+)/i) ??
-      text.match(/name="token"\s*\r?\n\r?\n([^\r\n]+)/i);
-    if (tokenMatch?.[1]) {
-      patch.clientToken = tokenMatch[1].trim();
-      found.push("browser token");
-    }
-  }
-  if (!patch.clientCookieD) {
-    const curlCookie = copiedCurlCookie(text);
-    if (curlCookie) applyCopiedCookie(curlCookie, patch, found);
-  }
-  if (!patch.clientCookieD) {
-    const cookieMatch = text.match(/cookie:\s*([^'"\n\\]+)/i);
-    if (cookieMatch?.[1])
-      applyCopiedCookie(cookieMatch[1].trim(), patch, found);
-  }
-
-  const uniqueFound = [...new Set(found)];
-  if (!patch.clientToken || !patch.clientCookieD) {
-    return {
-      patch,
-      found: uniqueFound,
-      error:
-        "Could not find both a Slack browser token and cookies. Copy a Slack web API request as cURL (including --data-raw token and -b/--cookie cookies) and paste it here.",
-    };
-  }
-  return { patch, found: uniqueFound };
-}
-
-function firstSlackApiUrl(text: string): URL | null {
-  const matches = text.match(/https:\/\/[^\s'"\\]+/g) ?? [];
-  for (const raw of matches) {
-    try {
-      const url = new URL(raw);
-      if (
-        url.hostname.endsWith("slack.com") &&
-        url.pathname.startsWith("/api/")
-      )
-        return url;
-    } catch {
-      // Ignore non-URL fragments in copied shell commands.
-    }
-  }
-  return null;
-}
-
-function copiedCurlHeaders(text: string): string[] {
-  const headers: string[] = [];
-  const quotedHeaderRe = /(?:-H|--header)\s+(['"])([\s\S]*?)\1/g;
-  let match: RegExpExecArray | null;
-  while ((match = quotedHeaderRe.exec(text)) !== null) {
-    if (match[2]) headers.push(match[2]);
-  }
-  return headers;
-}
-
-function copiedCurlCookie(text: string): string | null {
-  const match = text.match(/(?:\s|^)(?:-b|--cookie)\s+(['"])([\s\S]*?)\1/);
-  return match?.[2]?.trim() || null;
-}
-
-function copiedCurlFormField(text: string, name: string): string | null {
-  const normalized = text.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n");
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(
-    `name="${escapedName}"\\r?\\n\\r?\\n([^\\r\\n]+)`,
-    "i",
-  );
-  return normalized.match(regex)?.[1]?.trim() || null;
-}
-
-function applyCopiedCookie(
-  value: string,
-  patch: SlackSettingsPatch,
-  found: string[],
-): void {
-  const dCookie = value.match(/(?:^|;\s*)d=([^;]+)/)?.[1];
-  if (dCookie) {
-    patch.clientCookieD = dCookie;
-    found.push("d cookie");
-  }
 }
 
 const TEXT_SCALE_OPTIONS: readonly TextScale[] = [100, 110, 120, 130];

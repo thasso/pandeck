@@ -9,7 +9,6 @@ import {
 import { dirname, join } from "node:path";
 import type {
   SlackConnectionStatus,
-  SlackHuddleConnectionStatus,
   SlackSettings,
   SlackSettingsPatch,
 } from "@assistant/shared";
@@ -19,15 +18,10 @@ import {
   PUBLIC_BASE_URL,
   SLACK_STATIC_CONFIG,
 } from "./config.ts";
-import { errorText, fileReadErrorText } from "./errors.ts";
+import { fileReadErrorText } from "./errors.ts";
 import { userTimeZone } from "./userProfile.ts";
 
 const SLACK_SETTINGS_PATH = join(DATA_DIR, "settings", "slack.json");
-const SLACK_HUDDLE_SETTINGS_PATH = join(
-  DATA_DIR,
-  "settings",
-  "slack-huddles.json",
-);
 const SLACK_SETTINGS_RESPONSE_LIMIT_BYTES = 256_000;
 const SLACK_SETTINGS_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -50,12 +44,6 @@ const DEFAULTS = {
   oauthStateCreatedAt: 0,
 };
 
-const HUDDLE_DEFAULTS = {
-  enabled: false,
-  clientToken: "",
-  clientCookieD: "",
-};
-
 interface SlackSettingsFile {
   enabled?: boolean;
   userToken?: string;
@@ -66,8 +54,6 @@ interface SlackSettingsFile {
   grantedBotScopes?: string;
   oauthState?: string;
   oauthStateCreatedAt?: number;
-  clientToken?: string;
-  clientCookieD?: string;
 }
 
 export interface SlackPublicApiConfig {
@@ -93,20 +79,6 @@ export interface SlackToolConfig {
   userTokenConfigured: boolean;
   botTokenConfigured: boolean;
   source: string;
-}
-
-/** Dedicated projection for the experimental Huddle tool; no other caller receives browser credentials. */
-export interface SlackHuddleConfig {
-  enabled: true;
-  workspaceHost: string;
-  teamId: string;
-  timezone: string;
-  defaultMaxResults: number;
-  clientToken: string;
-  clientCookieD: string;
-  userToken?: string;
-  accountUserId?: string;
-  source: "experimental-browser-session";
 }
 
 function readPrivate(): Required<typeof DEFAULTS> {
@@ -136,42 +108,6 @@ function writePrivate(next: Required<typeof DEFAULTS>): void {
   renameSync(tmp, SLACK_SETTINGS_PATH);
 }
 
-function readHuddlePrivate(): Required<typeof HUDDLE_DEFAULTS> {
-  if (existsSync(SLACK_HUDDLE_SETTINGS_PATH)) {
-    try {
-      const parsed = JSON.parse(
-        readFileSync(SLACK_HUDDLE_SETTINGS_PATH, "utf8"),
-      ) as SlackSettingsFile;
-      return normalizeHuddlePrivate(parsed);
-    } catch (err) {
-      throw new Error(
-        `Failed to read Slack Huddle settings at ${SLACK_HUDDLE_SETTINGS_PATH}: ${fileReadErrorText(err)}`,
-      );
-    }
-  }
-  return { ...HUDDLE_DEFAULTS };
-}
-
-function writeHuddlePrivate(next: Required<typeof HUDDLE_DEFAULTS>): void {
-  mkdirSync(dirname(SLACK_HUDDLE_SETTINGS_PATH), { recursive: true });
-  const tmp = `${SLACK_HUDDLE_SETTINGS_PATH}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  renameSync(tmp, SLACK_HUDDLE_SETTINGS_PATH);
-}
-
-function normalizeHuddlePrivate(
-  settings: SlackSettingsFile,
-): Required<typeof HUDDLE_DEFAULTS> {
-  return {
-    enabled: Boolean(settings.enabled),
-    clientToken: String(settings.clientToken ?? "").trim(),
-    clientCookieD: String(settings.clientCookieD ?? "").trim(),
-  };
-}
-
 function normalizePrivate(
   settings: SlackSettingsFile,
 ): Required<typeof DEFAULTS> {
@@ -192,16 +128,7 @@ function normalizePrivate(
   };
 }
 
-function publicSettings(
-  settings: Required<typeof DEFAULTS>,
-  huddles: Required<typeof HUDDLE_DEFAULTS> = readHuddlePrivate(),
-): SlackSettings {
-  const effectiveClientToken =
-    process.env.SLACK_CLIENT_TOKEN || huddles.clientToken;
-  const effectiveClientCookie =
-    process.env.SLACK_CLIENT_COOKIE_D ||
-    extractDCookie(process.env.SLACK_CLIENT_COOKIE || "") ||
-    huddles.clientCookieD;
+function publicSettings(settings: Required<typeof DEFAULTS>): SlackSettings {
   return {
     enabled: Boolean(settings.enabled),
     oauthClientConfigured: Boolean(
@@ -210,9 +137,6 @@ function publicSettings(
     userTokenConfigured: Boolean(settings.userToken),
     botTokenConfigured: Boolean(settings.botToken),
     connected: Boolean(settings.userToken && settings.botToken),
-    huddlesEnabled: huddles.enabled,
-    clientTokenConfigured: Boolean(effectiveClientToken),
-    clientCookieConfigured: Boolean(effectiveClientCookie),
   };
 }
 
@@ -220,7 +144,7 @@ export function getSlackSettings(): SlackSettings {
   return publicSettings(readPrivate());
 }
 
-/** Secret-free normal-runtime identity projection; never reads Huddle storage. */
+/** Secret-free runtime identity projection. */
 export function getSlackRuntimeSettings(): {
   enabled: boolean;
   accountUserId: string;
@@ -231,24 +155,6 @@ export function getSlackRuntimeSettings(): {
     enabled: settings.enabled,
     accountUserId: settings.accountUserId,
     botUserId: settings.botUserId,
-  };
-}
-
-/** Secret-free Huddle capability gate for tool exposure/settings reconciliation. */
-export function getSlackHuddleCapabilitySettings(): Pick<
-  SlackSettings,
-  "huddlesEnabled" | "clientTokenConfigured" | "clientCookieConfigured"
-> {
-  const settings = readHuddlePrivate();
-  const clientToken = process.env.SLACK_CLIENT_TOKEN || settings.clientToken;
-  const clientCookieD =
-    process.env.SLACK_CLIENT_COOKIE_D ||
-    extractDCookie(process.env.SLACK_CLIENT_COOKIE || "") ||
-    settings.clientCookieD;
-  return {
-    huddlesEnabled: settings.enabled,
-    clientTokenConfigured: Boolean(clientToken),
-    clientCookieConfigured: Boolean(clientCookieD),
   };
 }
 
@@ -270,22 +176,10 @@ export function updateSlackSettings(patch: SlackSettingsPatch): SlackSettings {
   };
   writePrivate(next);
 
-  const huddleCurrent = readHuddlePrivate();
-  const huddleNext: Required<typeof HUDDLE_DEFAULTS> = {
-    enabled: patch.huddlesEnabled ?? huddleCurrent.enabled,
-    clientToken: patch.clearClientToken
-      ? ""
-      : patch.clientToken?.trim() || huddleCurrent.clientToken,
-    clientCookieD: patch.clearClientCookie
-      ? ""
-      : patch.clientCookieD?.trim() || huddleCurrent.clientCookieD,
-  };
-  if (JSON.stringify(huddleNext) !== JSON.stringify(huddleCurrent))
-    writeHuddlePrivate(huddleNext);
-  return publicSettings(next, huddleNext);
+  return publicSettings(next);
 }
 
-/** Public Web API tools receive only personal OAuth fields; browser-session fields never cross this boundary. */
+/** Public Web API tools receive only personal OAuth fields. */
 export function getSlackPublicApiConfig(): SlackPublicApiConfig {
   const settings = readPrivate();
   if (!settings.enabled)
@@ -356,46 +250,6 @@ export function getSlackToolConfig(
     userTokenConfigured: Boolean(envUserToken || settings.userToken),
     botTokenConfigured: Boolean(envBotToken || settings.botToken),
     source: "assistant-settings",
-  };
-}
-
-export function getSlackHuddleConfig(): SlackHuddleConfig {
-  const settings = readPrivate();
-  const huddles = readHuddlePrivate();
-  if (!huddles.enabled)
-    throw new Error(
-      "Experimental Slack Huddle history is disabled. Enable it in Settings → Slack Huddles.",
-    );
-  const clientToken = process.env.SLACK_CLIENT_TOKEN || huddles.clientToken;
-  const clientCookieD =
-    process.env.SLACK_CLIENT_COOKIE_D ||
-    extractDCookie(process.env.SLACK_CLIENT_COOKIE || "") ||
-    huddles.clientCookieD;
-  if (!clientToken || !clientCookieD)
-    throw new Error(
-      "Missing Slack Huddle browser session. Paste a huddles.history cURL in Settings → Slack Huddles.",
-    );
-  const userToken =
-    process.env.SLACK_USER_TOKEN || settings.userToken || undefined;
-  return {
-    enabled: true,
-    workspaceHost: SLACK_STATIC_CONFIG.workspaceHost,
-    teamId: SLACK_STATIC_CONFIG.teamId,
-    timezone: slackTimeZone(),
-    defaultMaxResults: clamp(
-      Number(
-        process.env.SLACK_MAX_RESULTS || SLACK_STATIC_CONFIG.defaultMaxResults,
-      ),
-      1,
-      100,
-    ),
-    clientToken,
-    clientCookieD,
-    ...(userToken ? { userToken } : {}),
-    ...(settings.accountUserId
-      ? { accountUserId: settings.accountUserId }
-      : {}),
-    source: "experimental-browser-session",
   };
 }
 
@@ -556,16 +410,6 @@ export async function testSlackSettings(): Promise<SlackConnectionStatus> {
   };
 }
 
-export async function testSlackHuddleSettings(): Promise<SlackHuddleConnectionStatus> {
-  const checkedAt = Date.now();
-  try {
-    const result = await testHuddles(getSlackHuddleConfig());
-    return { ok: result.ok, checkedAt, message: result.message };
-  } catch (err) {
-    return { ok: false, checkedAt, message: errorText(err) };
-  }
-}
-
 async function testToken(
   token: string,
 ): Promise<{ ok: boolean; message: string }> {
@@ -637,56 +481,6 @@ async function testPersonalSearch(
   return { ok: true, message: "Slack personal search works." };
 }
 
-async function testHuddles(
-  settings: SlackHuddleConfig,
-): Promise<{ ok: boolean; message: string }> {
-  const params = browserClientParams(settings, { limit: "1" });
-  const res = await fetch(
-    `https://${settings.workspaceHost}/api/huddles.history?${params}`,
-    {
-      headers: browserClientHeaders(settings, "assistant-slack-huddles/1.0"),
-      signal: AbortSignal.timeout(SLACK_SETTINGS_REQUEST_TIMEOUT_MS),
-    },
-  );
-  const text = await readBoundedSettingsResponse(res, "Slack Huddle check");
-  if (!res.ok)
-    return { ok: false, message: `Slack huddles HTTP ${res.status}.` };
-  const json = JSON.parse(text) as {
-    ok?: boolean;
-    error?: string;
-    huddles?: unknown[];
-  };
-  if (!json.ok)
-    return {
-      ok: false,
-      message: `Slack huddles rejected credentials: ${json.error ?? text.slice(0, 240)}`,
-    };
-  return {
-    ok: true,
-    message: `Slack huddles client credentials accepted (${json.huddles?.length ?? 0} recent returned).`,
-  };
-}
-
-function browserClientParams(
-  settings: Pick<SlackHuddleConfig, "teamId">,
-  values: Record<string, string>,
-): URLSearchParams {
-  return new URLSearchParams({ ...values, slack_route: settings.teamId });
-}
-
-function browserClientHeaders(
-  settings: Pick<SlackHuddleConfig, "clientToken" | "clientCookieD">,
-  userAgent: string,
-): Record<string, string> {
-  return {
-    Authorization: `Bearer ${settings.clientToken}`,
-    Cookie: `d=${settings.clientCookieD}`,
-    Accept: "application/json, text/plain, */*",
-    "User-Agent": `Mozilla/5.0 ${userAgent}`,
-    "X-Requested-With": "XMLHttpRequest",
-  };
-}
-
 async function readBoundedSettingsResponse(
   response: Response,
   label: string,
@@ -719,11 +513,6 @@ async function readBoundedSettingsResponse(
   } finally {
     reader.releaseLock();
   }
-}
-
-function extractDCookie(cookie: string): string {
-  const match = cookie.match(/(?:^|;\s*)d=([^;]+)/);
-  return match?.[1]?.trim() ?? "";
 }
 
 function clamp(value: number, min: number, max: number): number {

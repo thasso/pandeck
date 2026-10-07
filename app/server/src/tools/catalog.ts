@@ -90,7 +90,6 @@ import { sessionLogTools } from "./sessions/sessionLogTools.ts";
 import { sessionLookupTools } from "./sessions/sessionLookupTools.ts";
 import { sessionSendPromptTools } from "./sessions/sessionSendPromptTool.ts";
 import { sessionSpawnTools } from "./sessions/sessionSpawnTool.ts";
-import { assistantSlackHuddleTools } from "./slack/slackHuddleTools.ts";
 import { assistantSlackTools } from "./slack/slackTools.ts";
 import {
   taskToolsForKind,
@@ -221,7 +220,6 @@ const TOOL_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   slack_thread_read: "none",
   slack_unread: "none",
   slack_file_read: "none",
-  slack_huddle_history: "none",
   github_list_repositories: "none",
   github_search_repositories: "none",
   github_search_code: "none",
@@ -620,16 +618,6 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       family: "integration",
       gate: "slack",
       tools: assistantSlackTools,
-    },
-    {
-      id: "slack-huddles",
-      label: "Slack Huddles",
-      description:
-        "Personal Slack Huddle attendance history (experimental browser-session capability).",
-      loading: "deferred",
-      family: "integration",
-      gate: "slackHuddles",
-      tools: assistantSlackHuddleTools,
     },
     {
       id: "github-repositories",

@@ -2459,12 +2459,8 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   its status line surfaces the resolved login + reported server version. `Tempo`
   is OAuth (Connect/Reauthorize/Disconnect); it auto-verifies on open and notes
   that Tempo needs the Jira integration for worklog enrichment (degrading to raw
-  issue ids when Jira is disabled). Slack uses two settings pages: `Slack` owns
-  the end-user OAuth flow and normal health, while `Slack Huddles` owns
-  independently enabled/checked experimental paste-only “Copy as cURL” browser
-  access. Huddle cURL parsing accepts only `huddles.history` and sends only the
-  browser token plus `d` cookie; individual credentials stay hidden and Huddle
-  status/credentials must not enter the normal Slack flow.
+  issue ids when Jira is disabled). The `Slack` settings page owns the end-user
+  OAuth flow and connection health; individual credentials stay hidden.
 - Rich tool cards must tolerate partial, streaming, or malformed tool output and
   degrade gracefully. A card that lazily loads more of its own content in the
   browser (`GoogleWorkspaceToolCard`'s Drive preview and Gmail thread expansion)

@@ -122,9 +122,6 @@ export const settingsFixture: AppSettings = {
     userTokenConfigured: true,
     botTokenConfigured: true,
     connected: true,
-    huddlesEnabled: false,
-    clientTokenConfigured: false,
-    clientCookieConfigured: false,
   },
   openAiCompatible: {
     enabled: true,

@@ -1913,11 +1913,9 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   domain families; static deployment-level integration inputs are loaded through
   `config.ts`. Slack workspace metadata/read defaults, OAuth app client
   metadata, and the deployment-level Socket Mode app token are static config.
-  Normal OAuth state/tokens live in `settings/slack.json`; experimental Huddle
-  browser credentials live separately in `settings/slack-huddles.json` and
-  retain only the browser token plus `d` cookie. `getSlackPublicApiConfig` and
-  `getSlackToolConfig` never read or return that Huddle file; only
-  `getSlackHuddleConfig` may project it to Huddle health/tool code.
+  OAuth state/tokens live in `settings/slack.json`. `getSlackPublicApiConfig`
+  projects only personal user OAuth credentials to read tools;
+  `getSlackToolConfig` selects personal or bot OAuth credentials.
 - Jira and Tempo are two independent integrations (contract:
   `docs/jira-tempo.md`). `jiraSettings.ts` owns token/Basic auth
   (`settings/jira.json`: `enabled`, `atlassianEmail`, `atlassianToken`;

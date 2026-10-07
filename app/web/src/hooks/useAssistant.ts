@@ -81,7 +81,6 @@ import type {
   SubagentThreadSummary,
   BackgroundWorkItemSummary,
   SlackConnectionStatus,
-  SlackHuddleConnectionStatus,
   SlackSettingsPatch,
   SlashCommandInfo,
   SessionListItem,
@@ -276,9 +275,6 @@ const defaultSettings: AppSettings = {
     userTokenConfigured: false,
     botTokenConfigured: false,
     connected: false,
-    huddlesEnabled: false,
-    clientTokenConfigured: false,
-    clientCookieConfigured: false,
   },
   openAiCompatible: {
     enabled: false,
@@ -461,7 +457,6 @@ export interface UIState {
   tempoStatus: TempoConnectionStatus | null;
   googleStatus: GoogleConnectionStatus | null;
   slackStatus: SlackConnectionStatus | null;
-  slackHuddleStatus: SlackHuddleConnectionStatus | null;
   openAiCompatibleStatus: OpenAiCompatibleConnectionStatus | null;
   braveStatus: BraveConnectionStatus | null;
   context7Status: Context7ConnectionStatus | null;
@@ -815,7 +810,6 @@ const emptyInitial: UIState = {
   tempoStatus: null,
   googleStatus: null,
   slackStatus: null,
-  slackHuddleStatus: null,
   openAiCompatibleStatus: null,
   braveStatus: null,
   context7Status: null,
@@ -5236,13 +5230,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         slackStatus: msg.status,
         error: null,
       };
-    case "slackHuddleStatus":
-      return {
-        ...state,
-        settings: msg.settings,
-        slackHuddleStatus: msg.status,
-        error: null,
-      };
     case "openAiCompatibleStatus":
       return {
         ...state,
@@ -6229,8 +6216,6 @@ export interface AssistantActions {
   updateSlackSettings: (patch: SlackSettingsPatch) => void;
   saveAndTestSlackSettings: (patch: SlackSettingsPatch) => void;
   testSlackSettings: () => void;
-  saveAndTestSlackHuddleSettings: (patch: SlackSettingsPatch) => void;
-  testSlackHuddleSettings: () => void;
   updateOpenAiCompatibleSettings: (
     patch: OpenAiCompatibleSettingsPatch,
   ) => void;
@@ -8313,9 +8298,6 @@ export function useAssistant({
       saveAndTestSlackSettings: (patch) =>
         send({ type: "saveAndTestSlackSettings", patch }),
       testSlackSettings: () => send({ type: "testSlackSettings" }),
-      saveAndTestSlackHuddleSettings: (patch) =>
-        send({ type: "saveAndTestSlackHuddleSettings", patch }),
-      testSlackHuddleSettings: () => send({ type: "testSlackHuddleSettings" }),
       updateOpenAiCompatibleSettings: (patch) =>
         send({ type: "updateOpenAiCompatibleSettings", patch }),
       saveAndTestOpenAiCompatibleSettings: (patch) =>

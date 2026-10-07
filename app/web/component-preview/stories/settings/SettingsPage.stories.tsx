@@ -53,9 +53,6 @@ const baseArgs = {
   onSaveAndTestSlack: noop,
   onTestSlack: noop,
   slackStatus: healthy,
-  onSaveAndTestSlackHuddles: noop,
-  onTestSlackHuddles: noop,
-  slackHuddleStatus: null,
   onSaveAndTestOpenAiCompatible: noop,
   onTestOpenAiCompatible: noop,
   openAiCompatibleStatus: {
@@ -229,7 +226,6 @@ export const GoogleError: Story = {
   },
 };
 export const Slack: Story = { args: { section: "slack" } };
-export const SlackHuddles: Story = { args: { section: "slack-huddles" } };
 export const Jira: Story = { args: { section: "jira" } };
 export const Confluence: Story = { args: { section: "confluence" } };
 export const Tempo: Story = { args: { section: "tempo" } };

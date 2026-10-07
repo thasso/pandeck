@@ -25,8 +25,6 @@ vi.mock("./config.ts", async (importActual) => {
 const { DATA_DIR } = await import("./config.ts");
 const {
   createSlackOAuthStartUrl,
-  getSlackHuddleCapabilitySettings,
-  getSlackHuddleConfig,
   getSlackPublicApiConfig,
   getSlackSettings,
   getSlackToolConfig,
@@ -40,9 +38,6 @@ const originalFetch = globalThis.fetch;
 afterEach(() => {
   delete process.env.SLACK_TOKEN;
   delete process.env.SLACK_USER_TOKEN;
-  delete process.env.SLACK_CLIENT_TOKEN;
-  delete process.env.SLACK_CLIENT_COOKIE;
-  delete process.env.SLACK_CLIENT_COOKIE_D;
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
 });
@@ -68,66 +63,23 @@ test("browser settings expose only end-user connection flags", () => {
   });
   assert.deepEqual(Object.keys(getSlackSettings()).sort(), [
     "botTokenConfigured",
-    "clientCookieConfigured",
-    "clientTokenConfigured",
     "connected",
     "enabled",
-    "huddlesEnabled",
     "oauthClientConfigured",
     "userTokenConfigured",
   ]);
 });
 
-test("normal Slack projections never contain experimental browser credentials", () => {
+test("Slack API projections select the personal or bot OAuth token", () => {
   updateSlackSettings({
     enabled: true,
     userToken: "xoxp-personal",
     botToken: "xoxb-bot",
-    huddlesEnabled: true,
-    clientToken: "xoxc-browser-secret",
-    clientCookieD: "cookie-secret",
   });
 
-  const publicConfig = getSlackPublicApiConfig();
-  const userConfig = getSlackToolConfig("user");
-  const botConfig = getSlackToolConfig("bot");
-  for (const value of [publicConfig, userConfig, botConfig]) {
-    assert.doesNotMatch(
-      JSON.stringify(value),
-      /browser-secret|cookie-secret|clientToken|clientCookie/i,
-    );
-  }
-  assert.equal(getSlackHuddleConfig().clientToken, "xoxc-browser-secret");
-  assert.equal(getSlackHuddleConfig().clientCookieD, "cookie-secret");
-  const normalSettingsFile = readFileSync(
-    join(DATA_DIR, "settings", "slack.json"),
-    "utf8",
-  );
-  const huddleSettingsFile = readFileSync(
-    join(DATA_DIR, "settings", "slack-huddles.json"),
-    "utf8",
-  );
-  assert.doesNotMatch(
-    normalSettingsFile,
-    /browser-secret|cookie-secret|clientToken|clientCookie/i,
-  );
-  assert.match(huddleSettingsFile, /browser-secret/);
-});
-
-test("Huddle capability exposure recognizes environment-provided browser material", () => {
-  updateSlackSettings({
-    huddlesEnabled: true,
-    clearClientToken: true,
-    clearClientCookie: true,
-  });
-  process.env.SLACK_CLIENT_TOKEN = "xoxc-env";
-  process.env.SLACK_CLIENT_COOKIE_D = "env-cookie";
-  assert.deepEqual(getSlackHuddleCapabilitySettings(), {
-    huddlesEnabled: true,
-    clientTokenConfigured: true,
-    clientCookieConfigured: true,
-  });
-  assert.equal(getSlackHuddleConfig().clientToken, "xoxc-env");
+  assert.equal(getSlackPublicApiConfig().token, "xoxp-personal");
+  assert.equal(getSlackToolConfig("user").token, "xoxp-personal");
+  assert.equal(getSlackToolConfig("bot").token, "xoxb-bot");
 });
 
 test("OAuth state is single-use and rejects replayed callbacks", async () => {
@@ -217,32 +169,48 @@ test("OAuth rejects a token exchange for the wrong workspace", async () => {
   assert.match(result.message, /different workspace/);
 });
 
-test("normal Slack health checks never call the browser Huddle API", async () => {
+test("Slack health checks authenticate both OAuth tokens and verify personal search", async () => {
   updateSlackSettings({
     enabled: true,
     userToken: "xoxp-personal",
     botToken: "xoxb-bot",
-    huddlesEnabled: true,
-    clientToken: "xoxc-browser-secret",
-    clientCookieD: "cookie-secret",
   });
-  const urls: string[] = [];
-  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-    const url = String(input);
-    urls.push(url);
-    if (url.endsWith("/auth.test"))
-      return new Response(
-        JSON.stringify({ ok: true, user: "tester", team: "workspace" }),
-      );
-    if (url.endsWith("/search.messages"))
-      return new Response(JSON.stringify({ ok: true, messages: { total: 0 } }));
-    throw new Error(`Unexpected request: ${url}`);
-  }) as typeof fetch;
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  globalThis.fetch = vi.fn(
+    async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({
+        url,
+        authorization: new Headers(init?.headers).get("Authorization"),
+      });
+      if (url.endsWith("/auth.test"))
+        return new Response(
+          JSON.stringify({ ok: true, user: "tester", team: "workspace" }),
+        );
+      if (url.endsWith("/search.messages"))
+        return new Response(
+          JSON.stringify({ ok: true, messages: { total: 0 } }),
+        );
+      throw new Error(`Unexpected request: ${url}`);
+    },
+  ) as typeof fetch;
 
   await testSlackSettings();
 
-  assert.ok(urls.length >= 3);
-  assert.ok(urls.every((url) => !url.includes("huddles.history")));
+  assert.deepEqual(requests, [
+    {
+      url: "https://slack.com/api/auth.test",
+      authorization: "Bearer xoxp-personal",
+    },
+    {
+      url: "https://slack.com/api/auth.test",
+      authorization: "Bearer xoxb-bot",
+    },
+    {
+      url: "https://slack.com/api/search.messages",
+      authorization: "Bearer xoxp-personal",
+    },
+  ]);
 });
 
 test("connected needs both OAuth tokens, and disconnect clears both", () => {

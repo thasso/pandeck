@@ -167,8 +167,7 @@ persona toolsets.
   the `sessionAttachments` store (status `saved_attachment` + an attachment id,
   bytes off-context), and external/deleted/inaccessible content degrades to
   metadata-only. Unread aggregation preserves missing-marker uncertainty and
-  treats thread coverage as explicitly best-effort. Experimental browser-backed
-  Huddles and private Slack web-client APIs do not belong in this module.
+  treats thread coverage as explicitly best-effort.
 - `web/webTools.ts` owns the two public-web tools shared by every persona:
   `web_search` (Brave Search API) and `web_fetch` (in-house http(s) fetch →
   Readability/Turndown Markdown or raw text). `web_search` reads its key and
@@ -671,10 +670,6 @@ persona toolsets.
   filesystem work, validation and committing. Failures throw the domain message
   (dirty repository, invalid manifest, unsafe path, ambiguous edit). Has a
   test-only library seam (`setSkillToolLibraryForTests`).
-- `slack/slackHuddleTools.ts` exclusively owns `slack_huddle_history`. It is the
-  only tool allowed to request the browser-session projection, returns no raw
-  Slack objects or secrets, bounds history/output/metadata calls, and may use
-  personal OAuth only for participant/conversation/thread enrichment.
 
 ## Contract notes and rationale
 
