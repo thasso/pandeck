@@ -123,7 +123,7 @@ export function InlineDocumentEmbed({
 
   return (
     <span ref={ref} className="not-prose my-2 block max-w-full">
-      <span className="block max-h-96 overflow-hidden rounded-lg border border-line bg-panel">
+      <span className="block max-h-96 overflow-hidden rounded-lg border border-border bg-card">
         {visible ? (
           <SandboxedDocument
             target={target}
@@ -144,7 +144,7 @@ export function InlineDocumentEmbed({
           event.preventDefault();
           pushDocumentEntryAndAnnounce(viewerHref);
         }}
-        className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-fg"
+        className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
         <Eye size={12} /> Open in viewer
       </a>
@@ -297,7 +297,7 @@ function GrantedMediaPlayer({
         type="button"
         onClick={() => setActivated(true)}
         aria-label={`Play ${label}`}
-        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm text-fg hover:bg-raised"
+        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm text-foreground hover:bg-muted"
       >
         <Play size={16} /> Play {label}
       </button>

@@ -57,7 +57,7 @@ export function PageHeaderBackButton({ label, onClick }: PageHeaderBack) {
       onClick={onClick}
       title={`Back to ${label}`}
       aria-label={`Back to ${label}`}
-      className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <ArrowLeft size={18} />
     </button>
@@ -129,7 +129,7 @@ export function PageHeader({
       : "pt-3";
   const chromeClass = transparent
     ? "pointer-events-none border-b border-transparent bg-transparent sm:bg-transparent sm:backdrop-blur-none"
-    : "border-b border-line bg-surface sm:bg-surface/80 sm:backdrop-blur";
+    : "border-b border-border bg-background sm:bg-background/80 sm:backdrop-blur";
   const iconBoxClass = `flex size-8 shrink-0 items-center justify-center rounded-lg ${ICON_TONE_CLASS[iconTone]}`;
   return (
     <header
@@ -155,7 +155,7 @@ export function PageHeader({
         ) : null)}
       <div className="min-w-0 flex-1">
         {typeof title === "string" ? (
-          <h2 className="truncate text-sm font-semibold tracking-tight text-fg">
+          <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
             {title}
           </h2>
         ) : (
@@ -179,7 +179,7 @@ export function PageHeader({
 }
 
 const HEADER_ACTION_CLASS =
-  "relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30";
+  "relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30";
 
 /**
  * What this page's OBJECT offers, in the wide header: Add comment where the
@@ -273,7 +273,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
                     close();
                     action.onRun();
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                 >
                   {action.icon ? (
                     <span className="flex size-4 shrink-0 items-center justify-center">
@@ -284,7 +284,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
                     {action.label}
                   </span>
                   {action.hint ? (
-                    <span className="shrink-0 text-sm text-faint">
+                    <span className="shrink-0 text-sm text-muted-foreground">
                       {action.hint}
                     </span>
                   ) : null}

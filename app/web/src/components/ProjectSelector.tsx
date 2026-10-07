@@ -24,7 +24,7 @@ export function ProjectSelector({
   triggerTitle,
   includeCurrentWhenMissing = true,
   placement = "auto",
-  className = "rounded-lg px-1.5 py-1 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+  className = "rounded-lg px-1.5 py-1 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
 }: {
   currentId: string | null | undefined;
   projects: ProjectRecord[];
@@ -67,7 +67,7 @@ export function ProjectSelector({
       size="md"
     />
   ) : (
-    <span className="inline-flex items-center gap-1.5 text-sm text-faint hover:text-muted-foreground">
+    <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-muted-foreground">
       <FolderKanban size={13} />
       {emptyLabel}
     </span>
@@ -76,7 +76,7 @@ export function ProjectSelector({
   return (
     <div className="flex items-center gap-2">
       {label ? (
-        <span className="text-sm font-medium uppercase tracking-wide text-faint">
+        <span className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
           {label}
         </span>
       ) : null}
@@ -89,19 +89,19 @@ export function ProjectSelector({
         >
           {(close) => (
             <div className="flex w-64 flex-col gap-1 p-1">
-              <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5">
-                <Search size={13} className="shrink-0 text-faint" />
+              <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
+                <Search size={13} className="shrink-0 text-muted-foreground" />
                 <input
                   autoFocus
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
                   placeholder="Filter projects…"
-                  className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
                 />
               </div>
               {currentNotInList && selectedId ? (
                 <div className="px-2 py-1">
-                  <span className="text-sm text-faint">
+                  <span className="text-sm text-muted-foreground">
                     Current (archived or stale)
                   </span>
                   <div className="mt-1">
@@ -115,7 +115,7 @@ export function ProjectSelector({
               ) : null}
               <div className="max-h-52 overflow-y-auto">
                 {filtered.length === 0 && !currentNotInList ? (
-                  <div className="px-2 py-3 text-center text-sm text-faint">
+                  <div className="px-2 py-3 text-center text-sm text-muted-foreground">
                     {projects.length === 0
                       ? "No projects in the registry yet."
                       : "No matches."}
@@ -129,7 +129,7 @@ export function ProjectSelector({
                         onChange(p.id);
                         close();
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-raised ${selectedId === p.id ? "font-medium text-fg" : "text-muted-foreground"}`}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted ${selectedId === p.id ? "font-medium text-foreground" : "text-muted-foreground"}`}
                     >
                       <span
                         className="size-2 shrink-0 rounded-full"
@@ -138,12 +138,12 @@ export function ProjectSelector({
                       />
                       <span className="min-w-0 flex-1 truncate">{p.name}</span>
                       {projectDisplayKey(p) ? (
-                        <span className="shrink-0 rounded bg-surface px-1.5 py-0.5 text-xs font-medium tracking-wide text-faint">
+                        <span className="shrink-0 rounded bg-background px-1.5 py-0.5 text-xs font-medium tracking-wide text-muted-foreground">
                           {projectDisplayKey(p)}
                         </span>
                       ) : null}
                       {selectedId === p.id ? (
-                        <span className="shrink-0 text-xs text-faint">
+                        <span className="shrink-0 text-xs text-muted-foreground">
                           current
                         </span>
                       ) : null}
@@ -158,7 +158,7 @@ export function ProjectSelector({
                     onChange("");
                     close();
                   }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-faint hover:bg-raised hover:text-danger"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-destructive"
                 >
                   <X size={13} />
                   {clearLabel}

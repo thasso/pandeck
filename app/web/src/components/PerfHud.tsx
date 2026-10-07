@@ -57,8 +57,8 @@ export function PerfHud() {
   if (!enabled || !snapshot) return null;
 
   return (
-    <div className="pointer-events-none fixed bottom-2 left-2 z-[100] max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-line bg-panel/95 p-2 font-mono text-xs text-muted-foreground shadow-2xl">
-      <div className="mb-1 flex items-center justify-between text-fg">
+    <div className="pointer-events-none fixed bottom-2 left-2 z-[100] max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-border bg-card/95 p-2 font-mono text-xs text-muted-foreground shadow-2xl">
+      <div className="mb-1 flex items-center justify-between text-foreground">
         <span>perf · {snapshot.windowMs}ms</span>
         <span>
           {formatBytes(snapshot.totalBytes)}/s · parse{" "}
@@ -66,7 +66,7 @@ export function PerfHud() {
         </span>
       </div>
       {snapshot.messages.length === 0 ? (
-        <div className="text-faint">no traffic</div>
+        <div className="text-muted-foreground">no traffic</div>
       ) : null}
       {snapshot.messages.map((stat) => (
         <div
@@ -82,7 +82,7 @@ export function PerfHud() {
       ))}
       {snapshot.sessionLoad ? (
         <>
-          <div className="mt-1 border-t border-line pt-1 text-fg">
+          <div className="mt-1 border-t border-border pt-1 text-foreground">
             session load
           </div>
           <div className="flex items-center justify-between gap-2">
@@ -114,9 +114,11 @@ export function PerfHud() {
           </div>
         </>
       ) : null}
-      <div className="mt-1 border-t border-line pt-1 text-fg">renders/s</div>
+      <div className="mt-1 border-t border-border pt-1 text-foreground">
+        renders/s
+      </div>
       {snapshot.renders.length === 0 ? (
-        <div className="text-faint">none</div>
+        <div className="text-muted-foreground">none</div>
       ) : null}
       {snapshot.renders.map((render) => (
         <div

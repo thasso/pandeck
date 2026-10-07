@@ -228,7 +228,7 @@ describe("PeerPromptCardView", () => {
     ["interrupted", "Interrupted", "lucide-triangle-alert", "text-warning"],
     ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted-foreground"],
     ["expired", "Expired", "lucide-clock-alert", "text-warning"],
-    ["failed", "Failed", "lucide-circle-x", "text-danger"],
+    ["failed", "Failed", "lucide-circle-x", "text-destructive"],
   ] as const)(
     "keeps %s visible and distinct from success while collapsed",
     (state, label, icon, tone) => {
@@ -272,7 +272,9 @@ describe("PeerPromptCardView", () => {
     expect(html).not.toContain("<details");
     renderCard(retrying);
     expandCard();
-    expect(container.querySelector("p.text-danger")?.textContent).toBe("boom");
+    expect(container.querySelector("p.text-destructive")?.textContent).toBe(
+      "boom",
+    );
     expect(container.querySelector("details")).toBeNull();
   });
 });

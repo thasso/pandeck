@@ -131,7 +131,7 @@ export function InlineEdit({
         aria-label={ariaLabel}
         className={
           displayClassName ??
-          `text-left text-sm ${hasValue ? "text-fg" : "text-faint"}`
+          `text-left text-sm ${hasValue ? "text-foreground" : "text-muted-foreground"}`
         }
       >
         {hasValue ? value : (placeholder ?? "Add text…")}
@@ -160,7 +160,7 @@ export function InlineEdit({
           }}
           className={
             editorClassName ??
-            "min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
+            "min-h-[8rem] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
           }
         />
         <div className="flex items-center justify-end gap-2">
@@ -168,7 +168,7 @@ export function InlineEdit({
             type="button"
             onClick={cancel}
             disabled={submitPending}
-            className="inline-flex items-center gap-1 rounded-lg border border-line px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-panel hover:text-fg disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-sm text-muted-foreground hover:bg-card hover:text-foreground disabled:opacity-50"
           >
             <X size={13} /> Cancel
           </button>
@@ -209,13 +209,13 @@ export function InlineEdit({
         }}
         className={
           editorClassName ??
-          "min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-sm text-fg outline-none focus:border-primary"
+          "min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
         }
       />
       {submitPending ? (
         <span
           role="status"
-          className="inline-flex items-center gap-1 text-sm text-faint"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground"
         >
           <Spinner size="xs" /> Saving…
         </span>

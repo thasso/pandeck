@@ -52,12 +52,12 @@ function MarkdownFrontmatterHeader({
   if (!parsed) {
     return (
       <details
-        className={`rounded-xl border border-line bg-panel/60 px-4 py-2 text-sm ${className ?? ""}`}
+        className={`rounded-xl border border-border bg-card/60 px-4 py-2 text-sm ${className ?? ""}`}
       >
         <summary className="cursor-pointer text-muted-foreground">
           Frontmatter
         </summary>
-        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-fg">
+        <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-foreground">
           {raw}
         </pre>
       </details>
@@ -67,15 +67,17 @@ function MarkdownFrontmatterHeader({
   return (
     <header
       aria-label="Document metadata"
-      className={`flex flex-col gap-2 rounded-xl border border-line bg-panel/60 px-4 py-3 ${className ?? ""}`}
+      className={`flex flex-col gap-2 rounded-xl border border-border bg-card/60 px-4 py-3 ${className ?? ""}`}
     >
-      {title ? <p className="text-sm font-semibold text-fg">{title}</p> : null}
+      {title ? (
+        <p className="text-sm font-semibold text-foreground">{title}</p>
+      ) : null}
       {tags.length > 0 ? (
         <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
           {tags.map((tag, index) => (
             <li
               key={`${index}:${tag}`}
-              className="rounded-full border border-line bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground"
+              className="rounded-full border border-border bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground"
             >
               {tag}
             </li>
@@ -86,7 +88,7 @@ function MarkdownFrontmatterHeader({
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
           {fields.map((field) => (
             <div key={field.key} className="contents">
-              <dt className="text-faint">{field.key}</dt>
+              <dt className="text-muted-foreground">{field.key}</dt>
               <dd
                 className="min-w-0 break-words text-muted-foreground"
                 title={field.full}

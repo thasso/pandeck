@@ -266,7 +266,7 @@ export function PortForwardingSettingsSection() {
       </p>
 
       {!supported ? (
-        <div className="mt-6 rounded-xl border border-line bg-panel p-4">
+        <div className="mt-6 rounded-xl border border-border bg-card p-4">
           <p className="text-sm text-muted-foreground">
             Port forwarding needs the macOS app: it listens on this machine,
             which a browser tab cannot do. Open Settings in the desktop app to
@@ -277,11 +277,11 @@ export function PortForwardingSettingsSection() {
         <>
           <form
             onSubmit={(event) => void submit(event)}
-            className="mt-6 rounded-xl border border-line bg-panel p-4"
+            className="mt-6 rounded-xl border border-border bg-card p-4"
           >
             <label
               htmlFor={PORT_INPUT_ID}
-              className="block text-sm font-medium text-fg"
+              className="block text-sm font-medium text-foreground"
             >
               Server port
             </label>
@@ -304,14 +304,16 @@ export function PortForwardingSettingsSection() {
                   if (startError) setStartError(null);
                 }}
                 className={`settings-input min-w-0 flex-1 basis-40 font-mono ${
-                  startError !== null ? "border-danger focus:border-danger" : ""
+                  startError !== null
+                    ? "border-destructive focus:border-destructive"
+                    : ""
                 }`}
               />
               <Button type="submit" busy={starting}>
                 Start
               </Button>
             </div>
-            <p id={PORT_HINT_ID} className="mt-2 text-sm text-faint">
+            <p id={PORT_HINT_ID} className="mt-2 text-sm text-muted-foreground">
               A port from {PORT_FORWARD_MIN_PORT} to {PORT_FORWARD_MAX_PORT}.
               macOS asks before the app listens on 127.0.0.1 at that port. The
               forward ends when it expires (24 hours), when you stop it, or when
@@ -324,9 +326,11 @@ export function PortForwardingSettingsSection() {
             )}
           </form>
 
-          <div className="mt-4 rounded-xl border border-line bg-panel p-4">
+          <div className="mt-4 rounded-xl border border-border bg-card p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-fg">Forwards</h3>
+              <h3 className="text-sm font-semibold text-foreground">
+                Forwards
+              </h3>
               {state.status === "refreshing" && <RefreshIndicator />}
             </div>
             {errorOf(state) !== undefined && (
@@ -354,14 +358,14 @@ export function PortForwardingSettingsSection() {
                   : "."}
               </EmptyBox>
             ) : (
-              <ul className="mt-1 divide-y divide-line">
+              <ul className="mt-1 divide-y divide-border">
                 {forwards.map((status) => {
                   const rowError = rowErrors[status.port];
                   return (
                     <li key={status.port} className="py-3">
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                         <div className="min-w-0 flex-1 basis-56">
-                          <div className="truncate font-mono text-sm text-fg">
+                          <div className="truncate font-mono text-sm text-foreground">
                             {status.localUrl}
                           </div>
                           <div className="mt-0.5 flex flex-wrap gap-x-3 text-sm text-muted-foreground">

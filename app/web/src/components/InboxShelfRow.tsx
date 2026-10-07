@@ -106,10 +106,10 @@ export function InboxShelfRow({
       }}
       className={`group flex min-w-0 cursor-pointer select-none items-center gap-1 rounded-md pl-0.5 pr-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
         comfortable ? "h-11" : "h-7"
-      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
     >
       <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md bg-raised ${agent.activeColor}`}
+        className={`flex size-5 shrink-0 items-center justify-center rounded-md bg-muted ${agent.activeColor}`}
         aria-hidden
       >
         <AgentIcon size={12} />
@@ -121,7 +121,7 @@ export function InboxShelfRow({
         />
       </span>
       <SessionDeliveryMark session={session} variant="glyph" />
-      <span className="shrink-0 text-xs tabular-nums text-faint">
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
         {relativeAge(at, now)}
       </span>
       <button
@@ -132,7 +132,7 @@ export function InboxShelfRow({
           e.stopPropagation();
           onRestore();
         }}
-        className={`flex shrink-0 cursor-pointer items-center justify-center rounded text-faint transition-colors hover:bg-line/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        className={`flex shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-border/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           comfortable ? "size-9" : "size-5"
         }`}
       >

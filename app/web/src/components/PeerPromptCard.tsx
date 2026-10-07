@@ -106,7 +106,7 @@ export function PeerPromptCardView({
       </p>
       <Markdown text={message} onOpenSession={onOpenSession} />
       {typeof card.failureReason === "string" && card.failureReason ? (
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-danger">
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-destructive">
           {card.failureReason}
         </p>
       ) : null}

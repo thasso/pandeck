@@ -104,18 +104,18 @@ export function LoadedMemorySection({
         summary="Draft"
         defaultOpen={defaultOpen}
       >
-        <p className="text-sm text-faint">
+        <p className="text-sm text-muted-foreground">
           Draft — memory scope is staged but nothing has been loaded yet; it
           applies once the first message is sent.
         </p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5 text-sm text-faint">
+        <div className="mt-1.5 flex flex-wrap gap-1.5 text-sm text-muted-foreground">
           {stagedScope?.persona && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <span className="rounded bg-card px-1.5 py-0.5">
               persona: {stagedScope.persona}
             </span>
           )}
           {stagedScope?.projectId && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <span className="rounded bg-card px-1.5 py-0.5">
               project: {stagedScope.projectId}
               {stagedScope.pendingTaskTitle
                 ? ` (from Task "${stagedScope.pendingTaskTitle}")`
@@ -123,13 +123,13 @@ export function LoadedMemorySection({
             </span>
           )}
           {stagedScope?.projectIsGlobal && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <span className="rounded bg-card px-1.5 py-0.5">
               project: global (Task "{stagedScope.pendingTaskTitle}" has no
               project)
             </span>
           )}
           {stagedScope?.projectUnresolved && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <span className="rounded bg-card px-1.5 py-0.5">
               project scope from attached Task "{stagedScope.pendingTaskTitle}"
               (resolves once sent)
             </span>
@@ -167,20 +167,20 @@ export function LoadedMemorySection({
       defaultOpen={defaultOpen}
     >
       {!loadingEnabled ? (
-        <p className="text-sm text-faint">
+        <p className="text-sm text-muted-foreground">
           Memory loading is disabled in Memory settings — existing memories are
           kept but nothing is injected.
         </p>
       ) : notYetLoaded ? (
-        <p className="text-sm text-faint">Not yet loaded.</p>
+        <p className="text-sm text-muted-foreground">Not yet loaded.</p>
       ) : !batch ? (
-        <p className="text-sm text-faint">
+        <p className="text-sm text-muted-foreground">
           No memory has been loaded for this session yet.
         </p>
       ) : (
         <div className="space-y-2">
           {batches.length > 1 && (
-            <div className="flex items-center justify-between text-sm text-faint">
+            <div className="flex items-center justify-between text-sm text-muted-foreground">
               <button
                 type="button"
                 title="Older turn"
@@ -189,7 +189,7 @@ export function LoadedMemorySection({
                 onClick={() =>
                   setIndex((i) => Math.min(batches.length - 1, i + 1))
                 }
-                className="inline-flex items-center gap-0.5 rounded border border-line bg-panel px-1.5 py-0.5 disabled:opacity-40"
+                className="inline-flex items-center gap-0.5 rounded border border-border bg-card px-1.5 py-0.5 disabled:opacity-40"
               >
                 <ChevronLeft size={11} />
                 Older
@@ -204,7 +204,7 @@ export function LoadedMemorySection({
                 aria-label="Newer turn"
                 disabled={clampedIndex <= 0}
                 onClick={() => setIndex((i) => Math.max(0, i - 1))}
-                className="inline-flex items-center gap-0.5 rounded border border-line bg-panel px-1.5 py-0.5 disabled:opacity-40"
+                className="inline-flex items-center gap-0.5 rounded border border-border bg-card px-1.5 py-0.5 disabled:opacity-40"
               >
                 Newer
                 <ChevronRight size={11} />
@@ -219,7 +219,7 @@ export function LoadedMemorySection({
           type="button"
           onClick={onOpenManager}
           title="Open Memory settings"
-          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ExternalLink size={11} />
           Manage memory
@@ -238,23 +238,23 @@ function LoadBatch({
 }) {
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5 text-sm text-faint">
+      <div className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
         <span
           className={`rounded px-1.5 py-0.5 ${badgeTone(batch.deliveryState)}`}
         >
           {deliveryLabel(batch.deliveryState)}
         </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
+        <span className="rounded bg-card px-1.5 py-0.5">
           {batch.items.length} card{batch.items.length === 1 ? "" : "s"}
         </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
+        <span className="rounded bg-card px-1.5 py-0.5">
           {batch.renderedChars} chars
         </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
+        <span className="rounded bg-card px-1.5 py-0.5">
           {batch.injectedChars} injected
         </span>
         <span
-          className="rounded bg-panel px-1.5 py-0.5"
+          className="rounded bg-card px-1.5 py-0.5"
           title="Cumulative injected characters since the last compaction/rotation reset"
         >
           {batch.cumulativeInjectedChars} cumulative
@@ -330,21 +330,21 @@ function LoadItemRow({
   };
 
   return (
-    <div className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm">
+    <div className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">
-          <div className="text-fg">
+          <div className="text-foreground">
             {item.text || "(memory text unavailable)"}
           </div>
-          <div className="mt-0.5 flex flex-wrap gap-1 text-xs text-faint">
-            <span className="rounded bg-panel px-1 py-0.5">#{item.rank}</span>
-            <span className="rounded bg-panel px-1 py-0.5">{item.kind}</span>
-            <span className="rounded bg-panel px-1 py-0.5">
+          <div className="mt-0.5 flex flex-wrap gap-1 text-xs text-muted-foreground">
+            <span className="rounded bg-card px-1 py-0.5">#{item.rank}</span>
+            <span className="rounded bg-card px-1 py-0.5">{item.kind}</span>
+            <span className="rounded bg-card px-1 py-0.5">
               {scopeLabel(item.scope)}
             </span>
-            <span className="rounded bg-panel px-1 py-0.5">{item.reason}</span>
+            <span className="rounded bg-card px-1 py-0.5">{item.reason}</span>
             {item.provenance && (
-              <span className="rounded bg-panel px-1 py-0.5">
+              <span className="rounded bg-card px-1 py-0.5">
                 {provenanceLabel(item.provenance.sourceKind)}
               </span>
             )}
@@ -355,7 +355,7 @@ function LoadItemRow({
             title={open ? "Hide details" : "Details / actions"}
             aria-label={open ? "Hide details" : "Details / actions"}
             onClick={() => setOpen((v) => !v)}
-            className="rounded border border-line bg-panel p-1 text-muted-foreground hover:text-fg"
+            className="rounded border border-border bg-card p-1 text-muted-foreground hover:text-foreground"
           >
             {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
           </button>
@@ -363,9 +363,9 @@ function LoadItemRow({
       </div>
 
       {open && (
-        <div className="mt-2 border-t border-line pt-2">
+        <div className="mt-2 border-t border-border pt-2">
           {item.provenance?.sessionId && (
-            <div className="mb-1.5 text-sm text-faint">
+            <div className="mb-1.5 text-sm text-muted-foreground">
               Source: {provenanceLabel(item.provenance.sourceKind)} in{" "}
               <a
                 href={sessionPath(item.provenance.sessionId)}
@@ -386,14 +386,16 @@ function LoadItemRow({
               <Skeleton className="h-3 w-1/2" />
             </div>
           ) : !live ? (
-            <p className="text-sm text-faint">This memory no longer exists.</p>
+            <p className="text-sm text-muted-foreground">
+              This memory no longer exists.
+            </p>
           ) : editing ? (
             <div>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none focus:border-primary"
+                className="w-full resize-y rounded-md border border-border bg-card px-2 py-1 text-sm outline-none focus:border-primary"
               />
               <div className="mt-1 flex gap-2">
                 <button
@@ -418,7 +420,7 @@ function LoadItemRow({
                     setEditing(false);
                     setDraft(live.text);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm"
+                  className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-sm"
                 >
                   <X size={11} />
                   Cancel
@@ -427,7 +429,7 @@ function LoadItemRow({
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="rounded bg-panel px-1.5 py-0.5 text-xs text-faint">
+              <span className="rounded bg-card px-1.5 py-0.5 text-xs text-muted-foreground">
                 {live.state}
                 {live.pinned ? " · pinned" : ""}
               </span>
@@ -506,7 +508,7 @@ function IconBtn({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted-foreground hover:text-fg"
+      className="rounded-md border border-border bg-card p-1.5 text-muted-foreground hover:text-foreground"
     >
       {children}
     </button>
@@ -529,12 +531,12 @@ function badgeTone(state: MemoryLoadBatch["deliveryState"]): string {
   return state === "injected"
     ? "bg-primary/15 text-primary"
     : state === "reused"
-      ? "bg-panel text-muted-foreground"
+      ? "bg-card text-muted-foreground"
       : state === "cleared"
         ? "bg-amber-500/15 text-amber-500"
         : state === "failed"
           ? "bg-red-500/15 text-red-500"
-          : "bg-panel text-faint";
+          : "bg-card text-muted-foreground";
 }
 
 function scopeLabel(scope: { persona?: string; projectId?: string }): string {

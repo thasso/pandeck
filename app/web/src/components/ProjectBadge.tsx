@@ -32,7 +32,7 @@ export function ProjectBadge({
   if (size === "sm") {
     return (
       <span
-        className={`inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-xs ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
+        className={`inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-xs ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-border text-muted-foreground`}`}
         style={known ? { backgroundColor: colors.soft } : undefined}
         title={known ? label : `Unknown project: ${projectId}`}
       >
@@ -51,7 +51,7 @@ export function ProjectBadge({
               e.stopPropagation();
               onClear();
             }}
-            className="ml-0.5 shrink-0 rounded-full p-px text-faint hover:text-danger focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
+            className="ml-0.5 shrink-0 rounded-full p-px text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
             title="Remove project"
             aria-label="Remove project"
           >
@@ -65,7 +65,7 @@ export function ProjectBadge({
   // md
   return (
     <span
-      className={`inline-flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-sm ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
+      className={`inline-flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-sm ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-border text-muted-foreground`}`}
       style={known ? { backgroundColor: colors.soft } : undefined}
       title={known ? label : `Unknown project: ${projectId}`}
     >
@@ -84,7 +84,7 @@ export function ProjectBadge({
             e.stopPropagation();
             onClear();
           }}
-          className="ml-0.5 shrink-0 rounded-full p-0.5 text-faint hover:text-danger focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
+          className="ml-0.5 shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40"
           title="Remove project"
           aria-label="Remove project"
         >

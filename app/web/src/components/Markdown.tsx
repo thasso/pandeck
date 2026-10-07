@@ -534,7 +534,10 @@ function MarkdownAnchor({
       >
         {title && title !== session.id ? (
           <>
-            {title} <span className="font-mono text-faint">({session.id})</span>
+            {title}{" "}
+            <span className="font-mono text-muted-foreground">
+              ({session.id})
+            </span>
           </>
         ) : (
           <span className="font-mono">{session.id}</span>
@@ -903,7 +906,7 @@ function PaObjectLink({
           ? `Unresolved ${link.typeLabel.toLowerCase()} link: ${link.id}`
           : `${link.typeLabel}: ${link.title}${link.detail ? ` (${link.detail})` : ""}`
       }
-      className={broken ? "text-danger decoration-dotted" : undefined}
+      className={broken ? "text-destructive decoration-dotted" : undefined}
       aria-invalid={broken ? true : undefined}
       onClick={(event) => {
         if (
@@ -977,7 +980,7 @@ function ChangedFileCodeLink({
     <a
       href={workspaceFilePathHref(path)}
       title={`Open workspace file ${path}`}
-      className="rounded-[5px] border border-line bg-raised px-[0.34em] py-[0.08em] font-mono"
+      className="rounded-[5px] border border-border bg-muted px-[0.34em] py-[0.08em] font-mono"
       onClick={(event) => {
         if (
           !onOpenChangedFile ||

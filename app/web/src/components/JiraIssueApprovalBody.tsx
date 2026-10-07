@@ -74,7 +74,7 @@ function Outcome({ item }: { item: JiraItem }) {
   return (
     <div className="space-y-0.5">
       {item.error ? (
-        <div className="text-sm text-danger">{item.error}</div>
+        <div className="text-sm text-destructive">{item.error}</div>
       ) : item.resultIssueUrl ? (
         <a
           href={item.resultIssueUrl}
@@ -138,8 +138,8 @@ function FieldRows({
     <dl className={className}>
       {rows.map((row) => (
         <div key={`${row.label}:${row.value}`} className="flex gap-1.5">
-          <dt className="shrink-0 text-faint">{row.label}</dt>
-          <dd className="min-w-0 break-words text-fg">{row.value}</dd>
+          <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
+          <dd className="min-w-0 break-words text-foreground">{row.value}</dd>
         </div>
       ))}
     </dl>
@@ -153,7 +153,7 @@ function LinkRows({ item }: { item: JiraItem }) {
       {item.linkChanges.map((link, i) => (
         <li key={i} className="text-sm text-muted-foreground">
           {link.op === "remove" ? "unlink" : link.relationship}{" "}
-          <span className="font-mono text-fg">
+          <span className="font-mono text-foreground">
             {link.targetIssueKey || link.linkId}
           </span>
         </li>
@@ -187,11 +187,14 @@ export function ClippedMarkdown({ text }: { text: string }) {
   }, [text]);
   return (
     <div className="relative">
-      <div ref={ref} className="max-h-48 min-w-0 overflow-hidden text-fg">
+      <div
+        ref={ref}
+        className="max-h-48 min-w-0 overflow-hidden text-foreground"
+      >
         <Markdown text={text} density="compact" />
       </div>
       {clipped ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-panel to-transparent" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-card to-transparent" />
       ) : null}
     </div>
   );
@@ -208,7 +211,7 @@ function ReadFullButton({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
     >
       <Maximize2 size={12} />
       {label}
@@ -229,7 +232,7 @@ function CreateItem({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <IssueKind item={item} />
-        <span className="min-w-0 flex-1 font-medium text-fg">
+        <span className="min-w-0 flex-1 font-medium text-foreground">
           {item.createSummary}
         </span>
       </div>
@@ -237,7 +240,7 @@ function CreateItem({
       {item.createDescription ? (
         <ClippedMarkdown text={item.createDescription} />
       ) : (
-        <div className="text-faint">No description.</div>
+        <div className="text-muted-foreground">No description.</div>
       )}
       <LinkRows item={item} />
       <ReadFullButton label="Read full ticket" onClick={() => setOpen(true)} />
@@ -251,7 +254,7 @@ function CreateItem({
           <div className="flex flex-wrap items-center gap-2">
             <IssueKind item={item} />
           </div>
-          <h1 className="mt-2 text-xl font-semibold text-fg">
+          <h1 className="mt-2 text-xl font-semibold text-foreground">
             {item.createSummary}
           </h1>
           <FieldRows
@@ -262,7 +265,9 @@ function CreateItem({
             {item.createDescription ? (
               <Markdown text={item.createDescription} />
             ) : (
-              <div className="text-sm text-faint">No description.</div>
+              <div className="text-sm text-muted-foreground">
+                No description.
+              </div>
             )}
           </DialogSection>
           {item.linkChanges?.length ? (
@@ -314,7 +319,7 @@ function CommentItem({
 
 function IssueKeyLink({ item }: { item: JiraItem }) {
   if (!item.issueUrl)
-    return <span className="font-mono text-fg">{item.issueKey}</span>;
+    return <span className="font-mono text-foreground">{item.issueKey}</span>;
   return (
     <a
       href={item.issueUrl}
@@ -347,12 +352,15 @@ function EditItem({ item }: { item: JiraItem }) {
         <dl className="space-y-0.5">
           {item.fieldChanges.map((change) => (
             <div key={change.fieldId} className="flex flex-wrap gap-1.5">
-              <dt className="text-faint">{change.label}</dt>
+              <dt className="text-muted-foreground">{change.label}</dt>
               <dd className="min-w-0 break-words">
                 <span className="text-muted-foreground line-through">
                   {change.from || EMPTY_VALUE}
                 </span>{" "}
-                → <span className="text-fg">{change.to || EMPTY_VALUE}</span>
+                →{" "}
+                <span className="text-foreground">
+                  {change.to || EMPTY_VALUE}
+                </span>
               </dd>
             </div>
           ))}
@@ -390,14 +398,14 @@ function RankItem({ item }: { item: JiraItem }) {
     <div className="space-y-1">
       <div>
         <span className="text-muted-foreground">rank </span>
-        <span className="font-mono text-fg">
+        <span className="font-mono text-foreground">
           {(item.rankIssueKeys ?? []).join(", ")}
         </span>
         <span className="text-muted-foreground"> {item.rankPosition}</span>
         {target ? (
           <>
             <span className="text-muted-foreground"> </span>
-            <span className="font-mono text-fg">{target}</span>
+            <span className="font-mono text-foreground">{target}</span>
           </>
         ) : null}
         {scope ? (
@@ -408,20 +416,20 @@ function RankItem({ item }: { item: JiraItem }) {
         <ul className="space-y-0.5">
           {item.rankSteps.map((step, i) => (
             <li key={i} className="text-sm text-muted-foreground">
-              <span className="font-mono text-fg">{step.issueKey}</span>{" "}
+              <span className="font-mono text-foreground">{step.issueKey}</span>{" "}
               {step.placement}{" "}
-              <span className="font-mono text-fg">
+              <span className="font-mono text-foreground">
                 {step.relativeToIssueKey}
               </span>
               {step.resultOk === false ? (
-                <span className="text-danger"> — {step.error}</span>
+                <span className="text-destructive"> — {step.error}</span>
               ) : step.resultOk ? (
                 <span className="text-green-600 dark:text-green-400">
                   {" "}
                   — applied
                 </span>
               ) : executed ? (
-                <span className="text-faint"> — not attempted</span>
+                <span className="text-muted-foreground"> — not attempted</span>
               ) : null}
             </li>
           ))}
@@ -430,7 +438,7 @@ function RankItem({ item }: { item: JiraItem }) {
       {item.rankResultOrder?.length ? (
         <div className="text-sm text-muted-foreground">
           Order now:{" "}
-          <span className="font-mono text-fg">
+          <span className="font-mono text-foreground">
             {item.rankResultOrder.join(" → ")}
           </span>
         </div>
@@ -449,7 +457,7 @@ function DialogSection({
 }) {
   return (
     <section className="mt-4">
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
       {children}
@@ -497,7 +505,7 @@ function JiraProposalDialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl outline-none"
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           event.stopPropagation();
@@ -509,15 +517,15 @@ function JiraProposalDialog({
           wrapTabWithin(event, surfaceRef.current, DIALOG_FOCUSABLE);
         }}
       >
-        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
             {title}
           </div>
           <button
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="rounded-lg p-1 text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-lg p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <X size={14} />
           </button>
@@ -525,7 +533,7 @@ function JiraProposalDialog({
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           {children}
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
           {onDecide ? (
             <>
               <DialogCancelButton onClick={() => decide("rejected")}>

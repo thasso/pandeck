@@ -140,7 +140,7 @@ it("refuses a port outside the range before asking the shell", async () => {
     await submit();
     expect(text(), value).toContain("Enter a port from 1024 to 65535.");
     expect(input().getAttribute("aria-invalid")).toBe("true");
-    expect(input().className).toContain("border-danger");
+    expect(input().className).toContain("border-destructive");
     // The refusal is part of the field's description, ahead of the hint.
     expect(input().getAttribute("aria-describedby")).toBe(
       "port-forward-port-error port-forward-port-hint",
@@ -154,7 +154,7 @@ it("refuses a port outside the range before asking the shell", async () => {
   await type("5173");
   expect(text()).not.toContain("Enter a port from");
   expect(input().getAttribute("aria-invalid")).toBeNull();
-  expect(input().className).not.toContain("border-danger");
+  expect(input().className).not.toContain("border-destructive");
 });
 
 it("refuses a port that is already forwarded before minting a grant", async () => {

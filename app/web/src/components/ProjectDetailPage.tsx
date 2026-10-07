@@ -168,7 +168,7 @@ function ProjectDetailPageView({
     : undefined;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {/* One row of IDENTITY, at every width: the glyph (which copies the key —
           the thing you type into a prompt or a branch name) and `KEY - Name`.
           The key prefix is what makes this row worth its height; the name alone
@@ -203,7 +203,7 @@ function ProjectDetailPageView({
               submitState={mutationStates[`${selected.id}:name`]}
               onSubmit={(name) => onSave(selected.id, { name: name.trim() })}
               ariaLabel="Project name"
-              editorClassName="w-full rounded-md border border-line bg-surface px-2 py-1 text-sm font-semibold text-fg outline-none focus:border-primary"
+              editorClassName="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-semibold text-foreground outline-none focus:border-primary"
               renderDisplay={(begin) => {
                 beginRename.current = begin;
                 return (
@@ -213,10 +213,10 @@ function ProjectDetailPageView({
                         <span className="select-all font-mono text-muted-foreground">
                           {selected.key}
                         </span>
-                        <span className="text-faint"> - </span>
+                        <span className="text-muted-foreground"> - </span>
                       </>
                     ) : null}
-                    <span className="font-semibold text-fg">
+                    <span className="font-semibold text-foreground">
                       {selected.name}
                     </span>
                   </h2>
@@ -238,7 +238,7 @@ function ProjectDetailPageView({
           selected ? (
             <div className="flex items-center gap-1">
               {selected.status === "archived" ? (
-                <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-sm text-muted-foreground">
+                <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground">
                   archived
                 </span>
               ) : null}
@@ -453,7 +453,7 @@ function ProjectDetail({
           allowEmpty
           ariaLabel="Project description"
           placeholder="Add a description…"
-          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
+          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
           renderDisplay={(begin) => {
             // Editing is triggered only by the section's ghost edit button
             // (clicking prose selected text and entered edit mode too easily).
@@ -467,7 +467,7 @@ function ProjectDetail({
                     onOpenPaObject={onOpenPaObject}
                   />
                 ) : (
-                  <span className="text-sm text-faint">
+                  <span className="text-sm text-muted-foreground">
                     No description yet. Use the edit button to add one.
                   </span>
                 )}
@@ -516,7 +516,7 @@ function ProjectDetail({
                 <Skeleton className="h-7 w-4/5" />
               </div>
             ) : worktrees.length === 0 ? (
-              <p className="px-2 py-2 text-sm text-faint">
+              <p className="px-2 py-2 text-sm text-muted-foreground">
                 No worktrees yet. Spawn one to let an agent work in isolation.
               </p>
             ) : (
@@ -604,9 +604,9 @@ function ProjectWorktreeRowImpl({
   return (
     <div
       data-project-worktree-row={worktree.id}
-      className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-raised"
+      className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-muted"
     >
-      <BranchIcon size={13} className="mt-0.5 shrink-0 text-faint" />
+      <BranchIcon size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
       <button
         type="button"
         onClick={() => onOpen?.(worktree.id)}
@@ -617,7 +617,9 @@ function ProjectWorktreeRowImpl({
           data-worktree-primary
           className="flex min-w-0 max-w-full items-center gap-2"
         >
-          <span className="truncate text-sm font-medium text-fg">{branch}</span>
+          <span className="truncate text-sm font-medium text-foreground">
+            {branch}
+          </span>
           <WorktreeLineDelta status={status} />
           <WorktreeMergedBadge status={status} />
         </span>
@@ -715,7 +717,9 @@ function RepositorySection({
       body: (
         <>
           {checkoutPath ? (
-            <span className="mb-1 block font-mono text-fg">{checkoutPath}</span>
+            <span className="mb-1 block font-mono text-foreground">
+              {checkoutPath}
+            </span>
           ) : null}
           The folder is deleted from disk. Uncommitted work in it will be lost.
         </>
@@ -782,7 +786,7 @@ function RepositorySection({
               muted
             />
             {blocked ? (
-              <p className="text-sm text-faint">
+              <p className="text-sm text-muted-foreground">
                 {spawnedWorktrees} worktree{spawnedWorktrees === 1 ? "" : "s"}{" "}
                 still use{spawnedWorktrees === 1 ? "s" : ""} this clone. Remove{" "}
                 {spawnedWorktrees === 1 ? "it" : "them"} first to remove the
@@ -799,7 +803,7 @@ function RepositorySection({
               allowEmpty
               ariaLabel="Repository URL"
               placeholder="git@host:owner/repo.git"
-              editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
+              editorClassName="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
               renderDisplay={(begin) => (
                 <RepoRow
                   label="Clone from"
@@ -821,7 +825,7 @@ function RepositorySection({
                     ? "Clone it under the Projects root and use it as this project's main checkout"
                     : "Set a repository URL first"
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
               >
                 {provisioning === "clone" ? <Spinner size="sm" /> : null}
                 {provisioning === "clone" ? "Cloning…" : "Clone"}
@@ -852,13 +856,15 @@ function RepoRow({
 }) {
   const body = (
     <>
-      <span className="w-[4.5rem] shrink-0 text-sm text-faint">{label}</span>
-      <span className="mt-0.5 shrink-0 text-faint">{icon}</span>
+      <span className="w-[4.5rem] shrink-0 text-sm text-muted-foreground">
+        {label}
+      </span>
+      <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
       {/* A path or remote WRAPS rather than truncates: a truncated
           `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
           read or copy out on a phone. */}
       <span
-        className={`min-w-0 flex-1 select-all break-all font-mono text-sm ${value ? (muted ? "text-muted-foreground" : "text-fg") : "text-faint"}`}
+        className={`min-w-0 flex-1 select-all break-all font-mono text-sm ${value ? (muted ? "text-muted-foreground" : "text-foreground") : "text-muted-foreground"}`}
       >
         {value || placeholder}
       </span>
@@ -870,7 +876,7 @@ function RepoRow({
     <button
       type="button"
       onClick={onClick}
-      className="flex min-h-7 w-full items-start gap-2 rounded-md py-0.5 text-left hover:bg-raised"
+      className="flex min-h-7 w-full items-start gap-2 rounded-md py-0.5 text-left hover:bg-muted"
       title={`Edit ${label.toLowerCase()}`}
     >
       {body}
@@ -915,20 +921,20 @@ function EmptyProjectsMessage({
   return (
     <div className="flex h-full items-center justify-center px-4">
       <EmptyBox
-        className="bg-panel"
+        className="bg-card"
         action={
           actionLabel && onAction ? (
             <button
               type="button"
               onClick={onAction}
-              className="rounded-lg border border-line px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               {actionLabel}
             </button>
           ) : undefined
         }
       >
-        <div className="text-sm font-semibold text-fg">{title}</div>
+        <div className="text-sm font-semibold text-foreground">{title}</div>
         <div className="mt-1">{body}</div>
       </EmptyBox>
     </div>

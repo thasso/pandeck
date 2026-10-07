@@ -327,7 +327,7 @@ function AttachmentChip({
   if (attachment.role === "project-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-muted-foreground"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground"
         title="Project context was attached to this first prompt."
       >
         <FolderKanban size={13} className="shrink-0 text-primary" />
@@ -340,7 +340,7 @@ function AttachmentChip({
   if (attachment.role === "file-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-muted-foreground"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground"
         title="This session was started from this file."
       >
         <FileText size={13} className="shrink-0 text-primary" />
@@ -359,7 +359,7 @@ function AttachmentChip({
       ? withToken(`${serverHttpOrigin()}${attachment.url}`)
       : undefined;
   return (
-    <div className="mt-2 overflow-hidden rounded-xl border border-line bg-raised/60">
+    <div className="mt-2 overflow-hidden rounded-xl border border-border bg-muted/60">
       {isImage && imageSrc ? (
         <img
           src={imageSrc}
@@ -373,10 +373,10 @@ function AttachmentChip({
         ) : (
           <FileText size={14} className="text-primary" />
         )}
-        <span className="min-w-0 flex-1 truncate font-medium text-fg">
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
           {attachment.name}
         </span>
-        <span className="shrink-0 text-faint">
+        <span className="shrink-0 text-muted-foreground">
           {formatBytes(attachment.size)}
         </span>
       </div>
@@ -536,7 +536,7 @@ function MessageActionsBar({
                   close();
                   onCommentMessage?.(message.id);
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-fg hover:bg-raised"
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground hover:bg-muted"
               >
                 <MessageSquarePlus size={14} className="text-primary" />
                 Comment on this message
@@ -744,17 +744,17 @@ const ForkBoundaryMarker = memo(function ForkBoundaryMarker({
 }) {
   return (
     <div data-fork-boundary className="flex items-center gap-2">
-      <hr className="flex-1 border-line/60" />
+      <hr className="flex-1 border-border/60" />
       <button
         type="button"
         onClick={onOpen}
         title="Open the message this session was forked from"
-        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <GitFork size={12} className="shrink-0" />
         <span className="truncate">Forked from {parentTitle}</span>
       </button>
-      <hr className="flex-1 border-line/60" />
+      <hr className="flex-1 border-border/60" />
     </div>
   );
 });
@@ -1868,7 +1868,7 @@ export function MessageList({
             <button
               type="button"
               onClick={showEarlierRows}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
               {hiddenRowCount === 1 ? "message" : "messages"}
@@ -1883,7 +1883,7 @@ export function MessageList({
               type="button"
               onClick={loadOlderMessages}
               disabled={loadingOlderMessages}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
             >
               {loadingOlderMessages
                 ? "Loading earlier messages…"
@@ -1970,7 +1970,7 @@ export function MessageList({
               {turnEnd && (
                 <div data-turn-end className="flex flex-col gap-1.5">
                   {appearance?.separatorAtTurnEnd && (
-                    <hr className="border-line/60" />
+                    <hr className="border-border/60" />
                   )}
                   {appearance?.turnStatsRow && (
                     <TurnStatsRow

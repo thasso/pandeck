@@ -54,7 +54,7 @@ export function PendingApprovalsLedge({
           onClick={() => onRevealApproval(card.id)}
           aria-label={`Show the approval card “${card.title}”`}
           title={card.summary ?? card.title}
-          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ShieldAlert
             size={13}
@@ -65,8 +65,10 @@ export function PendingApprovalsLedge({
             {/* A settings-input card asks for a value, not a yes. */}
             {card.body.kind === "settingsInput" ? "Enter" : "Approve"}
           </span>
-          <span className="min-w-0 flex-1 truncate text-fg">{card.title}</span>
-          <span className="flex shrink-0 items-center gap-1 text-faint">
+          <span className="min-w-0 flex-1 truncate text-foreground">
+            {card.title}
+          </span>
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
             Show card
             <ArrowDown size={12} aria-hidden="true" />
           </span>
@@ -76,7 +78,7 @@ export function PendingApprovalsLedge({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-faint transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ChevronDown size={13} className="shrink-0" aria-hidden="true" />
           Show {hidden} more waiting

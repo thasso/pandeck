@@ -122,7 +122,7 @@ function WorktreeCard({
       className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors ${
         selected
           ? "border-primary/40 bg-accent"
-          : "border-line bg-panel hover:border-line-strong hover:bg-raised"
+          : "border-border bg-card hover:border-input hover:bg-muted"
       }`}
     >
       <span className="flex w-full min-w-0 items-center gap-1.5">
@@ -135,7 +135,7 @@ function WorktreeCard({
           }
         />
         <span
-          className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
         >
           {label}
         </span>
@@ -146,7 +146,7 @@ function WorktreeCard({
           style={{ backgroundColor: dot }}
           aria-hidden
         />
-        <span className="min-w-0 truncate text-sm text-faint">
+        <span className="min-w-0 truncate text-sm text-muted-foreground">
           {projectName}
         </span>
       </span>
@@ -349,7 +349,7 @@ export function NewSessionQuickStart({
             <div
               key={i}
               aria-hidden
-              className="h-9 w-28 shrink-0 snap-start rounded-xl border border-line bg-panel"
+              className="h-9 w-28 shrink-0 snap-start rounded-xl border border-border bg-card"
             >
               <Skeleton className="m-2.5 h-4" />
             </div>
@@ -389,7 +389,7 @@ export function NewSessionQuickStart({
             <div
               key={i}
               aria-hidden
-              className="flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border border-line bg-panel px-3 py-2.5"
+              className="flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border border-border bg-card px-3 py-2.5"
             >
               {/* The card's two real lines, to the pixel: a card that changes
                   height when the answer lands takes the whole row with it. */}
@@ -406,7 +406,10 @@ export function NewSessionQuickStart({
           {activeWorktrees.length === 0 ? (
             <EmptyBox variant="item">
               <span className="flex w-full min-w-0 items-center gap-1.5">
-                <GitBranch size={13} className="shrink-0 text-faint" />
+                <GitBranch
+                  size={13}
+                  className="shrink-0 text-muted-foreground"
+                />
                 <span className="min-w-0 flex-1 truncate font-medium">
                   No worktrees
                 </span>
@@ -433,7 +436,7 @@ export function NewSessionQuickStart({
               className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border ${DASHED_EDGE} px-3 py-2.5 text-left transition-colors ${
                 newWorktreeStaged
                   ? "border-primary/40 bg-accent"
-                  : "border-line bg-panel hover:border-line-strong hover:bg-raised"
+                  : "border-border bg-card hover:border-input hover:bg-muted"
               }`}
             >
               <span className="flex w-full min-w-0 items-center gap-1.5">
@@ -446,12 +449,12 @@ export function NewSessionQuickStart({
                   }
                 />
                 <span
-                  className={`min-w-0 flex-1 truncate text-sm font-medium ${newWorktreeStaged ? "text-primary" : "text-fg"}`}
+                  className={`min-w-0 flex-1 truncate text-sm font-medium ${newWorktreeStaged ? "text-primary" : "text-foreground"}`}
                 >
                   New worktree
                 </span>
               </span>
-              <span className="min-w-0 truncate text-sm text-faint">
+              <span className="min-w-0 truncate text-sm text-muted-foreground">
                 {newWorktreeStaged ? "named on send" : "off the main checkout"}
               </span>
             </button>
@@ -473,7 +476,7 @@ export function NewSessionQuickStart({
           {showWorktreeDivider ? (
             <div
               aria-hidden
-              className="my-1 w-px shrink-0 self-stretch bg-line"
+              className="my-1 w-px shrink-0 self-stretch bg-border"
             />
           ) : null}
           {otherWorktrees.map((worktree) => (
@@ -496,7 +499,7 @@ export function NewSessionQuickStart({
               type="button"
               onClick={onOpenPicker}
               title="More worktrees to select — open the full picker"
-              className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg`}
+              className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-border px-3 py-2.5 text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground`}
             >
               <Ellipsis size={14} />
               <span className="text-sm font-medium">More…</span>
@@ -507,7 +510,7 @@ export function NewSessionQuickStart({
 
       {/* Runtime block (who runs it and how) below the context rows, visually
           separated from the project/worktree staging above. */}
-      <hr className="mx-4 border-line" />
+      <hr className="mx-4 border-border" />
 
       {agentPills && modePills ? (
         <QuickRowSplit
@@ -552,7 +555,7 @@ export function NewSessionQuickStart({
               <div
                 key={index}
                 aria-hidden
-                className="h-9 w-28 shrink-0 snap-start rounded-xl border border-line bg-panel"
+                className="h-9 w-28 shrink-0 snap-start rounded-xl border border-border bg-card"
               >
                 <Skeleton className="m-2.5 h-4" />
               </div>
@@ -563,14 +566,14 @@ export function NewSessionQuickStart({
               <div
                 key={index}
                 aria-hidden
-                className="h-9 w-32 shrink-0 snap-start rounded-xl border border-line bg-panel"
+                className="h-9 w-32 shrink-0 snap-start rounded-xl border border-border bg-card"
               >
                 <Skeleton className="m-2.5 h-4" />
               </div>
             ))}
           </QuickRow>
           <div className="w-full">
-            <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
+            <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
               Thinking
             </div>
             <Skeleton className="mx-4 h-5 rounded-full" />
@@ -601,7 +604,7 @@ export function NewSessionQuickStart({
 
           {thinkingLevels.length > 1 ? (
             <div className="w-full">
-              <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
+              <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
                 Thinking
               </div>
               <ThinkingSlider

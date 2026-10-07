@@ -117,14 +117,14 @@ export function ProjectLocalPathsSection({
     >
       <div className="flex flex-col gap-1.5 px-1">
         {visible.length === 0 && !adding ? (
-          <p className="text-sm text-faint">
+          <p className="text-sm text-muted-foreground">
             No extra folders mapped to this project.
           </p>
         ) : null}
         {visible.map(({ item, index }) => (
           <div
             key={`${item.path}:${index}`}
-            className="group flex flex-col gap-0.5 rounded-lg px-2 py-1 transition-colors hover:bg-raised"
+            className="group flex flex-col gap-0.5 rounded-lg px-2 py-1 transition-colors hover:bg-muted"
           >
             <div className="flex items-start gap-1">
               <InlineEdit
@@ -134,13 +134,13 @@ export function ProjectLocalPathsSection({
                   replace(index, { ...item, path: path.trim() })
                 }
                 ariaLabel="Local path"
-                editorClassName="w-full rounded-md border border-line bg-panel px-2 py-0.5 font-mono text-sm text-fg outline-none focus:border-primary"
+                editorClassName="w-full rounded-md border border-border bg-card px-2 py-0.5 font-mono text-sm text-foreground outline-none focus:border-primary"
                 renderDisplay={(begin) => (
                   <button
                     type="button"
                     onClick={begin}
                     title="Click to edit this path"
-                    className="min-w-0 flex-1 break-all text-left font-mono text-sm text-fg hover:text-primary"
+                    className="min-w-0 flex-1 break-all text-left font-mono text-sm text-foreground hover:text-primary"
                   >
                     {item.path}
                   </button>
@@ -199,7 +199,7 @@ export function ProjectLocalPathsSection({
             onBlur={commitDraft}
             placeholder="/absolute/path"
             aria-label="New local path"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
+            className="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
           />
         ) : null}
         {mutationError ? (
@@ -232,7 +232,7 @@ function Chip({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="rounded bg-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-faint transition-colors hover:text-fg"
+      className="rounded bg-muted px-1.5 py-0.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
     >
       {label}
     </button>

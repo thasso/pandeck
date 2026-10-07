@@ -102,8 +102,8 @@ export function PeerRuntimesSettingsSection({
         runtimes they may start without asking you first.
       </p>
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <label className="block text-sm font-medium text-fg">
+      <div className="mt-6 rounded-xl border border-border bg-card p-4">
+        <label className="block text-sm font-medium text-foreground">
           Maximum uninterrupted peer-prompt hops
           <input
             type="number"
@@ -119,7 +119,7 @@ export function PeerRuntimesSettingsSection({
             className="settings-input mt-1.5 w-full"
           />
         </label>
-        <p className="mt-2 text-sm text-faint">
+        <p className="mt-2 text-sm text-muted-foreground">
           A causal agent-to-agent conversation is blocked after this many sends
           without you in the loop. Your next prompt closes the chain. Choose a
           value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
@@ -135,7 +135,7 @@ export function PeerRuntimesSettingsSection({
         re-prompt or take over any of them.
       </p>
 
-      <div className="mt-4 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-4 rounded-xl border border-border bg-card p-4">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-medium">Approved runtimes</div>
@@ -149,7 +149,7 @@ export function PeerRuntimesSettingsSection({
             type="button"
             onClick={addRuntime}
             disabled={noModels || rows.length >= MAX_PEER_SPAWN_RUNTIMES}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-50"
           >
             <Plus size={12} />
             Add runtime
@@ -164,7 +164,7 @@ export function PeerRuntimesSettingsSection({
         ) : null}
 
         {rows.length === 0 ? (
-          <div className="rounded-lg border border-line bg-surface px-3 py-3 text-center text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-3 text-center text-sm text-muted-foreground">
             No approved runtimes. Agents must ask you to approve every batch.
           </div>
         ) : (
@@ -222,7 +222,7 @@ function RuntimeRow({
     onRevealed();
   }, [justAdded, onRevealed]);
   return (
-    <li className="rounded-lg border border-line bg-surface p-3">
+    <li className="rounded-lg border border-border bg-background p-3">
       <div className="flex items-start justify-between gap-2">
         <label className="min-w-0 flex-1 space-y-1">
           <span className="text-sm font-medium text-muted-foreground">
@@ -242,7 +242,7 @@ function RuntimeRow({
           onClick={() => onRemove(row.id)}
           aria-label={`Remove runtime ${row.name?.trim() || row.modelId}`}
           title="Remove runtime"
-          className="mt-6 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-danger/10 hover:text-danger"
+          className="mt-6 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         >
           <Trash2 size={13} />
         </button>
@@ -332,7 +332,7 @@ function RuntimeRow({
           className="settings-input mt-1 w-full"
         />
       </label>
-      <p className="mt-1 text-sm text-faint">
+      <p className="mt-1 text-sm text-muted-foreground">
         Shown to agents as your hint for when to select this runtime. Family:{" "}
         {family}.
       </p>

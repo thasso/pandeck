@@ -18,21 +18,21 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   const targets = useKnowledgeOpenTargets();
   const openInPanel = targets?.openInPanel;
   return (
-    <div className="not-prose my-2 overflow-hidden rounded-xl border border-line bg-surface text-left shadow-sm">
+    <div className="not-prose my-2 overflow-hidden rounded-xl border border-border bg-background text-left shadow-sm">
       <div className="flex items-start gap-2 p-2.5">
         <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
           <BookOpen size={14} />
         </span>
         <div className="min-w-0 flex-1">
           <span
-            className="block truncate text-sm font-medium text-fg"
+            className="block truncate text-sm font-medium text-foreground"
             title={card.title}
           >
             {card.title}
           </span>
           {card.path ? (
             <span
-              className="block truncate text-xs text-faint"
+              className="block truncate text-xs text-muted-foreground"
               title={card.path}
             >
               {card.path}
@@ -46,12 +46,12 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
         </div>
       </div>
       {targets ? (
-        <div className="flex items-center gap-1 border-t border-line px-2.5 py-1.5">
+        <div className="flex items-center gap-1 border-t border-border px-2.5 py-1.5">
           {openInPanel ? (
             <button
               type="button"
               onClick={() => openInPanel(card.path)}
-              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <PanelRight size={13} />
               Open in side panel
@@ -60,7 +60,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           <button
             type="button"
             onClick={() => targets.openInMain(card.path)}
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <SquareArrowOutUpRight size={13} />
             Open in Knowledge

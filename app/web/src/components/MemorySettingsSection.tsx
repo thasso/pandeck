@@ -106,7 +106,7 @@ export function MemorySettingsSection({
         auto-capture in v1.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <Toggle
           label="Use memory (load into turns)"
           checked={m.loadingEnabled}
@@ -115,12 +115,14 @@ export function MemorySettingsSection({
         />
 
         <div>
-          <div className="text-sm font-medium text-fg">Automatic learning</div>
+          <div className="text-sm font-medium text-foreground">
+            Automatic learning
+          </div>
           <div className="mt-2 space-y-2">
             {LEARNING_MODES.map((mode) => (
               <label
                 key={mode.id}
-                className="flex items-start gap-2 text-sm text-fg"
+                className="flex items-start gap-2 text-sm text-foreground"
               >
                 <input
                   type="radio"
@@ -169,7 +171,7 @@ export function MemorySettingsSection({
       <p className="mt-1 text-sm text-muted-foreground">
         A small, cheap model extracts and maintains memories in the background.
       </p>
-      <div className="mt-3 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-3 space-y-5 rounded-xl border border-border bg-card p-4">
         <AgentModelFields
           models={models}
           provider={m.processor.provider}
@@ -214,7 +216,7 @@ export function MemorySettingsSection({
             onChange={(v) => save({ maxCostPerDayUsd: v })}
           />
         </div>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           These global safety ceilings apply across every session and mode —
           including Every turn, high-signal triggers, retries, and maintenance.
           They cannot be bypassed by a learning mode. Set calls/hour to 0 to
@@ -310,12 +312,12 @@ function MemoryManager({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Search text…"
-          className="min-w-40 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-primary"
+          className="min-w-40 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm outline-none focus:border-primary"
         />
         <select
           value={state}
           onChange={(e) => setState(e.target.value as typeof state)}
-          className="rounded-lg border border-line bg-surface px-2 py-1.5 text-sm"
+          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
           aria-label="State"
         >
           <option value="active">Active</option>
@@ -325,7 +327,7 @@ function MemoryManager({
         <select
           value={persona}
           onChange={(e) => setPersona(e.target.value as AgentType | "")}
-          className="rounded-lg border border-line bg-surface px-2 py-1.5 text-sm"
+          className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
           aria-label="Persona"
         >
           <option value="">Any persona</option>
@@ -339,7 +341,7 @@ function MemoryManager({
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
           placeholder="Project id…"
-          className="w-32 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm outline-none focus:border-primary"
+          className="w-32 rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-primary"
           aria-label="Project id"
         />
         <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -407,12 +409,12 @@ function MemoryManager({
       </div>
 
       {((page?.total ?? 0) > 0 || offset > 0) && (
-        <div className="mt-2 flex items-center justify-between text-sm text-faint">
+        <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground">
           <button
             type="button"
             disabled={offset === 0}
             onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
-            className="rounded-md border border-line bg-panel px-2 py-1 disabled:opacity-40"
+            className="rounded-md border border-border bg-card px-2 py-1 disabled:opacity-40"
           >
             Prev
           </button>
@@ -423,7 +425,7 @@ function MemoryManager({
             type="button"
             disabled={!page?.hasMore}
             onClick={() => setOffset((o) => o + PAGE_SIZE)}
-            className="rounded-md border border-line bg-panel px-2 py-1 disabled:opacity-40"
+            className="rounded-md border border-border bg-card px-2 py-1 disabled:opacity-40"
           >
             Next
           </button>
@@ -582,7 +584,7 @@ function MemoryRow({
   const lineage = memory.lineageById[card.id];
 
   return (
-    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm">
+    <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm">
       <div className="flex items-start justify-between gap-2">
         {editing ? (
           <div className="flex-1 space-y-2">
@@ -590,7 +592,7 @@ function MemoryRow({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={2}
-              className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none focus:border-primary"
+              className="w-full resize-y rounded-md border border-border bg-card px-2 py-1 text-sm outline-none focus:border-primary"
             />
             <div className="flex flex-wrap gap-2">
               <select
@@ -598,7 +600,7 @@ function MemoryRow({
                 onChange={(e) =>
                   setDraftPersona(e.target.value as AgentType | "")
                 }
-                className="rounded-md border border-line bg-panel px-2 py-1 text-sm"
+                className="rounded-md border border-border bg-card px-2 py-1 text-sm"
                 aria-label="Persona scope"
               >
                 <option value="">Any persona</option>
@@ -612,7 +614,7 @@ function MemoryRow({
                 value={draftProjectId}
                 onChange={(e) => setDraftProjectId(e.target.value)}
                 placeholder="Project id (any if empty)"
-                className="w-40 rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none focus:border-primary"
+                className="w-40 rounded-md border border-border bg-card px-2 py-1 text-sm outline-none focus:border-primary"
                 aria-label="Project scope"
               />
               <select
@@ -620,7 +622,7 @@ function MemoryRow({
                 onChange={(e) =>
                   changeTemporalMode(e.target.value as MemoryTemporal["mode"])
                 }
-                className="rounded-md border border-line bg-panel px-2 py-1 text-sm"
+                className="rounded-md border border-border bg-card px-2 py-1 text-sm"
                 aria-label="Temporal mode"
               >
                 <option value="persistent">Persistent</option>
@@ -655,7 +657,7 @@ function MemoryRow({
                         }),
                       )
                     }
-                    className="rounded-md border border-line bg-panel px-2 py-1 text-sm"
+                    className="rounded-md border border-border bg-card px-2 py-1 text-sm"
                     aria-label="Valid from"
                   />
                 </label>
@@ -683,7 +685,7 @@ function MemoryRow({
                         }),
                       )
                     }
-                    className="rounded-md border border-line bg-panel px-2 py-1 text-sm"
+                    className="rounded-md border border-border bg-card px-2 py-1 text-sm"
                     aria-label="Valid until"
                   />
                 </label>
@@ -691,7 +693,7 @@ function MemoryRow({
                   value={tzText}
                   onChange={(e) => setTemporalTimezone(e.target.value)}
                   placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-sm outline-none focus:border-primary ${tzValid ? "border-line" : "border-red-500"}`}
+                  className={`w-44 rounded-md border bg-card px-2 py-1 text-sm outline-none focus:border-primary ${tzValid ? "border-border" : "border-red-500"}`}
                   aria-label="Window timezone"
                 />
               </div>
@@ -738,7 +740,7 @@ function MemoryRow({
                   value={tzText}
                   onChange={(e) => setTemporalTimezone(e.target.value)}
                   placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-sm outline-none focus:border-primary ${tzValid ? "border-line" : "border-red-500"}`}
+                  className={`w-44 rounded-md border bg-card px-2 py-1 text-sm outline-none focus:border-primary ${tzValid ? "border-border" : "border-red-500"}`}
                   aria-label="Recurrence timezone"
                 />
               </div>
@@ -754,7 +756,7 @@ function MemoryRow({
               </button>
               <button
                 onClick={() => setEditing(false)}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-sm"
               >
                 <X size={12} />
                 Cancel
@@ -766,26 +768,24 @@ function MemoryRow({
           </div>
         ) : (
           <div className="flex-1">
-            <div className="text-fg">{card.text}</div>
-            <div className="mt-0.5 flex flex-wrap gap-1.5 text-sm text-faint">
-              <span className="rounded bg-panel px-1.5 py-0.5">
-                {card.kind}
-              </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
+            <div className="text-foreground">{card.text}</div>
+            <div className="mt-0.5 flex flex-wrap gap-1.5 text-sm text-muted-foreground">
+              <span className="rounded bg-card px-1.5 py-0.5">{card.kind}</span>
+              <span className="rounded bg-card px-1.5 py-0.5">
                 {scopeLabel}
               </span>
               {card.pinned && (
-                <span className="rounded bg-panel px-1.5 py-0.5 text-primary">
+                <span className="rounded bg-card px-1.5 py-0.5 text-primary">
                   pinned
                 </span>
               )}
-              <span className="rounded bg-panel px-1.5 py-0.5">
+              <span className="rounded bg-card px-1.5 py-0.5">
                 {temporalLabel(card.temporal, timezone)}
               </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
+              <span className="rounded bg-card px-1.5 py-0.5">
                 {card.state}
               </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
+              <span className="rounded bg-card px-1.5 py-0.5">
                 {provenanceLabel(card.provenance.sourceKind)}
               </span>
             </div>
@@ -793,7 +793,7 @@ function MemoryRow({
               <div className="mt-1 text-sm text-amber-500">{conflict}</div>
             )}
             {showLineage && (
-              <div className="mt-1.5 rounded-md border border-line bg-panel px-2 py-1.5 text-sm text-muted-foreground">
+              <div className="mt-1.5 rounded-md border border-border bg-card px-2 py-1.5 text-sm text-muted-foreground">
                 {!lineage ? (
                   // The per-id slot is deliberate (`useMemory`): each expanded
                   // row loads on its own, so each draws its own placeholder.
@@ -810,7 +810,7 @@ function MemoryRow({
                     {lineage.predecessor && (
                       <div>
                         Superseded:{" "}
-                        <span className="text-faint">
+                        <span className="text-muted-foreground">
                           {lineage.predecessor.text}
                         </span>
                       </div>
@@ -818,7 +818,7 @@ function MemoryRow({
                     {lineage.supersededBy.length > 0 && (
                       <div>
                         Replaced by:{" "}
-                        <span className="text-faint">
+                        <span className="text-muted-foreground">
                           {lineage.supersededBy.map((c) => c.text).join(", ")}
                         </span>
                       </div>
@@ -972,7 +972,7 @@ function Toggle({
 }) {
   return (
     <label className="block">
-      <span className="flex items-center gap-2 text-sm text-fg">
+      <span className="flex items-center gap-2 text-sm text-foreground">
         <input
           type="checkbox"
           checked={checked}
@@ -1006,7 +1006,7 @@ function NumberField({
   onChange: (v: number) => void;
 }) {
   return (
-    <label className="block text-sm font-medium text-fg">
+    <label className="block text-sm font-medium text-foreground">
       {label}
       <input
         type="number"
@@ -1015,7 +1015,7 @@ function NumberField({
         max={max}
         step={step ?? 1}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+        className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
       />
     </label>
   );
@@ -1035,7 +1035,7 @@ function IconBtn({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted-foreground hover:text-fg"
+      className="rounded-md border border-border bg-card p-1.5 text-muted-foreground hover:text-foreground"
     >
       {children}
     </button>

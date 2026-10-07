@@ -38,12 +38,12 @@ export function ProjectSettingsFields({
           onSubmit={(key) => onSave({ key: normalizeProjectKey(key) })}
           ariaLabel="Project Key"
           placeholder="KEY"
-          editorClassName="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-sm font-semibold uppercase text-fg outline-none focus:border-primary"
+          editorClassName="w-24 rounded-md border border-border bg-background px-2 py-0.5 text-sm font-semibold uppercase text-foreground outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
               onClick={begin}
-              className="rounded-md px-1 font-mono text-sm font-semibold text-fg hover:bg-raised hover:text-primary"
+              className="rounded-md px-1 font-mono text-sm font-semibold text-foreground hover:bg-muted hover:text-primary"
               title="Click to edit key"
             >
               {project.key || "KEY"}
@@ -60,7 +60,7 @@ export function ProjectSettingsFields({
           path, and the panel is ~320px wide. Empty means the global default, so
           the placeholder names it instead of an explainer paragraph. */}
       <div className="pt-0.5">
-        <span className="text-sm text-faint">Worktree root</span>
+        <span className="text-sm text-muted-foreground">Worktree root</span>
         <InlineEdit
           value={project.worktreeRoot ?? ""}
           submitState={mutation("worktreeRoot")}
@@ -75,13 +75,13 @@ export function ProjectSettingsFields({
           allowEmpty
           ariaLabel="Worktree root override"
           placeholder="Settings → Worktrees root"
-          editorClassName="mt-0.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
+          editorClassName="mt-0.5 w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
               onClick={begin}
               title="Where new worktrees for this project are created (empty = the global Worktrees root)"
-              className={`mt-0.5 block w-full break-all rounded-md px-1 py-0.5 text-left font-mono text-sm hover:bg-raised ${project.worktreeRoot ? "text-fg" : "text-faint"}`}
+              className={`mt-0.5 block w-full break-all rounded-md px-1 py-0.5 text-left font-mono text-sm hover:bg-muted ${project.worktreeRoot ? "text-foreground" : "text-muted-foreground"}`}
             >
               {project.worktreeRoot || "Settings → Worktrees root"}
             </button>
@@ -95,7 +95,7 @@ export function ProjectSettingsFields({
 function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-h-7 items-center justify-between gap-2">
-      <span className="text-sm text-faint">{label}</span>
+      <span className="text-sm text-muted-foreground">{label}</span>
       {children}
     </div>
   );
@@ -127,7 +127,7 @@ function ProjectColorRow({
           disabled={pending}
           aria-busy={pending || undefined}
           onClick={() => setOpen((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg"
+          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           title="Change Project color"
           aria-label="Change Project color"
           aria-expanded={open}
@@ -137,11 +137,11 @@ function ProjectColorRow({
             style={{ backgroundColor: value }}
             aria-hidden
           />
-          <Palette size={12} className="text-faint" />
+          <Palette size={12} className="text-muted-foreground" />
         </button>
       </FieldRow>
       {open ? (
-        <div className="mt-1 rounded-lg border border-line bg-surface p-2">
+        <div className="mt-1 rounded-lg border border-border bg-background p-2">
           <div
             className="grid grid-cols-5 gap-1.5"
             aria-label="Project color palette"
@@ -157,7 +157,7 @@ function ProjectColorRow({
                     submit(color);
                     setOpen(false);
                   }}
-                  className={`size-6 rounded-full border transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${selected ? "border-fg ring-2 ring-fg/30" : "border-white/50"}`}
+                  className={`size-6 rounded-full border transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${selected ? "border-foreground ring-2 ring-foreground/30" : "border-white/50"}`}
                   style={{ backgroundColor: color }}
                   title={`Use ${color}`}
                   aria-label={`Use Project color ${color}`}
@@ -175,7 +175,7 @@ function ProjectColorRow({
               onChange={(event) =>
                 submit(event.currentTarget.value.toUpperCase())
               }
-              className="size-6 cursor-pointer rounded border border-line bg-transparent p-0"
+              className="size-6 cursor-pointer rounded border border-border bg-transparent p-0"
               aria-label="Advanced Project color picker"
               title="Advanced color picker"
             />
