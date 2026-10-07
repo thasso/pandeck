@@ -38,12 +38,12 @@ export function ProjectSettingsFields({
           onSubmit={(key) => onSave({ key: normalizeProjectKey(key) })}
           ariaLabel="Project Key"
           placeholder="KEY"
-          editorClassName="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-caption font-semibold uppercase text-fg outline-none focus:border-primary"
+          editorClassName="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-sm font-semibold uppercase text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
               onClick={begin}
-              className="rounded-md px-1 font-mono text-caption font-semibold text-fg hover:bg-raised hover:text-primary"
+              className="rounded-md px-1 font-mono text-sm font-semibold text-fg hover:bg-raised hover:text-primary"
               title="Click to edit key"
             >
               {project.key || "KEY"}
@@ -60,7 +60,7 @@ export function ProjectSettingsFields({
           path, and the panel is ~320px wide. Empty means the global default, so
           the placeholder names it instead of an explainer paragraph. */}
       <div className="pt-0.5">
-        <span className="text-caption text-faint">Worktree root</span>
+        <span className="text-sm text-faint">Worktree root</span>
         <InlineEdit
           value={project.worktreeRoot ?? ""}
           submitState={mutation("worktreeRoot")}
@@ -75,13 +75,13 @@ export function ProjectSettingsFields({
           allowEmpty
           ariaLabel="Worktree root override"
           placeholder="Settings → Worktrees root"
-          editorClassName="mt-0.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
+          editorClassName="mt-0.5 w-full rounded-md border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => (
             <button
               type="button"
               onClick={begin}
               title="Where new worktrees for this project are created (empty = the global Worktrees root)"
-              className={`mt-0.5 block w-full break-all rounded-md px-1 py-0.5 text-left font-mono text-caption hover:bg-raised ${project.worktreeRoot ? "text-fg" : "text-faint"}`}
+              className={`mt-0.5 block w-full break-all rounded-md px-1 py-0.5 text-left font-mono text-sm hover:bg-raised ${project.worktreeRoot ? "text-fg" : "text-faint"}`}
             >
               {project.worktreeRoot || "Settings → Worktrees root"}
             </button>
@@ -95,7 +95,7 @@ export function ProjectSettingsFields({
 function FieldRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-h-7 items-center justify-between gap-2">
-      <span className="text-caption text-faint">{label}</span>
+      <span className="text-sm text-faint">{label}</span>
       {children}
     </div>
   );
@@ -127,7 +127,7 @@ function ProjectColorRow({
           disabled={pending}
           aria-busy={pending || undefined}
           onClick={() => setOpen((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg"
+          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg"
           title="Change Project color"
           aria-label="Change Project color"
           aria-expanded={open}
@@ -166,7 +166,7 @@ function ProjectColorRow({
               );
             })}
           </div>
-          <label className="mt-2 flex items-center justify-between gap-2 text-caption text-muted-foreground">
+          <label className="mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>Custom</span>
             <input
               type="color"

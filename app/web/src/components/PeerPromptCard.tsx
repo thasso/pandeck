@@ -101,16 +101,16 @@ export function PeerPromptCardView({
       preview={activityPreview(message)}
       {...(status ? { status } : {})}
     >
-      <p className="mb-1 break-words text-caption text-muted-foreground">
+      <p className="mb-1 break-words text-sm text-muted-foreground">
         {prefix} {title}
       </p>
       <Markdown text={message} onOpenSession={onOpenSession} />
       {typeof card.failureReason === "string" && card.failureReason ? (
-        <p className="mt-1 whitespace-pre-wrap break-words text-caption text-danger">
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-danger">
           {card.failureReason}
         </p>
       ) : null}
-      <div className="mt-1 flex flex-wrap gap-x-2 text-micro text-muted-foreground">
+      <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
         {typeof card.taskTitle === "string" && card.taskTitle ? (
           <span>Task: {card.taskTitle}</span>
         ) : null}

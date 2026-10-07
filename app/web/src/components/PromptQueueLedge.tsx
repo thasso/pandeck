@@ -29,7 +29,7 @@ export interface PromptQueueLedgeProps {
 const ROW_ACTION_CLASS =
   "flex size-7 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-30";
 const HEADER_ACTION_CLASS =
-  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-caption transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
  * @component PromptQueueLedge
@@ -87,7 +87,7 @@ export function PromptQueueLedge({
     // A container, because the ledge is inset from the composer and a phone's
     // row is too narrow for the text and five actions side by side.
     <div data-prompt-queue-ledge className="@container min-w-0">
-      <div className="flex h-8 min-w-0 items-center gap-2 px-3 text-caption">
+      <div className="flex h-8 min-w-0 items-center gap-2 px-3 text-sm">
         {queue.paused ? (
           <Pause
             size={13}
@@ -151,7 +151,7 @@ export function PromptQueueLedge({
                     Math.max(1, editing.text.split("\n").length),
                   )}
                   aria-label="Edit queued message"
-                  className="min-w-0 flex-1 resize-none rounded-md border border-line-strong bg-surface px-2 py-1 text-body text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="min-w-0 flex-1 resize-none rounded-md border border-line-strong bg-surface px-2 py-1 text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 />
                 <button
                   type="button"
@@ -210,17 +210,17 @@ function QueuedRow({
   return (
     <div className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-line bg-surface px-1 text-micro font-semibold text-muted-foreground">
+        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-line bg-surface px-1 text-xs font-semibold text-muted-foreground">
           {index + 1}
         </span>
         <span
-          className={`min-w-0 flex-1 truncate text-body text-fg ${item.command ? "font-mono" : ""}`}
+          className={`min-w-0 flex-1 truncate text-sm text-fg ${item.command ? "font-mono" : ""}`}
           title={item.text}
         >
           {item.text}
         </span>
         {attachmentCount > 0 ? (
-          <span className="flex shrink-0 items-center gap-0.5 text-micro text-faint">
+          <span className="flex shrink-0 items-center gap-0.5 text-xs text-faint">
             <Paperclip size={11} aria-hidden="true" />
             {attachmentCount}
           </span>
@@ -228,7 +228,7 @@ function QueuedRow({
         {/* A send under way is past changing: the server refuses an edit or
           removal, so the row says what is happening instead of offering them. */}
         {item.sending ? (
-          <span className="shrink-0 text-caption text-faint">Sending…</span>
+          <span className="shrink-0 text-sm text-faint">Sending…</span>
         ) : (
           // Its own line on a narrow ledge, beside the text on a wide one.
           <div className="flex basis-full justify-end @md:basis-auto">
@@ -285,7 +285,7 @@ function QueuedRow({
         )}
       </div>
       {item.error ? (
-        <p className="mt-0.5 pl-7 text-caption text-danger">{item.error}</p>
+        <p className="mt-0.5 pl-7 text-sm text-danger">{item.error}</p>
       ) : null}
     </div>
   );

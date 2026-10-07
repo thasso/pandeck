@@ -40,15 +40,15 @@ export function PushCard({ push }: { push: PushDisplay }) {
         <div className="mt-0.5">{statusIcon(push)}</div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="inline-flex items-center gap-1.5 text-body font-semibold text-fg">
+            <div className="inline-flex items-center gap-1.5 text-sm font-semibold text-fg">
               <CloudUpload size={13} className="text-faint" />
               {statusLabel(push)}
             </div>
             {target && (
-              <div className="font-mono text-caption text-faint">{target}</div>
+              <div className="font-mono text-sm text-faint">{target}</div>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-2 text-caption text-muted-foreground">
+          <div className="mt-1 flex flex-wrap gap-2 text-sm text-muted-foreground">
             {push.repoRoot && (
               <span className="font-mono text-faint">{push.repoRoot}</span>
             )}
@@ -82,7 +82,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
       {(push.output || push.error) && (
         <div className="space-y-3 border-t border-line/60 px-3 py-3">
           {push.error && (
-            <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-caption text-fg">
+            <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
               {push.error}
             </div>
           )}
@@ -91,7 +91,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
               <button
                 type="button"
                 onClick={() => setOutputOpen((open) => !open)}
-                className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
+                className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
               >
                 <ChevronDown
                   size={12}
@@ -100,7 +100,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
                 Git output
               </button>
               {outputOpen && (
-                <pre className="whitespace-pre-wrap rounded-lg bg-raised p-2 font-mono text-caption text-fg">
+                <pre className="whitespace-pre-wrap rounded-lg bg-raised p-2 font-mono text-sm text-fg">
                   {push.output}
                 </pre>
               )}

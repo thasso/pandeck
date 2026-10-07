@@ -155,7 +155,7 @@ export function PageHeader({
         ) : null)}
       <div className="min-w-0 flex-1">
         {typeof title === "string" ? (
-          <h2 className="truncate text-body font-semibold tracking-tight text-fg">
+          <h2 className="truncate text-sm font-semibold tracking-tight text-fg">
             {title}
           </h2>
         ) : (
@@ -165,9 +165,7 @@ export function PageHeader({
             it is dropped rather than squeezed. */}
         {subtitle != null && !compact ? (
           typeof subtitle === "string" ? (
-            <p className="truncate text-caption text-muted-foreground">
-              {subtitle}
-            </p>
+            <p className="truncate text-sm text-muted-foreground">{subtitle}</p>
           ) : (
             subtitle
           )
@@ -239,7 +237,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
           className={HEADER_ACTION_CLASS}
         >
           <SendHorizontal size={16} />
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
             {pendingCount}
           </span>
         </button>
@@ -263,7 +261,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
           button={<MoreHorizontal size={16} />}
         >
           {(close) => (
-            <div className="py-0.5 text-body" role="menu">
+            <div className="py-0.5 text-sm" role="menu">
               {secondary.map((action) => (
                 <button
                   key={action.key}
@@ -286,7 +284,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
                     {action.label}
                   </span>
                   {action.hint ? (
-                    <span className="shrink-0 text-caption text-faint">
+                    <span className="shrink-0 text-sm text-faint">
                       {action.hint}
                     </span>
                   ) : null}

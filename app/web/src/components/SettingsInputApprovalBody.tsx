@@ -45,7 +45,7 @@ function DismissButton({ active, busy, onDismiss }: ControlProps) {
       onClick={onDismiss}
       disabled={!active}
       aria-busy={busy === "dismiss" || undefined}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
     >
       {busy === "dismiss" ? <Spinner size="sm" /> : <XCircle size={12} />}
       Dismiss
@@ -91,10 +91,10 @@ function SecretControls(
               ? "Paste a new value to replace it"
               : "Paste the value"
           }
-          className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-fg placeholder:text-faint disabled:opacity-50"
+          className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-fg placeholder:text-faint disabled:opacity-50"
         />
       </form>
-      <div className="text-caption text-faint">
+      <div className="text-sm text-faint">
         The value goes straight to the server. The assistant never sees it, and
         this card does not keep it.
       </div>
@@ -111,7 +111,7 @@ function SecretControls(
           onClick={submit}
           disabled={!active || !value.trim()}
           aria-busy={busy === "submit" || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           {busy === "submit" ? <Spinner size="sm" /> : <Save size={12} />}
           Save
@@ -148,7 +148,7 @@ function ConnectControls(props: ControlProps) {
   };
   return (
     <>
-      <div className="text-caption text-faint">
+      <div className="text-sm text-faint">
         {connecting
           ? "Approve access in your browser. This card updates once the account is connected."
           : "Opens sign-in in your browser. This card updates once the account is connected."}
@@ -161,7 +161,7 @@ function ConnectControls(props: ControlProps) {
           onClick={() => void connect()}
           disabled={!active || !connectPath || opening}
           aria-busy={opening || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           {opening ? <Spinner size="sm" /> : <ExternalLink size={12} />}
           {connecting ? "Open again" : "Connect"}
@@ -240,7 +240,7 @@ function SignInControls(props: ControlProps) {
   return (
     <>
       {verification && code && account?.enabled ? (
-        <div className="space-y-1 text-caption text-fg">
+        <div className="space-y-1 text-sm text-fg">
           <div>
             Open{" "}
             <a
@@ -253,12 +253,12 @@ function SignInControls(props: ControlProps) {
             </a>{" "}
             and enter this code:
           </div>
-          <div className="font-mono text-body font-semibold tracking-wider">
+          <div className="font-mono text-sm font-semibold tracking-wider">
             {code}
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-caption text-faint">
+        <div className="flex items-center gap-2 text-sm text-faint">
           {account === undefined && <Spinner size="sm" />}
           {status}
         </div>
@@ -275,7 +275,7 @@ function SignInControls(props: ControlProps) {
           type="button"
           onClick={signIn}
           disabled={!active || !account?.enabled}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
           <LogIn size={12} />
           {account?.status === "connecting" ? "Sign in again" : "Sign in"}
@@ -314,7 +314,7 @@ export function SettingsInputApprovalBody({
   const controls = { body, active, busy, onDismiss };
   return (
     <div className="space-y-2">
-      {body.reason && <div className="text-caption text-fg">{body.reason}</div>}
+      {body.reason && <div className="text-sm text-fg">{body.reason}</div>}
       {waiting &&
         (body.mode === "secret" ? (
           <SecretControls {...controls} onSubmit={onSubmit} />

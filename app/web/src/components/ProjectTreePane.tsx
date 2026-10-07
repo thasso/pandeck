@@ -334,7 +334,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                         SESSION_LIMIT_STEP,
                     }));
                   }}
-                  className="w-full rounded-md px-1 py-0.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="w-full rounded-md px-1 py-0.5 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
                   session
@@ -382,7 +382,7 @@ const ProjectRowContent = memo(function ProjectRowContent({
           style={{ backgroundColor: color.dot }}
         />
       </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-fg">
+      <span className="min-w-0 flex-1 truncate text-sm text-fg">
         <span className="font-bold tracking-wide">{project.key}</span>
         <span className="mx-1 text-faint">·</span>
         <span className={selected ? "font-medium" : undefined}>
@@ -438,7 +438,7 @@ function WorktreeRowContentImpl({
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
             {branch}
           </span>
           <WorktreeLineDelta status={status} />

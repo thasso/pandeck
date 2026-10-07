@@ -10,7 +10,7 @@ import { Spinner } from "./common/load.tsx";
  */
 export function ProgressIndicator({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-2 py-1 text-caption">
+    <div className="flex items-center gap-2 py-1 text-sm">
       <Spinner size="sm" className="text-primary" />
       <span className="shimmer font-medium">{label}</span>
     </div>

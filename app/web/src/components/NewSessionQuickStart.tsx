@@ -135,7 +135,7 @@ function WorktreeCard({
           }
         />
         <span
-          className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
         >
           {label}
         </span>
@@ -146,7 +146,7 @@ function WorktreeCard({
           style={{ backgroundColor: dot }}
           aria-hidden
         />
-        <span className="min-w-0 truncate text-caption text-faint">
+        <span className="min-w-0 truncate text-sm text-faint">
           {projectName}
         </span>
       </span>
@@ -446,12 +446,12 @@ export function NewSessionQuickStart({
                   }
                 />
                 <span
-                  className={`min-w-0 flex-1 truncate text-caption font-medium ${newWorktreeStaged ? "text-primary" : "text-fg"}`}
+                  className={`min-w-0 flex-1 truncate text-sm font-medium ${newWorktreeStaged ? "text-primary" : "text-fg"}`}
                 >
                   New worktree
                 </span>
               </span>
-              <span className="min-w-0 truncate text-caption text-faint">
+              <span className="min-w-0 truncate text-sm text-faint">
                 {newWorktreeStaged ? "named on send" : "off the main checkout"}
               </span>
             </button>
@@ -499,7 +499,7 @@ export function NewSessionQuickStart({
               className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg`}
             >
               <Ellipsis size={14} />
-              <span className="text-caption font-medium">More…</span>
+              <span className="text-sm font-medium">More…</span>
             </button>
           ) : null}
         </QuickRow>
@@ -570,7 +570,7 @@ export function NewSessionQuickStart({
             ))}
           </QuickRow>
           <div className="w-full">
-            <div className="mb-1.5 px-4 text-center text-caption font-medium uppercase tracking-wide text-faint">
+            <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
               Thinking
             </div>
             <Skeleton className="mx-4 h-5 rounded-full" />
@@ -601,7 +601,7 @@ export function NewSessionQuickStart({
 
           {thinkingLevels.length > 1 ? (
             <div className="w-full">
-              <div className="mb-1.5 px-4 text-center text-caption font-medium uppercase tracking-wide text-faint">
+              <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
                 Thinking
               </div>
               <ThinkingSlider

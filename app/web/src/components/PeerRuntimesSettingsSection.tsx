@@ -96,14 +96,14 @@ export function PeerRuntimesSettingsSection({
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Peer sessions</h2>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <h2 className="text-sm font-semibold">Peer sessions</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Control how agents coordinate with ordinary peer sessions and which
         runtimes they may start without asking you first.
       </p>
 
       <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <label className="block text-caption font-medium text-fg">
+        <label className="block text-sm font-medium text-fg">
           Maximum uninterrupted peer-prompt hops
           <input
             type="number"
@@ -119,7 +119,7 @@ export function PeerRuntimesSettingsSection({
             className="settings-input mt-1.5 w-full"
           />
         </label>
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-faint">
           A causal agent-to-agent conversation is blocked after this many sends
           without you in the loop. Your next prompt closes the chain. Choose a
           value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
@@ -128,7 +128,7 @@ export function PeerRuntimesSettingsSection({
         </p>
       </div>
 
-      <p className="mt-6 text-caption text-muted-foreground">
+      <p className="mt-6 text-sm text-muted-foreground">
         Approving a runtime permits paid sessions on exactly that account, model
         and thinking level. Anything else still comes to you as an approval
         card. Spawned sessions appear in your sidebar, where you can read,
@@ -138,8 +138,8 @@ export function PeerRuntimesSettingsSection({
       <div className="mt-4 rounded-xl border border-line bg-panel p-4">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-caption font-medium">Approved runtimes</div>
-            <div className="mt-0.5 text-caption text-muted-foreground">
+            <div className="text-sm font-medium">Approved runtimes</div>
+            <div className="mt-0.5 text-sm text-muted-foreground">
               Two thinking levels for one model are two rows. Cost and the
               description help agents choose; changes apply to the next session
               an agent starts and never change a running one.
@@ -149,7 +149,7 @@ export function PeerRuntimesSettingsSection({
             type="button"
             onClick={addRuntime}
             disabled={noModels || rows.length >= MAX_PEER_SPAWN_RUNTIMES}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
           >
             <Plus size={12} />
             Add runtime
@@ -157,14 +157,14 @@ export function PeerRuntimesSettingsSection({
         </div>
 
         {noModels ? (
-          <p className="mb-3 text-caption text-warning">
+          <p className="mb-3 text-sm text-warning">
             No account offers a model right now, so there is nothing to approve.
             Enable an account under Models &amp; providers first.
           </p>
         ) : null}
 
         {rows.length === 0 ? (
-          <div className="rounded-lg border border-line bg-surface px-3 py-3 text-center text-caption text-faint">
+          <div className="rounded-lg border border-line bg-surface px-3 py-3 text-center text-sm text-faint">
             No approved runtimes. Agents must ask you to approve every batch.
           </div>
         ) : (
@@ -225,7 +225,7 @@ function RuntimeRow({
     <li className="rounded-lg border border-line bg-surface p-3">
       <div className="flex items-start justify-between gap-2">
         <label className="min-w-0 flex-1 space-y-1">
-          <span className="text-caption font-medium text-muted-foreground">
+          <span className="text-sm font-medium text-muted-foreground">
             Name
           </span>
           <input
@@ -289,7 +289,7 @@ function RuntimeRow({
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="block text-caption font-medium text-muted-foreground">
+        <label className="block text-sm font-medium text-muted-foreground">
           Cost
           <select
             value={row.relativeCost}
@@ -307,7 +307,7 @@ function RuntimeRow({
             ))}
           </select>
         </label>
-        <label className="flex items-end gap-2 pb-2 text-caption text-muted-foreground">
+        <label className="flex items-end gap-2 pb-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
             checked={row.enabled}
@@ -319,7 +319,7 @@ function RuntimeRow({
         </label>
       </div>
 
-      <label className="mt-3 block text-caption font-medium text-muted-foreground">
+      <label className="mt-3 block text-sm font-medium text-muted-foreground">
         Description
         <input
           type="text"
@@ -332,13 +332,13 @@ function RuntimeRow({
           className="settings-input mt-1 w-full"
         />
       </label>
-      <p className="mt-1 text-caption text-faint">
+      <p className="mt-1 text-sm text-faint">
         Shown to agents as your hint for when to select this runtime. Family:{" "}
         {family}.
       </p>
 
       {row.enabled && unavailable ? (
-        <p className="mt-2 text-caption text-warning">
+        <p className="mt-2 text-sm text-warning">
           Unavailable: {unavailable} Agents cannot use this row until you repair
           or remove it; it never moves to another runtime.
         </p>

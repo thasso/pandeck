@@ -203,11 +203,11 @@ function ProjectDetailPageView({
               submitState={mutationStates[`${selected.id}:name`]}
               onSubmit={(name) => onSave(selected.id, { name: name.trim() })}
               ariaLabel="Project name"
-              editorClassName="w-full rounded-md border border-line bg-surface px-2 py-1 text-body font-semibold text-fg outline-none focus:border-primary"
+              editorClassName="w-full rounded-md border border-line bg-surface px-2 py-1 text-sm font-semibold text-fg outline-none focus:border-primary"
               renderDisplay={(begin) => {
                 beginRename.current = begin;
                 return (
-                  <h2 className="truncate text-body">
+                  <h2 className="truncate text-sm">
                     {selected.key ? (
                       <>
                         <span className="select-all font-mono text-muted-foreground">
@@ -238,7 +238,7 @@ function ProjectDetailPageView({
           selected ? (
             <div className="flex items-center gap-1">
               {selected.status === "archived" ? (
-                <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-caption text-muted-foreground">
+                <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-sm text-muted-foreground">
                   archived
                 </span>
               ) : null}
@@ -453,7 +453,7 @@ function ProjectDetail({
           allowEmpty
           ariaLabel="Project description"
           placeholder="Add a description…"
-          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
+          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
           renderDisplay={(begin) => {
             // Editing is triggered only by the section's ghost edit button
             // (clicking prose selected text and entered edit mode too easily).
@@ -467,7 +467,7 @@ function ProjectDetail({
                     onOpenPaObject={onOpenPaObject}
                   />
                 ) : (
-                  <span className="text-body text-faint">
+                  <span className="text-sm text-faint">
                     No description yet. Use the edit button to add one.
                   </span>
                 )}
@@ -516,7 +516,7 @@ function ProjectDetail({
                 <Skeleton className="h-7 w-4/5" />
               </div>
             ) : worktrees.length === 0 ? (
-              <p className="px-2 py-2 text-caption text-faint">
+              <p className="px-2 py-2 text-sm text-faint">
                 No worktrees yet. Spawn one to let an agent work in isolation.
               </p>
             ) : (
@@ -617,9 +617,7 @@ function ProjectWorktreeRowImpl({
           data-worktree-primary
           className="flex min-w-0 max-w-full items-center gap-2"
         >
-          <span className="truncate text-caption font-medium text-fg">
-            {branch}
-          </span>
+          <span className="truncate text-sm font-medium text-fg">{branch}</span>
           <WorktreeLineDelta status={status} />
           <WorktreeMergedBadge status={status} />
         </span>
@@ -784,7 +782,7 @@ function RepositorySection({
               muted
             />
             {blocked ? (
-              <p className="text-caption text-faint">
+              <p className="text-sm text-faint">
                 {spawnedWorktrees} worktree{spawnedWorktrees === 1 ? "" : "s"}{" "}
                 still use{spawnedWorktrees === 1 ? "s" : ""} this clone. Remove{" "}
                 {spawnedWorktrees === 1 ? "it" : "them"} first to remove the
@@ -801,7 +799,7 @@ function RepositorySection({
               allowEmpty
               ariaLabel="Repository URL"
               placeholder="git@host:owner/repo.git"
-              editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
+              editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
               renderDisplay={(begin) => (
                 <RepoRow
                   label="Clone from"
@@ -823,7 +821,7 @@ function RepositorySection({
                     ? "Clone it under the Projects root and use it as this project's main checkout"
                     : "Set a repository URL first"
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint"
               >
                 {provisioning === "clone" ? <Spinner size="sm" /> : null}
                 {provisioning === "clone" ? "Cloning…" : "Clone"}
@@ -854,15 +852,13 @@ function RepoRow({
 }) {
   const body = (
     <>
-      <span className="w-[4.5rem] shrink-0 text-caption text-faint">
-        {label}
-      </span>
+      <span className="w-[4.5rem] shrink-0 text-sm text-faint">{label}</span>
       <span className="mt-0.5 shrink-0 text-faint">{icon}</span>
       {/* A path or remote WRAPS rather than truncates: a truncated
           `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
           read or copy out on a phone. */}
       <span
-        className={`min-w-0 flex-1 select-all break-all font-mono text-caption ${value ? (muted ? "text-muted-foreground" : "text-fg") : "text-faint"}`}
+        className={`min-w-0 flex-1 select-all break-all font-mono text-sm ${value ? (muted ? "text-muted-foreground" : "text-fg") : "text-faint"}`}
       >
         {value || placeholder}
       </span>
@@ -925,14 +921,14 @@ function EmptyProjectsMessage({
             <button
               type="button"
               onClick={onAction}
-              className="rounded-lg border border-line px-3 py-1.5 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+              className="rounded-lg border border-line px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
             >
               {actionLabel}
             </button>
           ) : undefined
         }
       >
-        <div className="text-body font-semibold text-fg">{title}</div>
+        <div className="text-sm font-semibold text-fg">{title}</div>
         <div className="mt-1">{body}</div>
       </EmptyBox>
     </div>

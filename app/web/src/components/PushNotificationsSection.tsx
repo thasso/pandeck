@@ -83,7 +83,7 @@ function NativeNotificationsPanel() {
 
   return (
     <>
-      <p className="text-caption text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         {push
           ? "This device is registered for Apple push, so alerts arrive even when the app is closed."
           : ios
@@ -93,7 +93,7 @@ function NativeNotificationsPanel() {
       </p>
 
       {ios && state && (
-        <ul className="space-y-1 text-caption text-muted-foreground">
+        <ul className="space-y-1 text-sm text-muted-foreground">
           <li className="flex items-center gap-2">
             {state.registration?.allowed ? (
               <CheckCircle2 size={14} className="shrink-0 text-success" />
@@ -144,7 +144,7 @@ function NativeNotificationsPanel() {
           {push ? "Send a test push" : "Send a test notification"}
         </button>
         {test.state === "sent" && (
-          <span className="flex items-center gap-2 text-caption text-success">
+          <span className="flex items-center gap-2 text-sm text-success">
             <CheckCircle2 size={14} />
             {test.detail}
           </span>
@@ -285,8 +285,8 @@ export function PushNotificationsSection() {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-heading font-semibold">Notifications</h2>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <h2 className="text-lg font-semibold">Notifications</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Receive an alert when an assistant session finishes a turn. This setting
         applies only to this installation.
       </p>
@@ -295,10 +295,10 @@ export function PushNotificationsSection() {
         <div className="flex items-start gap-3">
           <Bell size={18} className="mt-0.5 shrink-0 text-primary" />
           <div>
-            <h3 className="text-body font-semibold text-fg">
+            <h3 className="text-sm font-semibold text-fg">
               Session turn notifications
             </h3>
-            <p className="mt-1 text-caption text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               Notifications show whether the turn finished, failed, or stopped,
               together with the session name. Tapping one opens that session
               directly.
@@ -311,7 +311,7 @@ export function PushNotificationsSection() {
         {!native && !state && (
           <div
             role="status"
-            className="flex items-center gap-2 text-caption text-muted-foreground"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
           >
             <Spinner size="sm" />
             Checking this installation…
@@ -319,21 +319,21 @@ export function PushNotificationsSection() {
         )}
 
         {state && !state.support.supported && (
-          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-caption text-warning">
+          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>{state.support.reason}</span>
           </div>
         )}
 
         {state?.support.supported && enabled && (
-          <div className="flex items-center gap-2 text-caption text-success">
+          <div className="flex items-center gap-2 text-sm text-success">
             <CheckCircle2 size={14} />
             Notifications are enabled for this installation.
           </div>
         )}
 
         {state?.support.supported && permission === "denied" && (
-          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-caption text-warning">
+          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span>
               Notifications are blocked for this installation. Allow them in
@@ -379,7 +379,7 @@ export function PushNotificationsSection() {
         )}
       </div>
 
-      <p className="mt-4 text-caption text-faint">
+      <p className="mt-4 text-sm text-faint">
         Session names may be visible on the Lock Screen.{" "}
         {native
           ? "Every route shows the same text, so this reads the same however the alert reached you."

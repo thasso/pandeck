@@ -62,39 +62,39 @@ function StatusBadge({ card }: { card: PullRequestCardData }) {
   const { status } = card;
   if (status === "choosing-task")
     return (
-      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
+      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400">
         Choose a Task
       </span>
     );
   if (status === "creating")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
         <Spinner size="sm" />
         Creating
       </span>
     );
   if (status === "failed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
+      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
         <XCircle size={9} />
         Failed
       </span>
     );
   if (status === "merged")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/15 px-2 py-0.5 text-micro font-medium text-purple-600 dark:text-purple-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/15 px-2 py-0.5 text-xs font-medium text-purple-600 dark:text-purple-400">
         <GitMerge size={9} />
         Merged
       </span>
     );
   if (status === "closed")
     return (
-      <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
+      <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground">
         Closed
       </span>
     );
   return (
-    <span className="rounded-full bg-success/15 px-2 py-0.5 text-micro font-medium text-success">
+    <span className="rounded-full bg-success/15 px-2 py-0.5 text-xs font-medium text-success">
       Open
     </span>
   );
@@ -103,20 +103,20 @@ function StatusBadge({ card }: { card: PullRequestCardData }) {
 function CiBadge({ ci }: { ci: WorktreeCiStatus }) {
   if (ci.state === "pending")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
         <Spinner size="sm" />
         CI running
       </span>
     );
   if (ci.state === "success")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-micro font-medium text-green-600 dark:text-green-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400">
         <CheckCircle2 size={9} />
         CI passed
       </span>
     );
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
+    <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
       <XCircle size={9} />
       CI failed
     </span>
@@ -126,7 +126,7 @@ function CiBadge({ ci }: { ci: WorktreeCiStatus }) {
 function ReviewBadge({ changesRequested }: { changesRequested: boolean }) {
   if (!changesRequested) return null;
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft px-2 py-0.5 text-micro font-medium text-fg">
+    <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft px-2 py-0.5 text-xs font-medium text-fg">
       <AlertTriangle size={9} />
       Changes requested
     </span>
@@ -136,7 +136,7 @@ function ReviewBadge({ changesRequested }: { changesRequested: boolean }) {
 function MergeabilityBadge({ card }: { card: PullRequestCardData }) {
   if (card.conflicts)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
+      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
         <AlertTriangle size={9} />
         Conflicting
       </span>
@@ -147,7 +147,7 @@ function MergeabilityBadge({ card }: { card: PullRequestCardData }) {
   // already says that.
   if (card.mergeable === null && !card.draft)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
+      <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground">
         <CircleDot size={9} />
         Checking mergeability…
       </span>
@@ -178,7 +178,7 @@ function TaskChooser({
   const candidates = card.taskCandidates ?? [];
   return (
     <div className="space-y-2 px-3 py-3">
-      <div className="text-caption text-muted-foreground">
+      <div className="text-sm text-muted-foreground">
         Several linked Tasks qualify. Which one does this pull request address?
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -192,7 +192,7 @@ function TaskChooser({
               setBusy(task.id);
               onChooseTask?.(card.id, task.id);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-fg hover:bg-surface disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-fg hover:bg-surface disabled:opacity-50"
           >
             {busy === task.id && <Spinner size="sm" />}
             Task-{task.id}: {task.title}
@@ -206,7 +206,7 @@ function TaskChooser({
             setBusy("none");
             onChooseTask?.(card.id, null);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface disabled:opacity-50"
         >
           {busy === "none" && <Spinner size="sm" />}
           None of these
@@ -250,7 +250,7 @@ function ActionButton({
       disabled={disabled || busy}
       aria-busy={busy || undefined}
       onClick={onRun}
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-caption transition-colors disabled:opacity-40 ${
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-sm transition-colors disabled:opacity-40 ${
         danger
           ? "border-danger/40 bg-raised text-danger hover:bg-danger/10"
           : primary
@@ -367,7 +367,7 @@ function CardActions({
                     type="button"
                     disabled={Boolean(running) || conflicted}
                     onClick={() => setMethod(id)}
-                    className={`px-2 py-1 text-caption transition-colors disabled:opacity-40 ${
+                    className={`px-2 py-1 text-sm transition-colors disabled:opacity-40 ${
                       selectedMethod === id
                         ? "bg-primary text-white"
                         : "bg-raised text-muted-foreground hover:bg-surface"
@@ -378,14 +378,14 @@ function CardActions({
                 ))}
               </div>
             ) : (
-              <span className="text-caption text-faint">
+              <span className="text-sm text-faint">
                 {supportedMethods
                   ? "This repository allows no merge method"
                   : "Merge methods are not known yet"}
               </span>
             )}
             <label
-              className={`inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground ${
+              className={`inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground ${
                 running || conflicted
                   ? "opacity-40"
                   : "cursor-pointer hover:bg-surface"
@@ -465,7 +465,7 @@ function CardActions({
       {/* Why merge is off, in text: a `title` tooltip is unreachable on a
           phone and on a disabled button, and the colour alone says nothing. */}
       {conflicted && (
-        <p className="flex items-start gap-1.5 text-caption text-fg">
+        <p className="flex items-start gap-1.5 text-sm text-fg">
           <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />
           <span>
             {card.headBranch} conflicts with {card.baseBranch}, so it cannot be
@@ -484,14 +484,14 @@ function CardActions({
           and only while there is a merge to click: pairing it with "cannot be
           merged" would describe a button that is off. */}
       {open && !conflicted && (
-        <p className="text-micro text-faint">
+        <p className="text-xs text-faint">
           {deleteBranch
             ? `Merging deletes the remote branch ${card.headBranch}; the local checkout stays until you clean it up.`
             : `The remote branch ${card.headBranch} is KEPT after the merge; delete it yourself when you are done with it.`}
         </p>
       )}
       {canCleanup && (
-        <p className="text-micro text-faint">
+        <p className="text-xs text-faint">
           Cleanup removes this worktree and deletes {card.headBranch} locally —
           only after {card.baseBranch} is confirmed to contain it.
           {siblings > 0 &&
@@ -499,15 +499,13 @@ function CardActions({
         </p>
       )}
       {card.cleanedUp && (
-        <p className="text-caption text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Worktree removed and {card.headBranch} deleted locally.
         </p>
       )}
       {card.actionError && <ErrorNote message={card.actionError} />}
       {card.actionMessage && !card.actionError && (
-        <p className="text-caption text-muted-foreground">
-          {card.actionMessage}
-        </p>
+        <p className="text-sm text-muted-foreground">{card.actionMessage}</p>
       )}
     </div>
   );
@@ -559,17 +557,17 @@ export function PullRequestCard({
         <HeaderIcon status={card.status} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               {card.reused ? "Pull request reused" : "Pull request"}
             </div>
             {card.provider && card.number !== undefined && (
-              <span className="text-caption text-faint">
+              <span className="text-sm text-faint">
                 {card.provider} #{card.number}
               </span>
             )}
             <StatusBadge card={card} />
             {card.draft && (
-              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-micro text-fg">
+              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-xs text-fg">
                 draft
               </span>
             )}
@@ -580,8 +578,8 @@ export function PullRequestCard({
             {open && <MergeabilityBadge card={card} />}
             {card.reused && <RotateCcw size={13} className="text-faint" />}
           </div>
-          <div className="mt-1 truncate text-body text-fg">{card.title}</div>
-          <div className="mt-1 font-mono text-caption text-faint">
+          <div className="mt-1 truncate text-sm text-fg">{card.title}</div>
+          <div className="mt-1 font-mono text-sm text-faint">
             {card.headBranch} → {card.baseBranch}
           </div>
         </div>
@@ -590,7 +588,7 @@ export function PullRequestCard({
             href={card.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-primary/90"
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
           >
             Open
             <ExternalLink size={12} />
@@ -623,7 +621,7 @@ export function PullRequestCard({
         card.linkedTask) && (
         <div className="space-y-3 px-3 py-3">
           {card.linkedTask && (
-            <div className="text-caption text-muted-foreground">
+            <div className="text-sm text-muted-foreground">
               Linked to{" "}
               <span className="font-medium text-fg">
                 Task-{card.linkedTask.id}: {card.linkedTask.title}
@@ -632,13 +630,13 @@ export function PullRequestCard({
           )}
 
           {(card.body?.length ?? 0) > 0 && (
-            <div className="rounded-lg border border-line bg-panel/50 p-2 text-body text-fg">
+            <div className="rounded-lg border border-line bg-panel/50 p-2 text-sm text-fg">
               <Markdown text={card.body!.join("\n\n")} />
             </div>
           )}
 
           {card.warnings.length > 0 && (
-            <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-caption text-fg">
+            <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-sm text-fg">
               <div className="mb-1 flex items-center gap-1.5 font-medium">
                 <AlertTriangle size={13} className="text-warning" />
                 Warnings

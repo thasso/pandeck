@@ -82,7 +82,7 @@ function SessionRowContentImpl({
         ) : null}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate text-caption text-fg ${showUnread ? "font-semibold" : ""}`}
+        className={`min-w-0 flex-1 truncate text-sm text-fg ${showUnread ? "font-semibold" : ""}`}
       >
         <SessionTitleText
           title={rowTitle}
@@ -103,7 +103,7 @@ function SessionRowContentImpl({
           the row itself is what opens the session holding the card. */}
       <SessionDeliveryMark session={session} variant="glyph" />
       <span
-        className={`shrink-0 text-micro tabular-nums text-faint ${onArchive ? "group-hover/session-content:hidden group-focus-within/session-content:hidden" : ""}`}
+        className={`shrink-0 text-xs tabular-nums text-faint ${onArchive ? "group-hover/session-content:hidden group-focus-within/session-content:hidden" : ""}`}
       >
         {relativeTime(session.updatedAt)}
       </span>

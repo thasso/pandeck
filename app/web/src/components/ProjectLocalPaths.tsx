@@ -117,7 +117,7 @@ export function ProjectLocalPathsSection({
     >
       <div className="flex flex-col gap-1.5 px-1">
         {visible.length === 0 && !adding ? (
-          <p className="text-caption text-faint">
+          <p className="text-sm text-faint">
             No extra folders mapped to this project.
           </p>
         ) : null}
@@ -134,13 +134,13 @@ export function ProjectLocalPathsSection({
                   replace(index, { ...item, path: path.trim() })
                 }
                 ariaLabel="Local path"
-                editorClassName="w-full rounded-md border border-line bg-panel px-2 py-0.5 font-mono text-caption text-fg outline-none focus:border-primary"
+                editorClassName="w-full rounded-md border border-line bg-panel px-2 py-0.5 font-mono text-sm text-fg outline-none focus:border-primary"
                 renderDisplay={(begin) => (
                   <button
                     type="button"
                     onClick={begin}
                     title="Click to edit this path"
-                    className="min-w-0 flex-1 break-all text-left font-mono text-caption text-fg hover:text-primary"
+                    className="min-w-0 flex-1 break-all text-left font-mono text-sm text-fg hover:text-primary"
                   >
                     {item.path}
                   </button>
@@ -199,7 +199,7 @@ export function ProjectLocalPathsSection({
             onBlur={commitDraft}
             placeholder="/absolute/path"
             aria-label="New local path"
-            className="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-caption text-fg outline-none focus:border-primary"
+            className="w-full rounded-lg border border-line bg-surface px-2 py-1 font-mono text-sm text-fg outline-none focus:border-primary"
           />
         ) : null}
         {mutationError ? (
@@ -232,7 +232,7 @@ function Chip({
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="rounded bg-raised px-1.5 py-0.5 text-micro uppercase tracking-wide text-faint transition-colors hover:text-fg"
+      className="rounded bg-raised px-1.5 py-0.5 text-xs uppercase tracking-wide text-faint transition-colors hover:text-fg"
     >
       {label}
     </button>

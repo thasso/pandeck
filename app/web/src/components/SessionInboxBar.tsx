@@ -136,7 +136,7 @@ function Chip({
   onClick?: (() => void) | undefined;
   children: ReactNode;
 }) {
-  const shape = `flex items-center gap-1 rounded-full px-1.5 py-0.5 text-micro font-medium tabular-nums ${TONE_CLASS[tone]}`;
+  const shape = `flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums ${TONE_CLASS[tone]}`;
   // Every glyph gets the SAME box, whatever it is: a 12px icon, a 13px spinner
   // and whatever the next one is all centre in it, so the three chips sit on
   // one line and the digit beside them has a constant thing to centre against.

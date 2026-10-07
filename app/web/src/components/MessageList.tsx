@@ -310,7 +310,7 @@ function AttachmentChip({
       </>
     );
     const cls =
-      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-primary/30 bg-accent px-2.5 py-1.5 text-caption text-primary";
+      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-primary/30 bg-accent px-2.5 py-1.5 text-sm text-primary";
     return taskId && onOpenTask ? (
       <button
         type="button"
@@ -327,7 +327,7 @@ function AttachmentChip({
   if (attachment.role === "project-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted-foreground"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-muted-foreground"
         title="Project context was attached to this first prompt."
       >
         <FolderKanban size={13} className="shrink-0 text-primary" />
@@ -340,7 +340,7 @@ function AttachmentChip({
   if (attachment.role === "file-context") {
     return (
       <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted-foreground"
+        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-sm text-muted-foreground"
         title="This session was started from this file."
       >
         <FileText size={13} className="shrink-0 text-primary" />
@@ -367,7 +367,7 @@ function AttachmentChip({
           className="max-h-72 max-w-full object-contain"
         />
       ) : null}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-caption text-muted-foreground">
+      <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm text-muted-foreground">
         {attachment.mimeType.startsWith("image/") ? (
           <ImageIcon size={14} className="text-primary" />
         ) : (
@@ -536,7 +536,7 @@ function MessageActionsBar({
                   close();
                   onCommentMessage?.(message.id);
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption text-fg hover:bg-raised"
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-fg hover:bg-raised"
               >
                 <MessageSquarePlus size={14} className="text-primary" />
                 Comment on this message
@@ -675,7 +675,7 @@ const UserMessage = memo(function UserMessage({
     return (
       <div className="group/message min-w-0">
         <ChatActivityRow icon={Bot} title={originLabel} preview={preview}>
-          <p className="mb-2 break-words text-caption text-muted-foreground">
+          <p className="mb-2 break-words text-sm text-muted-foreground">
             {originLabel}
           </p>
           {message.promptDelivery ? (
@@ -695,7 +695,7 @@ const UserMessage = memo(function UserMessage({
       {message.promptDelivery ? (
         <PromptDeliveryNote delivery={message.promptDelivery} />
       ) : null}
-      <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-body text-foreground">
+      <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
         {body}
       </div>
       {promptQueueState ? (
@@ -722,7 +722,7 @@ const PROMPT_QUEUE_LABEL: Record<PromptQueueState, string> = {
 
 function PromptQueueCondition({ state }: { state: PromptQueueState }) {
   return (
-    <div className="mr-1 mt-1 flex items-center gap-1.5 text-caption text-muted-foreground">
+    <div className="mr-1 mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
       <Spinner size="xs" />
       <span>{PROMPT_QUEUE_LABEL[state]}</span>
     </div>
@@ -749,7 +749,7 @@ const ForkBoundaryMarker = memo(function ForkBoundaryMarker({
         type="button"
         onClick={onOpen}
         title="Open the message this session was forked from"
-        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <GitFork size={12} className="shrink-0" />
         <span className="truncate">Forked from {parentTitle}</span>
@@ -771,7 +771,7 @@ function PromptDeliveryNote({
 }) {
   return (
     <div
-      className={`mb-0.5 mr-1 inline-flex items-center gap-1 text-micro ${
+      className={`mb-0.5 mr-1 inline-flex items-center gap-1 text-xs ${
         delivery === "steer" ? "text-primary" : "text-warning"
       }`}
     >
@@ -1868,7 +1868,7 @@ export function MessageList({
             <button
               type="button"
               onClick={showEarlierRows}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="rounded-full border border-line bg-surface px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
               {hiddenRowCount === 1 ? "message" : "messages"}
@@ -1883,7 +1883,7 @@ export function MessageList({
               type="button"
               onClick={loadOlderMessages}
               disabled={loadingOlderMessages}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              className="rounded-full border border-line bg-surface px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
             >
               {loadingOlderMessages
                 ? "Loading earlier messages…"

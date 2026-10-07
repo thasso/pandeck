@@ -153,17 +153,17 @@ const PullRequestRow = memo(function PullRequestRow({
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <StateIcon item={item} />
-        <span className="shrink-0 font-mono text-micro tabular-nums text-faint">
+        <span className="shrink-0 font-mono text-xs tabular-nums text-faint">
           #{item.number}
         </span>
-        <span className="min-w-0 flex-1 truncate text-caption text-fg">
+        <span className="min-w-0 flex-1 truncate text-sm text-fg">
           {item.title}
         </span>
       </div>
       <div className="flex min-w-0 items-center gap-1.5 pl-[1.15rem]">
         {project ? (
           <span
-            className="flex shrink-0 items-center gap-1 text-micro text-faint"
+            className="flex shrink-0 items-center gap-1 text-xs text-faint"
             title={project.name}
           >
             <span
@@ -174,19 +174,17 @@ const PullRequestRow = memo(function PullRequestRow({
             {project.key}
           </span>
         ) : null}
-        <span className="min-w-0 flex-1 truncate font-mono text-micro text-faint">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-faint">
           {item.headBranch}
         </span>
         {item.draft ? (
-          <span className="shrink-0 text-micro font-medium text-faint">
-            Draft
-          </span>
+          <span className="shrink-0 text-xs font-medium text-faint">Draft</span>
         ) : null}
         {item.worktreeId ? (
           // The one relation a ROW states: this pull request has a checkout on
           // this machine, which is what makes it actionable from here.
           <span
-            className="shrink-0 text-micro font-medium text-primary"
+            className="shrink-0 text-xs font-medium text-primary"
             title="A local worktree holds this branch"
           >
             local
@@ -323,7 +321,7 @@ export function PullRequestBrowser({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pull requests…"
             aria-label="Search pull requests"
-            className="w-full rounded-lg border border-line bg-surface py-1.5 pl-8 pr-2 text-caption text-fg outline-none placeholder:text-faint focus:border-primary"
+            className="w-full rounded-lg border border-line bg-surface py-1.5 pl-8 pr-2 text-sm text-fg outline-none placeholder:text-faint focus:border-primary"
           />
         </div>
         {/* R2: a poll keeps the rows and says so here, rather than replacing
@@ -354,7 +352,7 @@ export function PullRequestBrowser({
         >
           <h2
             id={`pull-requests-${group.id}`}
-            className={`px-2 pb-0.5 text-micro font-semibold uppercase tracking-wide ${
+            className={`px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide ${
               group.id === "needs-review" ? "text-primary" : "text-faint"
             }`}
           >

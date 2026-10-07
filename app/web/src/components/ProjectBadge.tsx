@@ -32,7 +32,7 @@ export function ProjectBadge({
   if (size === "sm") {
     return (
       <span
-        className={`inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-micro ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
+        className={`inline-flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-xs ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
         style={known ? { backgroundColor: colors.soft } : undefined}
         title={known ? label : `Unknown project: ${projectId}`}
       >
@@ -65,7 +65,7 @@ export function ProjectBadge({
   // md
   return (
     <span
-      className={`inline-flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-caption ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
+      className={`inline-flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-sm ${known ? "text-muted-foreground" : `border ${DASHED_EDGE} border-line text-faint`}`}
       style={known ? { backgroundColor: colors.soft } : undefined}
       title={known ? label : `Unknown project: ${projectId}`}
     >

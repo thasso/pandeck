@@ -88,7 +88,7 @@ export function KnowledgeInspector({
           icon={<FileDiff size={13} />}
           {...(uncommitted > 0 ? { summary: `${uncommitted}` } : {})}
         >
-          <p className="text-caption text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {!status
               ? "Reading the Knowledge Base…"
               : uncommitted > 0

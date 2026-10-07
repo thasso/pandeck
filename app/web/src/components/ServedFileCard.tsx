@@ -90,19 +90,19 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
           </span>
           <span className="min-w-0">
             <span
-              className="block truncate text-caption font-medium text-fg"
+              className="block truncate text-sm font-medium text-fg"
               title={title}
             >
               {title}
             </span>
             <span
-              className="block truncate text-micro text-faint"
+              className="block truncate text-xs text-faint"
               title={path || name}
             >
               {path || name || "Served file"}
               {size ? ` · ${size}` : ""}
             </span>
-            <span className="block truncate text-micro text-muted-foreground">
+            <span className="block truncate text-xs text-muted-foreground">
               Preview only · not added to assistant context
             </span>
           </span>
@@ -190,7 +190,7 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
           ) : null}
         </>
       ) : (
-        <span className="block p-3 text-caption text-muted-foreground">
+        <span className="block p-3 text-sm text-muted-foreground">
           {viewerHref ? VIEWER_COPY[kind] : NO_VIEWER_COPY[kind]}
         </span>
       )}

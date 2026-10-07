@@ -259,15 +259,15 @@ export function PortForwardingSettingsSection() {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Port forwarding</h2>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <h2 className="text-sm font-semibold">Port forwarding</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Reach a service running on the Pandeck server, such as a dev server an
         agent started, at the same port on this Mac.
       </p>
 
       {!supported ? (
         <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-          <p className="text-caption text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             Port forwarding needs the macOS app: it listens on this machine,
             which a browser tab cannot do. Open Settings in the desktop app to
             start one.
@@ -281,7 +281,7 @@ export function PortForwardingSettingsSection() {
           >
             <label
               htmlFor={PORT_INPUT_ID}
-              className="block text-caption font-medium text-fg"
+              className="block text-sm font-medium text-fg"
             >
               Server port
             </label>
@@ -311,7 +311,7 @@ export function PortForwardingSettingsSection() {
                 Start
               </Button>
             </div>
-            <p id={PORT_HINT_ID} className="mt-2 text-caption text-faint">
+            <p id={PORT_HINT_ID} className="mt-2 text-sm text-faint">
               A port from {PORT_FORWARD_MIN_PORT} to {PORT_FORWARD_MAX_PORT}.
               macOS asks before the app listens on 127.0.0.1 at that port. The
               forward ends when it expires (24 hours), when you stop it, or when
@@ -326,7 +326,7 @@ export function PortForwardingSettingsSection() {
 
           <div className="mt-4 rounded-xl border border-line bg-panel p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-body font-semibold text-fg">Forwards</h3>
+              <h3 className="text-sm font-semibold text-fg">Forwards</h3>
               {state.status === "refreshing" && <RefreshIndicator />}
             </div>
             {errorOf(state) !== undefined && (
@@ -361,10 +361,10 @@ export function PortForwardingSettingsSection() {
                     <li key={status.port} className="py-3">
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                         <div className="min-w-0 flex-1 basis-56">
-                          <div className="truncate font-mono text-body text-fg">
+                          <div className="truncate font-mono text-sm text-fg">
                             {status.localUrl}
                           </div>
-                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-caption text-muted-foreground">
+                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-sm text-muted-foreground">
                             <span>to {serverHost(status.serverOrigin)}</span>
                             <span>
                               {connectionsLabel(status.activeConnections)}

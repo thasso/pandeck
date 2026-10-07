@@ -104,11 +104,11 @@ export function LoadedMemorySection({
         summary="Draft"
         defaultOpen={defaultOpen}
       >
-        <p className="text-caption text-faint">
+        <p className="text-sm text-faint">
           Draft — memory scope is staged but nothing has been loaded yet; it
           applies once the first message is sent.
         </p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5 text-caption text-faint">
+        <div className="mt-1.5 flex flex-wrap gap-1.5 text-sm text-faint">
           {stagedScope?.persona && (
             <span className="rounded bg-panel px-1.5 py-0.5">
               persona: {stagedScope.persona}
@@ -167,20 +167,20 @@ export function LoadedMemorySection({
       defaultOpen={defaultOpen}
     >
       {!loadingEnabled ? (
-        <p className="text-caption text-faint">
+        <p className="text-sm text-faint">
           Memory loading is disabled in Memory settings — existing memories are
           kept but nothing is injected.
         </p>
       ) : notYetLoaded ? (
-        <p className="text-caption text-faint">Not yet loaded.</p>
+        <p className="text-sm text-faint">Not yet loaded.</p>
       ) : !batch ? (
-        <p className="text-caption text-faint">
+        <p className="text-sm text-faint">
           No memory has been loaded for this session yet.
         </p>
       ) : (
         <div className="space-y-2">
           {batches.length > 1 && (
-            <div className="flex items-center justify-between text-caption text-faint">
+            <div className="flex items-center justify-between text-sm text-faint">
               <button
                 type="button"
                 title="Older turn"
@@ -219,7 +219,7 @@ export function LoadedMemorySection({
           type="button"
           onClick={onOpenManager}
           title="Open Memory settings"
-          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-caption text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ExternalLink size={11} />
           Manage memory
@@ -238,7 +238,7 @@ function LoadBatch({
 }) {
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5 text-caption text-faint">
+      <div className="flex flex-wrap items-center gap-1.5 text-sm text-faint">
         <span
           className={`rounded px-1.5 py-0.5 ${badgeTone(batch.deliveryState)}`}
         >
@@ -262,24 +262,24 @@ function LoadBatch({
       </div>
 
       {batch.deliveryState === "reused" && (
-        <p className="text-caption text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           No new memory block was sent — the same snapshot is already in the
           model's session context.
         </p>
       )}
       {batch.deliveryState === "cleared" && (
-        <p className="text-caption text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           A clearing marker superseded the previous snapshot; no memories
           currently apply.
         </p>
       )}
       {batch.deliveryState === "none" && batch.items.length === 0 && (
-        <p className="text-caption text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           No eligible memory for this turn.
         </p>
       )}
       {batch.deliveryState === "failed" && (
-        <p className="text-caption text-amber-500">
+        <p className="text-sm text-amber-500">
           Memory selection/delivery failed for this turn — the turn itself
           completed normally, but no memory snapshot could be computed. Not
           advanced; the next turn retries normally.
@@ -330,13 +330,13 @@ function LoadItemRow({
   };
 
   return (
-    <div className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-caption">
+    <div className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1">
           <div className="text-fg">
             {item.text || "(memory text unavailable)"}
           </div>
-          <div className="mt-0.5 flex flex-wrap gap-1 text-micro text-faint">
+          <div className="mt-0.5 flex flex-wrap gap-1 text-xs text-faint">
             <span className="rounded bg-panel px-1 py-0.5">#{item.rank}</span>
             <span className="rounded bg-panel px-1 py-0.5">{item.kind}</span>
             <span className="rounded bg-panel px-1 py-0.5">
@@ -365,7 +365,7 @@ function LoadItemRow({
       {open && (
         <div className="mt-2 border-t border-line pt-2">
           {item.provenance?.sessionId && (
-            <div className="mb-1.5 text-caption text-faint">
+            <div className="mb-1.5 text-sm text-faint">
               Source: {provenanceLabel(item.provenance.sourceKind)} in{" "}
               <a
                 href={sessionPath(item.provenance.sessionId)}
@@ -386,16 +386,14 @@ function LoadItemRow({
               <Skeleton className="h-3 w-1/2" />
             </div>
           ) : !live ? (
-            <p className="text-caption text-faint">
-              This memory no longer exists.
-            </p>
+            <p className="text-sm text-faint">This memory no longer exists.</p>
           ) : editing ? (
             <div>
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-primary"
+                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-sm outline-none focus:border-primary"
               />
               <div className="mt-1 flex gap-2">
                 <button
@@ -410,7 +408,7 @@ function LoadItemRow({
                     });
                     setEditing(false);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-caption text-white"
+                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-sm text-white"
                 >
                   <Check size={11} />
                   Save (supersede)
@@ -420,7 +418,7 @@ function LoadItemRow({
                     setEditing(false);
                     setDraft(live.text);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption"
+                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm"
                 >
                   <X size={11} />
                   Cancel
@@ -429,7 +427,7 @@ function LoadItemRow({
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="rounded bg-panel px-1.5 py-0.5 text-micro text-faint">
+              <span className="rounded bg-panel px-1.5 py-0.5 text-xs text-faint">
                 {live.state}
                 {live.pinned ? " · pinned" : ""}
               </span>
@@ -486,7 +484,7 @@ function LoadItemRow({
             </div>
           )}
           {feedback && (
-            <div className="mt-1 text-caption text-amber-500">{feedback}</div>
+            <div className="mt-1 text-sm text-amber-500">{feedback}</div>
           )}
         </div>
       )}

@@ -46,7 +46,7 @@ function Label({ descriptor }: { descriptor: SettingDescriptor }) {
     <span className="min-w-0">
       <span className="block font-medium">{descriptor.label}</span>
       {descriptor.hint && (
-        <span className="mt-0.5 block text-caption text-muted-foreground">
+        <span className="mt-0.5 block text-sm text-muted-foreground">
           {descriptor.hint}
         </span>
       )}
@@ -178,16 +178,16 @@ function Field({
   const spec = descriptor.value;
   if (descriptor.access === "readonly" || !spec)
     return (
-      <div className="space-y-1 text-caption text-fg">
+      <div className="space-y-1 text-sm text-fg">
         <Label descriptor={descriptor} />
-        <div className="break-all font-mono text-caption text-muted-foreground">
+        <div className="break-all font-mono text-sm text-muted-foreground">
           {readonlyText(value)}
         </div>
       </div>
     );
   if (spec.kind === "boolean")
     return (
-      <label className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-caption text-fg">
+      <label className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-sm text-fg">
         <input
           type="checkbox"
           checked={value === true}
@@ -198,7 +198,7 @@ function Field({
       </label>
     );
   return (
-    <div className="space-y-1 text-caption text-fg">
+    <div className="space-y-1 text-sm text-fg">
       <Label descriptor={descriptor} />
       {spec.kind === "enum" ? (
         <select
@@ -241,7 +241,7 @@ function Field({
         />
       )}
       {(spec.kind === "integer" || spec.kind === "number") && (
-        <div className="text-caption text-faint">
+        <div className="text-sm text-faint">
           {spec.min}–{spec.max}
         </div>
       )}
@@ -274,7 +274,7 @@ export function RegistrySettingFields({
   return (
     <div className="mx-auto max-w-2xl px-6 pb-6">
       <div className="space-y-3 rounded-xl border border-line bg-panel p-4">
-        <h3 className="text-body font-semibold text-fg">More settings</h3>
+        <h3 className="text-sm font-semibold text-fg">More settings</h3>
         {shown.map((descriptor) => (
           <Field
             key={descriptor.path}

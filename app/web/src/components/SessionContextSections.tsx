@@ -211,17 +211,17 @@ function PeerPromptBubble({
         {/* Already an excerpt when it arrives (`peerPromptExcerpt`): the full
             message is never on the wire, and truncating again here would only
             add a second ellipsis. */}
-        <p className="line-clamp-2 break-words text-caption text-fg">
+        <p className="line-clamp-2 break-words text-sm text-fg">
           {message.message}
         </p>
-        <p className="mt-0.5 text-micro text-muted-foreground">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           {PEER_PROMPT_STATE_LABEL[message.state]} ·{" "}
           {relativeTime(message.createdAt)}
         </p>
         {message.failureReason ? (
           // The only detail kept: a failed message whose reason lived nowhere
           // else in the UI would show a state word and no way to understand it.
-          <p className="mt-0.5 line-clamp-2 break-words text-micro text-danger">
+          <p className="mt-0.5 line-clamp-2 break-words text-xs text-danger">
             {message.failureReason}
           </p>
         ) : null}
@@ -274,7 +274,7 @@ export function PeerPromptsSection({
               <a
                 href={sessionPath(thread.peerSessionId)}
                 title={thread.otherPartyTitle}
-                className="min-w-0 truncate text-caption font-medium text-fg underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                className="min-w-0 truncate text-sm font-medium text-fg underline decoration-dotted underline-offset-2 hover:decoration-solid"
                 onClick={(event) => {
                   if (
                     !onOpenSession ||
@@ -290,7 +290,7 @@ export function PeerPromptsSection({
               >
                 {thread.otherPartyTitle}
               </a>
-              <span className="ml-auto shrink-0 text-micro text-faint">
+              <span className="ml-auto shrink-0 text-xs text-faint">
                 {relativeTime(
                   thread.messages[thread.messages.length - 1]?.createdAt ?? 0,
                 )}
@@ -312,12 +312,12 @@ export function PeerPromptsSection({
             <button
               type="button"
               onClick={() => onExpand()}
-              className="w-full rounded-lg border border-line px-2 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-surface hover:text-fg"
+              className="w-full rounded-lg border border-line px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-surface hover:text-fg"
             >
               Load more history
             </button>
           ) : (
-            <p className="text-micro text-faint">
+            <p className="text-xs text-faint">
               Older peer prompts are not shown.
             </p>
           )
@@ -335,19 +335,17 @@ function PostReloadContinuationCard({
   onCancel?: (() => void) | undefined;
 }) {
   return (
-    <section className="rounded-xl border border-primary/30 bg-accent p-3 text-caption text-primary">
+    <section className="rounded-xl border border-primary/30 bg-accent p-3 text-sm text-primary">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-semibold">Post-reload continuation queued</h3>
-          <p className="mt-1 line-clamp-3 text-caption">
-            {continuation.message}
-          </p>
+          <p className="mt-1 line-clamp-3 text-sm">{continuation.message}</p>
         </div>
         <button
           type="button"
           onClick={onCancel}
           disabled={!onCancel}
-          className="rounded-md border border-primary/30 px-2 py-1 text-caption transition-colors hover:bg-primary/10 disabled:opacity-50"
+          className="rounded-md border border-primary/30 px-2 py-1 text-sm transition-colors hover:bg-primary/10 disabled:opacity-50"
         >
           Cancel
         </button>
@@ -470,10 +468,10 @@ export function ActiveSkillsSection({
                         : "bg-line-strong"
                   }`}
                 />
-                <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
                   {name}
                 </span>
-                <span className="shrink-0 text-micro text-faint">
+                <span className="shrink-0 text-xs text-faint">
                   {detail ?? state}
                 </span>
               </li>
@@ -481,7 +479,7 @@ export function ActiveSkillsSection({
           })}
         </ul>
       ) : !libraryPending && !libraryError ? (
-        <p className="text-caption text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           No library skills were available when this session started.
         </p>
       ) : null}
@@ -581,10 +579,10 @@ function ToolsSection({
                   }
                   className={`size-2 shrink-0 rounded-full ${loaded > 0 ? "bg-emerald-500" : usable > 0 ? "bg-line-strong" : "bg-danger/40"}`}
                 />
-                <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
                   {group.label}
                 </span>
-                <span className="shrink-0 text-micro tabular-nums text-faint">
+                <span className="shrink-0 text-xs tabular-nums text-faint">
                   {loaded}/{group.tools.length}
                 </span>
               </button>
@@ -594,7 +592,7 @@ function ToolsSection({
                     <span
                       key={tool.name}
                       title={`${tool.loaded ? "Loaded" : tool.usable ? "Loads on demand" : "Unavailable"} · ${tool.used ? "called" : "not called"} · ${tool.definitionChars.toLocaleString()} definition chars${tool.tokens ? ` · ~${tool.tokens} tokens` : ""}`}
-                      className={`rounded-md border px-1.5 py-0.5 font-mono text-micro ${
+                      className={`rounded-md border px-1.5 py-0.5 font-mono text-xs ${
                         tool.loaded
                           ? "border-emerald-500/40 bg-emerald-500/10 text-fg"
                           : tool.usable
@@ -613,7 +611,7 @@ function ToolsSection({
         })}
       </div>
       {exposure.counts.loadedButUnused > 0 && (
-        <p className="mt-2 px-0.5 text-micro text-faint">
+        <p className="mt-2 px-0.5 text-xs text-faint">
           {exposure.counts.loadedButUnused} loaded but unused ·{" "}
           {exposure.counts.loadedButUnusedDefinitionChars.toLocaleString()}{" "}
           definition chars
@@ -624,7 +622,7 @@ function ToolsSection({
           {recentLoads.map((event) => (
             <p
               key={`${event.at}-${event.via}`}
-              className="truncate text-micro text-faint"
+              className="truncate text-xs text-faint"
               title={event.names.join(", ")}
             >
               {new Date(event.at).toLocaleTimeString()} ·{" "}
@@ -663,19 +661,19 @@ function ApprovalGrantsSection({
         {grants.map((grant) => (
           <li
             key={grant.key}
-            className="flex items-center gap-2 text-caption text-fg"
+            className="flex items-center gap-2 text-sm text-fg"
           >
             <span className="min-w-0 flex-1 truncate">
               {approvalGrantLabel(grant.key)}
             </span>
-            <span className="shrink-0 text-micro text-faint">
+            <span className="shrink-0 text-xs text-faint">
               {relativeTime(grant.grantedAt)}
             </span>
             {onRevoke && (
               <button
                 type="button"
                 onClick={() => onRevoke(sessionId, grant.key)}
-                className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
+                className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
               >
                 Revoke
               </button>
@@ -710,17 +708,17 @@ function BrowserRuntimesSection({
           <div
             className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-primary" : runtime.status === "error" ? "bg-danger" : "bg-line-strong"}`}
           />
-          <p className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
             Playwright MCP
           </p>
           <span
-            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-line text-faint"}`}
+            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-line text-faint"}`}
           >
             agent {runtime.agentStatus}
           </span>
         </div>
         {runtime.error && (
-          <p className="mt-1.5 line-clamp-2 text-caption text-danger">
+          <p className="mt-1.5 line-clamp-2 text-sm text-danger">
             {runtime.error}
           </p>
         )}
@@ -803,14 +801,12 @@ function ArtifactsSection({
               )}
               <div className="p-2">
                 <p
-                  className="truncate text-caption font-medium text-fg"
+                  className="truncate text-sm font-medium text-fg"
                   title={artifact.label}
                 >
                   {artifact.label}
                 </p>
-                <p className="truncate text-micro text-faint">
-                  {artifact.name}
-                </p>
+                <p className="truncate text-xs text-faint">{artifact.name}</p>
               </div>
             </button>
           );
@@ -853,12 +849,12 @@ function ArtifactPreview({
       <div className="flex items-start justify-between gap-2 border-b border-line p-2.5">
         <div className="min-w-0">
           <p
-            className="truncate text-caption font-medium text-fg"
+            className="truncate text-sm font-medium text-fg"
             title={artifact.label}
           >
             {artifact.label}
           </p>
-          <p className="truncate text-micro text-faint" title={artifact.name}>
+          <p className="truncate text-xs text-faint" title={artifact.name}>
             {artifact.name}
           </p>
         </div>
@@ -929,12 +925,12 @@ function ArtifactPreview({
         ) : text === undefined ? (
           <PaneLoading className="py-8" label="Loading preview…" />
         ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-micro text-muted-foreground">
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs text-muted-foreground">
             {text}
           </pre>
         )
       ) : (
-        <div className="p-3 text-caption text-muted-foreground">
+        <div className="p-3 text-sm text-muted-foreground">
           No inline preview for this artifact type. Open it in a new tab to
           inspect it.
         </div>

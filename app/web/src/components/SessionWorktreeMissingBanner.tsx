@@ -19,7 +19,7 @@ export function SessionWorktreeMissingBanner({
     <div className="mx-auto w-full max-w-3xl px-4">
       <div
         role="status"
-        className="mb-2 flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-400/10 px-3 py-2 text-caption text-fg sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2"
+        className="mb-2 flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-400/10 px-3 py-2 text-sm text-fg sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2"
       >
         <div className="flex items-start gap-2">
           <TriangleAlert size={14} className="mt-0.5 shrink-0 text-amber-500" />

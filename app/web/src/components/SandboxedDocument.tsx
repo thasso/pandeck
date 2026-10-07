@@ -207,7 +207,7 @@ export function SandboxedDocument({
           action={
             <a
               {...openProps}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90"
             >
               <ExternalLink size={13} /> Open PDF
             </a>
@@ -216,15 +216,15 @@ export function SandboxedDocument({
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent text-primary">
             <FileText size={22} />
           </div>
-          <h1 className="text-prose font-semibold text-fg">
+          <h1 className="text-base font-semibold text-fg">
             {name ?? "Document"}
           </h1>
           {sizeBytes === undefined ? null : (
-            <p className="mt-1 text-caption text-faint">
+            <p className="mt-1 text-sm text-faint">
               {formatFileSize(sizeBytes)}
             </p>
           )}
-          <p className="mt-2 text-body text-muted-foreground">
+          <p className="mt-2 text-sm text-muted-foreground">
             This PDF opens in your browser: iPhone and iPad can't scroll one
             inside the app.
           </p>

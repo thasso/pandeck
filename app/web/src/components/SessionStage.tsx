@@ -31,10 +31,10 @@ export function PendingSessionPanel({ title }: { title: string }) {
               <Spinner size="md" />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-body font-semibold text-fg">
+              <div className="truncate text-sm font-semibold text-fg">
                 Opening {title}
               </div>
-              <div className="mt-0.5 text-caption text-muted-foreground">
+              <div className="mt-0.5 text-sm text-muted-foreground">
                 Keeping the app shell stable while the transcript catches up.
               </div>
             </div>
@@ -67,7 +67,7 @@ export function UnavailableSessionPanel({
     <div className="min-h-0 flex-1 overflow-hidden bg-surface">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
         <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <div className="truncate text-body font-semibold text-fg">
+          <div className="truncate text-sm font-semibold text-fg">
             Can't open {title}
           </div>
           <ErrorNote className="mt-3" message={message} />
@@ -116,7 +116,7 @@ export function SessionBootstrapNarration({
       ) : (
         <div
           role="status"
-          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-caption text-muted-foreground"
+          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm text-muted-foreground"
         >
           <Spinner size="sm" />
           <span>{narration.label}</span>
@@ -142,7 +142,7 @@ export function SessionRefreshMark() {
     <div className="pointer-events-none absolute inset-x-0 top-20 z-20 flex justify-center px-3">
       <div
         role="status"
-        className="flex items-center gap-2 rounded-full border border-line-strong bg-panel px-4 py-2 text-body font-medium text-fg shadow-lg shadow-black/20"
+        className="flex items-center gap-2 rounded-full border border-line-strong bg-panel px-4 py-2 text-sm font-medium text-fg shadow-lg shadow-black/20"
       >
         <Spinner size="sm" />
         Updating session…

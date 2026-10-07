@@ -649,9 +649,7 @@ describe("SessionInbox density", () => {
   /** The height classes of a card's first row and of its status row. */
   function outerRows(id: string): string[] {
     const card = row(id);
-    const first = card.querySelector<HTMLElement>(
-      ".whitespace-nowrap.text-micro",
-    );
+    const first = card.querySelector<HTMLElement>(".whitespace-nowrap.text-xs");
     const status = card.querySelector<HTMLElement>(
       ".session-card-status-line",
     )?.parentElement;
