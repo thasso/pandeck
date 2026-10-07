@@ -125,9 +125,9 @@ export function SpawnedSessionsLedge({
       <Button
         variant="ghost"
         size="sm"
-        className={
-          working ? "w-full justify-start text-primary" : "w-full justify-start"
-        }
+        // Square, and filled under Button's transparent 1px border
+        // (`bg-clip-padding`), so the header fills the strip edge to edge.
+        className={`w-full justify-start rounded-none bg-clip-border ${working ? "text-primary" : ""}`}
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`spawned-sessions-ledge-${sessionId}`}

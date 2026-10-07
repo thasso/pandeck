@@ -78,7 +78,9 @@ export function BackgroundWorkLedge({
       <Button
         variant="ghost"
         size="sm"
-        className="w-full justify-start"
+        // Square, and filled under Button's transparent 1px border
+        // (`bg-clip-padding`), so the header fills the strip edge to edge.
+        className="w-full justify-start rounded-none bg-clip-border"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}

@@ -33,7 +33,8 @@ export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
   return (
     <div
       data-composer-ledge
-      className={`relative z-1 mx-9 divide-y rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
+      // Clips the strips' edge-to-edge headers to the rounded top.
+      className={`relative z-1 mx-9 divide-y overflow-hidden rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
     >
       {children}
     </div>
