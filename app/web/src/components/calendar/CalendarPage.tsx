@@ -64,14 +64,14 @@ export function CalendarPage({
         : formatFullDate(selectedDate);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         {back ? (
           <PageHeaderBackButton {...back} />
         ) : (
           <CalendarDays size={17} className="text-primary" />
         )}
-        <h1 className="mr-2 min-w-0 truncate text-base font-semibold text-fg">
+        <h1 className="mr-2 min-w-0 truncate text-base font-semibold text-foreground">
           {title}
         </h1>
         <div className="flex items-center gap-0.5">
@@ -79,14 +79,14 @@ export function CalendarPage({
             type="button"
             onClick={calendar.goPrev}
             aria-label="Previous"
-            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
+            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
           >
             <ChevronLeft size={16} />
           </button>
           <button
             type="button"
             onClick={calendar.goToday}
-            className="rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-panel hover:text-fg"
+            className="rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-card hover:text-foreground"
           >
             Today
           </button>
@@ -94,7 +94,7 @@ export function CalendarPage({
             type="button"
             onClick={calendar.goNext}
             aria-label="Next"
-            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
+            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
           >
             <ChevronRight size={16} />
           </button>
@@ -117,7 +117,7 @@ export function CalendarPage({
             className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
               showTempo
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
+                : "border-border text-muted-foreground hover:bg-card hover:text-foreground"
             }`}
           >
             Tempo
@@ -133,13 +133,13 @@ export function CalendarPage({
               className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
                 showWeekends
                   ? "border-primary/40 bg-accent text-primary"
-                  : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
+                  : "border-border text-muted-foreground hover:bg-card hover:text-foreground"
               }`}
             >
               Weekends
             </button>
           )}
-          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
+          <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
             {VIEWS.map((v) => (
               <button
                 key={v}
@@ -148,7 +148,7 @@ export function CalendarPage({
                 className={`rounded-md px-2.5 py-1 text-sm font-medium capitalize transition-colors ${
                   view === v
                     ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-panel hover:text-fg"
+                    : "text-muted-foreground hover:bg-card hover:text-foreground"
                 }`}
               >
                 {v}
@@ -160,7 +160,7 @@ export function CalendarPage({
 
       {/* Non-blocking (R2): the grid below keeps the entries it already has. */}
       {(eventsError || worklogsError) && (
-        <div className="flex shrink-0 flex-col gap-1.5 border-b border-line px-4 py-2">
+        <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-4 py-2">
           {eventsError && (
             <ErrorNote
               message={`Could not load calendar events: ${eventsError}`}

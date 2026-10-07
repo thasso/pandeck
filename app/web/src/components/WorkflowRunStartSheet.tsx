@@ -552,9 +552,11 @@ export function WorkflowRunStartLayer({
   ];
 
   const header = (
-    <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+    <div className="flex items-center gap-3 border-b border-border px-4 py-3">
       <div className="min-w-0 flex-1">
-        <div className="text-sm font-semibold text-fg">Run workflow</div>
+        <div className="text-sm font-semibold text-foreground">
+          Run workflow
+        </div>
         <div className="mt-0.5 flex items-center gap-2 text-sm text-muted-foreground">
           <TaskIdBadge id={task.id} />
           <span className="min-w-0 flex-1 truncate" title={task.title}>
@@ -568,7 +570,7 @@ export function WorkflowRunStartLayer({
           onClick={onClose}
           title="Close"
           aria-label="Close"
-          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <X size={15} />
         </button>
@@ -578,9 +580,9 @@ export function WorkflowRunStartLayer({
 
   const body = (
     <div className="flex flex-col gap-3">
-      <section className="rounded-xl border border-line p-3">
+      <section className="rounded-xl border border-border p-3">
         <label className="block">
-          <span className="mb-1 block text-sm font-medium uppercase tracking-wide text-faint">
+          <span className="mb-1 block text-sm font-medium uppercase tracking-wide text-muted-foreground">
             Base branch
           </span>
           {defaultBaseBranch ? (
@@ -595,7 +597,7 @@ export function WorkflowRunStartLayer({
                     : event.target.value,
                 )
               }
-              className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary disabled:opacity-60"
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
             >
               {baseBranches.map((option) => (
                 <option key={option.branch} value={option.branch}>
@@ -617,7 +619,7 @@ export function WorkflowRunStartLayer({
       </section>
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium uppercase tracking-wide text-faint">
+        <span className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
           Runtimes
         </span>
         <button
@@ -625,7 +627,7 @@ export function WorkflowRunStartLayer({
           onClick={onResetDefaults}
           disabled={pending}
           title="Put every runtime, limit and override back to the recommended run"
-          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
         >
           <RotateCcw size={12} className="shrink-0" />
           Reset to recommended defaults
@@ -642,7 +644,7 @@ export function WorkflowRunStartLayer({
         return (
           <section
             key={key}
-            className="overflow-hidden rounded-xl border border-line"
+            className="overflow-hidden rounded-xl border border-border"
           >
             {/* The remove control is a SIBLING of the expander, never nested
                 inside it: one button may not contain another. */}
@@ -654,10 +656,10 @@ export function WorkflowRunStartLayer({
                 disabled={pending}
                 onClick={() => setExpandedRow(open ? null : key)}
                 title={open ? `Collapse ${label}` : hint}
-                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-raised/60 disabled:opacity-60 disabled:hover:bg-transparent"
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 disabled:hover:bg-transparent"
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-fg">
+                  <span className="block text-sm font-medium text-foreground">
                     {label}
                   </span>
                   <span className="block truncate text-sm text-muted-foreground">
@@ -666,7 +668,7 @@ export function WorkflowRunStartLayer({
                 </span>
                 <ChevronDown
                   size={15}
-                  className={`shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`}
+                  className={`shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
                 />
               </button>
               {onRemove ? (
@@ -676,7 +678,7 @@ export function WorkflowRunStartLayer({
                   disabled={pending}
                   title={`Remove ${label}`}
                   aria-label={`Remove ${label}`}
-                  className="flex w-10 shrink-0 items-center justify-center text-faint transition-colors hover:bg-raised hover:text-danger disabled:opacity-60 disabled:hover:bg-transparent"
+                  className="flex w-10 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-60 disabled:hover:bg-transparent"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -685,9 +687,9 @@ export function WorkflowRunStartLayer({
             {open ? (
               <div
                 id={`workflow-runtime-${key}`}
-                className="flex flex-col gap-3 border-t border-line py-3"
+                className="flex flex-col gap-3 border-t border-border py-3"
               >
-                <p className="px-3 text-sm text-faint">{hint}</p>
+                <p className="px-3 text-sm text-muted-foreground">{hint}</p>
                 {accounts.length > 0 ? (
                   <ProviderAccountRow
                     accounts={accounts}
@@ -729,7 +731,7 @@ export function WorkflowRunStartLayer({
                 />
                 {thinkingLevels.length > 1 ? (
                   <div className="w-full">
-                    <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
+                    <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
                       Thinking
                     </div>
                     <ThinkingSlider
@@ -755,7 +757,7 @@ export function WorkflowRunStartLayer({
                         onChange={(event) =>
                           onChangeRole(row, { family: event.target.value })
                         }
-                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary disabled:opacity-60"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
                       />
                     </label>
                     <label className="block">
@@ -769,7 +771,7 @@ export function WorkflowRunStartLayer({
                         onChange={(event) =>
                           onChangeRole(row, { notes: event.target.value })
                         }
-                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary disabled:opacity-60"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
                       />
                     </label>
                   </div>
@@ -790,7 +792,7 @@ export function WorkflowRunStartLayer({
               pending || !canAddConfiguration(role, roles.sets[role].length)
             }
             title={`Add a candidate to the ${role} role set`}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-60 disabled:hover:bg-transparent"
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60 disabled:hover:bg-transparent"
           >
             <Plus size={13} className="shrink-0" />
             Add {role} configuration
@@ -805,9 +807,9 @@ export function WorkflowRunStartLayer({
 
       {/* Every one of these is a CEILING the run stops at; each hint says who
           decides the actual number. */}
-      <div className="flex flex-col gap-4 rounded-xl border border-line p-3">
+      <div className="flex flex-col gap-4 rounded-xl border border-border p-3">
         <div>
-          <span className="text-sm font-medium uppercase tracking-wide text-faint">
+          <span className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
             Upper limits
           </span>
           <p className="text-sm text-muted-foreground">
@@ -892,7 +894,7 @@ export function WorkflowRunStartLayer({
                     timeoutSeconds: Number(event.target.value),
                   })
                 }
-                className="rounded-lg border border-line bg-transparent px-2 py-1.5 text-fg"
+                className="rounded-lg border border-border bg-transparent px-2 py-1.5 text-foreground"
               />
             </label>
             <label className="flex flex-col gap-1 text-sm text-muted-foreground">
@@ -908,7 +910,7 @@ export function WorkflowRunStartLayer({
                     pollIntervalSeconds: Number(event.target.value),
                   })
                 }
-                className="rounded-lg border border-line bg-transparent px-2 py-1.5 text-fg"
+                className="rounded-lg border border-border bg-transparent px-2 py-1.5 text-foreground"
               />
             </label>
           </div>
@@ -928,7 +930,7 @@ export function WorkflowRunStartLayer({
         }
       >
         <div className="flex flex-col gap-3">
-          <p className="text-sm text-faint">
+          <p className="text-sm text-muted-foreground">
             These apply to this run only — the next Task starts without them, so
             instructions for one Task cannot leak into unrelated work.
           </p>
@@ -944,7 +946,7 @@ export function WorkflowRunStartLayer({
                 disabled={pending}
                 placeholder={`Extra instructions appended to the ${role}'s assignment.`}
                 onChange={(e) => onChangeOverride(role, e.target.value)}
-                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary disabled:opacity-60"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
               />
             </label>
           ))}
@@ -954,8 +956,8 @@ export function WorkflowRunStartLayer({
       {/* The authorization summary is the contract of the Start button, so it
           is plain, always-visible text — readable at any width, never behind
           hover (docs/agent-workflows.md, "Concurrency and safety"). */}
-      <div className="rounded-xl border border-line bg-panel/60 px-3 py-2.5 text-sm">
-        <div className="mb-1 flex items-center gap-1.5 font-medium text-fg">
+      <div className="rounded-xl border border-border bg-card/60 px-3 py-2.5 text-sm">
+        <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
           <ShieldCheck size={14} className="text-primary" />
           What starting allows
         </div>
@@ -974,7 +976,7 @@ export function WorkflowRunStartLayer({
           <li>Commits inside that worktree</li>
           <li>Push and a pull request — only after review passes</li>
         </ul>
-        <p className="mt-1.5 text-faint">
+        <p className="mt-1.5 text-muted-foreground">
           It does not merge, complete the Task, or remove the worktree or
           branches — those stay your decisions.
         </p>
@@ -985,7 +987,7 @@ export function WorkflowRunStartLayer({
   );
 
   const footer = (
-    <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
+    <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
       {pending ? (
         <>
           <span
@@ -997,7 +999,7 @@ export function WorkflowRunStartLayer({
               {phase && phase !== "failed" ? PHASE_LABEL[phase] : "Starting…"}
             </span>
             {branch ? (
-              <span className="inline-flex min-w-0 items-center gap-1 font-mono text-faint">
+              <span className="inline-flex min-w-0 items-center gap-1 font-mono text-muted-foreground">
                 <GitBranch size={12} className="shrink-0" />
                 <span className="truncate">{branch}</span>
               </span>
@@ -1028,7 +1030,7 @@ export function WorkflowRunStartLayer({
         role="dialog"
         aria-modal="true"
         aria-label="Run workflow"
-        className="fixed inset-0 z-[70] flex flex-col bg-surface pt-[var(--app-safe-area-top,0px)]"
+        className="fixed inset-0 z-[70] flex flex-col bg-background pt-[var(--app-safe-area-top,0px)]"
       >
         {header}
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{body}</div>
@@ -1045,7 +1047,7 @@ export function WorkflowRunStartLayer({
         role="dialog"
         aria-modal="true"
         aria-label="Run workflow"
-        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl"
+        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         {header}
@@ -1087,8 +1089,8 @@ function LimitSlider({
         <span className="text-sm font-medium text-muted-foreground">
           {label}
         </span>
-        <span className="text-sm font-medium text-fg">
-          <span className="text-sm text-faint">{"up to "}</span>
+        <span className="text-sm font-medium text-foreground">
+          <span className="text-sm text-muted-foreground">{"up to "}</span>
           <span className="tabular-nums">{value}</span>
         </span>
       </div>
@@ -1101,7 +1103,7 @@ function LimitSlider({
         valueText={`up to ${String(value)} ${unit}`}
         disabled={disabled}
       />
-      <p className="text-sm text-faint">{hint}</p>
+      <p className="text-sm text-muted-foreground">{hint}</p>
     </div>
   );
 }

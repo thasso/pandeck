@@ -254,7 +254,7 @@ function taskStatusIcon(status: TaskStatus): ReactNode {
     return <CheckCircle2 size={16} className="text-emerald-500" />;
   if (status === "doing")
     return <Circle size={16} className="fill-primary text-primary" />;
-  return <Circle size={16} className="text-faint" />;
+  return <Circle size={16} className="text-muted-foreground" />;
 }
 
 function taskObjectRef(
@@ -1174,7 +1174,7 @@ export function ProjectInspector({
       ) : worktreesPending ? (
         <div
           role="status"
-          className="flex items-center gap-2 text-sm text-faint"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
         >
           <Spinner size="sm" /> Refreshing Project worktrees…
         </div>
@@ -1395,14 +1395,14 @@ function WorktreeReviewSection({
           {reviewSets.map((set) => (
             <div
               key={set.id}
-              className="rounded-md border border-line px-2 py-1.5"
+              className="rounded-md border border-border px-2 py-1.5"
             >
               <div className="flex items-center gap-1.5 text-sm">
                 <span className="rounded bg-accent px-1 py-0.5 text-xs font-medium text-primary">
                   {set.authorModel ?? "agent"} ·{" "}
                   {set.authorSessionId.slice(0, 8)}
                 </span>
-                <span className="font-medium text-fg">
+                <span className="font-medium text-foreground">
                   {set.verdict ?? "review in progress"}
                 </span>
                 <span className="ml-auto text-xs text-muted-foreground">

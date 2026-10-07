@@ -93,9 +93,9 @@ function Block({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-panel/40 p-3">
+    <section className="rounded-xl border border-border bg-card/40 p-3">
       <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-        <span className="text-faint" aria-hidden>
+        <span className="text-muted-foreground" aria-hidden>
           {icon}
         </span>
         {title}
@@ -108,10 +108,10 @@ function Block({
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 py-0.5">
-      <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-faint">
+      <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="min-w-0 flex-1 text-sm text-fg">{children}</span>
+      <span className="min-w-0 flex-1 text-sm text-foreground">{children}</span>
     </div>
   );
 }
@@ -132,14 +132,16 @@ function RelationRow({
     <button
       type="button"
       onClick={onOpen}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
-      <span className="shrink-0 text-faint" aria-hidden>
+      <span className="shrink-0 text-muted-foreground" aria-hidden>
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-fg">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+        {label}
+      </span>
       {detail ? (
-        <span className="shrink-0 text-xs text-faint">{detail}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>
       ) : null}
     </button>
   );
@@ -185,7 +187,7 @@ function JoinGroup<T>({
   const pending = rows.filter((row) => row.kind === "pending");
   return (
     <>
-      <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-faint">
+      <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-muted-foreground">
         {title}
       </h3>
       {/* R2: the retained rows below stay, and the failure sits beside them. */}
@@ -355,7 +357,11 @@ export function PullRequestDetailPage({
       <Block title="Status" icon={<CircleDot size={13} />}>
         <Fact label="Checks">
           <span className="flex items-center gap-1.5">
-            <CircleDot size={12} aria-hidden className="text-faint" />
+            <CircleDot
+              size={12}
+              aria-hidden
+              className="text-muted-foreground"
+            />
             {ci.label}
             {item.ci?.url ? (
               <a
@@ -459,7 +465,7 @@ function Shell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitPullRequest size={16} />}

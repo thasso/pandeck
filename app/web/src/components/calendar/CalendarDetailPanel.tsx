@@ -88,8 +88,8 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
   const timeZone = useUserTimeZone();
   const duration = durationLabel(event.start, event.end);
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-surface p-3">
-      <div className="flex items-center gap-1.5 text-sm text-fg">
+    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-background p-3">
+      <div className="flex items-center gap-1.5 text-sm text-foreground">
         <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
         <span className="tabular-nums">
           {event.allDay
@@ -100,7 +100,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           <span className="text-muted-foreground">· {duration}</span>
         )}
         {event.selfResponse && event.selfResponse !== "accepted" && (
-          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-xs capitalize text-muted-foreground">
+          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs capitalize text-muted-foreground">
             {event.selfResponse}
           </span>
         )}
@@ -123,7 +123,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
 
       {event.attendees.length > 0 && (
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1.5 text-sm font-medium text-faint">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
             <Users size={12} />
             {event.attendeeCount} guest{event.attendeeCount === 1 ? "" : "s"}
           </div>
@@ -141,22 +141,24 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
                         ? "bg-red-500"
                         : attendee.response === "tentative"
                           ? "bg-yellow-500"
-                          : "bg-line-strong"
+                          : "bg-input"
                   }`}
                   title={attendee.response ?? "no response"}
                 />
                 <span
-                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-fg" : "text-muted-foreground"}`}
+                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-foreground" : "text-muted-foreground"}`}
                 >
                   {attendee.name ?? attendee.email}
                 </span>
                 {attendee.organizer && (
-                  <span className="shrink-0 text-xs text-faint">organizer</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    organizer
+                  </span>
                 )}
               </div>
             ))}
             {event.attendees.length > 12 && (
-              <span className="text-xs text-faint">
+              <span className="text-xs text-muted-foreground">
                 +{event.attendees.length - 12} more
               </span>
             )}
@@ -165,7 +167,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
       )}
 
       {event.description && (
-        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-sm text-muted-foreground">
+        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-border pt-2 text-sm text-muted-foreground">
           {event.description}
         </div>
       )}

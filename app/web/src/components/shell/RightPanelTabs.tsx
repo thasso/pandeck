@@ -135,7 +135,7 @@ function SortablePanelTab({
         transform: CSS.Transform.toString(transform),
         transition,
       }}
-      className={`group flex shrink-0 items-center rounded-lg border-r border-line/70 pr-1 last:border-r-0 ${active ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised/60 hover:text-fg"} ${isDragging ? "z-10 opacity-50" : ""}`}
+      className={`group flex shrink-0 items-center rounded-lg border-r border-border/70 pr-1 last:border-r-0 ${active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"} ${isDragging ? "z-10 opacity-50" : ""}`}
     >
       <button
         type="button"
@@ -153,7 +153,7 @@ function SortablePanelTab({
         onClick={onClose}
         title={`Close ${panel.label}`}
         aria-label={`Close ${panel.label}`}
-        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <X size={13} />
       </button>
@@ -295,9 +295,9 @@ export function RightPanelTabs({
     worktree,
   };
   return (
-    <div className="flex h-full min-h-0 flex-col border-l border-line bg-panel">
+    <div className="flex h-full min-h-0 flex-col border-l border-border bg-card">
       {showTabs ? (
-        <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-line px-2">
+        <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border px-2">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -325,7 +325,7 @@ export function RightPanelTabs({
             onClick={() => selectTab(null)}
             title="Open a right panel"
             aria-label="Open a right panel"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <Plus size={16} />
           </button>
@@ -353,7 +353,7 @@ export function RightPanelTabs({
         ))}
         {activeTab === null ? (
           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-5">
-            <p className="text-sm text-faint">Open a panel</p>
+            <p className="text-sm text-muted-foreground">Open a panel</p>
             <div className="w-full max-w-56 space-y-1">
               {PANEL_DEFINITIONS.filter((panel) => offered(panel.id)).map(
                 (panel) => (
@@ -361,9 +361,9 @@ export function RightPanelTabs({
                     key={panel.id}
                     type="button"
                     onClick={() => openPanel(panel.id)}
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
                       {panel.icon}
                     </span>
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">

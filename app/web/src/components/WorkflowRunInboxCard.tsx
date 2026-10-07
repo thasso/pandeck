@@ -42,9 +42,9 @@ import { Spinner } from "./common/load.tsx";
 const BADGE_TONE: Record<SessionStatusTone, string> = {
   accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
+  danger: "bg-destructive/10 text-destructive",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted-foreground",
+  muted: "bg-border text-muted-foreground",
 };
 
 /** Every run state has a glyph, so its badge survives the icon-only rail. */
@@ -76,7 +76,7 @@ function RunBadgeIcon({
 
 /** Settle, inline at the end of the status row like a session card's. */
 const INLINE_ACTION =
-  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-border hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
   tight: "size-6 -my-0.5",
   comfortable: "size-8 -my-0.5",
@@ -208,7 +208,7 @@ function WorkflowRunInboxCardImpl({
           settle();
         }
       }}
-      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-raised focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
     >
       {/* The session card's three rows, in the same places: context with the
           time, identity with the state in the leading slot, then signals with
@@ -217,7 +217,7 @@ function WorkflowRunInboxCardImpl({
         className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
       >
         <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-faint`}
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
         >
           <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
             {projectKey ? (
@@ -273,7 +273,7 @@ function WorkflowRunInboxCardImpl({
               </span>
             )}
           </span>
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {title}
           </span>
         </div>
@@ -302,7 +302,7 @@ function WorkflowRunInboxCardImpl({
                 className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                   item.counts.working > 0
                     ? "text-primary hover:text-primary"
-                    : "text-muted-foreground hover:text-fg"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {item.counts.working > 0 ? (

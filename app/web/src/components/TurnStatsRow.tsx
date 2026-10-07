@@ -93,7 +93,7 @@ const TURN_TIME_TITLE =
   "First provider run's start to the last one's end, so tool execution between runs is included — not model generation time alone.";
 
 function Dot() {
-  return <span className="text-faint/60">·</span>;
+  return <span className="text-muted-foreground/60">·</span>;
 }
 
 /** One label/value detail line (vertical layout — never overflows on mobile). */
@@ -108,7 +108,7 @@ function Detail({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4" title={title}>
-      <span className="text-faint">{label}</span>
+      <span className="text-muted-foreground">{label}</span>
       <span className="tabular-nums text-muted-foreground">{value}</span>
     </div>
   );
@@ -116,7 +116,7 @@ function Detail({
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-faint/70">
+    <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
       {children}
     </div>
   );
@@ -182,7 +182,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
   return (
     <div
       data-turn-stats-row=""
-      className="flex flex-col gap-0.5 px-1 text-sm text-faint"
+      className="flex flex-col gap-0.5 px-1 text-sm text-muted-foreground"
     >
       <button
         type="button"
@@ -193,7 +193,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
         <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
           <ChevronRight
             size={11}
-            className={`shrink-0 text-faint/70 transition-transform ${expanded ? "rotate-90" : ""}`}
+            className={`shrink-0 text-muted-foreground/70 transition-transform ${expanded ? "rotate-90" : ""}`}
           />
           <span className="font-medium text-muted-foreground">Turn</span>
           <span className="tabular-nums" title={INPUT_TITLE}>
@@ -378,7 +378,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
                   key={run.id}
                   className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
                 >
-                  <span className="text-faint/80">#{run.index}</span>
+                  <span className="text-muted-foreground/80">#{run.index}</span>
                   <span title={INPUT_TITLE}>
                     {fmtTokens(totalInput(run))} billed in
                   </span>

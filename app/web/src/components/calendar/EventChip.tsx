@@ -25,10 +25,10 @@ export function EventChip({
       title={`${event.allDay ? "All day" : hm(event.start, timeZone)} · ${event.title}`}
       className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-sm transition-colors ${
         selected ? "bg-primary text-primary-foreground" : "hover:bg-accent"
-      } ${declined && !selected ? "text-faint line-through" : selected ? "" : "text-fg"}`}
+      } ${declined && !selected ? "text-muted-foreground line-through" : selected ? "" : "text-foreground"}`}
     >
       <span
-        className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-primary-foreground" : event.meetingUrl ? "bg-primary" : "bg-line-strong"}`}
+        className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-primary-foreground" : event.meetingUrl ? "bg-primary" : "bg-input"}`}
       />
       {!event.allDay && (
         <span

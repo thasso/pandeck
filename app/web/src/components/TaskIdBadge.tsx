@@ -27,7 +27,8 @@ export function TaskIdBadge({
   /** In-app navigation, when the host has one; see `TaskRowBody`. */
   onNavigate?: ((path: string) => void) | undefined;
 }) {
-  const className = "shrink-0 font-mono text-xs tabular-nums text-faint";
+  const className =
+    "shrink-0 font-mono text-xs tabular-nums text-muted-foreground";
   if (!onNavigate)
     return (
       <span className={className} title={`Task-${id}`}>
@@ -40,7 +41,7 @@ export function TaskIdBadge({
       href={href}
       title={`Task-${id}`}
       draggable={false}
-      className={`${className} hover:text-fg hover:underline`}
+      className={`${className} hover:text-foreground hover:underline`}
       onClick={(event) => followRowLink(event, href, onNavigate)}
     >
       #{id}

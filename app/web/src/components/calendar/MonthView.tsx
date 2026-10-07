@@ -49,11 +49,11 @@ export function MonthView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid border-b border-line" style={gridStyle}>
+      <div className="grid border-b border-border" style={gridStyle}>
         {weeks[0]!.map((date) => (
           <div
             key={date}
-            className="px-2 py-1.5 text-sm font-medium uppercase tracking-wide text-faint"
+            className="px-2 py-1.5 text-sm font-medium uppercase tracking-wide text-muted-foreground"
           >
             {shortWeekday(date)}
           </div>
@@ -72,8 +72,8 @@ export function MonthView({
               key={date}
               onClick={() => onSelectDate(date)}
               onDoubleClick={() => onOpenDay(date)}
-              className={`flex min-h-0 flex-col gap-0.5 border-b border-r border-line p-1 text-left transition-colors hover:bg-raised/60 ${
-                inMonth ? "bg-surface" : "bg-panel/40"
+              className={`flex min-h-0 flex-col gap-0.5 border-b border-r border-border p-1 text-left transition-colors hover:bg-muted/60 ${
+                inMonth ? "bg-background" : "bg-card/40"
               } ${isSelected ? "ring-1 ring-inset ring-primary" : ""}`}
             >
               <div className="flex items-center justify-between px-0.5">
@@ -89,8 +89,8 @@ export function MonthView({
                     isToday
                       ? "bg-primary font-semibold text-primary-foreground"
                       : inMonth
-                        ? "text-fg"
-                        : "text-faint"
+                        ? "text-foreground"
+                        : "text-muted-foreground"
                   }`}
                 >
                   {dayOfMonth(date)}
@@ -121,7 +121,7 @@ export function MonthView({
                       e.stopPropagation();
                       onOpenDay(date);
                     }}
-                    className="px-1 text-xs text-muted-foreground hover:text-fg"
+                    className="px-1 text-xs text-muted-foreground hover:text-foreground"
                   >
                     +{events.length - MAX_CHIPS} more
                   </span>

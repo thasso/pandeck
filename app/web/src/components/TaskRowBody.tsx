@@ -30,9 +30,9 @@ import type { HostingAttention } from "../lib/worktreeHosting.ts";
 /** Priority is shown only when it is NOT the default — a row that says
  *  "normal" spends its second line restating the absence of information. */
 const PRIORITY_TONE: Partial<Record<TaskPriority, string>> = {
-  urgent: "text-danger",
+  urgent: "text-destructive",
   high: "text-amber-500",
-  low: "text-faint",
+  low: "text-muted-foreground",
 };
 
 /**
@@ -52,7 +52,7 @@ const DELIVERY_LABEL: Record<HostingAttention, string> = {
 };
 
 const DELIVERY_TONE: Record<HostingAttention, string> = {
-  "ci-failed": "text-danger",
+  "ci-failed": "text-destructive",
   "review-requested": "text-amber-500",
   merged: "text-emerald-500",
   "ci-pending": "text-primary",
@@ -193,7 +193,7 @@ export function TaskRowBody({
       ? { ...meta, session: null }
       : meta;
   const empty = !line2 || taskRowMetaEmpty(line2);
-  const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-faint line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-fg" : "text-fg"}`;
+  const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-muted-foreground line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-foreground" : "text-foreground"}`;
   return (
     <>
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -241,7 +241,7 @@ export function TaskRowBody({
                the two facts a Task always has — where it stands, and how long it
                has stood there — rather than leaving the line to the id alone. */
             <span
-              className="shrink-0 text-faint"
+              className="shrink-0 text-muted-foreground"
               title={`Updated ${line2.age}`}
             >
               {TASK_STATUS_LABEL[task.status]} · {line2.age}
@@ -410,7 +410,7 @@ function TaskMetaItems({
             <MetaLink
               href={worktree ?? ""}
               title="Has a worktree"
-              className="inline-flex items-center text-faint"
+              className="inline-flex items-center text-muted-foreground"
               onNavigate={worktree ? onNavigate : undefined}
             >
               <GitBranch size={10} aria-label="Has a worktree" />
@@ -471,7 +471,7 @@ function TaskMetaItems({
       ) : null}
       {meta.due ? (
         <span
-          className={`inline-flex shrink-0 items-center gap-0.5 ${meta.overdue ? "text-danger" : "text-muted-foreground"}`}
+          className={`inline-flex shrink-0 items-center gap-0.5 ${meta.overdue ? "text-destructive" : "text-muted-foreground"}`}
           title={`Due ${meta.due.toLowerCase()}`}
         >
           <Flag size={10} aria-hidden />

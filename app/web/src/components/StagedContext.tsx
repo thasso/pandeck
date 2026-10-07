@@ -199,7 +199,7 @@ export function StagedContextBar({
         type="button"
         onClick={onOpen}
         title="Edit session context"
-        className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         <Plus size={13} />
       </button>
@@ -225,7 +225,7 @@ function ContextChip({
   const toneClass =
     tone === "accent"
       ? "border-primary/30 bg-accent text-primary"
-      : "border-line bg-raised text-muted-foreground";
+      : "border-border bg-muted text-muted-foreground";
   return (
     <span
       className={`flex min-w-0 max-w-[14rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-sm font-medium ${toneClass} ${dimmed ? "opacity-70" : ""}`}
@@ -463,31 +463,31 @@ function FieldRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-surface">
+    <div className="rounded-xl border border-border bg-background">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
         className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {icon}
         </span>
-        <span className="w-16 shrink-0 text-sm font-semibold uppercase tracking-wide text-faint">
+        <span className="w-16 shrink-0 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           {label}
         </span>
         <span
-          className={`min-w-0 flex-1 truncate ${value ? "text-fg" : "text-faint"}`}
+          className={`min-w-0 flex-1 truncate ${value ? "text-foreground" : "text-muted-foreground"}`}
         >
           {value ?? "None"}
         </span>
         <ChevronDown
           size={14}
-          className={`shrink-0 text-faint transition-transform ${expanded ? "rotate-180" : ""}`}
+          className={`shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
         />
       </button>
       {expanded ? (
-        <div className="border-t border-line p-1.5">{children}</div>
+        <div className="border-t border-border p-1.5">{children}</div>
       ) : null}
     </div>
   );
@@ -553,15 +553,15 @@ function OptionList({
   return (
     <div className="flex flex-col gap-1">
       {showFilter ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2 py-1.5">
-          <Search size={13} className="shrink-0 text-faint" />
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5">
+          <Search size={13} className="shrink-0 text-muted-foreground" />
           {/* No autoFocus: the picker is tap-first, and focusing this input would
               re-open the mobile keyboard the dock sheet just dismissed. */}
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter…"
-            className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
           />
         </div>
       ) : null}
@@ -570,8 +570,8 @@ function OptionList({
           type="button"
           onClick={leadingAction.onSelect}
           aria-pressed={leadingAction.selected}
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-raised ${
-            leadingAction.selected ? "text-primary" : "text-fg"
+          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted ${
+            leadingAction.selected ? "text-primary" : "text-foreground"
           }`}
         >
           <Plus size={13} className="shrink-0" />
@@ -582,7 +582,7 @@ function OptionList({
         <button
           type="button"
           onClick={onClear}
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-faint transition-colors hover:bg-raised hover:text-danger"
+          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
         >
           <X size={13} className="shrink-0" />
           {clearLabel}
@@ -605,7 +605,7 @@ function OptionList({
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-2.5 py-3 text-center text-sm text-faint">
+          <div className="px-2.5 py-3 text-center text-sm text-muted-foreground">
             {items.length === 0 ? emptyLabel : "No matches."}
           </div>
         ) : (
@@ -617,15 +617,15 @@ function OptionList({
                 // marks the boundary — covers a leading action with no pinned
                 // items too, and never fires when nothing unpinned follows.
                 !q && index === firstUnpinnedIndex ? (
-                  <hr className="my-1 border-line" />
+                  <hr className="my-1 border-border" />
                 ) : null
               }
               <button
                 type="button"
                 onClick={() => onSelect(item.id)}
-                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-raised ${
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted ${
                   selectedId === item.id
-                    ? "font-medium text-fg"
+                    ? "font-medium text-foreground"
                     : "text-muted-foreground"
                 }`}
               >
@@ -638,7 +638,7 @@ function OptionList({
                 ) : null}
                 <span className="min-w-0 flex-1 truncate">{item.label}</span>
                 {item.hint ? (
-                  <span className="shrink-0 rounded bg-panel px-1.5 py-0.5 text-xs font-medium tracking-wide text-faint">
+                  <span className="shrink-0 rounded bg-card px-1.5 py-0.5 text-xs font-medium tracking-wide text-muted-foreground">
                     {item.hint}
                   </span>
                 ) : null}

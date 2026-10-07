@@ -166,7 +166,7 @@ export function TimeGrid({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {showHeaders && (
-        <div className="flex shrink-0 border-b border-line pl-12">
+        <div className="flex shrink-0 border-b border-border pl-12">
           {days.map((date) => {
             const isToday = date === today;
             return (
@@ -175,11 +175,11 @@ export function TimeGrid({
                 type="button"
                 onClick={() => onSelectDay(date)}
                 title="Select day"
-                className={`flex flex-1 items-baseline justify-center gap-1.5 border-l border-line py-1.5 text-left first:border-l-0 hover:bg-raised/60 ${
+                className={`flex flex-1 items-baseline justify-center gap-1.5 border-l border-border py-1.5 text-left first:border-l-0 hover:bg-muted/60 ${
                   date === selectedDate ? "bg-accent/30" : ""
                 }`}
               >
-                <span className="text-sm uppercase tracking-wide text-faint">
+                <span className="text-sm uppercase tracking-wide text-muted-foreground">
                   {shortWeekday(date)}
                 </span>
                 <span
@@ -190,7 +190,7 @@ export function TimeGrid({
                     e.stopPropagation();
                     onOpenDay(date);
                   }}
-                  className={`flex size-5 items-center justify-center rounded-full text-sm hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-fg"}`}
+                  className={`flex size-5 items-center justify-center rounded-full text-sm hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-foreground"}`}
                 >
                   {dayOfMonth(date)}
                 </span>
@@ -216,7 +216,7 @@ export function TimeGrid({
             {Array.from({ length: 24 }, (_, h) => (
               <div
                 key={h}
-                className="absolute right-1 -translate-y-1/2 text-xs tabular-nums text-faint"
+                className="absolute right-1 -translate-y-1/2 text-xs tabular-nums text-muted-foreground"
                 style={{ top: h * zoom }}
               >
                 {h === 0 ? "" : `${String(h).padStart(2, "0")}:00`}
@@ -238,13 +238,13 @@ export function TimeGrid({
             return (
               <div
                 key={date}
-                className="relative min-w-0 flex-1 border-l border-line"
+                className="relative min-w-0 flex-1 border-l border-border"
                 onClick={() => onSelectDay(date)}
               >
                 {Array.from({ length: 24 }, (_, h) => (
                   <div
                     key={h}
-                    className="absolute inset-x-0 border-t border-line/50"
+                    className="absolute inset-x-0 border-t border-border/50"
                     style={{ top: h * zoom }}
                   />
                 ))}
@@ -303,7 +303,7 @@ function AllDayBand({
   );
   if (!anyAllDay) return null;
   return (
-    <div className="flex shrink-0 border-b border-line pl-12">
+    <div className="flex shrink-0 border-b border-border pl-12">
       {days.map((date) => {
         const allDay = (eventsByDay.get(date) ?? []).filter(
           (event) => event.allDay,
@@ -311,7 +311,7 @@ function AllDayBand({
         return (
           <div
             key={date}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 border-l border-line p-1 first:border-l-0"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 border-l border-border p-1 first:border-l-0"
           >
             {allDay.map((event) => (
               <button
@@ -450,7 +450,7 @@ function EventBlock({
           <Video size={9} className="shrink-0 text-primary" />
         )}
         <span
-          className={`min-w-0 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
+          className={`min-w-0 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
         >
           {event.title}
         </span>

@@ -128,7 +128,7 @@ describe("Usage overview", () => {
         />,
       );
     expect(render(75)).toContain("bg-warning");
-    expect(render(99)).toContain("bg-danger");
+    expect(render(99)).toContain("bg-destructive");
   });
 });
 
@@ -242,7 +242,7 @@ describe("OpenAI reset credits", () => {
     expect(html).toContain(
       `expires tomorrow ${clock("2026-09-21T04:21:00Z")} · in 10h · auto-redeems ${clock("2026-09-20T22:21:00Z")}`,
     );
-    expect(html).toContain("text-danger");
+    expect(html).toContain("text-destructive");
     expect(html).not.toContain("in 1d");
   });
 
@@ -251,7 +251,7 @@ describe("OpenAI reset credits", () => {
       credit("far", new Date(NOW + 14 * 24 * HOUR).toISOString()),
     ]);
     expect(far).toContain("expires Oct 4 · in 14d");
-    expect(far).toContain("text-faint");
+    expect(far).toContain("text-muted-foreground");
     const soon = card([credit("soon", "2026-09-23T04:21:00Z")]);
     expect(soon).toContain(
       `expires Sep 23, ${clock("2026-09-23T04:21:00Z")} · in 2d 10h`,

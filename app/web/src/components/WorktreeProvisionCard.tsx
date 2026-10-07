@@ -30,17 +30,17 @@ export function WorktreeProvisionCard({
   const failed = provision.state === "failed";
   const done = provision.state === "created";
   const tone = failed
-    ? "border-danger/30 bg-danger-soft"
+    ? "border-destructive/30 bg-destructive/10"
     : done
       ? "border-success/30 bg-success-soft"
-      : "border-line bg-panel";
+      : "border-border bg-card";
 
   return (
     <div className={`my-1.5 overflow-hidden rounded-xl border ${tone}`}>
       <div className="flex items-start gap-3 px-3 py-3">
         <div className="mt-0.5">
           {failed ? (
-            <XCircle size={16} className="text-danger" />
+            <XCircle size={16} className="text-destructive" />
           ) : done ? (
             <GitBranch size={16} className="text-success" />
           ) : (
@@ -49,7 +49,7 @@ export function WorktreeProvisionCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="text-sm font-semibold text-fg">
+            <div className="text-sm font-semibold text-foreground">
               {phaseLabel(provision)}
             </div>
             {provision.branch &&
@@ -57,14 +57,14 @@ export function WorktreeProvisionCard({
                 <button
                   type="button"
                   onClick={() => onOpenWorktree(provision.worktreeId!)}
-                  className="min-w-0 truncate font-mono text-sm text-faint hover:text-fg hover:underline"
+                  className="min-w-0 truncate font-mono text-sm text-muted-foreground hover:text-foreground hover:underline"
                 >
                   {provision.branch}
                 </button>
               ) : (
                 // Until the checkout exists there is nothing to open, so the
                 // name is just a name.
-                <span className="min-w-0 truncate font-mono text-sm text-faint">
+                <span className="min-w-0 truncate font-mono text-sm text-muted-foreground">
                   {provision.branch}
                 </span>
               ))}
@@ -72,13 +72,13 @@ export function WorktreeProvisionCard({
           {provision.baseBranch && (
             <div className="mt-1 text-sm text-muted-foreground">
               forked from{" "}
-              <span className="font-mono text-faint">
+              <span className="font-mono text-muted-foreground">
                 {provision.baseBranch}
               </span>
             </div>
           )}
           {provision.error && (
-            <div className="mt-2 rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
+            <div className="mt-2 rounded-lg border border-destructive/35 bg-destructive/10 px-2.5 py-2 text-sm text-foreground">
               {provision.error}
             </div>
           )}
@@ -86,7 +86,7 @@ export function WorktreeProvisionCard({
             <button
               type="button"
               onClick={onRetry}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm font-medium text-fg hover:border-line-strong hover:bg-raised"
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm font-medium text-foreground hover:border-input hover:bg-muted"
             >
               <RotateCw size={13} />
               Retry

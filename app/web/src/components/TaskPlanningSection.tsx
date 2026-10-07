@@ -16,10 +16,10 @@ export interface TaskPlanningPatch {
 const PRIORITIES: TaskPriority[] = ["low", "normal", "high", "urgent"];
 
 const PRIORITY_TONE: Record<TaskPriority, string> = {
-  urgent: "border-danger/50 bg-danger/10 text-fg",
-  high: "border-amber-500/50 bg-amber-500/10 text-fg",
-  normal: "border-line-strong bg-raised text-fg",
-  low: "border-line bg-panel text-muted-foreground",
+  urgent: "border-destructive/50 bg-destructive/10 text-foreground",
+  high: "border-amber-500/50 bg-amber-500/10 text-foreground",
+  normal: "border-input bg-muted text-foreground",
+  low: "border-border bg-card text-muted-foreground",
 };
 
 /**
@@ -69,7 +69,7 @@ export function TaskPlanningSection({
     >
       <div className="space-y-3 px-1">
         <div>
-          <div className="mb-1 text-xs text-faint">Priority</div>
+          <div className="mb-1 text-xs text-muted-foreground">Priority</div>
           <div
             className="flex flex-wrap items-center gap-1"
             role="group"
@@ -89,7 +89,7 @@ export function TaskPlanningSection({
                   className={`cursor-pointer rounded-lg border px-2 py-1 text-sm capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                     active
                       ? PRIORITY_TONE[value]
-                      : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"
+                      : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-muted-foreground"
                   }`}
                 >
                   {value}
@@ -148,7 +148,7 @@ function DateRow({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1.5 text-xs text-faint">
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
@@ -175,7 +175,7 @@ function DateRow({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-sm text-fg outline-none focus:border-primary"
+        className="w-full max-w-full appearance-none rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
       />
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {quickPicks ? (
@@ -199,7 +199,7 @@ function DateRow({
             active={false}
           />
         ) : null}
-        <p className="ml-auto text-xs text-faint">{hint}</p>
+        <p className="ml-auto text-xs text-muted-foreground">{hint}</p>
       </div>
     </div>
   );
@@ -221,8 +221,8 @@ function QuickPick({
       aria-pressed={active}
       className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         active
-          ? "border-primary/60 bg-accent text-fg"
-          : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"
+          ? "border-primary/60 bg-accent text-foreground"
+          : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-muted-foreground"
       }`}
     >
       {label}

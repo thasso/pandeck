@@ -324,14 +324,14 @@ export function TaskManagementPage({
   return (
     <div
       ref={pageRef}
-      className="flex h-full min-w-0 flex-1 flex-col bg-surface text-fg"
+      className="flex h-full min-w-0 flex-1 flex-col bg-background text-foreground"
     >
       {!detailOnlyActive ? (
         <AppHeaderBar className="gap-3" safeAreaTop={false}>
           <button
             type="button"
             onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
+            className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
             title="Back to chat"
           >
             <ArrowLeft size={16} />
@@ -340,7 +340,7 @@ export function TaskManagementPage({
             <ClipboardList size={16} />
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold tracking-tight text-fg">
+            <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
               Backlog
             </h1>
             <p className="truncate text-sm text-muted-foreground">
@@ -353,7 +353,7 @@ export function TaskManagementPage({
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {!detailOnlyActive ? (
           <section
-            className={`relative h-full min-h-0 flex-col ${wide ? "flex shrink-0 border-r border-line" : selectedId ? "hidden" : "flex w-full"}`}
+            className={`relative h-full min-h-0 flex-col ${wide ? "flex shrink-0 border-r border-border" : selectedId ? "hidden" : "flex w-full"}`}
             style={
               wide
                 ? { width: clampMasterWidth(masterWidth, effectivePageWidth) }
@@ -471,7 +471,7 @@ export function TaskManagementPage({
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-panel text-faint">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-card text-muted-foreground">
                 <ClipboardList size={18} />
               </div>
               <p className="text-sm">Select a task to see its details.</p>
@@ -479,7 +479,7 @@ export function TaskManagementPage({
                 <button
                   type="button"
                   onClick={onCloseDetail}
-                  className="mt-2 rounded-lg border border-line px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-panel hover:text-fg"
+                  className="mt-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
                 >
                   Open Backlog list
                 </button>
@@ -765,7 +765,7 @@ function TaskDetailPanel({
                 allowEmpty
                 ariaLabel="Task description"
                 placeholder="Add a description…"
-                editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
+                editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
                 renderDisplay={(begin) => {
                   // Editing is triggered only by the section's ghost edit button
                   // (clicking prose selected text and entered edit mode too easily).
@@ -792,7 +792,7 @@ function TaskDetailPanel({
                             aria-label={
                               detailLoading ? "Loading description" : undefined
                             }
-                            className="break-words text-sm text-faint"
+                            className="break-words text-sm text-muted-foreground"
                           >
                             {item.descriptionPreview}
                           </span>
@@ -810,7 +810,7 @@ function TaskDetailPanel({
                           </div>
                         )
                       ) : (
-                        <span className="text-sm text-faint">
+                        <span className="text-sm text-muted-foreground">
                           No description yet. Use the edit button to add one.
                         </span>
                       )}
@@ -825,7 +825,7 @@ function TaskDetailPanel({
               storageKey={`wf.collapse.${item.id}.activity`}
               trailing={
                 taskCommentCount(dataOf(commentsState)) ? (
-                  <span className="text-sm text-faint">
+                  <span className="text-sm text-muted-foreground">
                     {taskCommentCount(dataOf(commentsState))}
                   </span>
                 ) : undefined
@@ -889,7 +889,7 @@ function TaskTitleBlock({
               aria-busy={isPending(statusMutation ?? idle()) || undefined}
               title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
               aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-              className="flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-panel px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg"
+              className="flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground"
             >
               {isPending(statusMutation ?? idle()) ? (
                 <Spinner size="sm" />
@@ -900,7 +900,7 @@ function TaskTitleBlock({
             </button>
           ) : null}
           {progress ? (
-            <span className="shrink-0 rounded-full bg-panel px-2 py-0.5 text-sm text-muted-foreground">
+            <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-sm text-muted-foreground">
               {progress.done}/{progress.total} subtasks
             </span>
           ) : null}
@@ -914,11 +914,11 @@ function TaskTitleBlock({
         onSubmit={onRename}
         submitState={renameMutation}
         ariaLabel="Task title"
-        editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 text-lg font-semibold text-fg outline-none focus:border-primary"
+        editorClassName="w-full rounded-lg border border-border bg-background px-2 py-1 text-lg font-semibold text-foreground outline-none focus:border-primary"
         renderDisplay={(begin) => (
           <div className="flex items-start gap-2">
             <h1
-              className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-faint line-through" : "text-fg"}`}
+              className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
             >
               {item.title}
             </h1>

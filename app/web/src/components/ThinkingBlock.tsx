@@ -173,7 +173,7 @@ export function ThinkingBlock({
         aria-controls={bodyId}
         className={cx(
           "inline-flex w-fit items-center gap-1.5 rounded-md py-1 pr-2 text-sm font-medium text-muted-foreground transition-colors",
-          "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+          "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         )}
       >
         {streaming ? (
@@ -199,7 +199,7 @@ export function ThinkingBlock({
         <div
           id={bodyId}
           aria-busy={!everNear || text.length === 0 || undefined}
-          className="mt-1 border-l-2 border-line pl-3 text-muted-foreground"
+          className="mt-1 border-l-2 border-border pl-3 text-muted-foreground"
         >
           {everNear && text.length > 0 ? (
             <Markdown text={text} />

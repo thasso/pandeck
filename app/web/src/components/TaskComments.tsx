@@ -56,7 +56,7 @@ export function TaskComments({
       {error ? <ErrorNote message={error} onRetry={onRetry} /> : null}
       {comments ? (
         comments.length === 0 ? (
-          <p className="text-sm text-faint">
+          <p className="text-sm text-muted-foreground">
             No activity yet. Add the first comment below.
           </p>
         ) : (
@@ -91,7 +91,7 @@ function CommentCard({ comment }: { comment: TaskComment }) {
 
   return (
     <div className="pb-3">
-      <hr className="mb-2.5 border-0 border-t border-line" />
+      <hr className="mb-2.5 border-0 border-t border-border" />
       <div className="flex min-w-0 items-center gap-1.5">
         <AuthorBadge kind={comment.author.kind} />
         {comment.author.kind === "agent" && comment.author.sessionId ? (
@@ -103,12 +103,12 @@ function CommentCard({ comment }: { comment: TaskComment }) {
             {comment.author.name}
           </a>
         ) : (
-          <span className="truncate text-sm font-medium text-fg">
+          <span className="truncate text-sm font-medium text-foreground">
             {comment.author.name}
           </span>
         )}
         <time
-          className="ml-auto shrink-0 text-xs text-faint"
+          className="ml-auto shrink-0 text-xs text-muted-foreground"
           dateTime={dateTimeWhen(comment.createdAt)}
         >
           {formatWhen(comment.createdAt)}
@@ -116,7 +116,7 @@ function CommentCard({ comment }: { comment: TaskComment }) {
         <button
           type="button"
           onClick={() => setCollapsed((value) => !value)}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-raised hover:text-fg"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
           title={collapsed ? "Expand comment" : "Collapse comment"}
@@ -144,7 +144,11 @@ const AUTHOR_BADGES: Record<
 > = {
   user: { label: "You", icon: User, className: "text-primary" },
   agent: { label: "Agent", icon: Bot, className: "text-emerald-500" },
-  system: { label: "System", icon: MessageSquare, className: "text-faint" },
+  system: {
+    label: "System",
+    icon: MessageSquare,
+    className: "text-muted-foreground",
+  },
 };
 
 function AuthorBadge({ kind }: { kind: TaskCommentAuthorKind }) {

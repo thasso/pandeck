@@ -90,7 +90,7 @@ export function SendCommentsSheet({
   const label = `${count} comment${count === 1 ? "" : "s"}`;
   const body = (
     <div className="flex flex-col gap-2">
-      <p className="text-sm text-faint">
+      <p className="text-sm text-muted-foreground">
         {intro ??
           `The session is linked to this object and can reply, edit and resolve the ${count === 1 ? "thread" : "threads"} you send.`}
       </p>
@@ -122,7 +122,7 @@ export function SendCommentsSheet({
           onChange={(event) => setAdditionalPrompt(event.target.value)}
           placeholder="Anything to say about this review? (optional)"
           aria-label="Message for this session"
-          className="field-sizing-content min-h-16 w-full resize-none rounded-lg border border-line bg-surface px-2.5 py-2 text-base text-fg outline-none focus:border-line-strong"
+          className="field-sizing-content min-h-16 w-full resize-none rounded-lg border border-border bg-background px-2.5 py-2 text-base text-foreground outline-none focus:border-input"
         />
       ) : null}
       <div className="flex items-center justify-end gap-2">
@@ -133,7 +133,7 @@ export function SendCommentsSheet({
               startWithout.onRun();
               onClose();
             }}
-            className="mr-auto rounded-lg px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="mr-auto rounded-lg px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {startWithout.label}
           </button>
@@ -141,7 +141,7 @@ export function SendCommentsSheet({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+          className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           Cancel
         </button>
@@ -171,10 +171,10 @@ export function SendCommentsSheet({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-line bg-panel p-4 shadow-2xl"
+        className="w-full max-w-md rounded-2xl border border-border bg-card p-4 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <p className="mb-2 text-sm font-semibold text-fg">
+        <p className="mb-2 text-sm font-semibold text-foreground">
           {verb} {label}
         </p>
         {body}
@@ -199,16 +199,18 @@ function TargetRow({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className={`flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${selected ? "bg-accent text-primary" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+      className={`flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${selected ? "bg-accent text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
     >
       <span
-        className={`size-2 shrink-0 rounded-full ${selected ? "bg-primary" : "bg-line"}`}
+        className={`size-2 shrink-0 rounded-full ${selected ? "bg-primary" : "bg-border"}`}
         aria-hidden
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{label}</span>
         {detail ? (
-          <span className="block truncate text-xs text-faint">{detail}</span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {detail}
+          </span>
         ) : null}
       </span>
     </button>

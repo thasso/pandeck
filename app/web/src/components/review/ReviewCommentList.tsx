@@ -73,7 +73,7 @@ export function ReviewCommentList({
   };
 
   if (threads.length === 0)
-    return <p className="px-1 text-sm text-faint">{emptyLabel}</p>;
+    return <p className="px-1 text-sm text-muted-foreground">{emptyLabel}</p>;
 
   const group = (
     label: string,
@@ -84,12 +84,12 @@ export function ReviewCommentList({
     if (rows.length === 0) return null;
     return (
       <div className="flex flex-col">
-        <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-medium uppercase tracking-wide text-faint">
+        <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
           <span className="flex size-4 items-center justify-center">
             {icon}
           </span>
           {label}
-          <span className="text-faint/80">{rows.length}</span>
+          <span className="text-muted-foreground/80">{rows.length}</span>
           {extra ? (
             <span className="ml-auto flex items-center gap-1">{extra}</span>
           ) : null}
@@ -150,14 +150,14 @@ export function ReviewCommentList({
         <CheckCircle2 size={12} className="text-emerald-500" />,
       )}
       {onSend && activeSelection.length > 0 ? (
-        <div className="sticky bottom-0 flex items-center gap-2 border-t border-line bg-panel/95 px-1 py-1.5 backdrop-blur">
+        <div className="sticky bottom-0 flex items-center gap-2 border-t border-border bg-card/95 px-1 py-1.5 backdrop-blur">
           <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {activeSelection.length} selected
           </span>
           <button
             type="button"
             onClick={() => setSelected(new Set())}
-            className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             Clear
           </button>
@@ -216,7 +216,7 @@ function Row({
   return (
     <div>
       <div
-        className={`group flex items-start gap-1.5 rounded-lg px-1 py-1 transition-colors ${expanded ? "bg-raised" : "hover:bg-raised"}`}
+        className={`group flex items-start gap-1.5 rounded-lg px-1 py-1 transition-colors ${expanded ? "bg-muted" : "hover:bg-muted"}`}
       >
         {onToggleSelected ? (
           <input
@@ -234,11 +234,11 @@ function Row({
           aria-expanded={link ? undefined : expanded}
         >
           <span
-            className={`block truncate text-sm ${thread.state === "resolved" ? "text-muted-foreground" : "text-fg"}`}
+            className={`block truncate text-sm ${thread.state === "resolved" ? "text-muted-foreground" : "text-foreground"}`}
           >
             {thread.firstLine || "(empty comment)"}
           </span>
-          <span className="block truncate text-xs text-faint">
+          <span className="block truncate text-xs text-muted-foreground">
             {[
               thread.anchorLabel,
               thread.author,
@@ -260,7 +260,7 @@ function Row({
             onClick={thread.locate}
             title="Jump to text"
             aria-label="Jump to text"
-            className="mt-0.5 shrink-0 rounded-md p-1 text-faint opacity-0 transition-opacity hover:text-fg focus-visible:opacity-100 group-hover:opacity-100"
+            className="mt-0.5 shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
           >
             <Crosshair size={12} />
           </button>

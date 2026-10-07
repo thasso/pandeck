@@ -137,7 +137,7 @@ export function TaskManageToolCard({
   const commentOnly = commentedIds.filter((id) => !changedIds.has(id));
 
   return (
-    <section className="my-2 rounded-xl border border-line bg-panel/60 px-3 py-2">
+    <section className="my-2 rounded-xl border border-border bg-card/60 px-3 py-2">
       <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <ClipboardList size={11} className="text-primary" />
         <span>Tasks</span>
@@ -173,7 +173,7 @@ export function TaskManageToolCard({
           </li>
         ))}
         {deletedIds.map((id) => (
-          <li key={`deleted-${id}`} className="text-sm text-faint">
+          <li key={`deleted-${id}`} className="text-sm text-muted-foreground">
             <span className="line-through">Task-{id}</span>
             <span className="ml-1.5 text-xs">deleted</span>
           </li>
@@ -309,12 +309,12 @@ function TaskChip({
     </>
   );
   const className =
-    "inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-md px-1 py-0.5 text-sm text-fg";
+    "inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-md px-1 py-0.5 text-sm text-foreground";
   return onOpenTask ? (
     <button
       type="button"
       onClick={() => onOpenTask(id)}
-      className={`${className} cursor-pointer hover:bg-raised`}
+      className={`${className} cursor-pointer hover:bg-muted`}
       title="Open task details"
     >
       {inner}

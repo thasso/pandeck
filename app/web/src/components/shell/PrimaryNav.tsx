@@ -100,7 +100,7 @@ export function PrimaryNav<Id extends string>({
             aria-current="true"
             onClick={() => select(section.id)}
             title={section.label}
-            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent px-1 text-sm font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent px-1 text-sm font-medium text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <span className="flex size-5 shrink-0 items-center justify-center text-primary">
               {section.icon}
@@ -116,7 +116,7 @@ export function PrimaryNav<Id extends string>({
             onClick={() => select(section.id)}
             title={section.label}
             aria-label={section.label}
-            className={`${SLOT_CLASS} text-muted-foreground hover:bg-raised hover:text-fg`}
+            className={`${SLOT_CLASS} text-muted-foreground hover:bg-muted hover:text-foreground`}
           >
             {section.icon}
           </button>
@@ -166,7 +166,7 @@ export function PrimaryNav<Id extends string>({
     <nav
       ref={barRef}
       aria-label="Primary"
-      className="flex shrink-0 items-center justify-center gap-0.5 border-t border-line px-2 pt-1.5 pb-[max(0.375rem,var(--app-safe-area-bottom))]"
+      className="flex shrink-0 items-center justify-center gap-0.5 border-t border-border px-2 pt-1.5 pb-[max(0.375rem,var(--app-safe-area-bottom))]"
     >
       {renderSlots(onSelect)}
       {overflow.length > 0 ? (

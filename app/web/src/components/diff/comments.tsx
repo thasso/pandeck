@@ -333,7 +333,7 @@ function AuthorChip({ comment }: { comment: WorktreeComment }) {
       {comment.author.model ?? "agent"} · {comment.author.sessionId.slice(0, 8)}
     </span>
   ) : (
-    <span className="rounded bg-raised px-1 py-0.5 text-xs font-medium text-muted-foreground">
+    <span className="rounded bg-muted px-1 py-0.5 text-xs font-medium text-muted-foreground">
       you
     </span>
   );
@@ -364,13 +364,16 @@ export function CommentThread({
 
   return (
     <div
-      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-line opacity-70" : "border-primary/50"}`}
+      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-border opacity-70" : "border-primary/50"}`}
     >
       <div className="flex items-start gap-1.5">
         <AuthorChip comment={root} />
-        <CommentBody body={root.body} className="min-w-0 flex-1 text-fg" />
+        <CommentBody
+          body={root.body}
+          className="min-w-0 flex-1 text-foreground"
+        />
         {root.severity ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
             {root.severity}
           </span>
         ) : null}
@@ -384,10 +387,13 @@ export function CommentThread({
       {replies.map((reply) => (
         <div
           key={reply.id}
-          className="mt-1.5 flex items-start gap-1.5 border-t border-line/70 pt-1.5"
+          className="mt-1.5 flex items-start gap-1.5 border-t border-border/70 pt-1.5"
         >
           <AuthorChip comment={reply} />
-          <CommentBody body={reply.body} className="min-w-0 flex-1 text-fg" />
+          <CommentBody
+            body={reply.body}
+            className="min-w-0 flex-1 text-foreground"
+          />
         </div>
       ))}
       {replying ? (
@@ -424,21 +430,21 @@ export function CommentThread({
             the app confirms; it now asks like the rest. */}
         {confirmingDelete ? (
           <span className="ml-auto flex items-center gap-1.5 text-sm">
-            <span className="text-faint">Delete?</span>
+            <span className="text-muted-foreground">Delete?</span>
             <button
               type="button"
               onClick={() => {
                 actions.onDeleteComment(root.id);
                 setConfirmingDelete(false);
               }}
-              className="text-danger hover:underline"
+              className="text-destructive hover:underline"
             >
               Yes
             </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
-              className="text-muted-foreground hover:text-fg"
+              className="text-muted-foreground hover:text-foreground"
             >
               No
             </button>
@@ -473,8 +479,8 @@ function ThreadAction({
   danger?: boolean;
 }) {
   const tone = danger
-    ? "hover:bg-danger/10 hover:text-danger"
-    : "hover:bg-raised hover:text-fg";
+    ? "hover:bg-destructive/10 hover:text-destructive"
+    : "hover:bg-muted hover:text-foreground";
   return (
     <button
       type="button"

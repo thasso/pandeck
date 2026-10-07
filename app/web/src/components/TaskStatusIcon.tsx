@@ -38,7 +38,7 @@ export function TaskStatusIcon({
     return <CheckCircle2 size={size} className="text-emerald-500" />;
   if (status === "doing")
     return <CircleDot size={size} className="text-primary" />;
-  return <Circle size={size} className="text-faint" />;
+  return <Circle size={size} className="text-muted-foreground" />;
 }
 
 /** Sentence-case label for the three statuses, for chips and control labels. */

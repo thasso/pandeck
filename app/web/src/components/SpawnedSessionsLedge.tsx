@@ -20,9 +20,9 @@ import { useElapsedNow } from "./useElapsedNow.ts";
 const BADGE_TONE: Record<SessionStatusTone, string> = {
   accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
+  danger: "bg-destructive/10 text-destructive",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted-foreground",
+  muted: "bg-border text-muted-foreground",
 };
 
 export interface SpawnedSessionsLedgeProps {
@@ -146,7 +146,7 @@ export function SpawnedSessionsLedge({
         className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           working
             ? "text-primary hover:text-primary"
-            : "text-muted-foreground hover:text-fg"
+            : "text-muted-foreground hover:text-foreground"
         }`}
       >
         {/* Same treatment as the cluster card's fold: while a peer runs, the
@@ -160,7 +160,11 @@ export function SpawnedSessionsLedge({
           <Users size={13} className="shrink-0" aria-hidden="true" />
         )}
         <span className="min-w-0 flex-1 truncate">{summary}</span>
-        <Chevron size={14} className="shrink-0 text-faint" aria-hidden="true" />
+        <Chevron
+          size={14}
+          className="shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
       </button>
       {/* Under the summary rather than beside it, exactly as the cluster card
           places it: a line of its own costs height only while a peer needs
@@ -189,7 +193,7 @@ export function SpawnedSessionsLedge({
               title={`Dismiss — settle “${bubbleTitle}”`}
               aria-label={`Dismiss the failure in “${bubbleTitle}”`}
               onClick={() => onSettleSession(bubbled.session.id, true)}
-              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <X size={12} aria-hidden />
             </button>
@@ -200,7 +204,7 @@ export function SpawnedSessionsLedge({
       {open ? (
         <div
           id={`spawned-sessions-ledge-${sessionId}`}
-          className="border-t border-line"
+          className="border-t border-border"
         >
           {/* The rows scroll in a box of bounded height, so listing every
               peer changes what is in the box and never how tall the
@@ -230,11 +234,11 @@ export function SpawnedSessionsLedge({
               type="button"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
-              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+              className="flex h-8 w-full items-center gap-2 border-t border-border px-3 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
             >
               <ChevronDown
                 size={13}
-                className={`shrink-0 text-faint transition-transform ${view.settledShown ? "rotate-180" : ""}`}
+                className={`shrink-0 text-muted-foreground transition-transform ${view.settledShown ? "rotate-180" : ""}`}
                 aria-hidden="true"
               />
               <span className="min-w-0 truncate">

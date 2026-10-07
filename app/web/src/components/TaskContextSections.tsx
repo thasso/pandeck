@@ -212,7 +212,7 @@ function JiraTicketsSection({
       collapsible={keys.length > 0 || adding}
       forceOpen={adding}
     >
-      <div className="divide-y divide-line px-1">
+      <div className="divide-y divide-border px-1">
         {keys.map((key) => {
           const url = jiraUrlForKey(key, links, jiraHost);
           const summary = summaries[key];
@@ -222,7 +222,7 @@ function JiraTicketsSection({
                 {key}
               </span>
               {summary ? (
-                <span className="block truncate text-sm text-fg">
+                <span className="block truncate text-sm text-foreground">
                   {summary}
                 </span>
               ) : null}
@@ -260,8 +260,8 @@ function JiraTicketsSection({
           );
         })}
         {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5">
-            <Tickets size={13} className="shrink-0 text-faint" />
+          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
+            <Tickets size={13} className="shrink-0 text-muted-foreground" />
             <input
               value={draft}
               autoFocus
@@ -271,13 +271,13 @@ function JiraTicketsSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="ABC-123"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
             <button
               type="button"
               onClick={add}
               disabled={normalizeJiraKeys([draft]).length === 0}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-border px-2 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -304,11 +304,11 @@ function GithubIssueIcon({ issue }: { issue: GithubLinkedIssue | undefined }) {
     return (
       <GitPullRequest
         size={13}
-        className={`${cls} ${issue.state === "closed" ? "text-faint" : "text-primary"}`}
+        className={`${cls} ${issue.state === "closed" ? "text-muted-foreground" : "text-primary"}`}
       />
     );
   if (issue?.state === "closed")
-    return <CircleCheck size={13} className={`${cls} text-faint`} />;
+    return <CircleCheck size={13} className={`${cls} text-muted-foreground`} />;
   return <CircleDot size={13} className={`${cls} text-primary`} />;
 }
 
@@ -363,7 +363,7 @@ function GithubIssuesSection({
       collapsible={refs.length > 0 || adding}
       forceOpen={adding}
     >
-      <div className="divide-y divide-line px-1">
+      <div className="divide-y divide-border px-1">
         {refs.map((ref) => {
           const issue = issues[ref];
           const url = issue?.url ?? githubIssueUrl(ref);
@@ -384,7 +384,7 @@ function GithubIssuesSection({
                   {ref}
                 </span>
                 {issue?.title ? (
-                  <span className="block truncate text-sm text-fg">
+                  <span className="block truncate text-sm text-foreground">
                     {issue.title}
                   </span>
                 ) : null}
@@ -400,8 +400,8 @@ function GithubIssuesSection({
           );
         })}
         {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5">
-            <CircleDot size={13} className="shrink-0 text-faint" />
+          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
+            <CircleDot size={13} className="shrink-0 text-muted-foreground" />
             <input
               value={draft}
               autoFocus
@@ -411,13 +411,13 @@ function GithubIssuesSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="owner/repo#123 or issue URL"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
             <button
               type="button"
               onClick={add}
               disabled={!normalizeGithubIssueRef(draft)}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-border px-2 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -474,20 +474,20 @@ function LinksSection({
         {links.map((link) => (
           <div
             key={link.url}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-raised"
+            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted"
           >
             <ProviderIcon source={link.source} size={13} />
             <a
               href={link.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="min-w-0 flex-1 truncate text-fg hover:text-primary hover:underline"
+              className="min-w-0 flex-1 truncate text-foreground hover:text-primary hover:underline"
               title={link.url}
             >
               {link.title?.trim() || link.url.replace(/^https?:\/\//, "")}
             </a>
             {link.type === "source" ? (
-              <span className="shrink-0 rounded bg-raised px-1 py-0.5 text-xs uppercase tracking-wide text-faint">
+              <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
                 src
               </span>
             ) : null}
@@ -501,7 +501,7 @@ function LinksSection({
           </div>
         ))}
         {adding ? (
-          <div className="space-y-1.5 rounded-lg border border-line bg-surface p-2">
+          <div className="space-y-1.5 rounded-lg border border-border bg-background p-2">
             <input
               value={url}
               autoFocus
@@ -511,7 +511,7 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="https://…"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-sm text-fg outline-none focus:border-primary"
+              className="w-full rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
             />
             <input
               value={title}
@@ -521,14 +521,14 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="Optional label"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-sm text-fg outline-none focus:border-primary"
+              className="w-full rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
             />
             <div className="flex justify-end gap-1.5">
               <button
                 type="button"
                 onClick={() => add("source")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-sm text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Link2 size={11} /> Source
               </button>
@@ -622,8 +622,10 @@ function ProviderIcon({
   if (source === "jira")
     return <Tickets size={size} className="shrink-0 text-primary" />;
   if (source === "github")
-    return <GitBranch size={size} className="shrink-0 text-fg" />;
+    return <GitBranch size={size} className="shrink-0 text-foreground" />;
   if (source === "forgejo")
-    return <Server size={size} className="shrink-0 text-fg" />;
-  return <ExternalLink size={size} className="shrink-0 text-faint" />;
+    return <Server size={size} className="shrink-0 text-foreground" />;
+  return (
+    <ExternalLink size={size} className="shrink-0 text-muted-foreground" />
+  );
 }

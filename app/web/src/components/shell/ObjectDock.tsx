@@ -188,7 +188,7 @@ export function DockAction({
         onClick={onRun}
         disabled={disabled}
         aria-label={label}
-        className="relative flex size-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+        className="relative flex size-9 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
       >
         {icon}
         {/* A count is news; a zero is not. An action whose badge is 0 wears
@@ -231,7 +231,7 @@ export function DockAction({
  */
 export function DockComposerField({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-9 min-w-0 flex-1 items-center gap-1 rounded-[1.15rem] border border-line bg-raised/60 px-1 transition-colors focus-within:border-line-strong hover:border-line-strong">
+    <div className="flex h-9 min-w-0 flex-1 items-center gap-1 rounded-[1.15rem] border border-border bg-muted/60 px-1 transition-colors focus-within:border-input hover:border-input">
       {children}
     </div>
   );
@@ -274,7 +274,7 @@ export function DockComposerFace({
       title={label}
       aria-label={label}
       className={`flex h-8 min-w-0 flex-1 items-center rounded-2xl px-2 text-left text-sm transition-colors disabled:cursor-default ${
-        text.placeholder ? "text-faint" : "text-fg"
+        text.placeholder ? "text-muted-foreground" : "text-foreground"
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{text.value}</span>

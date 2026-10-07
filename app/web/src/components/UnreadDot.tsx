@@ -2,7 +2,7 @@ type UnreadDotPlacement = "toolbar" | "avatar";
 
 const placementClasses: Record<UnreadDotPlacement, string> = {
   toolbar: "right-1 top-1 size-1.5",
-  avatar: "-right-0.5 -top-0.5 size-2.5 border-2 border-panel",
+  avatar: "-right-0.5 -top-0.5 size-2.5 border-2 border-card",
 };
 
 /**

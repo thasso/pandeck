@@ -112,7 +112,7 @@ export function KnowledgePanel({
               }
               title="Open in Knowledge"
               aria-label="Open in Knowledge"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <SquareArrowOutUpRight size={16} />
             </button>

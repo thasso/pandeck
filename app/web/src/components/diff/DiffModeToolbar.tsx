@@ -34,7 +34,7 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-md px-2 py-1 text-sm ${grow ? "flex-1 text-center" : ""} ${active ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
+      className={`rounded-md px-2 py-1 text-sm ${grow ? "flex-1 text-center" : ""} ${active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:text-foreground"}`}
     >
       {label}
     </button>
@@ -56,7 +56,7 @@ function ToggleMenuItem({
       role="menuitemcheckbox"
       aria-checked={active}
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       <span className="flex-1">{label}</span>
       <span
@@ -79,7 +79,7 @@ export function DiffModeToolbar({
     return (
       <div className="flex min-w-36 flex-col items-stretch">
         {showStyleToggle ? (
-          <div className="mb-1.5 flex items-center rounded-lg border border-line p-0.5">
+          <div className="mb-1.5 flex items-center rounded-lg border border-border p-0.5">
             <ModeButton
               active={prefs.diffStyle === "unified"}
               label="Unified"
@@ -131,7 +131,7 @@ export function DiffModeToolbar({
   return (
     <div className="flex items-center gap-2">
       {showStyleToggle ? (
-        <div className="flex items-center rounded-lg border border-line p-0.5">
+        <div className="flex items-center rounded-lg border border-border p-0.5">
           <ModeButton
             active={prefs.diffStyle === "unified"}
             label="Unified"
@@ -146,7 +146,7 @@ export function DiffModeToolbar({
           />
         </div>
       ) : null}
-      <div className="flex items-center rounded-lg border border-line p-0.5">
+      <div className="flex items-center rounded-lg border border-border p-0.5">
         <ModeButton
           active={prefs.diffWordLevel}
           label="Words"
