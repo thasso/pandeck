@@ -55,6 +55,14 @@ import {
   type LoadState,
 } from "../../lib/loadState.ts";
 import { projectDisplayKey } from "../../lib/projectDisplay.ts";
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.tsx";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "../ui/item.tsx";
 
 interface Props {
   back?: PageHeaderBack | undefined;
@@ -93,15 +101,17 @@ function Block({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-border bg-card/40 p-3">
-      <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
-        <span className="text-muted-foreground" aria-hidden>
-          {icon}
-        </span>
-        {title}
-      </h2>
-      {children}
-    </section>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>
+          <h2 className="flex items-center gap-1.5">
+            <span aria-hidden>{icon}</span>
+            {title}
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
@@ -129,21 +139,22 @@ function RelationRow({
   onOpen: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Item
+      size="xs"
+      render={<button type="button" />}
       onClick={onOpen}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      className="flex-nowrap text-left"
     >
-      <span className="shrink-0 text-muted-foreground" aria-hidden>
+      <ItemMedia variant="icon" aria-hidden>
         {icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {label}
-      </span>
-      {detail ? (
-        <span className="shrink-0 text-xs text-muted-foreground">{detail}</span>
-      ) : null}
-    </button>
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">{label}</span>
+        </ItemTitle>
+      </ItemContent>
+      {detail ? <ItemDescription>{detail}</ItemDescription> : null}
+    </Item>
   );
 }
 
@@ -386,7 +397,7 @@ export function PullRequestDetailPage({
         {/* Why the panel's Merge is disabled, as TEXT on the page: a disabled
             menu row's tooltip reaches neither a keyboard nor a phone. */}
         {mergeBlocked ? (
-          <p className="mt-1 text-sm text-amber-500">{mergeBlocked}</p>
+          <p className="mt-1 text-sm text-warning">{mergeBlocked}</p>
         ) : null}
       </Block>
 

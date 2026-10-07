@@ -71,10 +71,10 @@ import {
 const CI_POLL_MS = 60_000;
 
 const CI_DISPLAY = {
-  success: { className: "text-emerald-400", label: "passing" },
-  pending: { className: "text-amber-400", label: "running" },
-  failure: { className: "text-red-400", label: "failing" },
-  error: { className: "text-red-400", label: "errored" },
+  success: { className: "text-success", label: "passing" },
+  pending: { className: "text-warning", label: "running" },
+  failure: { className: "text-destructive", label: "failing" },
+  error: { className: "text-destructive", label: "errored" },
 } as const;
 
 function ciIcon(state: string) {
@@ -653,8 +653,8 @@ export function WorktreeDeliverySection({
               value: status.dirty ? (
                 <>
                   {status.filesChanged + status.untracked} files{" "}
-                  <span className="text-emerald-400">+{status.additions}</span>{" "}
-                  <span className="text-red-400">−{status.deletions}</span>
+                  <span className="text-success">+{status.additions}</span>{" "}
+                  <span className="text-destructive">−{status.deletions}</span>
                 </>
               ) : (
                 "clean"

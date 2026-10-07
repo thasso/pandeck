@@ -14,6 +14,8 @@ import {
 } from "../lib/nativeShell.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Button } from "./ui/button.tsx";
 
 /** Renew this far before expiry, so a reader never meets a dead frame. */
 const RENEW_MARGIN_MS = 60_000;
@@ -205,17 +207,12 @@ export function SandboxedDocument({
         <EmptyBox
           className="w-full max-w-md bg-card/60"
           action={
-            <a
-              {...openProps}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90"
-            >
-              <ExternalLink size={13} /> Open PDF
-            </a>
+            <Button nativeButton={false} render={<a {...openProps} />}>
+              <ExternalLink data-icon="inline-start" /> Open PDF
+            </Button>
           }
         >
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent text-primary">
-            <FileText size={22} />
-          </div>
+          <FileText size={22} className="mx-auto mb-4 text-primary" />
           <h1 className="text-base font-semibold text-foreground">
             {name ?? "Document"}
           </h1>
@@ -261,13 +258,15 @@ export function SandboxedDocument({
         className={`block border-0 bg-white ${className}`}
       />
       {showOpenAction ? (
-        <a
-          {...openProps}
-          aria-label={openProps.title}
-          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-border bg-background/90 text-muted-foreground transition-colors hover:text-foreground"
+        <IconButton
+          label={openProps.title}
+          variant="outline"
+          nativeButton={false}
+          render={<a {...openProps} />}
+          className="absolute right-2 top-2"
         >
-          <ExternalLink size={14} />
-        </a>
+          <ExternalLink />
+        </IconButton>
       ) : null}
       {openError ? <ErrorNote message={openError} className="mt-2" /> : null}
     </span>

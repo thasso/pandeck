@@ -21,6 +21,7 @@ import { useFetchState } from "../hooks/useFetchState.ts";
 import { pushDocumentEntryAndAnnounce } from "../lib/historyNav.ts";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import { ImageLightbox } from "./common/ImageLightbox.tsx";
+import { Button } from "./ui/button.tsx";
 import { ErrorNote, Skeleton } from "./common/load.tsx";
 
 function targetPath(target: DocumentTarget): string {
@@ -86,7 +87,7 @@ export function InlineDocumentEmbed({
         src={rawUrl}
         alt={label ?? ""}
         loading="lazy"
-        className="max-h-[32rem] max-w-full object-contain"
+        className="max-h-128 max-w-full object-contain"
       />
     );
     // Inside an authored link that anchor owns the click, so the picture stays
@@ -293,14 +294,14 @@ function GrantedMediaPlayer({
 
   if (!activated) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="lg"
         onClick={() => setActivated(true)}
         aria-label={`Play ${label}`}
-        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm text-foreground hover:bg-muted"
       >
-        <Play size={16} /> Play {label}
-      </button>
+        <Play data-icon="inline-start" /> Play {label}
+      </Button>
     );
   }
   if (error)
@@ -370,7 +371,7 @@ function GrantedMediaPlayer({
       // Without this iOS takes every video fullscreen the moment it plays,
       // which throws the reader out of the surface they pressed Play in.
       playsInline
-      className="max-h-96 max-w-full rounded-lg bg-black"
+      className="max-h-96 max-w-full rounded-lg"
     />
   );
 }

@@ -47,6 +47,7 @@ import {
   DeferredGrantedMedia,
   mediaElementForPath,
 } from "./InlineDocumentEmbed.tsx";
+import { Alert, AlertDescription } from "./ui/alert.tsx";
 
 const KIND_ICONS = {
   image: ImageIcon,
@@ -348,9 +349,11 @@ function ViewerBody({
     );
   }
   const truncatedNote = body.truncated ? (
-    <p className="mb-3 rounded-lg border border-border bg-card p-2 text-sm text-muted-foreground">
-      Showing the first part of this file only — download it to read the rest.
-    </p>
+    <Alert role="note" className="mb-3">
+      <AlertDescription>
+        Showing the first part of this file only — download it to read the rest.
+      </AlertDescription>
+    </Alert>
   ) : null;
   if (kind === "markdown") {
     return (

@@ -403,7 +403,7 @@ it("reloads every expanded directory in place when ignored files are shown", asy
     { name: "beta.ts", path: "sub/beta.ts", kind: "file" },
   ]);
 
-  await click("[title='Show ignored and hidden files']");
+  await click("[aria-label='Show ignored and hidden files']");
   expect(
     treeRequests
       .slice(-2)
@@ -437,7 +437,7 @@ it("restarts an expanded directory whose first listing is in flight", async () =
   await click("[title='pending']");
   expect(treeRequests.at(-1)?.key).toBe("tree:wt-1:pending");
 
-  await click("[title='Show ignored and hidden files']");
+  await click("[aria-label='Show ignored and hidden files']");
   expect(treeRequests.map((request) => request.key)).toContain(
     "tree:wt-1:pending:ignored",
   );

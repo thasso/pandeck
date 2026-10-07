@@ -14,7 +14,7 @@ describe("MarkdownFile", () => {
     );
     expect(html).toContain('aria-label="Document metadata"');
     expect(html).toContain("Release notes");
-    expect(html).toContain(">release</li>");
+    expect(html).toMatch(/<li><span[^>]*>release<\/span><\/li>/);
     expect(html).toContain("<dt");
     expect(html).toContain(">status</dt>");
     expect(html).toContain(">draft</dd>");
@@ -37,7 +37,7 @@ describe("MarkdownFile", () => {
     const html = renderToStaticMarkup(
       <MarkdownFile text={"---\nsummary: |\n  multi\n---\nBody\n"} />,
     );
-    expect(html).toContain("<details");
+    expect(html).toMatch(/aria-expanded="false"[^>]*>Frontmatter</);
     expect(html).toContain("summary: |");
     expect(html).toContain("Body");
   });
