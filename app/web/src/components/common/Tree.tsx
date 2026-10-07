@@ -751,7 +751,7 @@ function RowBody<T>({
         {content}
       </div>
       {badge != null && (
-        <span className="ml-1 shrink-0 self-center rounded-full bg-primary px-1.5 text-caption font-semibold text-primary-foreground">
+        <span className="ml-1 shrink-0 self-center rounded-full bg-primary px-1.5 text-sm font-semibold text-primary-foreground">
           {badge}
         </span>
       )}

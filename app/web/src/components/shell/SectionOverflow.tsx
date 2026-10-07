@@ -48,7 +48,7 @@ export function OverflowList<Id extends string>({
               onSelect(item.id);
               close();
             }}
-            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
               active
                 ? "bg-accent text-fg"
                 : "text-muted-foreground hover:bg-raised hover:text-fg"
@@ -72,7 +72,7 @@ export function OverflowList<Id extends string>({
               onCustomize();
               close();
             }}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <span className="flex size-5 shrink-0 items-center justify-center">
               <SlidersHorizontal size={15} />

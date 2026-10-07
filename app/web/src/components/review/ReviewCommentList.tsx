@@ -73,7 +73,7 @@ export function ReviewCommentList({
   };
 
   if (threads.length === 0)
-    return <p className="px-1 text-caption text-faint">{emptyLabel}</p>;
+    return <p className="px-1 text-sm text-faint">{emptyLabel}</p>;
 
   const group = (
     label: string,
@@ -84,7 +84,7 @@ export function ReviewCommentList({
     if (rows.length === 0) return null;
     return (
       <div className="flex flex-col">
-        <div className="flex items-center gap-1.5 px-1 py-1 text-micro font-medium uppercase tracking-wide text-faint">
+        <div className="flex items-center gap-1.5 px-1 py-1 text-xs font-medium uppercase tracking-wide text-faint">
           <span className="flex size-4 items-center justify-center">
             {icon}
           </span>
@@ -151,13 +151,13 @@ export function ReviewCommentList({
       )}
       {onSend && activeSelection.length > 0 ? (
         <div className="sticky bottom-0 flex items-center gap-2 border-t border-line bg-panel/95 px-1 py-1.5 backdrop-blur">
-          <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {activeSelection.length} selected
           </span>
           <button
             type="button"
             onClick={() => setSelected(new Set())}
-            className="rounded-md px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
           >
             Clear
           </button>
@@ -167,7 +167,7 @@ export function ReviewCommentList({
               onSend(activeSelection);
               setSelected(new Set());
             }}
-            className="rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            className="rounded-lg bg-primary px-2.5 py-1 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             Send to agent…
           </button>
@@ -188,7 +188,7 @@ function QuickSelect({
     <button
       type="button"
       onClick={onClick}
-      className="rounded px-1.5 py-0.5 text-micro font-medium normal-case tracking-normal text-primary transition-colors hover:bg-accent"
+      className="rounded px-1.5 py-0.5 text-xs font-medium normal-case tracking-normal text-primary transition-colors hover:bg-accent"
     >
       {label}
     </button>
@@ -234,11 +234,11 @@ function Row({
           aria-expanded={link ? undefined : expanded}
         >
           <span
-            className={`block truncate text-caption ${thread.state === "resolved" ? "text-muted-foreground" : "text-fg"}`}
+            className={`block truncate text-sm ${thread.state === "resolved" ? "text-muted-foreground" : "text-fg"}`}
           >
             {thread.firstLine || "(empty comment)"}
           </span>
-          <span className="block truncate text-micro text-faint">
+          <span className="block truncate text-xs text-faint">
             {[
               thread.anchorLabel,
               thread.author,

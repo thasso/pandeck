@@ -194,13 +194,13 @@ export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 px-1">
       {facts.map((fact) => (
         <Fragment key={fact.label}>
-          <dt className="text-caption text-faint">{fact.label}</dt>
+          <dt className="text-sm text-faint">{fact.label}</dt>
           <dd
             // Left-trimming is the block's DIRECTION (that is what moves the
             // ellipsis to the start), with the value itself back in ltr so the
             // path still reads forwards.
             {...(fact.truncate === "start" ? { dir: "rtl" as const } : {})}
-            className={`min-w-0 truncate text-caption ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted-foreground" : "text-fg"}`}
+            className={`min-w-0 truncate text-sm ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted-foreground" : "text-fg"}`}
             title={fact.title}
           >
             {fact.truncate === "start" ? (
@@ -284,7 +284,7 @@ export function InspectorSection({
 
   return (
     <section className="border-t border-line pt-3 first:border-t-0 first:pt-0">
-      <div className="mb-2 flex w-full items-center gap-2 py-0.5 text-caption font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="mb-2 flex w-full items-center gap-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         <button
           type="button"
           onClick={toggleOpen}
@@ -359,7 +359,7 @@ function RelationRows({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="w-full rounded-md px-2 py-1 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="w-full rounded-md px-2 py-1 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           Show {hidden} more
         </button>
@@ -394,7 +394,7 @@ function RelationRow({
       >
         <span
           aria-hidden="true"
-          className="w-3 shrink-0 text-center text-caption text-faint"
+          className="w-3 shrink-0 text-center text-sm text-faint"
         >
           {depth > 0 ? "↳" : ""}
         </span>
@@ -404,11 +404,9 @@ function RelationRow({
           </span>
         )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-caption text-fg">
-            {item.title}
-          </span>
+          <span className="block truncate text-sm text-fg">{item.title}</span>
           {(item.subtitle || item.counters) && (
-            <span className="block truncate text-caption text-faint">
+            <span className="block truncate text-sm text-faint">
               {item.subtitle}
               {item.counters && (
                 <span
@@ -562,7 +560,7 @@ export function Inspector({
                 // of the way — unless the action opted out.
                 if (!action.keepOpen) onAct?.();
               }}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
             >
               {action.busy ? (
                 <span className="flex size-5 shrink-0 items-center justify-center">
@@ -593,7 +591,7 @@ export function Inspector({
           <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
             <ScanSearch size={16} />
           </span>
-          <h2 className="min-w-0 flex-1 truncate text-body font-semibold tracking-tight text-fg">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold tracking-tight text-fg">
             Inspector
           </h2>
         </header>

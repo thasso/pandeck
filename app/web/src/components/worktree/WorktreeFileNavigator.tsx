@@ -464,7 +464,7 @@ function ChangeStats({
   isDir: boolean;
 }) {
   return (
-    <span className="shrink-0 whitespace-nowrap font-mono text-micro text-faint">
+    <span className="shrink-0 whitespace-nowrap font-mono text-xs text-faint">
       {isDir ? <span>{data.files}</span> : null}
       {data.additions > 0 ? (
         <span className="ml-1 text-emerald-400">+{data.additions}</span>
@@ -504,7 +504,7 @@ function NavigatorRow({
   const isDir = data.kind === "dir";
   return (
     <span
-      className={`flex min-w-0 items-center gap-2 text-caption ${state.selected ? "text-fg" : "text-muted-foreground"}`}
+      className={`flex min-w-0 items-center gap-2 text-sm ${state.selected ? "text-fg" : "text-muted-foreground"}`}
       title={data.path}
     >
       {isDir ? (
@@ -514,7 +514,7 @@ function NavigatorRow({
       )}
       {showChangeStats && !isDir ? (
         <span
-          className={`w-3 shrink-0 text-center font-mono text-micro font-bold uppercase ${statusClass(data.status)}`}
+          className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
         >
           {statusGlyph(data.status)}
         </span>
@@ -525,7 +525,7 @@ function NavigatorRow({
       (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-micro text-faint">
+        <span className="shrink-0 font-mono text-xs text-faint">
           {data.size.toLocaleString()}
         </span>
       ) : null}
@@ -568,15 +568,15 @@ function NavigatorListRow({
       )}
       {showChangeStats && !isDir ? (
         <span
-          className={`w-3 shrink-0 text-center font-mono text-micro font-bold uppercase ${statusClass(data.status)}`}
+          className={`w-3 shrink-0 text-center font-mono text-xs font-bold uppercase ${statusClass(data.status)}`}
         >
           {statusGlyph(data.status)}
         </span>
       ) : null}
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-caption">{data.name}</span>
+        <span className="block truncate text-sm">{data.name}</span>
         {showParentPath && dir ? (
-          <span className="block truncate font-mono text-micro text-faint">
+          <span className="block truncate font-mono text-xs text-faint">
             {dir}
           </span>
         ) : null}
@@ -589,7 +589,7 @@ function NavigatorListRow({
       (data.files > 0 || data.additions > 0 || data.deletions > 0) ? (
         <ChangeStats data={data} isDir={isDir} />
       ) : data.size != null && !isDir ? (
-        <span className="shrink-0 font-mono text-micro text-faint">
+        <span className="shrink-0 font-mono text-xs text-faint">
           {data.size.toLocaleString()}
         </span>
       ) : null}
@@ -751,9 +751,7 @@ export function WorktreeFileNavigator({
 
   if (loading) return <NavigatorSkeletonRows label="Loading files" />;
   if (entries.length === 0 || items.length === 0)
-    return (
-      <div className="px-2 py-4 text-caption text-faint">{emptyLabel}</div>
-    );
+    return <div className="px-2 py-4 text-sm text-faint">{emptyLabel}</div>;
 
   if (viewMode === "list") {
     const currentDirectoryLoading =
@@ -771,7 +769,7 @@ export function WorktreeFileNavigator({
             className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-line/70 px-2 py-2 text-left text-muted-foreground hover:bg-raised hover:text-fg"
           >
             <ChevronLeft size={14} className="shrink-0 text-faint" />
-            <span className="min-w-0 flex-1 truncate font-mono text-caption">
+            <span className="min-w-0 flex-1 truncate font-mono text-sm">
               {listDirectoryPath}
             </span>
           </button>
@@ -779,7 +777,7 @@ export function WorktreeFileNavigator({
         {currentDirectoryLoading && listEntries.length === 0 ? (
           <NavigatorSkeletonRows label="Loading folder" rows={4} />
         ) : listEntries.length === 0 ? (
-          <div className="px-2 py-4 text-caption text-faint">{emptyLabel}</div>
+          <div className="px-2 py-4 text-sm text-faint">{emptyLabel}</div>
         ) : (
           listEntries.map((entry) => (
             <NavigatorListRow

@@ -140,7 +140,7 @@ function SortablePanelTab({
       <button
         type="button"
         onClick={onSelect}
-        className={`flex min-w-0 items-center gap-1.5 py-1.5 pl-2 pr-1 text-caption font-medium ${isDragging ? "cursor-grabbing" : ""}`}
+        className={`flex min-w-0 items-center gap-1.5 py-1.5 pl-2 pr-1 text-sm font-medium ${isDragging ? "cursor-grabbing" : ""}`}
         aria-current={active || undefined}
         {...attributes}
         {...listeners}
@@ -353,7 +353,7 @@ export function RightPanelTabs({
         ))}
         {activeTab === null ? (
           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-5">
-            <p className="text-caption text-faint">Open a panel</p>
+            <p className="text-sm text-faint">Open a panel</p>
             <div className="w-full max-w-56 space-y-1">
               {PANEL_DEFINITIONS.filter((panel) => offered(panel.id)).map(
                 (panel) => (
@@ -366,7 +366,7 @@ export function RightPanelTabs({
                     <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-faint">
                       {panel.icon}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-body font-medium">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
                       {panel.label}
                     </span>
                   </button>

@@ -515,7 +515,7 @@ function BootstrapShellHarness({
     <>
       <PageHeader
         title={
-          <h2 className="truncate text-body font-semibold tracking-tight text-fg">
+          <h2 className="truncate text-sm font-semibold tracking-tight text-fg">
             <SessionTitleText
               title={shell.title}
               pending={shell.titleGenerationPending}

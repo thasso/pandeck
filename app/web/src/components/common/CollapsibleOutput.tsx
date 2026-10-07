@@ -61,7 +61,7 @@ function cx(...classes: Array<string | false | undefined>): string {
 }
 
 const controlClasses =
-  "rounded px-1 py-0.5 text-caption font-medium text-muted-foreground transition-colors " +
+  "rounded px-1 py-0.5 text-sm font-medium text-muted-foreground transition-colors " +
   "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 interface LineRange {
@@ -179,7 +179,7 @@ export function CollapsibleOutput({
         {renderContent ? (
           renderContent(visibleText, from)
         ) : (
-          <pre className="overflow-x-auto whitespace-pre font-mono text-caption text-muted-foreground">
+          <pre className="overflow-x-auto whitespace-pre font-mono text-sm text-muted-foreground">
             {visibleText}
           </pre>
         )}
@@ -236,7 +236,7 @@ export function CollapsibleOutput({
                   Show less
                 </button>
               )}
-              <span className="text-caption text-faint">
+              <span className="text-sm text-faint">
                 {windowed || from > 1
                   ? `lines ${from + lineNumberOffset}–${to + lineNumberOffset} of ${total + lineNumberOffset}`
                   : `${visibleCount} of ${total} lines`}
@@ -244,7 +244,7 @@ export function CollapsibleOutput({
             </>
           )}
           {focusNotice ? (
-            <span className="text-caption text-faint">{focusNotice}</span>
+            <span className="text-sm text-faint">{focusNotice}</span>
           ) : null}
           {footerActions ? (
             <div className="ml-auto flex items-center gap-1">

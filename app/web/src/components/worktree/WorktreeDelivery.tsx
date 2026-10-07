@@ -733,7 +733,7 @@ export function WorktreeDeliverySection({
           ]}
         />
       ) : (
-        <p className="px-1 text-caption text-faint">Loading git status…</p>
+        <p className="px-1 text-sm text-faint">Loading git status…</p>
       )}
     </InspectorSection>
   );

@@ -267,7 +267,7 @@ it("marks a cached boot paint as refreshing in one legible region", async () => 
   expect(text()).toContain("Updating session…");
   // It is the only thing telling the reader the transcript is not current, so
   // it reads at body size on full contrast rather than as caption-grey chrome.
-  expect(regions[0]!.className).toContain("text-body");
+  expect(regions[0]!.className).toContain("text-sm");
   expect(regions[0]!.className).toContain("text-fg");
 });
 

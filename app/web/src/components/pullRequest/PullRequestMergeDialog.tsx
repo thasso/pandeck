@@ -194,7 +194,7 @@ export function PullRequestMergeDialog({
     >
       {/* What a check ACCOUNTED for, above the decision it hands back. */}
       {note ? (
-        <p className="mt-2 text-caption text-muted-foreground">{note}</p>
+        <p className="mt-2 text-sm text-muted-foreground">{note}</p>
       ) : null}
 
       {/* --------------------------- the merge ---------------------------- */}
@@ -203,12 +203,12 @@ export function PullRequestMergeDialog({
           {conflicts ? (
             // As TEXT under the row, in place of the controls' own sentences: a
             // tooltip on a disabled button reaches neither keyboard nor phone.
-            <p className="text-caption text-amber-500">
+            <p className="text-sm text-amber-500">
               #{item.number} conflicts with {item.baseBranch}, so no merge is
               offered and nothing here can run. Update the branch first.
             </p>
           ) : offered.length === 0 ? (
-            <p className="text-caption text-amber-500">
+            <p className="text-sm text-amber-500">
               {supported
                 ? "This repository allows no merge method for pull requests, so nothing can be merged here."
                 : `The merge methods this repository allows could not be read${
@@ -222,7 +222,7 @@ export function PullRequestMergeDialog({
               {offered.map((id) => (
                 <label
                   key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
                 >
                   <input
                     type="radio"
@@ -239,7 +239,7 @@ export function PullRequestMergeDialog({
 
           {/* ---------------------- the remote branch ---------------------- */}
           {canDeleteRemoteBranch ? (
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-caption text-fg">
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-fg">
               <input
                 type="checkbox"
                 checked={deleteRemoteBranch}
@@ -253,7 +253,7 @@ export function PullRequestMergeDialog({
             </label>
           ) : null}
           {conflicts ? null : (
-            <p className="mt-1 text-caption text-faint">
+            <p className="mt-1 text-sm text-faint">
               {!canDeleteRemoteBranch
                 ? `Deleting the remote branch is not offered for this repository, so ${item.headBranch} is kept.`
                 : deleteRemoteBranch
@@ -267,7 +267,7 @@ export function PullRequestMergeDialog({
       {/* -------------------------- the checkout --------------------------- */}
       {hasCheckout && !outcomeUnknown ? (
         <div className="mt-3">
-          <label className="flex cursor-pointer items-center gap-2 text-caption text-fg">
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-fg">
             <input
               type="checkbox"
               checked={removeWorktree}
@@ -277,7 +277,7 @@ export function PullRequestMergeDialog({
             Remove the local worktree and delete the branch{" "}
             <span className="font-mono">{item.headBranch}</span>
           </label>
-          <p className="mt-1 text-caption text-faint">
+          <p className="mt-1 text-sm text-faint">
             {removeWorktree
               ? `The checkout of ${item.headBranch} is removed once delivery into ${item.baseBranch} is verified, its local branch deleted, and the sessions working in it are settled — one that is running, or waiting on an answer or approval, refuses the removal instead.`
               : `The local checkout of ${item.headBranch} is kept; it stays listed here until it is cleaned up.`}
@@ -287,7 +287,7 @@ export function PullRequestMergeDialog({
 
       {/* -------------------------- always stated -------------------------- */}
       {merging ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-faint">
           Any Task this pull request's card links is SUGGESTED done for you to
           answer; merging never writes a Task's status itself.
         </p>
@@ -296,7 +296,7 @@ export function PullRequestMergeDialog({
       {/* -------------------------- the consent ---------------------------- */}
       {needsForce ? (
         <div className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5">
-          <p className="flex items-start gap-1.5 text-caption text-red-400">
+          <p className="flex items-start gap-1.5 text-sm text-red-400">
             <AlertTriangle size={13} className="mt-0.5 shrink-0" />
             {/* The server's own words: this consent answers the refusal its
                 refreshed verification actually produced, which is what makes
@@ -304,7 +304,7 @@ export function PullRequestMergeDialog({
             The cleanup was refused: {refusal} Removing it anyway may LOSE every
             commit on <span className="font-mono">{item.headBranch}</span>.
           </p>
-          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-caption text-fg">
+          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-sm text-fg">
             <input
               type="checkbox"
               checked={confirmForce}
@@ -317,7 +317,7 @@ export function PullRequestMergeDialog({
       ) : null}
 
       {!merging && !hasCheckout && !outcomeUnknown ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-faint">
           Nothing is left to do here: this pull request is {item.state} and no
           local worktree holds {item.headBranch}.
         </p>

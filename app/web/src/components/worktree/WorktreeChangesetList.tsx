@@ -58,7 +58,7 @@ export function WorktreeChangesetList({
 }: WorktreeChangesetListProps) {
   if (files.length === 0) {
     return (
-      <div className="p-6 text-body text-muted-foreground">
+      <div className="p-6 text-sm text-muted-foreground">
         No changes in this scope.
       </div>
     );
@@ -181,15 +181,15 @@ function ChangesetFileSection({
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
         </button>
-        <span className="min-w-0 flex-1 truncate text-caption">
+        <span className="min-w-0 flex-1 truncate text-sm">
           <span className="font-medium text-fg">{parts.name}</span>
           {parts.dir ? (
-            <span className="ml-1.5 font-mono text-micro text-faint">
+            <span className="ml-1.5 font-mono text-xs text-faint">
               {parts.dir}
             </span>
           ) : null}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-micro text-faint">
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-faint">
           {file.additions > 0 ? (
             <span className="text-emerald-400">+{file.additions}</span>
           ) : null}
@@ -202,17 +202,15 @@ function ChangesetFileSection({
           onClick={toggleViewed}
           title={viewed ? "Mark as not viewed" : "Mark as viewed"}
           aria-pressed={viewed}
-          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
           <Check size={11} /> Viewed
         </button>
       </div>
       {collapsed ? null : file.binary ? (
-        <div className="p-4 text-caption text-muted-foreground">
-          Binary file.
-        </div>
+        <div className="p-4 text-sm text-muted-foreground">Binary file.</div>
       ) : failed ? (
-        <div className="p-4 text-caption text-muted-foreground">
+        <div className="p-4 text-sm text-muted-foreground">
           This file is no longer changed in this scope.
         </div>
       ) : !diff ? (
@@ -221,7 +219,7 @@ function ChangesetFileSection({
         // will be. The deferral above it is the perf contract, untouched.
         <div
           role="status"
-          className="flex items-center gap-2 p-4 text-caption text-muted-foreground"
+          className="flex items-center gap-2 p-4 text-sm text-muted-foreground"
         >
           <Spinner size="sm" /> Loading diff…
         </div>

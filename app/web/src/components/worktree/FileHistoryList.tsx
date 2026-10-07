@@ -84,21 +84,21 @@ export function FileHistoryList({
             className="mt-0.5 shrink-0 text-faint"
           />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-caption font-medium">
+            <span className="block truncate text-sm font-medium">
               {entry.subject}
             </span>
-            <span className="block truncate text-micro text-faint">
+            <span className="block truncate text-xs text-faint">
               {entry.author} · {relativeTime(entry.authoredAt)}
               {entry.path !== path ? ` · as ${entry.path}` : ""}
             </span>
           </span>
-          <span className="shrink-0 font-mono text-micro text-faint">
+          <span className="shrink-0 font-mono text-xs text-faint">
             {entry.shortOid}
           </span>
         </button>
       ))}
       {log.truncated ? (
-        <p className="px-2 py-1.5 text-micro text-faint">
+        <p className="px-2 py-1.5 text-xs text-faint">
           Showing the {log.entries.length} most recent commits.
         </p>
       ) : null}

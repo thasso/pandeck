@@ -169,7 +169,7 @@ export function JsonView({
 
   return (
     <div
-      className={cx("group relative font-mono text-caption text-fg", className)}
+      className={cx("group relative font-mono text-sm text-fg", className)}
       {...props}
     >
       {serialized && (

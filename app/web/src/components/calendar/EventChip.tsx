@@ -23,7 +23,7 @@ export function EventChip({
         onSelect(event.id);
       }}
       title={`${event.allDay ? "All day" : hm(event.start, timeZone)} · ${event.title}`}
-      className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-caption transition-colors ${
+      className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-sm transition-colors ${
         selected ? "bg-primary text-primary-foreground" : "hover:bg-accent"
       } ${declined && !selected ? "text-faint line-through" : selected ? "" : "text-fg"}`}
     >

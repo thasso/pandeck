@@ -53,7 +53,7 @@ export function MonthView({
         {weeks[0]!.map((date) => (
           <div
             key={date}
-            className="px-2 py-1.5 text-caption font-medium uppercase tracking-wide text-faint"
+            className="px-2 py-1.5 text-sm font-medium uppercase tracking-wide text-faint"
           >
             {shortWeekday(date)}
           </div>
@@ -85,7 +85,7 @@ export function MonthView({
                     e.stopPropagation();
                     onOpenDay(date);
                   }}
-                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-primary ${
+                  className={`flex size-5 items-center justify-center rounded-full text-sm hover:ring-1 hover:ring-primary ${
                     isToday
                       ? "bg-primary font-semibold text-primary-foreground"
                       : inMonth
@@ -98,7 +98,7 @@ export function MonthView({
                 {worklogs.length > 0 && (
                   <span
                     title={`${loggedHoursLabel(worklogs)} logged to Tempo`}
-                    className="rounded bg-emerald-500/15 px-1 text-micro font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
+                    className="rounded bg-emerald-500/15 px-1 text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
                   >
                     {loggedHoursLabel(worklogs)}
                   </span>
@@ -121,7 +121,7 @@ export function MonthView({
                       e.stopPropagation();
                       onOpenDay(date);
                     }}
-                    className="px-1 text-micro text-muted-foreground hover:text-fg"
+                    className="px-1 text-xs text-muted-foreground hover:text-fg"
                   >
                     +{events.length - MAX_CHIPS} more
                   </span>

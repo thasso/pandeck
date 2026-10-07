@@ -113,7 +113,7 @@ export function ProviderAccountRow({
                 }
               />
               <span
-                className={`min-w-0 flex-1 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
+                className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
               >
                 {account.name}
               </span>
@@ -207,7 +207,7 @@ export function ThinkingSlider({
         disabled={disabled}
       />
       <div
-        className="mt-0.5 text-center text-body font-medium text-fg"
+        className="mt-0.5 text-center text-sm font-medium text-fg"
         aria-hidden
       >
         {THINKING_LABELS[value]}
@@ -338,7 +338,7 @@ export function QuickRow({
 
   return (
     <div className="w-full">
-      <div className="mb-1.5 px-4 text-center text-caption font-medium uppercase tracking-wide text-faint">
+      <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-faint">
         {label}
       </div>
       {/* The gutter lives INSIDE the scroller (padding + matching scroll-padding
@@ -382,7 +382,7 @@ export function QuickRowSplit({
     <div className="flex w-full flex-wrap justify-center gap-x-7 gap-y-3 px-4 pb-1.5">
       {groups.map((group) => (
         <div key={group.label} className="flex flex-col">
-          <div className="mb-1.5 text-center text-caption font-medium uppercase tracking-wide text-faint">
+          <div className="mb-1.5 text-center text-sm font-medium uppercase tracking-wide text-faint">
             {group.label}
           </div>
           <div role="listbox" aria-label={group.label} className="flex gap-2">
@@ -417,7 +417,7 @@ export function QuickPill({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`flex h-9 max-w-[13rem] shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3 text-caption font-medium transition-colors disabled:opacity-60 ${
+      className={`flex h-9 max-w-[13rem] shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors disabled:opacity-60 ${
         selected
           ? "border-primary/40 bg-accent text-primary"
           : "border-line bg-panel text-fg hover:border-line-strong hover:bg-raised"

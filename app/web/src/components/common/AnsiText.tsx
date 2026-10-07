@@ -177,7 +177,7 @@ export function AnsiText({ text, className }: AnsiTextProps) {
   return (
     <pre
       className={cx(
-        "overflow-x-auto whitespace-pre font-mono text-caption text-muted-foreground",
+        "overflow-x-auto whitespace-pre font-mono text-sm text-muted-foreground",
         className,
       )}
     >

@@ -34,7 +34,7 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-md px-2 py-1 text-caption ${grow ? "flex-1 text-center" : ""} ${active ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
+      className={`rounded-md px-2 py-1 text-sm ${grow ? "flex-1 text-center" : ""} ${active ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
     >
       {label}
     </button>
@@ -56,7 +56,7 @@ function ToggleMenuItem({
       role="menuitemcheckbox"
       aria-checked={active}
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+      className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
     >
       <span className="flex-1">{label}</span>
       <span

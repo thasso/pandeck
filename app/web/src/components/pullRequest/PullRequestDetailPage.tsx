@@ -94,7 +94,7 @@ function Block({
 }) {
   return (
     <section className="rounded-xl border border-line bg-panel/40 p-3">
-      <h2 className="mb-2 flex items-center gap-1.5 text-caption font-semibold text-muted-foreground">
+      <h2 className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
         <span className="text-faint" aria-hidden>
           {icon}
         </span>
@@ -108,10 +108,10 @@ function Block({
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 py-0.5">
-      <span className="w-28 shrink-0 text-micro uppercase tracking-wide text-faint">
+      <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-faint">
         {label}
       </span>
-      <span className="min-w-0 flex-1 text-caption text-fg">{children}</span>
+      <span className="min-w-0 flex-1 text-sm text-fg">{children}</span>
     </div>
   );
 }
@@ -137,11 +137,9 @@ function RelationRow({
       <span className="shrink-0 text-faint" aria-hidden>
         {icon}
       </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-fg">
-        {label}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-sm text-fg">{label}</span>
       {detail ? (
-        <span className="shrink-0 text-micro text-faint">{detail}</span>
+        <span className="shrink-0 text-xs text-faint">{detail}</span>
       ) : null}
     </button>
   );
@@ -187,7 +185,7 @@ function JoinGroup<T>({
   const pending = rows.filter((row) => row.kind === "pending");
   return (
     <>
-      <h3 className="mb-1 mt-3 text-micro uppercase tracking-wide text-faint">
+      <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-faint">
         {title}
       </h3>
       {/* R2: the retained rows below stay, and the failure sits beside them. */}
@@ -382,7 +380,7 @@ export function PullRequestDetailPage({
         {/* Why the panel's Merge is disabled, as TEXT on the page: a disabled
             menu row's tooltip reaches neither a keyboard nor a phone. */}
         {mergeBlocked ? (
-          <p className="mt-1 text-caption text-amber-500">{mergeBlocked}</p>
+          <p className="mt-1 text-sm text-amber-500">{mergeBlocked}</p>
         ) : null}
       </Block>
 

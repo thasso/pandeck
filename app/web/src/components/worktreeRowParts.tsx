@@ -16,7 +16,7 @@ export function WorktreeLineDelta({
   const title = `${status.filesChanged + status.untracked} changed file${status.filesChanged + status.untracked === 1 ? "" : "s"}`;
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 font-mono text-micro font-semibold"
+      className="inline-flex shrink-0 items-center gap-1 font-mono text-xs font-semibold"
       title={title}
     >
       <span className="text-emerald-400">+{status.additions}</span>
@@ -33,7 +33,7 @@ export function WorktreeMergedBadge({
 }) {
   if (!status?.merged || status.ahead <= 0) return null;
   return (
-    <span className="shrink-0 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-micro font-medium text-emerald-500">
+    <span className="shrink-0 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs font-medium text-emerald-500">
       merged
     </span>
   );
@@ -64,7 +64,7 @@ export function AxesSummary({
       // apply to them and they keep their static position out at the untruncated
       // end of the axes text — pushing the sidebar's scrollWidth ~110px past its
       // client width and letting the whole pane pan sideways on a phone.
-      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-micro tabular-nums text-faint ${dim}`}
+      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-xs tabular-nums text-faint ${dim}`}
     >
       {axes.base ? (
         <span

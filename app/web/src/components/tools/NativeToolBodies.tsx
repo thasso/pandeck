@@ -56,7 +56,7 @@ export function FileExcerptBody({
         wrap={wrap}
       />
       {parsed?.notice ? (
-        <div className="mt-1 px-1 text-caption text-faint">{parsed.notice}</div>
+        <div className="mt-1 px-1 text-sm text-faint">{parsed.notice}</div>
       ) : null}
     </>
   );

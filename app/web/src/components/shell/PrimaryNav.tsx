@@ -100,7 +100,7 @@ export function PrimaryNav<Id extends string>({
             aria-current="true"
             onClick={() => select(section.id)}
             title={section.label}
-            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent px-1 text-caption font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent px-1 text-sm font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <span className="flex size-5 shrink-0 items-center justify-center text-primary">
               {section.icon}

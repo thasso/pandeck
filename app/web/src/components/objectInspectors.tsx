@@ -1174,7 +1174,7 @@ export function ProjectInspector({
       ) : worktreesPending ? (
         <div
           role="status"
-          className="flex items-center gap-2 text-caption text-faint"
+          className="flex items-center gap-2 text-sm text-faint"
         >
           <Spinner size="sm" /> Refreshing Project worktrees…
         </div>
@@ -1397,20 +1397,20 @@ function WorktreeReviewSection({
               key={set.id}
               className="rounded-md border border-line px-2 py-1.5"
             >
-              <div className="flex items-center gap-1.5 text-caption">
-                <span className="rounded bg-accent px-1 py-0.5 text-micro font-medium text-primary">
+              <div className="flex items-center gap-1.5 text-sm">
+                <span className="rounded bg-accent px-1 py-0.5 text-xs font-medium text-primary">
                   {set.authorModel ?? "agent"} ·{" "}
                   {set.authorSessionId.slice(0, 8)}
                 </span>
                 <span className="font-medium text-fg">
                   {set.verdict ?? "review in progress"}
                 </span>
-                <span className="ml-auto text-micro text-muted-foreground">
+                <span className="ml-auto text-xs text-muted-foreground">
                   {set.openCount} open · {set.addressedCount} addressed
                 </span>
               </div>
               {set.summary ? (
-                <p className="mt-1 text-caption text-muted-foreground">
+                <p className="mt-1 text-sm text-muted-foreground">
                   {set.summary}
                 </p>
               ) : null}
@@ -1518,7 +1518,7 @@ export function WorktreeInspector({
       sectionStorageScope={`worktree:${worktree?.id ?? "loading"}`}
     >
       {worktree ? (
-        <div className="space-y-4 text-caption">
+        <div className="space-y-4 text-sm">
           <InspectorSection
             id="checkout"
             storageScope={`worktree:${worktree.id}`}

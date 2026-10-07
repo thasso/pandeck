@@ -389,7 +389,7 @@ export function CommentComposer({
       className={
         card
           ? COMPOSER_FIELD_CLASS
-          : "max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-body text-fg outline-none placeholder:text-faint"
+          : "max-h-40 min-h-8 min-w-0 flex-1 resize-none bg-transparent px-1 py-1 text-sm text-fg outline-none placeholder:text-faint"
       }
     />
   );

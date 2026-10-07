@@ -71,7 +71,7 @@ export function CalendarPage({
         ) : (
           <CalendarDays size={17} className="text-primary" />
         )}
-        <h1 className="mr-2 min-w-0 truncate text-prose font-semibold text-fg">
+        <h1 className="mr-2 min-w-0 truncate text-base font-semibold text-fg">
           {title}
         </h1>
         <div className="flex items-center gap-0.5">
@@ -86,7 +86,7 @@ export function CalendarPage({
           <button
             type="button"
             onClick={calendar.goToday}
-            className="rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-panel hover:text-fg"
+            className="rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-panel hover:text-fg"
           >
             Today
           </button>
@@ -114,7 +114,7 @@ export function CalendarPage({
               showTempo ? "Hide logged Tempo time" : "Show logged Tempo time"
             }
             aria-pressed={showTempo}
-            className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
+            className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
               showTempo
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                 : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
@@ -130,7 +130,7 @@ export function CalendarPage({
               }
               title={showWeekends ? "Hide weekends" : "Show weekends"}
               aria-pressed={showWeekends}
-              className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
+              className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
                 showWeekends
                   ? "border-primary/40 bg-accent text-primary"
                   : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
@@ -145,7 +145,7 @@ export function CalendarPage({
                 key={v}
                 type="button"
                 onClick={() => calendar.setView(v)}
-                className={`rounded-md px-2.5 py-1 text-caption font-medium capitalize transition-colors ${
+                className={`rounded-md px-2.5 py-1 text-sm font-medium capitalize transition-colors ${
                   view === v
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-panel hover:text-fg"

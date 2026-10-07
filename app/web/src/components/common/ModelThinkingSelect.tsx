@@ -121,9 +121,9 @@ type SelectVariant = "pill" | "field";
 // Shared trigger classes. `pill` is a dense ghost control for the composer;
 // `field` looks like a form input for the settings page.
 const PILL_TRIGGER =
-  "inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-caption text-fg transition-colors hover:bg-raised data-[open=true]:bg-raised disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-sm text-fg transition-colors hover:bg-raised data-[open=true]:bg-raised disabled:cursor-not-allowed disabled:opacity-50";
 const FIELD_TRIGGER =
-  "flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-left text-body text-fg transition-colors hover:border-line-strong data-[open=true]:border-primary disabled:cursor-not-allowed disabled:opacity-60";
+  "flex w-full items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-left text-sm text-fg transition-colors hover:border-line-strong data-[open=true]:border-primary disabled:cursor-not-allowed disabled:opacity-60";
 
 export interface ModelSelectProps<M extends ModelOption = ModelOption> {
   models: M[];
@@ -218,7 +218,7 @@ export function ModelSelect<M extends ModelOption>({
       {(close) => (
         <div className="max-h-[45vh] min-w-[240px] overflow-y-auto">
           {models.length === 0 && (
-            <div className="px-3 py-2 text-caption text-faint">
+            <div className="px-3 py-2 text-sm text-faint">
               No models available
             </div>
           )}
@@ -229,7 +229,7 @@ export function ModelSelect<M extends ModelOption>({
               role="group"
               aria-label={group.label}
             >
-              <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-micro font-semibold uppercase tracking-wide text-faint">
+              <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wide text-faint">
                 <ProviderIcon provider={group.provider} size={12} />
                 {group.label}
               </div>
@@ -257,13 +257,13 @@ export function ModelSelect<M extends ModelOption>({
                     <span className="min-w-0 flex-1">
                       <span
                         className={cx(
-                          "block truncate text-caption font-medium",
+                          "block truncate text-sm font-medium",
                           active ? "text-primary" : "text-fg",
                         )}
                       >
                         {m.name}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-2 text-caption text-muted-foreground">
+                      <span className="mt-0.5 flex items-center gap-2 text-sm text-muted-foreground">
                         <span>
                           {formatContextTokens(m.contextWindow)} context
                         </span>
@@ -372,7 +372,7 @@ export function ThinkingSelect({
       {(close) => (
         <div className="min-w-[220px] py-0.5">
           {!reasoning && (
-            <div className="px-2.5 py-1 text-caption text-faint">
+            <div className="px-2.5 py-1 text-sm text-faint">
               Current model has no reasoning budget
             </div>
           )}
@@ -392,13 +392,13 @@ export function ThinkingSelect({
                 <span className="min-w-0 flex-1">
                   <span
                     className={cx(
-                      "block text-caption font-medium",
+                      "block text-sm font-medium",
                       active ? "text-primary" : "text-fg",
                     )}
                   >
                     {THINKING_LABELS[lvl]}
                   </span>
-                  <span className="mt-0.5 block text-caption text-muted-foreground">
+                  <span className="mt-0.5 block text-sm text-muted-foreground">
                     {THINKING_DESCRIPTIONS[lvl]}
                   </span>
                 </span>
@@ -424,7 +424,7 @@ export function SelectField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-caption font-medium text-muted-foreground">
+      <span className="mb-1 block text-sm font-medium text-muted-foreground">
         {label}
       </span>
       {children}

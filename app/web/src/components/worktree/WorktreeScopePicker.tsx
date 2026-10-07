@@ -89,7 +89,7 @@ export function WorktreeScopePicker({
     </>
   );
   const triggerClass =
-    "flex min-w-0 shrink items-center gap-1.5 rounded-md bg-raised px-2 py-1 text-caption font-medium text-fg";
+    "flex min-w-0 shrink items-center gap-1.5 rounded-md bg-raised px-2 py-1 text-sm font-medium text-fg";
 
   const body = (close: () => void) => (
     <ScopePanel
@@ -172,7 +172,7 @@ function ScopePanel({
           pick();
           onClose();
         }}
-        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption ${active === id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm ${active === id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
       >
         <Icon size={13} className="shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -264,7 +264,7 @@ function CommitListPanel({
   return (
     <div className="flex max-h-[60vh] flex-col">
       <div className="flex items-center justify-between gap-2 px-2 py-1.5">
-        <p className="text-caption text-faint">
+        <p className="text-sm text-faint">
           {rangeStart
             ? "Pick the other end of the range."
             : "Tap a commit for its diff. Shift-click compares a range."}
@@ -276,7 +276,7 @@ function CommitListPanel({
             setRangeStart(null);
           }}
           aria-pressed={rangeMode}
-          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
           Range
         </button>
@@ -293,9 +293,7 @@ function CommitListPanel({
             />
           )
         ) : entries.length === 0 ? (
-          <div className="p-4 text-caption text-muted-foreground">
-            No commits.
-          </div>
+          <div className="p-4 text-sm text-muted-foreground">No commits.</div>
         ) : (
           <div className="flex flex-col gap-px p-1">
             {/* R2: the commits stay pickable while a failed refresh says so. */}
@@ -318,15 +316,15 @@ function CommitListPanel({
                   className="mt-0.5 shrink-0 text-faint"
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-caption font-medium">
+                  <span className="block truncate text-sm font-medium">
                     {entry.subject}
                   </span>
-                  <span className="block truncate text-micro text-faint">
+                  <span className="block truncate text-xs text-faint">
                     {entry.author} ·{" "}
                     {new Date(entry.authoredAt).toLocaleDateString()}
                   </span>
                 </span>
-                <span className="shrink-0 font-mono text-micro text-faint">
+                <span className="shrink-0 font-mono text-xs text-faint">
                   {entry.shortOid}
                 </span>
               </button>

@@ -51,9 +51,9 @@ export function UsageCycleMeters({
       : null;
 
   return (
-    // `text-micro` sits here, not on the cells: the column widths below are in
+    // `text-xs` sits here, not on the cells: the column widths below are in
     // `em`, so they scale with the user's text size instead of clipping.
-    <span className="flex w-full flex-col gap-0.5 text-micro tabular-nums">
+    <span className="flex w-full flex-col gap-0.5 text-xs tabular-nums">
       <UsageCycleRow
         label="5h"
         title="Rolling 5-hour window"

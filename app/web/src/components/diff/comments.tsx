@@ -325,7 +325,7 @@ export interface LineCommentsConfig {
 function AuthorChip({ comment }: { comment: WorktreeComment }) {
   return comment.author.kind === "agent" ? (
     <span
-      className="rounded bg-accent px-1 py-0.5 text-micro font-medium text-primary"
+      className="rounded bg-accent px-1 py-0.5 text-xs font-medium text-primary"
       title={[comment.author.sessionId, comment.author.thinkingLevel]
         .filter(Boolean)
         .join(" · ")}
@@ -333,7 +333,7 @@ function AuthorChip({ comment }: { comment: WorktreeComment }) {
       {comment.author.model ?? "agent"} · {comment.author.sessionId.slice(0, 8)}
     </span>
   ) : (
-    <span className="rounded bg-raised px-1 py-0.5 text-micro font-medium text-muted-foreground">
+    <span className="rounded bg-raised px-1 py-0.5 text-xs font-medium text-muted-foreground">
       you
     </span>
   );
@@ -370,13 +370,13 @@ export function CommentThread({
         <AuthorChip comment={root} />
         <CommentBody body={root.body} className="min-w-0 flex-1 text-fg" />
         {root.severity ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-micro font-medium text-muted-foreground">
+          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
             {root.severity}
           </span>
         ) : null}
         {/* A badge only when the anchor is in trouble; an ordinary one says nothing. */}
         {root.anchorState === "moved" ? (
-          <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-micro text-amber-500">
+          <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-500">
             moved
           </span>
         ) : null}
@@ -423,7 +423,7 @@ export function CommentThread({
         {/* Deleting a thread was one unguarded tap here while every other delete in
             the app confirms; it now asks like the rest. */}
         {confirmingDelete ? (
-          <span className="ml-auto flex items-center gap-1.5 text-caption">
+          <span className="ml-auto flex items-center gap-1.5 text-sm">
             <span className="text-faint">Delete?</span>
             <button
               type="button"

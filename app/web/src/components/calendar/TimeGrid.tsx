@@ -179,7 +179,7 @@ export function TimeGrid({
                   date === selectedDate ? "bg-accent/30" : ""
                 }`}
               >
-                <span className="text-caption uppercase tracking-wide text-faint">
+                <span className="text-sm uppercase tracking-wide text-faint">
                   {shortWeekday(date)}
                 </span>
                 <span
@@ -190,7 +190,7 @@ export function TimeGrid({
                     e.stopPropagation();
                     onOpenDay(date);
                   }}
-                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-fg"}`}
+                  className={`flex size-5 items-center justify-center rounded-full text-sm hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-fg"}`}
                 >
                   {dayOfMonth(date)}
                 </span>
@@ -216,7 +216,7 @@ export function TimeGrid({
             {Array.from({ length: 24 }, (_, h) => (
               <div
                 key={h}
-                className="absolute right-1 -translate-y-1/2 text-micro tabular-nums text-faint"
+                className="absolute right-1 -translate-y-1/2 text-xs tabular-nums text-faint"
                 style={{ top: h * zoom }}
               >
                 {h === 0 ? "" : `${String(h).padStart(2, "0")}:00`}
@@ -318,7 +318,7 @@ function AllDayBand({
                 key={event.id}
                 type="button"
                 onClick={() => onSelectEvent(event.id)}
-                className={`truncate rounded px-1 py-0.5 text-left text-micro ${
+                className={`truncate rounded px-1 py-0.5 text-left text-xs ${
                   event.id === selectedEventId
                     ? "bg-primary text-primary-foreground"
                     : "bg-accent text-primary hover:opacity-80"
@@ -366,14 +366,14 @@ function TempoBlock({
         <span className="min-w-0 truncate font-medium">{label}</span>
       </div>
       {heightPx > 26 && (
-        <div className="truncate text-micro tabular-nums opacity-80">
+        <div className="truncate text-xs tabular-nums opacity-80">
           {hoursLabel}
         </div>
       )}
     </>
   );
   const className =
-    "absolute z-[1] overflow-hidden rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1 py-0.5 text-left text-micro text-emerald-700 dark:text-emerald-300";
+    "absolute z-[1] overflow-hidden rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1 py-0.5 text-left text-xs text-emerald-700 dark:text-emerald-300";
   const style = {
     top: topPx + 1,
     height: heightPx - 2,
@@ -450,13 +450,13 @@ function EventBlock({
           <Video size={9} className="shrink-0 text-primary" />
         )}
         <span
-          className={`min-w-0 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
+          className={`min-w-0 truncate text-sm font-medium ${selected ? "text-primary" : "text-fg"}`}
         >
           {event.title}
         </span>
       </div>
       {!compact && (
-        <div className="truncate text-micro tabular-nums text-muted-foreground">
+        <div className="truncate text-xs tabular-nums text-muted-foreground">
           {hm(event.start, timeZone)}
         </div>
       )}

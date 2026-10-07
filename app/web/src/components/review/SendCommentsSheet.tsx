@@ -90,7 +90,7 @@ export function SendCommentsSheet({
   const label = `${count} comment${count === 1 ? "" : "s"}`;
   const body = (
     <div className="flex flex-col gap-2">
-      <p className="text-caption text-faint">
+      <p className="text-sm text-faint">
         {intro ??
           `The session is linked to this object and can reply, edit and resolve the ${count === 1 ? "thread" : "threads"} you send.`}
       </p>
@@ -122,7 +122,7 @@ export function SendCommentsSheet({
           onChange={(event) => setAdditionalPrompt(event.target.value)}
           placeholder="Anything to say about this review? (optional)"
           aria-label="Message for this session"
-          className="field-sizing-content min-h-16 w-full resize-none rounded-lg border border-line bg-surface px-2.5 py-2 text-prose text-fg outline-none focus:border-line-strong"
+          className="field-sizing-content min-h-16 w-full resize-none rounded-lg border border-line bg-surface px-2.5 py-2 text-base text-fg outline-none focus:border-line-strong"
         />
       ) : null}
       <div className="flex items-center justify-end gap-2">
@@ -133,7 +133,7 @@ export function SendCommentsSheet({
               startWithout.onRun();
               onClose();
             }}
-            className="mr-auto rounded-lg px-3 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="mr-auto rounded-lg px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
           >
             {startWithout.label}
           </button>
@@ -141,14 +141,14 @@ export function SendCommentsSheet({
         <button
           type="button"
           onClick={onClose}
-          className="rounded-lg px-3 py-1.5 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+          className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
         >
           Cancel
         </button>
         <button
           type="button"
           onClick={send}
-          className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
           {target.kind === "new" && newSubmitLabel
             ? newSubmitLabel
@@ -174,7 +174,7 @@ export function SendCommentsSheet({
         className="w-full max-w-md rounded-2xl border border-line bg-panel p-4 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <p className="mb-2 text-body font-semibold text-fg">
+        <p className="mb-2 text-sm font-semibold text-fg">
           {verb} {label}
         </p>
         {body}
@@ -206,9 +206,9 @@ function TargetRow({
         aria-hidden
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-caption">{label}</span>
+        <span className="block truncate text-sm">{label}</span>
         {detail ? (
-          <span className="block truncate text-micro text-faint">{detail}</span>
+          <span className="block truncate text-xs text-faint">{detail}</span>
         ) : null}
       </span>
     </button>

@@ -553,7 +553,7 @@ export function SwipeRow({
           data-swipe-state={armed ? "armed" : "pending"}
           data-swipe-side={direction}
           data-swipe-tone={danger ? "danger" : undefined}
-          className={`absolute inset-y-0 flex w-full items-center gap-1.5 px-3 text-caption ${
+          className={`absolute inset-y-0 flex w-full items-center gap-1.5 px-3 text-sm ${
             direction === "left" ? "left-full" : "right-full"
           } ${
             armed

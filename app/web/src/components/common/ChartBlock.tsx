@@ -56,7 +56,7 @@ export function ChartBlock({ spec: text }: { spec: string }) {
   const parsed = parseChartSpec(text);
   if (!parsed.ok) {
     return (
-      <div className="my-2 rounded-lg border border-line bg-raised px-3 py-2 text-caption">
+      <div className="my-2 rounded-lg border border-line bg-raised px-3 py-2 text-sm">
         <p className="mb-1 font-medium text-danger">
           Chart could not be rendered: {parsed.error}
         </p>
@@ -170,7 +170,7 @@ function ChartFigure({ spec }: { spec: ChartSpec }) {
   return (
     <figure className="my-2 rounded-lg border border-line bg-surface px-3 py-2">
       {spec.title && (
-        <figcaption className="mb-1.5 text-caption font-medium text-fg">
+        <figcaption className="mb-1.5 text-sm font-medium text-fg">
           {spec.title}
         </figcaption>
       )}
@@ -183,10 +183,7 @@ function ChartFigure({ spec }: { spec: ChartSpec }) {
           />
         </div>
       )}
-      <details
-        className="mt-1 text-caption text-muted-foreground"
-        open={failed}
-      >
+      <details className="mt-1 text-sm text-muted-foreground" open={failed}>
         <summary className="cursor-pointer select-none text-faint">
           {failed ? "Chart unavailable — data table" : "Data table"}
         </summary>
@@ -199,7 +196,7 @@ function ChartFigure({ spec }: { spec: ChartSpec }) {
 function ChartDataTable({ spec }: { spec: ChartSpec }) {
   return (
     <div className="mt-1 overflow-x-auto">
-      <table className="w-full border-collapse text-caption">
+      <table className="w-full border-collapse text-sm">
         <thead>
           <tr>
             <th className="border-b border-line px-2 py-1 text-left font-medium text-muted-foreground">

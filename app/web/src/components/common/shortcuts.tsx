@@ -280,27 +280,25 @@ function ShortcutsHelpOverlay({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="text-body font-semibold text-fg">
-            Keyboard shortcuts
-          </h2>
+          <h2 className="text-sm font-semibold text-fg">Keyboard shortcuts</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-caption text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-raised hover:text-fg"
           >
             Esc
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-4 py-3">
           {groups.length === 0 ? (
-            <p className="py-6 text-center text-caption text-faint">
+            <p className="py-6 text-center text-sm text-faint">
               No shortcuts available here.
             </p>
           ) : (
             <div className="flex flex-col gap-4">
               {groups.map((group) => (
                 <section key={group.id}>
-                  <h3 className="mb-1.5 text-caption font-semibold uppercase tracking-wide text-faint">
+                  <h3 className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-faint">
                     {group.title}
                   </h3>
                   <ul className="flex flex-col">
@@ -310,7 +308,7 @@ function ShortcutsHelpOverlay({
                         className="flex items-center justify-between gap-4 py-1"
                       >
                         <span
-                          className={`text-caption ${shortcut.enabled === false ? "text-faint" : "text-fg"}`}
+                          className={`text-sm ${shortcut.enabled === false ? "text-faint" : "text-fg"}`}
                         >
                           {shortcut.label}
                         </span>
@@ -318,7 +316,7 @@ function ShortcutsHelpOverlay({
                           {displayCombo(shortcut).map((combo, i) => (
                             <kbd
                               key={i}
-                              className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-caption text-muted-foreground shadow-sm"
+                              className="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-sm text-muted-foreground shadow-sm"
                             >
                               {combo}
                             </kbd>
@@ -332,7 +330,7 @@ function ShortcutsHelpOverlay({
             </div>
           )}
         </div>
-        <div className="border-t border-line px-4 py-2 text-center text-caption text-faint">
+        <div className="border-t border-line px-4 py-2 text-center text-sm text-faint">
           Press{" "}
           <kbd className="rounded border border-line bg-surface px-1 font-mono">
             ?

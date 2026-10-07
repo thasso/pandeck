@@ -51,7 +51,7 @@ export const LIVE_PULSE = "motion-safe:animate-pulse";
 type SpinnerSize = "xs" | "sm" | "md" | "lg";
 
 /**
- * Pixel sizes for the spinner tokens: `xs` fits inside `text-micro` chrome (a
+ * Pixel sizes for the spinner tokens: `xs` fits inside `text-xs` chrome (a
  * card's state badge), `sm` sits inline in a caption row, `md` matches a
  * control's icon, `lg` is the whole-pane one.
  */
@@ -147,7 +147,7 @@ export function PaneLoading({
     <div
       role="status"
       className={cx(
-        "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-caption text-faint",
+        "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-faint",
         className,
       )}
     >
@@ -227,9 +227,9 @@ export function RefreshIndicator({
 type EmptyBoxVariant = "box" | "inline" | "item";
 
 const EMPTY_BOX_CLASS: Record<EmptyBoxVariant, string> = {
-  box: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-6 text-center text-caption text-faint`,
-  inline: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-2 text-caption text-faint`,
-  item: `flex min-w-[9.5rem] shrink-0 snap-start flex-col rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-caption text-faint`,
+  box: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-6 text-center text-sm text-faint`,
+  inline: `rounded-xl border ${DASHED_EDGE} border-line px-3 py-2 text-sm text-faint`,
+  item: `flex min-w-[9.5rem] shrink-0 snap-start flex-col rounded-xl border ${DASHED_EDGE} border-line px-3 py-2.5 text-sm text-faint`,
 };
 
 /** The message wrapper, where the variant needs one of its own. */
@@ -289,7 +289,7 @@ export function ErrorNote({
     <div
       role="alert"
       className={cx(
-        "flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2 text-caption text-danger",
+        "flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2 text-sm text-danger",
         className,
       )}
     >

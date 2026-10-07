@@ -194,7 +194,7 @@ export function DockAction({
         {/* A count is news; a zero is not. An action whose badge is 0 wears
             whatever it would wear without one. */}
         {badge ? (
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
+          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
             {badge}
           </span>
         ) : marked ? (
@@ -273,7 +273,7 @@ export function DockComposerFace({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className={`flex h-8 min-w-0 flex-1 items-center rounded-2xl px-2 text-left text-body transition-colors disabled:cursor-default ${
+      className={`flex h-8 min-w-0 flex-1 items-center rounded-2xl px-2 text-left text-sm transition-colors disabled:cursor-default ${
         text.placeholder ? "text-faint" : "text-fg"
       }`}
     >

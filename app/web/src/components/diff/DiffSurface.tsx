@@ -370,6 +370,6 @@ function DiffSurfaceContent({
     );
   }
   return (
-    <div className="p-4 text-body text-muted-foreground">Nothing to diff.</div>
+    <div className="p-4 text-sm text-muted-foreground">Nothing to diff.</div>
   );
 }

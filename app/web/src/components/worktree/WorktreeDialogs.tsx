@@ -52,7 +52,7 @@ export function CreateWorktreeDialog({
         title={`New worktree in ${projectName}`}
         onClose={onClose}
       />
-      <p className="text-caption text-faint">
+      <p className="text-sm text-faint">
         The name becomes the branch and the folder suffix. A naming agent
         proposes one; edit freely.
       </p>
@@ -70,7 +70,7 @@ export function CreateWorktreeDialog({
           placeholder={
             proposal === null ? "Proposing a name…" : "worktree-name"
           }
-          className="w-full flex-1 rounded-lg border border-line bg-surface px-3 py-2 font-mono text-body text-fg outline-none focus:border-primary"
+          className="w-full flex-1 rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-fg outline-none focus:border-primary"
         />
         {/* Deliberately NOT a busy control, unlike `DialogAction` below: the
             spinner reports the naming AGENT's outstanding proposal, and this
@@ -136,7 +136,7 @@ export function CommitWorktreeDialog({
   return (
     <Overlay onClose={busy ? () => undefined : onClose}>
       <DialogHeader title="Commit changes" onClose={onClose} />
-      <p className="text-caption text-faint">
+      <p className="text-sm text-faint">
         Commits{" "}
         {fileCount > 0
           ? `all ${fileCount} changed file${fileCount === 1 ? "" : "s"}`
@@ -157,7 +157,7 @@ export function CommitWorktreeDialog({
             onCommit(message.trim());
         }}
         placeholder="Commit message"
-        className="mt-3 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
+        className="mt-3 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -197,18 +197,18 @@ export function AutoCommitResultDialog({
       />
       {result.commitMessage ? (
         <div className="mt-2 rounded-lg border border-line bg-surface px-3 py-2">
-          <p className="mb-1 text-micro font-semibold uppercase tracking-wide text-faint">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-faint">
             Generated message
           </p>
-          <pre className="whitespace-pre-wrap font-sans text-caption text-fg">
+          <pre className="whitespace-pre-wrap font-sans text-sm text-fg">
             {result.commitMessage}
           </pre>
         </div>
       ) : null}
       {result.blockers.length ? (
         <div className="mt-3">
-          <p className="text-caption font-semibold text-danger">Blockers</p>
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">
+          <p className="text-sm font-semibold text-danger">Blockers</p>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
             {result.blockers.map((blocker, index) => (
               <li key={`${blocker.kind}:${index}`}>
                 {blocker.file ? `${blocker.file}: ` : ""}
@@ -220,8 +220,8 @@ export function AutoCommitResultDialog({
       ) : null}
       {result.warnings.length ? (
         <div className="mt-3">
-          <p className="text-caption font-semibold text-amber-400">Warnings</p>
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">
+          <p className="text-sm font-semibold text-amber-400">Warnings</p>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
             {result.warnings.map((warning, index) => (
               <li key={index}>{warning}</li>
             ))}
@@ -302,7 +302,7 @@ export function CreatePullRequestDialog({
   return (
     <Overlay onClose={busy ? () => undefined : onClose}>
       <DialogHeader title="Create pull request" onClose={onClose} />
-      <p className="text-caption text-faint">
+      <p className="text-sm text-faint">
         <span className="font-mono">{worktree.branch}</span> →{" "}
         <span className="font-mono">{worktree.baseBranch}</span>. Push your
         commits first — the PR is created from the remote branch.
@@ -312,14 +312,14 @@ export function CreatePullRequestDialog({
         value={title}
         onChange={(event) => setTitle(event.target.value)}
         placeholder="Title"
-        className="mt-3 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
+        className="mt-3 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
       />
       <textarea
         rows={4}
         value={body}
         onChange={(event) => setBody(event.target.value)}
         placeholder="Description (optional)"
-        className="mt-2 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
+        className="mt-2 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none focus:border-primary"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -402,7 +402,7 @@ export function MergePullRequestDialog({
         title={`Merge pull request #${prNumber}`}
         onClose={onClose}
       />
-      <p className="text-caption text-faint">
+      <p className="text-sm text-faint">
         <span className="font-mono">{worktree.branch}</span> →{" "}
         <span className="font-mono">{worktree.baseBranch}</span>.{" "}
         {deleteBranch
@@ -412,7 +412,7 @@ export function MergePullRequestDialog({
       </p>
       <div className="mt-3 flex flex-col gap-1">
         {offered.length === 0 ? (
-          <p className="text-caption text-faint">
+          <p className="text-sm text-faint">
             {supportedMethods
               ? "This repository allows no merge method for pull requests."
               : "The merge methods this repository allows could not be read; nothing can be chosen."}
@@ -421,7 +421,7 @@ export function MergePullRequestDialog({
         {offered.map((id) => (
           <label
             key={id}
-            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
+            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
           >
             <input
               type="radio"
@@ -433,7 +433,7 @@ export function MergePullRequestDialog({
           </label>
         ))}
       </div>
-      <label className="mt-2 flex cursor-pointer items-center gap-2 text-caption text-fg">
+      <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-fg">
         <input
           type="checkbox"
           checked={deleteBranch}
@@ -441,7 +441,7 @@ export function MergePullRequestDialog({
           onChange={(event) => setDeleteBranch(event.target.checked)}
         />
         Delete the remote branch{" "}
-        <span className="font-mono text-caption">{worktree.branch}</span>
+        <span className="font-mono text-sm">{worktree.branch}</span>
       </label>
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -534,7 +534,7 @@ export function MergeWorktreeDialog({
           {warnings.map((warning) => (
             <p
               key={warning}
-              className="mb-1.5 flex items-start gap-1.5 text-caption text-amber-500"
+              className="mb-1.5 flex items-start gap-1.5 text-sm text-amber-500"
             >
               <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {warning}
             </p>
@@ -547,7 +547,7 @@ export function MergeWorktreeDialog({
               (id) => (
                 <label
                   key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${strategy === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-sm ${strategy === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
                 >
                   <input
                     type="radio"
@@ -575,20 +575,17 @@ export function MergeWorktreeDialog({
         <div className="mt-1">
           {/* The merge runs on the server and survives this dialog, so the
               progress line is a status region, not a busy control. */}
-          <p
-            role="status"
-            className="flex items-center gap-2 text-caption text-fg"
-          >
+          <p role="status" className="flex items-center gap-2 text-sm text-fg">
             {busy ? <Spinner size="sm" className="text-primary" /> : null}
             {PHASE_LABELS[phase]}
           </p>
           {merge?.message ? (
-            <p className="mt-1 text-caption text-muted-foreground">
+            <p className="mt-1 text-sm text-muted-foreground">
               {merge.message}
             </p>
           ) : null}
           {merge?.conflictPaths?.length ? (
-            <ul className="mt-2 max-h-24 overflow-y-auto rounded-lg border border-line p-2 font-mono text-caption text-muted-foreground">
+            <ul className="mt-2 max-h-24 overflow-y-auto rounded-lg border border-line p-2 font-mono text-sm text-muted-foreground">
               {merge.conflictPaths.map((path) => (
                 <li key={path}>{path}</li>
               ))}
@@ -599,7 +596,7 @@ export function MergeWorktreeDialog({
             <button
               type="button"
               onClick={() => onOpenSession(merge.agentSessionId!)}
-              className="mt-2 text-caption text-primary hover:underline"
+              className="mt-2 text-sm text-primary hover:underline"
             >
               Open the merge agent's session →
             </button>
@@ -742,7 +739,7 @@ export function RemoveWorktreeDialog({
         ) : (
           <>
             Removes the folder{" "}
-            <span className="font-mono text-caption">{worktree.path}</span>. The
+            <span className="font-mono text-sm">{worktree.path}</span>. The
             sessions still working here are settled out of the inbox with it;
             one that is running, or waiting on an answer or approval, refuses
             the removal instead.
@@ -750,14 +747,14 @@ export function RemoveWorktreeDialog({
         )
       }
     >
-      <label className="mt-2 flex cursor-pointer items-center gap-2 text-caption text-fg">
+      <label className="mt-2 flex cursor-pointer items-center gap-2 text-sm text-fg">
         <input
           type="checkbox"
           checked={deleteBranch}
           onChange={(event) => setDeleteBranch(event.target.checked)}
         />
         Also delete the branch{" "}
-        <span className="font-mono text-caption">{worktree.branch}</span>
+        <span className="font-mono text-sm">{worktree.branch}</span>
       </label>
       {needsForce ? (
         <div className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5">
@@ -765,7 +762,7 @@ export function RemoveWorktreeDialog({
               stated: a dirty tree used to speak for an unverifiable branch too,
               and the consent then bought more than the sentence admitted. */}
           {losesWork ? (
-            <p className="flex items-start gap-1.5 text-caption text-red-400">
+            <p className="flex items-start gap-1.5 text-sm text-red-400">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               {retire ? (
                 <>
@@ -786,7 +783,7 @@ export function RemoveWorktreeDialog({
             </p>
           ) : null}
           {unverifiable ? (
-            <p className="mt-1.5 flex items-start gap-1.5 text-caption text-red-400">
+            <p className="mt-1.5 flex items-start gap-1.5 text-sm text-red-400">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
               {retire ? (
                 // The server's own words: this consent answers the refusal that
@@ -810,7 +807,7 @@ export function RemoveWorktreeDialog({
               )}
             </p>
           ) : null}
-          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-caption text-fg">
+          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-sm text-fg">
             <input
               type="checkbox"
               checked={confirmForce}
