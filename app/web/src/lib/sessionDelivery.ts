@@ -52,7 +52,7 @@ export type SessionDeliveryState =
   | "closed";
 
 /** Semantic tone; the renderer maps it to the theme's tokens. */
-export type SessionDeliveryTone =
+type SessionDeliveryTone =
   "accent" | "warning" | "danger" | "success" | "muted";
 
 /** Everything a row renders about the session's pull request. */

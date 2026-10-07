@@ -19,7 +19,20 @@ import {
   useRoutePrimaryAction,
   useRouteSecondaryActionHost,
 } from "./RoutePrimaryAction.tsx";
-import { EmptyBox, Skeleton, Spinner } from "../common/load.tsx";
+import { EmptyBox, Skeleton } from "../common/load.tsx";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
 
 /**
  * Chrome the HOST surface supplies instead of the inspector. The mobile object
@@ -268,7 +281,6 @@ export function InspectorSection({
   }, [storageKey, defaultOpen]);
 
   const toggleOpen = () => {
-    if (!collapsible) return;
     setStoredOpen((current) => {
       const next = !current;
       if (storageKey) {
@@ -283,50 +295,41 @@ export function InspectorSection({
   };
 
   return (
-    <section className="border-t border-border pt-3 first:border-t-0 first:pt-0">
-      <div className="mb-2 flex w-full items-center gap-2 py-0.5 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        <button
-          type="button"
-          onClick={toggleOpen}
-          disabled={!collapsible}
-          aria-expanded={collapsible ? open : undefined}
-          // `grow`, not `flex-1`: with a zero basis this button's width was only
-          // its share of free space, so it collapsed as the summary grew — and
-          // once it hit zero the row had no give left at all (shrinkage is
-          // weighted by base size, so a zero-basis item takes none of it, and
-          // the summary was `shrink-0`), so a long summary pushed the row past
-          // the panel. From a content basis both give way, so a long summary no
-          // longer pushes the row. Growth is unchanged: this is still the only
-          // growing item.
-          className="flex min-w-0 grow items-center gap-2 rounded-lg text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-default disabled:hover:text-muted-foreground"
-        >
+    <Collapsible
+      open={open}
+      onOpenChange={toggleOpen}
+      disabled={!collapsible}
+      render={<section />}
+      className="border-t border-border pt-3 first:border-t-0 first:pt-0"
+    >
+      <div className="mb-2 flex w-full items-center gap-2">
+        {/* `grow`, not `flex-1`: from a zero basis the trigger's width was only
+            its share of free space, so a long summary squeezed it to nothing
+            and then pushed the row past the panel. From a content basis both
+            give way, and the trigger is still the only growing item. */}
+        <CollapsibleTrigger className="flex min-h-7 min-w-0 grow items-center gap-2 rounded-md text-left text-sm font-medium outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 disabled:no-underline [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
           <ChevronRight
-            size={13}
-            className={`shrink-0 transition-transform ${open ? "rotate-90" : ""} ${collapsible ? "" : "text-muted-foreground opacity-35"}`}
+            className={`transition-transform ${open ? "rotate-90" : ""}`}
           />
-          {icon ? (
-            <span className="flex shrink-0 items-center text-muted-foreground">
-              {icon}
-            </span>
-          ) : null}
+          {icon}
           <span className="min-w-0 flex-1 truncate">{title}</span>
-        </button>
+        </CollapsibleTrigger>
         {summary ? (
           // Shrinkable, and the FIRST to give way: the summary only echoes what
           // the open section shows, so a narrow row should eat it before it eats
           // the section's name.
-          <span className="min-w-0 shrink-[3] truncate normal-case tracking-normal text-muted-foreground">
+          <span className="min-w-0 shrink-[3] truncate text-sm text-muted-foreground">
             {summary}
           </span>
         ) : null}
         {actions ? (
-          <span className="flex shrink-0 items-center gap-1 normal-case tracking-normal">
-            {actions}
-          </span>
+          <span className="flex shrink-0 items-center gap-1">{actions}</span>
         ) : null}
       </div>
-      {open ? <div className={contentClassName}>{children}</div> : null}
-    </section>
+      <CollapsibleContent className={contentClassName}>
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -356,13 +359,14 @@ function RelationRows({
         <RelationRow key={item.key} item={item} />
       ))}
       {hidden > 0 ? (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setShowAll(true)}
-          className="w-full rounded-md px-2 py-1 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="justify-start"
         >
           Show {hidden} more
-        </button>
+        </Button>
       ) : null}
     </div>
   );
@@ -381,8 +385,9 @@ function RelationRow({
   const { onAct } = useContext(InspectorChromeContext);
   return (
     <div>
-      <button
-        type="button"
+      <Item
+        size="xs"
+        render={<button type="button" />}
         onClick={() => {
           // Opening a related object moves the main pane, which on a phone is
           // behind this sheet.
@@ -390,43 +395,36 @@ function RelationRow({
           onAct?.();
         }}
         title={title}
-        className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex-nowrap text-left hover:bg-muted"
       >
-        <span
-          aria-hidden="true"
-          className="w-3 shrink-0 text-center text-sm text-muted-foreground"
-        >
-          {depth > 0 ? "↳" : ""}
-        </span>
-        {item.icon && (
-          <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-            {item.icon}
+        {depth > 0 ? (
+          <span aria-hidden="true" className="text-sm text-muted-foreground">
+            ↳
           </span>
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm text-foreground">
-            {item.title}
-          </span>
-          {(item.subtitle || item.counters) && (
-            <span className="block truncate text-sm text-muted-foreground">
+        ) : null}
+        {item.icon ? <ItemMedia variant="icon">{item.icon}</ItemMedia> : null}
+        <ItemContent className="min-w-0">
+          <ItemTitle className="w-full">
+            <span className="truncate">{item.title}</span>
+          </ItemTitle>
+          {item.subtitle || item.counters ? (
+            <ItemDescription className="truncate">
               {item.subtitle}
-              {item.counters && (
-                <span
-                  className={item.subtitle ? "ml-1 font-mono" : "font-mono"}
-                >
-                  {item.subtitle ? "· " : ""}
-                  <span className="text-emerald-400">
+              {item.counters ? (
+                <span className="font-mono">
+                  {item.subtitle ? " · " : ""}
+                  <span className="text-success">
                     +{item.counters.additions}
                   </span>{" "}
-                  <span className="text-red-400">
+                  <span className="text-destructive">
                     −{item.counters.deletions}
                   </span>
                 </span>
-              )}
-            </span>
-          )}
-        </span>
-      </button>
+              ) : null}
+            </ItemDescription>
+          ) : null}
+        </ItemContent>
+      </Item>
       {item.children?.length ? (
         <div className="ml-4 border-l border-border pl-1">
           {item.children.map((child) => (
@@ -542,11 +540,11 @@ export function Inspector({
       >
         <div className="flex flex-col gap-0.5">
           {inspectorActions.map((action) => (
-            <button
+            <Button
               key={action.key}
-              type="button"
-              disabled={action.busy || action.disabled}
-              aria-busy={action.busy || undefined}
+              variant="ghost"
+              busy={action.busy === true}
+              disabled={action.disabled}
               title={action.disabledReason}
               data-comment-actuation={action.commentActuation || undefined}
               onPointerDown={
@@ -562,24 +560,18 @@ export function Inspector({
                 // of the way — unless the action opted out.
                 if (!action.keepOpen) onAct?.();
               }}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+              className="w-full justify-start"
             >
-              {action.busy ? (
-                <span className="flex size-5 shrink-0 items-center justify-center">
-                  <Spinner size="xs" />
-                </span>
-              ) : action.icon ? (
-                <span className="flex size-5 shrink-0 items-center justify-center">
-                  {action.icon}
-                </span>
-              ) : null}
-              <span className="min-w-0 flex-1 truncate">{action.label}</span>
+              {action.busy ? null : action.icon}
+              <span className="min-w-0 flex-1 truncate text-left">
+                {action.label}
+              </span>
               {action.hint ? (
-                <span className="shrink-0 font-normal text-muted-foreground">
+                <span className="font-normal text-muted-foreground">
                   {action.hint}
                 </span>
               ) : null}
-            </button>
+            </Button>
           ))}
         </div>
       </InspectorSection>

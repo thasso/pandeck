@@ -30,6 +30,39 @@ import { showToast } from "../lib/toast.ts";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import { ImageLightbox } from "./common/ImageLightbox.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemHeader,
+  ItemTitle,
+} from "@/components/ui/item";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   dataOf,
@@ -190,7 +223,7 @@ function PeerPromptBubble({
       <a
         href={sessionPath(peerSessionId)}
         aria-busy={busy || undefined}
-        className={`block min-w-0 max-w-[85%] rounded-xl px-2 py-1 transition-colors ${
+        className={`block min-w-0 max-w-5/6 rounded-xl px-2 py-1 transition-colors ${
           sent
             ? "bg-accent hover:bg-primary/15"
             : "border border-border bg-card/60 hover:bg-background"
@@ -309,13 +342,14 @@ export function PeerPromptsSection({
         ))}
         {projection.truncated ? (
           onExpand ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onExpand()}
-              className="w-full rounded-lg border border-border px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+              className="w-full"
             >
               Load more history
-            </button>
+            </Button>
           ) : (
             <p className="text-xs text-muted-foreground">
               Older peer prompts are not shown.
@@ -335,22 +369,22 @@ function PostReloadContinuationCard({
   onCancel?: (() => void) | undefined;
 }) {
   return (
-    <section className="rounded-xl border border-primary/30 bg-accent p-3 text-sm text-primary">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="font-semibold">Post-reload continuation queued</h3>
-          <p className="mt-1 line-clamp-3 text-sm">{continuation.message}</p>
-        </div>
-        <button
-          type="button"
+    <Alert role="status">
+      <AlertTitle>Post-reload continuation queued</AlertTitle>
+      <AlertDescription className="line-clamp-3">
+        {continuation.message}
+      </AlertDescription>
+      <AlertAction>
+        <Button
+          variant="outline"
+          size="sm"
           onClick={onCancel}
           disabled={!onCancel}
-          className="rounded-md border border-primary/30 px-2 py-1 text-sm transition-colors hover:bg-primary/10 disabled:opacity-50"
         >
           Cancel
-        </button>
-      </div>
-    </section>
+        </Button>
+      </AlertAction>
+    </Alert>
   );
 }
 
@@ -441,7 +475,7 @@ export function ActiveSkillsSection({
         <RefreshIndicator label="Refreshing skills" />
       ) : null}
       {skills.length > 0 ? (
-        <ul className="space-y-1" aria-label="Session skills">
+        <ItemGroup className="gap-1" aria-label="Session skills">
           {skills.map((name) => {
             const load = loads.get(name);
             const state = load
@@ -453,31 +487,29 @@ export function ActiveSkillsSection({
               ? `${load.count > 1 ? `×${load.count} · ` : ""}${SKILL_LOAD_VIA[load.last.via]} ${new Date(load.last.at).toLocaleTimeString()}`
               : undefined;
             return (
-              <li
+              <Item
                 key={name}
+                variant="outline"
+                size="xs"
+                render={<li />}
                 aria-label={`${name}: ${state}`}
-                className="flex items-center gap-2 rounded-xl border border-border bg-background px-2.5 py-1.5"
+                className="flex-nowrap"
               >
-                <span
+                <ItemContent className="min-w-0">
+                  <ItemTitle className="w-full">
+                    <span className="truncate">{name}</span>
+                  </ItemTitle>
+                </ItemContent>
+                <Badge
+                  variant={SKILL_STATE_BADGE[state]}
                   title={SKILL_STATE_TITLE[state]}
-                  className={`size-2 shrink-0 rounded-full ${
-                    load
-                      ? "bg-emerald-500"
-                      : mounted.has(name)
-                        ? "border border-emerald-500"
-                        : "bg-input"
-                  }`}
-                />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                  {name}
-                </span>
-                <span className="shrink-0 text-xs text-muted-foreground">
+                >
                   {detail ?? state}
-                </span>
-              </li>
+                </Badge>
+              </Item>
             );
           })}
-        </ul>
+        </ItemGroup>
       ) : !libraryPending && !libraryError ? (
         <p className="text-sm text-muted-foreground">
           No library skills were available when this session started.
@@ -491,6 +523,12 @@ const SKILL_STATE_TITLE = {
   Loaded: "Body loaded into the model context",
   Available: "Mounted: only the name and description are in context",
   "Not mounted": "Not mounted for this session",
+} as const;
+
+const SKILL_STATE_BADGE = {
+  Loaded: "success",
+  Available: "outline",
+  "Not mounted": "secondary",
 } as const;
 
 const SKILL_LOAD_VIA: Record<SessionSkillInvocation["via"], string> = {
@@ -510,7 +548,6 @@ function ToolsSection({
   sessionId: string;
   exposure: SessionToolExposure;
 }) {
-  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const groups = useMemo(() => {
     const byId = new Map<
       string,
@@ -553,23 +590,21 @@ function ToolsSection({
       icon={<Wrench size={13} />}
       summary={`${exposure.counts.loaded}/${exposure.counts.total} in context · ${exposure.counts.loadedButUnused} unused`}
     >
-      <div className="space-y-1">
+      <Accordion>
         {groups.map((group) => {
-          const expanded = expandedGroupId === group.id;
           const loaded = group.tools.filter((tool) => tool.loaded).length;
           const usable = group.tools.filter((tool) => tool.usable).length;
           return (
-            <div
-              key={group.id}
-              className="rounded-xl border border-border bg-background"
-            >
-              <button
-                type="button"
-                onClick={() => setExpandedGroupId(expanded ? null : group.id)}
-                aria-expanded={expanded}
-                className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-              >
-                <div
+            <AccordionItem key={group.id} value={group.id}>
+              <AccordionTrigger className="items-center gap-2">
+                <Badge
+                  variant={
+                    loaded > 0
+                      ? "success"
+                      : usable > 0
+                        ? "outline"
+                        : "destructive"
+                  }
                   title={
                     loaded > 0
                       ? "Loaded into the model context"
@@ -577,39 +612,29 @@ function ToolsSection({
                         ? "Available (loads on demand)"
                         : "Unavailable"
                   }
-                  className={`size-2 shrink-0 rounded-full ${loaded > 0 ? "bg-emerald-500" : usable > 0 ? "bg-input" : "bg-destructive/40"}`}
-                />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                  {group.label}
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                  className="tabular-nums"
+                >
                   {loaded}/{group.tools.length}
-                </span>
-              </button>
-              {expanded && (
-                <div className="flex flex-wrap gap-1 border-t border-border px-2.5 py-2">
-                  {group.tools.map((tool) => (
-                    <span
-                      key={tool.name}
-                      title={`${tool.loaded ? "Loaded" : tool.usable ? "Loads on demand" : "Unavailable"} · ${tool.used ? "called" : "not called"} · ${tool.definitionChars.toLocaleString()} definition chars${tool.tokens ? ` · ~${tool.tokens} tokens` : ""}`}
-                      className={`rounded-md border px-1.5 py-0.5 font-mono text-xs ${
-                        tool.loaded
-                          ? "border-emerald-500/40 bg-emerald-500/10 text-foreground"
-                          : tool.usable
-                            ? "border-border text-muted-foreground"
-                            : "border-border text-muted-foreground line-through"
-                      }`}
-                    >
-                      {tool.name}
-                      {tool.loaded && !tool.used ? " · unused" : ""}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+                </Badge>
+                <span className="min-w-0 flex-1 truncate">{group.label}</span>
+              </AccordionTrigger>
+              <AccordionContent className="flex flex-wrap gap-1">
+                {group.tools.map((tool) => (
+                  <Badge
+                    key={tool.name}
+                    variant={tool.loaded ? "success" : "outline"}
+                    title={`${tool.loaded ? "Loaded" : tool.usable ? "Loads on demand" : "Unavailable"} · ${tool.used ? "called" : "not called"} · ${tool.definitionChars.toLocaleString()} definition chars${tool.tokens ? ` · ~${tool.tokens} tokens` : ""}`}
+                    className={`font-mono ${tool.loaded || tool.usable ? "" : "line-through"}`}
+                  >
+                    {tool.name}
+                    {tool.loaded && !tool.used ? " · unused" : ""}
+                  </Badge>
+                ))}
+              </AccordionContent>
+            </AccordionItem>
           );
         })}
-      </div>
+      </Accordion>
       {exposure.counts.loadedButUnused > 0 && (
         <p className="mt-2 px-0.5 text-xs text-muted-foreground">
           {exposure.counts.loadedButUnused} loaded but unused ·{" "}
@@ -670,13 +695,13 @@ function ApprovalGrantsSection({
               {relativeTime(grant.grantedAt)}
             </span>
             {onRevoke && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => onRevoke(sessionId, grant.key)}
-                className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
               >
                 Revoke
-              </button>
+              </Button>
             )}
           </li>
         ))}
@@ -703,26 +728,38 @@ function BrowserRuntimesSection({
       summary={runtime.status}
       defaultOpen={runtime.status === "error"}
     >
-      <div className="rounded-xl border border-border bg-background p-2.5">
-        <div className="flex items-center gap-2">
-          <div
-            className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-primary" : runtime.status === "error" ? "bg-destructive" : "bg-input"}`}
-          />
-          <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+      <Item variant="outline" size="xs">
+        <ItemContent className="min-w-0">
+          <ItemTitle>
             Playwright MCP
-          </p>
-          <span
-            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-border text-muted-foreground"}`}
+            <Badge
+              variant={
+                runtime.status === "running"
+                  ? "success"
+                  : runtime.status === "error"
+                    ? "destructive"
+                    : "secondary"
+              }
+            >
+              {runtime.status}
+            </Badge>
+          </ItemTitle>
+          {runtime.error ? (
+            <ItemDescription className="text-destructive">
+              {runtime.error}
+            </ItemDescription>
+          ) : null}
+        </ItemContent>
+        <ItemActions>
+          <Badge
+            variant={
+              runtime.agentStatus === "running" ? "secondary" : "outline"
+            }
           >
             agent {runtime.agentStatus}
-          </span>
-        </div>
-        {runtime.error && (
-          <p className="mt-1.5 line-clamp-2 text-sm text-destructive">
-            {runtime.error}
-          </p>
-        )}
-      </div>
+          </Badge>
+        </ItemActions>
+      </Item>
     </InspectorSection>
   );
 }
@@ -782,35 +819,35 @@ function ArtifactsSection({
           const url = artifactHttpUrl(artifact.url);
           const active = artifact.id === selected?.id;
           return (
-            <button
+            <Item
               key={artifact.id}
-              type="button"
+              variant={active ? "muted" : "outline"}
+              size="xs"
+              render={<button type="button" />}
+              aria-pressed={active}
               onClick={() => setSelectedId(artifact.id)}
-              className={`overflow-hidden rounded-xl border bg-background text-left transition-colors ${active ? "border-primary/50 ring-1 ring-primary/30" : "border-border hover:border-input"}`}
+              className="flex-col items-stretch text-left"
             >
-              {artifact.mimeType.startsWith("image/") ? (
-                <img
-                  src={url}
-                  alt={artifact.label}
-                  className="h-24 w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-24 items-center justify-center bg-card text-muted-foreground">
-                  <ImageIcon size={22} />
-                </div>
-              )}
-              <div className="p-2">
-                <p
-                  className="truncate text-sm font-medium text-foreground"
-                  title={artifact.label}
-                >
-                  {artifact.label}
-                </p>
-                <p className="truncate text-xs text-muted-foreground">
+              <ItemHeader className="h-24 justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+                {artifact.mimeType.startsWith("image/") ? (
+                  <img
+                    src={url}
+                    alt={artifact.label}
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <ImageIcon />
+                )}
+              </ItemHeader>
+              <ItemContent className="min-w-0">
+                <ItemTitle className="w-full" title={artifact.label}>
+                  <span className="truncate">{artifact.label}</span>
+                </ItemTitle>
+                <ItemDescription className="truncate">
                   {artifact.name}
-                </p>
-              </div>
-            </button>
+                </ItemDescription>
+              </ItemContent>
+            </Item>
           );
         })}
       </div>
@@ -847,67 +884,54 @@ function ArtifactPreview({
   const error = errorOf(state);
 
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-border bg-background">
-      <div className="flex items-start justify-between gap-2 border-b border-border p-2.5">
-        <div className="min-w-0">
-          <p
-            className="truncate text-sm font-medium text-foreground"
-            title={artifact.label}
-          >
-            {artifact.label}
-          </p>
-          <p
-            className="truncate text-xs text-muted-foreground"
-            title={artifact.name}
-          >
-            {artifact.name}
-          </p>
-        </div>
-        <div className="flex shrink-0 gap-1">
-          <button
-            type="button"
+    <Card size="sm" className="mt-3">
+      <CardHeader className="border-b">
+        <CardTitle className="truncate" title={artifact.label}>
+          {artifact.label}
+        </CardTitle>
+        <CardDescription className="truncate" title={artifact.name}>
+          {artifact.name}
+        </CardDescription>
+        <CardAction className="flex gap-1">
+          <IconButton
+            label="Copy artifact URL"
+            size="icon-xs"
             onClick={onCopyUrl}
-            title="Copy artifact URL"
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <Clipboard size={12} />
-          </button>
+            <Clipboard />
+          </IconButton>
           {artifact.mimeType.startsWith("image/") && (
-            <button
-              type="button"
-              onClick={onCopyImage}
-              title="Copy image"
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <ImageIcon size={12} />
-            </button>
+            <IconButton label="Copy image" size="icon-xs" onClick={onCopyImage}>
+              <ImageIcon />
+            </IconButton>
           )}
-          <a
+          <LinkButton
             href={url}
             target="_blank"
             rel="noreferrer"
-            title="Open artifact"
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            label="Open artifact"
+            variant="ghost"
+            size="icon-xs"
           >
-            <ExternalLink size={12} />
-          </a>
-        </div>
-      </div>
+            <ExternalLink />
+          </LinkButton>
+        </CardAction>
+      </CardHeader>
       {artifact.mimeType.startsWith("image/") ? (
         <>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
             onClick={() => setEnlarged(true)}
             title="Click to enlarge"
             aria-label={`Enlarge ${artifact.label}`}
-            className="block w-full cursor-zoom-in"
+            className="h-auto w-full cursor-zoom-in"
           >
             <img
               src={url}
               alt={artifact.label}
-              className="max-h-72 w-full bg-card object-contain"
+              className="max-h-72 w-full object-contain"
             />
-          </button>
+          </Button>
           {enlarged ? (
             <ImageLightbox
               src={url}
@@ -923,24 +947,26 @@ function ArtifactPreview({
         // artifact rather than as a fetch.
         error !== undefined ? (
           <ErrorNote
-            className="m-2.5"
+            className="mx-3"
             message={`Could not load this artifact: ${error}`}
             onRetry={reload}
           />
         ) : text === undefined ? (
           <PaneLoading className="py-8" label="Loading preview…" />
         ) : (
-          <pre className="max-h-72 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs text-muted-foreground">
-            {text}
-          </pre>
+          <CardContent>
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">
+              {text}
+            </pre>
+          </CardContent>
         )
       ) : (
-        <div className="p-3 text-sm text-muted-foreground">
+        <CardContent className="text-muted-foreground">
           No inline preview for this artifact type. Open it in a new tab to
           inspect it.
-        </div>
+        </CardContent>
       )}
-    </div>
+    </Card>
   );
 }
 

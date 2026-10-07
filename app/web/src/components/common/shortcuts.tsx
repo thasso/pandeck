@@ -9,6 +9,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 
 /**
  * @module common/shortcuts
@@ -250,96 +258,68 @@ export function ShortcutsProvider({ children }: { children: ReactNode }) {
   return (
     <ShortcutsContext.Provider value={value}>
       {children}
-      {helpOpen ? (
-        <ShortcutsHelpOverlay
-          groups={helpGroups}
-          onClose={() => setHelpOpen(false)}
-        />
-      ) : null}
+      <ShortcutsHelpDialog
+        open={helpOpen}
+        groups={helpGroups}
+        onOpenChange={setHelpOpen}
+      />
     </ShortcutsContext.Provider>
   );
 }
 
-function ShortcutsHelpOverlay({
+/**
+ * The `?` help: every shortcut the mounted surfaces registered, newest
+ * surface first, in a `Dialog`.
+ */
+function ShortcutsHelpDialog({
+  open,
   groups,
-  onClose,
+  onOpenChange,
 }: {
+  open: boolean;
   groups: RegisteredGroup[];
-  onClose: () => void;
+  onOpenChange: (open: boolean) => void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-[10vh] backdrop-blur-sm"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Keyboard shortcuts"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold text-foreground">
-            Keyboard shortcuts
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            Esc
-          </button>
-        </div>
-        <div className="max-h-[70vh] overflow-y-auto px-4 py-3">
-          {groups.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              No shortcuts available here.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-4">
-              {groups.map((group) => (
-                <section key={group.id}>
-                  <h3 className="mb-1.5 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                    {group.title}
-                  </h3>
-                  <ul className="flex flex-col">
-                    {group.shortcuts.map((shortcut) => (
-                      <li
-                        key={shortcut.label}
-                        className="flex items-center justify-between gap-4 py-1"
-                      >
-                        <span
-                          className={`text-sm ${shortcut.enabled === false ? "text-muted-foreground" : "text-foreground"}`}
-                        >
-                          {shortcut.label}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-1">
-                          {displayCombo(shortcut).map((combo, i) => (
-                            <kbd
-                              key={i}
-                              className="rounded-md border border-border bg-background px-1.5 py-0.5 font-mono text-sm text-muted-foreground shadow-sm"
-                            >
-                              {combo}
-                            </kbd>
-                          ))}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="border-t border-border px-4 py-2 text-center text-sm text-muted-foreground">
-          Press{" "}
-          <kbd className="rounded border border-border bg-background px-1 font-mono">
-            ?
-          </kbd>{" "}
-          anytime to toggle this list
-        </div>
-      </div>
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-4/5 overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogDescription>
+            Press <Kbd>?</Kbd> anytime to toggle this list.
+          </DialogDescription>
+        </DialogHeader>
+        {groups.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            No shortcuts available here.
+          </p>
+        ) : (
+          groups.map((group) => (
+            <section key={group.id}>
+              <h3 className="mb-1.5 text-sm font-medium text-muted-foreground">
+                {group.title}
+              </h3>
+              <ul className="flex flex-col">
+                {group.shortcuts.map((shortcut) => (
+                  <li
+                    key={shortcut.label}
+                    className={`flex items-center justify-between gap-4 py-1 text-sm ${
+                      shortcut.enabled === false ? "text-muted-foreground" : ""
+                    }`}
+                  >
+                    {shortcut.label}
+                    <KbdGroup>
+                      {displayCombo(shortcut).map((combo, i) => (
+                        <Kbd key={i}>{combo}</Kbd>
+                      ))}
+                    </KbdGroup>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -18,6 +18,9 @@ import { CSS } from "@dnd-kit/utilities";
 import { BookOpen, Bot, GitBranch, Plus, ScanSearch, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
+import { IconButton } from "../common/IconButton.tsx";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
 
 /**
@@ -96,27 +99,24 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
   {
     id: "inspector",
     label: "Inspector",
-    icon: <ScanSearch size={16} />,
+    icon: <ScanSearch />,
     mountsWhenHidden: true,
   },
   {
     id: "personal-assistant",
     label: "Personal Assistant",
-    icon: <Bot size={16} />,
+    icon: <Bot />,
   },
-  { id: "knowledge", label: "Knowledge", icon: <BookOpen size={16} /> },
-  { id: "worktree", label: "Worktree", icon: <GitBranch size={16} /> },
+  { id: "knowledge", label: "Knowledge", icon: <BookOpen /> },
+  { id: "worktree", label: "Worktree", icon: <GitBranch /> },
 ];
 
+/** One open panel's tab: drag it to reorder, or close it from its own X. */
 function SortablePanelTab({
   id,
-  active,
-  onSelect,
   onClose,
 }: {
   id: PanelId;
-  active: boolean;
-  onSelect: () => void;
   onClose: () => void;
 }) {
   const panel = panelDefinition(id);
@@ -135,28 +135,27 @@ function SortablePanelTab({
         transform: CSS.Transform.toString(transform),
         transition,
       }}
-      className={`group flex shrink-0 items-center rounded-lg border-r border-border/70 pr-1 last:border-r-0 ${active ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"} ${isDragging ? "z-10 opacity-50" : ""}`}
+      className={`flex shrink-0 items-center ${isDragging ? "z-10 opacity-50" : ""}`}
     >
-      <button
-        type="button"
-        onClick={onSelect}
-        className={`flex min-w-0 items-center gap-1.5 py-1.5 pl-2 pr-1 text-sm font-medium ${isDragging ? "cursor-grabbing" : ""}`}
-        aria-current={active || undefined}
-        {...attributes}
+      {/* The drag handle's description, but not its `role="button"`: this is
+          a tab of the strip, and arrow keys move between tabs. */}
+      <TabsTrigger
+        value={id}
+        aria-roledescription={attributes["aria-roledescription"]}
+        aria-describedby={attributes["aria-describedby"]}
+        className={isDragging ? "cursor-grabbing" : undefined}
         {...listeners}
       >
-        <span className="shrink-0">{panel.icon}</span>
+        {panel.icon}
         <span className="max-w-28 truncate">{panel.label}</span>
-      </button>
-      <button
-        type="button"
+      </TabsTrigger>
+      <IconButton
+        label={`Close ${panel.label}`}
+        size="icon-xs"
         onClick={onClose}
-        title={`Close ${panel.label}`}
-        aria-label={`Close ${panel.label}`}
-        className="mr-1 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
-        <X size={13} />
-      </button>
+        <X />
+      </IconButton>
     </div>
   );
 }
@@ -298,37 +297,42 @@ export function RightPanelTabs({
     <div className="flex h-full min-h-0 flex-col border-l border-border bg-card">
       {showTabs ? (
         <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border px-2">
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={reorderTabs}
+          <Tabs
+            value={activeTab}
+            onValueChange={(value: PanelId) => selectTab(value)}
+            className="min-w-0 flex-1"
           >
-            <SortableContext
-              items={openTabs}
-              strategy={horizontalListSortingStrategy}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={reorderTabs}
             >
-              <div className="right-panel-tab-list flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
-                {openTabs.map((id) => (
-                  <SortablePanelTab
-                    key={id}
-                    id={id}
-                    active={activeTab === id}
-                    onSelect={() => selectTab(id)}
-                    onClose={() => closePanel(id)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-          <button
-            type="button"
+              <SortableContext
+                items={openTabs}
+                strategy={horizontalListSortingStrategy}
+              >
+                <TabsList
+                  variant="line"
+                  className="right-panel-tab-list w-full justify-start overflow-x-auto"
+                >
+                  {openTabs.map((id) => (
+                    <SortablePanelTab
+                      key={id}
+                      id={id}
+                      onClose={() => closePanel(id)}
+                    />
+                  ))}
+                </TabsList>
+              </SortableContext>
+            </DndContext>
+          </Tabs>
+          <IconButton
+            label="Open a right panel"
+            size="icon"
             onClick={() => selectTab(null)}
-            title="Open a right panel"
-            aria-label="Open a right panel"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
-            <Plus size={16} />
-          </button>
+            <Plus />
+          </IconButton>
         </div>
       ) : null}
 
@@ -354,22 +358,21 @@ export function RightPanelTabs({
         {activeTab === null ? (
           <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 px-5">
             <p className="text-sm text-muted-foreground">Open a panel</p>
-            <div className="w-full max-w-56 space-y-1">
+            <div className="flex w-full max-w-56 flex-col gap-1">
               {PANEL_DEFINITIONS.filter((panel) => offered(panel.id)).map(
                 (panel) => (
-                  <button
+                  <Item
                     key={panel.id}
-                    type="button"
+                    size="sm"
+                    render={<button type="button" />}
                     onClick={() => openPanel(panel.id)}
-                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="text-left hover:bg-muted"
                   >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
-                      {panel.icon}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                      {panel.label}
-                    </span>
-                  </button>
+                    <ItemMedia variant="icon">{panel.icon}</ItemMedia>
+                    <ItemContent>
+                      <ItemTitle>{panel.label}</ItemTitle>
+                    </ItemContent>
+                  </Item>
                 ),
               )}
             </div>
