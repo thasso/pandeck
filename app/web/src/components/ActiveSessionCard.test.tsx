@@ -256,7 +256,7 @@ describe("ActiveSessionCard clusters", () => {
       counts: { total: 1, working: 0, waiting: 0, failed: 0 },
     });
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted-foreground hover:text-fg");
+    expect(idle).toContain("text-muted-foreground hover:text-foreground");
   });
 
   it("states running turns and background jobs on the line, not only in the tooltip", () => {

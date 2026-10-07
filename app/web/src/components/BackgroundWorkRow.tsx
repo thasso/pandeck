@@ -22,9 +22,9 @@ import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 const TONE_CLASS: Record<BackgroundWorkTone, string> = {
   accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
+  danger: "bg-destructive/10 text-destructive",
   success: "bg-success-soft text-success",
-  muted: "bg-panel text-muted-foreground",
+  muted: "bg-card text-muted-foreground",
 };
 
 export interface BackgroundWorkRowProps {
@@ -108,14 +108,14 @@ function BackgroundWorkRowImpl({
       data-list-row-id={item.id}
       data-background-item={item.id}
       data-background-anchored={anchored ? "true" : undefined}
-      className={`rounded-xl border bg-panel p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        anchored ? "border-primary/50 ring-1 ring-primary/30" : "border-line"
+      className={`rounded-xl border bg-card p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        anchored ? "border-primary/50 ring-1 ring-primary/30" : "border-border"
       }`}
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <p
-            className="truncate text-sm font-medium text-fg"
+            className="truncate text-sm font-medium text-foreground"
             title={item.label}
           >
             {item.label}
@@ -141,7 +141,9 @@ function BackgroundWorkRowImpl({
               className="mt-1.5"
             />
           ) : null}
-          {host ? <p className="mt-1 text-sm text-faint">{host}</p> : null}
+          {host ? (
+            <p className="mt-1 text-sm text-muted-foreground">{host}</p>
+          ) : null}
           {onOpenOwner ? (
             <button
               type="button"
@@ -172,7 +174,7 @@ function BackgroundWorkRowImpl({
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
               {facts.map((fact) => (
                 <div key={fact.label} className="contents">
-                  <dt className="text-faint">{fact.label}</dt>
+                  <dt className="text-muted-foreground">{fact.label}</dt>
                   <dd className="min-w-0 break-words text-muted-foreground">
                     {fact.value}
                   </dd>

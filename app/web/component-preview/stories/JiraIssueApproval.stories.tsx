@@ -201,7 +201,11 @@ export function JiraIssueApprovalStory({
     button?.click();
   }, [openPreview, scenario]);
   return (
-    <div ref={hostRef} className="bg-surface p-4" style={{ width: frameWidth }}>
+    <div
+      ref={hostRef}
+      className="bg-background p-4"
+      style={{ width: frameWidth }}
+    >
       <ApprovalCard approval={card} onResolve={() => {}} />
     </div>
   );

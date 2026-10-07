@@ -9,9 +9,9 @@ interface DisclosureProps {
 }
 
 const toneRing: Record<NonNullable<DisclosureProps["tone"]>, string> = {
-  neutral: "border-line",
-  accent: "border-line",
-  danger: "border-danger/40",
+  neutral: "border-border",
+  accent: "border-border",
+  danger: "border-destructive/40",
 };
 
 export function Disclosure({
@@ -23,12 +23,12 @@ export function Disclosure({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div
-      className={`my-1.5 overflow-hidden rounded-lg border bg-panel/60 ${toneRing[tone]}`}
+      className={`my-1.5 overflow-hidden rounded-lg border bg-card/60 ${toneRing[tone]}`}
     >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-raised/60"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted/60"
       >
         <ChevronRight
           size={13}
@@ -37,7 +37,7 @@ export function Disclosure({
         <span className="min-w-0 flex-1">{header}</span>
       </button>
       {open && (
-        <div className="border-t border-line px-2.5 py-2">{children}</div>
+        <div className="border-t border-border px-2.5 py-2">{children}</div>
       )}
     </div>
   );

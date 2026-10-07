@@ -645,10 +645,10 @@ function BacklogRowContent({
             aria-hidden
           />
         ) : (
-          <FolderKanban size={13} className="shrink-0 text-faint" />
+          <FolderKanban size={13} className="shrink-0 text-muted-foreground" />
         )}
         <span
-          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted-foreground"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-foreground" : "text-muted-foreground"}`}
         >
           {data.label}
         </span>
@@ -682,7 +682,7 @@ function BacklogRowContent({
         e.stopPropagation();
         onQuickArchive([task.id]);
       }}
-      className={`flex shrink-0 items-center justify-center rounded text-faint opacity-0 hover:bg-raised hover:text-fg focus-visible:opacity-100 group-hover/row:opacity-100 ${tight ? "size-5" : "size-6"}`}
+      className={`flex shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 ${tight ? "size-5" : "size-6"}`}
       title="Archive task"
       aria-label={`Archive “${task.title}”`}
     >
@@ -802,7 +802,7 @@ function SessionGutterAction({
         if (session) onOpenSession(session.id);
         else onStartSession(task);
       }}
-      className="flex w-9 shrink-0 items-center justify-center self-stretch rounded text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
+      className="flex w-9 shrink-0 items-center justify-center self-stretch rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
       title={label}
       aria-label={label}
     >
@@ -820,13 +820,13 @@ function FilteredEmptyState({
 }) {
   return (
     <EmptyBox
-      className="bg-panel"
+      className="bg-card"
       action={
         filtered ? (
           <button
             type="button"
             onClick={onClear}
-            className="rounded-lg border border-line px-2.5 py-1 text-sm font-medium text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-lg border border-border px-2.5 py-1 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             Clear filters
           </button>

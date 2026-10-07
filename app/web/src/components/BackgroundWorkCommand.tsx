@@ -47,19 +47,19 @@ export function BackgroundWorkCommand({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         title={open ? "Collapse the command" : "Show the whole command"}
-        className={`block w-full min-w-0 rounded-md bg-raised/60 px-2 py-1 text-left font-mono text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        className={`block w-full min-w-0 rounded-md bg-muted/60 px-2 py-1 text-left font-mono text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           open ? "whitespace-pre-wrap break-words" : "truncate"
         }`}
       >
         {open ? command : firstLine}
         {!open && expandable ? (
-          <span className="ml-1 text-faint" aria-hidden="true">
+          <span className="ml-1 text-muted-foreground" aria-hidden="true">
             …
           </span>
         ) : null}
       </button>
       {open && truncated ? (
-        <p className="mt-0.5 text-xs text-faint">
+        <p className="mt-0.5 text-xs text-muted-foreground">
           Cut at {Math.round(BACKGROUND_WORK_COMMAND_MAX_CHARS / 1024)} KB; the
           transcript&rsquo;s tool call holds the rest.
         </p>

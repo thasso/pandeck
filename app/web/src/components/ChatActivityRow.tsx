@@ -41,7 +41,7 @@ export function ChatActivityRow({
   const statusTone = status?.tone ?? (status?.attention ? "danger" : "muted");
   const statusClass =
     statusTone === "danger"
-      ? "text-danger"
+      ? "text-destructive"
       : statusTone === "warning"
         ? "text-warning"
         : "text-muted-foreground";
@@ -52,7 +52,11 @@ export function ChatActivityRow({
   return (
     <div className="min-w-0 w-full text-sm text-muted-foreground">
       <div className="flex min-w-0 items-center gap-1.5">
-        <Icon size={13} aria-hidden="true" className="shrink-0 text-faint" />
+        <Icon
+          size={13}
+          aria-hidden="true"
+          className="shrink-0 text-muted-foreground"
+        />
         {prefix ? <span className="shrink-0">{prefix}</span> : null}
         <div className="min-w-0 max-w-[32%] shrink-0 truncate">
           {href ? (
@@ -96,9 +100,9 @@ export function ChatActivityRow({
             }
             setExpanded((value) => !value);
           }}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2.5 text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 sm:py-2"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2.5 text-left hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 sm:py-2"
         >
-          <span aria-hidden="true" className="shrink-0 text-faint">
+          <span aria-hidden="true" className="shrink-0 text-muted-foreground">
             ·
           </span>
           <span ref={previewRef} className="min-w-0 flex-1 truncate">
@@ -122,14 +126,14 @@ export function ChatActivityRow({
           <ChevronRight
             size={13}
             aria-hidden="true"
-            className={`shrink-0 text-faint ${expanded ? "rotate-90" : ""}`}
+            className={`shrink-0 text-muted-foreground ${expanded ? "rotate-90" : ""}`}
           />
         </button>
       </div>
       {expanded ? (
         <div
           id={bodyId}
-          className="mb-2 ml-1.5 min-w-0 border-l border-line pl-5 pt-1 pb-2 text-sm text-fg [overflow-wrap:anywhere]"
+          className="mb-2 ml-1.5 min-w-0 border-l border-border pl-5 pt-1 pb-2 text-sm text-foreground [overflow-wrap:anywhere]"
         >
           {children}
         </div>

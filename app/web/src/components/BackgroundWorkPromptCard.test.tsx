@@ -83,9 +83,9 @@ describe("BackgroundWorkPromptCard", () => {
       if (status !== "completed")
         expect(container.querySelector(".lucide-circle-check")).toBeNull();
       if (status === "failed" || status === "lost")
-        expect(container.querySelector(".text-danger")?.textContent).toContain(
-          label,
-        );
+        expect(
+          container.querySelector(".text-destructive")?.textContent,
+        ).toContain(label);
       expect(body(toggle!)).toBeNull();
     },
   );

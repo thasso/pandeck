@@ -186,7 +186,7 @@ export function BackgroundWorkPromptCard({
       {/* Dropped updates stay visible while collapsed: a signal the reader has
           to open the card to discover is one this card swallowed. */}
       {presentation.omittedCount ? (
-        <p className="pl-5 text-xs text-faint">
+        <p className="pl-5 text-xs text-muted-foreground">
           {presentation.omittedCount} more update
           {presentation.omittedCount === 1 ? "" : "s"} omitted
         </p>

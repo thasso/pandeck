@@ -542,7 +542,7 @@ function DocumentCommentLayerBody({
       {count > 0 && !composer.open ? (
         <div
           data-comment-bar
-          className="shrink-0 border-t border-line bg-surface px-3 pt-2"
+          className="shrink-0 border-t border-border bg-background px-3 pt-2"
         >
           <div className="mx-auto w-full max-w-3xl">
             {trayError ? (

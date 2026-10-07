@@ -130,7 +130,7 @@ export function BackgroundWorkSection({
           one a refused delete answers with are the same one — said here where
           there is room to say what to do about it. */}
       {blocked ? (
-        <p className="mb-2 text-sm text-faint">
+        <p className="mb-2 text-sm text-muted-foreground">
           Settling and deleting this session are blocked while {blocked} Stop it
           first, here or in the registry.
         </p>
@@ -162,14 +162,16 @@ export function BackgroundWorkSection({
         <button
           type="button"
           onClick={() => onStopAll(sessionId)}
-          className="mt-2 h-9 w-full rounded-lg border border-line text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="mt-2 h-9 w-full rounded-lg border border-border text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           Stop all background work in this session
         </button>
       ) : null}
       {recent && recent.total > 0 ? (
         <>
-          <p className="mt-3 text-sm font-medium text-faint">Recent</p>
+          <p className="mt-3 text-sm font-medium text-muted-foreground">
+            Recent
+          </p>
           <ul className="mt-1 flex flex-col gap-2">
             {recent.rows.map((item) => (
               <BackgroundWorkRow

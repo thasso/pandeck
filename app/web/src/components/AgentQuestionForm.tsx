@@ -118,16 +118,16 @@ export function AgentQuestionForm({
 
   return (
     <div className="space-y-3 text-sm">
-      <div className="flex items-center gap-2 text-fg">
+      <div className="flex items-center gap-2 text-foreground">
         <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
         <span className="min-w-0 truncate font-medium">{request.title}</span>
       </div>
       {request.intro ? (
-        <p className="rounded-xl border border-line bg-raised/40 px-3 py-2 text-muted-foreground">
+        <p className="rounded-xl border border-border bg-muted/40 px-3 py-2 text-muted-foreground">
           {request.intro}
         </p>
       ) : null}
-      <div className="flex items-center justify-between gap-3 text-sm text-faint">
+      <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
         <span>
           {summary ? "Review" : `Question ${index + 1} of ${questions.length}`}
         </span>
@@ -153,12 +153,12 @@ export function AgentQuestionForm({
       ) : null}
 
       {notice ? (
-        <div className="rounded-lg border border-line bg-raised/40 px-3 py-2 text-faint">
+        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-muted-foreground">
           {notice}
         </div>
       ) : null}
       {error ? (
-        <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-destructive">
           {error}
         </div>
       ) : null}
@@ -167,7 +167,7 @@ export function AgentQuestionForm({
         <button
           type="button"
           onClick={cancel}
-          className="rounded-lg px-2 py-1 text-sm text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           Cancel
         </button>
@@ -176,7 +176,7 @@ export function AgentQuestionForm({
             type="button"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             disabled={index === 0}
-            className="rounded-lg border border-line px-2 py-1 text-sm text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-border px-2 py-1 text-sm text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
             Back
           </button>
@@ -344,12 +344,14 @@ function QuestionStep({
     question.typedAnswerLabel ??
     (isChoiceStyle(question) ? "Typed answer or extra context" : "Answer");
   return (
-    <section className="space-y-3 rounded-2xl border border-line bg-panel/60 p-3">
+    <section className="space-y-3 rounded-2xl border border-border bg-card/60 p-3">
       <div>
         <div className="flex items-start justify-between gap-3">
-          <h3 className="text-sm font-semibold text-fg">{question.title}</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            {question.title}
+          </h3>
           {!question.required && (
-            <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-xs text-faint">
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
               Optional
             </span>
           )}
@@ -360,7 +362,9 @@ function QuestionStep({
           </p>
         ) : null}
         {question.helpText ? (
-          <p className="mt-1 text-sm text-faint">{question.helpText}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {question.helpText}
+          </p>
         ) : null}
       </div>
 
@@ -372,7 +376,9 @@ function QuestionStep({
       question.style === "textarea" ||
       question.allowTypedAnswer ? (
         <label className="block space-y-1.5">
-          <span className="text-sm font-medium text-faint">{typedLabel}</span>
+          <span className="text-sm font-medium text-muted-foreground">
+            {typedLabel}
+          </span>
           {question.style === "text" ? (
             <input
               value={draft.text}
@@ -380,7 +386,7 @@ function QuestionStep({
                 onDraft(question.id, { text: event.target.value })
               }
               placeholder={question.placeholder ?? "Type your answer…"}
-              className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-input"
             />
           ) : (
             <textarea
@@ -390,7 +396,7 @@ function QuestionStep({
               }
               rows={3}
               placeholder={question.placeholder ?? "Type your answer…"}
-              className="max-h-36 min-h-20 w-full resize-y rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
+              className="max-h-36 min-h-20 w-full resize-y rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-input"
             />
           )}
         </label>
@@ -425,15 +431,15 @@ function DiscussAnswerOption({
       }
       className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
         active
-          ? "border-primary/40 bg-accent text-fg"
-          : "border-line bg-surface text-muted-foreground hover:border-line-strong hover:bg-raised hover:text-fg"
+          ? "border-primary/40 bg-accent text-foreground"
+          : "border-border bg-background text-muted-foreground hover:border-input hover:bg-muted hover:text-foreground"
       }`}
     >
       <span
         className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border ${
           active
             ? "border-primary bg-primary text-primary-foreground"
-            : "border-line-strong"
+            : "border-input"
         }`}
         aria-hidden="true"
       >
@@ -444,7 +450,7 @@ function DiscussAnswerOption({
           <CircleHelp size={12} className="text-primary" /> Discuss in chat
           instead
         </span>
-        <span className="mt-0.5 block text-sm text-faint">
+        <span className="mt-0.5 block text-sm text-muted-foreground">
           Return this item as a follow-up topic rather than an assumed answer.
         </span>
       </span>
@@ -494,14 +500,14 @@ function ChoiceList({
             onClick={() => toggle(choice.id)}
             className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
               active
-                ? "border-primary/40 bg-accent text-fg"
-                : "border-line bg-surface text-muted-foreground hover:border-line-strong hover:bg-raised hover:text-fg"
+                ? "border-primary/40 bg-accent text-foreground"
+                : "border-border bg-background text-muted-foreground hover:border-input hover:bg-muted hover:text-foreground"
             }`}
           >
             <span
               className={`mt-0.5 flex size-4 shrink-0 items-center justify-center border ${
                 multiple ? "rounded" : "rounded-full"
-              } ${active ? "border-primary bg-primary text-primary-foreground" : "border-line-strong"}`}
+              } ${active ? "border-primary bg-primary text-primary-foreground" : "border-input"}`}
               aria-hidden="true"
             >
               {active ? <Check size={11} /> : null}
@@ -509,7 +515,7 @@ function ChoiceList({
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium">{choice.label}</span>
               {choice.description ? (
-                <span className="mt-0.5 block text-sm text-faint">
+                <span className="mt-0.5 block text-sm text-muted-foreground">
                   {choice.description}
                 </span>
               ) : null}
@@ -531,9 +537,9 @@ function QuestionSummary({
   onEdit: (index: number) => void;
 }) {
   return (
-    <section className="space-y-2 rounded-2xl border border-line bg-panel/60 p-3">
+    <section className="space-y-2 rounded-2xl border border-border bg-card/60 p-3">
       <div>
-        <h3 className="text-sm font-semibold text-fg">
+        <h3 className="text-sm font-semibold text-foreground">
           Review before submitting
         </h3>
         <p className="mt-0.5 text-sm text-muted-foreground">
@@ -549,11 +555,11 @@ function QuestionSummary({
           return (
             <div
               key={question.id}
-              className="rounded-xl border border-line bg-surface px-3 py-2"
+              className="rounded-xl border border-border bg-background px-3 py-2"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-fg">
+                  <div className="truncate text-sm font-medium text-foreground">
                     {question.title}
                   </div>
                   <AnswerPreview question={question} answer={answer} />
@@ -582,7 +588,7 @@ function AnswerPreview({
   answer: AgentQuestionAnswer | undefined;
 }) {
   if (!answer || answer.disposition === "skipped")
-    return <div className="mt-1 text-sm text-faint">Skipped</div>;
+    return <div className="mt-1 text-sm text-muted-foreground">Skipped</div>;
   if (answer.disposition === "discuss") {
     return (
       <div className="mt-1 whitespace-pre-wrap text-sm text-primary">
@@ -605,7 +611,7 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
   const percent = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
   return (
     <div
-      className="h-1.5 overflow-hidden rounded-full bg-raised"
+      className="h-1.5 overflow-hidden rounded-full bg-muted"
       aria-hidden="true"
     >
       <div

@@ -82,7 +82,7 @@ export function DictationTrace({
       <WaveformStrip
         peaks={dictation.peaks}
         active={dictation.phase === "recording"}
-        className={`h-5 min-w-0 flex-1 ${dictation.phase === "recording" ? "text-danger" : "text-faint"}`}
+        className={`h-5 min-w-0 flex-1 ${dictation.phase === "recording" ? "text-destructive" : "text-muted-foreground"}`}
       />
       <span className="shrink-0 tabular-nums text-sm text-muted-foreground">
         {dictation.uploading
@@ -114,7 +114,7 @@ export function DictationDiscardButton({
       onClick={onCancel}
       title="Discard recording"
       aria-label="Discard recording"
-      className={`flex shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger ${
+      className={`flex shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive ${
         dense ? "size-7" : "size-8"
       }`}
     >
@@ -194,7 +194,7 @@ export function DictationToggleButton({
       }
       className={`flex shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
         busy && !steady ? "size-10" : idleSize === "md" ? "size-9" : "size-8"
-      } ${phase === "recording" ? "bg-danger text-primary-foreground hover:bg-danger/90" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+      } ${phase === "recording" ? "bg-destructive text-primary-foreground hover:bg-destructive/90" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
     >
       {/* Arming is NOT a spinner: a spinner says "waiting for an answer", and
           there is no request here — the microphone and the socket are opening.

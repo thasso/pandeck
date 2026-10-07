@@ -168,7 +168,7 @@ export function FileViewerPage({
             {path}
           </span>
           {meta ? (
-            <span className="shrink-0 text-faint">
+            <span className="shrink-0 text-muted-foreground">
               {formatFileSize(meta.sizeBytes)} ·{" "}
               {new Date(meta.modifiedMs).toLocaleString()}
             </span>
@@ -287,7 +287,7 @@ function ViewerBody({
   }
   if (kind === "image") {
     return (
-      <div className="document-visual-content flex h-full items-center justify-center bg-panel p-4">
+      <div className="document-visual-content flex h-full items-center justify-center bg-card p-4">
         <img src={versionedUrl} alt={name} className="max-h-full max-w-full" />
       </div>
     );
@@ -348,7 +348,7 @@ function ViewerBody({
     );
   }
   const truncatedNote = body.truncated ? (
-    <p className="mb-3 rounded-lg border border-line bg-panel p-2 text-sm text-muted-foreground">
+    <p className="mb-3 rounded-lg border border-border bg-card p-2 text-sm text-muted-foreground">
       Showing the first part of this file only — download it to read the rest.
     </p>
   ) : null;

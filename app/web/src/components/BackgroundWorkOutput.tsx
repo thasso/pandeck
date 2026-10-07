@@ -98,7 +98,7 @@ export function BackgroundWorkOutput({
             disabled={load.state === "loading"}
             title="Reload the captured output"
             aria-label="Reload the captured output"
-            className="inline-flex items-center gap-1 text-muted-foreground hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
+            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
           >
             <RefreshCw size={12} aria-hidden="true" />
             Reload
@@ -111,22 +111,24 @@ export function BackgroundWorkOutput({
           target="_blank"
           rel="noreferrer"
           title="Open the captured output file"
-          className="inline-flex items-center gap-1 text-muted-foreground hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ExternalLink size={12} aria-hidden="true" />
           Open file
         </a>
       </div>
       {open ? (
-        <div className="mt-1 rounded-md border border-line bg-raised/60 px-2 py-1">
+        <div className="mt-1 rounded-md border border-border bg-muted/60 px-2 py-1">
           {load.state === "loading" || load.state === "idle" ? (
-            <p className="text-sm text-faint">Loading output…</p>
+            <p className="text-sm text-muted-foreground">Loading output…</p>
           ) : load.state === "error" ? (
-            <p className="text-sm text-danger">
+            <p className="text-sm text-destructive">
               Could not load the output ({load.message}).
             </p>
           ) : load.text.length === 0 ? (
-            <p className="text-sm text-faint">The process wrote nothing.</p>
+            <p className="text-sm text-muted-foreground">
+              The process wrote nothing.
+            </p>
           ) : (
             <CollapsibleOutput
               text={load.text}
@@ -139,7 +141,7 @@ export function BackgroundWorkOutput({
               )}
               footerActions={
                 load.cut ? (
-                  <span className="text-sm text-faint">
+                  <span className="text-sm text-muted-foreground">
                     First{" "}
                     {Math.round(BACKGROUND_OUTPUT_INLINE_MAX_BYTES / 1024)} KB
                     shown; open the file for the rest.

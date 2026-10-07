@@ -224,7 +224,7 @@ function BacklogListImpl({
     <div className="flex flex-col gap-2">
       {showAddTask ? (
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 rounded-xl border border-line bg-panel p-2">
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-card p-2">
             <Plus size={16} className="ml-1 shrink-0 text-muted-foreground" />
             <input
               value={newTitle}
@@ -233,7 +233,7 @@ function BacklogListImpl({
                 if (e.key === "Enter") addTask();
               }}
               placeholder="Add a task…"
-              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
             <button
               type="button"
@@ -279,7 +279,7 @@ function BacklogListImpl({
       {density === "comfortable" &&
       view === "backlog" &&
       c.viewMode === "project" ? (
-        <p className="px-1 text-sm text-faint">
+        <p className="px-1 text-sm text-muted-foreground">
           Drag a Task onto another Project to reassign it, or within a Project
           to reorder. Collapse a Project to fold it away.
         </p>

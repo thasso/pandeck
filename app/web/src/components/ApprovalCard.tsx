@@ -108,7 +108,7 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
     );
   if (status === "failed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
+      <span className="inline-flex items-center gap-1 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive">
         <XCircle size={9} />
         Failed
       </span>
@@ -116,14 +116,14 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
   if (status === "superseded")
     return (
       <span
-        className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground"
+        className="rounded-full bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground"
         title="A newer request from this session replaced it"
       >
         Superseded
       </span>
     );
   return (
-    <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground">
+    <span className="rounded-full bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground">
       Rejected
     </span>
   );
@@ -247,14 +247,15 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
       <>
         {body.title && (
           <div>
-            <span className="text-faint">Title:</span>{" "}
-            <span className="text-fg">{body.title}</span>
+            <span className="text-muted-foreground">Title:</span>{" "}
+            <span className="text-foreground">{body.title}</span>
           </div>
         )}
         <div>
-          <span className="text-faint">Merge:</span>{" "}
-          <span className="font-mono text-sm text-fg">{body.head}</span> →{" "}
-          <span className="font-mono text-sm text-fg">{body.base}</span>
+          <span className="text-muted-foreground">Merge:</span>{" "}
+          <span className="font-mono text-sm text-foreground">{body.head}</span>{" "}
+          →{" "}
+          <span className="font-mono text-sm text-foreground">{body.base}</span>
           {body.draft ? " · draft" : ""}
         </div>
         {body.prBody && (
@@ -267,7 +268,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
   }
   if (body.operation === "ready") {
     return (
-      <div className="text-fg">
+      <div className="text-foreground">
         Mark pull request #{body.pullNumber} ready for review. This does not
         merge it.
       </div>
@@ -276,7 +277,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
   if (body.operation === "edit") {
     return (
       <>
-        <div className="text-faint">
+        <div className="text-muted-foreground">
           Replace description on #{body.pullNumber} with:
         </div>
         <div className="line-clamp-6 whitespace-pre-wrap text-sm text-muted-foreground">
@@ -295,7 +296,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
         )}
         {body.inlineComments && body.inlineComments.length > 0 && (
           <div className="space-y-1">
-            <div className="text-sm text-faint">
+            <div className="text-sm text-muted-foreground">
               {body.inlineComments.length} inline comment
               {body.inlineComments.length === 1 ? "" : "s"}:
             </div>
@@ -303,14 +304,14 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
               {body.inlineComments.slice(0, 8).map((c, i) => (
                 <li
                   key={i}
-                  className="rounded-md border border-line bg-raised px-2 py-1"
+                  className="rounded-md border border-border bg-muted px-2 py-1"
                 >
-                  <span className="font-mono text-xs text-faint">
+                  <span className="font-mono text-xs text-muted-foreground">
                     {c.path}:{c.line}
                   </span>
-                  <div className="text-sm text-fg">{c.body}</div>
+                  <div className="text-sm text-foreground">{c.body}</div>
                   {c.suggestion && (
-                    <pre className="mt-1 overflow-x-auto rounded bg-surface px-1.5 py-1 text-xs text-fg">
+                    <pre className="mt-1 overflow-x-auto rounded bg-background px-1.5 py-1 text-xs text-foreground">
                       <code>{c.suggestion}</code>
                     </pre>
                   )}
@@ -343,8 +344,8 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
       <>
         {rows.map((row) => (
           <div key={row.label}>
-            <span className="text-faint">{row.label}:</span>{" "}
-            <span className="font-mono text-sm text-fg">
+            <span className="text-muted-foreground">{row.label}:</span>{" "}
+            <span className="font-mono text-sm text-foreground">
               {row.people.join(", ")}
             </span>
           </div>
@@ -388,14 +389,16 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
     <>
       {rows.map((row) => (
         <div key={row.label}>
-          <span className="text-faint">{row.label}:</span>{" "}
-          <span className="text-fg">{row.value}</span>
+          <span className="text-muted-foreground">{row.label}:</span>{" "}
+          <span className="text-foreground">{row.value}</span>
         </div>
       ))}
       {text !== undefined && (
         <>
           {body.operation === "edit" && (
-            <div className="text-faint">Replace description with:</div>
+            <div className="text-muted-foreground">
+              Replace description with:
+            </div>
           )}
           <div className="line-clamp-6 whitespace-pre-wrap text-sm text-muted-foreground">
             {text}
@@ -425,11 +428,11 @@ function GithubBranchDeleteBody({
       {body.items.map((item) => (
         <li key={item.branch} className="space-y-0.5">
           <div className="flex min-w-0 items-center gap-1.5">
-            <GitBranch size={12} className="shrink-0 text-faint" />
-            <span className="break-all font-mono text-sm text-fg">
+            <GitBranch size={12} className="shrink-0 text-muted-foreground" />
+            <span className="break-all font-mono text-sm text-foreground">
               {item.branch}
             </span>
-            <span className="font-mono text-xs text-faint">
+            <span className="font-mono text-xs text-muted-foreground">
               {item.headSha.slice(0, 7)}
             </span>
             {item.deleted ? (
@@ -439,7 +442,7 @@ function GithubBranchDeleteBody({
             ) : null}
           </div>
           {item.error ? (
-            <div className="break-words pl-4 text-sm text-danger">
+            <div className="break-words pl-4 text-sm text-destructive">
               {item.error}
             </div>
           ) : null}
@@ -453,11 +456,11 @@ function GithubBranchDeleteBody({
                 href={pull.url}
                 target="_blank"
                 rel="noreferrer"
-                className="min-w-0 break-words underline decoration-line underline-offset-2"
+                className="min-w-0 break-words underline decoration-border underline-offset-2"
               >
                 #{pull.number} {pull.title}
               </a>
-              <span className="shrink-0 text-faint">
+              <span className="shrink-0 text-muted-foreground">
                 ({pull.role === "head" ? "its head" : "its base"}; will close)
               </span>
             </div>
@@ -472,22 +475,26 @@ function GitTagBody({ body }: { body: GitTagApprovalBody }) {
   return (
     <div className="space-y-1 text-sm">
       <div>
-        Tag <span className="font-mono text-fg">{body.tag}</span> at{" "}
-        <span className="break-all font-mono text-fg">{body.targetSha}</span>
+        Tag <span className="font-mono text-foreground">{body.tag}</span> at{" "}
+        <span className="break-all font-mono text-foreground">
+          {body.targetSha}
+        </span>
       </div>
       <div>
         Checkout{" "}
-        <span className="break-all font-mono text-fg">{body.repoPath}</span>
+        <span className="break-all font-mono text-foreground">
+          {body.repoPath}
+        </span>
       </div>
       <div>
         Push to{" "}
-        <span className="font-mono text-fg">
+        <span className="font-mono text-foreground">
           {body.remote}/{body.branch}
         </span>
       </div>
       <div>
         Destination{" "}
-        <span className="break-all font-mono text-fg">
+        <span className="break-all font-mono text-foreground">
           {body.pushUrlDisplay}
         </span>
       </div>
@@ -499,14 +506,14 @@ function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
   return (
     <>
       <div>
-        <span className="text-faint">Tag:</span>{" "}
-        <span className="font-mono text-sm text-fg">{body.tag}</span>
+        <span className="text-muted-foreground">Tag:</span>{" "}
+        <span className="font-mono text-sm text-foreground">{body.tag}</span>
         {body.draft ? " · draft" : ""}
         {body.prerelease ? " · prerelease" : ""}
       </div>
       <div>
-        <span className="text-faint">At:</span>{" "}
-        <span className="font-mono text-sm text-fg">
+        <span className="text-muted-foreground">At:</span>{" "}
+        <span className="font-mono text-sm text-foreground">
           {body.targetSha.slice(0, 8)}
         </span>
         {body.targetRef ? (
@@ -542,10 +549,15 @@ function ManagedMergeBody({
   return (
     <>
       <div>
-        <span className="text-faint">Merge:</span>{" "}
-        <span className="font-mono text-sm text-fg">{body.headBranch}</span> →{" "}
-        <span className="font-mono text-sm text-fg">{body.baseBranch}</span>{" "}
-        <span className="text-faint">(default branch)</span>
+        <span className="text-muted-foreground">Merge:</span>{" "}
+        <span className="font-mono text-sm text-foreground">
+          {body.headBranch}
+        </span>{" "}
+        →{" "}
+        <span className="font-mono text-sm text-foreground">
+          {body.baseBranch}
+        </span>{" "}
+        <span className="text-muted-foreground">(default branch)</span>
       </div>
       <div className="text-sm text-muted-foreground">
         {body.repo}#{body.number} · {body.method} ·{" "}
@@ -553,7 +565,7 @@ function ManagedMergeBody({
           ? "delete the remote branch"
           : "keep the remote branch"}
       </div>
-      <div className="text-sm text-faint">
+      <div className="text-sm text-muted-foreground">
         Head <span className="font-mono">{body.headSha.slice(0, 8)}</span> ·
         checks {checks.state}
         {checks.total !== undefined ? ` (${checks.total})` : ""}
@@ -570,11 +582,11 @@ function ManagedMergeBody({
           : "unknown"}
         {body.draft ? " · draft" : ""}
       </div>
-      <div className="text-sm text-faint">
+      <div className="text-sm text-muted-foreground">
         Repository allows: {body.supportedMethods.join(", ") || "no method"}
       </div>
       {body.linkedTask ? (
-        <div className="text-sm text-faint">
+        <div className="text-sm text-muted-foreground">
           Task-{body.linkedTask.id}: {body.linkedTask.title}
         </div>
       ) : null}
@@ -674,14 +686,14 @@ function SpawnRow({
 
   return (
     <div
-      className={`rounded-lg border border-line bg-raised px-2.5 py-2 ${skipped ? "opacity-50" : ""}`}
+      className={`rounded-lg border border-border bg-muted px-2.5 py-2 ${skipped ? "opacity-50" : ""}`}
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-fg">
+          <div className="truncate text-sm font-semibold text-foreground">
             {item.title}
           </div>
-          <div className="truncate text-sm text-faint">
+          <div className="truncate text-sm text-muted-foreground">
             {spawnTargetLine(item)}
           </div>
         </div>
@@ -689,7 +701,7 @@ function SpawnRow({
           <button
             type="button"
             onClick={() => onEdit({ skip: !skipped })}
-            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-surface hover:text-fg"
+            className="shrink-0 rounded-md border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-background hover:text-foreground"
           >
             {skipped ? "Include" : "Skip"}
           </button>
@@ -753,7 +765,7 @@ function SpawnRow({
         {showPrompt ? "Hide opening message" : "more…"}
       </button>
       {showPrompt && (
-        <div className="mt-1 whitespace-pre-wrap rounded-md bg-surface px-2 py-1.5 text-sm text-fg">
+        <div className="mt-1 whitespace-pre-wrap rounded-md bg-background px-2 py-1.5 text-sm text-foreground">
           {item.prompt}
         </div>
       )}
@@ -822,25 +834,25 @@ function SessionSpawnBody({
 function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
   return (
     <div
-      className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border border-line"
+      className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border border-border"
       role="region"
       tabIndex={0}
       aria-label={`${body.items.length} emails to archive`}
     >
-      <ul className="divide-y divide-line">
+      <ul className="divide-y divide-border">
         {body.items.map((item) => (
           <li key={item.messageId} className="space-y-1 px-2.5 py-2">
             <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-sm">
-              <span className="text-faint">From</span>
-              <span className="break-words text-fg">{item.sender}</span>
+              <span className="text-muted-foreground">From</span>
+              <span className="break-words text-foreground">{item.sender}</span>
             </div>
             <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-sm">
-              <span className="text-faint">Subject</span>
+              <span className="text-muted-foreground">Subject</span>
               <a
                 href={item.gmailUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="break-words text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
+                className="break-words text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
               >
                 {item.subject}
               </a>
@@ -856,12 +868,12 @@ function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
 function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
   const { project, repository } = body;
   const row = "grid min-w-0 grid-cols-[5.5rem_minmax(0,1fr)] gap-2";
-  const mono = "break-all font-mono text-sm text-fg";
+  const mono = "break-all font-mono text-sm text-foreground";
   return (
     <div className="space-y-1 text-sm">
       <div className={row}>
-        <span className="text-faint">Project</span>
-        <span className="break-words text-fg">
+        <span className="text-muted-foreground">Project</span>
+        <span className="break-words text-foreground">
           {project.name}{" "}
           <span className="font-mono text-muted-foreground">
             {project.key} · {project.id}
@@ -870,20 +882,20 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
       </div>
       {project.parentId ? (
         <div className={row}>
-          <span className="text-faint">Parent</span>
-          <span className="font-mono text-fg">{project.parentId}</span>
+          <span className="text-muted-foreground">Parent</span>
+          <span className="font-mono text-foreground">{project.parentId}</span>
         </div>
       ) : null}
       {project.tags?.length ? (
         <div className={row}>
-          <span className="text-faint">Tags</span>
-          <span className="text-fg">{project.tags.join(", ")}</span>
+          <span className="text-muted-foreground">Tags</span>
+          <span className="text-foreground">{project.tags.join(", ")}</span>
         </div>
       ) : null}
       {project.jira?.length ? (
         <div className={row}>
-          <span className="text-faint">Jira</span>
-          <span className="font-mono text-fg">
+          <span className="text-muted-foreground">Jira</span>
+          <span className="font-mono text-foreground">
             {project.jira
               .map((link) => link.issueKey ?? link.projectKey)
               .filter(Boolean)
@@ -893,8 +905,8 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
       ) : null}
       {repository?.mode === "create" ? (
         <div className={row}>
-          <span className="text-faint">Repository</span>
-          <span className="text-fg">
+          <span className="text-muted-foreground">Repository</span>
+          <span className="text-foreground">
             New {repository.private ? "private" : "public"}{" "}
             {repository.provider === "github" ? "GitHub" : "Forgejo"} repository{" "}
             <span className="font-mono">
@@ -905,7 +917,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
         </div>
       ) : repository?.mode === "link" ? (
         <div className={row}>
-          <span className="text-faint">Repository</span>
+          <span className="text-muted-foreground">Repository</span>
           <span className="min-w-0">
             <span className={mono}>{repository.url}</span>
             {repository.seedReadme ? (
@@ -919,13 +931,13 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
       ) : null}
       {repository?.mode === "create" && body.resultRepoUrl ? (
         <div className={row}>
-          <span className="text-faint">Created</span>
+          <span className="text-muted-foreground">Created</span>
           {body.resultWebUrl ? (
             <a
               href={body.resultWebUrl}
               target="_blank"
               rel="noreferrer"
-              className={`${mono} underline decoration-line underline-offset-2 hover:decoration-fg`}
+              className={`${mono} underline decoration-border underline-offset-2 hover:decoration-foreground`}
             >
               {body.resultRepoUrl}
             </a>
@@ -936,7 +948,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
       ) : null}
       {body.cloneDir ? (
         <div className={row}>
-          <span className="text-faint">Clone into</span>
+          <span className="text-muted-foreground">Clone into</span>
           <span className={mono}>{body.cloneDir}</span>
         </div>
       ) : null}
@@ -1001,13 +1013,13 @@ function Body({
       <ul className="space-y-1">
         {b.items.map((item, i) => (
           <li key={i} className="text-sm">
-            <span className="font-mono text-fg">{item.issueKey}</span>
+            <span className="font-mono text-foreground">{item.issueKey}</span>
             <span className="text-muted-foreground">
               {" "}
               · {item.date} · {item.duration}
             </span>
             {item.error ? (
-              <span className="text-danger"> · {item.error}</span>
+              <span className="text-destructive"> · {item.error}</span>
             ) : item.resultWorklogId ? (
               <span className="text-green-600 dark:text-green-400">
                 {" "}
@@ -1028,8 +1040,10 @@ function Body({
   // commit
   return (
     <>
-      <div className="whitespace-pre-wrap text-sm text-fg">{b.message}</div>
-      <div className="text-sm text-faint">
+      <div className="whitespace-pre-wrap text-sm text-foreground">
+        {b.message}
+      </div>
+      <div className="text-sm text-muted-foreground">
         {b.files.length} file{b.files.length === 1 ? "" : "s"}
         {b.branch ? ` · ${b.branch}` : ""}
         {typeof b.insertions === "number" ? ` · +${b.insertions}` : ""}
@@ -1112,18 +1126,18 @@ export function ApprovalCard({
     : [];
   const awaitingUser = approval.status === "pending" && !approval.autoApproved;
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
-      <div className="flex items-center gap-3 border-b border-line px-3 py-2.5">
+    <div className="my-2 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex items-center gap-3 border-b border-border px-3 py-2.5">
         <HeaderIcon approval={approval} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold text-fg">
+            <span className="truncate text-sm font-semibold text-foreground">
               {approval.title}
             </span>
             <StatusBadge approval={approval} />
             {approval.autoApproved && approval.status !== "pending" && (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                className="inline-flex items-center gap-1 rounded-full bg-background px-2 py-0.5 text-xs font-medium text-muted-foreground"
                 title="Ran under an Approve-for-session grant"
               >
                 <CheckCheck size={9} />
@@ -1132,7 +1146,7 @@ export function ApprovalCard({
             )}
           </div>
           {approval.summary && (
-            <div className="truncate text-sm text-faint">
+            <div className="truncate text-sm text-muted-foreground">
               {approval.summary}
             </div>
           )}
@@ -1187,7 +1201,7 @@ export function ApprovalCard({
           <ErrorNote message={approval.error ?? "The action failed."} />
         )}
         {approval.status === "superseded" && (
-          <div className="text-sm text-faint">
+          <div className="text-sm text-muted-foreground">
             Replaced by a newer request for the same action; nothing ran.
           </div>
         )}
@@ -1198,7 +1212,7 @@ export function ApprovalCard({
       </div>
 
       {ownGrants.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 border-t border-border px-3 py-2 text-sm text-muted-foreground">
           <CheckCheck size={12} className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">
             Approved for this session:{" "}
@@ -1211,7 +1225,7 @@ export function ApprovalCard({
                 for (const grant of ownGrants)
                   onRevokeGrant(approval.sessionId, grant.key);
               }}
-              className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
+              className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
             >
               Revoke
             </button>
@@ -1220,13 +1234,13 @@ export function ApprovalCard({
       )}
 
       {awaitingUser && approval.body.kind !== "settingsInput" && (
-        <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2.5">
+        <div className="flex items-center justify-end gap-2 border-t border-border px-3 py-2.5">
           <button
             type="button"
             onClick={() => decide("rejected")}
             disabled={busy !== null}
             aria-busy={busy === "rejected" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-50"
           >
             {busy === "rejected" ? (
               <Spinner size="sm" />
@@ -1241,7 +1255,7 @@ export function ApprovalCard({
             disabled={busy !== null}
             aria-busy={busy === "approvedForSession" || undefined}
             title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-raised px-2.5 py-1 text-sm text-primary hover:bg-primary/10 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-muted px-2.5 py-1 text-sm text-primary hover:bg-primary/10 disabled:opacity-50"
           >
             {busy === "approvedForSession" ? (
               <Spinner size="sm" />

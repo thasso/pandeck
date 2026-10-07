@@ -166,7 +166,7 @@ function ClusterChildRowImpl({
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
       className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 ${
         density === "comfortable" ? "min-h-8" : "min-h-7"
-      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
     >
       <AgentIcon
         size={12}
@@ -201,14 +201,14 @@ function ClusterChildRowImpl({
         <span
           title={sessionClusterSummary(peers)}
           className={`flex shrink-0 items-center gap-0.5 text-xs tabular-nums ${
-            peers.working > 0 ? "text-primary" : "text-faint"
+            peers.working > 0 ? "text-primary" : "text-muted-foreground"
           }`}
         >
           <Users size={10} aria-hidden />
           {peers.total}
         </span>
       ) : null}
-      <span className="shrink-0 text-xs tabular-nums text-faint">
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
         {relativeAge(session.updatedAt, now)}
       </span>
     </div>

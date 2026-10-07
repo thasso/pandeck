@@ -34,10 +34,10 @@ export function ChatActivityStory({
   return (
     <main
       style={{ width: frameWidth, maxWidth: "100%" }}
-      className="min-h-screen bg-surface px-5 py-6 text-sm text-fg sm:px-8"
+      className="min-h-screen bg-background px-5 py-6 text-sm text-foreground sm:px-8"
     >
       <div className="mb-7 flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user px-3.5 py-2">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2">
           Make peer messages collapsible. Keep the focus on our conversation.
         </div>
       </div>
@@ -66,7 +66,7 @@ export function ChatActivityStory({
           status={{ label: "Passed", icon: CircleCheck }}
         >
           <p>All 12 component tests passed.</p>
-          <pre className="mt-2 overflow-x-auto rounded-md bg-panel p-3 text-sm">
+          <pre className="mt-2 overflow-x-auto rounded-md bg-card p-3 text-sm">
             pnpm --filter @assistant/web test
           </pre>
         </ChatActivityRow>
@@ -88,7 +88,7 @@ export function ChatActivityStory({
         leaving this chat, or open Sol’s session from the name.
       </p>
       <section
-        className="border-t border-line pt-5"
+        className="border-t border-border pt-5"
         aria-label="Additional activity states"
       >
         <h2 className="mb-3 text-sm font-medium text-muted-foreground">
@@ -104,7 +104,7 @@ export function ChatActivityStory({
           status={{ label: "Failed", icon: CircleX, attention: true }}
         >
           <Markdown text="Check the final desktop and mobile screenshots." />
-          <p className="mt-2 text-sm text-danger">
+          <p className="mt-2 text-sm text-destructive">
             Not delivered. The recipient session is no longer available.
           </p>
         </ChatActivityRow>
@@ -134,7 +134,7 @@ export function ChatActivityStory({
             of the conversation.
           </p>
         </ChatActivityRow>
-        <p className="mt-4 text-xs text-faint">
+        <p className="mt-4 text-xs text-muted-foreground">
           Preview only. Click a row’s preview or chevron to expand it.
         </p>
         {openedSource ? (

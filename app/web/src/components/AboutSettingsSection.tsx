@@ -34,7 +34,7 @@ interface Row {
 function BuildRow({ label, build, missing }: Row) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-sm text-fg">{label}</span>
+      <span className="text-sm text-foreground">{label}</span>
       {build ? (
         <span className="font-mono text-sm text-muted-foreground">
           {formatBuildInfo(build)}
@@ -101,16 +101,16 @@ export function AboutSettingsSection({
         is installed by hand — so these can legitimately differ.
       </p>
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 rounded-xl border border-border bg-card p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-fg">Versions</h3>
+          <h3 className="text-sm font-semibold text-foreground">Versions</h3>
           <CopyButton
             value={diagnostic}
             label="Copy version details"
             copiedLabel="Version details copied"
           />
         </div>
-        <div className="mt-2 divide-y divide-line">
+        <div className="mt-2 divide-y divide-border">
           {rows.map((row) => (
             <BuildRow key={row.label} {...row} />
           ))}

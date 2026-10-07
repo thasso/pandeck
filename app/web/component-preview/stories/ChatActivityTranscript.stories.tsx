@@ -257,9 +257,9 @@ export function ChatActivityTranscript({
         maxWidth: "100%",
         height: expanded ? 1150 : 930,
       }}
-      className="flex flex-col bg-surface text-fg"
+      className="flex flex-col bg-background text-foreground"
     >
-      <header className="shrink-0 border-b border-line px-4 py-3 text-sm font-medium">
+      <header className="shrink-0 border-b border-border px-4 py-3 text-sm font-medium">
         Collapsible chat activity
       </header>
       <MessageList

@@ -68,21 +68,23 @@ function Header({ item }: { item: Item }) {
           href={item.pageUrl}
           target="_blank"
           rel="noreferrer noopener"
-          className="min-w-0 break-words font-medium text-fg hover:underline"
+          className="min-w-0 break-words font-medium text-foreground hover:underline"
         >
           {title}
         </a>
       ) : (
-        <span className="min-w-0 break-words font-medium text-fg">{title}</span>
+        <span className="min-w-0 break-words font-medium text-foreground">
+          {title}
+        </span>
       )}
       {item.spaceKey ? (
-        <span className="text-faint">
+        <span className="text-muted-foreground">
           in {item.spaceName || item.spaceKey}
           {item.parentTitle ? ` · under ${item.parentTitle}` : ""}
         </span>
       ) : null}
       {item.newTitle && item.title && item.newTitle !== item.title ? (
-        <span className="text-faint">renamed from {item.title}</span>
+        <span className="text-muted-foreground">renamed from {item.title}</span>
       ) : null}
     </div>
   );
@@ -142,15 +144,17 @@ function Attachment({ item }: { item: Item }) {
     <div className="space-y-0.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <Paperclip size={12} className="shrink-0 text-muted-foreground" />
-        <span className="min-w-0 break-all font-mono text-fg">
+        <span className="min-w-0 break-all font-mono text-foreground">
           {attachment.fileName}
         </span>
         {facts.length ? (
-          <span className="text-faint">{facts.join(" · ")}</span>
+          <span className="text-muted-foreground">{facts.join(" · ")}</span>
         ) : null}
       </div>
       {attachment.source ? (
-        <div className="break-all text-faint">from {attachment.source}</div>
+        <div className="break-all text-muted-foreground">
+          from {attachment.source}
+        </div>
       ) : null}
       {item.versionMessage ? (
         <div className="text-muted-foreground">“{item.versionMessage}”</div>
@@ -187,7 +191,7 @@ function Outcome({ item }: { item: Item }) {
   return (
     <div className="space-y-0.5">
       {item.error ? (
-        <div className="text-sm text-danger">{item.error}</div>
+        <div className="text-sm text-destructive">{item.error}</div>
       ) : item.resultPageUrl ? (
         <a
           href={item.resultPageUrl}

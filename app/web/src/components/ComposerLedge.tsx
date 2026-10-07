@@ -33,7 +33,7 @@ export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
   return (
     <div
       data-composer-ledge
-      className={`composer-ledge relative z-[1] mx-[2.3rem] divide-y divide-line rounded-t-[1.25rem] border border-line bg-panel/85 backdrop-blur-xl ${
+      className={`composer-ledge relative z-[1] mx-[2.3rem] divide-y divide-border rounded-t-[1.25rem] border border-border bg-card/85 backdrop-blur-xl ${
         joined ? "-mb-4 border-b-0 pb-4" : "border-b-0"
       }`}
     >

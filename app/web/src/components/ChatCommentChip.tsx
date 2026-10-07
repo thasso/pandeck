@@ -92,10 +92,10 @@ export function ChatCommentChip({
                     // The whole comment on hover: the row shows one line, and
                     // the rest is worth reading without opening the editor.
                     title={comment.body}
-                    className="min-w-0 flex-1 truncate py-1.5 text-left text-sm text-fg hover:text-primary disabled:cursor-default disabled:hover:text-fg"
+                    className="min-w-0 flex-1 truncate py-1.5 text-left text-sm text-foreground hover:text-primary disabled:cursor-default disabled:hover:text-foreground"
                   >
                     {labelSources && comment.anchor.kind === "document" ? (
-                      <span className="text-faint">
+                      <span className="text-muted-foreground">
                         {commentDocumentLabel(comment.anchor.document)} ·{" "}
                       </span>
                     ) : null}
@@ -120,7 +120,7 @@ export function ChatCommentChip({
           <div className="flex items-center justify-end gap-1.5 border-t border-primary/20 px-1 pt-1 text-sm">
             {confirmingClear ? (
               <>
-                <span className="mr-auto pl-1 text-faint">
+                <span className="mr-auto pl-1 text-muted-foreground">
                   Remove all {comments.length}?
                 </span>
                 <button
@@ -129,14 +129,14 @@ export function ChatCommentChip({
                     onClear();
                     setConfirmingClear(false);
                   }}
-                  className="rounded-lg px-2 py-1 font-medium text-danger hover:bg-danger/10"
+                  className="rounded-lg px-2 py-1 font-medium text-destructive hover:bg-destructive/10"
                 >
                   Remove all
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmingClear(false)}
-                  className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-raised hover:text-fg"
+                  className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                   Keep
                 </button>
@@ -145,7 +145,7 @@ export function ChatCommentChip({
               <button
                 type="button"
                 onClick={() => setConfirmingClear(true)}
-                className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-raised hover:text-fg"
+                className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 Remove all
               </button>
@@ -179,8 +179,8 @@ function RowAction({
       aria-label={label}
       aria-pressed={active || undefined}
       className={`flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
-        active ? "text-primary" : "text-faint"
-      } ${danger ? "hover:bg-danger/10 hover:text-danger" : "hover:bg-primary/10 hover:text-fg"}`}
+        active ? "text-primary" : "text-muted-foreground"
+      } ${danger ? "hover:bg-destructive/10 hover:text-destructive" : "hover:bg-primary/10 hover:text-foreground"}`}
     >
       {icon}
     </button>

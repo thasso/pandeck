@@ -111,7 +111,7 @@ function InboxRow({
   return (
     <li data-list-row-id={task.id}>
       <div
-        className={`flex w-full min-w-0 items-start gap-1.5 rounded-lg px-1 ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-raised" : "hover:bg-panel"}`}
+        className={`flex w-full min-w-0 items-start gap-1.5 rounded-lg px-1 ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-muted" : "hover:bg-card"}`}
       >
         <button
           type="button"
@@ -133,7 +133,7 @@ function InboxRow({
         >
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span
-              className={`min-w-0 flex-1 truncate text-sm ${selected ? "font-medium text-fg" : "text-fg"}`}
+              className={`min-w-0 flex-1 truncate text-sm ${selected ? "font-medium text-foreground" : "text-foreground"}`}
             >
               {task.title}
             </span>
@@ -150,7 +150,7 @@ function InboxRow({
             ) : null}
           </span>
           {preview ? (
-            <span className="mt-0.5 block truncate text-xs text-faint">
+            <span className="mt-0.5 block truncate text-xs text-muted-foreground">
               {preview}
             </span>
           ) : null}
@@ -160,7 +160,7 @@ function InboxRow({
           onClick={() => onDismiss(task)}
           title={`Dismiss "${task.title}" from the Inbox`}
           aria-label={`Dismiss "${task.title}" from the Inbox`}
-          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "size-6" : "size-7"}`}
+          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "size-6" : "size-7"}`}
         >
           <Check size={13} />
         </button>

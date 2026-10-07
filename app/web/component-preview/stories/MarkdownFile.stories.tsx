@@ -49,7 +49,7 @@ The raw block stays out of the rendered body.
  */
 export function MarkdownFileStory({ frameWidth }: MarkdownFileStoryProps) {
   return (
-    <div className="bg-surface p-4">
+    <div className="bg-background p-4">
       <div className="flex flex-col gap-8" style={{ width: frameWidth }}>
         {[PLAIN, NAMESPACED, UNPARSEABLE].map((text) => (
           <article key={text}>

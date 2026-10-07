@@ -159,12 +159,12 @@ export function BacklogFocusList({
  */
 const BUCKET_TONE: Record<FocusBucketId, string> = {
   review: "text-amber-500",
-  overdue: "text-danger",
+  overdue: "text-destructive",
   today: "text-primary",
   tomorrow: "text-muted-foreground",
   week: "text-muted-foreground",
-  later: "text-faint",
-  unscheduled: "text-faint",
+  later: "text-muted-foreground",
+  unscheduled: "text-muted-foreground",
 };
 
 function FocusRow({
@@ -204,7 +204,7 @@ function FocusRow({
           opens the Task in a tab. */}
       <div
         onClick={() => onOpen(task.id)}
-        className={`group/row flex w-full min-w-0 cursor-pointer items-start gap-1.5 rounded-lg px-1 text-left ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-raised" : "hover:bg-panel"}`}
+        className={`group/row flex w-full min-w-0 cursor-pointer items-start gap-1.5 rounded-lg px-1 text-left ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-muted" : "hover:bg-card"}`}
       >
         <button
           type="button"
@@ -260,7 +260,7 @@ function FocusRow({
             <ClaimButton
               icon={<X size={13} />}
               label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
-              tone="border-line text-faint hover:bg-raised hover:text-muted-foreground"
+              tone="border-border text-muted-foreground hover:bg-muted hover:text-muted-foreground"
               onClick={() => onDismissSuggestion(task)}
               tight={tight}
             />

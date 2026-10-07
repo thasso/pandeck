@@ -100,7 +100,7 @@ export function BacklogProjectFilterControl({
       <Popover
         button={
           <span
-            className={`inline-flex items-center gap-1 ${active ? "text-fg" : "text-muted-foreground"}`}
+            className={`inline-flex items-center gap-1 ${active ? "text-foreground" : "text-muted-foreground"}`}
           >
             <FolderKanban size={compact ? 11 : 12} />
             <span className="max-w-[9rem] truncate">
@@ -110,7 +110,7 @@ export function BacklogProjectFilterControl({
         }
         placement="auto"
         disabled={disabled}
-        className={`rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm"} ${active ? "border-primary/60 bg-accent" : "border-line bg-panel hover:bg-raised hover:text-fg"}`}
+        className={`rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm"} ${active ? "border-primary/60 bg-accent" : "border-border bg-card hover:bg-muted hover:text-foreground"}`}
         title="Filter Backlog by Project"
       >
         {(close) => (
@@ -121,21 +121,21 @@ export function BacklogProjectFilterControl({
                 onChange(ALL_PROJECT_FILTER);
                 close();
               }}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-raised ${filter.kind === "all" ? "font-medium text-fg" : "text-muted-foreground"}`}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted ${filter.kind === "all" ? "font-medium text-foreground" : "text-muted-foreground"}`}
               aria-pressed={filter.kind === "all"}
             >
               <span
-                className="size-2 shrink-0 rounded-full bg-line-strong"
+                className="size-2 shrink-0 rounded-full bg-input"
                 aria-hidden
               />
               <span className="min-w-0 flex-1 truncate">All projects</span>
               {filter.kind === "all" ? (
-                <span className="text-xs text-faint">current</span>
+                <span className="text-xs text-muted-foreground">current</span>
               ) : null}
             </button>
             <div className="max-h-64 overflow-y-auto">
               {options.length === 0 ? (
-                <div className="px-2 py-3 text-center text-sm text-faint">
+                <div className="px-2 py-3 text-center text-sm text-muted-foreground">
                   No Projects in the registry or Backlog yet.
                 </div>
               ) : (
@@ -161,7 +161,7 @@ export function BacklogProjectFilterControl({
                         );
                         close();
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-raised ${selected ? "font-medium text-fg" : "text-muted-foreground"}`}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted ${selected ? "font-medium text-foreground" : "text-muted-foreground"}`}
                       aria-pressed={selected}
                     >
                       {option.kind === "project" ? (
@@ -177,7 +177,7 @@ export function BacklogProjectFilterControl({
                         />
                       ) : (
                         <span
-                          className="size-2 shrink-0 rounded-full bg-line-strong"
+                          className="size-2 shrink-0 rounded-full bg-input"
                           aria-hidden
                         />
                       )}
@@ -185,12 +185,12 @@ export function BacklogProjectFilterControl({
                         {option.label}
                       </span>
                       {option.kind === "project" && !option.known ? (
-                        <span className="shrink-0 text-xs text-faint">
+                        <span className="shrink-0 text-xs text-muted-foreground">
                           stale
                         </span>
                       ) : null}
                       {selected ? (
-                        <span className="shrink-0 text-xs text-faint">
+                        <span className="shrink-0 text-xs text-muted-foreground">
                           current
                         </span>
                       ) : null}
@@ -206,7 +206,7 @@ export function BacklogProjectFilterControl({
         <button
           type="button"
           onClick={() => onChange(ALL_PROJECT_FILTER)}
-          className="rounded-md p-1 text-faint hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="rounded-md p-1 text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           title="Clear Project filter"
           aria-label="Clear Project filter"
         >

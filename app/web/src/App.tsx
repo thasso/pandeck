@@ -715,7 +715,7 @@ function useMobileKeyboardInset() {
  */
 function LoadingShell({ label = "Loading session…" }: { label?: string }) {
   return (
-    <div className="flex h-full min-h-dvh flex-col bg-surface text-fg">
+    <div className="flex h-full min-h-dvh flex-col bg-background text-foreground">
       <PaneLoading label={label} />
     </div>
   );
@@ -728,7 +728,7 @@ function LoadingShell({ label = "Loading session…" }: { label?: string }) {
  */
 function LazySurfaceFallback({ label = "Opening…" }: { label?: string }) {
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
       <PaneLoading label={label} />
     </div>
   );
@@ -752,10 +752,10 @@ function TranscriptChunkFallback() {
     <div
       role="status"
       aria-label="Opening transcript"
-      className="min-h-0 flex-1 overflow-hidden bg-surface"
+      className="min-h-0 flex-1 overflow-hidden bg-background"
     >
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-end gap-3 px-4 py-6">
-        <div className="ml-auto w-2/3 rounded-2xl border border-line bg-panel p-4">
+        <div className="ml-auto w-2/3 rounded-2xl border border-border bg-card p-4">
           <Skeleton className="h-3 w-full rounded-full" />
           <Skeleton className="mt-2 h-3 w-3/4 rounded-full" />
         </div>
@@ -778,7 +778,7 @@ function WorktreePlaceholder({
   back?: PageHeaderBack | undefined;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitBranch size={16} />}
@@ -803,7 +803,7 @@ function PullRequestIndexPlaceholder({
   back?: PageHeaderBack | undefined;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitPullRequest size={16} />}
@@ -4013,7 +4013,7 @@ function AppContent() {
       ? sessionShell.titleGenerationPending
       : displaySessionListItem?.titleGenerationPending === true);
   const sessionTitleHeading = (
-    <h2 className="truncate text-sm font-semibold tracking-tight text-fg">
+    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
       <SessionTitleText
         title={displaySessionTitle}
         pending={displaySessionTitleGenerationPending}
@@ -4054,7 +4054,9 @@ function AppContent() {
         renderTaskPicker: () => (
           <Suspense
             fallback={
-              <div className="px-1 py-2 text-sm text-faint">Loading tasks…</div>
+              <div className="px-1 py-2 text-sm text-muted-foreground">
+                Loading tasks…
+              </div>
             }
           >
             <BacklogList
@@ -6972,7 +6974,7 @@ function AppContent() {
                                 }
                                 title="View this session's worktree changes"
                                 aria-label="View this session's worktree changes"
-                                className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg"
+                                className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
                               >
                                 {/* Same rule as the dock's row and the inspector's action: the
                       glyph is the worktree this leaves for, not the diff it opens on. */}

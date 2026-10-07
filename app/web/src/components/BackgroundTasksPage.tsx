@@ -152,7 +152,7 @@ export function BackgroundTasksPage({
   );
 
   return (
-    <div className="flex h-full w-full flex-col bg-surface text-fg">
+    <div className="flex h-full w-full flex-col bg-background text-foreground">
       <PageHeader
         back={back}
         icon={<Activity size={16} />}
@@ -162,7 +162,7 @@ export function BackgroundTasksPage({
           view.activeTotal === 1 ? "1 running" : `${view.activeTotal} running`
         }
       />
-      <div className="border-b border-line px-4 py-3">
+      <div className="border-b border-border px-4 py-3">
         <div
           role="tablist"
           aria-label="Filter background work"
@@ -178,7 +178,7 @@ export function BackgroundTasksPage({
               className={`h-9 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 filter === entry.id
                   ? "bg-accent text-primary"
-                  : "text-muted-foreground hover:bg-panel hover:text-fg"
+                  : "text-muted-foreground hover:bg-card hover:text-foreground"
               }`}
             >
               {entry.label}
@@ -202,7 +202,7 @@ export function BackgroundTasksPage({
                 key={ownerSessionId}
                 type="button"
                 onClick={() => onStopAllForOwner(ownerSessionId)}
-                className="h-9 rounded-lg border border-line px-3 text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                className="h-9 rounded-lg border border-border px-3 text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Stop all in {ownerTitles.get(ownerSessionId) || "this session"}
               </button>
@@ -242,7 +242,7 @@ export function BackgroundTasksPage({
                   onClick={() =>
                     setLimit((value) => value + BACKGROUND_WORK_PAGE_SIZE)
                   }
-                  className="mt-3 h-9 w-full rounded-lg border border-line text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="mt-3 h-9 w-full rounded-lg border border-border text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(view.hidden, BACKGROUND_WORK_PAGE_SIZE)} more
                   of {view.total}

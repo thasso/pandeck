@@ -1099,9 +1099,9 @@ export function SessionInboxStory({
   }, [scenario]);
 
   return (
-    <div ref={hostRef} className="flex h-full bg-surface">
+    <div ref={hostRef} className="flex h-full bg-background">
       <aside
-        className="relative flex h-full shrink-0 flex-col overflow-hidden border-line bg-panel sm:border-r"
+        className="relative flex h-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
         style={{ width: frameWidth }}
       >
         <div

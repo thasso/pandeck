@@ -77,7 +77,7 @@ export function ApprovalSessionGrantStory({
   frameWidth,
 }: ApprovalSessionGrantStoryProps) {
   return (
-    <div className="bg-surface p-4" style={{ width: frameWidth }}>
+    <div className="bg-background p-4" style={{ width: frameWidth }}>
       {cards.map((card, index) => (
         <ApprovalCard
           key={index}

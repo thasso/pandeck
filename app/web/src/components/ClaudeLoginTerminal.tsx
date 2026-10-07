@@ -48,15 +48,15 @@ export function ClaudeLoginTerminal({
       aria-modal="true"
       aria-label={`Connect ${profile.name}`}
     >
-      <div className="flex max-h-[95dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-line bg-panel shadow-2xl sm:max-h-[85dvh] sm:rounded-2xl">
-        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+      <div className="flex max-h-[95dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:max-h-[85dvh] sm:rounded-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <Terminal size={17} className="shrink-0 text-primary" />
             <div className="min-w-0">
               <h3 className="truncate text-sm font-semibold">
                 Connect {profile.name}
               </h3>
-              <p className="text-sm text-faint">
+              <p className="text-sm text-muted-foreground">
                 Official Claude CLI · profile-isolated
               </p>
             </div>
@@ -64,7 +64,7 @@ export function ClaudeLoginTerminal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label="Close Claude login"
           >
             <X size={17} />
@@ -72,7 +72,7 @@ export function ClaudeLoginTerminal({
         </div>
 
         <div className="min-h-0 overflow-y-auto p-4">
-          <div className="rounded-xl border border-line bg-[#111318] p-3 text-sm text-[#e5e7eb] shadow-inner">
+          <div className="rounded-xl border border-border bg-[#111318] p-3 text-sm text-[#e5e7eb] shadow-inner">
             <pre className="max-h-[34dvh] min-h-32 overflow-auto whitespace-pre-wrap break-all font-mono">
               {output || "Starting Claude login…"}
             </pre>
@@ -93,11 +93,11 @@ export function ClaudeLoginTerminal({
             <form onSubmit={submitCode} className="mt-4 space-y-2">
               <label
                 htmlFor={`claude-login-code-${profile.id}`}
-                className="text-sm font-medium text-fg"
+                className="text-sm font-medium text-foreground"
               >
                 Paste the authorization code
               </label>
-              <p className="text-sm text-faint">
+              <p className="text-sm text-muted-foreground">
                 After signing in, Claude shows a code or callback URL. Paste it
                 here; PA forwards it directly to the CLI and never displays or
                 stores it.
@@ -142,7 +142,7 @@ export function ClaudeLoginTerminal({
             </div>
           ) : (
             <div
-              className={`mt-4 rounded-lg border px-3 py-2 text-sm ${status === "cancelled" ? "border-line text-muted-foreground" : "border-danger/30 bg-danger/10 text-danger"}`}
+              className={`mt-4 rounded-lg border px-3 py-2 text-sm ${status === "cancelled" ? "border-border text-muted-foreground" : "border-destructive/30 bg-destructive/10 text-destructive"}`}
             >
               {error ??
                 (status === "cancelled"
@@ -152,12 +152,12 @@ export function ClaudeLoginTerminal({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-line px-4 py-3">
+        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
           {status === "connecting" ? (
             <button
               type="button"
               onClick={cancel}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Cancel login
             </button>

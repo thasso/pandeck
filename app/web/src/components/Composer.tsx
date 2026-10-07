@@ -421,16 +421,16 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
         aria-describedby={tooltipId}
         className="size-[18px] rounded-full p-[3px]"
         style={{
-          background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--line-strong) 0deg)`,
+          background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--input) 0deg)`,
         }}
       >
-        <div className="size-full rounded-full bg-panel" />
+        <div className="size-full rounded-full bg-card" />
       </div>
       <div
         id={tooltipId}
-        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-line bg-panel p-3 text-left text-sm text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
+        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-border bg-card p-3 text-left text-sm text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
       >
-        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-fg">
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
           <span>Context</span>
           <span>{formatPercent(percent)}</span>
         </div>
@@ -472,7 +472,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
                 label="Turns"
                 value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
               />
-              <div className="pt-1 text-xs text-faint">
+              <div className="pt-1 text-xs text-muted-foreground">
                 Cached input is cumulative across internal model steps; some
                 providers report reads but not writes.
               </div>
@@ -487,7 +487,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
 function ContextRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <span className="shrink-0 text-faint">{label}</span>
+      <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right text-muted-foreground">
         {value}
       </span>
@@ -588,9 +588,9 @@ export function ModeSelector({
       className={composerPill}
       button={
         <>
-          <Icon size={15} className="shrink-0 text-faint" />
+          <Icon size={15} className="shrink-0 text-muted-foreground" />
           <span>{label}</span>
-          <ChevronDown size={13} className="shrink-0 text-faint" />
+          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
         </>
       }
     >
@@ -608,15 +608,15 @@ export function ModeSelector({
                   onChange(value);
                   close();
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-raised"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
               >
                 <OptionIcon
                   size={14}
-                  className={`shrink-0 ${active ? "text-primary" : "text-faint"}`}
+                  className={`shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`}
                 />
                 <span
                   className={`min-w-0 flex-1 font-medium ${
-                    active ? "text-primary" : "text-fg"
+                    active ? "text-primary" : "text-foreground"
                   }`}
                 >
                   {value === "build" ? "Build" : "Plan"}
@@ -680,7 +680,7 @@ function RuntimeSettingsPanel({
     <div className="space-y-3 text-sm">
       {agentType && availableAgentTypes && onAgentTypeChange ? (
         <section>
-          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Agent
           </div>
           <AgentTypeSelector
@@ -692,7 +692,7 @@ function RuntimeSettingsPanel({
       ) : null}
 
       <section>
-        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Model
         </div>
         <ModelSelect
@@ -706,7 +706,7 @@ function RuntimeSettingsPanel({
       </section>
 
       <section>
-        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Thinking
         </div>
         <ThinkingSelect
@@ -720,7 +720,7 @@ function RuntimeSettingsPanel({
 
       {mode ? (
         <section>
-          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Mode
           </div>
           <ModeSelector
@@ -751,7 +751,7 @@ export const COMPOSER_STREAMING_LABEL = "Streaming response…";
  * only; the geometry is the host row's, since a bar and a 36px field differ there.
  */
 export const COMPOSER_STOP_TONE_CLASS =
-  "bg-raised text-fg hover:bg-line-strong";
+  "bg-muted text-foreground hover:bg-input";
 /**
  * How much of a draft a resting face may carry. It truncates to one line anyway;
  * this keeps a novel-length draft out of the host's state and off the wire between
@@ -782,7 +782,7 @@ function AgentTypeSelector({
         <>
           <Icon size={15} className={iconColor} />
           <span>{label}</span>
-          <ChevronDown size={13} className="text-faint" />
+          <ChevronDown size={13} className="text-muted-foreground" />
         </>
       }
     >
@@ -800,7 +800,7 @@ function AgentTypeSelector({
                   onChange(type);
                   close();
                 }}
-                className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-fg transition-colors hover:bg-raised"
+                className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
               >
                 <TypeIcon
                   size={14}
@@ -808,7 +808,9 @@ function AgentTypeSelector({
                 />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{display.label}</div>
-                  <div className="text-sm text-faint">{display.desc}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {display.desc}
+                  </div>
                 </div>
                 {active && (
                   <Check size={13} className="mt-0.5 shrink-0 text-primary" />
@@ -2313,8 +2315,8 @@ export const Composer = memo(function Composer({
               />
 
               {slashMenuOpen && (
-                <div className="absolute bottom-full left-3 right-3 z-40 mb-2 overflow-hidden rounded-xl border border-line bg-panel shadow-2xl shadow-black/30">
-                  <div className="border-b border-line px-3 py-1.5 text-sm text-faint">
+                <div className="absolute bottom-full left-3 right-3 z-40 mb-2 overflow-hidden rounded-xl border border-border bg-card shadow-2xl shadow-black/30">
+                  <div className="border-b border-border px-3 py-1.5 text-sm text-muted-foreground">
                     ↑↓ to navigate · ↵ to select · esc to dismiss ·{" "}
                     <span className="font-mono">//</span> sends a literal slash
                   </div>
@@ -2329,18 +2331,18 @@ export const Composer = memo(function Composer({
                       }}
                       className={`flex w-full items-start gap-3 border-l-2 px-3 py-2 text-left transition-colors ${
                         index === slashIndex
-                          ? "border-primary bg-accent text-fg"
-                          : "border-transparent text-muted-foreground hover:bg-raised/70 hover:text-fg"
+                          ? "border-primary bg-accent text-foreground"
+                          : "border-transparent text-muted-foreground hover:bg-muted/70 hover:text-foreground"
                       }`}
                     >
                       <span className="mt-0.5 font-mono text-sm text-primary">
                         /{cmd.name}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-sm text-fg">
+                        <span className="block text-sm text-foreground">
                           {cmd.description}
                         </span>
-                        <span className="block truncate font-mono text-sm text-faint">
+                        <span className="block truncate font-mono text-sm text-muted-foreground">
                           {cmd.usage}
                         </span>
                       </span>
@@ -2356,14 +2358,14 @@ export const Composer = memo(function Composer({
                     return (
                       <div
                         key={attachment.id}
-                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line bg-raised px-2 py-1.5 text-sm text-muted-foreground"
+                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-border bg-muted px-2 py-1.5 text-sm text-muted-foreground"
                         title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
                       >
                         {isImage && attachment.previewUrl ? (
                           <img
                             src={attachment.previewUrl}
                             alt=""
-                            className="size-9 rounded-lg border border-line object-cover"
+                            className="size-9 rounded-lg border border-border object-cover"
                           />
                         ) : isImage ? (
                           <Image size={16} className="text-primary" />
@@ -2371,17 +2373,17 @@ export const Composer = memo(function Composer({
                           <FileText size={16} className="text-primary" />
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="max-w-44 truncate font-medium text-fg">
+                          <div className="max-w-44 truncate font-medium text-foreground">
                             {attachment.name}
                           </div>
-                          <div className="text-faint">
+                          <div className="text-muted-foreground">
                             {formatBytes(attachment.size)}
                           </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => removeAttachment(attachment.id)}
-                          className="ml-1 rounded-md p-0.5 text-faint hover:bg-line hover:text-fg"
+                          className="ml-1 rounded-md p-0.5 text-muted-foreground hover:bg-border hover:text-foreground"
                           title="Remove attachment"
                         >
                           <X size={13} />
@@ -2509,10 +2511,13 @@ export const Composer = memo(function Composer({
                         <ProviderIcon
                           provider={model.provider}
                           size={15}
-                          className="shrink-0 text-faint"
+                          className="shrink-0 text-muted-foreground"
                         />
                       ) : (
-                        <Cpu size={15} className="shrink-0 text-faint" />
+                        <Cpu
+                          size={15}
+                          className="shrink-0 text-muted-foreground"
+                        />
                       )}
                       <span className="min-w-0 truncate">{runtimeLabel}</span>
                     </button>
@@ -2541,7 +2546,7 @@ export const Composer = memo(function Composer({
                       title="Conversation branches"
                       aria-label="Conversation branches"
                       aria-expanded={branchesOpen}
-                      className="relative flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-primary data-[open=true]:bg-muted data-[open=true]:text-foreground"
+                      className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-primary data-[open=true]:bg-muted data-[open=true]:text-foreground"
                       data-open={branchesOpen && showBranches}
                     >
                       <GitFork size={15} />
@@ -2728,7 +2733,9 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {attachmentError ? (
-        <div className="mt-1.5 px-2 text-sm text-danger">{attachmentError}</div>
+        <div className="mt-1.5 px-2 text-sm text-destructive">
+          {attachmentError}
+        </div>
       ) : null}
     </div>
   );
@@ -2756,8 +2763,8 @@ function BusyModeSwitch({
       title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
       className={`h-6 rounded-full px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         mode === value
-          ? "bg-accent text-fg ring-1 ring-inset ring-primary/40"
-          : "text-muted-foreground hover:text-fg"
+          ? "bg-accent text-foreground ring-1 ring-inset ring-primary/40"
+          : "text-muted-foreground hover:text-foreground"
       }`}
     >
       {label}
@@ -2767,7 +2774,7 @@ function BusyModeSwitch({
     <div
       role="radiogroup"
       aria-label="While the response runs"
-      className="flex shrink-0 items-center rounded-full border border-line bg-surface p-0.5"
+      className="flex shrink-0 items-center rounded-full border border-border bg-background p-0.5"
     >
       {option("steer", "Steer", "Hand it to the running response")}
       {option("queue", "Queue", "Send it after this response")}
@@ -2844,7 +2851,7 @@ function CompactComposerBar({
           title={expandHint}
           aria-label={expandHint}
           aria-expanded={false}
-          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-sm text-faint transition-colors hover:bg-raised hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </button>
@@ -2870,7 +2877,7 @@ function CompactComposerBar({
           aria-label={
             primaryAction === "stop" ? "Stop response" : "Compose message"
           }
-          className={`flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint ${
+          className={`flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground ${
             primaryAction === "stop"
               ? COMPOSER_STOP_TONE_CLASS
               : "bg-primary text-primary-foreground hover:bg-primary/90"
@@ -2904,7 +2911,7 @@ function BranchPanel({
 
       <BranchSection title="Current">
         <div className="rounded-xl border border-primary/25 bg-accent px-3 py-2">
-          <div className="truncate font-medium text-fg">
+          <div className="truncate font-medium text-foreground">
             {info.currentTitle}
           </div>
           <div className="mt-0.5 text-sm text-muted-foreground">
@@ -2942,7 +2949,7 @@ function BranchSection({
 }) {
   return (
     <section>
-      <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {title}
       </div>
       {children}
@@ -2966,7 +2973,7 @@ function BranchItem({
         onClose();
         item.onOpen();
       }}
-      className="flex w-full items-start gap-2 rounded-xl border border-line bg-raised/40 px-3 py-2 text-left transition-colors hover:border-line-strong hover:bg-raised"
+      className="flex w-full items-start gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-left transition-colors hover:border-input hover:bg-muted"
     >
       <GitFork
         size={13}
@@ -2977,9 +2984,11 @@ function BranchItem({
         }
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium text-fg">{item.title}</span>
+        <span className="block truncate font-medium text-foreground">
+          {item.title}
+        </span>
         {item.subtitle ? (
-          <span className="mt-0.5 block truncate text-sm text-faint">
+          <span className="mt-0.5 block truncate text-sm text-muted-foreground">
             {item.subtitle}
           </span>
         ) : null}

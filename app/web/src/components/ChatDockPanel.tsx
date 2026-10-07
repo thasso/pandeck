@@ -69,15 +69,15 @@ export function ChatDockPanel({
     <div
       ref={panelRef}
       tabIndex={-1}
-      className="chat-dock-panel absolute inset-x-0 bottom-full z-0 -mb-px overflow-hidden rounded-t-[1.25rem] border border-b-0 border-line bg-panel outline-none"
+      className="chat-dock-panel absolute inset-x-0 bottom-full z-0 -mb-px overflow-hidden rounded-t-[1.25rem] border border-b-0 border-border bg-card outline-none"
     >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
         {icon ? (
           <div className="flex size-5 items-center justify-center rounded-md bg-accent text-primary">
             {icon}
           </div>
         ) : null}
-        <div className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
+        <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
           {title}
         </div>
         {actions ? (
@@ -91,7 +91,7 @@ export function ChatDockPanel({
             onClick={() => setMinimized((value) => !value)}
             title={minimized ? `Restore ${title}` : "Minimize panel"}
             aria-label={minimized ? `Restore ${title}` : "Minimize panel"}
-            className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
+            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {minimized ? <ChevronUp size={14} /> : <Minus size={14} />}
           </button>
@@ -101,7 +101,7 @@ export function ChatDockPanel({
           onClick={onClose}
           title="Close panel"
           aria-label="Close panel"
-          className="flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <X size={14} />
         </button>

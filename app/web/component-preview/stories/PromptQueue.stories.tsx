@@ -70,7 +70,7 @@ export function PromptQueueStory({
 }: PromptQueueStoryProps) {
   const running = scenario === "running";
   return (
-    <div className="flex h-[420px] flex-col justify-end bg-surface p-4">
+    <div className="flex h-[420px] flex-col justify-end bg-background p-4">
       <div style={{ width: frameWidth }}>
         <Composer
           onSend={() => {}}

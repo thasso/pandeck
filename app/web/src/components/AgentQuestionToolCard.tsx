@@ -43,7 +43,7 @@ export function AgentQuestionToolCard({
       : undefined;
 
   return (
-    <div className="my-2 rounded-2xl border border-line bg-panel/60 p-3">
+    <div className="my-2 rounded-2xl border border-border bg-card/60 p-3">
       {pending && onRespond ? (
         <AgentQuestionForm
           request={pending}
@@ -61,7 +61,7 @@ export function AgentQuestionToolCard({
 
 function CardHeader({ title }: { title: string }) {
   return (
-    <div className="flex items-center gap-2 text-fg">
+    <div className="flex items-center gap-2 text-foreground">
       <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
       <span className="min-w-0 truncate font-medium text-sm">{title}</span>
     </div>
@@ -75,11 +75,11 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
     <div className="space-y-2.5 text-sm">
       <CardHeader title={answered.title} />
       {answered.intro ? (
-        <p className="text-sm text-faint">{answered.intro}</p>
+        <p className="text-sm text-muted-foreground">{answered.intro}</p>
       ) : null}
       {cancelled ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-sm text-muted-foreground">
-          <CircleSlash size={13} className="shrink-0 text-faint" />
+        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          <CircleSlash size={13} className="shrink-0 text-muted-foreground" />
           You cancelled this question flow.
         </div>
       ) : (
@@ -87,16 +87,18 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
           {answered.questions.map((q) => (
             <li
               key={q.id}
-              className="rounded-xl border border-line bg-surface px-3 py-2"
+              className="rounded-xl border border-border bg-background px-3 py-2"
             >
-              <div className="text-sm font-medium text-fg">{q.title}</div>
+              <div className="text-sm font-medium text-foreground">
+                {q.title}
+              </div>
               <AnswerLine question={q} answer={byId.get(q.id)} />
             </li>
           ))}
         </ul>
       )}
       {!cancelled && (
-        <div className="flex items-center gap-1 text-sm text-faint">
+        <div className="flex items-center gap-1 text-sm text-muted-foreground">
           <Check size={12} className="text-primary" /> Answered
         </div>
       )}
@@ -187,7 +189,11 @@ function AnswerLine({
   answer?: AgentQuestionAnswer | undefined;
 }) {
   if (!answer || answer.disposition === "skipped") {
-    return <div className="mt-0.5 text-sm text-faint italic">No answer</div>;
+    return (
+      <div className="mt-0.5 text-sm text-muted-foreground italic">
+        No answer
+      </div>
+    );
   }
   const labels = (answer.choiceIds ?? [])
     .map((id) => question.choices?.find((c) => c.id === id)?.label ?? id)
@@ -219,7 +225,7 @@ function AnswerLine({
       {labels.length === 0 &&
       !answer.text &&
       answer.disposition !== "discuss" ? (
-        <div className="text-sm text-faint italic">No answer</div>
+        <div className="text-sm text-muted-foreground italic">No answer</div>
       ) : null}
     </div>
   );
@@ -242,7 +248,7 @@ function FallbackView({ block }: { block: ToolBlock }) {
   return (
     <div className="space-y-2 text-sm">
       <CardHeader title={title} />
-      {intro ? <p className="text-sm text-faint">{intro}</p> : null}
+      {intro ? <p className="text-sm text-muted-foreground">{intro}</p> : null}
       <ul className="space-y-1.5">
         {questions.map((q, i) => {
           const qt =
@@ -252,7 +258,7 @@ function FallbackView({ block }: { block: ToolBlock }) {
           return (
             <li
               key={i}
-              className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted-foreground"
+              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-muted-foreground"
             >
               {typeof qt === "string" ? qt : `Question ${i + 1}`}
             </li>

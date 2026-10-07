@@ -168,7 +168,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
   if (!view && secondary.length === 0) return null;
 
   const triggerClass =
-    "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg data-[open=true]:bg-panel data-[open=true]:text-fg";
+    "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground data-[open=true]:bg-card data-[open=true]:text-foreground";
 
   const content = (close: () => void) => (
     <div className="py-0.5 text-sm" role="menu">
@@ -180,7 +180,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
       ) : null}
 
       {view && secondary.length > 0 ? (
-        <div className="my-1 border-t border-line" role="presentation" />
+        <div className="my-1 border-t border-border" role="presentation" />
       ) : null}
 
       {secondary.length > 0 ? (
@@ -206,7 +206,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
               ) : null}
               <span className="min-w-0 flex-1 truncate">{action.label}</span>
               {action.hint ? (
-                <span className="shrink-0 text-sm text-faint">
+                <span className="shrink-0 text-sm text-muted-foreground">
                   {action.hint}
                 </span>
               ) : null}

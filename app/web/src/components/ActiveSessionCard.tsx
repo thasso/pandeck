@@ -73,7 +73,7 @@ const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
  * density the floor is the 44px a thumb needs; at `tight` it is 36px.
  */
 const GUTTER_BUTTON =
-  "flex flex-1 cursor-pointer items-center justify-center text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex flex-1 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground";
 const GUTTER_FLOOR: Record<RowDensity, string> = {
   tight: "min-h-9",
   comfortable: "min-h-11",
@@ -81,7 +81,7 @@ const GUTTER_FLOOR: Record<RowDensity, string> = {
 
 /** Settle and the actions flip, inline at the end of the status row. */
 const INLINE_ACTION =
-  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-border hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
   tight: "size-6 -my-0.5",
   comfortable: "size-8 -my-0.5",
@@ -107,11 +107,11 @@ function WorktreeChanges({ relations }: { relations: SessionCardRelations }) {
       {additions || deletions ? (
         <>
           <span className="text-success">+{additions}</span>
-          <span className="text-danger">−{deletions}</span>
+          <span className="text-destructive">−{deletions}</span>
         </>
       ) : null}
       {ahead ? (
-        <span className="flex items-center text-faint">
+        <span className="flex items-center text-muted-foreground">
           <ArrowUp size={10} aria-hidden />
           {ahead}
         </span>
@@ -357,7 +357,7 @@ function ActiveSessionCardImpl({
       }}
       className={`group w-full cursor-pointer select-none overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 ${
         flipped ? "[perspective:900px]" : ""
-      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
     >
       {/* One rotator, two faces: the front stays in flow so the card keeps its
           content height, and the actions face is absolutely laid over it at
@@ -396,7 +396,7 @@ function ActiveSessionCardImpl({
                 area. The row is as tall as the live-state row below the
                 title, so the title sits centred between the two. */}
             <div
-              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-faint`}
+              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
             >
               <div
                 ref={metaRowRef}
@@ -441,7 +441,7 @@ function ActiveSessionCardImpl({
                 )}
               </span>
               <span
-                className={`min-w-0 flex-1 truncate text-sm text-fg ${status === "unread" ? "font-semibold" : "font-medium"}`}
+                className={`min-w-0 flex-1 truncate text-sm text-foreground ${status === "unread" ? "font-semibold" : "font-medium"}`}
               >
                 <SessionTitleText
                   title={title}
@@ -480,7 +480,7 @@ function ActiveSessionCardImpl({
                     className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                       clusterWorking
                         ? "text-primary hover:text-primary"
-                        : "text-muted-foreground hover:text-fg"
+                        : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     {clusterWorking ? (
@@ -553,7 +553,7 @@ function ActiveSessionCardImpl({
                       e.stopPropagation();
                       if (bubbled) onSettle(bubbled.session.id);
                     }}
-                    className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     <X size={12} aria-hidden />
                   </button>
@@ -598,7 +598,7 @@ function ActiveSessionCardImpl({
                   <span
                     role="img"
                     aria-label={backgroundText}
-                    className="session-status-responsive-badge flex shrink-0 items-center gap-1 rounded-full border border-line px-1.5 py-px font-medium text-muted-foreground"
+                    className="session-status-responsive-badge flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-medium text-muted-foreground"
                     title={backgroundText}
                   >
                     <Activity size={10} aria-hidden="true" />
@@ -623,7 +623,7 @@ function ActiveSessionCardImpl({
                 {/* The badge already names the state; the one sentence it
                   cannot say is an Idle card's queued work. */}
                 {status === "quiet" && detail ? (
-                  <span className="min-w-0 flex-1 basis-0 truncate text-faint">
+                  <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground">
                     {detail}
                   </span>
                 ) : null}
@@ -660,7 +660,7 @@ function ActiveSessionCardImpl({
 
         {flipped ? (
           <div
-            className="absolute inset-0 flex bg-raised [backface-visibility:hidden] [transform:rotateY(180deg)]"
+            className="absolute inset-0 flex bg-muted [backface-visibility:hidden] [transform:rotateY(180deg)]"
             inert={!showActions}
             aria-label={`Actions for ${title}`}
           >
@@ -808,7 +808,7 @@ function MetaItem({
   return (
     <button
       type="button"
-      className={`${shape} -mx-1 cursor-pointer rounded px-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
+      className={`${shape} -mx-1 cursor-pointer rounded px-1 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
       title={`Open ${item.title ?? item.label}`}
       onClick={(e) => {
         e.stopPropagation();
@@ -847,8 +847,8 @@ function ActionTile({
       title={accessibleLabel}
       className={`flex h-14 w-16 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         danger
-          ? "text-danger hover:bg-danger-soft"
-          : "text-muted-foreground hover:bg-panel hover:text-fg"
+          ? "text-destructive hover:bg-destructive/10"
+          : "text-muted-foreground hover:bg-card hover:text-foreground"
       }`}
     >
       {/* Match the mobile dock action exactly: an 18px glyph centred in a

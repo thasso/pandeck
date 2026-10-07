@@ -79,7 +79,7 @@ export function BackgroundWorkLedge({
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}
-        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <Activity
           size={13}
@@ -88,14 +88,18 @@ export function BackgroundWorkLedge({
         />
         <span className="min-w-0 flex-1 truncate">
           {summary}
-          {age ? <span className="text-faint"> · {age}</span> : null}
+          {age ? <span className="text-muted-foreground"> · {age}</span> : null}
         </span>
-        <Chevron size={14} className="shrink-0 text-faint" aria-hidden="true" />
+        <Chevron
+          size={14}
+          className="shrink-0 text-muted-foreground"
+          aria-hidden="true"
+        />
       </button>
       {open ? (
         <div
           id={`background-ledge-${sessionId}`}
-          className="max-h-[40vh] overflow-y-auto border-t border-line px-2 py-2"
+          className="max-h-[40vh] overflow-y-auto border-t border-border px-2 py-2"
         >
           {active.total > 0 ? (
             <ul className="flex flex-col gap-2">
@@ -111,7 +115,9 @@ export function BackgroundWorkLedge({
               ))}
             </ul>
           ) : activity.activeCount > 0 ? (
-            <p className="px-1 text-sm text-faint">Loading the rows…</p>
+            <p className="px-1 text-sm text-muted-foreground">
+              Loading the rows…
+            </p>
           ) : (
             <p className="px-1 text-sm text-muted-foreground">
               Nothing is running; this session still holds a retained background
@@ -119,14 +125,14 @@ export function BackgroundWorkLedge({
             </p>
           )}
           {active.hidden > 0 ? (
-            <p className="mt-2 px-1 text-sm text-faint">
+            <p className="mt-2 px-1 text-sm text-muted-foreground">
               {active.hidden} more in the registry.
             </p>
           ) : null}
           <button
             type="button"
             onClick={() => onStopAll(sessionId)}
-            className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-border text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <Square size={12} aria-hidden="true" />
             Stop all background work in this session

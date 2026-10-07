@@ -31,7 +31,7 @@ export function ChatWideCard({
           transform: "translateX(-50%)",
         } as CSSProperties
       }
-      className={`relative left-1/2 my-3 w-[min(var(--chat-wide-max),calc(var(--shell-main-width,100vw)_-_2rem))] max-w-none overflow-hidden rounded-2xl border border-line bg-panel shadow-sm ${className}`}
+      className={`relative left-1/2 my-3 w-[min(var(--chat-wide-max),calc(var(--shell-main-width,100vw)_-_2rem))] max-w-none overflow-hidden rounded-2xl border border-border bg-card shadow-sm ${className}`}
     >
       {children}
     </Component>

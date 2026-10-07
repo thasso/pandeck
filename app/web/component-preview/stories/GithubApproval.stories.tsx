@@ -123,7 +123,7 @@ const cards: ApprovalCardData[] = [
 
 export function GithubApprovalStory({ frameWidth }: GithubApprovalStoryProps) {
   return (
-    <div className="bg-surface p-4" style={{ width: frameWidth }}>
+    <div className="bg-background p-4" style={{ width: frameWidth }}>
       {cards.map((approval) => (
         <ApprovalCard
           key={approval.id}

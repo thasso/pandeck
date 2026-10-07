@@ -178,7 +178,7 @@ interface Props {
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm text-muted-foreground">
+    <div className="my-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
       {label}
     </div>
   );
@@ -198,20 +198,20 @@ function ToolGroupNoticeCard({
     <div className="my-2 flex items-start gap-2 rounded-xl border border-primary/25 bg-accent px-3 py-2 text-sm text-muted-foreground">
       <PackageCheck size={15} className="mt-0.5 shrink-0 text-primary" />
       <div className="min-w-0">
-        <div className="font-medium text-fg">{title}</div>
+        <div className="font-medium text-foreground">{title}</div>
         {summary && <div className="mt-0.5">{summary}</div>}
         {shownTools.length > 0 && (
           <div className="mt-1 flex flex-wrap gap-1">
             {shownTools.map((tool) => (
               <span
                 key={tool}
-                className="rounded-md bg-raised px-1.5 py-0.5 font-mono text-xs text-faint"
+                className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
               >
                 {tool}
               </span>
             ))}
             {tools.length > shownTools.length && (
-              <span className="px-1.5 py-0.5 text-xs text-faint">
+              <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
                 +{tools.length - shownTools.length} more
               </span>
             )}
@@ -250,11 +250,11 @@ function CompactionCard({
       }
     >
       {compaction.firstKeptEntryId ? (
-        <div className="mt-1 text-sm text-faint">
+        <div className="mt-1 text-sm text-muted-foreground">
           First kept entry: {compaction.firstKeptEntryId}
         </div>
       ) : null}
-      <div className="mt-2 text-sm text-fg">
+      <div className="mt-2 text-sm text-foreground">
         <Markdown
           text={compaction.summary}
           sessionReferences={sessionReferences}
@@ -281,13 +281,13 @@ function ContextClearCard({
 }) {
   return (
     <div className="my-3 flex items-center gap-3" role="separator">
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
-      <span className="text-sm text-faint">
+      <span className="h-px flex-1 bg-border" aria-hidden="true" />
+      <span className="text-sm text-muted-foreground">
         {contextClear.tokensBefore === undefined
           ? "Context cleared"
           : `Context cleared — ${contextClear.tokensBefore.toLocaleString()} tokens dropped`}
       </span>
-      <span className="h-px flex-1 bg-line" aria-hidden="true" />
+      <span className="h-px flex-1 bg-border" aria-hidden="true" />
     </div>
   );
 }
@@ -634,7 +634,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             return content;
           return (
             <Fragment key={i}>
-              <hr className="border-line/60" />
+              <hr className="border-border/60" />
               {content}
             </Fragment>
           );
@@ -643,7 +643,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         {progress && <ProgressIndicator label={progress} />}
 
         {message.error && (
-          <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-sm text-danger">
+          <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-sm text-destructive">
             <AlertTriangle size={13} />
             {message.error}
           </div>
