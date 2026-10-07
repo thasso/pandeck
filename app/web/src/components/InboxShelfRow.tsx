@@ -104,9 +104,9 @@ export function InboxShelfRow({
           onDelete();
         }
       }}
-      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1 rounded-md pl-0.5 pr-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1 rounded-md pl-0.5 pr-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
         comfortable ? "h-11" : "h-7"
-      } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
     >
       <span
         className={`flex size-5 shrink-0 items-center justify-center rounded-md bg-raised ${agent.activeColor}`}
@@ -114,7 +114,7 @@ export function InboxShelfRow({
       >
         <AgentIcon size={12} />
       </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-muted">
+      <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
         <SessionTitleText
           title={title}
           pending={session.titleGenerationPending}
@@ -132,7 +132,7 @@ export function InboxShelfRow({
           e.stopPropagation();
           onRestore();
         }}
-        className={`flex shrink-0 cursor-pointer items-center justify-center rounded text-faint transition-colors hover:bg-line/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+        className={`flex shrink-0 cursor-pointer items-center justify-center rounded text-faint transition-colors hover:bg-line/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           comfortable ? "size-9" : "size-5"
         }`}
       >

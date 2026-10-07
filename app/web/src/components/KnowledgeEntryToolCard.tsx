@@ -20,7 +20,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   return (
     <div className="not-prose my-2 overflow-hidden rounded-xl border border-line bg-surface text-left shadow-sm">
       <div className="flex items-start gap-2 p-2.5">
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
           <BookOpen size={14} />
         </span>
         <div className="min-w-0 flex-1">
@@ -39,7 +39,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
             </span>
           ) : null}
           {(card.note ?? card.summary) ? (
-            <p className="mt-1 line-clamp-3 text-micro text-muted">
+            <p className="mt-1 line-clamp-3 text-micro text-muted-foreground">
               {card.note ?? card.summary}
             </p>
           ) : null}
@@ -51,7 +51,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
             <button
               type="button"
               onClick={() => openInPanel(card.path)}
-              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <PanelRight size={13} />
               Open in side panel
@@ -60,7 +60,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           <button
             type="button"
             onClick={() => targets.openInMain(card.path)}
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <SquareArrowOutUpRight size={13} />
             Open in Knowledge

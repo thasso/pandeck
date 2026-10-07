@@ -28,10 +28,10 @@ export function DocumentRangeNotice({
  */
 const ANCHOR_MARK = [
   "rounded-sm",
-  "bg-accent-soft",
+  "bg-accent",
   "ring-1",
   "ring-inset",
-  "ring-accent/30",
+  "ring-primary/30",
 ];
 
 /** Scroll a source renderer to the first block containing a 1-based line. */

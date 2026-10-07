@@ -138,7 +138,7 @@ export function DocumentZoomSection({
           onClick={zoom.reset}
           disabled={zoom.scale === DOCUMENT_ZOOM_DEFAULT}
           aria-label="Reset zoom to 100%"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted transition-colors hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
         >
           <RotateCcw size={13} /> Reset
         </button>

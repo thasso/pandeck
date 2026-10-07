@@ -60,7 +60,7 @@ function Header({ item }: { item: Item }) {
   const title = item.newTitle || item.title || item.pageId || "page";
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 text-micro text-accent">
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-micro text-primary">
         {actionLabel(item)}
       </span>
       {item.pageUrl ? (
@@ -141,7 +141,7 @@ function Attachment({ item }: { item: Item }) {
   return (
     <div className="space-y-0.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <Paperclip size={12} className="shrink-0 text-muted" />
+        <Paperclip size={12} className="shrink-0 text-muted-foreground" />
         <span className="min-w-0 break-all font-mono text-fg">
           {attachment.fileName}
         </span>
@@ -153,7 +153,7 @@ function Attachment({ item }: { item: Item }) {
         <div className="break-all text-faint">from {attachment.source}</div>
       ) : null}
       {item.versionMessage ? (
-        <div className="text-muted">“{item.versionMessage}”</div>
+        <div className="text-muted-foreground">“{item.versionMessage}”</div>
       ) : null}
     </div>
   );
@@ -162,7 +162,7 @@ function Attachment({ item }: { item: Item }) {
 function Labels({ item }: { item: Item }) {
   if (!item.labelsAdded?.length && !item.labelsRemoved?.length) return null;
   return (
-    <div className="text-caption text-muted">
+    <div className="text-caption text-muted-foreground">
       {item.labelsAdded?.length ? `+${item.labelsAdded.join(" +")}` : ""}
       {item.labelsAdded?.length && item.labelsRemoved?.length ? " · " : ""}
       {item.labelsRemoved?.length ? `-${item.labelsRemoved.join(" -")}` : ""}

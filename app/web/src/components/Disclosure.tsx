@@ -28,7 +28,7 @@ export function Disclosure({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-caption text-muted transition-colors hover:bg-raised/60"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-caption text-muted-foreground transition-colors hover:bg-raised/60"
       >
         <ChevronRight
           size={13}

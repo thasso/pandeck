@@ -343,7 +343,7 @@ function ViewerBody({
     );
   }
   const truncatedNote = body.truncated ? (
-    <p className="mb-3 rounded-lg border border-line bg-panel p-2 text-caption text-muted">
+    <p className="mb-3 rounded-lg border border-line bg-panel p-2 text-caption text-muted-foreground">
       Showing the first part of this file only — download it to read the rest.
     </p>
   ) : null;

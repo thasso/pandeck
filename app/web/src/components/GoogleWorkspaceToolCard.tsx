@@ -285,7 +285,7 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
     <ChatWideCard maxWidth={1120}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
         <div className="flex items-center gap-2">
-          <CalendarDays size={18} className="text-accent" />
+          <CalendarDays size={18} className="text-primary" />
           <div>
             <div className="text-body font-semibold text-fg">Calendar</div>
             <div className="text-caption text-faint">
@@ -293,7 +293,7 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted">
+        <div className="text-right text-caption text-muted-foreground">
           <div>
             {payload.date || rangeLabel(payload.localFrom, payload.localTo)}
           </div>
@@ -350,7 +350,10 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
             ))}
             {events.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted">
+                <td
+                  colSpan={7}
+                  className="px-4 py-8 text-center text-muted-foreground"
+                >
                   No calendar events found.
                 </td>
               </tr>
@@ -377,7 +380,7 @@ function CalendarEventRow({ event }: { event: CalendarEvent }) {
         <td className="whitespace-nowrap border-t border-line px-4 py-3 align-top font-mono text-caption text-fg">
           {timeRange(event.localStart, event.localEnd)}
           {event.duration && (
-            <span className="text-muted"> · {event.duration}</span>
+            <span className="text-muted-foreground"> · {event.duration}</span>
           )}
         </td>
         <td className="min-w-0 border-t border-line px-3 py-3 align-top">
@@ -514,7 +517,7 @@ function AttendancePanel({
                     href={record.meetingUri}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-accent hover:underline"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
                   >
                     <Video size={12} /> Meet
                   </a>
@@ -566,7 +569,7 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
     <ChatWideCard maxWidth={1120}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
         <div className="flex items-center gap-2">
-          <Video size={18} className="text-accent" />
+          <Video size={18} className="text-primary" />
           <div>
             <div className="text-body font-semibold text-fg">
               Google Meet records
@@ -576,7 +579,7 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted">
+        <div className="text-right text-caption text-muted-foreground">
           <div>{payload.date || rangeLabel(payload.from, payload.to)}</div>
           <div>
             {records.length} record{records.length === 1 ? "" : "s"}
@@ -613,14 +616,14 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
                   href={record.meetingUri}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="shrink-0 rounded-md border border-line px-2 py-1 text-caption text-accent hover:bg-raised"
+                  className="shrink-0 rounded-md border border-line px-2 py-1 text-caption text-primary hover:bg-raised"
                 >
                   Meet
                 </a>
               )}
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-2 text-caption text-muted">
+            <div className="mt-3 flex flex-wrap gap-2 text-caption text-muted-foreground">
               <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1">
                 <Users size={12} />{" "}
                 {record.participantCount ?? record.participants?.length ?? 0}{" "}
@@ -683,7 +686,7 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
           </article>
         ))}
         {records.length === 0 && (
-          <div className="p-6 text-center text-muted">
+          <div className="p-6 text-center text-muted-foreground">
             No Meet records found.
           </div>
         )}
@@ -706,13 +709,13 @@ function MinutesLinksList({ links }: { links: MinutesLink[] }) {
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex min-w-0 items-center gap-1 font-medium text-fg">
-              <FileText size={12} className="shrink-0 text-accent" />
+              <FileText size={12} className="shrink-0 text-primary" />
               {link.href ? (
                 <a
                   href={link.href}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="truncate text-accent hover:underline"
+                  className="truncate text-primary hover:underline"
                 >
                   {link.label}
                 </a>
@@ -720,7 +723,7 @@ function MinutesLinksList({ links }: { links: MinutesLink[] }) {
                 <span className="truncate">{link.label}</span>
               )}
             </div>
-            <span className="rounded-full bg-panel px-1.5 py-0.5 text-micro text-muted">
+            <span className="rounded-full bg-panel px-1.5 py-0.5 text-micro text-muted-foreground">
               {link.source}
             </span>
           </div>
@@ -763,13 +766,13 @@ function ArtifactList({
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex items-center gap-1 font-medium text-fg">
-                <FileText size={12} className="text-accent" />
+                <FileText size={12} className="text-primary" />
                 {href ? (
                   <a
                     href={href}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="text-accent hover:underline"
+                    className="text-primary hover:underline"
                   >
                     {label}
                   </a>
@@ -778,7 +781,7 @@ function ArtifactList({
                 )}
               </div>
               {artifact.state && (
-                <span className="rounded-full bg-raised px-1.5 py-0.5 text-micro text-muted">
+                <span className="rounded-full bg-raised px-1.5 py-0.5 text-micro text-muted-foreground">
                   {artifact.state}
                 </span>
               )}
@@ -853,7 +856,7 @@ function DrivePreviewButton({ fileId }: { fileId: string }) {
       <button
         type="button"
         onClick={() => void loadPreview()}
-        className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-caption text-accent transition-colors hover:bg-raised"
+        className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-caption text-primary transition-colors hover:bg-raised"
         aria-busy={loading}
       >
         {loading ? <Spinner size="sm" /> : null}
@@ -903,7 +906,7 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
     <ChatWideCard maxWidth={1180}>
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Mail size={18} className="shrink-0 text-accent" />
+          <Mail size={18} className="shrink-0 text-primary" />
           <div className="min-w-0">
             <div className="text-body font-semibold text-fg">Gmail search</div>
             <div className="truncate font-mono text-caption text-faint">
@@ -911,7 +914,7 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
             </div>
           </div>
         </div>
-        <div className="shrink-0 text-right text-caption text-muted">
+        <div className="shrink-0 text-right text-caption text-muted-foreground">
           <div>
             {threads.length} thread{threads.length === 1 ? "" : "s"}
           </div>
@@ -947,7 +950,10 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
           ))}
           {threads.length === 0 && (
             <tr>
-              <td colSpan={5} className="px-4 py-8 text-center text-muted">
+              <td
+                colSpan={5}
+                className="px-4 py-8 text-center text-muted-foreground"
+              >
                 No Gmail threads found.
               </td>
             </tr>
@@ -1008,7 +1014,7 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
             onClick={() => void toggleThread()}
             title={open ? "Collapse thread" : "Read thread"}
             aria-label={open ? "Collapse thread" : "Read thread"}
-            className="inline-flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-accent"
+            className="inline-flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-primary"
           >
             {loading ? (
               <Spinner size="sm" />
@@ -1023,13 +1029,13 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
         <td className="border-t border-line px-2 py-3 align-top">
           <div className="flex min-w-0 items-start gap-1.5">
             <GmailStatusIcon unread={thread.unread} />
-            <div className="min-w-0 font-mono text-caption text-muted">
+            <div className="min-w-0 font-mono text-caption text-muted-foreground">
               <div className="truncate">{latest.date}</div>
               <div className="truncate text-faint">{latest.time}</div>
             </div>
           </div>
         </td>
-        <td className="border-t border-line px-3 py-3 align-top text-muted">
+        <td className="border-t border-line px-3 py-3 align-top text-muted-foreground">
           <div className="truncate" title={sender}>
             {sender}
           </div>
@@ -1043,12 +1049,12 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
             <GmailCategoryIcons thread={thread} />
           </div>
           {thread.snippet && (
-            <div className="mt-1 line-clamp-2 overflow-hidden text-ellipsis text-caption text-muted">
+            <div className="mt-1 line-clamp-2 overflow-hidden text-ellipsis text-caption text-muted-foreground">
               {thread.snippet}
             </div>
           )}
         </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top text-muted">
+        <td className="border-t border-line px-2 py-3 text-center align-top text-muted-foreground">
           {thread.messageCount ?? 0}
         </td>
       </tr>
@@ -1103,9 +1109,12 @@ function GmailThreadCard({
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
         <div className="flex min-w-0 items-start gap-2">
           {payload.unread ? (
-            <Mail size={18} className="mt-0.5 shrink-0 text-accent" />
+            <Mail size={18} className="mt-0.5 shrink-0 text-primary" />
           ) : (
-            <MailOpen size={18} className="mt-0.5 shrink-0 text-muted" />
+            <MailOpen
+              size={18}
+              className="mt-0.5 shrink-0 text-muted-foreground"
+            />
           )}
           <div className="min-w-0">
             <div className="text-body font-semibold text-fg">
@@ -1114,7 +1123,7 @@ function GmailThreadCard({
                 href={payload.gmailUrl}
               />
             </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted">
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
               <span>{payload.unread ? "Unread" : "Read"}</span>
               <span>
                 {messages.length || payload.messageCount || 0} message
@@ -1141,7 +1150,7 @@ function GmailThreadCard({
           </div>
         </div>
         {payload.participants?.length ? (
-          <div className="max-w-72 text-right text-caption text-muted">
+          <div className="max-w-72 text-right text-caption text-muted-foreground">
             {payload.participants
               .map((p) => p.name || p.email || p.label)
               .filter(Boolean)
@@ -1155,7 +1164,7 @@ function GmailThreadCard({
           <GmailMessageArticle key={message.id ?? index} message={message} />
         ))}
         {messages.length === 0 && (
-          <div className="py-8 text-center text-muted">
+          <div className="py-8 text-center text-muted-foreground">
             No readable messages returned.
           </div>
         )}
@@ -1187,20 +1196,20 @@ function GmailMessageCard({
 function GmailMessageArticle({ message }: { message: GmailFullMessage }) {
   return (
     <article
-      className={`rounded-xl border ${message.unread ? "border-accent/40 bg-accent-soft/20" : "border-line bg-surface"} p-3`}
+      className={`rounded-xl border ${message.unread ? "border-primary/40 bg-accent/20" : "border-line bg-surface"} p-3`}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="font-medium text-fg">
             {messageSenderDisplay(message)}
           </div>
-          <div className="mt-0.5 text-caption text-muted">
+          <div className="mt-0.5 text-caption text-muted-foreground">
             {message.localDate || ""}
             {message.to ? ` · to ${message.to}` : ""}
           </div>
         </div>
         <span
-          className={`rounded-full px-2 py-1 text-micro ${message.unread ? "bg-accent-soft font-semibold text-accent" : "bg-raised text-muted"}`}
+          className={`rounded-full px-2 py-1 text-micro ${message.unread ? "bg-accent font-semibold text-primary" : "bg-raised text-muted-foreground"}`}
         >
           {message.unread ? "Unread" : "Read"}
         </span>
@@ -1222,7 +1231,7 @@ function GmailMessageArticle({ message }: { message: GmailFullMessage }) {
           {message.attachments.map((attachment, index) => (
             <span
               key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
-              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-caption text-muted"
+              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-caption text-muted-foreground"
             >
               <Paperclip size={11} /> {attachment.filename || "attachment"}
             </span>
@@ -1255,7 +1264,9 @@ function GmailSnippetList({ messages }: { messages: GmailMessageSummary[] }) {
               </span>
             </div>
             {message.snippet && (
-              <div className="mt-0.5 text-muted">{message.snippet}</div>
+              <div className="mt-0.5 text-muted-foreground">
+                {message.snippet}
+              </div>
             )}
           </div>
         ))}
@@ -1333,7 +1344,7 @@ function GmailStatusIcon({ unread }: { unread?: boolean | undefined }) {
   return (
     <span
       title={unread ? "Unread" : "Read"}
-      className={`mt-0.5 shrink-0 ${unread ? "text-accent" : "text-faint"}`}
+      className={`mt-0.5 shrink-0 ${unread ? "text-primary" : "text-faint"}`}
     >
       {unread ? <Mail size={13} /> : <MailOpen size={13} />}
     </span>
@@ -1478,7 +1489,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
     <ChatWideCard maxWidth={980}>
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
         <div className="flex min-w-0 items-start gap-2">
-          <FileText size={18} className="mt-0.5 shrink-0 text-accent" />
+          <FileText size={18} className="mt-0.5 shrink-0 text-primary" />
           <div className="min-w-0">
             <div className="text-body font-semibold text-fg">
               <ExternalTitle
@@ -1486,7 +1497,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
                 href={file?.webViewLink}
               />
             </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted">
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
               {file?.localModified && (
                 <span>Modified {file.localModified}</span>
               )}
@@ -1501,7 +1512,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
           </div>
         </div>
         {file?.owners?.[0] && (
-          <div className="text-right text-caption text-muted">
+          <div className="text-right text-caption text-muted-foreground">
             {file.owners[0].displayName || file.owners[0].emailAddress}
           </div>
         )}
@@ -1512,7 +1523,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
             {text}
           </pre>
         ) : (
-          <div className="py-8 text-center text-muted">
+          <div className="py-8 text-center text-muted-foreground">
             No readable document text was returned.
           </div>
         )}
@@ -1534,7 +1545,7 @@ function ExternalTitle({
       href={href}
       target="_blank"
       rel="noreferrer noopener"
-      className="inline-flex min-w-0 items-center gap-1 font-medium text-accent hover:underline"
+      className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline"
     >
       <span className="truncate">{title}</span>
       <ExternalLink size={12} className="shrink-0" />
@@ -1578,7 +1589,7 @@ function MeetingLinkIcon({ event }: { event: CalendarEvent }) {
       target="_blank"
       rel="noreferrer noopener"
       title={`Open ${link.label ?? providerLabel(link.provider)}${link.source ? ` (${link.source})` : ""}`}
-      className="inline-flex size-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-raised hover:text-accent"
+      className="inline-flex size-6 items-center justify-center rounded-md text-primary transition-colors hover:bg-raised hover:text-primary"
     >
       <ProviderIcon provider={link.provider} />
     </a>
@@ -1615,7 +1626,7 @@ function MinutesIcon({ links }: { links: MinutesLink[] }) {
       : `${links.length} minutes/transcript links`;
   if (!first.href)
     return (
-      <span title={title} className="inline-flex justify-center text-accent">
+      <span title={title} className="inline-flex justify-center text-primary">
         <FileText size={16} />
       </span>
     );
@@ -1625,7 +1636,7 @@ function MinutesIcon({ links }: { links: MinutesLink[] }) {
       target="_blank"
       rel="noreferrer noopener"
       title={title}
-      className="inline-flex size-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-raised hover:text-accent"
+      className="inline-flex size-6 items-center justify-center rounded-md text-primary transition-colors hover:bg-raised hover:text-primary"
     >
       <FileText size={15} />
     </a>
@@ -1727,7 +1738,7 @@ function isMinutesLike(title: string, mimeType?: string | null): boolean {
 
 function LocationLine({ location }: { location: string }) {
   return (
-    <div className="mt-0.5 truncate text-caption text-muted">
+    <div className="mt-0.5 truncate text-caption text-muted-foreground">
       <LinkifiedText text={location} />
     </div>
   );
@@ -1745,7 +1756,7 @@ function LinkifiedText({ text }: { text: string }) {
               href={part}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-accent hover:underline"
+              className="text-primary hover:underline"
             >
               {part}
             </a>

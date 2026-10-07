@@ -219,7 +219,7 @@ export function LoadedMemorySection({
           type="button"
           onClick={onOpenManager}
           title="Open Memory settings"
-          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-caption text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-caption text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ExternalLink size={11} />
           Manage memory
@@ -262,19 +262,19 @@ function LoadBatch({
       </div>
 
       {batch.deliveryState === "reused" && (
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           No new memory block was sent — the same snapshot is already in the
           model's session context.
         </p>
       )}
       {batch.deliveryState === "cleared" && (
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           A clearing marker superseded the previous snapshot; no memories
           currently apply.
         </p>
       )}
       {batch.deliveryState === "none" && batch.items.length === 0 && (
-        <p className="text-caption text-muted">
+        <p className="text-caption text-muted-foreground">
           No eligible memory for this turn.
         </p>
       )}
@@ -355,7 +355,7 @@ function LoadItemRow({
             title={open ? "Hide details" : "Details / actions"}
             aria-label={open ? "Hide details" : "Details / actions"}
             onClick={() => setOpen((v) => !v)}
-            className="rounded border border-line bg-panel p-1 text-muted hover:text-fg"
+            className="rounded border border-line bg-panel p-1 text-muted-foreground hover:text-fg"
           >
             {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
           </button>
@@ -369,7 +369,7 @@ function LoadItemRow({
               Source: {provenanceLabel(item.provenance.sourceKind)} in{" "}
               <a
                 href={sessionPath(item.provenance.sessionId)}
-                className="text-accent underline decoration-dotted"
+                className="text-primary underline decoration-dotted"
               >
                 session {item.provenance.sessionId.slice(0, 8)}
               </a>
@@ -395,7 +395,7 @@ function LoadItemRow({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
+                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-primary"
               />
               <div className="mt-1 flex gap-2">
                 <button
@@ -410,7 +410,7 @@ function LoadItemRow({
                     });
                     setEditing(false);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption text-white"
+                  className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-caption text-white"
                 >
                   <Check size={11} />
                   Save (supersede)
@@ -508,7 +508,7 @@ function IconBtn({
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted hover:text-fg"
+      className="rounded-md border border-line bg-panel p-1.5 text-muted-foreground hover:text-fg"
     >
       {children}
     </button>
@@ -529,9 +529,9 @@ function deliveryLabel(state: MemoryLoadBatch["deliveryState"]): string {
 
 function badgeTone(state: MemoryLoadBatch["deliveryState"]): string {
   return state === "injected"
-    ? "bg-accent/15 text-accent"
+    ? "bg-primary/15 text-primary"
     : state === "reused"
-      ? "bg-panel text-muted"
+      ? "bg-panel text-muted-foreground"
       : state === "cleared"
         ? "bg-amber-500/15 text-amber-500"
         : state === "failed"

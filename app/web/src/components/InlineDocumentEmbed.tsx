@@ -144,7 +144,7 @@ export function InlineDocumentEmbed({
           event.preventDefault();
           pushDocumentEntryAndAnnounce(viewerHref);
         }}
-        className="mt-1 inline-flex items-center gap-1 text-micro text-muted hover:text-fg"
+        className="mt-1 inline-flex items-center gap-1 text-micro text-muted-foreground hover:text-fg"
       >
         <Eye size={12} /> Open in viewer
       </a>

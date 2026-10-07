@@ -98,9 +98,9 @@ function Outcome({ item }: { item: JiraItem }) {
 /** `Project · Type` in the accent chip every create wears, in card and modal. */
 function IssueKind({ item }: { item: JiraItem }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 font-mono text-micro text-accent">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 font-mono text-micro text-primary">
       {item.createProjectKey}
-      <span className="text-accent/60">·</span>
+      <span className="text-primary/60">·</span>
       <span className="font-sans">{item.createIssueType}</span>
     </span>
   );
@@ -151,7 +151,7 @@ function LinkRows({ item }: { item: JiraItem }) {
   return (
     <ul className="space-y-0.5">
       {item.linkChanges.map((link, i) => (
-        <li key={i} className="text-caption text-muted">
+        <li key={i} className="text-caption text-muted-foreground">
           {link.op === "remove" ? "unlink" : link.relationship}{" "}
           <span className="font-mono text-fg">
             {link.targetIssueKey || link.linkId}
@@ -208,7 +208,7 @@ function ReadFullButton({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2 py-1 text-caption text-muted hover:bg-surface hover:text-fg"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
     >
       <Maximize2 size={12} />
       {label}
@@ -287,7 +287,7 @@ function CommentItem({
   return (
     <div className="space-y-2">
       <div>
-        <span className="text-muted">comment on </span>
+        <span className="text-muted-foreground">comment on </span>
         <IssueKeyLink item={item} />
       </div>
       {item.commentBody ? <ClippedMarkdown text={item.commentBody} /> : null}
@@ -299,7 +299,7 @@ function CommentItem({
           onClose={() => setOpen(false)}
           onDecide={onDecide}
         >
-          <div className="text-caption text-muted">
+          <div className="text-caption text-muted-foreground">
             <IssueKeyLink item={item} />
             {item.issueSummary ? ` · ${item.issueSummary}` : ""}
           </div>
@@ -320,7 +320,7 @@ function IssueKeyLink({ item }: { item: JiraItem }) {
       href={item.issueUrl}
       target="_blank"
       rel="noreferrer noopener"
-      className="font-mono text-accent hover:underline"
+      className="font-mono text-primary hover:underline"
     >
       {item.issueKey}
     </a>
@@ -333,10 +333,10 @@ function EditItem({ item }: { item: JiraItem }) {
       <div>
         <IssueKeyLink item={item} />
         {item.issueSummary ? (
-          <span className="text-muted"> · {item.issueSummary}</span>
+          <span className="text-muted-foreground"> · {item.issueSummary}</span>
         ) : null}
         {item.targetTransitionName ? (
-          <span className="text-muted">
+          <span className="text-muted-foreground">
             {" "}
             · {item.targetTransitionName}
             {item.targetStatus ? ` → ${item.targetStatus}` : ""}
@@ -349,7 +349,7 @@ function EditItem({ item }: { item: JiraItem }) {
             <div key={change.fieldId} className="flex flex-wrap gap-1.5">
               <dt className="text-faint">{change.label}</dt>
               <dd className="min-w-0 break-words">
-                <span className="text-muted line-through">
+                <span className="text-muted-foreground line-through">
                   {change.from || EMPTY_VALUE}
                 </span>{" "}
                 → <span className="text-fg">{change.to || EMPTY_VALUE}</span>
@@ -389,23 +389,25 @@ function RankItem({ item }: { item: JiraItem }) {
   return (
     <div className="space-y-1">
       <div>
-        <span className="text-muted">rank </span>
+        <span className="text-muted-foreground">rank </span>
         <span className="font-mono text-fg">
           {(item.rankIssueKeys ?? []).join(", ")}
         </span>
-        <span className="text-muted"> {item.rankPosition}</span>
+        <span className="text-muted-foreground"> {item.rankPosition}</span>
         {target ? (
           <>
-            <span className="text-muted"> </span>
+            <span className="text-muted-foreground"> </span>
             <span className="font-mono text-fg">{target}</span>
           </>
         ) : null}
-        {scope ? <span className="text-muted"> in {scope}</span> : null}
+        {scope ? (
+          <span className="text-muted-foreground"> in {scope}</span>
+        ) : null}
       </div>
       {item.rankSteps?.length ? (
         <ul className="space-y-0.5">
           {item.rankSteps.map((step, i) => (
-            <li key={i} className="text-caption text-muted">
+            <li key={i} className="text-caption text-muted-foreground">
               <span className="font-mono text-fg">{step.issueKey}</span>{" "}
               {step.placement}{" "}
               <span className="font-mono text-fg">
@@ -426,7 +428,7 @@ function RankItem({ item }: { item: JiraItem }) {
         </ul>
       ) : null}
       {item.rankResultOrder?.length ? (
-        <div className="text-caption text-muted">
+        <div className="text-caption text-muted-foreground">
           Order now:{" "}
           <span className="font-mono text-fg">
             {item.rankResultOrder.join(" → ")}
@@ -515,7 +517,7 @@ function JiraProposalDialog({
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="rounded-lg p-1 text-muted hover:bg-raised hover:text-fg"
+            className="rounded-lg p-1 text-muted-foreground hover:bg-raised hover:text-fg"
           >
             <X size={14} />
           </button>

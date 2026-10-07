@@ -532,7 +532,7 @@ function DocumentCommentLayerBody({
       <style>{`
   ::highlight(${highlightName}) {
     color: inherit;
-    background-color: color-mix(in oklab, var(--accent) 32%, transparent);
+    background-color: color-mix(in oklab, var(--primary) 32%, transparent);
   }
   ::highlight(${pendingHighlight}) {
     color: inherit;
@@ -561,7 +561,7 @@ function DocumentCommentLayerBody({
                 <button
                   type="button"
                   onClick={openSend}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-caption font-medium text-accent hover:bg-accent/10"
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-caption font-medium text-primary hover:bg-primary/10"
                 >
                   <SendHorizontal size={14} />
                   Send to session

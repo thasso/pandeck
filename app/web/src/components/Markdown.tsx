@@ -924,7 +924,7 @@ function PaObjectLink({
       {/* Live state the label cannot carry, e.g. whether a linked approval
           card is still waiting — so "approve this" reads as done once it is. */}
       {!broken && link.detail ? (
-        <span className="text-muted"> · {link.detail}</span>
+        <span className="text-muted-foreground"> · {link.detail}</span>
       ) : null}
     </a>
   );

@@ -399,7 +399,7 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
 const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
 
 const composerPill =
-  "flex h-8 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg disabled:cursor-not-allowed disabled:opacity-30";
+  "flex h-8 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg disabled:cursor-not-allowed disabled:opacity-30";
 
 function ContextMeter({ info }: { info: ContextInfo | null }) {
   const usage = info?.context;
@@ -411,7 +411,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
   const tooltipId = "composer-context-tooltip";
 
   return (
-    <div className="group/context relative flex size-8 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-fg">
+    <div className="group/context relative flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg">
       <div
         role="meter"
         aria-label="Context usage"
@@ -421,14 +421,14 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
         aria-describedby={tooltipId}
         className="size-[18px] rounded-full p-[3px]"
         style={{
-          background: `conic-gradient(var(--accent) ${clamped * 3.6}deg, var(--line-strong) 0deg)`,
+          background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--line-strong) 0deg)`,
         }}
       >
         <div className="size-full rounded-full bg-panel" />
       </div>
       <div
         id={tooltipId}
-        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-line bg-panel p-3 text-left text-caption text-muted shadow-2xl shadow-black/30 group-hover/context:block"
+        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-line bg-panel p-3 text-left text-caption text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
       >
         <div className="mb-2 flex items-center justify-between gap-3 text-caption font-semibold text-fg">
           <span>Context</span>
@@ -488,7 +488,9 @@ function ContextRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
       <span className="shrink-0 text-faint">{label}</span>
-      <span className="min-w-0 truncate text-right text-muted">{value}</span>
+      <span className="min-w-0 truncate text-right text-muted-foreground">
+        {value}
+      </span>
     </div>
   );
 }
@@ -610,16 +612,18 @@ export function ModeSelector({
               >
                 <OptionIcon
                   size={14}
-                  className={`shrink-0 ${active ? "text-accent" : "text-faint"}`}
+                  className={`shrink-0 ${active ? "text-primary" : "text-faint"}`}
                 />
                 <span
                   className={`min-w-0 flex-1 font-medium ${
-                    active ? "text-accent" : "text-fg"
+                    active ? "text-primary" : "text-fg"
                   }`}
                 >
                   {value === "build" ? "Build" : "Plan"}
                 </span>
-                {active && <Check size={13} className="shrink-0 text-accent" />}
+                {active && (
+                  <Check size={13} className="shrink-0 text-primary" />
+                )}
               </button>
             );
           })}
@@ -632,7 +636,7 @@ export function ModeSelector({
 /** The one badge shown while a session is in Plan (session header). */
 export function PlanModeBadge() {
   return (
-    <span className="shrink-0 rounded-md bg-accent-soft px-1.5 py-0.5 text-micro font-semibold text-accent">
+    <span className="shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-micro font-semibold text-primary">
       Plan
     </span>
   );
@@ -807,7 +811,7 @@ function AgentTypeSelector({
                   <div className="text-caption text-faint">{display.desc}</div>
                 </div>
                 {active && (
-                  <Check size={13} className="mt-0.5 shrink-0 text-accent" />
+                  <Check size={13} className="mt-0.5 shrink-0 text-primary" />
                 )}
               </button>
             );
@@ -2325,11 +2329,11 @@ export const Composer = memo(function Composer({
                       }}
                       className={`flex w-full items-start gap-3 border-l-2 px-3 py-2 text-left transition-colors ${
                         index === slashIndex
-                          ? "border-accent bg-accent-soft text-fg"
-                          : "border-transparent text-muted hover:bg-raised/70 hover:text-fg"
+                          ? "border-primary bg-accent text-fg"
+                          : "border-transparent text-muted-foreground hover:bg-raised/70 hover:text-fg"
                       }`}
                     >
-                      <span className="mt-0.5 font-mono text-caption text-accent">
+                      <span className="mt-0.5 font-mono text-caption text-primary">
                         /{cmd.name}
                       </span>
                       <span className="min-w-0 flex-1">
@@ -2352,7 +2356,7 @@ export const Composer = memo(function Composer({
                     return (
                       <div
                         key={attachment.id}
-                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line bg-raised px-2 py-1.5 text-caption text-muted"
+                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line bg-raised px-2 py-1.5 text-caption text-muted-foreground"
                         title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
                       >
                         {isImage && attachment.previewUrl ? (
@@ -2362,9 +2366,9 @@ export const Composer = memo(function Composer({
                             className="size-9 rounded-lg border border-line object-cover"
                           />
                         ) : isImage ? (
-                          <Image size={16} className="text-accent" />
+                          <Image size={16} className="text-primary" />
                         ) : (
-                          <FileText size={16} className="text-accent" />
+                          <FileText size={16} className="text-primary" />
                         )}
                         <div className="min-w-0 flex-1">
                           <div className="max-w-44 truncate font-medium text-fg">
@@ -2438,7 +2442,7 @@ export const Composer = memo(function Composer({
                         aria-label="Session context"
                         aria-expanded={contextOpen}
                         data-open={contextOpen}
-                        className="flex size-8 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent-soft data-[open=true]:text-accent disabled:cursor-not-allowed disabled:opacity-30"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent data-[open=true]:text-primary disabled:cursor-not-allowed disabled:opacity-30"
                       >
                         <Plus size={16} />
                       </button>
@@ -2498,7 +2502,7 @@ export const Composer = memo(function Composer({
                       title={runtimeTitle}
                       aria-label={runtimeTitle}
                       aria-expanded={runtimeOpen}
-                      className="flex h-8 min-w-0 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent-soft data-[open=true]:text-accent"
+                      className="flex h-8 min-w-0 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent data-[open=true]:text-primary"
                       data-open={runtimeOpen}
                     >
                       {model ? (
@@ -2537,12 +2541,12 @@ export const Composer = memo(function Composer({
                       title="Conversation branches"
                       aria-label="Conversation branches"
                       aria-expanded={branchesOpen}
-                      className="relative flex size-8 items-center justify-center rounded-xl text-faint transition-colors hover:bg-raised hover:text-accent data-[open=true]:bg-accent-soft data-[open=true]:text-accent"
+                      className="relative flex size-8 items-center justify-center rounded-xl text-faint transition-colors hover:bg-raised hover:text-primary data-[open=true]:bg-accent data-[open=true]:text-primary"
                       data-open={branchesOpen && showBranches}
                     >
                       <GitFork size={15} />
                       {branchCount > 1 && (
-                        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent px-1 text-micro font-semibold text-accent-fg">
+                        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
                           {branchCount}
                         </span>
                       )}
@@ -2752,10 +2756,10 @@ function BusyModeSwitch({
       aria-checked={mode === value}
       onClick={() => onChange(value)}
       title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
-      className={`h-6 rounded-full px-2.5 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`h-6 rounded-full px-2.5 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         mode === value
-          ? "bg-accent-soft text-fg ring-1 ring-inset ring-accent/40"
-          : "text-muted hover:text-fg"
+          ? "bg-accent text-fg ring-1 ring-inset ring-primary/40"
+          : "text-muted-foreground hover:text-fg"
       }`}
     >
       {label}
@@ -2842,7 +2846,7 @@ function CompactComposerBar({
           title={expandHint}
           aria-label={expandHint}
           aria-expanded={false}
-          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-body text-faint transition-colors hover:bg-raised hover:text-muted disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-body text-faint transition-colors hover:bg-raised hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </button>
@@ -2871,7 +2875,7 @@ function CompactComposerBar({
           className={`flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint ${
             primaryAction === "stop"
               ? COMPOSER_STOP_TONE_CLASS
-              : "bg-accent text-accent-fg hover:bg-accent/90"
+              : "bg-primary text-primary-foreground hover:bg-primary/90"
           }`}
         >
           {primaryAction === "stop" ? (
@@ -2901,11 +2905,13 @@ function BranchPanel({
       )}
 
       <BranchSection title="Current">
-        <div className="rounded-xl border border-accent/25 bg-accent-soft px-3 py-2">
+        <div className="rounded-xl border border-primary/25 bg-accent px-3 py-2">
           <div className="truncate font-medium text-fg">
             {info.currentTitle}
           </div>
-          <div className="mt-0.5 text-caption text-muted">Current session</div>
+          <div className="mt-0.5 text-caption text-muted-foreground">
+            Current session
+          </div>
         </div>
       </BranchSection>
 
@@ -2968,8 +2974,8 @@ function BranchItem({
         size={13}
         className={
           tone === "parent"
-            ? "mt-0.5 shrink-0 rotate-180 text-accent"
-            : "mt-0.5 shrink-0 text-accent"
+            ? "mt-0.5 shrink-0 rotate-180 text-primary"
+            : "mt-0.5 shrink-0 text-primary"
         }
       />
       <span className="min-w-0 flex-1">

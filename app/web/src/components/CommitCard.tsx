@@ -15,7 +15,7 @@ import type { CommitDisplay, CommitFileChange } from "@assistant/shared";
 
 function tone(commit: CommitDisplay): string {
   if (commit.status === "committed") return "border-success/30 bg-success-soft";
-  if (commit.status === "dry-run") return "border-accent/30 bg-accent-soft";
+  if (commit.status === "dry-run") return "border-primary/30 bg-accent";
   if (commit.status === "blocked" || commit.status === "failed")
     return "border-danger/30 bg-danger-soft";
   return "border-line bg-panel";
@@ -25,7 +25,7 @@ function statusIcon(commit: CommitDisplay) {
   if (commit.status === "committed")
     return <CheckCircle2 size={16} className="text-success" />;
   if (commit.status === "dry-run")
-    return <GitCommitHorizontal size={16} className="text-accent" />;
+    return <GitCommitHorizontal size={16} className="text-primary" />;
   return <XCircle size={16} className="text-danger" />;
 }
 
@@ -69,7 +69,7 @@ export function CommitCard({
               </div>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-3 text-caption text-muted">
+          <div className="mt-1 flex flex-wrap gap-3 text-caption text-muted-foreground">
             <span>
               {commit.totals.files} file{commit.totals.files === 1 ? "" : "s"}
             </span>
@@ -82,7 +82,7 @@ export function CommitCard({
               {commit.totals.deletions}
             </span>
             {commit.dryRun && (
-              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-accent">
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
                 no changes committed
               </span>
             )}
@@ -92,7 +92,7 @@ export function CommitCard({
               </span>
             )}
             {commit.stagedOnly && (
-              <span className="rounded-full bg-accent/15 px-2 py-0.5 text-accent">
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
                 staged only
               </span>
             )}
@@ -102,7 +102,7 @@ export function CommitCard({
           <button
             type="button"
             onClick={() => onAccept(commit.entryId!)}
-            className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-accent/90"
+            className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-primary/90"
           >
             Commit this
           </button>
@@ -130,10 +130,10 @@ export function CommitCard({
               {commit.addressedTasks!.map((task) => (
                 <div
                   key={task.id}
-                  className="flex items-center gap-2 text-caption text-muted"
+                  className="flex items-center gap-2 text-caption text-muted-foreground"
                 >
                   <span
-                    className={`size-1.5 rounded-full ${task.status === "done" ? "bg-success" : "bg-accent"}`}
+                    className={`size-1.5 rounded-full ${task.status === "done" ? "bg-success" : "bg-primary"}`}
                   />
                   <span className="min-w-0 flex-1 truncate text-fg">
                     {task.title}
@@ -150,7 +150,7 @@ export function CommitCard({
             <button
               type="button"
               onClick={() => setFilesOpen((open) => !open)}
-              className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted"
+              className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
             >
               <ChevronDown
                 size={12}
@@ -169,7 +169,7 @@ export function CommitCard({
                     {file.path}
                   </span>
                   {file.sessionTouched && (
-                    <span className="rounded bg-accent/15 px-1.5 py-0.5 text-micro text-accent">
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-micro text-primary">
                       session
                     </span>
                   )}

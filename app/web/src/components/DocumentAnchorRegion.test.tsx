@@ -32,10 +32,10 @@ it("scrolls to and visibly marks every line in an inclusive range", () => {
   expect(container.querySelectorAll("[data-document-anchor]")).toHaveLength(2);
   expect(
     container.querySelector('[data-source-line-start="2"]')?.className,
-  ).toContain("bg-accent-soft");
+  ).toContain("bg-accent");
   expect(
     container.querySelector('[data-source-line-start="4"]')?.className,
-  ).not.toContain("bg-accent-soft");
+  ).not.toContain("bg-accent");
   expect(scrollIntoView).toHaveBeenCalledOnce();
 
   act(() => {
@@ -56,10 +56,10 @@ it("scrolls to and visibly marks every line in an inclusive range", () => {
   expect(container.querySelectorAll("[data-document-anchor]")).toHaveLength(1);
   expect(
     container.querySelector('[data-source-line-start="2"]')?.className,
-  ).not.toContain("bg-accent-soft");
+  ).not.toContain("bg-accent");
   expect(
     container.querySelector('[data-source-line-start="4"]')?.className,
-  ).toContain("bg-accent-soft");
+  ).toContain("bg-accent");
   act(() => root.unmount());
   container.remove();
 });
@@ -101,7 +101,7 @@ it("re-marks addressed lines a renderer replaces after the first paint", async (
   expect(container.querySelectorAll("[data-document-anchor]")).toHaveLength(1);
   expect(
     container.querySelector('[data-source-line-start="2"]')?.className,
-  ).toContain("bg-accent-soft");
+  ).toContain("bg-accent");
   // The reader is not thrown back to the line a second time.
   expect(scrollIntoView).toHaveBeenCalledOnce();
   act(() => root.unmount());

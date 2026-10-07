@@ -84,7 +84,7 @@ export function DictationTrace({
         active={dictation.phase === "recording"}
         className={`h-5 min-w-0 flex-1 ${dictation.phase === "recording" ? "text-danger" : "text-faint"}`}
       />
-      <span className="shrink-0 tabular-nums text-caption text-muted">
+      <span className="shrink-0 tabular-nums text-caption text-muted-foreground">
         {dictation.uploading
           ? "uploading…"
           : dictation.phase === "transcribing"
@@ -114,7 +114,7 @@ export function DictationDiscardButton({
       onClick={onCancel}
       title="Discard recording"
       aria-label="Discard recording"
-      className={`flex shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-danger/10 hover:text-danger ${
+      className={`flex shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger ${
         dense ? "size-7" : "size-8"
       }`}
     >
@@ -194,7 +194,7 @@ export function DictationToggleButton({
       }
       className={`flex shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
         busy && !steady ? "size-10" : idleSize === "md" ? "size-9" : "size-8"
-      } ${phase === "recording" ? "bg-danger text-accent-fg hover:bg-danger/90" : "text-muted hover:bg-raised hover:text-fg"}`}
+      } ${phase === "recording" ? "bg-danger text-primary-foreground hover:bg-danger/90" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
     >
       {/* Arming is NOT a spinner: a spinner says "waiting for an answer", and
           there is no request here — the microphone and the socket are opening.
