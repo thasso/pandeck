@@ -2157,8 +2157,10 @@ export const Composer = memo(function Composer({
           // Opaque: InputGroup's own fill is transparent (dark: `bg-input/30`),
           // which lets the transcript scrolling underneath show through. No
           // focus border or ring either: the composer is the page's one text
-          // field and its caret already says where focus is.
-          className={`relative z-10 h-auto flex-col items-stretch bg-background dark:bg-card has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
+          // field and its caret already says where focus is. Its corners are
+          // deliberately rounder than the theme radius and do not follow it:
+          // the composer is the one object on the page meant to read as such.
+          className={`relative z-10 h-auto flex-col items-stretch rounded-[1.25rem] bg-background dark:bg-card has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
             barless mobile composer, which collapses to nothing and lets the object
