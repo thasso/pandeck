@@ -16,7 +16,10 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import type { PortForwardTunnelStatus } from "@assistant/shared/portForwarding";
+import type {
+  PortForwardFailure,
+  PortForwardTunnelStatus,
+} from "@assistant/shared/portForwarding";
 import {
   isPortForwardPort,
   PORT_FORWARD_MAX_PORT,
@@ -140,6 +143,14 @@ function expiryLabel(expiresAt: string, now: number): string {
   const remaining = new Date(expiresAt).getTime() - now;
   if (!Number.isFinite(remaining)) return "expiry unknown";
   return remaining <= 0 ? "expired" : `expires in ${elapsedLabel(remaining)}`;
+}
+
+/**
+ * The shell's word on the last connection the server refused. It stays until
+ * a connection is carried again, so it says when, not just what.
+ */
+function failureLabel(failure: PortForwardFailure, now: number): string {
+  return `A connection failed ${elapsedLabel(now - failure.atMs)} ago: ${failure.message}`;
 }
 
 function omit<K extends string | number, T>(
@@ -402,6 +413,12 @@ export function PortForwardingSettingsSection() {
                             </Button>
                           </div>
                         </div>
+                        {status.lastFailure && (
+                          <ErrorNote
+                            className="mt-2"
+                            message={failureLabel(status.lastFailure, now)}
+                          />
+                        )}
                         {rowError && (
                           <ErrorNote className="mt-2" message={rowError} />
                         )}

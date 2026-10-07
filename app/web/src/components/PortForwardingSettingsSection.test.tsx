@@ -49,6 +49,7 @@ const status = (
   serverOrigin: "https://app.acme.test",
   activeConnections: 0,
   expiresAt: new Date(Date.now() + 23 * 60 * 60_000).toISOString(),
+  lastFailure: null,
   ...extra,
 });
 
@@ -345,6 +346,28 @@ it("keeps the row and its error when the listener itself could not be stopped", 
     "Port-forward manager is unavailable.",
   );
   expect(getToasts()).toEqual([]);
+});
+
+it("shows the shell's last failed connection on its row", async () => {
+  shell.list.mockResolvedValue([
+    status(6006, {
+      lastFailure: {
+        message:
+          "The server closed the connection: nothing is listening on port 6006 there.",
+        atMs: Date.now() - 2 * 60_000,
+      },
+    }),
+    status(3000),
+  ]);
+  await mount();
+  const alerts = [...container!.querySelectorAll('[role="alert"]')];
+  expect(alerts).toHaveLength(1);
+  expect(alerts[0]?.textContent).toBe(
+    "A connection failed 2m ago: The server closed the connection: nothing is listening on port 6006 there.",
+  );
+  expect(alerts[0]?.closest("li")?.textContent).toContain(
+    "http://localhost:6006",
+  );
 });
 
 it("labels a forward past its expiry as expired", async () => {

@@ -33,6 +33,15 @@ export interface PortForwardGrantRevokeRequest {
   id: string;
 }
 
+/**
+ * The most recent connection the server did not carry, kept until one is
+ * carried again. The browser sees such a failure only as a reset.
+ */
+export interface PortForwardFailure {
+  message: string;
+  atMs: number;
+}
+
 /** Public state reported by the native shell. */
 export interface PortForwardTunnelStatus {
   port: number;
@@ -40,4 +49,5 @@ export interface PortForwardTunnelStatus {
   serverOrigin: string;
   activeConnections: number;
   expiresAt: string;
+  lastFailure: PortForwardFailure | null;
 }
