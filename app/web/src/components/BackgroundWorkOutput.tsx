@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { AnsiText } from "./common/AnsiText.tsx";
 import { CollapsibleOutput } from "./common/CollapsibleOutput.tsx";
+import { ErrorNote } from "./common/load.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { Button } from "@/components/ui/button";
 
 /** How much of a captured log the panel holds in memory; the link has the rest. */
 const BACKGROUND_OUTPUT_INLINE_MAX_BYTES = 64 * 1024;
@@ -80,77 +83,81 @@ export function BackgroundWorkOutput({
     capturedBytes !== undefined ? ` · ${formatBytes(capturedBytes)}` : "";
   return (
     <div className={className}>
-      <div className="flex flex-wrap items-center gap-x-2 text-sm">
-        <button
-          type="button"
+      <div className="flex flex-wrap items-center gap-1">
+        <Button
+          variant="link"
+          size="xs"
+          className="px-0"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           {open ? "Hide output" : "Output"}
           {sizeLabel}
           {truncated ? " · truncated" : ""}
-        </button>
+        </Button>
         {open ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() => setLoad({ state: "idle" })}
-            disabled={load.state === "loading"}
+            busy={load.state === "loading"}
             title="Reload the captured output"
             aria-label="Reload the captured output"
-            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
           >
-            <RefreshCw size={12} aria-hidden="true" />
+            <RefreshCw aria-hidden="true" />
             Reload
-          </button>
+          </Button>
         ) : null}
         {/* The file itself is always one link away, whether or not the inline
             panel is open: the panel holds a bounded head, the link has it all. */}
-        <a
+        <LinkButton
+          variant="ghost"
+          size="xs"
           href={url}
           target="_blank"
           rel="noreferrer"
           title="Open the captured output file"
-          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
-          <ExternalLink size={12} aria-hidden="true" />
+          <ExternalLink aria-hidden="true" />
           Open file
-        </a>
+        </LinkButton>
       </div>
       {open ? (
-        <div className="mt-1 rounded-md border border-border bg-muted/60 px-2 py-1">
-          {load.state === "loading" || load.state === "idle" ? (
-            <p className="text-sm text-muted-foreground">Loading output…</p>
-          ) : load.state === "error" ? (
-            <p className="text-sm text-destructive">
-              Could not load the output ({load.message}).
-            </p>
-          ) : load.text.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              The process wrote nothing.
-            </p>
-          ) : (
-            <CollapsibleOutput
-              text={load.text}
-              collapsedLines={20}
-              renderContent={(visible) => (
-                <AnsiText
-                  text={visible}
-                  className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm"
-                />
-              )}
-              footerActions={
-                load.cut ? (
-                  <span className="text-sm text-muted-foreground">
-                    First{" "}
-                    {Math.round(BACKGROUND_OUTPUT_INLINE_MAX_BYTES / 1024)} KB
-                    shown; open the file for the rest.
-                  </span>
-                ) : undefined
-              }
-            />
-          )}
-        </div>
+        load.state === "error" ? (
+          <ErrorNote
+            className="mt-1"
+            message={`Could not load the output (${load.message}).`}
+            onRetry={() => setLoad({ state: "idle" })}
+          />
+        ) : (
+          <div className="mt-1 rounded-md border bg-muted/60 px-2 py-1 text-sm text-muted-foreground">
+            {load.state === "loading" || load.state === "idle" ? (
+              <p>Loading output…</p>
+            ) : load.text.length === 0 ? (
+              <p>The process wrote nothing.</p>
+            ) : (
+              <CollapsibleOutput
+                text={load.text}
+                collapsedLines={20}
+                renderContent={(visible) => (
+                  <AnsiText
+                    text={visible}
+                    className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm text-foreground"
+                  />
+                )}
+                footerActions={
+                  load.cut ? (
+                    <span>
+                      First{" "}
+                      {Math.round(BACKGROUND_OUTPUT_INLINE_MAX_BYTES / 1024)} KB
+                      shown; open the file for the rest.
+                    </span>
+                  ) : undefined
+                }
+              />
+            )}
+          </div>
+        )
       ) : null}
     </div>
   );
