@@ -64,7 +64,7 @@ export function CommitCard({
           {statusIcon(commit)}
           {statusLabel(commit)}
           {commit.repoRoot && (
-            <span className="font-mono text-sm font-normal text-muted-foreground">
+            <span className="min-w-0 font-mono text-sm font-normal wrap-anywhere text-muted-foreground">
               {commit.repoRoot}
             </span>
           )}
@@ -102,7 +102,7 @@ export function CommitCard({
             <p className="mb-1 text-xs font-medium text-muted-foreground">
               Commit message
             </p>
-            <pre className="rounded-lg bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
+            <pre className="rounded-lg bg-muted p-2 font-mono text-sm wrap-anywhere whitespace-pre-wrap">
               {commit.commitMessage}
             </pre>
           </div>

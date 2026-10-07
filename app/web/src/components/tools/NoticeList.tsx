@@ -26,8 +26,11 @@ export function NoticeList({
     >
       {variant === "warning" ? <AlertTriangle /> : <XCircle />}
       {title ? <AlertTitle>{title}</AlertTitle> : null}
-      <AlertDescription>
-        <ul className="list-disc pl-5">
+      {/* Items carry file paths and ids with no break opportunity: the grid
+          cell may shrink below them (`min-w-0`) and they wrap anywhere rather
+          than push the card past the screen edge. */}
+      <AlertDescription className="min-w-0">
+        <ul className="list-disc pl-5 wrap-anywhere">
           {items.map((item, index) => (
             <li key={index}>{item}</li>
           ))}
