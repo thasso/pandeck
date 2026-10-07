@@ -189,7 +189,7 @@ export function SpawnedSessionsLedge({
               control the user has to know to scroll for is not offered. */}
           <div
             data-spawned-sessions-rows
-            className="max-h-72 overflow-y-auto border-b py-1"
+            className="max-h-72 overflow-y-auto border-b"
           >
             {view.rows.map((card) => (
               <ClusterChildRow
@@ -199,6 +199,7 @@ export function SpawnedSessionsLedge({
                 active={false}
                 relation="spawned"
                 tabbable
+                flush
                 onOpen={onOpenSession}
               />
             ))}
@@ -209,7 +210,8 @@ export function SpawnedSessionsLedge({
             <Button
               variant="ghost"
               size="sm"
-              className="w-full justify-start"
+              // Edge to edge like the strip's header (see above).
+              className="w-full justify-start rounded-none bg-clip-border"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
             >
