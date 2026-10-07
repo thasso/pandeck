@@ -159,7 +159,7 @@ function JiraIssueSearchCard({ payload }: { payload: JiraSearchPayload }) {
         <div className="flex min-w-0 items-center gap-2">
           <FolderKanban size={18} className="shrink-0 text-primary" />
           <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               Jira issue search
             </div>
             {payload.jiraSearchUrl ? (
@@ -167,20 +167,20 @@ function JiraIssueSearchCard({ payload }: { payload: JiraSearchPayload }) {
                 href={payload.jiraSearchUrl}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="inline-flex max-w-full items-center gap-1 font-mono text-caption text-primary hover:underline"
+                className="inline-flex max-w-full items-center gap-1 font-mono text-sm text-primary hover:underline"
                 title="Open JQL in Jira"
               >
                 <span className="truncate">{payload.jql || "JQL search"}</span>
                 <ExternalLink size={11} className="shrink-0" />
               </a>
             ) : (
-              <div className="truncate font-mono text-caption text-faint">
+              <div className="truncate font-mono text-sm text-faint">
                 {payload.jql || "JQL search"}
               </div>
             )}
           </div>
         </div>
-        <div className="shrink-0 text-right text-caption text-muted-foreground">
+        <div className="shrink-0 text-right text-sm text-muted-foreground">
           <div>
             {issues.length} issue{issues.length === 1 ? "" : "s"}
           </div>
@@ -188,8 +188,8 @@ function JiraIssueSearchCard({ payload }: { payload: JiraSearchPayload }) {
         </div>
       </header>
       <div className="max-w-full overflow-x-auto overscroll-x-contain">
-        <table className="w-max min-w-full border-separate border-spacing-0 text-left text-caption">
-          <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
+        <table className="w-max min-w-full border-separate border-spacing-0 text-left text-sm">
+          <thead className="bg-surface/70 text-xs uppercase tracking-wide text-faint">
             <tr>
               <th
                 className="sticky left-0 z-30 w-9 bg-surface/95 px-2 py-2 font-medium shadow-[1px_0_0_var(--color-line)]"
@@ -290,31 +290,31 @@ function JiraIssueDetails({
   return (
     <div className="w-full min-w-0 space-y-3">
       <div className="min-w-0 overflow-hidden rounded-xl border border-line bg-panel p-3">
-        <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
           Issue details
         </div>
-        <div className="text-body font-semibold text-fg">
+        <div className="text-sm font-semibold text-fg">
           <ExternalTitle
             title={`${issue.key ?? "Issue"}: ${issue.summary ?? ""}`}
             href={issue.issueUrl}
           />
         </div>
         {issue.descriptionMarkdown?.trim() ? (
-          <div className="mt-3 max-h-72 min-w-0 overflow-auto text-caption">
+          <div className="mt-3 max-h-72 min-w-0 overflow-auto text-sm">
             <Markdown text={issue.descriptionMarkdown} />
           </div>
         ) : issue.description?.trim() ? (
-          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-caption text-fg">
+          <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-sm text-fg">
             {issue.description}
           </pre>
         ) : (
-          <div className="mt-3 text-caption text-faint">
+          <div className="mt-3 text-sm text-faint">
             No description returned.
           </div>
         )}
       </div>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
-        <div className="grid min-w-0 grid-cols-2 gap-2 rounded-xl border border-line bg-panel p-3 text-caption">
+        <div className="grid min-w-0 grid-cols-2 gap-2 rounded-xl border border-line bg-panel p-3 text-sm">
           <Detail
             label="Project"
             value={[issue.project?.key, issue.project?.name]
@@ -333,7 +333,7 @@ function JiraIssueDetails({
           <Detail label="Updated" value={formatDate(issue.updated)} />
         </div>
         <div className="min-w-0 rounded-xl border border-line bg-panel p-3">
-          <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
             Returned fields
           </div>
           <div className="max-h-72 overflow-auto pr-1">
@@ -344,19 +344,16 @@ function JiraIssueDetails({
                   key={field.id}
                   className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2 border-t border-line/70 py-1.5 first:border-t-0"
                 >
-                  <div
-                    className="truncate text-caption text-faint"
-                    title={field.id}
-                  >
+                  <div className="truncate text-sm text-faint" title={field.id}>
                     {field.name}
                   </div>
-                  <div className="min-w-0 break-words text-caption text-fg">
+                  <div className="min-w-0 break-words text-sm text-fg">
                     {field.valueText}
                   </div>
                 </div>
               ))}
             {!fields.some((field) => field.valueText) && (
-              <div className="text-caption text-faint">
+              <div className="text-sm text-faint">
                 No non-empty extra fields returned.
               </div>
             )}
@@ -375,13 +372,13 @@ function JiraProjectsCard({ payload }: { payload: JiraProjectsPayload }) {
         <div className="flex items-center gap-2">
           <FolderKanban size={18} className="text-primary" />
           <div>
-            <div className="text-body font-semibold text-fg">Jira projects</div>
-            <div className="text-caption text-faint">
+            <div className="text-sm font-semibold text-fg">Jira projects</div>
+            <div className="text-sm text-faint">
               {payload.query || "Visible projects"}
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted-foreground">
+        <div className="text-right text-sm text-muted-foreground">
           <div>
             {projects.length} project{projects.length === 1 ? "" : "s"}
           </div>
@@ -389,8 +386,8 @@ function JiraProjectsCard({ payload }: { payload: JiraProjectsPayload }) {
         </div>
       </header>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-caption">
-          <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
+        <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="bg-surface/70 text-xs uppercase tracking-wide text-faint">
             <tr>
               <th className="w-9 px-2 py-2" />
               <th className="px-3 py-2 font-medium">Project</th>
@@ -443,7 +440,7 @@ function JiraProjectRow({ project }: { project: JiraProject }) {
                 title={`${project.key ?? ""}${project.key && project.name ? " · " : ""}${project.name ?? ""}`}
                 href={project.projectUrl}
               />
-              <div className="text-caption text-faint">{project.id}</div>
+              <div className="text-sm text-faint">{project.id}</div>
             </div>
           </div>
         </td>
@@ -475,22 +472,22 @@ function ProjectDetails({ project }: { project: JiraProject }) {
   return (
     <div className="grid gap-3 md:grid-cols-2">
       <div className="rounded-xl border border-line bg-panel p-3">
-        <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
           Description
         </div>
-        <div className="whitespace-pre-wrap text-caption text-fg">
+        <div className="whitespace-pre-wrap text-sm text-fg">
           {project.description || "No description returned."}
         </div>
       </div>
       <div className="rounded-xl border border-line bg-panel p-3">
-        <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
           Issue types
         </div>
         <div className="flex flex-wrap gap-1.5">
           {(project.issueTypes ?? []).map((type, typeIndex) => (
             <span
               key={type.id ?? type.name ?? typeIndex}
-              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-caption text-muted-foreground"
+              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-sm text-muted-foreground"
             >
               {type.iconUrl && (
                 <img src={type.iconUrl} alt="" className="size-4" />
@@ -499,9 +496,7 @@ function ProjectDetails({ project }: { project: JiraProject }) {
             </span>
           ))}
           {!project.issueTypes?.length && (
-            <span className="text-caption text-faint">
-              No issue types returned.
-            </span>
+            <span className="text-sm text-faint">No issue types returned.</span>
           )}
         </div>
       </div>
@@ -517,21 +512,21 @@ function JiraUsersCard({ payload }: { payload: JiraUsersPayload }) {
         <div className="flex items-center gap-2">
           <Users size={18} className="text-primary" />
           <div>
-            <div className="text-body font-semibold text-fg">Jira users</div>
-            <div className="text-caption text-faint">
+            <div className="text-sm font-semibold text-fg">Jira users</div>
+            <div className="text-sm text-faint">
               {payload.assignableOnly
                 ? `Assignable in ${payload.projectKey}`
                 : payload.query || "Visible users"}
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted-foreground">
+        <div className="text-right text-sm text-muted-foreground">
           {users.length} user{users.length === 1 ? "" : "s"}
         </div>
       </header>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-caption">
-          <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
+        <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="bg-surface/70 text-xs uppercase tracking-wide text-faint">
             <tr>
               <th className="px-3 py-2 font-medium">User</th>
               <th className="px-3 py-2 font-medium">Email</th>
@@ -558,7 +553,7 @@ function JiraUsersCard({ payload }: { payload: JiraUsersPayload }) {
                 <td className="border-t border-line px-3 py-3 text-muted-foreground">
                   {user.emailAddress || "—"}
                 </td>
-                <td className="border-t border-line px-3 py-3 font-mono text-caption text-faint">
+                <td className="border-t border-line px-3 py-3 font-mono text-sm text-faint">
                   {user.accountId || "—"}
                 </td>
                 <td className="border-t border-line px-3 py-3">
@@ -647,7 +642,7 @@ function renderIssueCell(
     );
   if (id === "created" || id === "updated" || id === "duedate")
     return (
-      <span className="block whitespace-nowrap font-mono text-caption text-muted-foreground">
+      <span className="block whitespace-nowrap font-mono text-sm text-muted-foreground">
         {formatDate(
           field?.valueText ||
             (id === "created"
@@ -814,7 +809,7 @@ function Avatar({
   label: string;
   square?: boolean;
 }) {
-  const className = `inline-flex size-6 shrink-0 items-center justify-center ${square ? "rounded-md" : "rounded-full"} bg-raised text-micro font-semibold text-faint`;
+  const className = `inline-flex size-6 shrink-0 items-center justify-center ${square ? "rounded-md" : "rounded-full"} bg-raised text-xs font-semibold text-faint`;
   if (src)
     return <img src={src} alt="" className={`${className} object-cover`} />;
   return (
@@ -853,7 +848,7 @@ function StatusChip({
   const color = statusColorClass(colorName, category);
   return (
     <span
-      className={`inline-flex max-w-full whitespace-nowrap rounded px-2 py-0.5 text-caption font-bold uppercase tracking-wide ${color}`}
+      className={`inline-flex max-w-full whitespace-nowrap rounded px-2 py-0.5 text-sm font-bold uppercase tracking-wide ${color}`}
       title={label || undefined}
     >
       <span className="truncate">{label || "—"}</span>
@@ -877,18 +872,18 @@ function statusColorClass(
 function StatusPill({ active }: { active?: boolean | null | undefined }) {
   if (active === true)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-caption text-emerald-300">
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-1 text-sm text-emerald-300">
         <ShieldCheck size={12} /> Active
       </span>
     );
   if (active === false)
     return (
-      <span className="rounded-full bg-danger/10 px-2 py-1 text-caption text-danger">
+      <span className="rounded-full bg-danger/10 px-2 py-1 text-sm text-danger">
         Inactive
       </span>
     );
   return (
-    <span className="rounded-full bg-raised px-2 py-1 text-caption text-muted-foreground">
+    <span className="rounded-full bg-raised px-2 py-1 text-sm text-muted-foreground">
       Unknown
     </span>
   );
@@ -901,13 +896,13 @@ function ChipList({ values }: { values: string[] }) {
       {values.slice(0, 5).map((value) => (
         <span
           key={value}
-          className="rounded-full bg-raised px-2 py-0.5 text-caption text-muted-foreground"
+          className="rounded-full bg-raised px-2 py-0.5 text-sm text-muted-foreground"
         >
           {value}
         </span>
       ))}
       {values.length > 5 && (
-        <span className="text-caption text-faint">+{values.length - 5}</span>
+        <span className="text-sm text-faint">+{values.length - 5}</span>
       )}
     </span>
   );
@@ -922,9 +917,7 @@ function Detail({
 }) {
   return (
     <div>
-      <div className="text-micro uppercase tracking-wide text-faint">
-        {label}
-      </div>
+      <div className="text-xs uppercase tracking-wide text-faint">{label}</div>
       <div className="mt-0.5 break-words text-fg">{value || "—"}</div>
     </div>
   );

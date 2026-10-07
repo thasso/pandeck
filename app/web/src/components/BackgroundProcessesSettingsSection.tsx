@@ -36,7 +36,7 @@ function NumberField({
 }) {
   return (
     <div className="mt-4 rounded-xl border border-line bg-panel p-4">
-      <label className="block text-caption font-medium text-fg">
+      <label className="block text-sm font-medium text-fg">
         {label}
         <input
           type="number"
@@ -58,7 +58,7 @@ function NumberField({
           className="settings-input mt-1.5 w-full"
         />
       </label>
-      <p className="mt-2 text-caption text-faint">
+      <p className="mt-2 text-sm text-faint">
         {hint} Choose a value from {min} to {max}; the default is {fallback}.
       </p>
     </div>
@@ -78,8 +78,8 @@ export function BackgroundProcessesSettingsSection({
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Background processes</h2>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <h2 className="text-sm font-semibold">Background processes</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Shell commands and monitors an agent session starts and leaves running
         after its turn ends. They are governed by PA, not by your provider
         account, and are always visible and stoppable in the background
@@ -95,10 +95,10 @@ export function BackgroundProcessesSettingsSection({
             className="mt-0.5"
           />
           <span className="min-w-0">
-            <span className="block text-caption font-medium text-fg">
+            <span className="block text-sm font-medium text-fg">
               Allow sessions to start background work
             </span>
-            <span className="mt-1 block text-caption text-faint">
+            <span className="mt-1 block text-sm text-faint">
               Turning this off denies every NEW background process. Work that is
               already running keeps running to its own deadline, stays listed,
               and can still be stopped — disabling is not a kill switch.
@@ -150,7 +150,7 @@ export function BackgroundProcessesSettingsSection({
         }
       />
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4 text-caption text-muted-foreground">
+      <div className="mt-6 rounded-xl border border-line bg-panel p-4 text-sm text-muted-foreground">
         <p className="font-medium text-fg">What these settings do not change</p>
         <ul className="mt-2 list-disc space-y-1.5 pl-4">
           <li>

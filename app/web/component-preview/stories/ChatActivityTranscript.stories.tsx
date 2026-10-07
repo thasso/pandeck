@@ -259,7 +259,7 @@ export function ChatActivityTranscript({
       }}
       className="flex flex-col bg-surface text-fg"
     >
-      <header className="shrink-0 border-b border-line px-4 py-3 text-body font-medium">
+      <header className="shrink-0 border-b border-line px-4 py-3 text-sm font-medium">
         Collapsible chat activity
       </header>
       <MessageList
@@ -273,7 +273,7 @@ export function ChatActivityTranscript({
         onResendPrompt={noop}
       />
       {destination ? (
-        <p role="status" className="px-4 text-caption text-muted-foreground">
+        <p role="status" className="px-4 text-sm text-muted-foreground">
           Preview navigation: {destination}
         </p>
       ) : null}

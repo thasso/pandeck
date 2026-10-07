@@ -44,7 +44,7 @@ export function JiraIssueApprovalBody({
   return (
     <ul className="space-y-2">
       {body.items.map((item, i) => (
-        <li key={item.clientId || i} className="text-caption">
+        <li key={item.clientId || i} className="text-sm">
           {item.operation === "create" ? (
             <CreateItem item={item} onDecide={onDecide} />
           ) : item.operation === "comment" ? (
@@ -74,20 +74,20 @@ function Outcome({ item }: { item: JiraItem }) {
   return (
     <div className="space-y-0.5">
       {item.error ? (
-        <div className="text-caption text-danger">{item.error}</div>
+        <div className="text-sm text-danger">{item.error}</div>
       ) : item.resultIssueUrl ? (
         <a
           href={item.resultIssueUrl}
           target="_blank"
           rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 text-caption text-green-600 hover:underline dark:text-green-400"
+          className="inline-flex items-center gap-1 text-sm text-green-600 hover:underline dark:text-green-400"
         >
           <ExternalLink size={11} />
           {outcomeLabel(item)}
         </a>
       ) : null}
       {item.warning ? (
-        <div className="text-caption text-yellow-600 dark:text-yellow-400">
+        <div className="text-sm text-yellow-600 dark:text-yellow-400">
           {item.warning}
         </div>
       ) : null}
@@ -98,7 +98,7 @@ function Outcome({ item }: { item: JiraItem }) {
 /** `Project · Type` in the accent chip every create wears, in card and modal. */
 function IssueKind({ item }: { item: JiraItem }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 font-mono text-micro text-primary">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 font-mono text-xs text-primary">
       {item.createProjectKey}
       <span className="text-primary/60">·</span>
       <span className="font-sans">{item.createIssueType}</span>
@@ -151,7 +151,7 @@ function LinkRows({ item }: { item: JiraItem }) {
   return (
     <ul className="space-y-0.5">
       {item.linkChanges.map((link, i) => (
-        <li key={i} className="text-caption text-muted-foreground">
+        <li key={i} className="text-sm text-muted-foreground">
           {link.op === "remove" ? "unlink" : link.relationship}{" "}
           <span className="font-mono text-fg">
             {link.targetIssueKey || link.linkId}
@@ -208,7 +208,7 @@ function ReadFullButton({
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
     >
       <Maximize2 size={12} />
       {label}
@@ -251,18 +251,18 @@ function CreateItem({
           <div className="flex flex-wrap items-center gap-2">
             <IssueKind item={item} />
           </div>
-          <h1 className="mt-2 text-title font-semibold text-fg">
+          <h1 className="mt-2 text-xl font-semibold text-fg">
             {item.createSummary}
           </h1>
           <FieldRows
             rows={fields}
-            className="mt-3 grid gap-x-6 gap-y-1 text-caption sm:grid-cols-2"
+            className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2"
           />
           <DialogSection title="Description">
             {item.createDescription ? (
               <Markdown text={item.createDescription} />
             ) : (
-              <div className="text-caption text-faint">No description.</div>
+              <div className="text-sm text-faint">No description.</div>
             )}
           </DialogSection>
           {item.linkChanges?.length ? (
@@ -299,7 +299,7 @@ function CommentItem({
           onClose={() => setOpen(false)}
           onDecide={onDecide}
         >
-          <div className="text-caption text-muted-foreground">
+          <div className="text-sm text-muted-foreground">
             <IssueKeyLink item={item} />
             {item.issueSummary ? ` · ${item.issueSummary}` : ""}
           </div>
@@ -407,7 +407,7 @@ function RankItem({ item }: { item: JiraItem }) {
       {item.rankSteps?.length ? (
         <ul className="space-y-0.5">
           {item.rankSteps.map((step, i) => (
-            <li key={i} className="text-caption text-muted-foreground">
+            <li key={i} className="text-sm text-muted-foreground">
               <span className="font-mono text-fg">{step.issueKey}</span>{" "}
               {step.placement}{" "}
               <span className="font-mono text-fg">
@@ -428,7 +428,7 @@ function RankItem({ item }: { item: JiraItem }) {
         </ul>
       ) : null}
       {item.rankResultOrder?.length ? (
-        <div className="text-caption text-muted-foreground">
+        <div className="text-sm text-muted-foreground">
           Order now:{" "}
           <span className="font-mono text-fg">
             {item.rankResultOrder.join(" → ")}
@@ -449,7 +449,7 @@ function DialogSection({
 }) {
   return (
     <section className="mt-4">
-      <div className="mb-1.5 text-micro font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-faint">
         {title}
       </div>
       {children}
@@ -510,7 +510,7 @@ function JiraProposalDialog({
         }}
       >
         <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <div className="min-w-0 flex-1 truncate text-body font-semibold text-fg">
+          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
             {title}
           </div>
           <button

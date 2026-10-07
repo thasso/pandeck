@@ -784,7 +784,7 @@ function WorktreePlaceholder({
         icon={<GitBranch size={16} />}
         title="Worktrees"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted-foreground">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-sm text-muted-foreground">
         {detail}
       </div>
     </div>
@@ -809,7 +809,7 @@ function PullRequestIndexPlaceholder({
         icon={<GitPullRequest size={16} />}
         title="Pull Requests"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted-foreground">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-sm text-muted-foreground">
         Pick a pull request to see its checks, its review and what it is joined
         to on this machine.
       </div>
@@ -4013,7 +4013,7 @@ function AppContent() {
       ? sessionShell.titleGenerationPending
       : displaySessionListItem?.titleGenerationPending === true);
   const sessionTitleHeading = (
-    <h2 className="truncate text-body font-semibold tracking-tight text-fg">
+    <h2 className="truncate text-sm font-semibold tracking-tight text-fg">
       <SessionTitleText
         title={displaySessionTitle}
         pending={displaySessionTitleGenerationPending}
@@ -4054,9 +4054,7 @@ function AppContent() {
         renderTaskPicker: () => (
           <Suspense
             fallback={
-              <div className="px-1 py-2 text-caption text-faint">
-                Loading tasks…
-              </div>
+              <div className="px-1 py-2 text-sm text-faint">Loading tasks…</div>
             }
           >
             <BacklogList

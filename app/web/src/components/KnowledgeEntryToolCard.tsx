@@ -25,21 +25,21 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
         </span>
         <div className="min-w-0 flex-1">
           <span
-            className="block truncate text-caption font-medium text-fg"
+            className="block truncate text-sm font-medium text-fg"
             title={card.title}
           >
             {card.title}
           </span>
           {card.path ? (
             <span
-              className="block truncate text-micro text-faint"
+              className="block truncate text-xs text-faint"
               title={card.path}
             >
               {card.path}
             </span>
           ) : null}
           {(card.note ?? card.summary) ? (
-            <p className="mt-1 line-clamp-3 text-micro text-muted-foreground">
+            <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">
               {card.note ?? card.summary}
             </p>
           ) : null}
@@ -51,7 +51,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
             <button
               type="button"
               onClick={() => openInPanel(card.path)}
-              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <PanelRight size={13} />
               Open in side panel
@@ -60,7 +60,7 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
           <button
             type="button"
             onClick={() => targets.openInMain(card.path)}
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <SquareArrowOutUpRight size={13} />
             Open in Knowledge

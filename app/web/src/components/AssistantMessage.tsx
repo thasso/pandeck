@@ -178,7 +178,7 @@ interface Props {
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted-foreground">
+    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm text-muted-foreground">
       {label}
     </div>
   );
@@ -195,7 +195,7 @@ function ToolGroupNoticeCard({
 }) {
   const shownTools = tools.slice(0, 6);
   return (
-    <div className="my-2 flex items-start gap-2 rounded-xl border border-primary/25 bg-accent px-3 py-2 text-caption text-muted-foreground">
+    <div className="my-2 flex items-start gap-2 rounded-xl border border-primary/25 bg-accent px-3 py-2 text-sm text-muted-foreground">
       <PackageCheck size={15} className="mt-0.5 shrink-0 text-primary" />
       <div className="min-w-0">
         <div className="font-medium text-fg">{title}</div>
@@ -205,13 +205,13 @@ function ToolGroupNoticeCard({
             {shownTools.map((tool) => (
               <span
                 key={tool}
-                className="rounded-md bg-raised px-1.5 py-0.5 font-mono text-micro text-faint"
+                className="rounded-md bg-raised px-1.5 py-0.5 font-mono text-xs text-faint"
               >
                 {tool}
               </span>
             ))}
             {tools.length > shownTools.length && (
-              <span className="px-1.5 py-0.5 text-micro text-faint">
+              <span className="px-1.5 py-0.5 text-xs text-faint">
                 +{tools.length - shownTools.length} more
               </span>
             )}
@@ -250,11 +250,11 @@ function CompactionCard({
       }
     >
       {compaction.firstKeptEntryId ? (
-        <div className="mt-1 text-caption text-faint">
+        <div className="mt-1 text-sm text-faint">
           First kept entry: {compaction.firstKeptEntryId}
         </div>
       ) : null}
-      <div className="mt-2 text-body text-fg">
+      <div className="mt-2 text-sm text-fg">
         <Markdown
           text={compaction.summary}
           sessionReferences={sessionReferences}
@@ -282,7 +282,7 @@ function ContextClearCard({
   return (
     <div className="my-3 flex items-center gap-3" role="separator">
       <span className="h-px flex-1 bg-line" aria-hidden="true" />
-      <span className="text-caption text-faint">
+      <span className="text-sm text-faint">
         {contextClear.tokensBefore === undefined
           ? "Context cleared"
           : `Context cleared — ${contextClear.tokensBefore.toLocaleString()} tokens dropped`}
@@ -620,7 +620,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           turn renders as one streaming message or splits into committed rows. */}
       <div className="assistant-message-content flex min-w-0 flex-1 flex-col gap-3 [&>*]:!my-0">
         {originLabel ? (
-          <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/20 bg-accent px-2 py-0.5 text-micro font-medium text-primary">
+          <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/20 bg-accent px-2 py-0.5 text-xs font-medium text-primary">
             <Bot size={11} className="shrink-0" />
             <span className="min-w-0 truncate">{originLabel}</span>
           </div>
@@ -643,7 +643,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         {progress && <ProgressIndicator label={progress} />}
 
         {message.error && (
-          <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-caption text-danger">
+          <div className="flex items-center gap-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-sm text-danger">
             <AlertTriangle size={13} />
             {message.error}
           </div>

@@ -158,7 +158,7 @@ export function AgentModelFields({
           />
         </SelectField>
       </div>
-      {warning ? <p className="text-caption text-warning">{warning}</p> : null}
+      {warning ? <p className="text-sm text-warning">{warning}</p> : null}
     </div>
   );
 }

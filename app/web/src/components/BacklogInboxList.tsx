@@ -133,13 +133,13 @@ function InboxRow({
         >
           <span className="flex min-w-0 items-baseline gap-1.5">
             <span
-              className={`min-w-0 flex-1 truncate text-caption ${selected ? "font-medium text-fg" : "text-fg"}`}
+              className={`min-w-0 flex-1 truncate text-sm ${selected ? "font-medium text-fg" : "text-fg"}`}
             >
               {task.title}
             </span>
             <TaskIdBadge id={task.id} />
           </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-micro">
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs">
             <span className="shrink-0 text-muted-foreground">{origin}</span>
             {showProjectBadge && task.projectId ? (
               <ProjectBadge
@@ -150,7 +150,7 @@ function InboxRow({
             ) : null}
           </span>
           {preview ? (
-            <span className="mt-0.5 block truncate text-micro text-faint">
+            <span className="mt-0.5 block truncate text-xs text-faint">
               {preview}
             </span>
           ) : null}

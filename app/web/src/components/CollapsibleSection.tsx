@@ -41,7 +41,7 @@ export function CollapsibleSection({
         <button
           type="button"
           onClick={toggle}
-          className="flex min-w-0 items-center gap-1 text-caption font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
+          className="flex min-w-0 items-center gap-1 text-sm font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
           aria-expanded={open}
         >
           <ChevronRight

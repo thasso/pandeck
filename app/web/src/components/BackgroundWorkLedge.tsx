@@ -79,7 +79,7 @@ export function BackgroundWorkLedge({
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}
-        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         <Activity
           size={13}
@@ -111,22 +111,22 @@ export function BackgroundWorkLedge({
               ))}
             </ul>
           ) : activity.activeCount > 0 ? (
-            <p className="px-1 text-caption text-faint">Loading the rows…</p>
+            <p className="px-1 text-sm text-faint">Loading the rows…</p>
           ) : (
-            <p className="px-1 text-caption text-muted-foreground">
+            <p className="px-1 text-sm text-muted-foreground">
               Nothing is running; this session still holds a retained background
               host.
             </p>
           )}
           {active.hidden > 0 ? (
-            <p className="mt-2 px-1 text-caption text-faint">
+            <p className="mt-2 px-1 text-sm text-faint">
               {active.hidden} more in the registry.
             </p>
           ) : null}
           <button
             type="button"
             onClick={() => onStopAll(sessionId)}
-            className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line text-caption text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line text-sm text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             <Square size={12} aria-hidden="true" />
             Stop all background work in this session

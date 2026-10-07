@@ -103,7 +103,7 @@ function BackgroundWorkPromptRow({
             <p className="font-medium break-words">{clippedTitle}</p>
           ) : null}
           {(outcome ?? exitDetail) ? (
-            <p className="text-caption text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               {outcome ?? exitDetail}
             </p>
           ) : null}
@@ -123,7 +123,7 @@ function BackgroundWorkPromptRow({
               className="mt-1"
             />
           ) : null}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-caption">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm">
             <button
               type="button"
               onClick={() => onOpenBackgroundWork?.(update.taskId)}
@@ -186,7 +186,7 @@ export function BackgroundWorkPromptCard({
       {/* Dropped updates stay visible while collapsed: a signal the reader has
           to open the card to discover is one this card swallowed. */}
       {presentation.omittedCount ? (
-        <p className="pl-5 text-micro text-faint">
+        <p className="pl-5 text-xs text-faint">
           {presentation.omittedCount} more update
           {presentation.omittedCount === 1 ? "" : "s"} omitted
         </p>

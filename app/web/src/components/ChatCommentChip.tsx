@@ -59,11 +59,11 @@ export function ChatCommentChip({
             setConfirmingClear(false);
           }}
           aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-caption font-medium text-primary hover:bg-primary/10"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-sm font-medium text-primary hover:bg-primary/10"
         >
           <MessageSquareText size={14} className="shrink-0" />
           <span className="min-w-0 flex-1">Comments</span>
-          <span className="shrink-0 rounded-full bg-primary/15 px-1.5 text-micro font-semibold tabular-nums">
+          <span className="shrink-0 rounded-full bg-primary/15 px-1.5 text-xs font-semibold tabular-nums">
             {comments.length}
           </span>
           <ChevronDown
@@ -92,7 +92,7 @@ export function ChatCommentChip({
                     // The whole comment on hover: the row shows one line, and
                     // the rest is worth reading without opening the editor.
                     title={comment.body}
-                    className="min-w-0 flex-1 truncate py-1.5 text-left text-caption text-fg hover:text-primary disabled:cursor-default disabled:hover:text-fg"
+                    className="min-w-0 flex-1 truncate py-1.5 text-left text-sm text-fg hover:text-primary disabled:cursor-default disabled:hover:text-fg"
                   >
                     {labelSources && comment.anchor.kind === "document" ? (
                       <span className="text-faint">
@@ -117,7 +117,7 @@ export function ChatCommentChip({
               );
             })}
           </ul>
-          <div className="flex items-center justify-end gap-1.5 border-t border-primary/20 px-1 pt-1 text-caption">
+          <div className="flex items-center justify-end gap-1.5 border-t border-primary/20 px-1 pt-1 text-sm">
             {confirmingClear ? (
               <>
                 <span className="mr-auto pl-1 text-faint">

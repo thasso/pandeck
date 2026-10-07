@@ -77,7 +77,7 @@ export function ChatDockPanel({
             {icon}
           </div>
         ) : null}
-        <div className="min-w-0 flex-1 truncate text-caption font-semibold text-fg">
+        <div className="min-w-0 flex-1 truncate text-sm font-semibold text-fg">
           {title}
         </div>
         {actions ? (

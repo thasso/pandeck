@@ -110,7 +110,7 @@ export function BacklogProjectFilterControl({
         }
         placement="auto"
         disabled={disabled}
-        className={`rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? "border-primary/60 bg-accent" : "border-line bg-panel hover:bg-raised hover:text-fg"}`}
+        className={`rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm"} ${active ? "border-primary/60 bg-accent" : "border-line bg-panel hover:bg-raised hover:text-fg"}`}
         title="Filter Backlog by Project"
       >
         {(close) => (
@@ -121,7 +121,7 @@ export function BacklogProjectFilterControl({
                 onChange(ALL_PROJECT_FILTER);
                 close();
               }}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption hover:bg-raised ${filter.kind === "all" ? "font-medium text-fg" : "text-muted-foreground"}`}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-raised ${filter.kind === "all" ? "font-medium text-fg" : "text-muted-foreground"}`}
               aria-pressed={filter.kind === "all"}
             >
               <span
@@ -130,12 +130,12 @@ export function BacklogProjectFilterControl({
               />
               <span className="min-w-0 flex-1 truncate">All projects</span>
               {filter.kind === "all" ? (
-                <span className="text-micro text-faint">current</span>
+                <span className="text-xs text-faint">current</span>
               ) : null}
             </button>
             <div className="max-h-64 overflow-y-auto">
               {options.length === 0 ? (
-                <div className="px-2 py-3 text-center text-caption text-faint">
+                <div className="px-2 py-3 text-center text-sm text-faint">
                   No Projects in the registry or Backlog yet.
                 </div>
               ) : (
@@ -161,7 +161,7 @@ export function BacklogProjectFilterControl({
                         );
                         close();
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-caption hover:bg-raised ${selected ? "font-medium text-fg" : "text-muted-foreground"}`}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-raised ${selected ? "font-medium text-fg" : "text-muted-foreground"}`}
                       aria-pressed={selected}
                     >
                       {option.kind === "project" ? (
@@ -185,12 +185,12 @@ export function BacklogProjectFilterControl({
                         {option.label}
                       </span>
                       {option.kind === "project" && !option.known ? (
-                        <span className="shrink-0 text-micro text-faint">
+                        <span className="shrink-0 text-xs text-faint">
                           stale
                         </span>
                       ) : null}
                       {selected ? (
-                        <span className="shrink-0 text-micro text-faint">
+                        <span className="shrink-0 text-xs text-faint">
                           current
                         </span>
                       ) : null}

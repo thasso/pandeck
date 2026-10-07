@@ -115,14 +115,14 @@ function BackgroundWorkRowImpl({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <p
-            className="truncate text-body font-medium text-fg"
+            className="truncate text-sm font-medium text-fg"
             title={item.label}
           >
             {item.label}
           </p>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted-foreground">
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             <span
-              className={`rounded-full px-2 py-0.5 text-micro font-medium ${TONE_CLASS[badge.tone]}`}
+              className={`rounded-full px-2 py-0.5 text-xs font-medium ${TONE_CLASS[badge.tone]}`}
             >
               {badge.label}
             </span>
@@ -141,12 +141,12 @@ function BackgroundWorkRowImpl({
               className="mt-1.5"
             />
           ) : null}
-          {host ? <p className="mt-1 text-caption text-faint">{host}</p> : null}
+          {host ? <p className="mt-1 text-sm text-faint">{host}</p> : null}
           {onOpenOwner ? (
             <button
               type="button"
               onClick={() => onOpenOwner(item.ownerSessionId)}
-              className="mt-1 max-w-full truncate text-caption text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="mt-1 max-w-full truncate text-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               {ownerTitle || "Open owning session"}
             </button>
@@ -155,7 +155,7 @@ function BackgroundWorkRowImpl({
             <button
               type="button"
               onClick={() => onOpenRegistry(item.id)}
-              className="mt-1 block text-caption text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="mt-1 block text-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Open in the background registry
             </button>
@@ -169,7 +169,7 @@ function BackgroundWorkRowImpl({
             />
           ) : null}
           {facts.length > 0 ? (
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-caption">
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
               {facts.map((fact) => (
                 <div key={fact.label} className="contents">
                   <dt className="text-faint">{fact.label}</dt>

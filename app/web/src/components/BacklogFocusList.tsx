@@ -125,7 +125,7 @@ export function BacklogFocusList({
       {buckets.map((bucket) => (
         <section key={bucket.id} aria-label={bucket.label}>
           <h3
-            className={`px-1 pb-1 font-medium uppercase tracking-wide ${tight ? "text-micro" : "text-caption"} ${BUCKET_TONE[bucket.id]}`}
+            className={`px-1 pb-1 font-medium uppercase tracking-wide ${tight ? "text-xs" : "text-sm"} ${BUCKET_TONE[bucket.id]}`}
           >
             {bucket.label}
           </h3>

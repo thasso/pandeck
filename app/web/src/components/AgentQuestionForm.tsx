@@ -117,7 +117,7 @@ export function AgentQuestionForm({
   };
 
   return (
-    <div className="space-y-3 text-caption">
+    <div className="space-y-3 text-sm">
       <div className="flex items-center gap-2 text-fg">
         <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
         <span className="min-w-0 truncate font-medium">{request.title}</span>
@@ -127,7 +127,7 @@ export function AgentQuestionForm({
           {request.intro}
         </p>
       ) : null}
-      <div className="flex items-center justify-between gap-3 text-caption text-faint">
+      <div className="flex items-center justify-between gap-3 text-sm text-faint">
         <span>
           {summary ? "Review" : `Question ${index + 1} of ${questions.length}`}
         </span>
@@ -167,7 +167,7 @@ export function AgentQuestionForm({
         <button
           type="button"
           onClick={cancel}
-          className="rounded-lg px-2 py-1 text-caption text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="rounded-lg px-2 py-1 text-sm text-faint transition-colors hover:bg-raised hover:text-fg"
         >
           Cancel
         </button>
@@ -176,7 +176,7 @@ export function AgentQuestionForm({
             type="button"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             disabled={index === 0}
-            className="rounded-lg border border-line px-2 py-1 text-caption text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-line px-2 py-1 text-sm text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
           >
             Back
           </button>
@@ -184,7 +184,7 @@ export function AgentQuestionForm({
             <button
               type="button"
               onClick={submit}
-              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-opacity hover:opacity-90"
+              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
             >
               <Check size={12} /> {discussCount ? "Submit + discuss" : "Submit"}
             </button>
@@ -192,7 +192,7 @@ export function AgentQuestionForm({
             <button
               type="button"
               onClick={goNext}
-              className="rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-opacity hover:opacity-90"
+              className="rounded-lg bg-primary px-2.5 py-1 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
             >
               {index === questions.length - 1 ? "Review" : "Next"}
             </button>
@@ -347,20 +347,20 @@ function QuestionStep({
     <section className="space-y-3 rounded-2xl border border-line bg-panel/60 p-3">
       <div>
         <div className="flex items-start justify-between gap-3">
-          <h3 className="text-body font-semibold text-fg">{question.title}</h3>
+          <h3 className="text-sm font-semibold text-fg">{question.title}</h3>
           {!question.required && (
-            <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-micro text-faint">
+            <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-xs text-faint">
               Optional
             </span>
           )}
         </div>
         {question.prompt ? (
-          <p className="mt-1 whitespace-pre-wrap text-caption text-muted-foreground">
+          <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
             {question.prompt}
           </p>
         ) : null}
         {question.helpText ? (
-          <p className="mt-1 text-caption text-faint">{question.helpText}</p>
+          <p className="mt-1 text-sm text-faint">{question.helpText}</p>
         ) : null}
       </div>
 
@@ -372,9 +372,7 @@ function QuestionStep({
       question.style === "textarea" ||
       question.allowTypedAnswer ? (
         <label className="block space-y-1.5">
-          <span className="text-caption font-medium text-faint">
-            {typedLabel}
-          </span>
+          <span className="text-sm font-medium text-faint">{typedLabel}</span>
           {question.style === "text" ? (
             <input
               value={draft.text}
@@ -382,7 +380,7 @@ function QuestionStep({
                 onDraft(question.id, { text: event.target.value })
               }
               placeholder={question.placeholder ?? "Type your answer…"}
-              className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-body text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
+              className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
             />
           ) : (
             <textarea
@@ -392,7 +390,7 @@ function QuestionStep({
               }
               rows={3}
               placeholder={question.placeholder ?? "Type your answer…"}
-              className="max-h-36 min-h-20 w-full resize-y rounded-xl border border-line bg-surface px-3 py-2 text-body text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
+              className="max-h-36 min-h-20 w-full resize-y rounded-xl border border-line bg-surface px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
             />
           )}
         </label>
@@ -442,11 +440,11 @@ function DiscussAnswerOption({
         {active ? <Check size={11} /> : null}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5 text-caption font-medium">
+        <span className="flex items-center gap-1.5 text-sm font-medium">
           <CircleHelp size={12} className="text-primary" /> Discuss in chat
           instead
         </span>
-        <span className="mt-0.5 block text-caption text-faint">
+        <span className="mt-0.5 block text-sm text-faint">
           Return this item as a follow-up topic rather than an assumed answer.
         </span>
       </span>
@@ -509,11 +507,9 @@ function ChoiceList({
               {active ? <Check size={11} /> : null}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-caption font-medium">
-                {choice.label}
-              </span>
+              <span className="block text-sm font-medium">{choice.label}</span>
               {choice.description ? (
-                <span className="mt-0.5 block text-caption text-faint">
+                <span className="mt-0.5 block text-sm text-faint">
                   {choice.description}
                 </span>
               ) : null}
@@ -537,10 +533,10 @@ function QuestionSummary({
   return (
     <section className="space-y-2 rounded-2xl border border-line bg-panel/60 p-3">
       <div>
-        <h3 className="text-body font-semibold text-fg">
+        <h3 className="text-sm font-semibold text-fg">
           Review before submitting
         </h3>
-        <p className="mt-0.5 text-caption text-muted-foreground">
+        <p className="mt-0.5 text-sm text-muted-foreground">
           Answers marked “Discuss in chat” will be returned to the agent as
           follow-up topics, not assumptions.
         </p>
@@ -557,7 +553,7 @@ function QuestionSummary({
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-caption font-medium text-fg">
+                  <div className="truncate text-sm font-medium text-fg">
                     {question.title}
                   </div>
                   <AnswerPreview question={question} answer={answer} />
@@ -565,7 +561,7 @@ function QuestionSummary({
                 <button
                   type="button"
                   onClick={() => onEdit(index)}
-                  className="shrink-0 rounded-lg px-2 py-1 text-caption text-primary transition-colors hover:bg-accent"
+                  className="shrink-0 rounded-lg px-2 py-1 text-sm text-primary transition-colors hover:bg-accent"
                 >
                   Edit
                 </button>
@@ -586,10 +582,10 @@ function AnswerPreview({
   answer: AgentQuestionAnswer | undefined;
 }) {
   if (!answer || answer.disposition === "skipped")
-    return <div className="mt-1 text-caption text-faint">Skipped</div>;
+    return <div className="mt-1 text-sm text-faint">Skipped</div>;
   if (answer.disposition === "discuss") {
     return (
-      <div className="mt-1 whitespace-pre-wrap text-caption text-primary">
+      <div className="mt-1 whitespace-pre-wrap text-sm text-primary">
         Discuss in chat{answer.text?.trim() ? ` · ${answer.text.trim()}` : ""}
       </div>
     );
@@ -599,7 +595,7 @@ function AnswerPreview({
   );
   const pieces = [...choiceLabels, answer.text?.trim()].filter(Boolean);
   return (
-    <div className="mt-1 whitespace-pre-wrap text-caption text-muted-foreground">
+    <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
       {pieces.join(choiceLabels.length && answer.text ? " · " : "") || "—"}
     </div>
   );

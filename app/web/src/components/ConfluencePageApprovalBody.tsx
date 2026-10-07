@@ -27,7 +27,7 @@ export function ConfluencePageApprovalBody({
   return (
     <ul className="space-y-3">
       {body.items.map((item, i) => (
-        <li key={item.clientId || i} className="space-y-1.5 text-caption">
+        <li key={item.clientId || i} className="space-y-1.5 text-sm">
           <Header item={item} />
           <LossWarning item={item} />
           <Attachment item={item} />
@@ -60,7 +60,7 @@ function Header({ item }: { item: Item }) {
   const title = item.newTitle || item.title || item.pageId || "page";
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-micro text-primary">
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-xs text-primary">
         {actionLabel(item)}
       </span>
       {item.pageUrl ? (
@@ -96,14 +96,14 @@ function Header({ item }: { item: Item }) {
 function LossWarning({ item }: { item: Item }) {
   if (item.operation === "delete")
     return (
-      <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
+      <div className="flex items-start gap-1.5 text-sm text-yellow-600 dark:text-yellow-400">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" />
         <span>The page and its comments move to the trash.</span>
       </div>
     );
   if (item.operation === "deleteAttachment")
     return (
-      <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
+      <div className="flex items-start gap-1.5 text-sm text-yellow-600 dark:text-yellow-400">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" />
         <span>
           The attachment moves to the trash; wherever the page embeds it shows
@@ -113,7 +113,7 @@ function LossWarning({ item }: { item: Item }) {
     );
   if (item.placement !== "replace" || !item.lossyNodes?.length) return null;
   return (
-    <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
+    <div className="flex items-start gap-1.5 text-sm text-yellow-600 dark:text-yellow-400">
       <AlertTriangle size={12} className="mt-0.5 shrink-0" />
       <span>
         Replacing the body drops content Markdown cannot carry back:{" "}
@@ -162,7 +162,7 @@ function Attachment({ item }: { item: Item }) {
 function Labels({ item }: { item: Item }) {
   if (!item.labelsAdded?.length && !item.labelsRemoved?.length) return null;
   return (
-    <div className="text-caption text-muted-foreground">
+    <div className="text-sm text-muted-foreground">
       {item.labelsAdded?.length ? `+${item.labelsAdded.join(" +")}` : ""}
       {item.labelsAdded?.length && item.labelsRemoved?.length ? " · " : ""}
       {item.labelsRemoved?.length ? `-${item.labelsRemoved.join(" -")}` : ""}
@@ -187,24 +187,24 @@ function Outcome({ item }: { item: Item }) {
   return (
     <div className="space-y-0.5">
       {item.error ? (
-        <div className="text-caption text-danger">{item.error}</div>
+        <div className="text-sm text-danger">{item.error}</div>
       ) : item.resultPageUrl ? (
         <a
           href={item.resultPageUrl}
           target="_blank"
           rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 text-caption text-green-600 hover:underline dark:text-green-400"
+          className="inline-flex items-center gap-1 text-sm text-green-600 hover:underline dark:text-green-400"
         >
           <ExternalLink size={11} />
           {outcomeLabel(item)}
         </a>
       ) : item.resultPageId ? (
-        <div className="text-caption text-green-600 dark:text-green-400">
+        <div className="text-sm text-green-600 dark:text-green-400">
           {outcomeLabel(item)}
         </div>
       ) : null}
       {item.warning ? (
-        <div className="text-caption text-yellow-600 dark:text-yellow-400">
+        <div className="text-sm text-yellow-600 dark:text-yellow-400">
           {item.warning}
         </div>
       ) : null}

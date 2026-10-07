@@ -73,7 +73,7 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
   if (status === "pending" && approval.autoApproved)
     return (
       <span
-        className="rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400"
+        className="rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400"
         title="Approved for this session; runs when the agent's turn ends"
       >
         Queued
@@ -81,34 +81,34 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
     );
   if (status === "pending")
     return (
-      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
+      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400">
         Pending approval
       </span>
     );
   if (status === "executing")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
         <Spinner size="sm" />
         Executing
       </span>
     );
   if (status === "executed" && approvalHasWarnings(approval))
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/15 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400">
         <CheckCircle2 size={9} />
         Done with warnings
       </span>
     );
   if (status === "executed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-micro font-medium text-green-600 dark:text-green-400">
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-xs font-medium text-green-600 dark:text-green-400">
         <CheckCircle2 size={9} />
         Done
       </span>
     );
   if (status === "failed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
+      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-xs font-medium text-danger">
         <XCircle size={9} />
         Failed
       </span>
@@ -116,14 +116,14 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
   if (status === "superseded")
     return (
       <span
-        className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground"
+        className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground"
         title="A newer request from this session replaced it"
       >
         Superseded
       </span>
     );
   return (
-    <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
+    <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground">
       Rejected
     </span>
   );
@@ -253,12 +253,12 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
         )}
         <div>
           <span className="text-faint">Merge:</span>{" "}
-          <span className="font-mono text-caption text-fg">{body.head}</span> →{" "}
-          <span className="font-mono text-caption text-fg">{body.base}</span>
+          <span className="font-mono text-sm text-fg">{body.head}</span> →{" "}
+          <span className="font-mono text-sm text-fg">{body.base}</span>
           {body.draft ? " · draft" : ""}
         </div>
         {body.prBody && (
-          <div className="line-clamp-4 whitespace-pre-wrap text-caption text-muted-foreground">
+          <div className="line-clamp-4 whitespace-pre-wrap text-sm text-muted-foreground">
             {body.prBody}
           </div>
         )}
@@ -279,7 +279,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
         <div className="text-faint">
           Replace description on #{body.pullNumber} with:
         </div>
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
+        <div className="line-clamp-6 whitespace-pre-wrap text-sm text-muted-foreground">
           {body.prBody === "" ? "(empty description)" : body.prBody}
         </div>
       </>
@@ -289,13 +289,13 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     return (
       <>
         {body.reviewSummary && (
-          <div className="whitespace-pre-wrap text-caption text-muted-foreground line-clamp-6">
+          <div className="whitespace-pre-wrap text-sm text-muted-foreground line-clamp-6">
             {body.reviewSummary}
           </div>
         )}
         {body.inlineComments && body.inlineComments.length > 0 && (
           <div className="space-y-1">
-            <div className="text-caption text-faint">
+            <div className="text-sm text-faint">
               {body.inlineComments.length} inline comment
               {body.inlineComments.length === 1 ? "" : "s"}:
             </div>
@@ -305,12 +305,12 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
                   key={i}
                   className="rounded-md border border-line bg-raised px-2 py-1"
                 >
-                  <span className="font-mono text-micro text-faint">
+                  <span className="font-mono text-xs text-faint">
                     {c.path}:{c.line}
                   </span>
-                  <div className="text-caption text-fg">{c.body}</div>
+                  <div className="text-sm text-fg">{c.body}</div>
                   {c.suggestion && (
-                    <pre className="mt-1 overflow-x-auto rounded bg-surface px-1.5 py-1 text-micro text-fg">
+                    <pre className="mt-1 overflow-x-auto rounded bg-surface px-1.5 py-1 text-xs text-fg">
                       <code>{c.suggestion}</code>
                     </pre>
                   )}
@@ -344,7 +344,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
         {rows.map((row) => (
           <div key={row.label}>
             <span className="text-faint">{row.label}:</span>{" "}
-            <span className="font-mono text-caption text-fg">
+            <span className="font-mono text-sm text-fg">
               {row.people.join(", ")}
             </span>
           </div>
@@ -353,7 +353,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     );
   }
   return body.commentBody ? (
-    <div className="whitespace-pre-wrap text-caption text-muted-foreground line-clamp-6">
+    <div className="whitespace-pre-wrap text-sm text-muted-foreground line-clamp-6">
       {body.commentBody}
     </div>
   ) : null;
@@ -397,13 +397,13 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
           {body.operation === "edit" && (
             <div className="text-faint">Replace description with:</div>
           )}
-          <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
+          <div className="line-clamp-6 whitespace-pre-wrap text-sm text-muted-foreground">
             {text}
           </div>
         </>
       )}
       {body.newLabels?.length ? (
-        <div className="flex items-start gap-1.5 text-caption text-warning">
+        <div className="flex items-start gap-1.5 text-sm text-warning">
           <AlertTriangle size={12} className="mt-0.5 shrink-0" />
           <span>
             Not yet in {body.repo}, GitHub will create:{" "}
@@ -426,10 +426,10 @@ function GithubBranchDeleteBody({
         <li key={item.branch} className="space-y-0.5">
           <div className="flex min-w-0 items-center gap-1.5">
             <GitBranch size={12} className="shrink-0 text-faint" />
-            <span className="break-all font-mono text-caption text-fg">
+            <span className="break-all font-mono text-sm text-fg">
               {item.branch}
             </span>
-            <span className="font-mono text-micro text-faint">
+            <span className="font-mono text-xs text-faint">
               {item.headSha.slice(0, 7)}
             </span>
             {item.deleted ? (
@@ -439,14 +439,14 @@ function GithubBranchDeleteBody({
             ) : null}
           </div>
           {item.error ? (
-            <div className="break-words pl-4 text-caption text-danger">
+            <div className="break-words pl-4 text-sm text-danger">
               {item.error}
             </div>
           ) : null}
           {item.openPullRequests?.map((pull) => (
             <div
               key={`${pull.role}-${pull.number}`}
-              className="flex items-start gap-1.5 pl-4 text-caption text-warning"
+              className="flex items-start gap-1.5 pl-4 text-sm text-warning"
             >
               <AlertTriangle size={12} className="mt-0.5 shrink-0" />
               <a
@@ -470,7 +470,7 @@ function GithubBranchDeleteBody({
 
 function GitTagBody({ body }: { body: GitTagApprovalBody }) {
   return (
-    <div className="space-y-1 text-caption">
+    <div className="space-y-1 text-sm">
       <div>
         Tag <span className="font-mono text-fg">{body.tag}</span> at{" "}
         <span className="break-all font-mono text-fg">{body.targetSha}</span>
@@ -500,26 +500,26 @@ function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
     <>
       <div>
         <span className="text-faint">Tag:</span>{" "}
-        <span className="font-mono text-caption text-fg">{body.tag}</span>
+        <span className="font-mono text-sm text-fg">{body.tag}</span>
         {body.draft ? " · draft" : ""}
         {body.prerelease ? " · prerelease" : ""}
       </div>
       <div>
         <span className="text-faint">At:</span>{" "}
-        <span className="font-mono text-caption text-fg">
+        <span className="font-mono text-sm text-fg">
           {body.targetSha.slice(0, 8)}
         </span>
         {body.targetRef ? (
           <span className="text-muted-foreground"> ({body.targetRef})</span>
         ) : null}
         {body.targetSubject ? (
-          <div className="text-caption text-muted-foreground">
+          <div className="text-sm text-muted-foreground">
             {body.targetSubject}
           </div>
         ) : null}
       </div>
       {body.notes && (
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
+        <div className="line-clamp-6 whitespace-pre-wrap text-sm text-muted-foreground">
           {body.notes}
         </div>
       )}
@@ -543,22 +543,17 @@ function ManagedMergeBody({
     <>
       <div>
         <span className="text-faint">Merge:</span>{" "}
-        <span className="font-mono text-caption text-fg">
-          {body.headBranch}
-        </span>{" "}
-        →{" "}
-        <span className="font-mono text-caption text-fg">
-          {body.baseBranch}
-        </span>{" "}
+        <span className="font-mono text-sm text-fg">{body.headBranch}</span> →{" "}
+        <span className="font-mono text-sm text-fg">{body.baseBranch}</span>{" "}
         <span className="text-faint">(default branch)</span>
       </div>
-      <div className="text-caption text-muted-foreground">
+      <div className="text-sm text-muted-foreground">
         {body.repo}#{body.number} · {body.method} ·{" "}
         {body.deleteRemoteBranch
           ? "delete the remote branch"
           : "keep the remote branch"}
       </div>
-      <div className="text-caption text-faint">
+      <div className="text-sm text-faint">
         Head <span className="font-mono">{body.headSha.slice(0, 8)}</span> ·
         checks {checks.state}
         {checks.total !== undefined ? ` (${checks.total})` : ""}
@@ -575,11 +570,11 @@ function ManagedMergeBody({
           : "unknown"}
         {body.draft ? " · draft" : ""}
       </div>
-      <div className="text-caption text-faint">
+      <div className="text-sm text-faint">
         Repository allows: {body.supportedMethods.join(", ") || "no method"}
       </div>
       {body.linkedTask ? (
-        <div className="text-caption text-faint">
+        <div className="text-sm text-faint">
           Task-{body.linkedTask.id}: {body.linkedTask.title}
         </div>
       ) : null}
@@ -683,10 +678,10 @@ function SpawnRow({
     >
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-caption font-semibold text-fg">
+          <div className="truncate text-sm font-semibold text-fg">
             {item.title}
           </div>
-          <div className="truncate text-caption text-faint">
+          <div className="truncate text-sm text-faint">
             {spawnTargetLine(item)}
           </div>
         </div>
@@ -694,7 +689,7 @@ function SpawnRow({
           <button
             type="button"
             onClick={() => onEdit({ skip: !skipped })}
-            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface hover:text-fg"
+            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-surface hover:text-fg"
           >
             {skipped ? "Include" : "Skip"}
           </button>
@@ -731,7 +726,7 @@ function SpawnRow({
           />
         </div>
       ) : (
-        <div className="mt-1 text-caption text-muted-foreground">
+        <div className="mt-1 text-sm text-muted-foreground">
           {[
             selected?.name ?? item.modelName ?? item.modelId,
             selected?.accountName ?? item.accountName,
@@ -743,7 +738,7 @@ function SpawnRow({
       )}
 
       {warning && (
-        <div className="mt-1 flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
+        <div className="mt-1 flex items-start gap-1.5 text-sm text-yellow-600 dark:text-yellow-400">
           <AlertTriangle size={12} className="mt-0.5 shrink-0" />
           <span>{warning}</span>
         </div>
@@ -753,12 +748,12 @@ function SpawnRow({
         type="button"
         onClick={() => setShowPrompt((open) => !open)}
         aria-expanded={showPrompt}
-        className="mt-1 text-caption text-primary hover:underline"
+        className="mt-1 text-sm text-primary hover:underline"
       >
         {showPrompt ? "Hide opening message" : "more…"}
       </button>
       {showPrompt && (
-        <div className="mt-1 whitespace-pre-wrap rounded-md bg-surface px-2 py-1.5 text-caption text-fg">
+        <div className="mt-1 whitespace-pre-wrap rounded-md bg-surface px-2 py-1.5 text-sm text-fg">
           {item.prompt}
         </div>
       )}
@@ -767,7 +762,7 @@ function SpawnRow({
         <div className="mt-1">
           <a
             href={sessionPath(item.resultSessionId)}
-            className="text-caption text-primary underline decoration-dotted underline-offset-2 hover:decoration-solid"
+            className="text-sm text-primary underline decoration-dotted underline-offset-2 hover:decoration-solid"
             onClick={(event) => {
               const id = item.resultSessionId;
               if (
@@ -835,11 +830,11 @@ function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
       <ul className="divide-y divide-line">
         {body.items.map((item) => (
           <li key={item.messageId} className="space-y-1 px-2.5 py-2">
-            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-caption">
+            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-sm">
               <span className="text-faint">From</span>
               <span className="break-words text-fg">{item.sender}</span>
             </div>
-            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-caption">
+            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-sm">
               <span className="text-faint">Subject</span>
               <a
                 href={item.gmailUrl}
@@ -861,9 +856,9 @@ function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
 function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
   const { project, repository } = body;
   const row = "grid min-w-0 grid-cols-[5.5rem_minmax(0,1fr)] gap-2";
-  const mono = "break-all font-mono text-caption text-fg";
+  const mono = "break-all font-mono text-sm text-fg";
   return (
-    <div className="space-y-1 text-caption">
+    <div className="space-y-1 text-sm">
       <div className={row}>
         <span className="text-faint">Project</span>
         <span className="break-words text-fg">
@@ -1005,7 +1000,7 @@ function Body({
     return (
       <ul className="space-y-1">
         {b.items.map((item, i) => (
-          <li key={i} className="text-caption">
+          <li key={i} className="text-sm">
             <span className="font-mono text-fg">{item.issueKey}</span>
             <span className="text-muted-foreground">
               {" "}
@@ -1033,10 +1028,8 @@ function Body({
   // commit
   return (
     <>
-      <div className="whitespace-pre-wrap text-caption text-fg">
-        {b.message}
-      </div>
-      <div className="text-caption text-faint">
+      <div className="whitespace-pre-wrap text-sm text-fg">{b.message}</div>
+      <div className="text-sm text-faint">
         {b.files.length} file{b.files.length === 1 ? "" : "s"}
         {b.branch ? ` · ${b.branch}` : ""}
         {typeof b.insertions === "number" ? ` · +${b.insertions}` : ""}
@@ -1124,13 +1117,13 @@ export function ApprovalCard({
         <HeaderIcon approval={approval} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-caption font-semibold text-fg">
+            <span className="truncate text-sm font-semibold text-fg">
               {approval.title}
             </span>
             <StatusBadge approval={approval} />
             {approval.autoApproved && approval.status !== "pending" && (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground"
+                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-xs font-medium text-muted-foreground"
                 title="Ran under an Approve-for-session grant"
               >
                 <CheckCheck size={9} />
@@ -1139,14 +1132,14 @@ export function ApprovalCard({
             )}
           </div>
           {approval.summary && (
-            <div className="truncate text-caption text-faint">
+            <div className="truncate text-sm text-faint">
               {approval.summary}
             </div>
           )}
         </div>
       </div>
 
-      <div className="space-y-2 px-3 py-3 text-caption text-muted-foreground">
+      <div className="space-y-2 px-3 py-3 text-sm text-muted-foreground">
         <Body
           approval={approval}
           onDecide={awaitingUser && busy === null ? decide : undefined}
@@ -1180,13 +1173,13 @@ export function ApprovalCard({
               href={approval.resultUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-caption text-primary hover:underline"
+              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
             >
               <ExternalLink size={12} />
               {approval.resultSummary ?? "View result"}
             </a>
           ) : (
-            <div className="text-caption text-green-600 dark:text-green-400">
+            <div className="text-sm text-green-600 dark:text-green-400">
               {approval.resultSummary}
             </div>
           ))}
@@ -1194,7 +1187,7 @@ export function ApprovalCard({
           <ErrorNote message={approval.error ?? "The action failed."} />
         )}
         {approval.status === "superseded" && (
-          <div className="text-caption text-faint">
+          <div className="text-sm text-faint">
             Replaced by a newer request for the same action; nothing ran.
           </div>
         )}
@@ -1205,7 +1198,7 @@ export function ApprovalCard({
       </div>
 
       {ownGrants.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-caption text-muted-foreground">
+        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-sm text-muted-foreground">
           <CheckCheck size={12} className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">
             Approved for this session:{" "}
@@ -1218,7 +1211,7 @@ export function ApprovalCard({
                 for (const grant of ownGrants)
                   onRevokeGrant(approval.sessionId, grant.key);
               }}
-              className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
+              className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
             >
               Revoke
             </button>
@@ -1233,7 +1226,7 @@ export function ApprovalCard({
             onClick={() => decide("rejected")}
             disabled={busy !== null}
             aria-busy={busy === "rejected" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
           >
             {busy === "rejected" ? (
               <Spinner size="sm" />
@@ -1248,7 +1241,7 @@ export function ApprovalCard({
             disabled={busy !== null}
             aria-busy={busy === "approvedForSession" || undefined}
             title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-raised px-2.5 py-1 text-caption text-primary hover:bg-primary/10 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-raised px-2.5 py-1 text-sm text-primary hover:bg-primary/10 disabled:opacity-50"
           >
             {busy === "approvedForSession" ? (
               <Spinner size="sm" />
@@ -1262,7 +1255,7 @@ export function ApprovalCard({
             onClick={() => decide("approved")}
             disabled={busy !== null}
             aria-busy={busy === "approved" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
           >
             {busy === "approved" ? (
               <Spinner size="sm" />

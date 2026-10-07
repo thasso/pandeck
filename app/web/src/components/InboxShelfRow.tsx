@@ -114,14 +114,14 @@ export function InboxShelfRow({
       >
         <AgentIcon size={12} />
       </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
         <SessionTitleText
           title={title}
           pending={session.titleGenerationPending}
         />
       </span>
       <SessionDeliveryMark session={session} variant="glyph" />
-      <span className="shrink-0 text-micro tabular-nums text-faint">
+      <span className="shrink-0 text-xs tabular-nums text-faint">
         {relativeAge(at, now)}
       </span>
       <button

@@ -287,13 +287,13 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
         <div className="flex items-center gap-2">
           <CalendarDays size={18} className="text-primary" />
           <div>
-            <div className="text-body font-semibold text-fg">Calendar</div>
-            <div className="text-caption text-faint">
+            <div className="text-sm font-semibold text-fg">Calendar</div>
+            <div className="text-sm text-faint">
               {payload.calendarSummary || "Primary calendar"}
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted-foreground">
+        <div className="text-right text-sm text-muted-foreground">
           <div>
             {payload.date || rangeLabel(payload.localFrom, payload.localTo)}
           </div>
@@ -304,8 +304,8 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
       </header>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] border-separate border-spacing-0 text-left text-caption">
-          <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
+        <table className="w-full min-w-[620px] border-separate border-spacing-0 text-left text-sm">
+          <thead className="bg-surface/70 text-xs uppercase tracking-wide text-faint">
             <tr>
               <th className="w-36 px-4 py-2 font-medium">Time</th>
               <th className="px-3 py-2 font-medium">Event</th>
@@ -377,7 +377,7 @@ function CalendarEventRow({ event }: { event: CalendarEvent }) {
   return (
     <Fragment>
       <tr className="border-t border-line odd:bg-surface/30">
-        <td className="whitespace-nowrap border-t border-line px-4 py-3 align-top font-mono text-caption text-fg">
+        <td className="whitespace-nowrap border-t border-line px-4 py-3 align-top font-mono text-sm text-fg">
           {timeRange(event.localStart, event.localEnd)}
           {event.duration && (
             <span className="text-muted-foreground"> · {event.duration}</span>
@@ -453,19 +453,19 @@ function DescriptionPanel({
 }) {
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
         Description
       </div>
       {description?.trim() ? (
-        <div className="max-h-72 overflow-auto whitespace-pre-wrap text-caption text-fg">
+        <div className="max-h-72 overflow-auto whitespace-pre-wrap text-sm text-fg">
           <LinkifiedText text={description} />
         </div>
       ) : location ? (
-        <div className="text-caption text-fg">
+        <div className="text-sm text-fg">
           <LinkifiedText text={location} />
         </div>
       ) : (
-        <div className="text-caption text-faint">No description.</div>
+        <div className="text-sm text-faint">No description.</div>
       )}
     </div>
   );
@@ -485,11 +485,11 @@ function AttendancePanel({
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="text-xs font-semibold uppercase tracking-wide text-faint">
           Meet attendance
         </div>
         {records.length > 0 && (
-          <div className="text-micro text-faint">
+          <div className="text-xs text-faint">
             {records.length} record{records.length === 1 ? "" : "s"} ·{" "}
             {sessionCount} session{sessionCount === 1 ? "" : "s"} ·{" "}
             {artifactCount} artifact{artifactCount === 1 ? "" : "s"}
@@ -498,7 +498,7 @@ function AttendancePanel({
       </div>
       <MinutesLinksList links={minutesLinks} />
       {records.length === 0 ? (
-        <div className="text-caption text-faint">
+        <div className="text-sm text-faint">
           No matching Meet attendance record.
         </div>
       ) : (
@@ -506,7 +506,7 @@ function AttendancePanel({
           {records.map((record, index) => (
             <div
               key={`${record.name ?? "record"}-${index}`}
-              className="rounded-lg bg-raised/60 p-2 text-caption"
+              className="rounded-lg bg-raised/60 p-2 text-sm"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-mono text-faint">
@@ -571,15 +571,15 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
         <div className="flex items-center gap-2">
           <Video size={18} className="text-primary" />
           <div>
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               Google Meet records
             </div>
-            <div className="text-caption text-faint">
+            <div className="text-sm text-faint">
               Conference records and participant sessions
             </div>
           </div>
         </div>
-        <div className="text-right text-caption text-muted-foreground">
+        <div className="text-right text-sm text-muted-foreground">
           <div>{payload.date || rangeLabel(payload.from, payload.to)}</div>
           <div>
             {records.length} record{records.length === 1 ? "" : "s"}
@@ -595,10 +595,10 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
           >
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="font-mono text-caption text-faint">
+                <div className="font-mono text-sm text-faint">
                   {timeRange(record.localStart, record.localEnd)}
                 </div>
-                <div className="mt-1 text-body font-semibold text-fg">
+                <div className="mt-1 text-sm font-semibold text-fg">
                   <ExternalTitle
                     title={
                       record.calendarMatches?.[0]?.title ||
@@ -616,14 +616,14 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
                   href={record.meetingUri}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="shrink-0 rounded-md border border-line px-2 py-1 text-caption text-primary hover:bg-raised"
+                  className="shrink-0 rounded-md border border-line px-2 py-1 text-sm text-primary hover:bg-raised"
                 >
                   Meet
                 </a>
               )}
             </div>
 
-            <div className="mt-3 flex flex-wrap gap-2 text-caption text-muted-foreground">
+            <div className="mt-3 flex flex-wrap gap-2 text-sm text-muted-foreground">
               <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1">
                 <Users size={12} />{" "}
                 {record.participantCount ?? record.participants?.length ?? 0}{" "}
@@ -653,7 +653,7 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
                 .map((participant, pIndex) => (
                   <div
                     key={`${participant.displayName ?? "participant"}-${pIndex}`}
-                    className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
+                    className="rounded-lg bg-raised/60 px-2 py-1.5 text-sm"
                   >
                     <div className="font-medium text-fg">
                       {participant.displayName ||
@@ -674,7 +674,7 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
                   </div>
                 ))}
               {(record.participants?.length ?? 0) > 6 && (
-                <div className="text-caption text-faint">
+                <div className="text-sm text-faint">
                   +{(record.participants?.length ?? 0) - 6} more participants
                 </div>
               )}
@@ -699,13 +699,13 @@ function MinutesLinksList({ links }: { links: MinutesLink[] }) {
   if (links.length === 0) return null;
   return (
     <div className="mb-2 space-y-1.5">
-      <div className="text-micro font-semibold uppercase tracking-wide text-faint">
+      <div className="text-xs font-semibold uppercase tracking-wide text-faint">
         Minutes / transcripts
       </div>
       {links.map((link, index) => (
         <div
           key={`${link.driveFileId ?? link.href ?? link.label}-${index}`}
-          className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
+          className="rounded-lg bg-raised/60 px-2 py-1.5 text-sm"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="inline-flex min-w-0 items-center gap-1 font-medium text-fg">
@@ -723,14 +723,14 @@ function MinutesLinksList({ links }: { links: MinutesLink[] }) {
                 <span className="truncate">{link.label}</span>
               )}
             </div>
-            <span className="rounded-full bg-panel px-1.5 py-0.5 text-micro text-muted-foreground">
+            <span className="rounded-full bg-panel px-1.5 py-0.5 text-xs text-muted-foreground">
               {link.source}
             </span>
           </div>
           {link.driveFileId && <DrivePreviewButton fileId={link.driveFileId} />}
         </div>
       ))}
-      <div className="text-micro text-faint">
+      <div className="text-xs text-faint">
         Preview loads here only in the browser; it is not sent to the assistant
         context.
       </div>
@@ -751,7 +751,7 @@ function ArtifactList({
   return (
     <div className={`${compact ? "mt-2" : "mt-3"} space-y-1.5`}>
       {artifacts.length > 0 && (
-        <div className="text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="text-xs font-semibold uppercase tracking-wide text-faint">
           Artifacts
         </div>
       )}
@@ -762,7 +762,7 @@ function ArtifactList({
         return (
           <div
             key={`${artifact.kind ?? "artifact"}-${artifact.driveFileId ?? index}`}
-            className="rounded-lg bg-panel/70 px-2 py-1.5 text-caption"
+            className="rounded-lg bg-panel/70 px-2 py-1.5 text-sm"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="inline-flex items-center gap-1 font-medium text-fg">
@@ -781,7 +781,7 @@ function ArtifactList({
                 )}
               </div>
               {artifact.state && (
-                <span className="rounded-full bg-raised px-1.5 py-0.5 text-micro text-muted-foreground">
+                <span className="rounded-full bg-raised px-1.5 py-0.5 text-xs text-muted-foreground">
                   {artifact.state}
                 </span>
               )}
@@ -805,7 +805,7 @@ function ArtifactList({
         );
       })}
       {errors.map((error, index) => (
-        <div key={index} className="text-caption text-faint">
+        <div key={index} className="text-sm text-faint">
           Artifact lookup: {error}
         </div>
       ))}
@@ -856,7 +856,7 @@ function DrivePreviewButton({ fileId }: { fileId: string }) {
       <button
         type="button"
         onClick={() => void loadPreview()}
-        className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-caption text-primary transition-colors hover:bg-raised"
+        className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-sm text-primary transition-colors hover:bg-raised"
         aria-busy={loading}
       >
         {loading ? <Spinner size="sm" /> : null}
@@ -871,17 +871,17 @@ function DrivePreviewButton({ fileId }: { fileId: string }) {
       {open && preview && (
         <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-panel p-2">
           {preview.error ? (
-            <div className="text-caption text-danger">{preview.error}</div>
+            <div className="text-sm text-danger">{preview.error}</div>
           ) : (
             <>
-              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-micro text-faint">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-faint">
                 <span>{preview.file?.name || "Drive document"}</span>
                 <span>
                   {preview.textCharCount?.toLocaleString()} chars
                   {preview.truncated ? " · truncated" : ""}
                 </span>
               </div>
-              <pre className="whitespace-pre-wrap break-words font-sans text-caption text-fg">
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm text-fg">
                 {preview.text}
               </pre>
             </>
@@ -908,13 +908,13 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
         <div className="flex min-w-0 items-center gap-2">
           <Mail size={18} className="shrink-0 text-primary" />
           <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">Gmail search</div>
-            <div className="truncate font-mono text-caption text-faint">
+            <div className="text-sm font-semibold text-fg">Gmail search</div>
+            <div className="truncate font-mono text-sm text-faint">
               {payload.query || "in:inbox"}
             </div>
           </div>
         </div>
-        <div className="shrink-0 text-right text-caption text-muted-foreground">
+        <div className="shrink-0 text-right text-sm text-muted-foreground">
           <div>
             {threads.length} thread{threads.length === 1 ? "" : "s"}
           </div>
@@ -925,7 +925,7 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
         </div>
       </header>
 
-      <table className="w-full table-fixed border-separate border-spacing-0 text-left text-caption">
+      <table className="w-full table-fixed border-separate border-spacing-0 text-left text-sm">
         <colgroup>
           <col className="w-9" />
           <col className="w-[6.4rem]" />
@@ -933,7 +933,7 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
           <col />
           <col className="w-14" />
         </colgroup>
-        <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
+        <thead className="bg-surface/70 text-xs uppercase tracking-wide text-faint">
           <tr>
             <th className="px-2 py-2 font-medium" aria-label="Expand" />
             <th className="px-2 py-2 font-medium">Date</th>
@@ -960,7 +960,7 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
           )}
         </tbody>
       </table>
-      <div className="border-t border-line px-4 py-2 text-micro text-faint">
+      <div className="border-t border-line px-4 py-2 text-xs text-faint">
         Search results contain metadata and snippets only. Expanding a thread
         loads the email body in your browser without adding it to assistant
         context.
@@ -1029,7 +1029,7 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
         <td className="border-t border-line px-2 py-3 align-top">
           <div className="flex min-w-0 items-start gap-1.5">
             <GmailStatusIcon unread={thread.unread} />
-            <div className="min-w-0 font-mono text-caption text-muted-foreground">
+            <div className="min-w-0 font-mono text-sm text-muted-foreground">
               <div className="truncate">{latest.date}</div>
               <div className="truncate text-faint">{latest.time}</div>
             </div>
@@ -1049,7 +1049,7 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
             <GmailCategoryIcons thread={thread} />
           </div>
           {thread.snippet && (
-            <div className="mt-1 line-clamp-2 overflow-hidden text-ellipsis text-caption text-muted-foreground">
+            <div className="mt-1 line-clamp-2 overflow-hidden text-ellipsis text-sm text-muted-foreground">
               {thread.snippet}
             </div>
           )}
@@ -1089,7 +1089,7 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
 function GmailThreadInline({ payload }: { payload: GmailThreadPayload }) {
   if (payload.error)
     return (
-      <div className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-caption text-danger">
+      <div className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
         {payload.error}
       </div>
     );
@@ -1117,13 +1117,13 @@ function GmailThreadCard({
             />
           )}
           <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               <ExternalTitle
                 title={payload.subject || "(no subject)"}
                 href={payload.gmailUrl}
               />
             </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
               <span>{payload.unread ? "Unread" : "Read"}</span>
               <span>
                 {messages.length || payload.messageCount || 0} message
@@ -1150,7 +1150,7 @@ function GmailThreadCard({
           </div>
         </div>
         {payload.participants?.length ? (
-          <div className="max-w-72 text-right text-caption text-muted-foreground">
+          <div className="max-w-72 text-right text-sm text-muted-foreground">
             {payload.participants
               .map((p) => p.name || p.email || p.label)
               .filter(Boolean)
@@ -1203,35 +1203,33 @@ function GmailMessageArticle({ message }: { message: GmailFullMessage }) {
           <div className="font-medium text-fg">
             {messageSenderDisplay(message)}
           </div>
-          <div className="mt-0.5 text-caption text-muted-foreground">
+          <div className="mt-0.5 text-sm text-muted-foreground">
             {message.localDate || ""}
             {message.to ? ` · to ${message.to}` : ""}
           </div>
         </div>
         <span
-          className={`rounded-full px-2 py-1 text-micro ${message.unread ? "bg-accent font-semibold text-primary" : "bg-raised text-muted-foreground"}`}
+          className={`rounded-full px-2 py-1 text-xs ${message.unread ? "bg-accent font-semibold text-primary" : "bg-raised text-muted-foreground"}`}
         >
           {message.unread ? "Unread" : "Read"}
         </span>
       </div>
       {message.text ? (
-        <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-caption text-fg">
+        <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-sm text-fg">
           {message.text}
         </pre>
       ) : (
-        <div className="mt-3 text-caption text-faint">
-          No readable body text.
-        </div>
+        <div className="mt-3 text-sm text-faint">No readable body text.</div>
       )}
       {message.truncated && (
-        <div className="mt-2 text-caption text-faint">Message truncated.</div>
+        <div className="mt-2 text-sm text-faint">Message truncated.</div>
       )}
       {message.attachments?.length ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {message.attachments.map((attachment, index) => (
             <span
               key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
-              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-caption text-muted-foreground"
+              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-sm text-muted-foreground"
             >
               <Paperclip size={11} /> {attachment.filename || "attachment"}
             </span>
@@ -1246,14 +1244,14 @@ function GmailSnippetList({ messages }: { messages: GmailMessageSummary[] }) {
   if (messages.length === 0) return null;
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
         Thread snippets
       </div>
       <div className="space-y-1.5">
         {messages.map((message, index) => (
           <div
             key={`${message.id ?? index}`}
-            className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
+            className="rounded-lg bg-raised/60 px-2 py-1.5 text-sm"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="font-medium text-fg">
@@ -1491,13 +1489,13 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
         <div className="flex min-w-0 items-start gap-2">
           <FileText size={18} className="mt-0.5 shrink-0 text-primary" />
           <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               <ExternalTitle
                 title={file?.name || "Drive document"}
                 href={file?.webViewLink}
               />
             </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted-foreground">
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
               {file?.localModified && (
                 <span>Modified {file.localModified}</span>
               )}
@@ -1512,14 +1510,14 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
           </div>
         </div>
         {file?.owners?.[0] && (
-          <div className="text-right text-caption text-muted-foreground">
+          <div className="text-right text-sm text-muted-foreground">
             {file.owners[0].displayName || file.owners[0].emailAddress}
           </div>
         )}
       </header>
       <div className="max-h-[520px] overflow-auto p-4">
         {text ? (
-          <pre className="whitespace-pre-wrap break-words font-sans text-body text-fg">
+          <pre className="whitespace-pre-wrap break-words font-sans text-sm text-fg">
             {text}
           </pre>
         ) : (
@@ -1597,10 +1595,8 @@ function MeetingLinkIcon({ event }: { event: CalendarEvent }) {
 }
 
 function ProviderIcon({ provider }: { provider?: ConferenceLink["provider"] }) {
-  if (provider === "zoom")
-    return <span className="text-caption font-bold">Z</span>;
-  if (provider === "teams")
-    return <span className="text-caption font-bold">T</span>;
+  if (provider === "zoom") return <span className="text-sm font-bold">Z</span>;
+  if (provider === "teams") return <span className="text-sm font-bold">T</span>;
   if (provider === "google-meet") return <Video size={15} />;
   return <Video size={15} />;
 }
@@ -1738,7 +1734,7 @@ function isMinutesLike(title: string, mimeType?: string | null): boolean {
 
 function LocationLine({ location }: { location: string }) {
   return (
-    <div className="mt-0.5 truncate text-caption text-muted-foreground">
+    <div className="mt-0.5 truncate text-sm text-muted-foreground">
       <LinkifiedText text={location} />
     </div>
   );

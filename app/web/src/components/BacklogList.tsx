@@ -233,14 +233,14 @@ function BacklogListImpl({
                 if (e.key === "Enter") addTask();
               }}
               placeholder="Add a task…"
-              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-body text-fg outline-none placeholder:text-faint"
+              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm text-fg outline-none placeholder:text-faint"
             />
             <button
               type="button"
               onClick={addTask}
               disabled={!newTitle.trim() || createPending}
               aria-busy={createPending || undefined}
-              className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {createPending ? <Spinner size="sm" /> : null} Add
             </button>
@@ -279,7 +279,7 @@ function BacklogListImpl({
       {density === "comfortable" &&
       view === "backlog" &&
       c.viewMode === "project" ? (
-        <p className="px-1 text-caption text-faint">
+        <p className="px-1 text-sm text-faint">
           Drag a Task onto another Project to reassign it, or within a Project
           to reorder. Collapse a Project to fold it away.
         </p>

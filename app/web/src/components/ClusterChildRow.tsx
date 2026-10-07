@@ -181,7 +181,7 @@ function ClusterChildRowImpl({
         <span aria-hidden className="size-5 shrink-0" />
       )}
       <span
-        className={`min-w-0 flex-1 truncate text-caption text-muted-foreground ${status === "unread" ? "font-semibold" : ""}`}
+        className={`min-w-0 flex-1 truncate text-sm text-muted-foreground ${status === "unread" ? "font-semibold" : ""}`}
       >
         <SessionTitleText
           title={title}
@@ -191,7 +191,7 @@ function ClusterChildRowImpl({
       {jobs > 0 ? (
         <span
           title={jobsText}
-          className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground"
+          className="flex shrink-0 items-center gap-0.5 text-xs tabular-nums text-muted-foreground"
         >
           <Activity size={10} aria-hidden />
           {jobs}
@@ -200,7 +200,7 @@ function ClusterChildRowImpl({
       {peers ? (
         <span
           title={sessionClusterSummary(peers)}
-          className={`flex shrink-0 items-center gap-0.5 text-micro tabular-nums ${
+          className={`flex shrink-0 items-center gap-0.5 text-xs tabular-nums ${
             peers.working > 0 ? "text-primary" : "text-faint"
           }`}
         >
@@ -208,7 +208,7 @@ function ClusterChildRowImpl({
           {peers.total}
         </span>
       ) : null}
-      <span className="shrink-0 text-micro tabular-nums text-faint">
+      <span className="shrink-0 text-xs tabular-nums text-faint">
         {relativeAge(session.updatedAt, now)}
       </span>
     </div>

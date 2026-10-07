@@ -428,9 +428,9 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
       </div>
       <div
         id={tooltipId}
-        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-line bg-panel p-3 text-left text-caption text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
+        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-line bg-panel p-3 text-left text-sm text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
       >
-        <div className="mb-2 flex items-center justify-between gap-3 text-caption font-semibold text-fg">
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-fg">
           <span>Context</span>
           <span>{formatPercent(percent)}</span>
         </div>
@@ -472,7 +472,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
                 label="Turns"
                 value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
               />
-              <div className="pt-1 text-micro text-faint">
+              <div className="pt-1 text-xs text-faint">
                 Cached input is cumulative across internal model steps; some
                 providers report reads but not writes.
               </div>
@@ -608,7 +608,7 @@ export function ModeSelector({
                   onChange(value);
                   close();
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-caption transition-colors hover:bg-raised"
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-raised"
               >
                 <OptionIcon
                   size={14}
@@ -636,7 +636,7 @@ export function ModeSelector({
 /** The one badge shown while a session is in Plan (session header). */
 export function PlanModeBadge() {
   return (
-    <span className="shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-micro font-semibold text-primary">
+    <span className="shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-xs font-semibold text-primary">
       Plan
     </span>
   );
@@ -677,10 +677,10 @@ function RuntimeSettingsPanel({
   };
 
   return (
-    <div className="space-y-3 text-caption">
+    <div className="space-y-3 text-sm">
       {agentType && availableAgentTypes && onAgentTypeChange ? (
         <section>
-          <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
             Agent
           </div>
           <AgentTypeSelector
@@ -692,7 +692,7 @@ function RuntimeSettingsPanel({
       ) : null}
 
       <section>
-        <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
           Model
         </div>
         <ModelSelect
@@ -706,7 +706,7 @@ function RuntimeSettingsPanel({
       </section>
 
       <section>
-        <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-faint">
+        <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
           Thinking
         </div>
         <ThinkingSelect
@@ -720,7 +720,7 @@ function RuntimeSettingsPanel({
 
       {mode ? (
         <section>
-          <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
             Mode
           </div>
           <ModeSelector
@@ -800,7 +800,7 @@ function AgentTypeSelector({
                   onChange(type);
                   close();
                 }}
-                className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-caption text-fg transition-colors hover:bg-raised"
+                className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-fg transition-colors hover:bg-raised"
               >
                 <TypeIcon
                   size={14}
@@ -808,7 +808,7 @@ function AgentTypeSelector({
                 />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{display.label}</div>
-                  <div className="text-caption text-faint">{display.desc}</div>
+                  <div className="text-sm text-faint">{display.desc}</div>
                 </div>
                 {active && (
                   <Check size={13} className="mt-0.5 shrink-0 text-primary" />
@@ -2107,7 +2107,7 @@ export const Composer = memo(function Composer({
             <button
               type="button"
               onClick={() => openContext("worktree")}
-              className="min-w-0 truncate text-caption font-medium text-amber-500 hover:underline"
+              className="min-w-0 truncate text-sm font-medium text-amber-500 hover:underline"
             >
               {sendBlockedReason}
             </button>
@@ -2314,7 +2314,7 @@ export const Composer = memo(function Composer({
 
               {slashMenuOpen && (
                 <div className="absolute bottom-full left-3 right-3 z-40 mb-2 overflow-hidden rounded-xl border border-line bg-panel shadow-2xl shadow-black/30">
-                  <div className="border-b border-line px-3 py-1.5 text-caption text-faint">
+                  <div className="border-b border-line px-3 py-1.5 text-sm text-faint">
                     ↑↓ to navigate · ↵ to select · esc to dismiss ·{" "}
                     <span className="font-mono">//</span> sends a literal slash
                   </div>
@@ -2333,14 +2333,14 @@ export const Composer = memo(function Composer({
                           : "border-transparent text-muted-foreground hover:bg-raised/70 hover:text-fg"
                       }`}
                     >
-                      <span className="mt-0.5 font-mono text-caption text-primary">
+                      <span className="mt-0.5 font-mono text-sm text-primary">
                         /{cmd.name}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-caption text-fg">
+                        <span className="block text-sm text-fg">
                           {cmd.description}
                         </span>
-                        <span className="block truncate font-mono text-caption text-faint">
+                        <span className="block truncate font-mono text-sm text-faint">
                           {cmd.usage}
                         </span>
                       </span>
@@ -2356,7 +2356,7 @@ export const Composer = memo(function Composer({
                     return (
                       <div
                         key={attachment.id}
-                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line bg-raised px-2 py-1.5 text-caption text-muted-foreground"
+                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-line bg-raised px-2 py-1.5 text-sm text-muted-foreground"
                         title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
                       >
                         {isImage && attachment.previewUrl ? (
@@ -2546,7 +2546,7 @@ export const Composer = memo(function Composer({
                     >
                       <GitFork size={15} />
                       {branchCount > 1 && (
-                        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-micro font-semibold text-primary-foreground">
+                        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
                           {branchCount}
                         </span>
                       )}
@@ -2728,9 +2728,7 @@ export const Composer = memo(function Composer({
         </div>
       </div>
       {attachmentError ? (
-        <div className="mt-1.5 px-2 text-caption text-danger">
-          {attachmentError}
-        </div>
+        <div className="mt-1.5 px-2 text-sm text-danger">{attachmentError}</div>
       ) : null}
     </div>
   );
@@ -2756,7 +2754,7 @@ function BusyModeSwitch({
       aria-checked={mode === value}
       onClick={() => onChange(value)}
       title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
-      className={`h-6 rounded-full px-2.5 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+      className={`h-6 rounded-full px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         mode === value
           ? "bg-accent text-fg ring-1 ring-inset ring-primary/40"
           : "text-muted-foreground hover:text-fg"
@@ -2846,7 +2844,7 @@ function CompactComposerBar({
           title={expandHint}
           aria-label={expandHint}
           aria-expanded={false}
-          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-body text-faint transition-colors hover:bg-raised hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-sm text-faint transition-colors hover:bg-raised hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="min-w-0 flex-1 truncate">{label}</span>
         </button>
@@ -2897,7 +2895,7 @@ function BranchPanel({
   onClose: () => void;
 }) {
   return (
-    <div className="space-y-2 text-caption">
+    <div className="space-y-2 text-sm">
       {info.parent && (
         <BranchSection title="Parent">
           <BranchItem item={info.parent} onClose={onClose} tone="parent" />
@@ -2909,7 +2907,7 @@ function BranchPanel({
           <div className="truncate font-medium text-fg">
             {info.currentTitle}
           </div>
-          <div className="mt-0.5 text-caption text-muted-foreground">
+          <div className="mt-0.5 text-sm text-muted-foreground">
             Current session
           </div>
         </div>
@@ -2944,7 +2942,7 @@ function BranchSection({
 }) {
   return (
     <section>
-      <div className="mb-1 px-1 text-micro font-semibold uppercase tracking-wide text-faint">
+      <div className="mb-1 px-1 text-xs font-semibold uppercase tracking-wide text-faint">
         {title}
       </div>
       {children}
@@ -2981,7 +2979,7 @@ function BranchItem({
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-fg">{item.title}</span>
         {item.subtitle ? (
-          <span className="mt-0.5 block truncate text-caption text-faint">
+          <span className="mt-0.5 block truncate text-sm text-faint">
             {item.subtitle}
           </span>
         ) : null}

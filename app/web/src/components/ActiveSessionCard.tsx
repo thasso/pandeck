@@ -396,7 +396,7 @@ function ActiveSessionCardImpl({
                 area. The row is as tall as the live-state row below the
                 title, so the title sits centred between the two. */}
             <div
-              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+              className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-faint`}
             >
               <div
                 ref={metaRowRef}
@@ -441,7 +441,7 @@ function ActiveSessionCardImpl({
                 )}
               </span>
               <span
-                className={`min-w-0 flex-1 truncate text-caption text-fg ${status === "unread" ? "font-semibold" : "font-medium"}`}
+                className={`min-w-0 flex-1 truncate text-sm text-fg ${status === "unread" ? "font-semibold" : "font-medium"}`}
               >
                 <SessionTitleText
                   title={title}
@@ -455,7 +455,7 @@ function ActiveSessionCardImpl({
                 one line, so activity can change without changing the card's
                 geometry. Fixed badges survive; prose yields and clips. */}
             <div
-              className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+              className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
             >
               {/* Signals show whole or not at all: the area is one line tall,
                   and whatever does not fit wraps onto a hidden second line. DOM
@@ -845,7 +845,7 @@ function ActionTile({
       }}
       aria-label={accessibleLabel}
       title={accessibleLabel}
-      className={`flex h-14 w-16 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg text-micro font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+      className={`flex h-14 w-16 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         danger
           ? "text-danger hover:bg-danger-soft"
           : "text-muted-foreground hover:bg-panel hover:text-fg"

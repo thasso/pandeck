@@ -84,7 +84,7 @@ export function DictationTrace({
         active={dictation.phase === "recording"}
         className={`h-5 min-w-0 flex-1 ${dictation.phase === "recording" ? "text-danger" : "text-faint"}`}
       />
-      <span className="shrink-0 tabular-nums text-caption text-muted-foreground">
+      <span className="shrink-0 tabular-nums text-sm text-muted-foreground">
         {dictation.uploading
           ? "uploading…"
           : dictation.phase === "transcribing"

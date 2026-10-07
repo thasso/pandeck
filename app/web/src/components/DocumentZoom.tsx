@@ -123,7 +123,7 @@ export function DocumentZoomSection({
         {/* The number is the state these controls change, so it is announced. */}
         <span
           aria-live="polite"
-          className="min-w-12 text-center text-caption tabular-nums text-fg"
+          className="min-w-12 text-center text-sm tabular-nums text-fg"
         >
           {percent}%
         </span>
@@ -138,7 +138,7 @@ export function DocumentZoomSection({
           onClick={zoom.reset}
           disabled={zoom.scale === DOCUMENT_ZOOM_DEFAULT}
           aria-label="Reset zoom to 100%"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
         >
           <RotateCcw size={13} /> Reset
         </button>

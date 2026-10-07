@@ -18,7 +18,7 @@ export function DocumentRangeNotice({
   const shown = shownAnchorRange(anchor);
   const notice = shown?.truncated ? partialRangeNotice(anchor, shown) : null;
   if (!notice) return null;
-  return <p className={`text-caption text-faint ${className}`}>{notice}</p>;
+  return <p className={`text-sm text-faint ${className}`}>{notice}</p>;
 }
 
 /**

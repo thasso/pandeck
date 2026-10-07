@@ -34,7 +34,7 @@ export function ChatActivityStory({
   return (
     <main
       style={{ width: frameWidth, maxWidth: "100%" }}
-      className="min-h-screen bg-surface px-5 py-6 text-body text-fg sm:px-8"
+      className="min-h-screen bg-surface px-5 py-6 text-sm text-fg sm:px-8"
     >
       <div className="mb-7 flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-user px-3.5 py-2">
@@ -55,7 +55,7 @@ export function ChatActivityStory({
           status={{ label: "Delivered", icon: Check }}
         >
           <Markdown text="Review the collapse behavior and keyboard interaction. Check that peer messages start collapsed and that opening a session does not also expand the message." />
-          <p className="mt-2 text-caption text-muted-foreground">
+          <p className="mt-2 text-sm text-muted-foreground">
             Response requested
           </p>
         </ChatActivityRow>
@@ -66,7 +66,7 @@ export function ChatActivityStory({
           status={{ label: "Passed", icon: CircleCheck }}
         >
           <p>All 12 component tests passed.</p>
-          <pre className="mt-2 overflow-x-auto rounded-md bg-panel p-3 text-caption">
+          <pre className="mt-2 overflow-x-auto rounded-md bg-panel p-3 text-sm">
             pnpm --filter @assistant/web test
           </pre>
         </ChatActivityRow>
@@ -91,7 +91,7 @@ export function ChatActivityStory({
         className="border-t border-line pt-5"
         aria-label="Additional activity states"
       >
-        <h2 className="mb-3 text-caption font-medium text-muted-foreground">
+        <h2 className="mb-3 text-sm font-medium text-muted-foreground">
           Other states
         </h2>
         <ChatActivityRow
@@ -104,7 +104,7 @@ export function ChatActivityStory({
           status={{ label: "Failed", icon: CircleX, attention: true }}
         >
           <Markdown text="Check the final desktop and mobile screenshots." />
-          <p className="mt-2 text-caption text-danger">
+          <p className="mt-2 text-sm text-danger">
             Not delivered. The recipient session is no longer available.
           </p>
         </ChatActivityRow>
@@ -119,7 +119,7 @@ export function ChatActivityStory({
           preview="Keyboard navigation passes. No focus traps found."
           status={{ label: "Replied", icon: MessageSquare }}
         >
-          <p className="mb-2 text-caption text-muted-foreground">
+          <p className="mb-2 text-sm text-muted-foreground">
             From Sol reviewing keyboard accessibility
           </p>
           <Markdown text="Keyboard navigation passes. No focus traps found. Tab reaches the session link and the disclosure separately. Enter and Space toggle the message." />
@@ -134,11 +134,11 @@ export function ChatActivityStory({
             of the conversation.
           </p>
         </ChatActivityRow>
-        <p className="mt-4 text-micro text-faint">
+        <p className="mt-4 text-xs text-faint">
           Preview only. Click a row’s preview or chevron to expand it.
         </p>
         {openedSource ? (
-          <p role="status" className="mt-2 text-caption text-muted-foreground">
+          <p role="status" className="mt-2 text-sm text-muted-foreground">
             This link would open {openedSource}’s session.
           </p>
         ) : null}

@@ -561,7 +561,7 @@ function DocumentCommentLayerBody({
                 <button
                   type="button"
                   onClick={openSend}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-caption font-medium text-primary hover:bg-primary/10"
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-sm font-medium text-primary hover:bg-primary/10"
                 >
                   <SendHorizontal size={14} />
                   Send to session

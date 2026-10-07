@@ -60,16 +60,16 @@ export function CommitCard({
         <div className="mt-0.5">{statusIcon(commit)}</div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="text-body font-semibold text-fg">
+            <div className="text-sm font-semibold text-fg">
               {statusLabel(commit)}
             </div>
             {commit.repoRoot && (
-              <div className="font-mono text-caption text-faint">
+              <div className="font-mono text-sm text-faint">
                 {commit.repoRoot}
               </div>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-3 text-caption text-muted-foreground">
+          <div className="mt-1 flex flex-wrap gap-3 text-sm text-muted-foreground">
             <span>
               {commit.totals.files} file{commit.totals.files === 1 ? "" : "s"}
             </span>
@@ -102,7 +102,7 @@ export function CommitCard({
           <button
             type="button"
             onClick={() => onAccept(commit.entryId!)}
-            className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-primary/90"
+            className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
           >
             Commit this
           </button>
@@ -112,10 +112,10 @@ export function CommitCard({
       <div className="space-y-3 px-3 py-3">
         {commit.commitMessage && (
           <div>
-            <div className="mb-1 text-micro font-medium uppercase tracking-wide text-faint">
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-faint">
               Commit message
             </div>
-            <pre className="whitespace-pre-wrap rounded-lg bg-raised p-2 font-mono text-caption text-fg">
+            <pre className="whitespace-pre-wrap rounded-lg bg-raised p-2 font-mono text-sm text-fg">
               {commit.commitMessage}
             </pre>
           </div>
@@ -123,14 +123,14 @@ export function CommitCard({
 
         {(commit.addressedTasks?.length ?? 0) > 0 && (
           <div>
-            <div className="mb-1 text-micro font-medium uppercase tracking-wide text-faint">
+            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-faint">
               Session Task context
             </div>
             <div className="space-y-1 rounded-lg border border-line bg-panel/50 p-2">
               {commit.addressedTasks!.map((task) => (
                 <div
                   key={task.id}
-                  className="flex items-center gap-2 text-caption text-muted-foreground"
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
                 >
                   <span
                     className={`size-1.5 rounded-full ${task.status === "done" ? "bg-success" : "bg-primary"}`}
@@ -150,7 +150,7 @@ export function CommitCard({
             <button
               type="button"
               onClick={() => setFilesOpen((open) => !open)}
-              className="mb-1 flex items-center gap-1 text-micro font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
+              className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
             >
               <ChevronDown
                 size={12}
@@ -165,24 +165,24 @@ export function CommitCard({
                   className="flex items-center gap-2 border-b border-line/50 px-2 py-1.5 last:border-b-0"
                 >
                   {fileIcon(file)}
-                  <span className="min-w-0 flex-1 truncate font-mono text-caption text-fg">
+                  <span className="min-w-0 flex-1 truncate font-mono text-sm text-fg">
                     {file.path}
                   </span>
                   {file.sessionTouched && (
-                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-micro text-primary">
+                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs text-primary">
                       session
                     </span>
                   )}
-                  <span className="text-caption text-success">
+                  <span className="text-sm text-success">
                     +{file.additions ?? 0}
                   </span>
-                  <span className="text-caption text-danger">
+                  <span className="text-sm text-danger">
                     -{file.deletions ?? 0}
                   </span>
                 </div>
               ))}
               {!filesOpen && commit.files.length > shownFiles.length && (
-                <div className="px-2 py-1.5 text-caption text-faint">
+                <div className="px-2 py-1.5 text-sm text-faint">
                   + {commit.files.length - shownFiles.length} more files
                 </div>
               )}
@@ -191,7 +191,7 @@ export function CommitCard({
         )}
 
         {commit.blockers.length > 0 && (
-          <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-caption text-fg">
+          <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
             <div className="mb-1 flex items-center gap-1.5 font-medium text-fg">
               <XCircle size={13} className="text-danger" />
               Blockers
@@ -210,7 +210,7 @@ export function CommitCard({
         )}
 
         {commit.warnings.length > 0 && (
-          <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-caption text-fg">
+          <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-sm text-fg">
             <div className="mb-1 flex items-center gap-1.5 font-medium text-fg">
               <AlertTriangle size={13} className="text-warning" />
               Warnings
@@ -224,7 +224,7 @@ export function CommitCard({
         )}
 
         {commit.error && (
-          <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-caption text-fg">
+          <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
             {commit.error}
           </div>
         )}

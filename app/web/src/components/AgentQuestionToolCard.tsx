@@ -63,7 +63,7 @@ function CardHeader({ title }: { title: string }) {
   return (
     <div className="flex items-center gap-2 text-fg">
       <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
-      <span className="min-w-0 truncate font-medium text-caption">{title}</span>
+      <span className="min-w-0 truncate font-medium text-sm">{title}</span>
     </div>
   );
 }
@@ -72,13 +72,13 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
   const cancelled = answered.response.status === "cancelled";
   const byId = new Map(answered.response.answers.map((a) => [a.questionId, a]));
   return (
-    <div className="space-y-2.5 text-caption">
+    <div className="space-y-2.5 text-sm">
       <CardHeader title={answered.title} />
       {answered.intro ? (
-        <p className="text-caption text-faint">{answered.intro}</p>
+        <p className="text-sm text-faint">{answered.intro}</p>
       ) : null}
       {cancelled ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-caption text-muted-foreground">
+        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-sm text-muted-foreground">
           <CircleSlash size={13} className="shrink-0 text-faint" />
           You cancelled this question flow.
         </div>
@@ -89,14 +89,14 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
               key={q.id}
               className="rounded-xl border border-line bg-surface px-3 py-2"
             >
-              <div className="text-caption font-medium text-fg">{q.title}</div>
+              <div className="text-sm font-medium text-fg">{q.title}</div>
               <AnswerLine question={q} answer={byId.get(q.id)} />
             </li>
           ))}
         </ul>
       )}
       {!cancelled && (
-        <div className="flex items-center gap-1 text-caption text-faint">
+        <div className="flex items-center gap-1 text-sm text-faint">
           <Check size={12} className="text-primary" /> Answered
         </div>
       )}
@@ -187,9 +187,7 @@ function AnswerLine({
   answer?: AgentQuestionAnswer | undefined;
 }) {
   if (!answer || answer.disposition === "skipped") {
-    return (
-      <div className="mt-0.5 text-caption text-faint italic">No answer</div>
-    );
+    return <div className="mt-0.5 text-sm text-faint italic">No answer</div>;
   }
   const labels = (answer.choiceIds ?? [])
     .map((id) => question.choices?.find((c) => c.id === id)?.label ?? id)
@@ -197,7 +195,7 @@ function AnswerLine({
   return (
     <div className="mt-1 space-y-1">
       {answer.disposition === "discuss" && (
-        <div className="text-caption font-medium text-primary">
+        <div className="text-sm font-medium text-primary">
           Marked to discuss in chat
         </div>
       )}
@@ -206,7 +204,7 @@ function AnswerLine({
           {labels.map((label, i) => (
             <span
               key={i}
-              className="rounded-md bg-accent px-1.5 py-0.5 text-caption text-primary"
+              className="rounded-md bg-accent px-1.5 py-0.5 text-sm text-primary"
             >
               {label}
             </span>
@@ -214,14 +212,14 @@ function AnswerLine({
         </div>
       )}
       {answer.text ? (
-        <div className="whitespace-pre-wrap text-caption text-muted-foreground">
+        <div className="whitespace-pre-wrap text-sm text-muted-foreground">
           {answer.text}
         </div>
       ) : null}
       {labels.length === 0 &&
       !answer.text &&
       answer.disposition !== "discuss" ? (
-        <div className="text-caption text-faint italic">No answer</div>
+        <div className="text-sm text-faint italic">No answer</div>
       ) : null}
     </div>
   );
@@ -242,9 +240,9 @@ function FallbackView({ block }: { block: ToolBlock }) {
   const intro = typeof args?.intro === "string" ? args.intro : undefined;
   const questions = Array.isArray(args?.questions) ? args!.questions : [];
   return (
-    <div className="space-y-2 text-caption">
+    <div className="space-y-2 text-sm">
       <CardHeader title={title} />
-      {intro ? <p className="text-caption text-faint">{intro}</p> : null}
+      {intro ? <p className="text-sm text-faint">{intro}</p> : null}
       <ul className="space-y-1.5">
         {questions.map((q, i) => {
           const qt =
@@ -254,7 +252,7 @@ function FallbackView({ block }: { block: ToolBlock }) {
           return (
             <li
               key={i}
-              className="rounded-xl border border-line bg-surface px-3 py-2 text-caption text-muted-foreground"
+              className="rounded-xl border border-line bg-surface px-3 py-2 text-sm text-muted-foreground"
             >
               {typeof qt === "string" ? qt : `Question ${i + 1}`}
             </li>

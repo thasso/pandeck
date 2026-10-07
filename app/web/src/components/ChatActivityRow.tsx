@@ -50,7 +50,7 @@ export function ChatActivityRow({
     "min-w-0 truncate rounded-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40";
 
   return (
-    <div className="min-w-0 w-full text-caption text-muted-foreground">
+    <div className="min-w-0 w-full text-sm text-muted-foreground">
       <div className="flex min-w-0 items-center gap-1.5">
         <Icon size={13} aria-hidden="true" className="shrink-0 text-faint" />
         {prefix ? <span className="shrink-0">{prefix}</span> : null}
@@ -107,7 +107,7 @@ export function ChatActivityRow({
           {status && StatusIcon ? (
             <span
               title={status.label}
-              className={`flex min-w-0 shrink-0 items-center gap-1 text-micro ${status.attention ? "" : "max-w-[40%]"} ${statusClass}`}
+              className={`flex min-w-0 shrink-0 items-center gap-1 text-xs ${status.attention ? "" : "max-w-[40%]"} ${statusClass}`}
             >
               <StatusIcon size={12} aria-hidden="true" className="shrink-0" />
               <span
@@ -129,7 +129,7 @@ export function ChatActivityRow({
       {expanded ? (
         <div
           id={bodyId}
-          className="mb-2 ml-1.5 min-w-0 border-l border-line pl-5 pt-1 pb-2 text-body text-fg [overflow-wrap:anywhere]"
+          className="mb-2 ml-1.5 min-w-0 border-l border-line pl-5 pt-1 pb-2 text-sm text-fg [overflow-wrap:anywhere]"
         >
           {children}
         </div>

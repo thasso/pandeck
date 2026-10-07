@@ -648,11 +648,11 @@ function BacklogRowContent({
           <FolderKanban size={13} className="shrink-0 text-faint" />
         )}
         <span
-          className={`min-w-0 flex-1 truncate text-caption font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted-foreground"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted-foreground"}`}
         >
           {data.label}
         </span>
-        <span className="shrink-0 text-caption text-muted-foreground">
+        <span className="shrink-0 text-sm text-muted-foreground">
           {data.taskCount}
         </span>
       </div>
@@ -826,7 +826,7 @@ function FilteredEmptyState({
           <button
             type="button"
             onClick={onClear}
-            className="rounded-lg border border-line px-2.5 py-1 text-caption font-medium text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-lg border border-line px-2.5 py-1 text-sm font-medium text-muted-foreground hover:bg-raised hover:text-fg"
           >
             Clear filters
           </button>

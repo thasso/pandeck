@@ -34,13 +34,13 @@ interface Row {
 function BuildRow({ label, build, missing }: Row) {
   return (
     <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-body text-fg">{label}</span>
+      <span className="text-sm text-fg">{label}</span>
       {build ? (
-        <span className="font-mono text-caption text-muted-foreground">
+        <span className="font-mono text-sm text-muted-foreground">
           {formatBuildInfo(build)}
         </span>
       ) : (
-        <span className="text-caption text-muted-foreground">{missing}</span>
+        <span className="text-sm text-muted-foreground">{missing}</span>
       )}
     </div>
   );
@@ -94,8 +94,8 @@ export function AboutSettingsSection({
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-heading font-semibold">About</h2>
-      <p className="mt-1 text-caption text-muted-foreground">
+      <h2 className="text-lg font-semibold">About</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Which build each part of the app is running. They are updated
         independently — the browser reloads itself on a deploy, the desktop app
         is installed by hand — so these can legitimately differ.
@@ -103,7 +103,7 @@ export function AboutSettingsSection({
 
       <div className="mt-6 rounded-xl border border-line bg-panel p-4">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-body font-semibold text-fg">Versions</h3>
+          <h3 className="text-sm font-semibold text-fg">Versions</h3>
           <CopyButton
             value={diagnostic}
             label="Copy version details"
@@ -115,7 +115,7 @@ export function AboutSettingsSection({
             <BuildRow key={row.label} {...row} />
           ))}
         </div>
-        <p className="mt-3 text-micro text-muted-foreground">
+        <p className="mt-3 text-xs text-muted-foreground">
           Each entry is the released version followed by the commit it was built
           from. <span className="font-mono">-dev</span> marks a build ahead of
           its release tag, and <span className="font-mono">-dirty</span> one

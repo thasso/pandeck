@@ -171,7 +171,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
     "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg data-[open=true]:bg-panel data-[open=true]:text-fg";
 
   const content = (close: () => void) => (
-    <div className="py-0.5 text-body" role="menu">
+    <div className="py-0.5 text-sm" role="menu">
       {view ? (
         <>
           <GroupLabel>Transcript</GroupLabel>
@@ -206,7 +206,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
               ) : null}
               <span className="min-w-0 flex-1 truncate">{action.label}</span>
               {action.hint ? (
-                <span className="shrink-0 text-caption text-faint">
+                <span className="shrink-0 text-sm text-faint">
                   {action.hint}
                 </span>
               ) : null}

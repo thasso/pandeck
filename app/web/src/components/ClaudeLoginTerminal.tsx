@@ -53,10 +53,10 @@ export function ClaudeLoginTerminal({
           <div className="flex min-w-0 items-center gap-2">
             <Terminal size={17} className="shrink-0 text-primary" />
             <div className="min-w-0">
-              <h3 className="truncate text-body font-semibold">
+              <h3 className="truncate text-sm font-semibold">
                 Connect {profile.name}
               </h3>
-              <p className="text-caption text-faint">
+              <p className="text-sm text-faint">
                 Official Claude CLI · profile-isolated
               </p>
             </div>
@@ -72,7 +72,7 @@ export function ClaudeLoginTerminal({
         </div>
 
         <div className="min-h-0 overflow-y-auto p-4">
-          <div className="rounded-xl border border-line bg-[#111318] p-3 text-caption text-[#e5e7eb] shadow-inner">
+          <div className="rounded-xl border border-line bg-[#111318] p-3 text-sm text-[#e5e7eb] shadow-inner">
             <pre className="max-h-[34dvh] min-h-32 overflow-auto whitespace-pre-wrap break-all font-mono">
               {output || "Starting Claude login…"}
             </pre>
@@ -83,7 +83,7 @@ export function ClaudeLoginTerminal({
               href={authorizationUrl}
               target="_blank"
               rel="noreferrer"
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-caption font-medium text-primary-foreground"
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground"
             >
               Open Claude authorization <ExternalLink size={14} />
             </a>
@@ -93,11 +93,11 @@ export function ClaudeLoginTerminal({
             <form onSubmit={submitCode} className="mt-4 space-y-2">
               <label
                 htmlFor={`claude-login-code-${profile.id}`}
-                className="text-caption font-medium text-fg"
+                className="text-sm font-medium text-fg"
               >
                 Paste the authorization code
               </label>
-              <p className="text-caption text-faint">
+              <p className="text-sm text-faint">
                 After signing in, Claude shows a code or callback URL. Paste it
                 here; PA forwards it directly to the CLI and never displays or
                 stores it.
@@ -128,7 +128,7 @@ export function ClaudeLoginTerminal({
               {submitted ? (
                 <p
                   role="status"
-                  className="flex items-center gap-1.5 text-caption text-muted-foreground"
+                  className="flex items-center gap-1.5 text-sm text-muted-foreground"
                 >
                   <Spinner size="sm" />
                   Code submitted; waiting for Claude…
@@ -136,13 +136,13 @@ export function ClaudeLoginTerminal({
               ) : null}
             </form>
           ) : status === "ready" ? (
-            <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-caption text-emerald-300">
+            <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
               <CheckCircle2 size={15} />
               Claude is connected for this profile.
             </div>
           ) : (
             <div
-              className={`mt-4 rounded-lg border px-3 py-2 text-caption ${status === "cancelled" ? "border-line text-muted-foreground" : "border-danger/30 bg-danger/10 text-danger"}`}
+              className={`mt-4 rounded-lg border px-3 py-2 text-sm ${status === "cancelled" ? "border-line text-muted-foreground" : "border-danger/30 bg-danger/10 text-danger"}`}
             >
               {error ??
                 (status === "cancelled"

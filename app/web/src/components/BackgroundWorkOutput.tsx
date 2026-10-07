@@ -80,7 +80,7 @@ export function BackgroundWorkOutput({
     capturedBytes !== undefined ? ` · ${formatBytes(capturedBytes)}` : "";
   return (
     <div className={className}>
-      <div className="flex flex-wrap items-center gap-x-2 text-caption">
+      <div className="flex flex-wrap items-center gap-x-2 text-sm">
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
@@ -120,15 +120,13 @@ export function BackgroundWorkOutput({
       {open ? (
         <div className="mt-1 rounded-md border border-line bg-raised/60 px-2 py-1">
           {load.state === "loading" || load.state === "idle" ? (
-            <p className="text-caption text-faint">Loading output…</p>
+            <p className="text-sm text-faint">Loading output…</p>
           ) : load.state === "error" ? (
-            <p className="text-caption text-danger">
+            <p className="text-sm text-danger">
               Could not load the output ({load.message}).
             </p>
           ) : load.text.length === 0 ? (
-            <p className="text-caption text-faint">
-              The process wrote nothing.
-            </p>
+            <p className="text-sm text-faint">The process wrote nothing.</p>
           ) : (
             <CollapsibleOutput
               text={load.text}
@@ -136,12 +134,12 @@ export function BackgroundWorkOutput({
               renderContent={(visible) => (
                 <AnsiText
                   text={visible}
-                  className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-caption"
+                  className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-sm"
                 />
               )}
               footerActions={
                 load.cut ? (
-                  <span className="text-caption text-faint">
+                  <span className="text-sm text-faint">
                     First{" "}
                     {Math.round(BACKGROUND_OUTPUT_INLINE_MAX_BYTES / 1024)} KB
                     shown; open the file for the rest.
