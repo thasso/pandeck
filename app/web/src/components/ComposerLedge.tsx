@@ -41,7 +41,9 @@ export function ComposerLedge({
 }: ComposerLedgeProps) {
   const edgeClass =
     edge === "top"
-      ? `rounded-t-xl border-b-0 ${joined ? "-mb-4 pb-4" : ""}`
+      ? // Stepped aside while the phone keyboard is up: nothing on the shelf
+        // is needed mid-sentence, and that height is the transcript's.
+        `rounded-t-xl border-b-0 in-data-[keyboard-open]:hidden ${joined ? "-mb-4 pb-4" : ""}`
       : `rounded-b-xl border-t-0 ${joined ? "-mt-4 pt-4" : ""}`;
   return (
     <div

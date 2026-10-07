@@ -647,9 +647,12 @@ function useMobileKeyboardInset() {
     const viewport = window.visualViewport;
     const mobileMedia = window.matchMedia("(max-width: 767px)");
 
+    // `data-keyboard-open` is the same estimate as a flag, for chrome that
+    // should step aside while the user types (`in-data-[keyboard-open]:`).
     const reset = () => {
       root.style.removeProperty("--app-keyboard-inset-bottom");
       root.style.removeProperty("--app-composer-bottom-padding");
+      root.removeAttribute("data-keyboard-open");
     };
 
     const isTextInputFocused = () => {
@@ -683,6 +686,7 @@ function useMobileKeyboardInset() {
         `${Math.round(keyboardOverlap)}px`,
       );
       root.style.setProperty("--app-composer-bottom-padding", "0.25rem");
+      root.setAttribute("data-keyboard-open", "");
       window.scrollTo(0, 0);
     };
 
