@@ -4241,6 +4241,15 @@ function AppContent() {
     ? locksModelAfterStart(displaySession) && runtimeHasStarted
     : false;
   const thinkingLocked = modelLocked;
+  // The account the shown session runs on: fixed at its first prompt, the
+  // staged pick before that. The inspector's Profile and the composer's
+  // runtime line both state it.
+  const displayCredentialProfileId =
+    displaySessionListItem?.credentialProfileId ??
+    (!runtimeHasStarted ? credentialProfileId : undefined);
+  const displayCredentialProfile = credentialProfiles.find(
+    (item) => item.id === displayCredentialProfileId,
+  );
   // Claude SDK models belong only to Claude-driven sessions; disable them in a
   // started pi session. Non-pi sessions are exempt from this restriction.
   const isModelDisabled = useCallback(
@@ -5688,6 +5697,7 @@ function AppContent() {
           isModelDisabled={isModelDisabled}
           modelLocked={modelLocked}
           thinkingLocked={thinkingLocked}
+          accountName={displayCredentialProfile?.name}
           hideRuntimeControls={route.name === "permanentAssistant"}
           ledge={composerLedge}
           selectedAgentType={
@@ -6248,17 +6258,14 @@ function AppContent() {
       relatedTasks={relatedGlobalTasks}
       sessionTasks={sessionTasks}
       forkOrigin={displaySession?.forkOrigin}
-      credentialProfile={(() => {
-        const profileId =
-          displaySessionListItem?.credentialProfileId ??
-          (!runtimeHasStarted ? credentialProfileId : undefined);
-        const profile = credentialProfiles.find(
-          (item) => item.id === profileId,
-        );
-        return profile
-          ? { name: profile.name, provider: profile.provider }
-          : undefined;
-      })()}
+      credentialProfile={
+        displayCredentialProfile
+          ? {
+              name: displayCredentialProfile.name,
+              provider: displayCredentialProfile.provider,
+            }
+          : undefined
+      }
       // Before the first prompt the runtime is still the staged selection, the
       // same one the composer's pickers show.
       model={

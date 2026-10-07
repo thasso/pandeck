@@ -106,7 +106,11 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
-import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
+import {
+  ModelSelect,
+  THINKING_LABELS,
+  ThinkingSelect,
+} from "./common/ModelThinkingSelect.tsx";
 import {
   COMPOSER_ACTION_CLUSTER_CLASS,
   COMPOSER_ACTION_ROW_CLASS,
@@ -210,6 +214,11 @@ interface Props {
   isModelDisabled?: (model: ModelOption) => boolean;
   modelLocked?: boolean;
   thinkingLocked?: boolean;
+  /**
+   * The account the session runs on, for the runtime line under the card once
+   * model and thinking are locked (a started session).
+   */
+  accountName?: string | undefined;
   /** Hide runtime model/thinking controls for server-configured special sessions. */
   hideRuntimeControls?: boolean;
   /**
@@ -920,6 +929,7 @@ export const Composer = memo(function Composer({
   isModelDisabled,
   modelLocked = false,
   thinkingLocked = false,
+  accountName,
   hideRuntimeControls = false,
   ledge,
   mobile = false,
@@ -1676,6 +1686,20 @@ export const Composer = memo(function Composer({
         ? { agentType: session?.agentType }
         : {}),
     });
+  // Once a session has started its model and thinking level are fixed, so
+  // their pickers would only spend the action row's width on a value that
+  // cannot change. They give way to one quiet line under the card that states
+  // the runtime instead: account, model, effort.
+  const runtimeLocked = modelLocked && thinkingLocked && !hideRuntimeControls;
+  const runtimeLine = runtimeLocked
+    ? [
+        accountName,
+        model ? (model.name ?? model.id) : undefined,
+        model?.reasoning ? THINKING_LABELS[thinkingLevel] : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   const branchCount =
     (branchInfo?.parent ? 1 : 0) + (branchInfo?.children.length ?? 0);
   const showBranches = Boolean(branchInfo && branchCount > 0);
@@ -2439,20 +2463,24 @@ export const Composer = memo(function Composer({
                           onChange={onAgentTypeChange}
                         />
                       ) : null}
-                      <ModelSelector
-                        model={model}
-                        models={models}
-                        actions={actions}
-                        isModelDisabled={isModelDisabled}
-                        locked={modelLocked}
-                        currentThinkingLevel={thinkingLevel}
-                      />
-                      <ThinkingSelector
-                        model={model}
-                        level={thinkingLevel}
-                        actions={actions}
-                        locked={thinkingLocked}
-                      />
+                      {runtimeLocked ? null : (
+                        <>
+                          <ModelSelector
+                            model={model}
+                            models={models}
+                            actions={actions}
+                            isModelDisabled={isModelDisabled}
+                            locked={modelLocked}
+                            currentThinkingLevel={thinkingLevel}
+                          />
+                          <ThinkingSelector
+                            model={model}
+                            level={thinkingLevel}
+                            actions={actions}
+                            locked={thinkingLocked}
+                          />
+                        </>
+                      )}
                     </div>
                   ) : null}
                   {!hideRuntimeControls && runtimeCollapsed && !commentMode ? (
@@ -2678,6 +2706,14 @@ export const Composer = memo(function Composer({
           </div>
         </InputGroup>
       </div>
+      {runtimeLine && !hidden && !commentMode ? (
+        <p
+          className="mt-1 truncate px-2 text-center text-xs text-muted-foreground"
+          title={runtimeLine}
+        >
+          {runtimeLine}
+        </p>
+      ) : null}
       {attachmentError ? (
         <div className="mt-1.5 px-2 text-sm text-destructive">
           {attachmentError}
