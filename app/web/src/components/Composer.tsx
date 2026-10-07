@@ -14,11 +14,6 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
-  readBusySendMode,
-  writeBusySendMode,
-  type BusySendMode,
-} from "../lib/busySendMode.ts";
-import {
   Check,
   ChevronDown,
   ClipboardList,
@@ -103,7 +98,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
   ModelSelect,
   THINKING_LABELS,
@@ -158,6 +152,8 @@ interface Props {
     text: string;
     attachments?: PromptAttachment[];
     command?: { name: string; rawArgs: string };
+    /** Steer it into the running turn as soon as it is queued (Alt+Enter). */
+    steerNow?: boolean;
   }) => void;
   onAbort: () => void;
   streaming: boolean;
@@ -1378,23 +1374,12 @@ export const Composer = memo(function Composer({
     speech.toggle();
   };
 
-  // While a turn runs, a message either steers it or queues behind it. Enter
-  // does what this device last chose; Alt+Enter the other. A provider that
-  // cannot take mid-turn input only queues.
+  // While a turn runs, a message QUEUES: it lands in the queue strip, whose
+  // rows steer it in or drop it. Alt+Enter queues it and steers it in at once
+  // where the provider takes a steer. A surface with no queue (the permanent
+  // Assistant) still steers directly.
   const providerCanSteer = Boolean(session?.canSteer);
-  const [busyMode, setBusyModeState] = useState<BusySendMode>(readBusySendMode);
-  const setBusyMode = (mode: BusySendMode) => {
-    setBusyModeState(mode);
-    writeBusySendMode(mode);
-  };
-  const offerBusyModeSwitch = streaming && providerCanSteer && Boolean(onQueue);
-  const busyModeFor = (alternate: boolean): BusySendMode => {
-    if (!streaming || !onQueue) return "steer";
-    if (!providerCanSteer) return "queue";
-    if (!alternate) return busyMode;
-    return busyMode === "queue" ? "steer" : "queue";
-  };
-  const effectiveBusyMode = busyModeFor(false);
+  const queueing = streaming && Boolean(onQueue);
   const canSend = !streaming || providerCanSteer || Boolean(onQueue);
 
   /**
@@ -1469,7 +1454,7 @@ export const Composer = memo(function Composer({
 
   const submit = (alternate = false) => {
     if (disabled || !canSend || sendBlocked || sendBlockedReason) return;
-    const queueing = busyModeFor(alternate) === "queue";
+    const steerNow = alternate && providerCanSteer;
     const outgoing = attachments.map(
       ({ previewUrl: _previewUrl, ...attachment }) => attachment,
     );
@@ -1478,6 +1463,7 @@ export const Composer = memo(function Composer({
         onQueue({
           text: prompt,
           ...(outgoing.length ? { attachments: outgoing } : {}),
+          ...(steerNow ? { steerNow: true } : {}),
         });
       else onSend(prompt, outgoing);
     };
@@ -2265,7 +2251,7 @@ export const Composer = memo(function Composer({
                       ? "Edit this comment…"
                       : "Add a comment…"
                     : streaming
-                      ? effectiveBusyMode === "queue"
+                      ? queueing
                         ? "Queue a message for after this response…"
                         : providerCanSteer
                           ? "Send a message to steer…"
@@ -2556,25 +2542,8 @@ export const Composer = memo(function Composer({
                       <Trash2 />
                     </IconButton>
                   ) : null}
-                  {offerBusyModeSwitch && !commentMode ? (
-                    <BusyModeSwitch
-                      mode={busyMode}
-                      onChange={setBusyMode}
-                      showShortcut={!touchComposerMode}
-                    />
-                  ) : null}
-                  {/* Typing while a turn runs turns the primary action into
-                    Send, so Stop keeps a button of its own until it is sent. */}
-                  {streaming && primaryAction === "send" && !commentMode ? (
-                    <IconButton
-                      label="Stop response"
-                      variant="secondary"
-                      onClick={onAbort}
-                      title="Stop"
-                    >
-                      <Square className="fill-current" />
-                    </IconButton>
-                  ) : null}
+                  {/* One button: Stop while the field is empty, Queue (or,
+                    with no queue here, Steer) once something is typed. */}
                   <InputGroupButton
                     size="icon-sm"
                     variant={
@@ -2602,8 +2571,10 @@ export const Composer = memo(function Composer({
                         : primaryAction === "stop"
                           ? "Stop"
                           : streaming
-                            ? effectiveBusyMode === "queue"
-                              ? "Queue for after this response"
+                            ? queueing
+                              ? touchComposerMode || !providerCanSteer
+                                ? "Queue it"
+                                : "Queue it (Enter) · queue and steer in now (Alt+Enter)"
                               : "Steer the response"
                             : touchComposerMode
                               ? "Send message"
@@ -2617,7 +2588,7 @@ export const Composer = memo(function Composer({
                         : primaryAction === "stop"
                           ? "Stop response"
                           : streaming
-                            ? effectiveBusyMode === "queue"
+                            ? queueing
                               ? "Queue message"
                               : "Steer response"
                             : "Send message"
@@ -2627,7 +2598,7 @@ export const Composer = memo(function Composer({
                       <Check size={16} />
                     ) : primaryAction === "stop" ? (
                       <Square size={14} className="fill-current" />
-                    ) : streaming && effectiveBusyMode === "queue" ? (
+                    ) : queueing ? (
                       <ListPlus size={16} />
                     ) : streaming ? (
                       <CornerDownRight size={16} />
@@ -2712,47 +2683,6 @@ export const Composer = memo(function Composer({
     </div>
   );
 });
-
-/**
- * Steer or Queue: what Enter does while a turn runs. Shown only while there is
- * a choice to make, and remembered on this device.
- */
-function BusyModeSwitch({
-  mode,
-  onChange,
-  showShortcut,
-}: {
-  mode: BusySendMode;
-  onChange: (mode: BusySendMode) => void;
-  showShortcut: boolean;
-}) {
-  const option = (value: BusySendMode, label: string, hint: string) => (
-    <ToggleGroupItem
-      value={value}
-      role="radio"
-      aria-checked={mode === value}
-      title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
-    >
-      {label}
-    </ToggleGroupItem>
-  );
-  return (
-    <ToggleGroup
-      variant="outline"
-      size="sm"
-      value={[mode]}
-      onValueChange={(values) => {
-        const next = values[0] as BusySendMode | undefined;
-        if (next) onChange(next);
-      }}
-      role="radiogroup"
-      aria-label="While the response runs"
-    >
-      {option("steer", "Steer", "Hand it to the running response")}
-      {option("queue", "Queue", "Send it after this response")}
-    </ToggleGroup>
-  );
-}
 
 /**
  * The collapsed composer bar, which doubles as the dictation surface.

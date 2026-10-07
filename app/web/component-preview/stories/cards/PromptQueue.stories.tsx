@@ -88,11 +88,8 @@ export function PromptQueueStory({
               queue={queueFor(scenario)}
               running={running}
               canSteer
-              onEdit={() => {}}
               onRemove={() => {}}
-              onMove={() => {}}
               onSendNow={() => {}}
-              onClear={() => {}}
               onResume={() => {}}
             />
           }

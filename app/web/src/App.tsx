@@ -5051,6 +5051,19 @@ function AppContent() {
   const queueSessionId =
     route.name === "session" ? displaySession?.sessionId : undefined;
   const sendPromptQueue = actions.promptQueue;
+  const shownPromptQueue = queueSessionId
+    ? displaySession?.promptQueue
+    : undefined;
+  // Alt+Enter queues a message AND steers it in at once, so it is seen in the
+  // queue on its way. The server names the row, so the steer waits for the
+  // queue update that brings a new row with exactly this text.
+  const pendingSteerRef = useRef<{
+    sessionId: string;
+    text: string;
+    knownIds: ReadonlySet<string>;
+  } | null>(null);
+  const shownPromptQueueRef = useRef(shownPromptQueue);
+  shownPromptQueueRef.current = shownPromptQueue;
   const queuePrompt = useMemo(
     () =>
       queueSessionId
@@ -5058,18 +5071,46 @@ function AppContent() {
             text: string;
             attachments?: PromptAttachment[];
             command?: { name: string; rawArgs: string };
-          }) =>
+            steerNow?: boolean;
+          }) => {
+            const { steerNow, ...queued } = item;
+            if (steerNow && !queued.command)
+              pendingSteerRef.current = {
+                sessionId: queueSessionId,
+                text: queued.text,
+                knownIds: new Set(
+                  (shownPromptQueueRef.current?.items ?? []).map(
+                    (row) => row.id,
+                  ),
+                ),
+              };
             sendPromptQueue({
               type: "queuePrompt",
               sessionId: queueSessionId,
-              ...item,
-            })
+              ...queued,
+            });
+          }
         : undefined,
     [queueSessionId, sendPromptQueue],
   );
-  const shownPromptQueue = queueSessionId
-    ? displaySession?.promptQueue
-    : undefined;
+  useEffect(() => {
+    const pending = pendingSteerRef.current;
+    if (!pending || !shownPromptQueue) return;
+    if (pending.sessionId !== queueSessionId) {
+      pendingSteerRef.current = null;
+      return;
+    }
+    const row = shownPromptQueue.items.find(
+      (item) => !pending.knownIds.has(item.id) && item.text === pending.text,
+    );
+    if (!row) return;
+    pendingSteerRef.current = null;
+    sendPromptQueue({
+      type: "sendQueuedPromptNow",
+      sessionId: pending.sessionId,
+      id: row.id,
+    });
+  }, [shownPromptQueue, queueSessionId, sendPromptQueue]);
   const sessionCanSteer = Boolean(displaySession?.canSteer);
   const promptQueueLedge = useMemo(
     () =>
@@ -5078,14 +5119,6 @@ function AppContent() {
           queue={shownPromptQueue}
           running={displayStreaming}
           canSteer={sessionCanSteer}
-          onEdit={(id, text) =>
-            sendPromptQueue({
-              type: "updateQueuedPrompt",
-              sessionId: queueSessionId,
-              id,
-              text,
-            })
-          }
           onRemove={(id) =>
             sendPromptQueue({
               type: "removeQueuedPrompt",
@@ -5093,25 +5126,11 @@ function AppContent() {
               id,
             })
           }
-          onMove={(id, toIndex) =>
-            sendPromptQueue({
-              type: "moveQueuedPrompt",
-              sessionId: queueSessionId,
-              id,
-              toIndex,
-            })
-          }
           onSendNow={(id) =>
             sendPromptQueue({
               type: "sendQueuedPromptNow",
               sessionId: queueSessionId,
               id,
-            })
-          }
-          onClear={() =>
-            sendPromptQueue({
-              type: "clearPromptQueue",
-              sessionId: queueSessionId,
             })
           }
           onResume={() =>
