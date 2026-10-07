@@ -214,9 +214,10 @@ export const TurnStatsRow = memo(function TurnStatsRow({
           <Button
             variant="ghost"
             size="sm"
-            // Open is not a hover state: ghost styles `aria-expanded` like
-            // one, so reset it and keep only the real hover.
-            className="h-auto w-full flex-col items-start gap-0.5 aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50"
+            // Like the session title link: no fill or colour change on hover
+            // or while open (ghost styles both), just the pointer cursor —
+            // the chevron already says it unfolds.
+            className="h-auto w-full cursor-pointer flex-col items-start gap-0.5 hover:bg-transparent hover:text-inherit aria-expanded:bg-transparent aria-expanded:text-inherit dark:hover:bg-transparent"
           />
         }
       >
