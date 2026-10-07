@@ -419,31 +419,41 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
  */
 const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
 
-function ContextMeter({ info }: { info: ContextInfo | null }) {
-  const usage = info?.context;
+/**
+ * How full the session's context window is, as text in the runtime strip under
+ * the card. It grows with the strip (container queries) so it never crowds out
+ * the model and effort: `42%` on a phone, `42% context` from 24rem, plus
+ * `181k / 1.00M` from 28rem. Turns the warning colour from 80% on. The full
+ * breakdown is its tooltip.
+ */
+function ContextStatus({ info }: { info: ContextInfo }) {
+  const usage = info.context;
   const percent = usage?.percent ?? null;
-  const clamped = Math.max(0, Math.min(100, percent ?? 0));
-  const live = info?.currentTurn;
+  const live = info.currentTurn;
   const liveTokens = live ? live.output + live.thinking : 0;
-  const cost = info ? formatCost(info.cost) : null;
+  const cost = formatCost(info.cost);
   const tooltipId = "composer-context-tooltip";
 
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<div />}
+        render={<span />}
         role="meter"
         aria-label="Context usage"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent ?? undefined}
         aria-describedby={tooltipId}
-        className="size-5 shrink-0 rounded-full p-1"
-        style={{
-          background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--input) 0deg)`,
-        }}
+        className={`shrink-0 whitespace-nowrap tabular-nums ${percent !== null && percent >= 80 ? "text-warning" : ""}`}
       >
-        <div className="size-full rounded-full bg-card" />
+        {percent !== null ? `${Math.round(percent)}%` : "—"}
+        <span className="hidden @sm:inline"> context</span>
+        {usage ? (
+          <span className="hidden @md:inline">
+            {" "}
+            · {formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}
+          </span>
+        ) : null}
       </TooltipTrigger>
       {/* TooltipContent is a one-line row (`inline-flex items-center`) on an
           inverted surface: stack this panel, and tint with `text-background`. */}
@@ -465,41 +475,34 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
                 : "unknown"
             }
           />
-          {info && (
-            <>
-              <ContextRow
-                label="Tokens"
-                value={`in ${formatTokens(info.tokenUsage.input)} · out ${formatTokens(info.tokenUsage.output)}`}
-              />
-              {info.tokenUsage.cacheRead > 0 && (
-                <ContextRow
-                  label="Cached in"
-                  value={formatTokens(info.tokenUsage.cacheRead)}
-                />
-              )}
-              {info.tokenUsage.cacheWrite > 0 && (
-                <ContextRow
-                  label="Cache write"
-                  value={formatTokens(info.tokenUsage.cacheWrite)}
-                />
-              )}
-              {liveTokens > 0 && (
-                <ContextRow
-                  label="Live"
-                  value={`~${formatTokens(liveTokens)}`}
-                />
-              )}
-              {cost && <ContextRow label="Cost" value={cost} />}
-              <ContextRow
-                label="Turns"
-                value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
-              />
-              <div className="pt-1 text-xs text-background/70">
-                Cached input is cumulative across internal model steps; some
-                providers report reads but not writes.
-              </div>
-            </>
+          <ContextRow
+            label="Tokens"
+            value={`in ${formatTokens(info.tokenUsage.input)} · out ${formatTokens(info.tokenUsage.output)}`}
+          />
+          {info.tokenUsage.cacheRead > 0 && (
+            <ContextRow
+              label="Cached in"
+              value={formatTokens(info.tokenUsage.cacheRead)}
+            />
           )}
+          {info.tokenUsage.cacheWrite > 0 && (
+            <ContextRow
+              label="Cache write"
+              value={formatTokens(info.tokenUsage.cacheWrite)}
+            />
+          )}
+          {liveTokens > 0 && (
+            <ContextRow label="Live" value={`~${formatTokens(liveTokens)}`} />
+          )}
+          {cost && <ContextRow label="Cost" value={cost} />}
+          <ContextRow
+            label="Turns"
+            value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
+          />
+          <div className="pt-1 text-xs text-background/70">
+            Cached input is cumulative across internal model steps; some
+            providers report reads but not writes.
+          </div>
         </div>
       </TooltipContent>
     </Tooltip>
@@ -1673,15 +1676,20 @@ export const Composer = memo(function Composer({
   // cannot change. They give way to one quiet line under the card that states
   // the runtime instead: account, model, effort.
   const runtimeLocked = modelLocked && thinkingLocked && !hideRuntimeControls;
-  const runtimeLine = runtimeLocked
+  // Model and effort are what the reader checks; the account is what gives
+  // way, so the strip truncates only the account (`runtimeAccount`).
+  const runtimeAccount = runtimeLocked ? accountName : undefined;
+  const runtimeModel = runtimeLocked
     ? [
-        accountName,
         model ? (model.name ?? model.id) : undefined,
         model?.reasoning ? THINKING_LABELS[thinkingLevel] : undefined,
       ]
         .filter(Boolean)
         .join(" · ")
     : "";
+  const runtimeLine = [runtimeAccount, runtimeModel]
+    .filter(Boolean)
+    .join(" · ");
   const branchCount =
     (branchInfo?.parent ? 1 : 0) + (branchInfo?.children.length ?? 0);
   const showBranches = Boolean(branchInfo && branchCount > 0);
@@ -2509,7 +2517,6 @@ export const Composer = memo(function Composer({
                       )}
                     </IconButton>
                   )}
-                  {commentMode ? null : <ContextMeter info={contextInfo} />}
                   {commentMode ? null : (
                     <IconButton
                       label="Add comment"
@@ -2665,20 +2672,49 @@ export const Composer = memo(function Composer({
         {/* The runtime as a strip under the card, the same object as the
             ledges above it: what the session runs on, resting where the
             composer ends. A statement, not a control — nothing to unfold. */}
-        {runtimeLine && !hidden && !commentMode ? (
+        {(runtimeLine || contextInfo?.context) && !hidden && !commentMode ? (
           <ComposerLedge joined edge="bottom">
-            <div
-              className="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground"
-              title={runtimeLine}
-            >
-              {model ? (
-                <ProviderIcon
-                  provider={model.provider}
-                  size={14}
-                  className="shrink-0"
-                />
+            {/* `@container`: the context sizes join only where they fit. */}
+            <div className="@container flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground">
+              {runtimeLine ? (
+                <>
+                  {model ? (
+                    <ProviderIcon
+                      provider={model.provider}
+                      size={14}
+                      className="shrink-0"
+                    />
+                  ) : null}
+                  {runtimeAccount ? (
+                    <span className="min-w-0 truncate" title={runtimeLine}>
+                      {runtimeAccount}
+                    </span>
+                  ) : null}
+                  {runtimeAccount && runtimeModel ? (
+                    <span aria-hidden className="shrink-0">
+                      ·
+                    </span>
+                  ) : null}
+                  {runtimeModel ? (
+                    <span
+                      className="shrink-0 whitespace-nowrap"
+                      title={runtimeLine}
+                    >
+                      {runtimeModel}
+                    </span>
+                  ) : null}
+                </>
               ) : null}
-              <span className="min-w-0 truncate">{runtimeLine}</span>
+              {contextInfo?.context ? (
+                <>
+                  {runtimeLine ? (
+                    <span aria-hidden className="shrink-0">
+                      ·
+                    </span>
+                  ) : null}
+                  <ContextStatus info={contextInfo} />
+                </>
+              ) : null}
             </div>
           </ComposerLedge>
         ) : null}
