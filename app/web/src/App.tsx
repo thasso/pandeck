@@ -5190,9 +5190,14 @@ function AppContent() {
   // the composer is opened inside this tap — synchronously, like compose and the
   // paperclip, or iOS keeps the keyboard down — and the anchor is captured after,
   // since opening focuses the textarea and comment mode wants that caret.
+  // On desktop the composer is always on screen, so the press only captures the
+  // anchor and comment mode focuses its own field: focusing it here first would
+  // hand the caret to the transcript's `removeAllRanges` and lose it.
   const commentOnSelection = useCallback(() => {
-    if (mobileLayout) setInspectorOpen(false);
-    openComposerRef.current?.();
+    if (mobileLayout) {
+      setInspectorOpen(false);
+      openComposerRef.current?.();
+    }
     chatCommentSelection?.onComment();
   }, [chatCommentSelection, mobileLayout, setInspectorOpen]);
 

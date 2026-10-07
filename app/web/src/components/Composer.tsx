@@ -1053,7 +1053,15 @@ export const Composer = memo(function Composer({
     if (!commentDraft) return;
     setCommentBody("");
     selectComment?.(null);
-    requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
+    // Twice: the transcript clears the page selection while it captures the
+    // anchor, and a focus that lands before that settles can be dropped.
+    requestAnimationFrame(() => {
+      ref.current?.focus({ preventScroll: true });
+      requestAnimationFrame(() => {
+        if (document.activeElement !== ref.current)
+          ref.current?.focus({ preventScroll: true });
+      });
+    });
   }, [commentDraft, selectComment]);
   const editingCommentId = editingComment?.id ?? null;
   useEffect(() => {
@@ -2651,7 +2659,9 @@ export const Composer = memo(function Composer({
         {/* The runtime as a strip under the card, the same object as the
             ledges above it: what the session runs on, resting where the
             composer ends. A statement, not a control — nothing to unfold. */}
-        {(runtimeLine || contextInfo?.context) && !hidden && !commentMode ? (
+        {/* Shown in comment mode too: the card swaps its field and actions,
+            and the dock around it keeps its shape. */}
+        {(runtimeLine || contextInfo?.context) && !hidden ? (
           <ComposerLedge joined edge="bottom">
             {/* `@container`: the context sizes join only where they fit. */}
             <div className="@container relative flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground">
