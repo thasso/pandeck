@@ -87,7 +87,7 @@ function PanelsPreview({
   );
 }
 const meta = {
-  title: "Chat/Panels and loading",
+  title: "App/Chat/Panels and loading",
   component: PanelsPreview,
   args: { state: "context" },
   parameters: { layout: "fullscreen" },

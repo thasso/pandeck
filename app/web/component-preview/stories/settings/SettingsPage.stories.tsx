@@ -121,7 +121,7 @@ function SettingsPreview(args: React.ComponentProps<typeof SettingsPage>) {
   );
 }
 const meta = {
-  title: "Settings/Sections",
+  title: "App/Settings/Sections",
   component: SettingsPage,
   args: baseArgs,
   render: (args, context) => (

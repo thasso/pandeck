@@ -4,7 +4,7 @@ import { ProjectSelector } from "../../../src/components/ProjectSelector.tsx";
 import { taskAreaProjects } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Project selector",
+  title: "App/Tasks/Project selector",
   component: ProjectSelector,
   parameters: { layout: "centered" },
   args: {

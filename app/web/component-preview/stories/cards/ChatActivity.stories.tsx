@@ -150,7 +150,7 @@ export function ChatActivityStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "chat-activity",
-  title: "Cards/Side activity",
+  title: "App/Cards/Side activity",
   component: ChatActivityStory,
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof ChatActivityStory>;

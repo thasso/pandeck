@@ -94,7 +94,7 @@ function PageHeaderStory({
 }
 
 const meta = {
-  title: "Shell/Page header",
+  title: "App/Shell/Page header",
   component: PageHeaderStory,
   parameters: { layout: "fullscreen" },
   args: {

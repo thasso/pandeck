@@ -3,7 +3,7 @@ import { ProjectLocalPathsSection } from "../../../src/components/ProjectLocalPa
 import { taskAreaProjects } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Project local paths",
+  title: "App/Tasks/Project local paths",
   component: ProjectLocalPathsSection,
   args: { project: taskAreaProjects[0]!, onSave: () => {} },
   parameters: { layout: "padded" },

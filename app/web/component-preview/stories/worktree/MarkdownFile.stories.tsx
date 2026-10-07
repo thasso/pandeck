@@ -64,7 +64,7 @@ export function MarkdownFileStory({ frameWidth }: MarkdownFileStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "markdown-file",
-  title: "Worktree/Markdown file",
+  title: "App/Worktree/Markdown file",
   component: MarkdownFileStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

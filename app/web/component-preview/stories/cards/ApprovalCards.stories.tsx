@@ -25,7 +25,7 @@ export function ApprovalCardsStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "approval-cards",
-  title: "Cards/Approvals",
+  title: "App/Cards/Approvals",
   component: ApprovalCardsStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 720, set: "lifecycle" },

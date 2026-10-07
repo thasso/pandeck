@@ -83,7 +83,7 @@ function RightPanelTabsStory({
 }
 
 const meta = {
-  title: "Shell/Right panel tabs",
+  title: "App/Shell/Right panel tabs",
   component: RightPanelTabsStory,
   parameters: { layout: "fullscreen" },
   args: {

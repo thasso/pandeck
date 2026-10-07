@@ -20,7 +20,7 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/ContextMenu", component: Gallery } satisfies Meta<
+const meta = { title: "shadcn/ContextMenu", component: Gallery } satisfies Meta<
   typeof Gallery
 >;
 export default meta;

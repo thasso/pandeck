@@ -145,7 +145,7 @@ export function PullRequestStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "pull-requests",
-  title: "Worktree/Pull requests",
+  title: "App/Worktree/Pull requests",
   component: PullRequestStory,
   parameters: { layout: "fullscreen" },
   args: {

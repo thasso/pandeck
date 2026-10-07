@@ -228,7 +228,7 @@ export function ChatConversation({
 
 const meta = {
   id: "chat-conversation",
-  title: "Chat/Conversation",
+  title: "App/Chat/Conversation",
   component: ChatConversation,
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof ChatConversation>;

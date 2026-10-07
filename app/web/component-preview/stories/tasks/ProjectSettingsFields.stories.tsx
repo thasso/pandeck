@@ -3,7 +3,7 @@ import { ProjectSettingsFields } from "../../../src/components/ProjectSettingsFi
 import { taskAreaProjects } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Project settings fields",
+  title: "App/Tasks/Project settings fields",
   component: ProjectSettingsFields,
   args: { project: taskAreaProjects[0]!, onSave: () => {} },
   parameters: { layout: "padded" },

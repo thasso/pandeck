@@ -123,7 +123,7 @@ function ObjectDockStory({ expanded, row }: ObjectDockStoryProps) {
 }
 
 const meta = {
-  title: "Shell/Object dock",
+  title: "App/Shell/Object dock",
   component: ObjectDockStory,
   parameters: { layout: "fullscreen" },
   args: { expanded: false, row: "actions" },

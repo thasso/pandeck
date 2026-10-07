@@ -37,7 +37,7 @@ export function GitCardsStory({ frameWidth, surface }: GitCardsStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "git-cards",
-  title: "Cards/Git results",
+  title: "App/Cards/Git results",
   component: GitCardsStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 720, surface: "commit" },

@@ -41,7 +41,7 @@ function TranscriptBlocks({
   );
 }
 const meta = {
-  title: "Chat/Transcript blocks",
+  title: "App/Chat/Transcript blocks",
   component: TranscriptBlocks,
   args: { status: "success", expanded: false },
   parameters: { layout: "fullscreen" },

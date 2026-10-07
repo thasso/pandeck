@@ -72,7 +72,7 @@ function calendar(view: "month" | "week"): CalendarController {
 }
 
 const meta = {
-  title: "Tasks/Calendar",
+  title: "App/Tasks/Calendar",
   component: CalendarPage,
   args: {
     calendar: calendar("month"),

@@ -20,7 +20,7 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/Combobox", component: Gallery } satisfies Meta<
+const meta = { title: "shadcn/Combobox", component: Gallery } satisfies Meta<
   typeof Gallery
 >;
 export default meta;

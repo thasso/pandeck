@@ -9,7 +9,7 @@ import { TaskStatusIcon } from "../../../src/components/TaskStatusIcon.tsx";
 import { taskAreaProjects, taskAreaTask } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Rows",
+  title: "App/Tasks/Rows",
   component: TaskRowBody,
   args: {
     task: taskAreaTask,

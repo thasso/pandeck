@@ -17,7 +17,7 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/ScrollArea", component: Gallery } satisfies Meta<
+const meta = { title: "shadcn/ScrollArea", component: Gallery } satisfies Meta<
   typeof Gallery
 >;
 export default meta;

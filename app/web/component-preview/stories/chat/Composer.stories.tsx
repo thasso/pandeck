@@ -124,7 +124,7 @@ function ComposerPreview({
   );
 }
 const meta = {
-  title: "Chat/Composer",
+  title: "App/Chat/Composer",
   component: ComposerPreview,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 800, state: "empty" },

@@ -159,7 +159,7 @@ export function WorktreeDialogStory({ dialog }: WorktreeDialogStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "worktree-dialogs",
-  title: "Worktree/Dialogs",
+  title: "App/Worktree/Dialogs",
   component: WorktreeDialogStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

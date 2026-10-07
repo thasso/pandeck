@@ -66,7 +66,7 @@ function QuickStartPreview({
   );
 }
 const meta = {
-  title: "Chat/New session quick start",
+  title: "App/Chat/New session quick start",
   component: QuickStartPreview,
   args: { state: "default", frameWidth: 800 },
   parameters: { layout: "fullscreen" },

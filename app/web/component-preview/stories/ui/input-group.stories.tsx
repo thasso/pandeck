@@ -36,7 +36,7 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/InputGroup", component: Gallery } satisfies Meta<
+const meta = { title: "shadcn/InputGroup", component: Gallery } satisfies Meta<
   typeof Gallery
 >;
 export default meta;

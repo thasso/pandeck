@@ -857,7 +857,7 @@ export function SessionInboxStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "session-inbox",
-  title: "Sessions/Attention list",
+  title: "App/Sessions/Attention list",
   component: SessionInboxStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

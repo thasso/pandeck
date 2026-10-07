@@ -108,7 +108,7 @@ function CrowdedCardStory({
 }
 
 const meta = {
-  title: "Shell/Session card",
+  title: "App/Shell/Session card",
   component: CrowdedCardStory,
   parameters: { layout: "fullscreen" },
   args: { width: 390, density: "comfortable" },

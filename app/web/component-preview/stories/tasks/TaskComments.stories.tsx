@@ -20,7 +20,7 @@ const comments: TaskComment[] = [
   },
 ];
 const meta = {
-  title: "Tasks/Comments",
+  title: "App/Tasks/Comments",
   component: TaskComments,
   args: { state: ready(comments), onRetry: () => {}, onAddComment: () => {} },
   parameters: { layout: "padded" },

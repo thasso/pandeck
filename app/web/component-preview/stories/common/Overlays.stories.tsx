@@ -1,29 +1,29 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { ToastViewport } from "../../src/components/ToastViewport.tsx";
-import { Button } from "../../src/components/ui/button.tsx";
+import { ToastViewport } from "../../../src/components/ToastViewport.tsx";
+import { Button } from "../../../src/components/ui/button.tsx";
 import {
   ConfirmDialog,
   useDialogs,
-} from "../../src/components/common/dialogs.tsx";
+} from "../../../src/components/common/dialogs.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "../../src/components/ui/dropdown-menu.tsx";
-import { EdgeSheet } from "../../src/components/common/EdgeSheet.tsx";
-import { IconButton } from "../../src/components/common/IconButton.tsx";
+} from "../../../src/components/ui/dropdown-menu.tsx";
+import { EdgeSheet } from "../../../src/components/common/EdgeSheet.tsx";
+import { IconButton } from "../../../src/components/common/IconButton.tsx";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "../../src/components/ui/popover.tsx";
-import { showToast } from "../../src/lib/toast.ts";
+} from "../../../src/components/ui/popover.tsx";
+import { showToast } from "../../../src/lib/toast.ts";
 
 /** Every app overlay, now on shadcn: dialogs, menus, popovers, sheets, toasts. */
-export function Overlays() {
+function OverlaysStory() {
   const dialogs = useDialogs();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -124,9 +124,10 @@ export function Overlays() {
 
 const meta = {
   id: "overlays",
-  title: "Foundation/Overlays",
-  component: Overlays,
+  title: "Common/Overlays",
+  component: OverlaysStory,
   parameters: { layout: "fullscreen" },
-} satisfies Meta<typeof Overlays>;
+  excludeStories: /.*Story$/,
+} satisfies Meta<typeof OverlaysStory>;
 export default meta;
 export const Default = {} satisfies StoryObj<typeof meta>;

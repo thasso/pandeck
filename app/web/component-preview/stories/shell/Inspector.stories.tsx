@@ -89,7 +89,7 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
 }
 
 const meta = {
-  title: "Shell/Inspector",
+  title: "App/Shell/Inspector",
   component: ObjectInspectorStory,
   parameters: { layout: "fullscreen" },
   args: { object: "session" },

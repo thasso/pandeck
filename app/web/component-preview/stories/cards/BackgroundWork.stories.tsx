@@ -127,7 +127,7 @@ export function BackgroundWorkStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "background-work",
-  title: "Cards/Background work and ledges",
+  title: "App/Cards/Background work and ledges",
   component: BackgroundWorkStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 640, surface: "ledges", open: false },

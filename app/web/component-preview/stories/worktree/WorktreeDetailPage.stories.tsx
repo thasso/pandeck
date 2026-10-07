@@ -140,7 +140,7 @@ export function WorktreeDetailStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "worktree-detail",
-  title: "Worktree/Detail page",
+  title: "App/Worktree/Detail page",
   component: WorktreeDetailStory,
   parameters: { layout: "fullscreen" },
   args: {

@@ -296,7 +296,7 @@ export function ChatActivityTranscript({
 
 const meta = {
   id: "chat-activity-transcript",
-  title: "Chat/Integrated side activity",
+  title: "App/Chat/Integrated side activity",
   component: ChatActivityTranscript,
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof ChatActivityTranscript>;

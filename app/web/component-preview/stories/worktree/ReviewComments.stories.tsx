@@ -116,7 +116,7 @@ export function ReviewCommentsStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "review-comments",
-  title: "Worktree/Review comments",
+  title: "App/Worktree/Review comments",
   component: ReviewCommentsStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 360, surface: "page-list" },

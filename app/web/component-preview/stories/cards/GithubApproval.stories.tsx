@@ -138,7 +138,7 @@ export function GithubApprovalStory({ frameWidth }: GithubApprovalStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "github-approval",
-  title: "Cards/GitHub approvals",
+  title: "App/Cards/GitHub approvals",
   component: GithubApprovalStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

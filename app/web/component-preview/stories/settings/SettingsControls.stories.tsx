@@ -13,7 +13,7 @@ import {
 
 const noop = () => {};
 const meta = {
-  title: "Settings/Controls",
+  title: "App/Settings/Controls",
   component: CredentialProfileCard,
   args: {
     profile: settingsProfiles[0]!,

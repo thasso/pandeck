@@ -100,7 +100,7 @@ export function ToolCardsStory({ frameWidth, surface }: ToolCardsStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "tool-cards",
-  title: "Cards/Tool cards",
+  title: "App/Cards/Tool cards",
   component: ToolCardsStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 640, surface: "results" },

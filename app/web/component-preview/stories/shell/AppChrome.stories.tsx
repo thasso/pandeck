@@ -73,7 +73,7 @@ function AppChromeStory({ status, toast }: AppChromeStoryProps) {
 }
 
 const meta = {
-  title: "Shell/App chrome",
+  title: "App/Shell/App chrome",
   component: AppChromeStory,
   parameters: { layout: "fullscreen" },
   args: { status: "restart-queued", toast: "success" },

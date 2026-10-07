@@ -94,7 +94,7 @@ export function ApprovalSessionGrantStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "approval-session-grant",
-  title: "Cards/Approve for session",
+  title: "App/Cards/Approve for session",
   component: ApprovalSessionGrantStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

@@ -3,7 +3,7 @@ import { TaskPlanningSection } from "../../../src/components/TaskPlanningSection
 import { taskAreaTask } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Planning section",
+  title: "App/Tasks/Planning section",
   component: TaskPlanningSection,
   args: { task: taskAreaTask, onPatch: () => {} },
   parameters: { layout: "padded" },

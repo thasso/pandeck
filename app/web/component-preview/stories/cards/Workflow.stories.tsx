@@ -135,7 +135,7 @@ export function WorkflowStory({ frameWidth, state }: WorkflowStoryProps) {
 const meta = {
   excludeStories: /.*Story$/,
   id: "workflow-run",
-  title: "Cards/Workflow run",
+  title: "App/Cards/Workflow run",
   component: WorkflowStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 640, state: "active" },

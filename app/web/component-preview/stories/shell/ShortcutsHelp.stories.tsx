@@ -63,7 +63,7 @@ function ShortcutsHelpStory({ empty }: { empty: boolean }) {
 }
 
 const meta = {
-  title: "Shell/Shortcuts help",
+  title: "App/Shell/Shortcuts help",
   component: ShortcutsHelpStory,
   parameters: { layout: "fullscreen" },
   args: { empty: false },

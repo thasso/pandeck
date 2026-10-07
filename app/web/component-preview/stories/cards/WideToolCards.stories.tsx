@@ -52,7 +52,7 @@ export function WideToolCardsStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "wide-tool-cards",
-  title: "Cards/Wide tool cards",
+  title: "App/Cards/Wide tool cards",
   component: WideToolCardsStory,
   parameters: { layout: "fullscreen" },
   args: { frameWidth: 720, surface: "jira" },

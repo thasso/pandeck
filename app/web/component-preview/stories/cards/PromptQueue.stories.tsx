@@ -105,7 +105,7 @@ export function PromptQueueStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "prompt-queue",
-  title: "Cards/Prompt queue",
+  title: "App/Cards/Prompt queue",
   component: PromptQueueStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

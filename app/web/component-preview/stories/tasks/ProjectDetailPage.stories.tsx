@@ -5,7 +5,7 @@ import { taskAreaProjects } from "../../fixtures/tasks.ts";
 
 const project = taskAreaProjects[0]!;
 const meta = {
-  title: "Tasks/Project detail",
+  title: "App/Tasks/Project detail",
   component: ProjectDetailPage,
   args: {
     projects: taskAreaProjects,

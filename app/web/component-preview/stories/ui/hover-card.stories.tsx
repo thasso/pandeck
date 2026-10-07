@@ -21,7 +21,7 @@ function Gallery() {
 }
 
 const meta = {
-  title: "UI/HoverCard",
+  title: "shadcn/HoverCard",
   component: Gallery,
 } satisfies Meta<typeof Gallery>;
 export default meta;

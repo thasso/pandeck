@@ -92,7 +92,7 @@ function BackgroundPreview({
 }
 
 const meta = {
-  title: "Settings/Usage and background work",
+  title: "App/Settings/Usage and background work",
   parameters: { layout: "fullscreen" },
 } satisfies Meta;
 export default meta;

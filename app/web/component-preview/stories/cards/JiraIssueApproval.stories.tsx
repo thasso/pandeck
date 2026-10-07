@@ -214,7 +214,7 @@ export function JiraIssueApprovalStory({
 const meta = {
   excludeStories: /.*Story$/,
   id: "jira-issue-approval",
-  title: "Cards/Jira issue approval",
+  title: "App/Cards/Jira issue approval",
   component: JiraIssueApprovalStory,
   parameters: { layout: "fullscreen" },
   argTypes: {

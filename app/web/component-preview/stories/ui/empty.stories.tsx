@@ -33,7 +33,7 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/Empty", component: Gallery } satisfies Meta<
+const meta = { title: "shadcn/Empty", component: Gallery } satisfies Meta<
   typeof Gallery
 >;
 export default meta;

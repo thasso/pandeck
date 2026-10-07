@@ -58,7 +58,7 @@ function renderPage(state: "loading" | "empty" | "tasks") {
 }
 
 const meta = {
-  title: "Tasks/Backlog page",
+  title: "App/Tasks/Backlog page",
   component: TaskManagementPage,
   args: {
     backlogState: {} as never,

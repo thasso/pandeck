@@ -42,7 +42,7 @@ function PrimaryNavStory({
 }
 
 const meta = {
-  title: "Shell/Primary navigation",
+  title: "App/Shell/Primary navigation",
   component: PrimaryNavStory,
   parameters: { layout: "fullscreen" },
   args: { width: 256, mobile: false },

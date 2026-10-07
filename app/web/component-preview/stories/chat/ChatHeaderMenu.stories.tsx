@@ -38,7 +38,7 @@ function HeaderMenuPreview({ mobile }: { mobile: boolean }) {
   );
 }
 const meta = {
-  title: "Chat/Header menu",
+  title: "App/Chat/Header menu",
   component: HeaderMenuPreview,
   args: { mobile: false },
   parameters: { layout: "fullscreen" },

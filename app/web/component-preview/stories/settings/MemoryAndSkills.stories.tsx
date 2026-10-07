@@ -338,7 +338,7 @@ const openSkill =
   };
 
 const meta = {
-  title: "Settings/Memory and skills",
+  title: "App/Settings/Memory and skills",
   parameters: { layout: "fullscreen" },
 } satisfies Meta;
 

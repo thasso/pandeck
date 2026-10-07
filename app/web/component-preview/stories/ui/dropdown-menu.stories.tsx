@@ -24,8 +24,9 @@ function Gallery() {
   );
 }
 
-const meta = { title: "UI/DropdownMenu", component: Gallery } satisfies Meta<
-  typeof Gallery
->;
+const meta = {
+  title: "shadcn/DropdownMenu",
+  component: Gallery,
+} satisfies Meta<typeof Gallery>;
 export default meta;
 export const Default = {} satisfies StoryObj<typeof meta>;

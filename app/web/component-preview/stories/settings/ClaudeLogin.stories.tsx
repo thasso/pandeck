@@ -3,7 +3,7 @@ import { ClaudeLoginTerminalView } from "../../../src/components/ClaudeLoginTerm
 import { settingsProfiles } from "../../fixtures/settings.ts";
 
 const meta = {
-  title: "Settings/Claude login",
+  title: "App/Settings/Claude login",
   component: ClaudeLoginTerminalView,
   args: {
     profile: settingsProfiles[0]!,

@@ -3,7 +3,7 @@ import { TaskContextSections } from "../../../src/components/TaskContextSections
 import { taskAreaProjects, taskAreaTask } from "../../fixtures/tasks.ts";
 
 const meta = {
-  title: "Tasks/Context sections",
+  title: "App/Tasks/Context sections",
   component: TaskContextSections,
   args: {
     task: taskAreaTask,

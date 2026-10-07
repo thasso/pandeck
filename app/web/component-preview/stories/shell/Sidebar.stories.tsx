@@ -106,7 +106,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
 }
 
 const meta = {
-  title: "Shell/Sidebar",
+  title: "App/Shell/Sidebar",
   component: SidebarStory,
   parameters: { layout: "fullscreen" },
   args: {
