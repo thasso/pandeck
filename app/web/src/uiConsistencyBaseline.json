@@ -1,0 +1,587 @@
+{
+  "src/App.tsx": {
+    "raw-button": 1
+  },
+  "src/components/ActiveSessionCard.tsx": {
+    "raw-button": 9
+  },
+  "src/components/AgentQuestionForm.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 7,
+    "raw-input": 1,
+    "raw-textarea": 1
+  },
+  "src/components/AppHeaderBar.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/AppStatus.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/ApprovalCard.tsx": {
+    "arbitrary-value": 3,
+    "palette-color": 24,
+    "raw-button": 6
+  },
+  "src/components/BackgroundProcessesSettingsSection.tsx": {
+    "raw-input": 2
+  },
+  "src/components/BackgroundTasksPage.tsx": {
+    "raw-button": 3,
+    "raw-input": 1
+  },
+  "src/components/BackgroundWorkCommand.tsx": {
+    "raw-button": 1
+  },
+  "src/components/BackgroundWorkLedge.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/BackgroundWorkOutput.tsx": {
+    "raw-button": 2
+  },
+  "src/components/BackgroundWorkPromptCard.tsx": {
+    "raw-button": 1
+  },
+  "src/components/BackgroundWorkRow.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/BackgroundWorkSection.tsx": {
+    "raw-button": 2
+  },
+  "src/components/BacklogFilters.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 3
+  },
+  "src/components/BacklogFocusList.tsx": {
+    "palette-color": 4,
+    "raw-button": 2
+  },
+  "src/components/BacklogInboxList.tsx": {
+    "raw-button": 3
+  },
+  "src/components/BacklogList.tsx": {
+    "palette-color": 1,
+    "raw-button": 1,
+    "raw-input": 1
+  },
+  "src/components/BacklogStatusFilter.tsx": {
+    "palette-color": 3,
+    "raw-button": 1
+  },
+  "src/components/BacklogToolbar.tsx": {
+    "raw-button": 2
+  },
+  "src/components/BacklogTreePane.tsx": {
+    "raw-button": 4
+  },
+  "src/components/ChatActivityRow.tsx": {
+    "arbitrary-value": 2,
+    "raw-button": 1
+  },
+  "src/components/ChatCommentChip.tsx": {
+    "raw-button": 6
+  },
+  "src/components/ChatDockPanel.tsx": {
+    "arbitrary-value": 5,
+    "raw-button": 2
+  },
+  "src/components/ChatHeaderMenu.tsx": {
+    "arbitrary-value": 2,
+    "hand-menu": 3,
+    "raw-button": 3
+  },
+  "src/components/ChatWideCard.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/ClaudeLoginTerminal.tsx": {
+    "arbitrary-value": 6,
+    "hand-dialog": 2,
+    "palette-color": 4,
+    "raw-button": 4,
+    "raw-input": 1
+  },
+  "src/components/CollapsibleSection.tsx": {
+    "raw-button": 1
+  },
+  "src/components/CommitCard.tsx": {
+    "palette-color": 1,
+    "raw-button": 2
+  },
+  "src/components/Composer.tsx": {
+    "arbitrary-value": 12,
+    "palette-color": 1,
+    "raw-button": 20,
+    "raw-input": 1,
+    "raw-textarea": 1
+  },
+  "src/components/ComposerLedge.tsx": {
+    "arbitrary-value": 3
+  },
+  "src/components/ConfluencePageApprovalBody.tsx": {
+    "palette-color": 12
+  },
+  "src/components/DictationControls.tsx": {
+    "raw-button": 2
+  },
+  "src/components/Disclosure.tsx": {
+    "raw-button": 1
+  },
+  "src/components/DocumentComments.tsx": {
+    "raw-button": 1
+  },
+  "src/components/DocumentZoom.tsx": {
+    "raw-button": 1
+  },
+  "src/components/GoogleWorkspaceToolCard.tsx": {
+    "arbitrary-value": 6,
+    "palette-color": 11,
+    "raw-button": 3
+  },
+  "src/components/InboxShelfRow.tsx": {
+    "raw-button": 1
+  },
+  "src/components/InlineDocumentEmbed.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 1,
+    "raw-button": 2
+  },
+  "src/components/InlineEdit.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 1,
+    "raw-button": 3,
+    "raw-input": 1,
+    "raw-textarea": 1
+  },
+  "src/components/JiraIssueApprovalBody.tsx": {
+    "arbitrary-value": 2,
+    "hand-dialog": 2,
+    "palette-color": 7,
+    "portal": 1,
+    "raw-button": 2
+  },
+  "src/components/JiraToolCard.tsx": {
+    "arbitrary-value": 17,
+    "palette-color": 10,
+    "raw-button": 2
+  },
+  "src/components/KnowledgeEntryToolCard.tsx": {
+    "raw-button": 2
+  },
+  "src/components/LoadedMemorySection.tsx": {
+    "palette-color": 7,
+    "raw-button": 7,
+    "raw-textarea": 1
+  },
+  "src/components/Markdown.tsx": {
+    "arbitrary-value": 3
+  },
+  "src/components/MarkdownFile.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/MemorySettingsSection.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 10,
+    "raw-button": 5,
+    "raw-input": 14,
+    "raw-select": 4,
+    "raw-textarea": 1
+  },
+  "src/components/MessageList.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 8
+  },
+  "src/components/NewSessionQuickStart.tsx": {
+    "arbitrary-value": 9,
+    "raw-button": 3
+  },
+  "src/components/PageHeader.tsx": {
+    "hand-menu": 2,
+    "palette-color": 4,
+    "raw-button": 6
+  },
+  "src/components/PeerRuntimesSettingsSection.tsx": {
+    "raw-button": 2,
+    "raw-input": 4,
+    "raw-select": 1
+  },
+  "src/components/PendingApprovalsLedge.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/PerfHud.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/Popover.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/PortForwardingSettingsSection.tsx": {
+    "raw-input": 1
+  },
+  "src/components/ProjectBadge.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/ProjectDetailPage.tsx": {
+    "arbitrary-value": 5,
+    "raw-button": 4
+  },
+  "src/components/ProjectLocalPaths.tsx": {
+    "raw-button": 2,
+    "raw-input": 1,
+    "raw-select": 2
+  },
+  "src/components/ProjectSelector.tsx": {
+    "raw-button": 2,
+    "raw-input": 1
+  },
+  "src/components/ProjectSettingsFields.tsx": {
+    "palette-color": 1,
+    "raw-button": 4,
+    "raw-input": 1
+  },
+  "src/components/ProjectTreePane.tsx": {
+    "raw-button": 3
+  },
+  "src/components/PromptQueueLedge.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 9,
+    "raw-textarea": 1
+  },
+  "src/components/PullRequestBrowser.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 1,
+    "raw-input": 1
+  },
+  "src/components/PullRequestCard.tsx": {
+    "palette-color": 21,
+    "raw-button": 4,
+    "raw-input": 1
+  },
+  "src/components/PushCard.tsx": {
+    "raw-button": 1
+  },
+  "src/components/PushNotificationsSection.tsx": {
+    "raw-button": 3
+  },
+  "src/components/RegistrySettingFields.tsx": {
+    "raw-input": 3,
+    "raw-select": 1,
+    "raw-textarea": 1
+  },
+  "src/components/SandboxedDocument.tsx": {
+    "palette-color": 1
+  },
+  "src/components/ServedFileCard.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/SessionContextSections.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 6,
+    "raw-button": 8
+  },
+  "src/components/SessionDockActions.tsx": {
+    "raw-button": 1
+  },
+  "src/components/SessionInbox.tsx": {
+    "arbitrary-value": 4,
+    "raw-button": 4
+  },
+  "src/components/SessionInboxBar.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 1
+  },
+  "src/components/SessionRow.tsx": {
+    "palette-color": 2,
+    "raw-button": 1
+  },
+  "src/components/SessionWorktreeMissingBanner.tsx": {
+    "palette-color": 6,
+    "raw-button": 1
+  },
+  "src/components/SettingsInputApprovalBody.tsx": {
+    "palette-color": 3,
+    "portal": 1,
+    "raw-button": 4,
+    "raw-input": 1
+  },
+  "src/components/SettingsPage.tsx": {
+    "arbitrary-value": 10,
+    "palette-color": 46,
+    "raw-button": 44,
+    "raw-input": 42,
+    "raw-select": 5,
+    "raw-textarea": 2
+  },
+  "src/components/Sidebar.tsx": {
+    "raw-button": 3
+  },
+  "src/components/SkillsSettingsSection.tsx": {
+    "raw-button": 1,
+    "raw-input": 1
+  },
+  "src/components/SpawnedSessionsLedge.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 5
+  },
+  "src/components/StagedContext.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 1,
+    "raw-button": 7,
+    "raw-input": 1
+  },
+  "src/components/TaskComments.tsx": {
+    "palette-color": 1,
+    "raw-button": 1
+  },
+  "src/components/TaskContextSections.tsx": {
+    "raw-button": 4,
+    "raw-input": 4
+  },
+  "src/components/TaskManageToolCard.tsx": {
+    "arbitrary-value": 2,
+    "palette-color": 6,
+    "raw-button": 2
+  },
+  "src/components/TaskManagementPage.tsx": {
+    "arbitrary-value": 4,
+    "raw-button": 3
+  },
+  "src/components/TaskPlanningSection.tsx": {
+    "palette-color": 2,
+    "raw-button": 2,
+    "raw-input": 1
+  },
+  "src/components/TaskRowBody.tsx": {
+    "palette-color": 4
+  },
+  "src/components/TaskStatusIcon.tsx": {
+    "palette-color": 2
+  },
+  "src/components/ThinkingBlock.tsx": {
+    "raw-button": 1
+  },
+  "src/components/Topbar.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 5
+  },
+  "src/components/TurnStatsRow.tsx": {
+    "arbitrary-value": 3,
+    "raw-button": 1
+  },
+  "src/components/UsagePage.tsx": {
+    "arbitrary-value": 7,
+    "palette-color": 3,
+    "raw-button": 4
+  },
+  "src/components/WorkflowRunCard.tsx": {
+    "palette-color": 13,
+    "raw-button": 15,
+    "raw-input": 3
+  },
+  "src/components/WorkflowRunInboxCard.tsx": {
+    "raw-button": 3
+  },
+  "src/components/WorkflowRunStartSheet.tsx": {
+    "arbitrary-value": 5,
+    "hand-dialog": 4,
+    "palette-color": 1,
+    "portal": 1,
+    "raw-button": 5,
+    "raw-input": 6,
+    "raw-select": 1,
+    "raw-textarea": 1
+  },
+  "src/components/WorkshopDraftHandoffCard.tsx": {
+    "raw-button": 1
+  },
+  "src/components/WorktreeProvisionCard.tsx": {
+    "raw-button": 2
+  },
+  "src/components/agentTypeDisplay.ts": {
+    "palette-color": 4
+  },
+  "src/components/calendar/CalendarDetailPanel.tsx": {
+    "palette-color": 11
+  },
+  "src/components/calendar/CalendarPage.tsx": {
+    "palette-color": 4,
+    "raw-button": 6
+  },
+  "src/components/calendar/EventChip.tsx": {
+    "raw-button": 1
+  },
+  "src/components/calendar/MonthView.tsx": {
+    "palette-color": 3,
+    "raw-button": 1
+  },
+  "src/components/calendar/TimeGrid.tsx": {
+    "arbitrary-value": 2,
+    "palette-color": 7,
+    "raw-button": 3
+  },
+  "src/components/common/ChartBlock.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/CollapsibleOutput.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 4
+  },
+  "src/components/common/CommentComposer.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 4,
+    "raw-textarea": 1
+  },
+  "src/components/common/EdgeSheet.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/common/ImageLightbox.tsx": {
+    "arbitrary-value": 4,
+    "hand-dialog": 2,
+    "palette-color": 12,
+    "portal": 1,
+    "raw-button": 2
+  },
+  "src/components/common/JsonView.tsx": {
+    "raw-button": 1
+  },
+  "src/components/common/ModelThinkingSelect.tsx": {
+    "arbitrary-value": 7,
+    "raw-button": 2
+  },
+  "src/components/common/RuntimePicker.tsx": {
+    "arbitrary-value": 2,
+    "raw-button": 2,
+    "raw-input": 1
+  },
+  "src/components/common/SwipeRow.tsx": {
+    "palette-color": 1
+  },
+  "src/components/common/ToolCallBlock.tsx": {
+    "raw-button": 1
+  },
+  "src/components/common/Tree.tsx": {
+    "arbitrary-value": 4,
+    "raw-button": 1
+  },
+  "src/components/common/UsageCycleMeters.tsx": {
+    "arbitrary-value": 5
+  },
+  "src/components/common/bottomSheet.ts": {
+    "arbitrary-value": 2
+  },
+  "src/components/common/composerShell.ts": {
+    "arbitrary-value": 6
+  },
+  "src/components/common/dialogs.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/load.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 1
+  },
+  "src/components/common/shortcuts.tsx": {
+    "arbitrary-value": 3,
+    "hand-dialog": 2,
+    "palette-color": 1,
+    "raw-button": 1
+  },
+  "src/components/diff/DiffModeToolbar.tsx": {
+    "hand-menu": 2,
+    "raw-button": 2
+  },
+  "src/components/diff/comments.tsx": {
+    "palette-color": 2,
+    "raw-button": 3
+  },
+  "src/components/objectInspectors.tsx": {
+    "palette-color": 1
+  },
+  "src/components/pullRequest/PullRequestDetailPage.tsx": {
+    "palette-color": 1,
+    "raw-button": 1
+  },
+  "src/components/pullRequest/PullRequestMergeDialog.tsx": {
+    "palette-color": 5,
+    "raw-input": 4
+  },
+  "src/components/review/ReviewCommentList.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 2,
+    "raw-button": 5,
+    "raw-input": 1
+  },
+  "src/components/review/SendCommentsSheet.tsx": {
+    "arbitrary-value": 1,
+    "palette-color": 1,
+    "raw-button": 4,
+    "raw-textarea": 1
+  },
+  "src/components/shell/AppShell.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/shell/BottomCard.tsx": {
+    "arbitrary-value": 2,
+    "hand-dialog": 1,
+    "palette-color": 1,
+    "raw-button": 1
+  },
+  "src/components/shell/Inspector.tsx": {
+    "arbitrary-value": 2,
+    "palette-color": 2,
+    "raw-button": 4
+  },
+  "src/components/shell/KnowledgePanel.tsx": {
+    "raw-button": 1
+  },
+  "src/components/shell/ObjectDock.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/shell/PrimaryNav.tsx": {
+    "arbitrary-value": 1,
+    "raw-button": 2
+  },
+  "src/components/shell/RightPanelTabs.tsx": {
+    "raw-button": 4
+  },
+  "src/components/shell/SectionOverflow.tsx": {
+    "raw-button": 2
+  },
+  "src/components/shell/WorktreePanel.tsx": {
+    "raw-button": 1
+  },
+  "src/components/worktree/FileHistoryList.tsx": {
+    "raw-button": 1
+  },
+  "src/components/worktree/WorktreeChangesetList.tsx": {
+    "palette-color": 5,
+    "raw-button": 2
+  },
+  "src/components/worktree/WorktreeDelivery.tsx": {
+    "palette-color": 6
+  },
+  "src/components/worktree/WorktreeDetailPage.tsx": {
+    "arbitrary-value": 9,
+    "palette-color": 2,
+    "raw-button": 8
+  },
+  "src/components/worktree/WorktreeDialogs.tsx": {
+    "palette-color": 6,
+    "raw-button": 2,
+    "raw-input": 7,
+    "raw-textarea": 2
+  },
+  "src/components/worktree/WorktreeFileNavigator.tsx": {
+    "palette-color": 5,
+    "raw-button": 2
+  },
+  "src/components/worktree/WorktreeScopePicker.tsx": {
+    "arbitrary-value": 4,
+    "raw-button": 4
+  },
+  "src/components/worktreeRowParts.tsx": {
+    "palette-color": 10
+  }
+}

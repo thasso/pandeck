@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet.tsx";
+import { BOTTOM_SHEET_BOTTOM_PADDING_CLASS } from "./bottomSheet.ts";
 
 /**
  * @component EdgeSheet
@@ -39,7 +40,7 @@ export function EdgeSheet({
         className={
           top
             ? "gap-0 rounded-b-xl"
-            : "max-h-[85vh] gap-0 rounded-t-xl pb-[var(--app-safe-area-bottom)]"
+            : `max-h-[85vh] gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
         }
         style={
           top

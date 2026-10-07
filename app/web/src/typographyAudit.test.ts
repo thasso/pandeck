@@ -6,13 +6,15 @@ import { describe, expect, test } from "vitest";
 /**
  * Typography source audit (Task-184) — strict zero-bypass mode.
  *
- * The six semantic role utilities (`text-micro/caption/body/prose/heading/
- * title`) and their paired line heights are the ONLY typography sizes the web
- * client may use, and they are defined centrally in `app/web/src/index.css`.
+ * Tailwind's stock `text-xs/sm/base/lg/xl` utilities (the scale shadcn
+ * components use) and their paired line heights are the ONLY typography sizes
+ * the web client may use; `app/web/src/index.css` multiplies them by the
+ * `--text-scale` preference. The vendored shadcn components in
+ * `src/components/ui/` are generated code and exempt.
  * This test scans first-party production sources and fails on any bypass:
  *
  *  - arbitrary Tailwind font sizes (`text-[12px]`, `text-[0.86em]`, …)
- *  - Tailwind's generic size scale (`text-xs/sm/base/lg/xl/2xl/…`)
+ *  - Tailwind sizes above the scale (`text-2xl` … `text-9xl`)
  *  - direct `font-size:` declarations / inline `fontSize:`/`fontSize =` sets
  *    outside the owning stylesheet
  *  - component-level `leading-*` overrides that defeat the role line heights
@@ -30,6 +32,8 @@ const WEB_ROOT = join(HERE, "..");
 
 // The owning stylesheet defines every token/utility and is exempt.
 const OWNER_FILES = new Set([join(HERE, "index.css")]);
+// Vendored shadcn components (`shadcn add`) are generated code.
+const VENDORED_DIR = join(HERE, "components", "ui");
 
 const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".css", ".html"]);
 
@@ -37,8 +41,8 @@ const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".css", ".html"]);
 const RULES: readonly RegExp[] = [
   // Arbitrary Tailwind font size with an explicit CSS length unit.
   /\btext-\[\s*\d[\d.]*(?:px|rem|em|pt)\s*\]/g,
-  // Tailwind's generic font-size scale.
-  /\btext-(?:xs|sm|base|lg|xl|\d+xl)\b/g,
+  // Tailwind sizes above the app's scale.
+  /\btext-\d+xl\b/g,
   // CSS font-size declaration outside the owning stylesheet.
   /font-size\s*:/g,
   // Inline React fontSize set (object property or property assignment), NOT a
@@ -50,6 +54,7 @@ const RULES: readonly RegExp[] = [
 
 function shouldScan(path: string): boolean {
   if (OWNER_FILES.has(path)) return false;
+  if (path.startsWith(VENDORED_DIR)) return false;
   if (path.endsWith(".d.ts")) return false;
   if (/\.test\.[tj]sx?$/.test(path)) return false;
   if (/typographyAudit\./.test(path)) return false;
@@ -81,7 +86,7 @@ function findViolations(source: string): string[] {
 }
 
 describe("typography source audit", () => {
-  test("first-party production sources use only the semantic role utilities", () => {
+  test("first-party production sources use only the stock type scale", () => {
     const offenders: string[] = [];
     for (const file of collectFiles()) {
       const hits = findViolations(readFileSync(file, "utf8"));
@@ -90,7 +95,7 @@ describe("typography source audit", () => {
     }
     expect(
       offenders,
-      `Typography bypasses (use text-micro/caption/body/prose/heading/title):\n${offenders.join("\n")}`,
+      `Typography bypasses (use text-xs/sm/base/lg/xl):\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
 });

@@ -164,8 +164,8 @@ it("paints popover panels above a modal Sheet", () => {
       </EdgeSheet>,
     ),
   );
-  // The sheet's own overlay is what carries the band; the dialog card sits in it.
-  const overlay = document.querySelector('[role="dialog"]')?.parentElement;
+  // The sheet's popup carries the modal band.
+  const overlay = document.querySelector('[data-slot="sheet-content"]');
   expect(overlay?.textContent).toContain("Sheet body");
   expect(panelLayer).toBeGreaterThan(layerOf(overlay));
 });

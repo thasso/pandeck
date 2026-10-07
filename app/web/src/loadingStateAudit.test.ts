@@ -56,6 +56,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** The module that owns all of it. */
 const OWNER_FILES = new Set([join(HERE, "components", "common", "load.tsx")]);
+/** Vendored shadcn components (`shadcn add`): the primitives `load.tsx` uses. */
+const VENDORED_DIR = join(HERE, "components", "ui");
 
 const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".css"]);
 
@@ -91,6 +93,7 @@ const RULES: readonly Rule[] = [
 
 function shouldScan(path: string): boolean {
   if (OWNER_FILES.has(path)) return false;
+  if (path.startsWith(VENDORED_DIR)) return false;
   if (path.endsWith(".d.ts")) return false;
   if (/\.test\.[tj]sx?$/.test(path)) return false;
   if (/loadingStateAudit\./.test(path)) return false;

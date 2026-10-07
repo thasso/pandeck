@@ -513,20 +513,21 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `pointerdowncapture` guard on that button lands before the input's blur and
   suppresses the commit. `hidePath` keeps the managed clone out of the list,
   since the page's Repository section states it.
-- `ui/dialog.tsx` owns the app's modal chrome (`DialogOverlay`, `DialogHeader`,
-  `DialogAction`, `DialogCancelButton`) and the single confirmation surface
-  built from it. `ConfirmDialog` is the declarative half — title, body, optional
-  single field, caller-owned `busy`/`error`, extra gates as children (the
-  worktree removal's "also delete the branch" and force checkboxes) — and
-  `DialogProvider`/`useDialogs` the imperative half, awaiting a `confirm` or
-  `promptText` from an ordinary handler. `main.tsx` mounts the provider once
-  around `App`; its context value never changes, so opening a dialog re-renders
-  the provider alone, and the two members stay referentially stable for the
-  memoized rows whose handlers close over them. Native `window.confirm`/`alert`/
-  `prompt` are banned app-wide because the Tauri shell's WKWebView never shows
-  them (`src/nativeDialogAudit.test.ts`); `WorktreeDialogs.tsx` builds its
-  clean/removal guards on `ConfirmDialog` and its form dialogs on the same
-  primitives, so all of them share one idea of chrome, focus and busy state.
+- `common/dialogs.tsx` owns the app's modal chrome (`DialogOverlay`,
+  `DialogHeader`, `DialogAction`, `DialogCancelButton`) and the single
+  confirmation surface built from it. `ConfirmDialog` is the declarative half —
+  title, body, optional single field, caller-owned `busy`/`error`, extra gates
+  as children (the worktree removal's "also delete the branch" and force
+  checkboxes) — and `DialogProvider`/`useDialogs` the imperative half, awaiting
+  a `confirm` or `promptText` from an ordinary handler. `main.tsx` mounts the
+  provider once around `App`; its context value never changes, so opening a
+  dialog re-renders the provider alone, and the two members stay referentially
+  stable for the memoized rows whose handlers close over them. Native
+  `window.confirm`/`alert`/ `prompt` are banned app-wide because the Tauri
+  shell's WKWebView never shows them (`src/nativeDialogAudit.test.ts`);
+  `WorktreeDialogs.tsx` builds its clean/removal guards on `ConfirmDialog` and
+  its form dialogs on the same primitives, so all of them share one idea of
+  chrome, focus and busy state.
 - `common/CommentComposer.tsx` owns the app's shared comment-entry silhouette
   for unanchored and anchored comments: an optional host-supplied anchor header
   over one growing field, with optional text refinement and dictation controls

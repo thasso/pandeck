@@ -322,7 +322,7 @@ it("reports a failed changes load in the danger tone, with a retry", async () =>
   });
   const note = container!.querySelector("[role='alert']");
   expect(note?.textContent).toContain("not a git repository");
-  expect(note?.className).toContain("danger");
+  expect(note?.className).toContain("destructive");
 
   await act(async () => {
     note!.querySelector<HTMLButtonElement>("button")!.click();

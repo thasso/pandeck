@@ -111,7 +111,7 @@ function click(label: string, scope: ParentNode = container!): void {
 
 /** Answer the confirmation the control just raised, not the control again. */
 function clickInDialog(label: string): void {
-  const dialog = container!.querySelector('[role="dialog"]');
+  const dialog = document.querySelector('[role="dialog"]');
   expect(dialog, "no dialog open").not.toBeNull();
   click(label, dialog!);
 }
@@ -154,28 +154,28 @@ it("keeps pause reason and stale reviewed commit visible and wires controls", as
     );
   });
 
-  expect(container!.textContent).toContain("review needs a decision");
+  expect(document.body.textContent).toContain("review needs a decision");
   expect(
-    container!.textContent!.split("review needs a decision").length - 1,
+    document.body.textContent!.split("review needs a decision").length - 1,
   ).toBe(1);
-  expect(container!.textContent).toContain("abcdef12");
-  expect(container!.textContent).toContain("outdated — workspace moved");
+  expect(document.body.textContent).toContain("abcdef12");
+  expect(document.body.textContent).toContain("outdated — workspace moved");
   // The reviewer's own words, which used to reach nothing but its transcript.
-  expect(container!.textContent).toContain("retry path is still unguarded");
-  expect(container!.textContent).toContain(
+  expect(document.body.textContent).toContain("retry path is still unguarded");
+  expect(document.body.textContent).toContain(
     "[major] src/retry.ts:22 — guard the retry path",
   );
   // Where the findings live durably, and what the fix round left on them.
-  expect(container!.textContent).toContain("2 anchored findings");
-  expect(container!.textContent).toContain("1 answered and left open");
-  expect(container!.textContent).toContain("the helper name reads oddly");
-  expect(container!.textContent).toContain("iteration 2 of 3");
-  expect(container!.textContent).toContain("Protocol and UI changes");
+  expect(document.body.textContent).toContain("2 anchored findings");
+  expect(document.body.textContent).toContain("1 answered and left open");
+  expect(document.body.textContent).toContain("the helper name reads oddly");
+  expect(document.body.textContent).toContain("iteration 2 of 3");
+  expect(document.body.textContent).toContain("Protocol and UI changes");
   // The coordinator's post-review call, which the user would otherwise have to
   // open its session to read.
-  expect(container!.textContent).toContain("another review pass");
-  expect(container!.textContent).toContain("deserves a second reader");
-  expect(container!.textContent).toContain("the migration");
+  expect(document.body.textContent).toContain("another review pass");
+  expect(document.body.textContent).toContain("deserves a second reader");
+  expect(document.body.textContent).toContain("the migration");
   click("Resume");
   click("Retry");
   expect(resume).toHaveBeenCalledWith("7");
@@ -231,7 +231,7 @@ it("defaults late-bound worktree cleanup on and keeps cleanup choices independen
 
   click("Delete run…");
   const checkboxes = [
-    ...container!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    ...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
   ];
   expect(checkboxes).toHaveLength(2);
   expect(checkboxes.every((checkbox) => checkbox.checked)).toBe(true);
@@ -282,11 +282,11 @@ it("shows the stopped step's own reason beside the generic pause banner", () => 
     );
   });
 
-  expect(container!.textContent).toContain("Commit and sync blocked");
-  expect(container!.textContent).toContain("the rebase conflicted");
-  expect(container!.textContent).toContain("docs/reference/web-diff.md");
-  expect(container!.textContent).toContain("run branch was restored");
-  expect(container!.textContent).toContain("then Retry");
+  expect(document.body.textContent).toContain("Commit and sync blocked");
+  expect(document.body.textContent).toContain("the rebase conflicted");
+  expect(document.body.textContent).toContain("docs/reference/web-diff.md");
+  expect(document.body.textContent).toContain("run branch was restored");
+  expect(document.body.textContent).toContain("then Retry");
 });
 
 it("says what another retry would do, without repeating the banner's count", async () => {
@@ -327,19 +327,21 @@ it("says what another retry would do, without repeating the banner's count", asy
   });
 
   // The count is the banner's; this line carries only what the banner cannot.
-  expect(container!.textContent!.split("attempt 3").length - 1).toBe(1);
-  expect(container!.textContent).toContain("Retry re-runs the same assignment");
+  expect(document.body.textContent!.split("attempt 3").length - 1).toBe(1);
+  expect(document.body.textContent).toContain(
+    "Retry re-runs the same assignment",
+  );
   // Never a promise that the outcome is fixed — but also never a false reason
   // for it: the executor REUSES the role's session whenever it is still
   // resolvable, so a retry does not get fresh eyes, only another attempt.
-  expect(container!.textContent).toContain("repaired outside the run");
-  expect(container!.textContent).not.toContain("fresh session");
+  expect(document.body.textContent).toContain("repaired outside the run");
+  expect(document.body.textContent).not.toContain("fresh session");
   // Discouraged, never refused: a declined confirmation runs nothing, and the
   // user who repaired the condition outside the run can still say yes.
   click("Retry again");
   await settled();
-  expect(container!.textContent).toContain("Retry anyway?");
-  expect(container!.textContent).toContain("ended with the same result");
+  expect(document.body.textContent).toContain("Retry anyway?");
+  expect(document.body.textContent).toContain("ended with the same result");
   clickInDialog("Cancel");
   await settled();
   expect(retry).not.toHaveBeenCalled();
@@ -380,9 +382,10 @@ it("never repeats the pause sentence the banner or next action already shows", (
   });
 
   expect(
-    container!.textContent!.split("the reviewer rejected this head").length - 1,
+    document.body.textContent!.split("the reviewer rejected this head").length -
+      1,
   ).toBe(1);
-  expect(container!.textContent).not.toContain("Review failed");
+  expect(document.body.textContent).not.toContain("Review failed");
 });
 
 it("links the provider PR and opens the existing live PR card", () => {
@@ -463,15 +466,15 @@ it("keeps a completed run inspectable with its separate follow-ups", () => {
     );
   });
 
-  expect(container!.textContent).toContain("completed");
-  expect(container!.textContent).toContain("Pull request merged");
+  expect(document.body.textContent).toContain("completed");
+  expect(document.body.textContent).toContain("Pull request merged");
   // No delivery state on the card — an older server, or a card the run cannot
   // read — offers no control rather than one whose refusal it cannot predict.
-  expect(container!.textContent).not.toContain("Clean up");
+  expect(document.body.textContent).not.toContain("Clean up");
   // Answering the Task is still the user's own, separate choice.
-  expect(container!.textContent).toContain("Task's own status");
-  expect(container!.textContent).toContain("Pull request #12");
-  expect(container!.textContent).not.toContain("Cancel");
+  expect(document.body.textContent).toContain("Task's own status");
+  expect(document.body.textContent).toContain("Pull request #12");
+  expect(document.body.textContent).not.toContain("Cancel");
 });
 
 it("offers user-authorized rebase and re-review for an observed conflict", async () => {
@@ -508,12 +511,12 @@ it("offers user-authorized rebase and re-review for an observed conflict", async
     );
   });
 
-  expect(container!.textContent).not.toContain("Resume");
+  expect(document.body.textContent).not.toContain("Resume");
   // Authorized by the user, through the app's own dialog: the confirming button
   // repeats the control's name, so the answer says what it starts.
   click("Rebase and re-review");
   await settled();
-  expect(container!.textContent).toContain("send through review again?");
+  expect(document.body.textContent).toContain("send through review again?");
   clickInDialog("Rebase and re-review");
   await settled();
   expect(rebase).toHaveBeenCalledWith("7");
@@ -632,7 +635,7 @@ it("says when the card shortened the review instead of hiding it", () => {
     );
   });
 
-  expect(container!.textContent).toContain("Shortened for this card");
+  expect(document.body.textContent).toContain("Shortened for this card");
 });
 
 it("uses a slider to raise by N even at the start-form maximum", () => {
@@ -676,7 +679,7 @@ it("uses a slider to raise by N even at the start-form maximum", () => {
   // Below the start-form bound: the raise is offered and names the next
   // number.
   render(gate(2));
-  const text = () => container!.textContent ?? "";
+  const text = () => document.body.textContent ?? "";
   expect(text()).toMatch(/reached its review-pass ceiling/);
   expect(text()).toMatch(/would ship work no review pass has accepted/);
   const raise = () =>
@@ -788,7 +791,7 @@ it("announces a cancellation in flight and withdraws every control", () => {
     canRetry: false,
     canRebaseAndReview: false,
   });
-  expect(container!.textContent).toMatch(/[Cc]ancelling/);
+  expect(document.body.textContent).toMatch(/[Cc]ancelling/);
   expect(hasButton("Resume"), "a cancellation is not undone by Resume").toBe(
     false,
   );
@@ -811,7 +814,9 @@ it("offers Look again where the workspace is what refused", () => {
       suggestedRaise: 2,
     },
   });
-  expect(container!.textContent).toContain("Commit or discard the stray work");
+  expect(document.body.textContent).toContain(
+    "Commit or discard the stray work",
+  );
   expect(hasButton("Deliver as it stands"), "there is no commit").toBe(false);
   expect(hasButton("Resume"), "the gate is answered, not resumed").toBe(false);
   click("Look again");
@@ -862,8 +867,8 @@ it("does not advise Look again on a gate that has no such choice", () => {
       suggestedRaise: 2,
     },
   });
-  expect(container!.textContent).not.toContain("Look again");
-  expect(container!.textContent).toContain("Extend the run");
+  expect(document.body.textContent).not.toContain("Look again");
+  expect(document.body.textContent).toContain("Extend the run");
 });
 
 it("counts no iteration when the run may spend no fix rounds", () => {
@@ -890,8 +895,8 @@ it("counts no iteration when the run may spend no fix rounds", () => {
       </DialogProvider>,
     );
   });
-  expect(container!.textContent).toContain("no fix rounds");
-  expect(container!.textContent).not.toContain("iteration 0 of 0");
+  expect(document.body.textContent).toContain("no fix rounds");
+  expect(document.body.textContent).not.toContain("iteration 0 of 0");
 });
 
 it("merges the run's pull request from the Task, with the click's own choices", () => {
@@ -937,12 +942,12 @@ it("merges the run's pull request from the Task, with the click's own choices", 
   });
 
   // The user never has to leave the Task for the decision the run stopped for.
-  expect(container!.textContent).toContain("Merge below");
+  expect(document.body.textContent).toContain("Merge below");
   // Only the methods the repository allows.
-  expect(container!.textContent).not.toContain("Rebase");
+  expect(document.body.textContent).not.toContain("Rebase");
   // Deleting the remote branch is the default, and the card says so before the
   // click rather than after it.
-  expect(container!.textContent).toContain(
+  expect(document.body.textContent).toContain(
     "deletes the remote branch t370-card",
   );
 
@@ -1007,8 +1012,8 @@ it("finishes a completed run with one cleanup that also settles it", () => {
 
   // What the one click does, in full: this is the click that ends the run's
   // presence in the Sessions inbox, so it may not be a surprise.
-  expect(container!.textContent).toContain("settles every session");
-  expect(container!.textContent).toContain("settles the run itself");
+  expect(document.body.textContent).toContain("settles every session");
+  expect(document.body.textContent).toContain("settles the run itself");
   click("Clean up");
   expect(cleanUp).toHaveBeenCalledWith("7");
 
@@ -1049,7 +1054,7 @@ it("finishes a completed run with one cleanup that also settles it", () => {
       </DialogProvider>,
     );
   });
-  expect(container!.textContent).toContain("does not contain t370-card yet");
+  expect(document.body.textContent).toContain("does not contain t370-card yet");
   const button = [...container!.querySelectorAll("button")].find(
     (item) => item.textContent?.trim() === "Clean up",
   )!;
@@ -1105,7 +1110,7 @@ it("states an unsettled run after cleanup, and nothing once it is settled", () =
     );
   });
 
-  expect(container!.textContent).toContain(
+  expect(document.body.textContent).toContain(
     "still waiting for its Settle in the Sessions inbox",
   );
   expect(
@@ -1137,6 +1142,6 @@ it("states an unsettled run after cleanup, and nothing once it is settled", () =
       </DialogProvider>,
     );
   });
-  expect(container!.textContent).not.toContain("waiting for its Settle");
-  expect(container!.textContent).toContain("The checkout was cleaned up.");
+  expect(document.body.textContent).not.toContain("waiting for its Settle");
+  expect(document.body.textContent).toContain("The checkout was cleaned up.");
 });

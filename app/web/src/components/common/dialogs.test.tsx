@@ -94,6 +94,26 @@ async function settled(): Promise<void> {
   });
 }
 
+/** Base UI moves focus into an opened dialog a frame after it mounts. */
+async function focusSettled(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+/** A press on the backdrop, the way Base UI listens for one. */
+function pressBackdrop(): void {
+  const overlay = document.querySelector('[data-slot="dialog-overlay"]')!;
+  for (const type of [
+    "pointerdown",
+    "mousedown",
+    "pointerup",
+    "mouseup",
+    "click",
+  ])
+    overlay.dispatchEvent(new MouseEvent(type, { bubbles: true }));
+}
+
 function field(): HTMLInputElement {
   const input = document.querySelector("input[type=text]");
   expect(input, "no text field").not.toBeNull();
@@ -148,10 +168,7 @@ it("answers false for cancel, Escape and the backdrop alike", async () => {
         ?.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
         ),
-    () =>
-      (
-        document.querySelector('[role="dialog"]')!.parentElement as HTMLElement
-      ).click(),
+    pressBackdrop,
   ]) {
     const asked = askOnce((dialogs) => dialogs.confirm({ title: "Sure?" }));
     act(() => {
@@ -168,6 +185,7 @@ it("returns the trimmed prompt value, and null for an empty answer", async () =>
   );
   expect(field().value).toBe("Old name");
   // The field is focused and selected, so typing replaces the current name.
+  await focusSettled();
   expect(document.activeElement).toBe(field());
 
   type("  New name  ");
@@ -249,7 +267,7 @@ it("gives a replacing prompt its own field, not the previous answer", async () =
       .promptText({ title: "Rename profile", defaultValue: "Main account" })
       .then((value) => answered.push(value));
   });
-  await settled();
+  await focusSettled();
   expect(answered).toEqual([null]);
   expect(field().value).toBe("Main account");
   expect(document.activeElement).toBe(field());

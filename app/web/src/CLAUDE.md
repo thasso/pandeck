@@ -10,8 +10,9 @@
   hook below it changes the hook count on the hydrating render (React #310,
   blank app on a fresh profile). `appHookOrderAudit.test.ts` enforces it; no
   render test catches it.
-- `index.css` owns typography: components select the six size roles, never font
-  sizes, `leading-*` or arbitrary Tailwind sizes (`typographyAudit.test.ts`).
+- Build UI from the shadcn components in `components/ui/` per
+  `app/web/docs/ui-components.md`: no styled raw controls, theme tokens only,
+  `text-xs`–`text-xl` only. `uiConsistencyAudit.test.ts` counts may only drop.
 - A `saveTask` not editing the title OMITS `title` (an update without one keeps
   it) but must still send `status`, coerced to `todo` when missing
   (`taskSaveTitleAudit.test.ts` allowlists the two title saves).
