@@ -27,7 +27,6 @@ import {
   FileText,
   GitFork,
   Hammer,
-  Image,
   ListPlus,
   Mic,
   Paperclip,
@@ -98,6 +97,7 @@ import { Badge } from "./ui/badge.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
+import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
 import { Command, CommandItem, CommandList } from "./ui/command.tsx";
 import {
   DropdownMenu,
@@ -2347,46 +2347,19 @@ export const Composer = memo(function Composer({
               )}
 
               {attachments.length > 0 && (
-                <div className="mt-2 flex max-w-full flex-wrap gap-2 overflow-hidden px-1">
-                  {attachments.map((attachment) => {
-                    const isImage = attachment.mimeType.startsWith("image/");
-                    return (
-                      <Item
-                        key={attachment.id}
-                        variant="muted"
-                        size="sm"
-                        className="max-w-full min-w-0 gap-2"
-                        title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
-                      >
-                        {isImage && attachment.previewUrl ? (
-                          <img
-                            src={attachment.previewUrl}
-                            alt=""
-                            className="size-9 rounded-lg border border-border object-cover"
-                          />
-                        ) : isImage ? (
-                          <Image size={16} className="text-primary" />
-                        ) : (
-                          <FileText size={16} className="text-primary" />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="max-w-44 truncate font-medium text-foreground">
-                            {attachment.name}
-                          </div>
-                          <div className="text-muted-foreground">
-                            {formatBytes(attachment.size)}
-                          </div>
-                        </div>
-                        <IconButton
-                          label="Remove attachment"
-                          size="icon-xs"
-                          onClick={() => removeAttachment(attachment.id)}
-                        >
-                          <X />
-                        </IconButton>
-                      </Item>
-                    );
-                  })}
+                // `pt-1.5 pr-1.5` leaves room for each tile's remove button,
+                // which sits over its top-right corner.
+                <div className="mt-2 flex max-w-full flex-wrap gap-2 px-1 pt-1.5 pr-1.5">
+                  {attachments.map((attachment) => (
+                    <AttachmentThumbnail
+                      key={attachment.id}
+                      name={attachment.name}
+                      mimeType={attachment.mimeType}
+                      size={attachment.size}
+                      src={attachment.previewUrl}
+                      onRemove={() => removeAttachment(attachment.id)}
+                    />
+                  ))}
                 </div>
               )}
 

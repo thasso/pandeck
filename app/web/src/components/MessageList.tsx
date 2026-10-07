@@ -10,7 +10,6 @@ import {
 } from "react";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import {
   DropdownMenu,
@@ -28,7 +27,6 @@ import {
   FolderKanban,
   Ellipsis,
   GitFork,
-  Image as ImageIcon,
   MessageSquarePlus,
   RotateCcw,
 } from "lucide-react";
@@ -90,6 +88,8 @@ import type { PromptQueueState } from "../hooks/useAssistant.ts";
 import { useTranscriptScroll } from "../hooks/useTranscriptScroll.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
+import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
+import { attachmentPreviewSrc } from "../lib/attachmentPreviews.ts";
 import { bundleFromOffsets, describeAnchor } from "../lib/describeAnchor.ts";
 import {
   useSelectionAnchor,
@@ -284,11 +284,8 @@ export function reuseStableTurnEnds(
   return next;
 }
 
-function formatBytes(value: number): string {
-  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
-  return `${value} B`;
-}
+/** `useAssistant`'s optimistic prompt echo (`optimisticEchoId`): still sending. */
+const OPTIMISTIC_PROMPT_ID_PREFIX = "creq-";
 
 function AttachmentChip({
   attachment,
@@ -350,41 +347,43 @@ function AttachmentChip({
       </Badge>
     );
   }
-  const isImage =
-    attachment.mimeType.startsWith("image/") &&
-    (attachment.data || attachment.url);
-  const imageSrc = attachment.data
-    ? `data:${attachment.mimeType};base64,${attachment.data}`
-    : attachment.url
-      ? withToken(`${serverHttpOrigin()}${attachment.url}`)
-      : undefined;
+  return null;
+}
+
+/**
+ * A prompt's FILE attachments as one row of thumbnails. The picture comes from
+ * the block's own bytes or URL when it carries them, else from the preview this
+ * browser remembered when it sent the prompt (`lib/attachmentPreviews.ts`) —
+ * the durable echo carries neither. While the prompt is still the optimistic
+ * echo its bytes are uploading, and the tiles say so.
+ */
+function AttachmentThumbnails({
+  attachments,
+  uploading,
+}: {
+  attachments: readonly DisplayAttachment[];
+  uploading: boolean;
+}) {
+  if (attachments.length === 0) return null;
   return (
-    <Item
-      variant="muted"
-      size="sm"
-      className="mt-2 flex-col items-stretch overflow-hidden"
-    >
-      {isImage && imageSrc ? (
-        <img
-          src={imageSrc}
-          alt={attachment.name}
-          className="max-h-72 max-w-full object-contain"
+    <div className="mt-2 flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <AttachmentThumbnail
+          key={attachment.id}
+          name={attachment.name}
+          mimeType={attachment.mimeType}
+          size={attachment.size}
+          src={
+            attachment.data
+              ? `data:${attachment.mimeType};base64,${attachment.data}`
+              : attachment.url
+                ? withToken(`${serverHttpOrigin()}${attachment.url}`)
+                : attachmentPreviewSrc(attachment)
+          }
+          uploading={uploading}
         />
-      ) : null}
-      <div className="flex items-center gap-2">
-        {attachment.mimeType.startsWith("image/") ? (
-          <ImageIcon size={14} className="text-primary" />
-        ) : (
-          <FileText size={14} className="text-primary" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-          {attachment.name}
-        </span>
-        <span className="shrink-0 text-muted-foreground">
-          {formatBytes(attachment.size)}
-        </span>
-      </div>
-    </Item>
+      ))}
+    </div>
   );
 }
 
@@ -648,7 +647,7 @@ const UserMessage = memo(function UserMessage({
           />
         </div>
       );
-    if (block.kind === "attachment")
+    if (block.kind === "attachment" && block.attachment.role)
       return (
         <AttachmentChip
           key={block.attachment.id}
@@ -658,6 +657,16 @@ const UserMessage = memo(function UserMessage({
       );
     return null;
   });
+  const fileAttachments = (
+    <AttachmentThumbnails
+      attachments={message.blocks.flatMap((block) =>
+        block.kind === "attachment" && !block.attachment.role
+          ? [block.attachment]
+          : [],
+      )}
+      uploading={message.id.startsWith(OPTIMISTIC_PROMPT_ID_PREFIX)}
+    />
+  );
   const actions = (
     <MessageActionsBar
       message={message}
@@ -683,6 +692,7 @@ const UserMessage = memo(function UserMessage({
             <PromptDeliveryNote delivery={message.promptDelivery} />
           ) : null}
           {body}
+          {fileAttachments}
           {actions}
         </ChatActivityRow>
         {promptQueueState ? (
@@ -698,6 +708,7 @@ const UserMessage = memo(function UserMessage({
       ) : null}
       <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
         {body}
+        {fileAttachments}
       </div>
       {promptQueueState ? (
         <PromptQueueCondition state={promptQueueState} />

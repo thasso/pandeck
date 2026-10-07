@@ -175,6 +175,7 @@ import {
   worktreeSilhouetteKey,
 } from "../lib/worktreeRowStatuses.ts";
 import type { CredentialProfileProjection } from "../lib/credentialProfiles.ts";
+import { rememberAttachmentPreviews } from "../lib/attachmentPreviews.ts";
 import {
   beginLoad,
   dataOf,
@@ -1812,6 +1813,8 @@ type Action =
       kind: "optimisticUserMessage";
       clientRequestId: string;
       text: string;
+      /** File attachments, by reference: their previews are remembered apart. */
+      images?: { name: string; mimeType: string; size: number }[];
       sessionId?: string;
       canMoveSession?: boolean;
     }
@@ -1912,8 +1915,10 @@ function compactFrameMessages(messages: ServerMessage[]): ServerMessage[] {
 /**
  * Optimistically show the user's prompt the instant it's sent (a transient user
  * timeline entry id `creq-<clientRequestId>`); the server's durable user
- * `timelineDelta` echoes the same clientRequestId and reconciles it. No-op for an
- * empty prompt (attachments-only) — the server entry carries the chips.
+ * `timelineDelta` echoes the same clientRequestId and reconciles it. File
+ * attachments ride along as image blocks — their bytes are still uploading, and
+ * this echo is what shows the user they are attached (an attachments-only
+ * prompt echoes too). No-op only for a prompt with neither.
  */
 function optimisticUserEcho(
   dispatch: (action: Action) => void,
@@ -1921,13 +1926,19 @@ function optimisticUserEcho(
   text: string,
   sessionId?: string,
   canMoveSession = false,
+  attachments: readonly PromptAttachment[] = [],
 ): void {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  const images = attachments
+    .filter((a) => !a.role)
+    .map(({ name, mimeType, size }) => ({ name, mimeType, size }));
+  if (!trimmed && images.length === 0) return;
+  rememberAttachmentPreviews(attachments);
   dispatch({
     kind: "optimisticUserMessage",
     clientRequestId,
     text: trimmed,
+    ...(images.length ? { images } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     canMoveSession,
   });
@@ -4722,7 +4733,15 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       type: "message",
       role: "user",
       origin: { kind: "human" },
-      content: [{ type: "text", text: action.text }],
+      content: [
+        ...(action.text ? [{ type: "text" as const, text: action.text }] : []),
+        ...(action.images ?? []).map((image) => ({
+          type: "image" as const,
+          mimeType: image.mimeType,
+          name: image.name,
+          size: image.size,
+        })),
+      ],
       ...(action.sessionId ? { optimisticSessionId: action.sessionId } : {}),
       ...(action.canMoveSession ? { optimisticCanMoveSession: true } : {}),
     };
@@ -7902,7 +7921,14 @@ export function useAssistant({
         const target = stateRef.current.session?.sessionId;
         if (target)
           dispatch({ kind: "clearSessionFailure", sessionId: target });
-        optimisticUserEcho(dispatch, clientRequestId, text, target);
+        optimisticUserEcho(
+          dispatch,
+          clientRequestId,
+          text,
+          target,
+          false,
+          attachments,
+        );
         send({
           type: "prompt",
           text,
@@ -8041,6 +8067,7 @@ export function useAssistant({
           input.text,
           input.id,
           true,
+          input.attachments,
         );
         send({ type: "harnessSend", ...input, clientRequestId });
         return clientRequestId;
