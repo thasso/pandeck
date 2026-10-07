@@ -14,7 +14,7 @@ import {
   backgroundWorkStopDisabledReason,
   type BackgroundWorkTone,
 } from "../lib/backgroundWork.ts";
-import { Button } from "./ui/Button.tsx";
+import { Button } from "@/components/ui/button";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 
@@ -182,8 +182,7 @@ function BackgroundWorkRowImpl({
           ) : null}
         </div>
         <Button
-          variant="secondary"
-          size="sm"
+          variant="outline"
           busy={stopPending}
           disabled={Boolean(stopBlocked)}
           title={stopBlocked ?? "Stop this background work"}

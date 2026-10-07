@@ -175,7 +175,7 @@ export function JsonView({
       {serialized && (
         <CopyButton
           value={serialized}
-          size="sm"
+          size="icon-sm"
           className="absolute right-0 top-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
         />
       )}

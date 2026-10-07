@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { ConfirmDialog, DialogProvider, useDialogs } from "./dialog.tsx";
+import { ConfirmDialog, DialogProvider, useDialogs } from "./dialogs.tsx";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 

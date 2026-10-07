@@ -15,7 +15,7 @@ import type {
 } from "../hooks/useAssistant.ts";
 
 import { ErrorNote, Spinner } from "./ui/load.tsx";
-import { ConfirmDialog, useDialogs } from "./ui/dialog.tsx";
+import { ConfirmDialog, useDialogs } from "./ui/dialogs.tsx";
 import { DiscreteSlider } from "./ui/RuntimePicker.tsx";
 // One phase vocabulary for this card and for the Sessions inbox item that leads
 // here: a run must not be called one thing where it is found and another where

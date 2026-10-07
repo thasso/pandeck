@@ -29,7 +29,7 @@ import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
 import { Popover } from "../Popover.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
-import { Sheet } from "../ui/Sheet.tsx";
+import { EdgeSheet } from "../ui/EdgeSheet.tsx";
 import { ErrorNote, PaneLoading } from "../ui/load.tsx";
 import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { dataOf, errorOf, isInitialLoad } from "../../lib/loadState.ts";
@@ -113,13 +113,13 @@ export function WorktreeScopePicker({
         >
           {trigger}
         </button>
-        <Sheet
+        <EdgeSheet
           open={sheetOpen}
           title="What to review"
           onClose={() => setSheetOpen(false)}
         >
           {body(() => setSheetOpen(false))}
-        </Sheet>
+        </EdgeSheet>
       </>
     );
   }

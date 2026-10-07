@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import type { ReactElement } from "react";
-import { Button } from "./Button.tsx";
+import { Button } from "./button.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -106,7 +106,7 @@ it("busies only the button, keeping its label and reporting aria-busy", () => {
 
 it("swaps an icon-only button's icon for the spinner", () => {
   const host = render(
-    <Button busy iconOnly aria-label="Refresh">
+    <Button busy size="icon" aria-label="Refresh">
       <span data-testid="icon" />
     </Button>,
   );

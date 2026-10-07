@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 
-import { Button, type ButtonProps } from "./Button";
+import type { ComponentProps } from "react";
+
+import { Button } from "@/components/ui/button";
 import { GhostIconButton } from "./GhostIconButton.tsx";
 import { copyTextToClipboard, copyWithToast } from "../../lib/clipboard.ts";
 
 export interface CopyButtonProps extends Omit<
-  ButtonProps,
-  "children" | "iconOnly" | "onClick"
+  ComponentProps<typeof Button>,
+  "children" | "onClick" | "className"
 > {
+  className?: string;
   /** Text written to the clipboard when the button is pressed. */
   value: string;
   /** Accessible label / tooltip in the idle state. Defaults to `"Copy"`. */
@@ -35,6 +38,7 @@ export function CopyButton({
   label = "Copy",
   copiedLabel = "Copied to clipboard",
   variant = "ghost",
+  size = "icon",
   className,
   ...props
 }: CopyButtonProps) {
@@ -55,7 +59,7 @@ export function CopyButton({
   return (
     <Button
       variant={variant}
-      iconOnly
+      size={size}
       aria-label={copied ? copiedLabel : label}
       title={copied ? copiedLabel : label}
       onClick={handleCopy}

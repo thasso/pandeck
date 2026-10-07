@@ -1,5 +1,6 @@
+import { TooltipProvider } from "../src/components/ui/tooltip.tsx";
 import { useLayoutEffect, type ReactNode } from "react";
-import { DialogProvider } from "../src/components/ui/dialog.tsx";
+import { DialogProvider } from "../src/components/ui/dialogs.tsx";
 import { ShortcutsProvider } from "../src/components/ui/shortcuts.tsx";
 import type { PreviewTextScale, PreviewTheme } from "./storyCatalog.ts";
 
@@ -27,8 +28,10 @@ export function PaPreviewRoot({
   }, [textScale, theme]);
 
   return (
-    <ShortcutsProvider>
-      <DialogProvider>{children}</DialogProvider>
-    </ShortcutsProvider>
+    <TooltipProvider delay={400}>
+      <ShortcutsProvider>
+        <DialogProvider>{children}</DialogProvider>
+      </ShortcutsProvider>
+    </TooltipProvider>
   );
 }

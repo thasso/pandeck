@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Sheet } from "../ui/Sheet.tsx";
+import { EdgeSheet } from "../ui/EdgeSheet.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 
 /** Where a bundle of review comments is being sent. */
@@ -160,9 +160,9 @@ export function SendCommentsSheet({
 
   if (mobile) {
     return (
-      <Sheet open title={`${verb} ${label}`} onClose={onClose}>
+      <EdgeSheet open title={`${verb} ${label}`} onClose={onClose}>
         {body}
-      </Sheet>
+      </EdgeSheet>
     );
   }
   return (

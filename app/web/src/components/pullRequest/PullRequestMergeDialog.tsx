@@ -25,7 +25,7 @@ import {
   type PullRequestInventoryItem,
   type PullRequestMergeMethod,
 } from "@assistant/shared";
-import { ConfirmDialog } from "../ui/dialog.tsx";
+import { ConfirmDialog } from "../ui/dialogs.tsx";
 
 const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   squash: "Squash — one commit on the base branch",

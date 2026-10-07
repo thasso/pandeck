@@ -42,7 +42,7 @@ import { useMobileLayout } from "./shell/useMobileLayout.ts";
 import { showToast } from "../lib/toast.ts";
 import { workflowStartOutcomeToast } from "../lib/workflowStart.ts";
 import { Disclosure } from "./Disclosure.tsx";
-import { Button } from "./ui/Button.tsx";
+import { Button } from "@/components/ui/button";
 import { ErrorNote, Spinner } from "./ui/load.tsx";
 import { THINKING_LABELS } from "./ui/ModelThinkingSelect.tsx";
 import {
@@ -1003,16 +1003,16 @@ export function WorkflowRunStartLayer({
               </span>
             ) : null}
           </span>
-          <Button variant="ghost" size="sm" onClick={onContinueInBackground}>
+          <Button variant="ghost" onClick={onContinueInBackground}>
             Run in background
           </Button>
         </>
       ) : (
         <>
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button size="sm" onClick={onStart} disabled={!ready}>
+          <Button onClick={onStart} disabled={!ready}>
             Start run
           </Button>
         </>

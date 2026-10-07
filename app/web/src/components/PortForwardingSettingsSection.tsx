@@ -45,7 +45,7 @@ import {
 import { startPortForward } from "../lib/portForwards.ts";
 import { elapsedLabel } from "../lib/relativeTime.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
-import { Button } from "./ui/Button.tsx";
+import { Button } from "@/components/ui/button";
 import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
 
 /**
@@ -302,7 +302,7 @@ export function PortForwardingSettingsSection() {
                   startError !== null ? "border-danger focus:border-danger" : ""
                 }`}
               />
-              <Button type="submit" size="sm" busy={starting}>
+              <Button type="submit" busy={starting}>
                 Start
               </Button>
             </div>
@@ -375,8 +375,7 @@ export function PortForwardingSettingsSection() {
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
                           <Button
-                            size="sm"
-                            variant="secondary"
+                            variant="outline"
                             busy={rowBusy[`${status.port}/open`] === true}
                             onClick={() => void open(status)}
                             aria-label={`Open ${status.localUrl} in your browser`}
@@ -384,7 +383,6 @@ export function PortForwardingSettingsSection() {
                             Open
                           </Button>
                           <Button
-                            size="sm"
                             variant="ghost"
                             busy={rowBusy[`${status.port}/stop`] === true}
                             onClick={() => void stop(status)}

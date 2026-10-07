@@ -82,7 +82,7 @@ import { WorktreeChangesetList } from "./WorktreeChangesetList.tsx";
 import { pendingWorktreeReviewIds } from "./worktreeReview.tsx";
 import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
-import { Sheet } from "../ui/Sheet.tsx";
+import { EdgeSheet } from "../ui/EdgeSheet.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "../ui/load.tsx";
 import {
   externalDocumentActionEnabled,
@@ -799,13 +799,13 @@ function ChangesView({
           </WorktreeRailLayout>
         )}
         {phone ? (
-          <Sheet
+          <EdgeSheet
             open={jumpSheetOpen}
             title="Jump to file"
             onClose={() => setJumpSheetOpen(false)}
           >
             {jumpNavigator(() => setJumpSheetOpen(false))}
-          </Sheet>
+          </EdgeSheet>
         ) : null}
       </div>
     );

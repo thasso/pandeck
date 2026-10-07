@@ -20,7 +20,7 @@ const FOCUSABLE = "button, a[href]";
  * resolution inside a scroll container — the two answers a screenshot question
  * actually needs. `src` is used as given, so the caller owns origin and token.
  *
- * It takes focus and keeps it, exactly like `ui/dialog.tsx`, and for the same
+ * It takes focus and keeps it, exactly like `ui/dialogs.tsx`, and for the same
  * two reasons. Keyboard: a viewer nobody can reach by Tab has no Fit, Open or
  * Close. Dismissal: Escape is READ INSIDE the surface and stopped there, so it
  * cannot also reach the document listener of whatever raised it — the mobile

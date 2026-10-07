@@ -26,7 +26,7 @@ import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InlineEdit } from "./InlineEdit.tsx";
 import { CollapsibleSection } from "./CollapsibleSection.tsx";
 import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { useDialogs } from "./ui/dialog.tsx";
+import { useDialogs } from "./ui/dialogs.tsx";
 import {
   EmptyBox,
   ErrorNote,

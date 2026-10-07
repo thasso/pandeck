@@ -100,8 +100,8 @@ import { AboutSettingsSection } from "./AboutSettingsSection.tsx";
 import { PushNotificationsSection } from "./PushNotificationsSection.tsx";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
 import { ErrorNote, Spinner } from "./ui/load.tsx";
-import { Button } from "./ui/Button.tsx";
-import { useDialogs } from "./ui/dialog.tsx";
+import { Button } from "@/components/ui/button";
+import { useDialogs } from "./ui/dialogs.tsx";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import type { LoadState } from "../lib/loadState.ts";
 
@@ -4448,8 +4448,7 @@ export function ModelsSection({
           without a spinner a working button and a dead one look the same.
         */}
         <Button
-          variant="secondary"
-          size="sm"
+          variant="outline"
           busy={refreshing}
           onClick={onRefresh}
           className="gap-1.5 rounded-lg px-2.5 text-caption text-muted-foreground"

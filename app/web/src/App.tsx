@@ -350,8 +350,8 @@ import {
   PaneLoading,
   Skeleton,
 } from "./components/ui/load.tsx";
-import { Button } from "./components/ui/Button.tsx";
-import { useDialogs } from "./components/ui/dialog.tsx";
+import { Button } from "@/components/ui/button";
+import { useDialogs } from "./components/ui/dialogs.tsx";
 
 const SIDEBAR_MIN_WIDTH = 220;
 
@@ -822,7 +822,7 @@ function AppContent() {
   useMobileKeyboardInset();
   // The app's own confirm/prompt surface. Native dialogs are banned: the Tauri
   // shell's webview never shows them, so the action they guard silently does
-  // nothing (`components/ui/dialog.tsx`). Both members are stable, so the
+  // nothing (`components/ui/dialogs.tsx`). Both members are stable, so the
   // handlers below stay referentially stable for memoized rows.
   const dialogs = useDialogs();
   // Register the always-present General group last (lowest priority) so it sorts
@@ -6762,8 +6762,7 @@ function AppContent() {
                   className="m-6"
                   action={
                     <Button
-                      variant="secondary"
-                      size="sm"
+                      variant="outline"
                       onClick={() => openSettingsSection("knowledge-base")}
                     >
                       Open Knowledge Base settings

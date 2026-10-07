@@ -21,7 +21,7 @@ import {
   DialogCancelButton,
   DialogHeader,
   DialogOverlay as Overlay,
-} from "../ui/dialog.tsx";
+} from "../ui/dialogs.tsx";
 
 /* ---------------------------------- create --------------------------------- */
 

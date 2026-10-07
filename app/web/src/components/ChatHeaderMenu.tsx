@@ -8,8 +8,19 @@ import {
   Terminal,
   WrapText,
 } from "lucide-react";
-import { Popover } from "./Popover.tsx";
-import { Sheet } from "./ui/Sheet.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+import { EdgeSheet } from "./ui/EdgeSheet.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
 import { useRouteSecondaryActions } from "./shell/RoutePrimaryAction.tsx";
 
@@ -30,11 +41,11 @@ interface Props {
 }
 
 const ROW_CLASS =
-  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
 
 function GroupLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="px-2.5 pb-0.5 pt-1.5 text-micro font-semibold uppercase tracking-wide text-faint">
+    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
       {children}
     </div>
   );
@@ -227,7 +238,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
         >
           <MoreHorizontal size={16} />
         </button>
-        <Sheet
+        <EdgeSheet
           open={sheetOpen}
           side="top"
           offsetTop={sheetTop}
@@ -235,20 +246,95 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
           onClose={() => setSheetOpen(false)}
         >
           {content(() => setSheetOpen(false))}
-        </Sheet>
+        </EdgeSheet>
       </>
     );
   }
 
+  const rows = view
+    ? [
+        {
+          icon: <Brain />,
+          label: "Show thinking",
+          checked: view.showThinking,
+          patch: { showThinking: !view.showThinking },
+        },
+        {
+          icon: <ChevronsUpDown />,
+          label: "Expand thinking",
+          checked: view.expandThinking,
+          disabled: !view.showThinking,
+          patch: { expandThinking: !view.expandThinking },
+        },
+        {
+          icon: <Terminal />,
+          label: "Show tool calls",
+          checked: view.showTools,
+          patch: { showTools: !view.showTools },
+        },
+        {
+          icon: <ChevronsDownUp />,
+          label: "Expand tool calls",
+          checked: view.expandTools,
+          disabled: !view.showTools,
+          patch: { expandTools: !view.expandTools },
+        },
+        {
+          icon: <WrapText />,
+          label: "Wrap long lines",
+          checked: view.wrapToolLines,
+          patch: { wrapToolLines: !view.wrapToolLines },
+        },
+      ]
+    : [];
+
   return (
-    <Popover
-      align="right"
-      placement="bottom"
-      title="Chat options"
-      className={triggerClass}
-      button={<MoreHorizontal size={16} />}
-    >
-      {content}
-    </Popover>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="ghost" size="icon" aria-label="Chat options" />
+        }
+      >
+        <MoreHorizontal />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {view ? (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Transcript</DropdownMenuLabel>
+            {rows.map((row) => (
+              <DropdownMenuCheckboxItem
+                key={row.label}
+                checked={row.checked}
+                disabled={row.disabled ?? false}
+                closeOnClick={false}
+                onCheckedChange={() => view.onChange(row.patch)}
+              >
+                {row.icon}
+                {row.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+          </DropdownMenuGroup>
+        ) : null}
+        {view && secondary.length > 0 ? <DropdownMenuSeparator /> : null}
+        {secondary.length > 0 ? (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+            {secondary.map((action) => (
+              <DropdownMenuItem
+                key={action.key}
+                disabled={action.busy || action.disabled}
+                onClick={action.onRun}
+              >
+                {action.icon}
+                {action.label}
+                {action.hint ? (
+                  <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

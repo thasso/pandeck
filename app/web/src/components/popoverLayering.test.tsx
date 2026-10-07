@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { AccountModelOption } from "@assistant/shared";
 import { Popover } from "./Popover.tsx";
-import { Sheet } from "./ui/Sheet.tsx";
+import { EdgeSheet } from "./ui/EdgeSheet.tsx";
 import { WorkflowRunStartLayer } from "./WorkflowRunStartSheet.tsx";
 
 /**
@@ -159,9 +159,9 @@ it("paints popover panels above a modal Sheet", () => {
   const panelLayer = openedPopoverLayer();
   act(() =>
     root?.render(
-      <Sheet open title="Chat options" onClose={() => undefined}>
+      <EdgeSheet open title="Chat options" onClose={() => undefined}>
         <div>Sheet body</div>
-      </Sheet>,
+      </EdgeSheet>,
     ),
   );
   // The sheet's own overlay is what carries the band; the dialog card sits in it.

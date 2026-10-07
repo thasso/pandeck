@@ -73,7 +73,7 @@ import {
 } from "../lib/skillsApi.ts";
 import { Markdown } from "./Markdown.tsx";
 import { PageHeader } from "./PageHeader.tsx";
-import { Button } from "./ui/Button.tsx";
+import { Button } from "@/components/ui/button";
 import { CodeBlock } from "./ui/CodeBlock.tsx";
 import { Tree, type TreeNode } from "./ui/Tree.tsx";
 import {
@@ -340,8 +340,7 @@ function SkillDetailPane({
           {rereading ? <RefreshIndicator label="Rereading SKILL.md" /> : null}
           <Button
             variant="ghost"
-            size="sm"
-            iconOnly
+            size="icon"
             aria-label={`Reread ${name}`}
             onClick={onReload}
           >
@@ -349,8 +348,7 @@ function SkillDetailPane({
           </Button>
           <Button
             variant="ghost"
-            size="sm"
-            iconOnly
+            size="icon"
             aria-label={`Close ${name}`}
             onClick={onClose}
           >
