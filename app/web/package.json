@@ -17,13 +17,17 @@
   },
   "dependencies": {
     "@assistant/shared": "workspace:*",
+    "@base-ui/react": "catalog:",
     "@dnd-kit/core": "catalog:",
     "@dnd-kit/sortable": "catalog:",
     "@dnd-kit/utilities": "catalog:",
+    "@fontsource-variable/geist": "catalog:",
     "@pierre/diffs": "catalog:",
     "@shikijs/langs": "catalog:",
     "@shikijs/themes": "catalog:",
     "chart.js": "catalog:",
+    "class-variance-authority": "catalog:",
+    "cn": "catalog:",
     "hast-util-to-jsx-runtime": "catalog:",
     "lucide-react": "catalog:",
     "react": "catalog:",
@@ -34,7 +38,10 @@
     "rehype-sanitize": "catalog:",
     "remark-gfm": "catalog:",
     "remark-math": "catalog:",
-    "shiki": "catalog:"
+    "shadcn": "catalog:",
+    "shiki": "catalog:",
+    "sonner": "catalog:",
+    "tw-animate-css": "catalog:"
   },
   "devDependencies": {
     "@storybook/addon-a11y": "catalog:",

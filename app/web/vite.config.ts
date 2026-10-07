@@ -106,6 +106,7 @@ export default defineConfig(({ command }) => {
       // Consume the shared package from source so both toolchains agree. Subpath
       // entries must precede the root so prefix matching resolves them first.
       alias: {
+        "@/": fileURLToPath(new URL("./src/", import.meta.url)),
         "@assistant/shared/buildInfo": fileURLToPath(
           new URL("../shared/buildInfo.ts", import.meta.url),
         ),

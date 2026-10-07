@@ -7,6 +7,7 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "paths": {
+      "@/*": ["./src/*"],
       "@assistant/shared": ["../shared/protocol.ts"]
     }
   },
