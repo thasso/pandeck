@@ -22,7 +22,8 @@
       "entry": [
         "component-preview/main.tsx",
         "component-preview/build-story.ts",
-        "component-preview/storybook-config/preview.tsx"
+        "component-preview/storybook-config/preview.tsx",
+        "src/components/ui/*.tsx"
       ],
       "storybook": {
         "config": ["component-preview/storybook-config/main.ts"]
