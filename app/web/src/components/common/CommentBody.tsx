@@ -7,7 +7,7 @@ import { Markdown } from "../Markdown.tsx";
  * @useWhen Displaying a comment body anywhere — a diff line thread, a Knowledge
  *   passage thread, a Task's activity trace.
  * @avoidWhen A one-line summary in a roster row (that is `firstLineOf`, plain
- *   text on purpose) or an editor (that is `ui/CommentComposer`).
+ *   text on purpose) or an editor (that is `common/CommentComposer`).
  * @intent A comment is Markdown wherever it is written — the composer accepts
  *   it, agents send it, and a body that renders `- item` as a literal dash was
  *   the app disagreeing with itself. One component so a comment reads the same

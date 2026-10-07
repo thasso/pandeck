@@ -35,7 +35,7 @@ import {
   ErrorNote,
   RefreshIndicator,
   Skeleton,
-} from "../ui/load.tsx";
+} from "../common/load.tsx";
 import {
   resolveJoinRows,
   type JoinRowState,

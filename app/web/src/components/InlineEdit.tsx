@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Check, X } from "lucide-react";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
 import { errorOf, idle, isPending, type LoadState } from "../lib/loadState.ts";
 
 /**

@@ -99,9 +99,9 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
 import { AboutSettingsSection } from "./AboutSettingsSection.tsx";
 import { PushNotificationsSection } from "./PushNotificationsSection.tsx";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
-import { useDialogs } from "./ui/dialogs.tsx";
+import { useDialogs } from "./common/dialogs.tsx";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import type { LoadState } from "../lib/loadState.ts";
 

@@ -43,15 +43,15 @@ import { showToast } from "../lib/toast.ts";
 import { workflowStartOutcomeToast } from "../lib/workflowStart.ts";
 import { Disclosure } from "./Disclosure.tsx";
 import { Button } from "@/components/ui/button";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
-import { THINKING_LABELS } from "./ui/ModelThinkingSelect.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import {
   DiscreteSlider,
   ModelQuickRow,
   ProviderAccountRow,
   ThinkingSlider,
   type RuntimeAccount,
-} from "./ui/RuntimePicker.tsx";
+} from "./common/RuntimePicker.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 
 /** The separately chosen coordinator and four role-scoped candidate sets. */

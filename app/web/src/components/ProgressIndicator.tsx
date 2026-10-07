@@ -1,4 +1,4 @@
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /**
  * A turn's live progress line inside the transcript ("Thinking", a tool's

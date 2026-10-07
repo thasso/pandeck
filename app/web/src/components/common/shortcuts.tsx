@@ -11,7 +11,7 @@ import {
 } from "react";
 
 /**
- * @module ui/shortcuts
+ * @module common/shortcuts
  * @purpose A small, app-wide keyboard-shortcut registry with a discoverable
  * help overlay. Surfaces register a `ShortcutGroup` while mounted; the provider
  * runs a single global `keydown` listener that dispatches matching shortcuts and
@@ -22,7 +22,7 @@ import {
  * @useWhen A page, list, or tree wants declarative keyboard actions that are also
  * self-documenting (e.g. the Backlog tree's archive/delete keys). Row-scoped keys
  * that must act on the focused item are handled inside that widget (see
- * `components/ui/Tree` `rowActions`) and registered here `display`-only so `?`
+ * `components/common/Tree` `rowActions`) and registered here `display`-only so `?`
  * still lists them without double-firing.
  * @avoidWhen A one-off key handler local to a focused input; handle it inline.
  * @intent Domain-free: shortcut handlers and labels come from the caller. The

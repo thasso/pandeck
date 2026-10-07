@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Activity, CircleDashed, CircleHelp } from "lucide-react";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 interface Props {
   /** Items in the `needs-you` tier — the same count the block used to state. */

@@ -10,9 +10,9 @@
  * `lib/toolOutput.ts` for what each harness actually provides.
  */
 import { useMemo } from "react";
-import { CodeBlock } from "../ui/CodeBlock.tsx";
-import { CollapsibleOutput } from "../ui/CollapsibleOutput.tsx";
-import { AnsiText } from "../ui/AnsiText.tsx";
+import { CodeBlock } from "../common/CodeBlock.tsx";
+import { CollapsibleOutput } from "../common/CollapsibleOutput.tsx";
+import { AnsiText } from "../common/AnsiText.tsx";
 import {
   diffMarkdownLines,
   diffMarkdownWords,

@@ -1,7 +1,7 @@
 import { GitBranch, RotateCw, XCircle } from "lucide-react";
 import type { WorktreeProvisionDisplay } from "@assistant/shared";
 
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /**
  * @component WorktreeProvisionCard

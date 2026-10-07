@@ -8,7 +8,7 @@ import type {
   WorkflowRunSummary,
 } from "@assistant/shared";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
-import { DialogProvider } from "./ui/dialogs.tsx";
+import { DialogProvider } from "./common/dialogs.tsx";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }

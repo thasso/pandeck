@@ -56,7 +56,7 @@ import {
 } from "@assistant/shared/turnStats";
 import { PeerPromptCardView } from "./PeerPromptCard.tsx";
 import { BackgroundWorkPromptCard } from "./BackgroundWorkPromptCard.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import { activityPreview } from "../lib/activityPreview.ts";
 import { ProgressIndicator } from "./ProgressIndicator.tsx";

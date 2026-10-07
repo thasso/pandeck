@@ -21,8 +21,8 @@ import type { Prefs } from "../../hooks/usePrefs.ts";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import type { LineCommentsConfig } from "../diff/comments.tsx";
 import { fetchWorktreeFileDiff, hashContent } from "../../lib/worktrees.ts";
-import { useNearViewport } from "../ui/useNearViewport.ts";
-import { Spinner } from "../ui/load.tsx";
+import { useNearViewport } from "../common/useNearViewport.ts";
+import { Spinner } from "../common/load.tsx";
 
 /** Diffs beyond this many changed lines start collapsed. */
 const LARGE_DIFF_LINES = 600;

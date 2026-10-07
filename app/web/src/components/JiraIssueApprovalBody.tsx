@@ -23,8 +23,8 @@ import type {
   JiraIssueMutationItemDisplay,
 } from "@assistant/shared";
 import { Markdown } from "./Markdown.tsx";
-import { DialogAction, DialogCancelButton } from "./ui/dialogs.tsx";
-import { wrapTabWithin } from "./ui/focusTrap.ts";
+import { DialogAction, DialogCancelButton } from "./common/dialogs.tsx";
+import { wrapTabWithin } from "./common/focusTrap.ts";
 
 type JiraItem = JiraIssueMutationItemDisplay;
 

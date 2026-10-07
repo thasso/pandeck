@@ -11,17 +11,17 @@ import {
 import { AlertTriangle, X } from "lucide-react";
 import { cn } from "cn";
 
-import { Alert, AlertDescription } from "./alert.tsx";
-import { Button } from "./button.tsx";
+import { Alert, AlertDescription } from "../ui/alert.tsx";
+import { Button } from "../ui/button.tsx";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader as ShadcnDialogHeader,
   DialogTitle,
-} from "./dialog.tsx";
-import { Input } from "./input.tsx";
-import { Label } from "./label.tsx";
+} from "../ui/dialog.tsx";
+import { Input } from "../ui/input.tsx";
+import { Label } from "../ui/label.tsx";
 import { ErrorNote } from "./load.tsx";
 
 /**

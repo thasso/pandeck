@@ -46,7 +46,12 @@ import { startPortForward } from "../lib/portForwards.ts";
 import { elapsedLabel } from "../lib/relativeTime.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import { Button } from "@/components/ui/button";
-import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
 
 /**
  * How often the list is re-read while the page is visible. The shell answers

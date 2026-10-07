@@ -53,8 +53,8 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import { approvalGrantKeys, approvalGrantLabel } from "@assistant/shared";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
-import { ModelSelect, ThinkingSelect } from "./ui/ModelThinkingSelect.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
+import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";

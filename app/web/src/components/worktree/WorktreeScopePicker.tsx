@@ -29,8 +29,8 @@ import type { WorktreeCommitLogEntry, WorktreeRecord } from "@assistant/shared";
 import { fetchWorktreeLog } from "../../lib/worktrees.ts";
 import { Popover } from "../Popover.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
-import { EdgeSheet } from "../ui/EdgeSheet.tsx";
-import { ErrorNote, PaneLoading } from "../ui/load.tsx";
+import { EdgeSheet } from "../common/EdgeSheet.tsx";
+import { ErrorNote, PaneLoading } from "../common/load.tsx";
 import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
 import { dataOf, errorOf, isInitialLoad } from "../../lib/loadState.ts";
 

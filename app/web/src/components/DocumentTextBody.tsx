@@ -3,7 +3,7 @@ import {
   type DocumentLineAnchor,
 } from "@assistant/shared/documentTargets";
 import { DocumentAnchorRegion } from "./DocumentAnchorRegion.tsx";
-import { CodeBlock } from "./ui/CodeBlock.tsx";
+import { CodeBlock } from "./common/CodeBlock.tsx";
 
 /**
  * @component DocumentTextBody

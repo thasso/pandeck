@@ -4,15 +4,18 @@ import { useState } from "react";
 import { Popover } from "../../src/components/Popover.tsx";
 import { ToastViewport } from "../../src/components/ToastViewport.tsx";
 import { Button } from "../../src/components/ui/button.tsx";
-import { ConfirmDialog, useDialogs } from "../../src/components/ui/dialogs.tsx";
+import {
+  ConfirmDialog,
+  useDialogs,
+} from "../../src/components/common/dialogs.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../src/components/ui/dropdown-menu.tsx";
-import { EdgeSheet } from "../../src/components/ui/EdgeSheet.tsx";
-import { GhostIconButton } from "../../src/components/ui/GhostIconButton.tsx";
+import { EdgeSheet } from "../../src/components/common/EdgeSheet.tsx";
+import { GhostIconButton } from "../../src/components/common/GhostIconButton.tsx";
 import { showToast } from "../../src/lib/toast.ts";
 
 /** Every app overlay, now on shadcn: dialogs, menus, popovers, sheets, toasts. */

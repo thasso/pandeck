@@ -14,7 +14,7 @@ import {
 import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { DocumentNavigationShell } from "./DocumentNavigationShell.tsx";
 import { MarkdownFile } from "./MarkdownFile.tsx";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import { DeferredGrantedMedia } from "./InlineDocumentEmbed.tsx";
 

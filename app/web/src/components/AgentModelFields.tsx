@@ -11,7 +11,7 @@ import {
   ModelSelect,
   ThinkingSelect,
   SelectField,
-} from "./ui/ModelThinkingSelect.tsx";
+} from "./common/ModelThinkingSelect.tsx";
 import { accountPinWarning } from "../lib/credentialProfiles.ts";
 
 /**

@@ -14,7 +14,7 @@ import { useElapsedNow } from "./useElapsedNow.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { BackgroundWorkRow } from "./BackgroundWorkRow.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 
 const FILTERS: { id: BackgroundWorkFilter; label: string }[] = [
   { id: "active", label: "Active" },

@@ -57,8 +57,8 @@ import {
   type InspectorRelationGroup,
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
-import { THINKING_LABELS } from "./ui/ModelThinkingSelect.tsx";
-import { EmptyBox, ErrorNote, Spinner } from "./ui/load.tsx";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
 import {
   dataOf,
   errorOf,

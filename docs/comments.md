@@ -326,8 +326,8 @@ there that a single row cannot undo, so it asks first — it is not a ✕ next t
 the control that collapses the panel.
 
 A comment BODY is Markdown wherever it is shown, at one size, through
-`app/web/src/components/ui/CommentBody.tsx`: the composer accepts Markdown and
-agents write it, so a surface that rendered it as literal text was the app
+`app/web/src/components/common/CommentBody.tsx`: the composer accepts Markdown
+and agents write it, so a surface that rendered it as literal text was the app
 disagreeing with itself. The exception is a roster row, which shows a plain
 first line because it is an index, not the comment.
 

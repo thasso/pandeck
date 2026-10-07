@@ -36,7 +36,7 @@ import type {
 } from "@assistant/shared";
 import type { ClientPullRequestCard } from "../hooks/useAssistant.ts";
 import { Markdown } from "./Markdown.tsx";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
 
 /**
  * The wire card plus the reducer's browser-local click overlay — one type, so

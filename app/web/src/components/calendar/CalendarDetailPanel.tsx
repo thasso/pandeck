@@ -12,7 +12,7 @@ import type {
   CalendarEventDto,
 } from "@assistant/shared";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
-import { EmptyBox } from "../ui/load.tsx";
+import { EmptyBox } from "../common/load.tsx";
 import { Inspector, InspectorSection } from "../shell/Inspector.tsx";
 import { hm } from "./calendarDates.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";

@@ -2,9 +2,9 @@ import { useState } from "react";
 import { Bot, ChevronDown, MessageSquare, User } from "lucide-react";
 import type { TaskComment, TaskCommentAuthorKind } from "@assistant/shared";
 import { sessionPath } from "../lib/sessionRoutes.ts";
-import { CommentBody } from "./ui/CommentBody.tsx";
-import { CommentComposer } from "./ui/CommentComposer.tsx";
-import { ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import { CommentBody } from "./common/CommentBody.tsx";
+import { CommentComposer } from "./common/CommentComposer.tsx";
+import { ErrorNote, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -22,7 +22,7 @@ import {
  * `taskComments` broadcasts and are added via a `useAssistant` action.
  * @intent Presentational and flat: oldest-first list, author kind badge, no
  * threading/resolve/edit/delete (an auditable trace). The composer is the shared
- * `ui/CommentComposer` — the same one row a document's comment tray uses.
+ * `common/CommentComposer` — the same one row a document's comment tray uses.
  * @related TaskManagementPage, DocumentComments.
  */
 export function TaskComments({

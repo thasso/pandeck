@@ -77,7 +77,7 @@ class NearObserver {
 
 await import("./components/MessageList.tsx");
 const App = (await import("./App.tsx")).default;
-const { ShortcutsProvider } = await import("./components/ui/shortcuts.tsx");
+const { ShortcutsProvider } = await import("./components/common/shortcuts.tsx");
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;

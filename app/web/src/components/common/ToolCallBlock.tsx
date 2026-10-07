@@ -6,7 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { Badge } from "./badge.tsx";
+import { Badge } from "../ui/badge.tsx";
 import { useViewportProximity } from "./useNearViewport.ts";
 import { Spinner } from "./load.tsx";
 import { ChevronDown, CircleDashed, TriangleAlert, Wrench } from "lucide-react";

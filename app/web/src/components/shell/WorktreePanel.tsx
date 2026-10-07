@@ -9,7 +9,7 @@ import WorktreeDetailPage from "../worktree/WorktreeDetailPage.tsx";
 import type { CommentActions } from "../diff/comments.tsx";
 import type { CommentWatch } from "../../hooks/useCommentWatch.ts";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
-import { EmptyBox, PaneLoading } from "../ui/load.tsx";
+import { EmptyBox, PaneLoading } from "../common/load.tsx";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import {
   parseRoute,

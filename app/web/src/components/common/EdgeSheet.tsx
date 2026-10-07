@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "./sheet.tsx";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet.tsx";
 
 /**
  * @component EdgeSheet

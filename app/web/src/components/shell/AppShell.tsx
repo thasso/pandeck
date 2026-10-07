@@ -11,7 +11,7 @@ import {
   ResizableSeparator,
   RESIZE_KEYBOARD_STEP,
   useResizeDrag,
-} from "../ui/ResizableSeparator.tsx";
+} from "../common/ResizableSeparator.tsx";
 import { dockMode } from "./dockState.ts";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion.ts";
 import {

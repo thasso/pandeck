@@ -36,7 +36,7 @@ import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /** The same semantic tones the session cards use, at the same weight. */
 const BADGE_TONE: Record<SessionStatusTone, string> = {

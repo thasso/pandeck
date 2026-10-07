@@ -82,8 +82,8 @@ import { WorktreeChangesetList } from "./WorktreeChangesetList.tsx";
 import { pendingWorktreeReviewIds } from "./worktreeReview.tsx";
 import { WorktreeScopePicker } from "./WorktreeScopePicker.tsx";
 import { useViewedFiles } from "./useViewedFiles.ts";
-import { EdgeSheet } from "../ui/EdgeSheet.tsx";
-import { ErrorNote, PaneLoading, RefreshIndicator } from "../ui/load.tsx";
+import { EdgeSheet } from "../common/EdgeSheet.tsx";
+import { ErrorNote, PaneLoading, RefreshIndicator } from "../common/load.tsx";
 import {
   externalDocumentActionEnabled,
   runExternalDocumentAction,
@@ -113,7 +113,7 @@ import { copyWithToast } from "../../lib/clipboard.ts";
 import {
   ResizableSeparator,
   useResizeDrag,
-} from "../ui/ResizableSeparator.tsx";
+} from "../common/ResizableSeparator.tsx";
 import {
   WorktreeFileNavigator,
   ancestorDirectoryPaths,

@@ -52,16 +52,16 @@ import {
   type SendCommentsTarget,
 } from "./review/SendCommentsSheet.tsx";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
-import { ErrorNote } from "./ui/load.tsx";
+import { ErrorNote } from "./common/load.tsx";
 import {
   CommentComposer,
   type CommentDictationOptions,
   type CommentRefineOptions,
-} from "./ui/CommentComposer.tsx";
+} from "./common/CommentComposer.tsx";
 import {
   COMPOSER_SHELL_CLASS,
   COMPOSER_SHELL_PADDING_CLASS,
-} from "./ui/composerShell.ts";
+} from "./common/composerShell.ts";
 
 /**
  * What the app supplies to every document that collects comments: where a

@@ -14,7 +14,7 @@ import {
   BOTTOM_SHEET_MAX_HEIGHT_CLASS,
   BOTTOM_SHEET_SKIRT_CLASS,
   BOTTOM_SHEET_SURFACE_CLASS,
-} from "../ui/bottomSheet.ts";
+} from "../common/bottomSheet.ts";
 import { clampDockDragOffset, resolveDockDrag } from "./dockDrag.ts";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion.ts";
 
@@ -85,7 +85,7 @@ export function bottomCardInset(hasRow: boolean): string {
  *
  * Content-agnostic: hosts supply the header row and the body, and the body gets
  * `collapse` so acting inside it can reveal the result underneath. What the hosts
- * share is not a look (`ui/bottomSheet.ts` tokens already give every bottom surface
+ * share is not a look (`common/bottomSheet.ts` tokens already give every bottom surface
  * that) but the MECHANICS: travel, thresholds, the click guard, the entrance.
  *
  * Positioned inside its host's box rather than portaled: `position: fixed` resolves

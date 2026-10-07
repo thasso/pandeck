@@ -16,7 +16,7 @@ import {
   type SessionDeliveryState,
   type SessionDeliveryTone,
 } from "../lib/sessionDelivery.ts";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /** Tone → theme tokens. Text only: this sits inside rows that own their fill. */
 const TONE_CLASS: Record<SessionDeliveryTone, string> = {

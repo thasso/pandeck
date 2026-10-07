@@ -20,8 +20,8 @@ import { dataOf, errorOf, isInitialLoad } from "../lib/loadState.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { pushDocumentEntryAndAnnounce } from "../lib/historyNav.ts";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
-import { ImageLightbox } from "./ui/ImageLightbox.tsx";
-import { ErrorNote, Skeleton } from "./ui/load.tsx";
+import { ImageLightbox } from "./common/ImageLightbox.tsx";
+import { ErrorNote, Skeleton } from "./common/load.tsx";
 
 function targetPath(target: DocumentTarget): string {
   return target.path;

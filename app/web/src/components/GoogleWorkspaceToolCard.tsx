@@ -29,7 +29,7 @@ import type { DisplayBlock } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { normalizedToolName } from "./tools/toolName.ts";
 import { ChatWideCard } from "./ChatWideCard.tsx";
-import { Skeleton, Spinner } from "./ui/load.tsx";
+import { Skeleton, Spinner } from "./common/load.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 

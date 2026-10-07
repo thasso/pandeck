@@ -2,8 +2,8 @@ import { useEffect, useId, useRef, useState, type HTMLAttributes } from "react";
 import { Brain, ChevronDown } from "lucide-react";
 
 import { Markdown } from "./Markdown.tsx";
-import { Spinner } from "./ui/load.tsx";
-import { useViewportProximity } from "./ui/useNearViewport.ts";
+import { Spinner } from "./common/load.tsx";
+import { useViewportProximity } from "./common/useNearViewport.ts";
 
 export interface ThinkingBlockProps extends Omit<
   HTMLAttributes<HTMLDivElement>,

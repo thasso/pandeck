@@ -10,7 +10,7 @@ import {
   type AppStatusState,
 } from "../lib/appStatus.ts";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /**
  * How long the socket may be down before the app says so. A shell restored from

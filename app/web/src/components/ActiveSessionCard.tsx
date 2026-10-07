@@ -57,7 +57,7 @@ import {
 } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /** Object glyphs for the third line, matching the primary navigation's icons. */
 const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {

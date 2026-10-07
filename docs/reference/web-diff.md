@@ -33,9 +33,9 @@ diff and code-file view in the app, with remembered display modes.
 - `DiffWorkerProvider.tsx` owns @pierre/diffs worker-pool setup, render-option
   sync, syntax-highlighting progress UI, and completion versioning for diff/file
   surfaces. Its progress pill is a `role="status"` region drawing the shared
-  `ui/load.tsx` `Spinner` (Task-361 Phase 3c): the app has ONE loading glyph,
-  and its own pulsing dot said "something is happening" in a second visual
-  language.
+  `common/load.tsx` `Spinner` (Task-361 Phase 3c): the app has ONE loading
+  glyph, and its own pulsing dot said "something is happening" in a second
+  visual language.
 - `useDiffScrollRestoration.ts` owns scroll continuity across Pierre host and
   shadow-column replacement: it remembers the surrounding viewport's axes and
   each shadow-root code pane's horizontal offset without causing React renders.
@@ -45,28 +45,28 @@ diff and code-file view in the app, with remembered display modes.
   whitespace/Wrap/Context as a regular vertical checkbox menu; `showStyleToggle`
   hides the style control where unified mode is forced.
 - `diffOptions.ts` owns the pure prefs → pierre options mapping (Catppuccin
-  Latte/Mocha themes, matching `ui/highlighter.ts`). Word-level maps to Pierre's
-  `word-alt` (joins adjacent changed spans — its own default — not plain `word`,
-  which leaves per-token boxes fragmented). Ignore-whitespace maps to
-  `parseDiffOptions.ignoreWhitespace`, which Pierre only consults when it
+  Latte/Mocha themes, matching `common/highlighter.ts`). Word-level maps to
+  Pierre's `word-alt` (joins adjacent changed spans — its own default — not
+  plain `word`, which leaves per-token boxes fragmented). Ignore-whitespace maps
+  to `parseDiffOptions.ignoreWhitespace`, which Pierre only consults when it
   computes the diff from `oldFile`/`newFile` contents (not for pre-parsed patch
   text).
 - `comments.tsx` owns the compact line-comment widgets (thread card and
   composer) and the `useLineComments` hook both surfaces share. The thread card
   is the app-wide thread SHAPE: author, body (Markdown, through the shared
-  `ui/CommentBody` — one comment body look for the whole app, at the size it was
-  typed at rather than the diff's mono caption), replies, then ONE bottom row of
-  icon actions — reply (the shared `ui/CommentComposer`), resolve/reopen, and
-  delete at the far right behind a Yes/No confirm, which it previously performed
-  on a single unguarded tap. It offers no per-comment handoff to an agent (that
-  is a review, submitted as a batch from `../review/`) and no jump (it renders
-  on the line it annotates), and it badges the anchor only when it has MOVED.
-  Two anchor modes via `LineCommentsConfig`: current-content surfaces (no
-  `refOid`) display threads at re-anchored `current` positions; committed
-  surfaces pass `refOid` (the resolved commit oid of the displayed new side) —
-  threads then display at their immutable creation anchors for exactly that
-  commit, and new comments are created with `NewWorktreeCommentAnchor.ref` so
-  the server snapshots them at that commit.
+  `common/CommentBody` — one comment body look for the whole app, at the size it
+  was typed at rather than the diff's mono caption), replies, then ONE bottom
+  row of icon actions — reply (the shared `common/CommentComposer`),
+  resolve/reopen, and delete at the far right behind a Yes/No confirm, which it
+  previously performed on a single unguarded tap. It offers no per-comment
+  handoff to an agent (that is a review, submitted as a batch from `../review/`)
+  and no jump (it renders on the line it annotates), and it badges the anchor
+  only when it has MOVED. Two anchor modes via `LineCommentsConfig`:
+  current-content surfaces (no `refOid`) display threads at re-anchored
+  `current` positions; committed surfaces pass `refOid` (the resolved commit oid
+  of the displayed new side) — threads then display at their immutable creation
+  anchors for exactly that commit, and new comments are created with
+  `NewWorktreeCommentAnchor.ref` so the server snapshots them at that commit.
 
 ## Contract notes and rationale
 
@@ -135,7 +135,7 @@ diff and code-file view in the app, with remembered display modes.
 - Diffs only create comments on the additions/current side, and a deletions-side
   gutter activation or selection SAYS SO (a toast) rather than failing silently.
 - The new-comment composer sits one line down and is JUST the shared
-  `ui/CommentComposer` row — send inside the field, Enter (Shift+Enter for a
+  `common/CommentComposer` row — send inside the field, Enter (Shift+Enter for a
   newline), cancel beside send, growing with the text. It states no line: it
   opens under the one the reader just pressed the gutter on, and the caption
   that used to say so existed only to carry a ✕, which is now the composer's own

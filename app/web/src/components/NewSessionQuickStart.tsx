@@ -21,7 +21,7 @@ import {
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
-import { DASHED_EDGE, EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { DASHED_EDGE, EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import {
   ModelQuickRow,
   ProviderAccountRow,
@@ -29,7 +29,7 @@ import {
   QuickRow,
   QuickRowSplit,
   ThinkingSlider,
-} from "./ui/RuntimePicker.tsx";
+} from "./common/RuntimePicker.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 
 /**

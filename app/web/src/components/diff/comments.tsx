@@ -20,8 +20,8 @@ import type { SelectorBundle } from "@assistant/shared/comments";
 import { bundleFromOffsets } from "../../lib/describeAnchor.ts";
 import { showToast } from "../../lib/toast.ts";
 import { usePublishCommentActuation } from "../review/CommentActuation.tsx";
-import { CommentBody } from "../ui/CommentBody.tsx";
-import { CommentComposer as CommentComposerRow } from "../ui/CommentComposer.tsx";
+import { CommentBody } from "../common/CommentBody.tsx";
+import { CommentComposer as CommentComposerRow } from "../common/CommentComposer.tsx";
 
 /** Callbacks the surfaces need to mutate comments (wired to WS actions). */
 export interface CommentActions {
@@ -491,7 +491,7 @@ function ThreadAction({
 
 /**
  * The composer for a comment on a LINE: the app's one comment row
- * (`ui/CommentComposer`), on the line it annotates.
+ * (`common/CommentComposer`), on the line it annotates.
  *
  * It says nothing about which line that is. It opens directly under it, the
  * reader is the one who just pressed the gutter there, and the caption that used

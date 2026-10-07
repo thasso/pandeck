@@ -87,7 +87,7 @@ import {
   sameComposerRuntimeFit,
 } from "./composerRuntimeFit.ts";
 import { Popover } from "./Popover.tsx";
-import { ModelSelect, ThinkingSelect } from "./ui/ModelThinkingSelect.tsx";
+import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import {
   COMPOSER_ACTION_CLUSTER_CLASS,
   COMPOSER_ACTION_ROW_CLASS,
@@ -105,9 +105,9 @@ import {
   COMPOSER_SHELL_CLASS,
   COMPOSER_SHELL_PADDING_CLASS,
   composerFoldClass,
-} from "./ui/composerShell.ts";
-import { ProviderIcon } from "./ui/ProviderIcon.tsx";
-import { EmptyBox, Spinner } from "./ui/load.tsx";
+} from "./common/composerShell.ts";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
+import { EmptyBox, Spinner } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { ChatCommentChip } from "./ChatCommentChip.tsx";
@@ -391,7 +391,7 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
 
 /**
  * Tailwind's `sm`, the one media query the runtime pills draw differently on:
- * `ui/ModelThinkingSelect` widens the model cap (`max-w-[170px] sm:max-w-[220px]`)
+ * `common/ModelThinkingSelect` widens the model cap (`max-w-[170px] sm:max-w-[220px]`)
  * and swaps the short thinking label for the full one. So the same content has
  * two natural widths, and the fold has to treat the mode as part of what it
  * measured — see `runtimeSignature`.

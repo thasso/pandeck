@@ -2,7 +2,7 @@ import { useMemo, useState, type SyntheticEvent } from "react";
 import { CheckCircle2, ExternalLink, Terminal, X } from "lucide-react";
 import type { CredentialProfileSummary } from "@assistant/shared";
 import { useClaudeLoginTerminal } from "../hooks/useClaudeLoginTerminal.ts";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 export function claudeLoginAuthorizationUrl(
   output: string,

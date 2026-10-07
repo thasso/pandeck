@@ -28,7 +28,7 @@ import type {
 } from "@assistant/shared";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { dataOf, isEmpty, isInitialLoad, isPending } from "../lib/loadState.ts";
-import { EmptyBox, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import { EmptyBox, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import {
   isValidTimezone,

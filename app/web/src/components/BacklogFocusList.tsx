@@ -6,7 +6,7 @@ import {
   TASK_STATUS_LABEL,
 } from "./TaskStatusIcon.tsx";
 import { TaskRowBody } from "./TaskRowBody.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import { nextStatus, type Task } from "../lib/backlogTree.ts";
 import { buildFocusBuckets, type FocusBucketId } from "../lib/backlogFocus.ts";
 import {

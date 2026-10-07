@@ -22,7 +22,7 @@ import {
 import type { WorkerStats } from "@pierre/diffs/worker";
 import PierreDiffWorker from "@pierre/diffs/worker/worker.js?worker";
 import type { Prefs } from "../../hooks/usePrefs.ts";
-import { Spinner } from "../ui/load.tsx";
+import { Spinner } from "../common/load.tsx";
 
 const DIFF_THEMES = {
   light: "catppuccin-latte",

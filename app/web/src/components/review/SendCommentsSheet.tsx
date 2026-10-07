@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { EdgeSheet } from "../ui/EdgeSheet.tsx";
+import { EdgeSheet } from "../common/EdgeSheet.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
 
 /** Where a bundle of review comments is being sent. */

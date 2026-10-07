@@ -32,15 +32,15 @@ import {
   orderCredentialProfilesByProvider,
 } from "../lib/credentialProfiles.ts";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { ProviderIcon } from "./ui/ProviderIcon.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import {
   EmptyBox,
   ErrorNote,
   RefreshIndicator,
   Skeleton,
   Spinner,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { useNow } from "../hooks/useNow.ts";
 import {

@@ -23,7 +23,7 @@ import {
   externalDocumentActionEnabled,
   runExternalDocumentAction,
 } from "../lib/documentActions.ts";
-import { ImageLightbox } from "./ui/ImageLightbox.tsx";
+import { ImageLightbox } from "./common/ImageLightbox.tsx";
 
 /**
  * One served file, as its producer described it: a captured `SessionArtifact`

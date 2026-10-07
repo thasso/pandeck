@@ -457,7 +457,7 @@ body {
   line-height: var(--text-caption--line-height);
 }
 /*
- * A fenced block routes through `ui/CodeBlock`, which puts a row UNDER the
+ * A fenced block routes through `common/CodeBlock`, which puts a row UNDER the
  * `pre` inside the same container (the copy button, the reveal controls). That
  * row is the gap to what follows, so the `pre`'s own bottom margin would double
  * it. Scoped to `pre.shiki` — the class both of `CodeBlock`'s paths carry — so a

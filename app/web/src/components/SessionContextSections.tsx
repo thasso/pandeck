@@ -28,8 +28,8 @@ import { sessionPath } from "../lib/sessionRoutes.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { showToast } from "../lib/toast.ts";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { ImageLightbox } from "./ui/ImageLightbox.tsx";
-import { ErrorNote, PaneLoading, RefreshIndicator } from "./ui/load.tsx";
+import { ImageLightbox } from "./common/ImageLightbox.tsx";
+import { ErrorNote, PaneLoading, RefreshIndicator } from "./common/load.tsx";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   dataOf,

@@ -978,8 +978,8 @@ safe-area inset in its place, so an installed PWA still clears the notch.
   yet, not for the one already following. The math is
   `components/shell/edgeSwipe.ts`, on the same rule as the row swipe below:
   thresholds belong in a tested module, not in a component tuned by feel.
-- A LIST ROW may carry one swipe action PER SIDE (`components/ui/SwipeRow`), and
-  it obeys the edge rule above rather than being an exception to it: a touch
+- A LIST ROW may carry one swipe action PER SIDE (`components/common/SwipeRow`),
+  and it obeys the edge rule above rather than being an exception to it: a touch
   starting within `SWIPE_EDGE_GUARD_PX` of either edge belongs to the edge's
   owner — the browser's gesture, or the shell's back — and never becomes a row
   swipe. That guard is load-bearing now rather than courteous: a row's rightward

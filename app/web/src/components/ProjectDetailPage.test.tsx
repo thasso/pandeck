@@ -26,7 +26,7 @@ if (!("ResizeObserver" in globalThis)) {
 /**
  * The reference behaviour for R1: this page has always kept "still loading",
  * "not in the registry" and "registry is empty" apart. The assertions exist so
- * the Task-384 migration to `ui/load.tsx` kept all three.
+ * the Task-384 migration to `common/load.tsx` kept all three.
  */
 
 function render(options: {

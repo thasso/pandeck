@@ -47,7 +47,7 @@ import {
   InspectorSection,
   type InspectorAction,
 } from "../shell/Inspector.tsx";
-import { Spinner } from "../ui/load.tsx";
+import { Spinner } from "../common/load.tsx";
 import {
   autoCommitWorktree,
   cleanWorktree,

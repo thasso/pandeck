@@ -1,8 +1,8 @@
 import type { MouseEvent, ReactNode } from "react";
 import { cn } from "cn";
 
-import { Button } from "./button.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip.tsx";
+import { Button } from "../ui/button.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip.tsx";
 
 /**
  * @component GhostIconButton

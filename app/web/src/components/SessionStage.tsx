@@ -1,5 +1,5 @@
 import type { NewSessionNarration } from "../lib/newSessionShell.ts";
-import { ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
 
 /**
  * The chrome the chat stage draws while what it shows is not yet the live

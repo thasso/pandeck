@@ -17,18 +17,18 @@ import type {
   LazyBlockRef,
   LiveBodyKey,
 } from "@assistant/shared/session";
-import { ToolCallBlock, type ToolStatus } from "../ui/ToolCallBlock.tsx";
+import { ToolCallBlock, type ToolStatus } from "../common/ToolCallBlock.tsx";
 import { PeerPromptCardView } from "../PeerPromptCard.tsx";
 import { KnowledgeEntryToolCard } from "../KnowledgeEntryToolCard.tsx";
 import { ServedFileCard } from "../ServedFileCard.tsx";
 import { TaskManageToolCard } from "../TaskManageToolCard.tsx";
-import { CollapsibleOutput } from "../ui/CollapsibleOutput.tsx";
+import { CollapsibleOutput } from "../common/CollapsibleOutput.tsx";
 import {
   BashBody,
   EditDiffBody,
   FileExcerptBody,
 } from "./NativeToolBodies.tsx";
-import { JsonView } from "../ui/JsonView.tsx";
+import { JsonView } from "../common/JsonView.tsx";
 import {
   acceptsAgentQuestionCard,
   acceptsGoogleWorkspaceCard,

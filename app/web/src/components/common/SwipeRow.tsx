@@ -130,7 +130,7 @@ export interface SwipeAction {
  * mouse drags here would fight the tree's drag-to-reorder. Vertical scrolling
  * stays native for every touch the row does NOT claim, and the gesture math
  * (edge guard, claim, engage/commit thresholds) lives in `lib/swipeGesture.ts`.
- * @related lib/swipeGesture.ts, components/ui/Tree.tsx
+ * @related lib/swipeGesture.ts, components/common/Tree.tsx
  */
 export function SwipeRow({
   left,

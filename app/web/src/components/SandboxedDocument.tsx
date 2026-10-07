@@ -13,7 +13,7 @@ import {
   openNativeServedFile,
 } from "../lib/nativeShell.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 
 /** Renew this far before expiry, so a reader never meets a dead frame. */
 const RENEW_MARGIN_MS = 60_000;

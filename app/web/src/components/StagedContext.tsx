@@ -16,7 +16,7 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
-import { Skeleton } from "./ui/load.tsx";
+import { Skeleton } from "./common/load.tsx";
 
 /**
  * The composable pre-session context staged for a new chat's first prompt.

@@ -11,7 +11,7 @@ import type { ProjectRecord, TaskPriority } from "@assistant/shared";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import {
   projectPath,
   taskPath,

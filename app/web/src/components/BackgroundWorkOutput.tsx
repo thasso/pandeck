@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
-import { AnsiText } from "./ui/AnsiText.tsx";
-import { CollapsibleOutput } from "./ui/CollapsibleOutput.tsx";
+import { AnsiText } from "./common/AnsiText.tsx";
+import { CollapsibleOutput } from "./common/CollapsibleOutput.tsx";
 
 /** How much of a captured log the panel holds in memory; the link has the rest. */
 const BACKGROUND_OUTPUT_INLINE_MAX_BYTES = 64 * 1024;

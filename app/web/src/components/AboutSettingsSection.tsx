@@ -14,7 +14,7 @@ import { useFetchState } from "../hooks/useFetchState.ts";
 import { dataOf } from "../lib/loadState.ts";
 import { appBuildInfo } from "../lib/appBuild.ts";
 import { nativeShellBuild, nativeShellPlatform } from "../lib/nativeShell.ts";
-import { CopyButton } from "./ui/CopyButton.tsx";
+import { CopyButton } from "./common/CopyButton.tsx";
 
 /** How the shell's row is titled, per platform. */
 const SHELL_LABELS: Record<string, string> = {

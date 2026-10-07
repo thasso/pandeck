@@ -34,7 +34,7 @@ import {
   type BacklogProjectFilterOption,
 } from "../components/BacklogFilters.tsx";
 import type { ProjectAssignTarget } from "../components/BacklogTreePane.tsx";
-import { useDialogs } from "../components/ui/dialogs.tsx";
+import { useDialogs } from "../components/common/dialogs.tsx";
 import {
   dismissToastKey,
   PROJECT_ASSIGNMENT_TOAST_KEY,

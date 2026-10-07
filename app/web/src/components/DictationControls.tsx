@@ -2,13 +2,13 @@ import { useRef } from "react";
 import { Mic, Square, X } from "lucide-react";
 import type { DictationPhase } from "../hooks/useDictation.ts";
 import type { PeakRing } from "../lib/waveform.ts";
-import { WaveformStrip } from "./ui/WaveformStrip.tsx";
-import { LIVE_PULSE, Spinner } from "./ui/load.tsx";
+import { WaveformStrip } from "./common/WaveformStrip.tsx";
+import { LIVE_PULSE, Spinner } from "./common/load.tsx";
 
 /**
  * The dictation surface, shared by every row that can host it: the chat
  * composer's compact bar, the mobile object dock's action row
- * (`SessionDockActions`), and `ui/CommentComposer`.
+ * (`SessionDockActions`), and `common/CommentComposer`.
  *
  * Split into pieces rather than one component because the hosts arrange their
  * idle state differently, while the RECORDING state must be identical in all of

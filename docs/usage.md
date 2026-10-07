@@ -204,13 +204,14 @@ The outcome is logged (`[usage] auto-redeemed …`); there is no separate journa
 
 ## What the card shows
 
-The provider card (`ui/RuntimePicker.tsx` → `ui/UsageCycleMeters.tsx`, shown by
-the new-session landing and the workflow start sheet) keeps the account icon
-**and** name — several accounts can share one provider, so the provider word
-moves into the card's label. Below it sits a fixed-height slot of two generic
-cycle rows, `5h` and `wk`, each a micro meter with the number right-aligned
-(`62% · 14:00`; time-of-day for the short cycle, weekday for the long). Each
-provider adapter maps its own windows into those two slots, or one, or none.
+The provider card (`common/RuntimePicker.tsx` → `common/UsageCycleMeters.tsx`,
+shown by the new-session landing and the workflow start sheet) keeps the account
+icon **and** name — several accounts can share one provider, so the provider
+word moves into the card's label. Below it sits a fixed-height slot of two
+generic cycle rows, `5h` and `wk`, each a micro meter with the number
+right-aligned (`62% · 14:00`; time-of-day for the short cycle, weekday for the
+long). Each provider adapter maps its own windows into those two slots, or one,
+or none.
 
 - Fill is **used**, never remaining. Length, colour and the printed number are
   redundant channels, so the meaning survives without colour.

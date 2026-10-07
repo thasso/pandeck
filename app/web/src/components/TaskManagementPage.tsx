@@ -32,8 +32,11 @@ import { InlineEdit } from "./InlineEdit.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { CollapsibleSection } from "./CollapsibleSection.tsx";
 import { TaskComments, taskCommentCount } from "./TaskComments.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { ResizableSeparator, useResizeDrag } from "./ui/ResizableSeparator.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import {
+  ResizableSeparator,
+  useResizeDrag,
+} from "./common/ResizableSeparator.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -41,7 +44,7 @@ import {
   RefreshIndicator,
   Skeleton,
   Spinner,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 import {
   dataOf,
   errorOf,

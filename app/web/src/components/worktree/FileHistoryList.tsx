@@ -10,7 +10,7 @@ import {
   ErrorNote,
   PaneLoading,
   RefreshIndicator,
-} from "../ui/load.tsx";
+} from "../common/load.tsx";
 
 /**
  * @component FileHistoryList

@@ -3,8 +3,8 @@ import { FolderTree, Plus, Trash2, X } from "lucide-react";
 import type { ProjectLocalPath, ProjectRecord } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import { InlineEdit } from "./InlineEdit.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { ErrorNote } from "./ui/load.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import { ErrorNote } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 
 const KINDS: Array<NonNullable<ProjectLocalPath["kind"]>> = [

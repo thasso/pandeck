@@ -74,14 +74,14 @@ import {
 import { Markdown } from "./Markdown.tsx";
 import { PageHeader } from "./PageHeader.tsx";
 import { Button } from "@/components/ui/button";
-import { CodeBlock } from "./ui/CodeBlock.tsx";
-import { Tree, type TreeNode } from "./ui/Tree.tsx";
+import { CodeBlock } from "./common/CodeBlock.tsx";
+import { Tree, type TreeNode } from "./common/Tree.tsx";
 import {
   EmptyBox,
   ErrorNote,
   PaneLoading,
   RefreshIndicator,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 
 export function SkillsSettingsSection({
   library,

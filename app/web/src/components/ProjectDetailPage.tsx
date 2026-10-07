@@ -25,8 +25,8 @@ import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InlineEdit } from "./InlineEdit.tsx";
 import { CollapsibleSection } from "./CollapsibleSection.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { useDialogs } from "./ui/dialogs.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import { useDialogs } from "./common/dialogs.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -34,7 +34,7 @@ import {
   RefreshIndicator,
   Skeleton,
   Spinner,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 import {
   dataOf,
   errorOf,

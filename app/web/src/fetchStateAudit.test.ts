@@ -13,8 +13,8 @@ import { describe, expect, test } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY_CANCELLED_EFFECTS = new Set([
-  "components/ui/ChartBlock.tsx",
-  "components/ui/useHighlighterLanguage.ts",
+  "components/common/ChartBlock.tsx",
+  "components/common/useHighlighterLanguage.ts",
   "components/worktree/WorktreeChangesetList.tsx",
   "components/worktree/WorktreeDelivery.tsx",
   "hooks/useWorktreeHosting.ts",

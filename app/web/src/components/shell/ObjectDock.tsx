@@ -109,7 +109,7 @@ export function ObjectDock({
           // it at the two ends, so a row with more actions than fit loses none
           // of them to a scroll the reader has no reason to suspect.
           //
-          // `px-2` doubles the card's own 8px gutter (`ui/bottomSheet`) at both ends,
+          // `px-2` doubles the card's own 8px gutter (`common/bottomSheet`) at both ends,
           // so the control at each end sits 16px off the screen rather than 12px.
           // It is the same inset on both sides — the row's symmetry is what puts the
           // field on the grabber's axis — and it costs the field 8px, which is the
@@ -140,7 +140,7 @@ export function ObjectDock({
 /**
  * One control in the dock's action row. Icon-only and ghost-styled, the app's
  * chrome-row icon button (`Topbar`, the composer's toolbar) rather than
- * `ui/GhostIconButton`, which is sized for inline actions inside content.
+ * `common/GhostIconButton`, which is sized for inline actions inside content.
  *
  * Icon-only because a labelled accent pill was the widest thing in the row and read
  * as the screen's call to action, which "Start session" on a task you are only

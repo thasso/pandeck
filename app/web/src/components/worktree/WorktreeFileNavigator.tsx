@@ -5,8 +5,8 @@ import type {
   WorktreeChangeStatus,
   WorktreeTreeEntry,
 } from "@assistant/shared";
-import { Tree, type TreeNode, type TreeNodeState } from "../ui/Tree.tsx";
-import { Skeleton, Spinner } from "../ui/load.tsx";
+import { Tree, type TreeNode, type TreeNodeState } from "../common/Tree.tsx";
+import { Skeleton, Spinner } from "../common/load.tsx";
 
 /**
  * @component WorktreeFileNavigator
@@ -14,11 +14,11 @@ import { Skeleton, Spinner } from "../ui/load.tsx";
  * lazy working-tree browsing, and compact inspector file summaries.
  * @useWhen A worktree surface needs folder-aware file navigation with caller-defined
  * click behavior (open a diff, open a file, or simply reveal a path).
- * @avoidWhen Rendering generic non-file hierarchies; use `components/ui/Tree` directly.
+ * @avoidWhen Rendering generic non-file hierarchies; use `components/common/Tree` directly.
  * @intent Domain-light wrapper around the shared Tree chrome. Callers provide flat
  * file/dir entries and own loading/navigation; this component only builds the
  * folder hierarchy and reports selected file/directory entries.
- * @related components/ui/Tree.tsx, WorktreeDetailPage.tsx, objectInspectors.tsx
+ * @related components/common/Tree.tsx, WorktreeDetailPage.tsx, objectInspectors.tsx
  */
 
 type WorktreeNavigatorEntryKind = "file" | "dir";

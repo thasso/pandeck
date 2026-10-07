@@ -12,7 +12,12 @@ import type {
   ProjectRecord,
   PullRequestInventoryItem,
 } from "@assistant/shared";
-import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
 import {
   buildPullRequestInbox,
   pullRequestCiState,
@@ -33,7 +38,7 @@ import {
 } from "../lib/loadState.ts";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
-import { useShortcuts, type ShortcutGroup } from "./ui/shortcuts.tsx";
+import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
 
 const PULL_REQUEST_SHORTCUTS: ShortcutGroup = {
   title: "Pull Requests",

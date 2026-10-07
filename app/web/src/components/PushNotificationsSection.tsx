@@ -4,7 +4,7 @@ import type {
   ApnsConfigResponse,
   WebPushConfigResponse,
 } from "@assistant/shared";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
 import {
   nativeNotify,
   nativeShellPlatform,

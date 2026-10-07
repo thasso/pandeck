@@ -61,12 +61,12 @@ import { fileViewerPath } from "../hooks/useSessionRouting.ts";
 import { InlineDocumentEmbed } from "./InlineDocumentEmbed.tsx";
 
 const CodeBlock = lazy(() =>
-  import("./ui/CodeBlock.tsx").then((module) => ({
+  import("./common/CodeBlock.tsx").then((module) => ({
     default: module.CodeBlock,
   })),
 );
 const ChartBlock = lazy(() =>
-  import("./ui/ChartBlock.tsx").then((module) => ({
+  import("./common/ChartBlock.tsx").then((module) => ({
     default: module.ChartBlock,
   })),
 );

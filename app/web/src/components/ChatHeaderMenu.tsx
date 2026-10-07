@@ -20,7 +20,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { EdgeSheet } from "./ui/EdgeSheet.tsx";
+import { EdgeSheet } from "./common/EdgeSheet.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
 import { useRouteSecondaryActions } from "./shell/RoutePrimaryAction.tsx";
 
@@ -154,7 +154,7 @@ export function TranscriptViewRows({
  * mostly empty. Show/expand are two independent controls per block type: "show"
  * decides whether the blocks render at all, "expand" is a live expand-all /
  * collapse-all that ALSO becomes the default for blocks arriving later (see
- * `ui/ToolCallBlock`/`ThinkingBlock`, which re-sync when their default flips), so
+ * `common/ToolCallBlock`/`ThinkingBlock`, which re-sync when their default flips), so
  * a running turn keeps obeying the choice. View rows keep the surface open —
  * these get toggled in bursts — while session actions close it.
  * @related Popover, ui/Sheet, PageHeader.

@@ -2,7 +2,7 @@ import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import { errorOf, isInitialLoad, isPending } from "../../lib/loadState.ts";
-import { ErrorNote, RefreshIndicator } from "../ui/load.tsx";
+import { ErrorNote, RefreshIndicator } from "../common/load.tsx";
 import { MonthView } from "./MonthView.tsx";
 import { TimeGrid } from "./TimeGrid.tsx";
 import { PageHeaderBackButton, type PageHeaderBack } from "../PageHeader.tsx";

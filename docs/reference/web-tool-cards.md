@@ -59,7 +59,7 @@ rich cards or disclosure bodies.
   - Wrapping is opt-in per user (`prefs.wrapToolLines`, off by default) and
     arrives as `ToolRenderContext.wrapLines`; code and shell output are
     column-aligned, so wrapping is never the default.
-  - Bodies are VIEWPORT-GATED by `ToolCallBlock` (`ui/useNearViewport.ts`):
+  - Bodies are VIEWPORT-GATED by `ToolCallBlock` (`common/useNearViewport.ts`):
     expand-all opens every block in the transcript, and building all those
     bodies in one commit is what froze the main thread on long chats. Keep new
     bodies cheap on first paint and never assume a body mounts the moment its

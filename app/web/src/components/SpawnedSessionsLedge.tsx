@@ -13,7 +13,7 @@ import {
   type SpawnedSessionsView,
 } from "../lib/sessionInbox.ts";
 import { ClusterChildRow } from "./ClusterChildRow.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 
 /** Same semantic tones the cards and rows use, at the bubble badge's weight. */

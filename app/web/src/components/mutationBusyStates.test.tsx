@@ -15,7 +15,7 @@ import { ApprovalCard } from "./ApprovalCard.tsx";
 import { PullRequestCard } from "./PullRequestCard.tsx";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
 import { CommitWorktreeDialog } from "./worktree/WorktreeDialogs.tsx";
-import { DialogProvider } from "./ui/dialogs.tsx";
+import { DialogProvider } from "./common/dialogs.tsx";
 
 /**
  * How a MUTATION says it is running (`app/web/docs/loading-states.md` R5,

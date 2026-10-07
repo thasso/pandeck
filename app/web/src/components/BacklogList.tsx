@@ -21,7 +21,7 @@ import { BacklogTreePane } from "./BacklogTreePane.tsx";
 import { BacklogFocusList } from "./BacklogFocusList.tsx";
 import { BacklogInboxList } from "./BacklogInboxList.tsx";
 import { hasInboxWork } from "../lib/backlogInbox.ts";
-import { ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
 import { errorOf, idle, isPending } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";

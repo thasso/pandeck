@@ -36,7 +36,12 @@ import {
 import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { DocumentNavigationShell } from "./DocumentNavigationShell.tsx";
 import { DocumentCommentLayer } from "./DocumentComments.tsx";
-import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import {
   DeferredGrantedMedia,

@@ -113,7 +113,7 @@ describe("Slack Huddle cURL intake", () => {
 /**
  * Settings is an END-USER surface (`components/CLAUDE.md`), so its pending
  * states say what is happening in plain words and get their motion from
- * `ui/load.tsx` — no hand-rolled spinner, no protocol or token diagnostics
+ * `common/load.tsx` — no hand-rolled spinner, no protocol or token diagnostics
  * leaking into the flow (`app/web/docs/loading-states.md`, Task-361 Phase 3d).
  */
 

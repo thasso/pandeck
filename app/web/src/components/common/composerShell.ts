@@ -13,7 +13,7 @@
  * chat composer's alone.
  */
 
-import { buttonVariants } from "./button.tsx";
+import { buttonVariants } from "../ui/button.tsx";
 
 /** Width clamp and gutters of the bottom-edge slot. */
 export const COMPOSER_SHELL_CLASS = "relative mx-auto w-full max-w-3xl px-4";

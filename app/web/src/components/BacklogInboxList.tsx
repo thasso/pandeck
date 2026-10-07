@@ -7,7 +7,7 @@ import {
 } from "./TaskStatusIcon.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import {
   nextStatus,
   pendingStatusSuggestion,

@@ -19,7 +19,7 @@ import {
   useRoutePrimaryAction,
   useRouteSecondaryActionHost,
 } from "./RoutePrimaryAction.tsx";
-import { EmptyBox, Skeleton, Spinner } from "../ui/load.tsx";
+import { EmptyBox, Skeleton, Spinner } from "../common/load.tsx";
 
 /**
  * Chrome the HOST surface supplies instead of the inspector. The mobile object

@@ -72,7 +72,7 @@ export interface TreeRowAction {
 
 /**
  * The touch equivalent of a `TreeRowAction`: an action revealed by swiping the
- * row, one per side, committed on release (`components/ui/SwipeRow`). Returned
+ * row, one per side, committed on release (`components/common/SwipeRow`). Returned
  * per node, so a tree offers each only on the rows where it applies — an
  * offered swipe that refuses on release is worse than no swipe at all, and a
  * row may well offer one side and not the other.
@@ -237,7 +237,7 @@ function useControllable<V>(
  * @intent Stays domain-free: it speaks `TreeNode<T>` and calls `renderNode`,
  * never reading into `data`. Pass `onMove` to enable drag; callers translate the
  * `TreeMoveResult` into their own persistence (e.g. placements/reorderTasks).
- * @related components/ui/tree-model.ts, BacklogTreePane.tsx
+ * @related components/common/tree-model.ts, BacklogTreePane.tsx
  */
 export function Tree<T>({
   items,

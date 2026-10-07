@@ -7,8 +7,8 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import { Tree, type TreeNode } from "./ui/Tree.tsx";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { Tree, type TreeNode } from "./common/Tree.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 import {
   buildTaskNodes,
@@ -38,7 +38,7 @@ const MORE_NODE_PREFIX = "more-sessions:";
 /**
  * @component ProjectTreePane
  * @purpose The sidebar Projects browser: the project registry as a compact,
- * collapsible tree on the shared `components/ui/Tree` chrome, with each Project
+ * collapsible tree on the shared `components/common/Tree` chrome, with each Project
  * revealing bounded direct sessions, Worktrees, and bounded sessions under each
  * Worktree.
  * @useWhen Rendering the Projects section of the sidebar.
@@ -47,7 +47,7 @@ const MORE_NODE_PREFIX = "more-sessions:";
  * related sessions/worktrees are read-only tree children that reuse SessionRow
  * and WorktreeBrowser row pieces. Session children are paged in the same 5-at-a-
  * time style as the Worktrees browser so the sidebar remains compact.
- * @related Sidebar, BacklogTreePane, WorktreeBrowser, SessionRow, components/ui/Tree.tsx
+ * @related Sidebar, BacklogTreePane, WorktreeBrowser, SessionRow, components/common/Tree.tsx
  */
 export const ProjectTreePane = memo(function ProjectTreePane({
   projects,

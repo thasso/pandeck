@@ -5,7 +5,7 @@ import type {
   AccountModelOption,
   CredentialProfileSummary,
 } from "@assistant/shared";
-import { ModelSelect } from "./ui/ModelThinkingSelect.tsx";
+import { ModelSelect } from "./common/ModelThinkingSelect.tsx";
 import { AgentModelFields } from "./AgentModelFields.tsx";
 import { CredentialProfileCard } from "./SettingsPage.tsx";
 

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { AccountModelOption } from "@assistant/shared";
 import { Popover } from "./Popover.tsx";
-import { EdgeSheet } from "./ui/EdgeSheet.tsx";
+import { EdgeSheet } from "./common/EdgeSheet.tsx";
 import { WorkflowRunStartLayer } from "./WorkflowRunStartSheet.tsx";
 
 /**

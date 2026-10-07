@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Palette } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { InlineEdit } from "./InlineEdit.tsx";
-import { ErrorNote } from "./ui/load.tsx";
+import { ErrorNote } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 
 /**

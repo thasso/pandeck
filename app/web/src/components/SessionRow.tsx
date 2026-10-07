@@ -12,7 +12,7 @@ import { isWorkspaceAware } from "../lib/sessionCapabilities.ts";
 import { relativeTime, sameSessionRowProps } from "../lib/sessionRows.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 
 /**

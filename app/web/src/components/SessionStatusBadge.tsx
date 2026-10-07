@@ -13,7 +13,7 @@ import type {
   SessionStatusBadge as SessionStatusBadgeModel,
   SessionStatusTone,
 } from "../lib/sessionInbox.ts";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 
 /** Badge colors shared by full session cards and their compact child rows. */
 export const SESSION_BADGE_TONE: Record<SessionStatusTone, string> = {

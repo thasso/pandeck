@@ -15,7 +15,7 @@ import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { BackgroundWorkRow } from "./BackgroundWorkRow.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 
 export interface BackgroundWorkSectionProps {
   sessionId: string | undefined;

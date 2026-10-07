@@ -28,7 +28,7 @@ import type {
   MemorySettings,
 } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { Skeleton } from "./ui/load.tsx";
+import { Skeleton } from "./common/load.tsx";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 

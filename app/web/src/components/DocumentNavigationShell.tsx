@@ -33,7 +33,7 @@ import {
   type DocumentZoomRegistration,
 } from "./DocumentZoom.tsx";
 import { PageHeader, type PageHeaderIconTone } from "./PageHeader.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
 import { worktreePath } from "../hooks/useSessionRouting.ts";
 
 export interface DocumentSourceAction {

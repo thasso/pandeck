@@ -196,9 +196,9 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   is held for the recording and released in teardown. The waveform envelope is
   exposed as a `lib/waveform.ts` `PeakRing`, deliberately NOT React state: ~40
   bars a second through `setState` would re-render the whole composer for a
-  canvas repaint, so `ui/WaveformStrip` reads the ring inside its own animation
-  frame. Ownership is a MODULE-LEVEL single-owner lock, not component state,
-  because `Composer` can be mounted several times at once; non-owning mic
+  canvas repaint, so `common/WaveformStrip` reads the ring inside its own
+  animation frame. Ownership is a MODULE-LEVEL single-owner lock, not component
+  state, because `Composer` can be mounted several times at once; non-owning mic
   buttons render disabled. Stopping speech is decoupled from finishing delivery:
   on stop it flushes the watermarked backlog, waits briefly for the socket to
   drain, and falls back to `POST /api/speech/transcribe` with the capture's

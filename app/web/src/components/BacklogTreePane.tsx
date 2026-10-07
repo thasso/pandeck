@@ -18,10 +18,10 @@ import {
   type TreeNodeState,
   type TreeRowAction,
   type TreeRowSwipe,
-} from "./ui/Tree.tsx";
-import type { SwipeAction } from "./ui/SwipeRow.tsx";
+} from "./common/Tree.tsx";
+import type { SwipeAction } from "./common/SwipeRow.tsx";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskRowBody } from "./TaskRowBody.tsx";
 import {
@@ -86,7 +86,7 @@ export type ProjectAssignTarget = { projectId: string | null; label: string };
 
 /**
  * @component BacklogTreePane
- * @purpose The Backlog list body, built on the generic `components/ui/Tree`:
+ * @purpose The Backlog list body, built on the generic `components/common/Tree`:
  * the Normal view (task hierarchy with drag-reorder/reparent, multi-select,
  * keyboard) and the By-Project view (projects as collapsible depth-0 nodes;
  * dragging tasks across project nodes reassigns their `projectId`). The status
@@ -94,13 +94,13 @@ export type ProjectAssignTarget = { projectId: string | null; label: string };
  * dimmed context.
  * @useWhen Rendering the durable-Task list (via BacklogList) on the full Tasks
  * page, in the sidebar Tasks tab, or as a Task picker — `density` says which.
- * @avoidWhen A non-Task hierarchy; use `components/ui/Tree` directly.
+ * @avoidWhen A non-Task hierarchy; use `components/common/Tree` directly.
  * @intent Presentational + interaction only; the page owns the optimistic task
  * order and project-assignment/undo state and receives `onReorder` (full
  * placements) and `onAssignProjectsForRoots` (selection roots → target project).
  * Normal-view reorder works even while filtered: the move is reconstructed
  * against the full task tree so hidden rows keep their place.
- * @related lib/backlogTreeModel.ts, components/ui/Tree.tsx, TaskManagementPage.tsx
+ * @related lib/backlogTreeModel.ts, components/common/Tree.tsx, TaskManagementPage.tsx
  */
 export function BacklogTreePane({
   tasks,

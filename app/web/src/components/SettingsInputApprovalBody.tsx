@@ -25,7 +25,7 @@ import {
   startOpenAiProfileLogin,
 } from "../lib/credentialProfiles.ts";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
 
 type Busy = "submit" | "dismiss" | null;
 

@@ -57,7 +57,7 @@ class NoopObserver {
 await import("./components/MessageList.tsx");
 await import("./components/PullRequestCard.tsx");
 const App = (await import("./App.tsx")).default;
-const { ShortcutsProvider } = await import("./components/ui/shortcuts.tsx");
+const { ShortcutsProvider } = await import("./components/common/shortcuts.tsx");
 const { perfSnapshot, setPerfStatsEnabled } =
   await import("./lib/perfStats.ts");
 

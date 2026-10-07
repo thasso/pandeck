@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import type { ReactElement } from "react";
-import { Button } from "./button.tsx";
+import { Button } from "../ui/button.tsx";
 import {
   EmptyBox,
   ErrorNote,

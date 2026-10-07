@@ -53,7 +53,7 @@ only binding rules; everything else lives here.
 - `loading-states.md` (under `app/web/docs/`) — the binding loading-state model:
   the five states every async region renders, R1–R6 (empty is not loading,
   stale-while-refresh, a different object gets a placeholder, reserved layout,
-  per-control busy, a11y/motion), the shared `ui/load.tsx` vocabulary, the
+  per-control busy, a11y/motion), the shared `common/load.tsx` vocabulary, the
   inline-vs-toast error rule, and the audit that enforces it.
 - `messaging.md` — the binding model for what the app SAYS: the three questions
   that pick a channel, the channels themselves and the absence of a banner among

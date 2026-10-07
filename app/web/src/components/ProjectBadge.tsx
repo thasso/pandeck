@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { projectColor, resolveProjectDisplay } from "../lib/projectDisplay.ts";
-import { DASHED_EDGE } from "./ui/load.tsx";
+import { DASHED_EDGE } from "./common/load.tsx";
 
 /**
  * @component ProjectBadge

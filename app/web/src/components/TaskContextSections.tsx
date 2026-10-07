@@ -32,7 +32,7 @@ import {
 import { fetchGithubLinkedIssues } from "../lib/githubApi.ts";
 import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import {
   TaskPlanningSection,

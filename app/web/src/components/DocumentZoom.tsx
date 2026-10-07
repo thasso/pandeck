@@ -13,7 +13,7 @@ import {
   steppedDocumentZoom,
   type DocumentZoomMode,
 } from "../lib/documentZoom.ts";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { GhostIconButton } from "./common/GhostIconButton.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 
 export interface DocumentZoomRegistration {

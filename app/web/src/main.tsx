@@ -2,8 +2,8 @@ import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
-import { DialogProvider } from "./components/ui/dialogs.tsx";
-import { ShortcutsProvider } from "./components/ui/shortcuts.tsx";
+import { DialogProvider } from "./components/common/dialogs.tsx";
+import { ShortcutsProvider } from "./components/common/shortcuts.tsx";
 import { initHistoryNav } from "./lib/historyNav.ts";
 import "./index.css";
 
