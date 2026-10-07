@@ -1,4 +1,7 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "../ui/button.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
+import { IconButton } from "../common/IconButton.tsx";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import { errorOf, isInitialLoad, isPending } from "../../lib/loadState.ts";
@@ -75,29 +78,15 @@ export function CalendarPage({
           {title}
         </h1>
         <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={calendar.goPrev}
-            aria-label="Previous"
-            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={calendar.goToday}
-            className="rounded-lg px-2 py-1 text-sm font-medium text-muted-foreground hover:bg-card hover:text-foreground"
-          >
+          <IconButton label="Previous" onClick={calendar.goPrev}>
+            <ChevronLeft />
+          </IconButton>
+          <Button variant="ghost" size="sm" onClick={calendar.goToday}>
             Today
-          </button>
-          <button
-            type="button"
-            onClick={calendar.goNext}
-            aria-label="Next"
-            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
-          >
-            <ChevronRight size={16} />
-          </button>
+          </Button>
+          <IconButton label="Next" onClick={calendar.goNext}>
+            <ChevronRight />
+          </IconButton>
         </div>
         {isPending(events) && (
           <RefreshIndicator
@@ -107,54 +96,51 @@ export function CalendarPage({
           />
         )}
         <div className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
+          <Button
+            variant={showTempo ? "secondary" : "outline"}
+            size="sm"
             onClick={() => onUpdatePrefs({ calendarShowTempo: !showTempo })}
             title={
               showTempo ? "Hide logged Tempo time" : "Show logged Tempo time"
             }
             aria-pressed={showTempo}
-            className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
-              showTempo
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-border text-muted-foreground hover:bg-card hover:text-foreground"
-            }`}
           >
             Tempo
-          </button>
+          </Button>
           {view !== "day" && (
-            <button
-              type="button"
+            <Button
+              variant={showWeekends ? "secondary" : "outline"}
+              size="sm"
               onClick={() =>
                 onUpdatePrefs({ calendarShowWeekends: !showWeekends })
               }
               title={showWeekends ? "Hide weekends" : "Show weekends"}
               aria-pressed={showWeekends}
-              className={`rounded-lg border px-2 py-1 text-sm font-medium transition-colors ${
-                showWeekends
-                  ? "border-primary/40 bg-accent text-primary"
-                  : "border-border text-muted-foreground hover:bg-card hover:text-foreground"
-              }`}
             >
               Weekends
-            </button>
+            </Button>
           )}
-          <div className="flex items-center gap-0.5 rounded-lg border border-border p-0.5">
+          <ToggleGroup
+            value={[view]}
+            onValueChange={(values) => {
+              const selected = values[0] as CalendarView | undefined;
+              if (selected) calendar.setView(selected);
+            }}
+            variant="outline"
+            size="sm"
+            aria-label="Calendar view"
+          >
             {VIEWS.map((v) => (
-              <button
+              <ToggleGroupItem
                 key={v}
-                type="button"
-                onClick={() => calendar.setView(v)}
-                className={`rounded-md px-2.5 py-1 text-sm font-medium capitalize transition-colors ${
-                  view === v
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-card hover:text-foreground"
-                }`}
+                value={v}
+                aria-label={`${v} view`}
+                className="capitalize"
               >
                 {v}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </div>
       </div>
 

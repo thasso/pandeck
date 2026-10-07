@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { FolderTree, Plus, Trash2, X } from "lucide-react";
 import type { ProjectLocalPath, ProjectRecord } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { InlineEdit } from "./InlineEdit.tsx";
-import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { ErrorNote } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 
@@ -17,13 +18,13 @@ const KINDS: Array<NonNullable<ProjectLocalPath["kind"]>> = [
  * @component ProjectLocalPathsSection
  * @purpose The Project's extra folder mappings, as an object-panel section.
  * @useWhen Composing the Project object panel (`objectInspectors.tsx`).
- * @avoidWhen On the Project page: this was a bordered card of `<select>` grids
+ * @avoidWhen On the Project page: this was a bordered card of selection grids
  *   above the worktree list, and for most projects it is empty — the managed
  *   checkout now states itself in the page's Repository section, so what is left
  *   here is only manually mapped extras.
  * @intent Shaped like the Task inspector's Links section: one row per path with
  *   the path itself editable, kind/match as chips that CYCLE on tap (no
- *   `<select>` — the app's other state controls are tap-to-change glyphs), and a
+ *   selection controls — the app's other state controls are tap-to-change glyphs), and a
  *   draft input behind the section's `+`. `notes` is not editable here; nothing
  *   in the app reads it and a free-text field per path earned no space.
  * @prop hidePath The managed clone, shown read-only in the page's Repository
@@ -48,6 +49,8 @@ export function ProjectLocalPathsSection({
     .filter(({ item }) => !samePath(item.path, hidePath));
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [pathDraft, setPathDraft] = useState("");
   // The draft commits on blur (tapping away on a phone should not silently
   // discard what you typed), so cancelling has to win the race: a pointer press
   // on the header's X lands BEFORE the input's blur and suppresses that commit.
@@ -104,14 +107,15 @@ export function ProjectLocalPathsSection({
             if (adding) cancelRef.current = true;
           }}
         >
-          <GhostIconButton
-            icon={adding ? <X size={13} /> : <Plus size={13} />}
+          <IconButton
             label={adding ? "Cancel adding a local path" : "Add a local path"}
             onClick={() => {
               setAdding((previous) => !previous);
               setDraft("");
             }}
-          />
+          >
+            {adding ? <X /> : <Plus />}
+          </IconButton>
         </span>
       }
     >
@@ -127,33 +131,54 @@ export function ProjectLocalPathsSection({
             className="group flex flex-col gap-0.5 rounded-lg px-2 py-1 transition-colors hover:bg-muted"
           >
             <div className="flex items-start gap-1">
-              <InlineEdit
-                value={item.path}
-                submitState={mutationState}
-                onSubmit={(path) =>
-                  replace(index, { ...item, path: path.trim() })
-                }
-                ariaLabel="Local path"
-                editorClassName="w-full rounded-md border border-border bg-card px-2 py-0.5 font-mono text-sm text-foreground outline-none focus:border-primary"
-                renderDisplay={(begin) => (
-                  <button
-                    type="button"
-                    onClick={begin}
-                    title="Click to edit this path"
-                    className="min-w-0 flex-1 break-all text-left font-mono text-sm text-foreground hover:text-primary"
+              {editingIndex === index ? (
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <Input
+                    className="font-mono"
+                    value={pathDraft}
+                    aria-label="Local path"
+                    onChange={(event) => setPathDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        replace(index, { ...item, path: pathDraft.trim() });
+                        setEditingIndex(null);
+                      }
+                      if (event.key === "Escape") setEditingIndex(null);
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    busy={pending}
+                    onClick={() => {
+                      replace(index, { ...item, path: pathDraft.trim() });
+                      setEditingIndex(null);
+                    }}
                   >
-                    {item.path}
-                  </button>
-                )}
-              />
-              <GhostIconButton
-                danger
-                revealOnHover
-                icon={<Trash2 size={12} />}
+                    Save
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto min-w-0 flex-1 justify-start break-all px-1 py-0.5 text-left font-mono"
+                  onClick={() => {
+                    setPathDraft(item.path);
+                    setEditingIndex(index);
+                  }}
+                >
+                  {item.path}
+                </Button>
+              )}
+              <IconButton
+                size="icon-xs"
+                variant="destructive"
                 label="Remove local path"
                 busy={pending}
                 onClick={() => submit(items.filter((_, i) => i !== index))}
-              />
+              >
+                <Trash2 />
+              </IconButton>
             </div>
             <div className="flex items-center gap-1">
               <Chip
@@ -186,7 +211,7 @@ export function ProjectLocalPathsSection({
           </div>
         ))}
         {adding ? (
-          <input
+          <Input
             value={draft}
             autoFocus
             disabled={pending}
@@ -199,7 +224,7 @@ export function ProjectLocalPathsSection({
             onBlur={commitDraft}
             placeholder="/absolute/path"
             aria-label="New local path"
-            className="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
+            className="font-mono"
           />
         ) : null}
         {mutationError ? (
@@ -227,15 +252,17 @@ function Chip({
   disabled?: boolean;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="xs"
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="rounded bg-muted px-1.5 py-0.5 text-xs uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+      className="uppercase tracking-wide"
     >
       {label}
-    </button>
+    </Button>
   );
 }
 

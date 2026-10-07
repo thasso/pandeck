@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Badge } from "./ui/badge.tsx";
 import {
   CalendarCheck,
   Flag,
@@ -7,7 +8,7 @@ import {
   MessageSquare,
   Workflow,
 } from "lucide-react";
-import type { ProjectRecord, TaskPriority } from "@assistant/shared";
+import type { ProjectRecord } from "@assistant/shared";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
@@ -29,12 +30,6 @@ import type { HostingAttention } from "../lib/worktreeHosting.ts";
 
 /** Priority is shown only when it is NOT the default — a row that says
  *  "normal" spends its second line restating the absence of information. */
-const PRIORITY_TONE: Partial<Record<TaskPriority, string>> = {
-  urgent: "text-destructive",
-  high: "text-amber-500",
-  low: "text-muted-foreground",
-};
-
 /**
  * The delivery chip's words and tone, per rung of the shared ladder. The words
  * are the Worktrees inbox's own badge labels (`worktreeStatusBadge`) so the two
@@ -51,12 +46,15 @@ const DELIVERY_LABEL: Record<HostingAttention, string> = {
   open: "PR",
 };
 
-const DELIVERY_TONE: Record<HostingAttention, string> = {
-  "ci-failed": "text-destructive",
-  "review-requested": "text-amber-500",
-  merged: "text-emerald-500",
-  "ci-pending": "text-primary",
-  open: "text-muted-foreground",
+const DELIVERY_VARIANT: Record<
+  HostingAttention,
+  "destructive" | "warning" | "success" | "secondary"
+> = {
+  "ci-failed": "destructive",
+  "review-requested": "warning",
+  merged: "success",
+  "ci-pending": "secondary",
+  open: "secondary",
 };
 
 /**
@@ -332,8 +330,8 @@ function TaskMetaItems({
           and the glyph only says one is pending. The reason, when there is one,
           is the tooltip rather than a second line. */}
       {meta.suggestion ? (
-        <span
-          className="shrink-0 text-amber-500"
+        <Badge
+          variant="warning"
           title={
             meta.suggestion.reason ??
             (meta.suggestion.to === "done"
@@ -342,7 +340,7 @@ function TaskMetaItems({
           }
         >
           {meta.suggestion.to === "done" ? "says done" : "says not done"}
-        </span>
+        </Badge>
       ) : null}
       {/* OBSERVED, not reported: a session started from this Task is streaming
           right now. It leads the line because it is the only item on it that is
@@ -395,12 +393,15 @@ function TaskMetaItems({
               href={meta.delivery.url ?? ""}
               external={meta.delivery.url !== null}
               title={deliveryTitle(meta.delivery)}
-              className={`inline-flex items-center gap-0.5 ${DELIVERY_TONE[meta.delivery.state]}`}
+              className="inline-flex shrink-0"
             >
-              <GitPullRequest size={10} aria-hidden />
-              {meta.delivery.state === "open" && meta.delivery.prNumber !== null
-                ? `PR #${meta.delivery.prNumber}`
-                : DELIVERY_LABEL[meta.delivery.state]}
+              <Badge variant={DELIVERY_VARIANT[meta.delivery.state]}>
+                <GitPullRequest aria-hidden="true" />
+                {meta.delivery.state === "open" &&
+                meta.delivery.prNumber !== null
+                  ? `PR #${meta.delivery.prNumber}`
+                  : DELIVERY_LABEL[meta.delivery.state]}
+              </Badge>
             </MetaLink>
           ) : (
             /* A glyph alone: the worktree RECORDS (and so its branch name) are
@@ -461,29 +462,35 @@ function TaskMetaItems({
         </span>
       ) : null}
       {meta.planned ? (
-        <span
-          className="inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"
+        <Badge
+          variant="secondary"
           title={`Planned for ${meta.planned.toLowerCase()}`}
         >
-          <CalendarCheck size={10} aria-hidden />
+          <CalendarCheck aria-hidden="true" />
           {meta.planned}
-        </span>
+        </Badge>
       ) : null}
       {meta.due ? (
-        <span
-          className={`inline-flex shrink-0 items-center gap-0.5 ${meta.overdue ? "text-destructive" : "text-muted-foreground"}`}
+        <Badge
+          variant={meta.overdue ? "destructive" : "secondary"}
           title={`Due ${meta.due.toLowerCase()}`}
         >
-          <Flag size={10} aria-hidden />
+          <Flag aria-hidden="true" />
           {meta.due}
-        </span>
+        </Badge>
       ) : null}
       {meta.priority ? (
-        <span
-          className={PRIORITY_TONE[meta.priority] ?? "text-muted-foreground"}
+        <Badge
+          variant={
+            meta.priority === "urgent"
+              ? "destructive"
+              : meta.priority === "high"
+                ? "warning"
+                : "secondary"
+          }
         >
           {meta.priority}
-        </span>
+        </Badge>
       ) : null}
       {/* The chip keeps its own tooltip (the Project's full name), so the link
           around it carries none and adds no underline: it is a badge, and a

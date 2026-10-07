@@ -13,6 +13,9 @@ import type {
 } from "@assistant/shared";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
 import { EmptyBox } from "../common/load.tsx";
+import { Card } from "../ui/card.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { Button } from "../ui/button.tsx";
 import { Inspector, InspectorSection } from "../shell/Inspector.tsx";
 import { hm } from "./calendarDates.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
@@ -88,7 +91,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
   const timeZone = useUserTimeZone();
   const duration = durationLabel(event.start, event.end);
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-background p-3">
+    <Card className="gap-2.5">
       <div className="flex items-center gap-1.5 text-sm text-foreground">
         <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
         <span className="tabular-nums">
@@ -100,9 +103,18 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           <span className="text-muted-foreground">· {duration}</span>
         )}
         {event.selfResponse && event.selfResponse !== "accepted" && (
-          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-xs capitalize text-muted-foreground">
+          <Badge
+            variant={
+              event.selfResponse === "declined"
+                ? "destructive"
+                : event.selfResponse === "tentative"
+                  ? "warning"
+                  : "secondary"
+            }
+            className="ml-auto capitalize"
+          >
             {event.selfResponse}
-          </span>
+          </Badge>
         )}
       </div>
 
@@ -136,11 +148,11 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
                 <span
                   className={`size-1.5 shrink-0 rounded-full ${
                     attendee.response === "accepted"
-                      ? "bg-emerald-500"
+                      ? "bg-success"
                       : attendee.response === "declined"
-                        ? "bg-red-500"
+                        ? "bg-destructive"
                         : attendee.response === "tentative"
-                          ? "bg-yellow-500"
+                          ? "bg-warning"
                           : "bg-input"
                   }`}
                   title={attendee.response ?? "no response"}
@@ -183,26 +195,20 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           Open in Google Calendar
         </a>
       )}
-    </div>
+    </Card>
   );
 }
 
 function ConferenceButton({ link }: { link: CalendarConferenceLink }) {
-  const tone =
-    link.provider === "zoom"
-      ? "border-blue-500/40 text-blue-600 dark:text-blue-300 hover:bg-blue-500/10"
-      : link.provider === "teams"
-        ? "border-indigo-500/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/10"
-        : "border-primary/40 text-primary hover:bg-accent";
   return (
-    <a
-      href={link.uri}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${tone}`}
+    <Button
+      render={<a href={link.uri} target="_blank" rel="noopener noreferrer" />}
+      variant="outline"
+      size="sm"
+      className="justify-center"
     >
-      <Video size={13} />
+      <Video />
       Join {link.label}
-    </a>
+    </Button>
   );
 }

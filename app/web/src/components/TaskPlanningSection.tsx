@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { CalendarCheck, CalendarClock, Flag } from "lucide-react";
 import type { TaskPriority, TaskSummary } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
 import { focusDateLabel } from "../lib/backlogFocus.ts";
 import { addDays, todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
@@ -14,13 +17,6 @@ export interface TaskPlanningPatch {
 }
 
 const PRIORITIES: TaskPriority[] = ["low", "normal", "high", "urgent"];
-
-const PRIORITY_TONE: Record<TaskPriority, string> = {
-  urgent: "border-destructive/50 bg-destructive/10 text-foreground",
-  high: "border-amber-500/50 bg-amber-500/10 text-foreground",
-  normal: "border-input bg-muted text-foreground",
-  low: "border-border bg-card text-muted-foreground",
-};
 
 /**
  * @component TaskPlanningSection
@@ -70,33 +66,22 @@ export function TaskPlanningSection({
       <div className="space-y-3 px-1">
         <div>
           <div className="mb-1 text-xs text-muted-foreground">Priority</div>
-          <div
-            className="flex flex-wrap items-center gap-1"
-            role="group"
+          <ToggleGroup
+            value={[priority]}
+            onValueChange={(values) => {
+              const value = values[0] as TaskPriority | undefined;
+              if (value) onPatch({ priority: value });
+            }}
+            variant="outline"
+            size="sm"
             aria-label="Task priority"
           >
-            {PRIORITIES.map((value) => {
-              const active = priority === value;
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onPatch({ priority: value })}
-                  aria-pressed={active}
-                  // Same geometry as `QuickPick` below: two rows of chips in one
-                  // section at different heights read as two kinds of control,
-                  // and the shorter one was a ~24px target on a phone.
-                  className={`cursor-pointer rounded-lg border px-2 py-1 text-sm capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                    active
-                      ? PRIORITY_TONE[value]
-                      : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-muted-foreground"
-                  }`}
-                >
-                  {value}
-                </button>
-              );
-            })}
-          </div>
+            {PRIORITIES.map((value) => (
+              <ToggleGroupItem key={value} value={value} className="capitalize">
+                {value}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </div>
 
         <DateRow
@@ -170,12 +155,12 @@ function DateRow({
           `auto` vs `none` is pixel-identical here, same box and placeholder and
           picker indicator. If iOS regresses the display, drop `appearance-none`
           first. */}
-      <input
+      <Input
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="w-full max-w-full appearance-none rounded-lg border border-border bg-background px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
+        className="w-full max-w-full"
       />
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {quickPicks ? (
@@ -215,17 +200,14 @@ function QuickPick({
   active: boolean;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant={active ? "secondary" : "outline"}
+      size="sm"
       onClick={onClick}
       aria-pressed={active}
-      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        active
-          ? "border-primary/60 bg-accent text-foreground"
-          : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-muted-foreground"
-      }`}
     >
       {label}
-    </button>
+    </Button>
   );
 }

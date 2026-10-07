@@ -1,7 +1,13 @@
 import { FolderKanban, X } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
-import { Popover } from "./Popover.tsx";
-import { projectColor, resolveProjectDisplay } from "../lib/projectDisplay.ts";
+import { IconButton } from "./common/IconButton.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "./ui/select.tsx";
+import { resolveProjectDisplay } from "../lib/projectDisplay.ts";
 import type { Task } from "../lib/backlogTree.ts";
 import {
   ALL_PROJECT_FILTER,
@@ -94,124 +100,59 @@ export function BacklogProjectFilterControl({
   disabled?: boolean;
 }) {
   const active = !disabled && filter.kind !== "all";
+  const value =
+    filter.kind === "project" ? `project:${filter.projectId}` : filter.kind;
   const label = disabled ? "…" : filterLabel(filter, projectsById);
+  const handleChange = (next: string | null) => {
+    if (next === "all") onChange(ALL_PROJECT_FILTER);
+    else if (next === "unassigned") onChange({ kind: "unassigned" });
+    else if (next?.startsWith("project:"))
+      onChange({ kind: "project", projectId: next.slice(8) });
+  };
   return (
     <div className="inline-flex items-center gap-1">
-      <Popover
-        button={
-          <span
-            className={`inline-flex items-center gap-1 ${active ? "text-foreground" : "text-muted-foreground"}`}
-          >
-            <FolderKanban size={compact ? 11 : 12} />
-            <span className="max-w-[9rem] truncate">
-              {compact ? label : `Project: ${label}`}
-            </span>
-          </span>
-        }
-        placement="auto"
-        disabled={disabled}
-        className={`rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm"} ${active ? "border-primary/60 bg-accent" : "border-border bg-card hover:bg-muted hover:text-foreground"}`}
-        title="Filter Backlog by Project"
-      >
-        {(close) => (
-          <div className="flex w-64 flex-col gap-1 p-1">
-            <button
-              type="button"
-              onClick={() => {
-                onChange(ALL_PROJECT_FILTER);
-                close();
-              }}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted ${filter.kind === "all" ? "font-medium text-foreground" : "text-muted-foreground"}`}
-              aria-pressed={filter.kind === "all"}
-            >
-              <span
-                className="size-2 shrink-0 rounded-full bg-input"
-                aria-hidden
-              />
-              <span className="min-w-0 flex-1 truncate">All projects</span>
-              {filter.kind === "all" ? (
-                <span className="text-xs text-muted-foreground">current</span>
-              ) : null}
-            </button>
-            <div className="max-h-64 overflow-y-auto">
-              {options.length === 0 ? (
-                <div className="px-2 py-3 text-center text-sm text-muted-foreground">
-                  No Projects in the registry or Backlog yet.
-                </div>
-              ) : (
-                options.map((option) => {
-                  const selected =
-                    option.kind === "unassigned"
-                      ? filter.kind === "unassigned"
-                      : filter.kind === "project" &&
-                        filter.projectId === option.projectId;
-                  return (
-                    <button
-                      key={
-                        option.kind === "unassigned"
-                          ? "unassigned"
-                          : option.projectId
-                      }
-                      type="button"
-                      onClick={() => {
-                        onChange(
-                          option.kind === "unassigned"
-                            ? { kind: "unassigned" }
-                            : { kind: "project", projectId: option.projectId },
-                        );
-                        close();
-                      }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-muted ${selected ? "font-medium text-foreground" : "text-muted-foreground"}`}
-                      aria-pressed={selected}
-                    >
-                      {option.kind === "project" ? (
-                        <span
-                          className="size-2 shrink-0 rounded-full"
-                          style={{
-                            backgroundColor: projectColor(
-                              projectsById.get(option.projectId) ??
-                                option.projectId,
-                            ).dot,
-                          }}
-                          aria-hidden
-                        />
-                      ) : (
-                        <span
-                          className="size-2 shrink-0 rounded-full bg-input"
-                          aria-hidden
-                        />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">
-                        {option.label}
-                      </span>
-                      {option.kind === "project" && !option.known ? (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          stale
-                        </span>
-                      ) : null}
-                      {selected ? (
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          current
-                        </span>
-                      ) : null}
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        )}
-      </Popover>
-      {active ? (
-        <button
-          type="button"
-          onClick={() => onChange(ALL_PROJECT_FILTER)}
-          className="rounded-md p-1 text-muted-foreground hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          title="Clear Project filter"
-          aria-label="Clear Project filter"
+      <Select value={value} onValueChange={handleChange} disabled={disabled}>
+        <SelectTrigger
+          size={compact ? "sm" : "default"}
+          aria-label="Filter Backlog by Project"
         >
-          <X size={12} />
-        </button>
+          <FolderKanban />
+          <span className="max-w-36 truncate">
+            {compact ? label : `Project: ${label}`}
+          </span>
+        </SelectTrigger>
+        <SelectContent align="start">
+          <SelectItem value="all">All projects</SelectItem>
+          {options.map((option) => (
+            <SelectItem
+              key={
+                option.kind === "unassigned" ? "unassigned" : option.projectId
+              }
+              value={
+                option.kind === "unassigned"
+                  ? "unassigned"
+                  : `project:${option.projectId}`
+              }
+            >
+              {option.label}
+              {option.kind === "project" && !option.known ? " (stale)" : ""}
+            </SelectItem>
+          ))}
+          {options.length === 0 ? (
+            <SelectItem value="empty" disabled>
+              No Projects in the registry or Backlog yet.
+            </SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
+      {active ? (
+        <IconButton
+          label="Clear Project filter"
+          size="icon-xs"
+          onClick={() => onChange(ALL_PROJECT_FILTER)}
+        >
+          <X />
+        </IconButton>
       ) : null}
     </div>
   );

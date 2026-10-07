@@ -1,7 +1,8 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Palette } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
-import { InlineEdit } from "./InlineEdit.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
 import { ErrorNote } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 
@@ -29,27 +30,64 @@ export function ProjectSettingsFields({
 }) {
   const mutation = (field: string) =>
     mutationStates[`${project.id}:field:${field}`];
+  const keyMutation = mutation("key");
+  const rootMutation = mutation("worktreeRoot");
+  const [editingKey, setEditingKey] = useState(false);
+  const [keyDraft, setKeyDraft] = useState(project.key);
+  const [editingRoot, setEditingRoot] = useState(false);
+  const [rootDraft, setRootDraft] = useState(project.worktreeRoot ?? "");
+  const saveRoot = () => {
+    const value = rootDraft.trim();
+    onSave(value ? { worktreeRoot: value } : {});
+    setEditingRoot(false);
+  };
   return (
     <div className="flex flex-col gap-1 px-1">
       <FieldRow label="Key">
-        <InlineEdit
-          value={project.key}
-          submitState={mutation("key")}
-          onSubmit={(key) => onSave({ key: normalizeProjectKey(key) })}
-          ariaLabel="Project Key"
-          placeholder="KEY"
-          editorClassName="w-24 rounded-md border border-border bg-background px-2 py-0.5 text-sm font-semibold uppercase text-foreground outline-none focus:border-primary"
-          renderDisplay={(begin) => (
-            <button
-              type="button"
-              onClick={begin}
-              className="rounded-md px-1 font-mono text-sm font-semibold text-foreground hover:bg-muted hover:text-primary"
-              title="Click to edit key"
+        {editingKey ? (
+          <div className="flex items-center gap-1">
+            <Input
+              className="w-24 uppercase"
+              value={keyDraft}
+              aria-label="Project Key"
+              placeholder="KEY"
+              onChange={(event) => setKeyDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSave({ key: normalizeProjectKey(keyDraft) });
+                  setEditingKey(false);
+                }
+                if (event.key === "Escape") setEditingKey(false);
+              }}
+            />
+            <Button
+              size="sm"
+              busy={keyMutation ? isPending(keyMutation) : false}
+              onClick={() => {
+                onSave({ key: normalizeProjectKey(keyDraft) });
+                setEditingKey(false);
+              }}
             >
-              {project.key || "KEY"}
-            </button>
-          )}
-        />
+              Save
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="font-mono"
+            title="Click to edit key"
+            onClick={() => {
+              setKeyDraft(project.key);
+              setEditingKey(true);
+            }}
+          >
+            {project.key || "KEY"}
+          </Button>
+        )}
+        {keyMutation && errorOf(keyMutation) ? (
+          <ErrorNote message={errorOf(keyMutation)!} />
+        ) : null}
       </FieldRow>
       <ProjectColorRow
         project={project}
@@ -61,32 +99,53 @@ export function ProjectSettingsFields({
           the placeholder names it instead of an explainer paragraph. */}
       <div className="pt-0.5">
         <span className="text-sm text-muted-foreground">Worktree root</span>
-        <InlineEdit
-          value={project.worktreeRoot ?? ""}
-          submitState={mutation("worktreeRoot")}
-          onSubmit={(next) => {
-            const worktreeRootValue = next.trim() || undefined;
-            return onSave({
-              ...(worktreeRootValue !== undefined
-                ? { worktreeRoot: worktreeRootValue }
-                : {}),
-            });
-          }}
-          allowEmpty
-          ariaLabel="Worktree root override"
-          placeholder="Settings → Worktrees root"
-          editorClassName="mt-0.5 w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
-          renderDisplay={(begin) => (
-            <button
-              type="button"
-              onClick={begin}
-              title="Where new worktrees for this project are created (empty = the global Worktrees root)"
-              className={`mt-0.5 block w-full break-all rounded-md px-1 py-0.5 text-left font-mono text-sm hover:bg-muted ${project.worktreeRoot ? "text-foreground" : "text-muted-foreground"}`}
-            >
-              {project.worktreeRoot || "Settings → Worktrees root"}
-            </button>
-          )}
-        />
+        {editingRoot ? (
+          <div className="mt-0.5 flex flex-col gap-1">
+            <Input
+              className="font-mono"
+              value={rootDraft}
+              aria-label="Worktree root override"
+              placeholder="Settings → Worktrees root"
+              onChange={(event) => setRootDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveRoot();
+                if (event.key === "Escape") setEditingRoot(false);
+              }}
+            />
+            <div className="flex justify-end gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setEditingRoot(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                busy={rootMutation ? isPending(rootMutation) : false}
+                onClick={saveRoot}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`mt-0.5 h-auto w-full justify-start break-all px-1 py-0.5 text-left font-mono ${project.worktreeRoot ? "" : "text-muted-foreground"}`}
+            title="Where new worktrees for this project are created (empty = the global Worktrees root)"
+            onClick={() => {
+              setRootDraft(project.worktreeRoot ?? "");
+              setEditingRoot(true);
+            }}
+          >
+            {project.worktreeRoot || "Settings → Worktrees root"}
+          </Button>
+        )}
+        {rootMutation && errorOf(rootMutation) ? (
+          <ErrorNote message={errorOf(rootMutation)!} />
+        ) : null}
       </div>
     </div>
   );
@@ -122,12 +181,12 @@ function ProjectColorRow({
   return (
     <div>
       <FieldRow label="Color">
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           disabled={pending}
-          aria-busy={pending || undefined}
+          busy={pending}
           onClick={() => setOpen((previous) => !previous)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
           title="Change Project color"
           aria-label="Change Project color"
           aria-expanded={open}
@@ -138,7 +197,7 @@ function ProjectColorRow({
             aria-hidden
           />
           <Palette size={12} className="text-muted-foreground" />
-        </button>
+        </Button>
       </FieldRow>
       {open ? (
         <div className="mt-1 rounded-lg border border-border bg-background p-2">
@@ -149,15 +208,16 @@ function ProjectColorRow({
             {PROJECT_COLOR_PALETTE.map((color) => {
               const selected = color.toUpperCase() === value.toUpperCase();
               return (
-                <button
+                <Button
                   key={color}
-                  type="button"
+                  variant="outline"
+                  size="icon-xs"
                   disabled={pending}
                   onClick={() => {
                     submit(color);
                     setOpen(false);
                   }}
-                  className={`size-6 rounded-full border transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${selected ? "border-foreground ring-2 ring-foreground/30" : "border-white/50"}`}
+                  className={`rounded-full ${selected ? "ring-2 ring-ring" : ""}`}
                   style={{ backgroundColor: color }}
                   title={`Use ${color}`}
                   aria-label={`Use Project color ${color}`}
@@ -168,14 +228,14 @@ function ProjectColorRow({
           </div>
           <label className="mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>Custom</span>
-            <input
+            <Input
               type="color"
               value={value}
               disabled={pending}
               onChange={(event) =>
                 submit(event.currentTarget.value.toUpperCase())
               }
-              className="size-6 cursor-pointer rounded border border-border bg-transparent p-0"
+              className="size-8 p-0"
               aria-label="Advanced Project color picker"
               title="Advanced color picker"
             />

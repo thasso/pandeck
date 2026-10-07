@@ -212,10 +212,6 @@ export function dayOfMonth(dateIso: string): number {
   return Number(dateIso.split("-")[2]);
 }
 
-export function monthOf(dateIso: string): number {
-  return Number(dateIso.split("-")[1]);
-}
-
 /** Group events into day buckets keyed by user-local YYYY-MM-DD, sorted by start. */
 export function groupEventsByDay(
   events: CalendarEventDto[],

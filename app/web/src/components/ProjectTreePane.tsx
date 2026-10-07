@@ -8,6 +8,8 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
+import { Button } from "./ui/button.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 import {
@@ -322,8 +324,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "moreSessions":
               return (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -334,14 +338,13 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                         SESSION_LIMIT_STEP,
                     }));
                   }}
-                  className="w-full rounded-md px-1 py-0.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
                   session
                   {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1
                     ? ""
                     : "s"}
-                </button>
+                </Button>
               );
           }
         }}
@@ -390,19 +393,18 @@ const ProjectRowContent = memo(function ProjectRowContent({
         </span>
       </span>
       {onStartSession ? (
-        <button
-          type="button"
+        <IconButton
+          size="icon-xs"
+          className="shrink-0"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onStartSession(project.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Start session in this project"
-          aria-label={`Start session in project: ${project.key} ${project.name}`}
+          label={`Start session in project: ${project.key} ${project.name}`}
         >
-          <MessageSquarePlus size={12} />
-        </button>
+          <MessageSquarePlus />
+        </IconButton>
       ) : null}
     </div>
   );
@@ -447,19 +449,18 @@ function WorktreeRowContentImpl({
         <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
       </span>
       {onStartSession ? (
-        <button
-          type="button"
+        <IconButton
+          size="icon-xs"
+          className="shrink-0"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onStartSession(worktree.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Start session in this worktree"
-          aria-label={`Start session in worktree: ${branch}`}
+          label={`Start session in worktree: ${branch}`}
         >
-          <MessageSquarePlus size={12} />
-        </button>
+          <MessageSquarePlus />
+        </IconButton>
       ) : null}
     </div>
   );

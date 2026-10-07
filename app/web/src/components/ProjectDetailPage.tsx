@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 import {
   Check,
   FolderKanban,
@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  ChevronRight,
 } from "lucide-react";
 import type {
   ProjectRecord,
@@ -23,9 +24,15 @@ import {
 } from "./worktreeRowParts.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
-import { InlineEdit } from "./InlineEdit.tsx";
-import { CollapsibleSection } from "./CollapsibleSection.tsx";
-import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Input } from "./ui/input.tsx";
+import { Textarea } from "./ui/textarea.tsx";
+import { Button } from "./ui/button.tsx";
 import { useDialogs } from "./common/dialogs.tsx";
 import {
   EmptyBox,
@@ -33,7 +40,6 @@ import {
   PaneLoading,
   RefreshIndicator,
   Skeleton,
-  Spinner,
 } from "./common/load.tsx";
 import {
   dataOf,
@@ -152,7 +158,12 @@ function ProjectDetailPageView({
     ? (projects.find((project) => project.id === selectedId) ?? null)
     : null;
   const selectedDocument = detailState ? dataOf(detailState) : undefined;
-  const beginRename = useRef<(() => void) | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const beginRename = () => {
+    setNameDraft(selected?.name ?? "");
+    setEditingName(true);
+  };
   const [keyCopied, setKeyCopied] = useState(false);
   const copyKey = selected?.key
     ? () => {
@@ -198,31 +209,35 @@ function ProjectDetailPageView({
         }
         title={
           selected ? (
-            <InlineEdit
-              value={selected.name}
-              submitState={mutationStates[`${selected.id}:name`]}
-              onSubmit={(name) => onSave(selected.id, { name: name.trim() })}
-              ariaLabel="Project name"
-              editorClassName="w-full rounded-md border border-border bg-background px-2 py-1 text-sm font-semibold text-foreground outline-none focus:border-primary"
-              renderDisplay={(begin) => {
-                beginRename.current = begin;
-                return (
-                  <h2 className="truncate text-sm">
-                    {selected.key ? (
-                      <>
-                        <span className="select-all font-mono text-muted-foreground">
-                          {selected.key}
-                        </span>
-                        <span className="text-muted-foreground"> - </span>
-                      </>
-                    ) : null}
-                    <span className="font-semibold text-foreground">
-                      {selected.name}
+            editingName ? (
+              <Input
+                value={nameDraft}
+                aria-label="Project name"
+                autoFocus
+                onChange={(event) => setNameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    onSave(selected.id, { name: nameDraft.trim() });
+                    setEditingName(false);
+                  }
+                  if (event.key === "Escape") setEditingName(false);
+                }}
+              />
+            ) : (
+              <h2 className="truncate text-sm">
+                {selected.key ? (
+                  <>
+                    <span className="select-all font-mono text-muted-foreground">
+                      {selected.key}
                     </span>
-                  </h2>
-                );
-              }}
-            />
+                    <span className="text-muted-foreground"> - </span>
+                  </>
+                ) : null}
+                <span className="font-semibold text-foreground">
+                  {selected.name}
+                </span>
+              </h2>
+            )
           ) : (
             "Projects"
           )
@@ -242,11 +257,9 @@ function ProjectDetailPageView({
                   archived
                 </span>
               ) : null}
-              <GhostIconButton
-                icon={<Pencil size={13} />}
-                label="Rename Project"
-                onClick={() => beginRename.current?.()}
-              />
+              <IconButton label="Rename Project" onClick={beginRename}>
+                <Pencil />
+              </IconButton>
             </div>
           ) : null
         }
@@ -409,8 +422,13 @@ function ProjectDetail({
   renderTasks?: ((projectId: string) => ReactNode) | undefined;
   mutationStates: Record<string, LoadState<true>>;
 }) {
-  const beginDescriptionEdit = useRef<(() => void) | null>(null);
   const description = project.description ?? "";
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(description);
+  const beginDescriptionEdit = () => {
+    setDescriptionDraft(description);
+    setEditingDescription(true);
+  };
   const cloneState = mutationStates[`${project.id}:clone`];
   const removeState = mutationStates[`${project.id}:remove`];
   const provisioning =
@@ -433,49 +451,63 @@ function ProjectDetail({
     (worktree) => worktree.isMain,
   )?.mainRepoRoot;
   return (
-    <div className="mx-auto w-full max-w-[760px] px-1 py-2">
-      <CollapsibleSection
+    <div className="mx-auto w-full max-w-3xl px-1 py-2">
+      <ProjectCollapsibleSection
         title="Description"
         storageKey={`project.collapse.${project.id}.description`}
         trailing={
-          <GhostIconButton
-            icon={<Pencil size={13} />}
-            label="Edit description"
-            onClick={() => beginDescriptionEdit.current?.()}
-          />
+          <IconButton label="Edit description" onClick={beginDescriptionEdit}>
+            <Pencil />
+          </IconButton>
         }
       >
-        <InlineEdit
-          value={description}
-          submitState={mutationStates[`${project.id}:description`]}
-          onSubmit={(next) => onSave({ description: next.trim() })}
-          multiline
-          allowEmpty
-          ariaLabel="Project description"
-          placeholder="Add a description…"
-          editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
-          renderDisplay={(begin) => {
-            // Editing is triggered only by the section's ghost edit button
-            // (clicking prose selected text and entered edit mode too easily).
-            beginDescriptionEdit.current = begin;
-            return (
-              <div className="min-h-[4rem] w-full py-1">
-                {description.trim() ? (
-                  <Markdown
-                    text={description}
-                    paObjectReferences={paObjectReferences}
-                    onOpenPaObject={onOpenPaObject}
-                  />
-                ) : (
-                  <span className="text-sm text-muted-foreground">
-                    No description yet. Use the edit button to add one.
-                  </span>
-                )}
-              </div>
-            );
-          }}
-        />
-      </CollapsibleSection>
+        {editingDescription ? (
+          <div className="flex flex-col gap-2">
+            <Textarea
+              value={descriptionDraft}
+              aria-label="Project description"
+              placeholder="Add a description…"
+              className="min-h-32 resize-y"
+              onChange={(event) => setDescriptionDraft(event.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setEditingDescription(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                busy={
+                  mutationStates[`${project.id}:description`]
+                    ? isPending(mutationStates[`${project.id}:description`]!)
+                    : false
+                }
+                onClick={() => {
+                  onSave({ description: descriptionDraft.trim() });
+                  setEditingDescription(false);
+                }}
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="min-h-16 w-full py-1">
+            {description.trim() ? (
+              <Markdown
+                text={description}
+                paObjectReferences={paObjectReferences}
+                onOpenPaObject={onOpenPaObject}
+              />
+            ) : (
+              <span className="text-sm text-muted-foreground">
+                No description yet. Use the edit button to add one.
+              </span>
+            )}
+          </div>
+        )}
+      </ProjectCollapsibleSection>
 
       {/* The project's Tasks and Worktrees are its CONTENT, so they live here
           rather than in the object panel — the panel used to list both beside a
@@ -483,25 +515,26 @@ function ProjectDetail({
           do, where the work happens, then the repository state you rarely
           touch. */}
       {renderTasks ? (
-        <CollapsibleSection
+        <ProjectCollapsibleSection
           title="Tasks"
           storageKey={`project.collapse.${project.id}.tasks`}
         >
           {renderTasks(project.id)}
-        </CollapsibleSection>
+        </ProjectCollapsibleSection>
       ) : null}
 
       {showWorktrees ? (
-        <CollapsibleSection
+        <ProjectCollapsibleSection
           title="Worktrees"
           storageKey={`project.collapse.${project.id}.worktrees`}
           trailing={
             onCreateWorktree ? (
-              <GhostIconButton
-                icon={<Plus size={13} />}
+              <IconButton
                 label="New worktree"
                 onClick={() => onCreateWorktree(project.id)}
-              />
+              >
+                <Plus />
+              </IconButton>
             ) : undefined
           }
         >
@@ -528,7 +561,7 @@ function ProjectDetail({
               />
             )}
           </div>
-        </CollapsibleSection>
+        </ProjectCollapsibleSection>
       ) : null}
 
       <RepositorySection
@@ -607,10 +640,10 @@ function ProjectWorktreeRowImpl({
       className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-muted"
     >
       <BranchIcon size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        className="h-auto min-w-0 flex-1 flex-col items-start justify-start gap-0.5 text-left"
         onClick={() => onOpen?.(worktree.id)}
-        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left"
         title={worktree.path}
       >
         <span
@@ -624,14 +657,14 @@ function ProjectWorktreeRowImpl({
           <WorktreeMergedBadge status={status} />
         </span>
         <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
-      </button>
+      </Button>
       {onStartSession ? (
-        <GhostIconButton
-          revealOnHover
-          icon={<MessageSquarePlus size={13} />}
+        <IconButton
           label="Start session in this worktree"
           onClick={() => onStartSession(worktree.id)}
-        />
+        >
+          <MessageSquarePlus />
+        </IconButton>
       ) : null}
     </div>
   );
@@ -708,6 +741,8 @@ function RepositorySection({
 }) {
   const dialogs = useDialogs();
   const url = project.repoUrl?.trim() ?? "";
+  const [editingUrl, setEditingUrl] = useState(false);
+  const [urlDraft, setUrlDraft] = useState(url);
   const busy = provisioning !== null;
   const dependencyPending = spawnedWorktrees === null;
   const blocked = dependencyPending || spawnedWorktrees > 0;
@@ -734,16 +769,15 @@ function RepositorySection({
   // itself reports through `provisionError`.
   const removeClone = () => void confirmRemoveClone();
   return (
-    <CollapsibleSection
+    <ProjectCollapsibleSection
       title="Repository"
       storageKey={`project.collapse.${project.id}.repository`}
       trailing={
         hasCheckout ? (
-          <GhostIconButton
-            danger
+          <IconButton
+            variant="destructive"
             busy={provisioning === "remove"}
             disabled={blocked}
-            icon={<Trash2 size={13} />}
             label={
               dependencyPending
                 ? "Checking worktrees before clone removal"
@@ -752,7 +786,9 @@ function RepositorySection({
                   : "Remove the clone"
             }
             onClick={removeClone}
-          />
+          >
+            <Trash2 />
+          </IconButton>
         ) : undefined
       }
     >
@@ -796,45 +832,70 @@ function RepositorySection({
           </>
         ) : (
           <>
-            <InlineEdit
-              value={url}
-              submitState={mutationState}
-              onSubmit={(next) => onSaveUrl(next.trim() || undefined)}
-              allowEmpty
-              ariaLabel="Repository URL"
-              placeholder="git@host:owner/repo.git"
-              editorClassName="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-sm text-foreground outline-none focus:border-primary"
-              renderDisplay={(begin) => (
-                <RepoRow
-                  label="Clone from"
-                  icon={<Link2 size={13} />}
-                  value={url}
-                  placeholder="Set a repository URL"
-                  onClick={begin}
+            {editingUrl ? (
+              <div className="flex flex-col gap-1">
+                <Input
+                  className="font-mono"
+                  value={urlDraft}
+                  aria-label="Repository URL"
+                  placeholder="git@host:owner/repo.git"
+                  onChange={(event) => setUrlDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      onSaveUrl(urlDraft.trim() || undefined);
+                      setEditingUrl(false);
+                    }
+                    if (event.key === "Escape") setEditingUrl(false);
+                  }}
                 />
-              )}
-            />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setEditingUrl(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    busy={mutationState ? isPending(mutationState) : false}
+                    onClick={() => {
+                      onSaveUrl(urlDraft.trim() || undefined);
+                      setEditingUrl(false);
+                    }}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <RepoRow
+                label="Clone from"
+                icon={<Link2 size={13} />}
+                value={url}
+                placeholder="Set a repository URL"
+                onClick={() => {
+                  setUrlDraft(url);
+                  setEditingUrl(true);
+                }}
+              />
+            )}
             <div className="pt-1">
-              <button
-                type="button"
+              <Button
                 disabled={!url || busy}
-                aria-busy={provisioning === "clone" || undefined}
+                busy={provisioning === "clone"}
                 onClick={onClone}
                 title={
                   url
                     ? "Clone it under the Projects root and use it as this project's main checkout"
                     : "Set a repository URL first"
                 }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
               >
-                {provisioning === "clone" ? <Spinner size="sm" /> : null}
                 {provisioning === "clone" ? "Cloning…" : "Clone"}
-              </button>
+              </Button>
             </div>
           </>
         )}
       </div>
-    </CollapsibleSection>
+    </ProjectCollapsibleSection>
   );
 }
 
@@ -856,7 +917,7 @@ function RepoRow({
 }) {
   const body = (
     <>
-      <span className="w-[4.5rem] shrink-0 text-sm text-muted-foreground">
+      <span className="w-18 shrink-0 text-sm text-muted-foreground">
         {label}
       </span>
       <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
@@ -873,14 +934,14 @@ function RepoRow({
   if (!onClick)
     return <div className="flex min-h-7 items-start gap-2 py-0.5">{body}</div>;
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      className="h-auto w-full justify-start py-0.5 text-left"
       onClick={onClick}
-      className="flex min-h-7 w-full items-start gap-2 rounded-md py-0.5 text-left hover:bg-muted"
       title={`Edit ${label.toLowerCase()}`}
     >
       {body}
-    </button>
+    </Button>
   );
 }
 
@@ -897,7 +958,7 @@ function ProjectDetailSkeleton() {
     <div
       role="status"
       aria-label="Loading Project details"
-      className="mx-auto flex w-full max-w-[760px] flex-col gap-5 px-1 py-2"
+      className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-1 py-2"
     >
       <Skeleton className="h-24 w-full" />
       <Skeleton className="h-36 w-full" />
@@ -924,13 +985,9 @@ function EmptyProjectsMessage({
         className="bg-card"
         action={
           actionLabel && onAction ? (
-            <button
-              type="button"
-              onClick={onAction}
-              className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
+            <Button variant="outline" onClick={onAction}>
               {actionLabel}
-            </button>
+            </Button>
           ) : undefined
         }
       >
@@ -941,4 +998,55 @@ function EmptyProjectsMessage({
   );
 }
 
-/** Compare two absolute paths, tolerating a trailing separator. */
+function ProjectCollapsibleSection({
+  title,
+  storageKey,
+  defaultOpen = true,
+  trailing,
+  children,
+}: {
+  title: string;
+  storageKey: string;
+  defaultOpen?: boolean;
+  trailing?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const value = localStorage.getItem(storageKey);
+      return value === null ? defaultOpen : value === "1";
+    } catch {
+      return defaultOpen;
+    }
+  });
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    try {
+      localStorage.setItem(storageKey, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <section className="mb-4">
+      <Collapsible open={open} onOpenChange={changeOpen}>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-w-0 justify-start uppercase tracking-wide text-muted-foreground"
+              />
+            }
+          >
+            <ChevronRight className={`shrink-0 ${open ? "rotate-90" : ""}`} />
+            <span className="truncate">{title}</span>
+          </CollapsibleTrigger>
+          {trailing ? <div className="shrink-0">{trailing}</div> : null}
+        </div>
+        <CollapsibleContent>{children}</CollapsibleContent>
+      </Collapsible>
+    </section>
+  );
+}

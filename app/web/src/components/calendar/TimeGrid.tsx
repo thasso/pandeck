@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock, Video } from "lucide-react";
 import type { CalendarEventDto, CalendarWorklogDto } from "@assistant/shared";
+import { Button } from "../ui/button.tsx";
 import { useNow } from "../../hooks/useNow.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
 import {
@@ -170,31 +171,35 @@ export function TimeGrid({
           {days.map((date) => {
             const isToday = date === today;
             return (
-              <button
+              <div
                 key={date}
-                type="button"
-                onClick={() => onSelectDay(date)}
-                title="Select day"
-                className={`flex flex-1 items-baseline justify-center gap-1.5 border-l border-border py-1.5 text-left first:border-l-0 hover:bg-muted/60 ${
-                  date === selectedDate ? "bg-accent/30" : ""
-                }`}
+                className="flex flex-1 items-center justify-center gap-1.5 border-l border-border first:border-l-0"
               >
-                <span className="text-sm uppercase tracking-wide text-muted-foreground">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto uppercase tracking-wide"
+                  title="Select day"
+                  onClick={() => onSelectDay(date)}
+                >
                   {shortWeekday(date)}
-                </span>
-                <span
-                  role="button"
-                  tabIndex={-1}
+                </Button>
+                <Button
+                  variant={
+                    isToday
+                      ? "default"
+                      : date === selectedDate
+                        ? "secondary"
+                        : "ghost"
+                  }
+                  size="icon-xs"
                   title="Open day view"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenDay(date);
-                  }}
-                  className={`flex size-5 items-center justify-center rounded-full text-sm hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-foreground"}`}
+                  aria-label={`Open ${date} day view`}
+                  onClick={() => onOpenDay(date)}
                 >
                   {dayOfMonth(date)}
-                </span>
-              </button>
+                </Button>
+              </div>
             );
           })}
         </div>
@@ -250,10 +255,10 @@ export function TimeGrid({
                 ))}
                 {isToday && (
                   <div
-                    className="absolute inset-x-0 z-10 border-t-2 border-red-500"
+                    className="absolute inset-x-0 z-10 border-t-2 border-destructive"
                     style={{ top: (nowMinutes / 60) * zoom }}
                   >
-                    <span className="absolute -left-1 -top-1 size-2 rounded-full bg-red-500" />
+                    <span className="absolute -left-1 -top-1 size-2 rounded-full bg-destructive" />
                   </div>
                 )}
                 {positioned.map(
@@ -314,18 +319,15 @@ function AllDayBand({
             className="flex min-w-0 flex-1 flex-col gap-0.5 border-l border-border p-1 first:border-l-0"
           >
             {allDay.map((event) => (
-              <button
+              <Button
                 key={event.id}
-                type="button"
+                variant={event.id === selectedEventId ? "default" : "secondary"}
+                size="xs"
+                className="w-full justify-start truncate"
                 onClick={() => onSelectEvent(event.id)}
-                className={`truncate rounded px-1 py-0.5 text-left text-xs ${
-                  event.id === selectedEventId
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-accent text-primary hover:opacity-80"
-                }`}
               >
                 {event.title}
-              </button>
+              </Button>
             ))}
           </div>
         );
@@ -373,7 +375,7 @@ function TempoBlock({
     </>
   );
   const className =
-    "absolute z-[1] overflow-hidden rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1 py-0.5 text-left text-xs text-emerald-700 dark:text-emerald-300";
+    "absolute overflow-hidden rounded-md border border-success bg-success-soft px-1 py-0.5 text-left text-xs text-foreground";
   const style = {
     top: topPx + 1,
     height: heightPx - 2,
@@ -387,8 +389,8 @@ function TempoBlock({
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
       title={`${hoursLabel} · ${worklog.description || label}`}
-      className={`${className} hover:bg-emerald-500/25`}
-      style={style}
+      className={`${className} hover:bg-success-soft`}
+      style={{ ...style, zIndex: 1 }}
     >
       {body}
     </a>
@@ -424,19 +426,17 @@ function EventBlock({
   const declined = event.selfResponse === "declined";
   const compact = heightPx < 34;
   return (
-    <button
+    <Button
       type="button"
+      variant={selected ? "default" : "secondary"}
       onClick={(e) => {
         e.stopPropagation();
         onSelect(event.id);
       }}
       title={`${hm(event.start, timeZone)}–${hm(event.end, timeZone)} · ${event.title}`}
-      className={`absolute z-[1] overflow-hidden rounded-md border px-1.5 py-0.5 text-left transition-shadow ${
-        selected
-          ? "border-primary bg-accent ring-1 ring-primary"
-          : "border-primary/30 bg-accent/70 hover:border-primary/60"
-      } ${declined ? "opacity-50" : ""}`}
+      className={`absolute overflow-hidden text-left ${declined ? "opacity-50" : ""}`}
       style={{
+        zIndex: 1,
         top: topPx + 1,
         height: heightPx - 2,
         left: `calc(${leftPct}% + 2px)`,
@@ -460,6 +460,6 @@ function EventBlock({
           {hm(event.start, timeZone)}
         </div>
       )}
-    </button>
+    </Button>
   );
 }

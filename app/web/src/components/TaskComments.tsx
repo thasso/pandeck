@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { Bot, ChevronDown, MessageSquare, User } from "lucide-react";
+import { Badge } from "./ui/badge.tsx";
+import { Card } from "./ui/card.tsx";
+import { Separator } from "./ui/separator.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import type { TaskComment, TaskCommentAuthorKind } from "@assistant/shared";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { CommentBody } from "./common/CommentBody.tsx";
@@ -90,8 +94,8 @@ function CommentCard({ comment }: { comment: TaskComment }) {
   const bodyId = `task-comment-body-${comment.id}`;
 
   return (
-    <div className="pb-3">
-      <hr className="mb-2.5 border-0 border-t border-border" />
+    <Card className="mb-2 gap-2 p-3">
+      <Separator />
       <div className="flex min-w-0 items-center gap-1.5">
         <AuthorBadge kind={comment.author.kind} />
         {comment.author.kind === "agent" && comment.author.sessionId ? (
@@ -113,19 +117,15 @@ function CommentCard({ comment }: { comment: TaskComment }) {
         >
           {formatWhen(comment.createdAt)}
         </time>
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        <IconButton
+          label={collapsed ? "Expand comment" : "Collapse comment"}
+          size="icon-xs"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
-          title={collapsed ? "Expand comment" : "Collapse comment"}
+          onClick={() => setCollapsed((value) => !value)}
         >
-          <ChevronDown
-            size={14}
-            className={`transition-transform ${collapsed ? "-rotate-90" : ""}`}
-          />
-        </button>
+          <ChevronDown className={collapsed ? "-rotate-90" : ""} />
+        </IconButton>
       </div>
       {!collapsed ? (
         <CommentBody
@@ -134,34 +134,31 @@ function CommentCard({ comment }: { comment: TaskComment }) {
           className="mt-3 text-muted-foreground"
         />
       ) : null}
-    </div>
+    </Card>
   );
 }
 
 const AUTHOR_BADGES: Record<
   TaskCommentAuthorKind,
-  { label: string; icon: typeof User; className: string }
+  {
+    label: string;
+    icon: typeof User;
+    variant: "default" | "warning" | "secondary";
+  }
 > = {
-  user: { label: "You", icon: User, className: "text-primary" },
-  agent: { label: "Agent", icon: Bot, className: "text-emerald-500" },
-  system: {
-    label: "System",
-    icon: MessageSquare,
-    className: "text-muted-foreground",
-  },
+  user: { label: "You", icon: User, variant: "default" },
+  agent: { label: "Agent", icon: Bot, variant: "warning" },
+  system: { label: "System", icon: MessageSquare, variant: "secondary" },
 };
 
 function AuthorBadge({ kind }: { kind: TaskCommentAuthorKind }) {
   const badge = AUTHOR_BADGES[kind];
   const Icon = badge.icon;
   return (
-    <span
-      className={`flex shrink-0 items-center ${badge.className}`}
-      title={badge.label}
-      aria-label={badge.label}
-    >
-      <Icon size={13} />
-    </span>
+    <Badge variant={badge.variant} title={badge.label} aria-label={badge.label}>
+      <Icon />
+      {badge.label}
+    </Badge>
   );
 }
 

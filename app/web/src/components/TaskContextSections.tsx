@@ -32,7 +32,10 @@ import {
 import { fetchGithubLinkedIssues } from "../lib/githubApi.ts";
 import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
-import { GhostIconButton } from "./common/GhostIconButton.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
+import { Item } from "./ui/item.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import {
   TaskPlanningSection,
@@ -113,11 +116,12 @@ export function TaskContextSections({
             label={null}
           />
           {task.projectId && onOpenProject ? (
-            <GhostIconButton
-              icon={<ArrowUpRight size={13} />}
+            <IconButton
               label="Open project"
               onClick={() => onOpenProject(task.projectId!)}
-            />
+            >
+              <ArrowUpRight />
+            </IconButton>
           ) : null}
         </div>
       </InspectorSection>
@@ -147,11 +151,12 @@ export function TaskContextSections({
 
 function addAction(title: string, adding: boolean, onToggleAdd: () => void) {
   return (
-    <GhostIconButton
-      icon={adding ? <X size={13} /> : <Plus size={13} />}
+    <IconButton
       label={adding ? `Cancel adding to ${title}` : `Add to ${title}`}
       onClick={onToggleAdd}
-    />
+    >
+      {adding ? <X /> : <Plus />}
+    </IconButton>
   );
 }
 
@@ -229,10 +234,7 @@ function JiraTicketsSection({
             </>
           );
           return (
-            <div
-              key={key}
-              className="group flex min-w-0 items-start gap-2 py-2 first:pt-1"
-            >
+            <Item key={key} size="sm" className="min-w-0 items-start gap-2">
               <Tickets size={13} className="mt-0.5 shrink-0 text-primary" />
               {url ? (
                 <a
@@ -249,20 +251,21 @@ function JiraTicketsSection({
                   {label}
                 </span>
               )}
-              <GhostIconButton
-                danger
-                revealOnHover
-                icon={<Trash2 size={12} />}
+              <IconButton
+                variant="destructive"
+                size="icon-xs"
                 label={`Unlink ${key}`}
                 onClick={() => onChange(keys.filter((item) => item !== key))}
-              />
-            </div>
+              >
+                <Trash2 />
+              </IconButton>
+            </Item>
           );
         })}
         {adding ? (
           <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
             <Tickets size={13} className="shrink-0 text-muted-foreground" />
-            <input
+            <Input
               value={draft}
               autoFocus
               onChange={(event) => setDraft(event.target.value.toUpperCase())}
@@ -271,16 +274,16 @@ function JiraTicketsSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="ABC-123"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              aria-label="Jira issue key"
+              className="min-w-0 flex-1 font-mono"
             />
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={add}
               disabled={normalizeJiraKeys([draft]).length === 0}
-              className="shrink-0 rounded-md border border-border px-2 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -368,10 +371,7 @@ function GithubIssuesSection({
           const issue = issues[ref];
           const url = issue?.url ?? githubIssueUrl(ref);
           return (
-            <div
-              key={ref}
-              className="group flex min-w-0 items-start gap-2 py-2 first:pt-1"
-            >
+            <Item key={ref} size="sm" className="min-w-0 items-start gap-2">
               <GithubIssueIcon issue={issue} />
               <a
                 href={url}
@@ -389,20 +389,21 @@ function GithubIssuesSection({
                   </span>
                 ) : null}
               </a>
-              <GhostIconButton
-                danger
-                revealOnHover
-                icon={<Trash2 size={12} />}
+              <IconButton
+                variant="destructive"
+                size="icon-xs"
                 label={`Unlink ${ref}`}
                 onClick={() => onChange(refs.filter((item) => item !== ref))}
-              />
-            </div>
+              >
+                <Trash2 />
+              </IconButton>
+            </Item>
           );
         })}
         {adding ? (
           <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
             <CircleDot size={13} className="shrink-0 text-muted-foreground" />
-            <input
+            <Input
               value={draft}
               autoFocus
               onChange={(event) => setDraft(event.target.value)}
@@ -411,16 +412,16 @@ function GithubIssuesSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="owner/repo#123 or issue URL"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              aria-label="GitHub issue"
+              className="min-w-0 flex-1 font-mono"
             />
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={add}
               disabled={!normalizeGithubIssueRef(draft)}
-              className="shrink-0 rounded-md border border-border px-2 py-0.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -472,9 +473,10 @@ function LinksSection({
     >
       <div className="space-y-1 px-1">
         {links.map((link) => (
-          <div
+          <Item
             key={link.url}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted"
+            size="sm"
+            className="min-w-0 items-center gap-1.5"
           >
             <ProviderIcon source={link.source} size={13} />
             <a
@@ -491,18 +493,19 @@ function LinksSection({
                 src
               </span>
             ) : null}
-            <GhostIconButton
-              danger
-              revealOnHover
-              icon={<Trash2 size={12} />}
+            <IconButton
+              variant="destructive"
+              size="icon-xs"
               label="Remove link"
               onClick={() => onRemove(link.url)}
-            />
-          </div>
+            >
+              <Trash2 />
+            </IconButton>
+          </Item>
         ))}
         {adding ? (
           <div className="space-y-1.5 rounded-lg border border-border bg-background p-2">
-            <input
+            <Input
               value={url}
               autoFocus
               onChange={(event) => setUrl(event.target.value)}
@@ -511,9 +514,9 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="https://…"
-              className="w-full rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
+              aria-label="Link URL"
             />
-            <input
+            <Input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               onKeyDown={(event) => {
@@ -521,25 +524,24 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="Optional label"
-              className="w-full rounded-md border border-border bg-card px-2 py-1 text-sm text-foreground outline-none focus:border-primary"
+              aria-label="Optional link label"
             />
             <div className="flex justify-end gap-1.5">
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => add("source")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Link2 size={11} /> Source
-              </button>
-              <button
-                type="button"
+                <Link2 /> Source
+              </Button>
+              <Button
+                size="sm"
                 onClick={() => add("related")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Plus size={11} /> Related
-              </button>
+                <Plus /> Related
+              </Button>
             </div>
           </div>
         ) : null}

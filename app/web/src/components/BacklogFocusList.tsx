@@ -1,4 +1,6 @@
 import { useMemo, type ReactNode } from "react";
+import { IconButton } from "./common/IconButton.tsx";
+import { Item } from "./ui/item.tsx";
 import { Check, Undo2, X } from "lucide-react";
 import type { ProjectRecord, SessionListItem } from "@assistant/shared";
 import {
@@ -158,7 +160,7 @@ export function BacklogFocusList({
  * what a heading tone is for.
  */
 const BUCKET_TONE: Record<FocusBucketId, string> = {
-  review: "text-amber-500",
+  review: "text-warning",
   overdue: "text-destructive",
   today: "text-primary",
   tomorrow: "text-muted-foreground",
@@ -202,26 +204,27 @@ function FocusRow({
           anyway. This way the whole two-line block still opens the Task under a
           finger, the keyboard gets a real named target, and a modifier click
           opens the Task in a tab. */}
-      <div
+      <Item
+        size={tight ? "xs" : "sm"}
+        variant={selected ? "muted" : "default"}
         onClick={() => onOpen(task.id)}
-        className={`group/row flex w-full min-w-0 cursor-pointer items-start gap-1.5 rounded-lg px-1 text-left ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-muted" : "hover:bg-card"}`}
+        className={`group/row min-w-0 cursor-pointer items-start gap-1.5 px-1 text-left ${tight ? "py-1" : "py-1.5"}`}
       >
-        <button
-          type="button"
+        <IconButton
+          label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
+          size={tight ? "icon-xs" : "icon-sm"}
+          className="shrink-0"
           onClick={(event) => {
             event.stopPropagation();
             onCycle(task);
           }}
-          className={`flex shrink-0 cursor-pointer items-center justify-center ${tight ? "size-5" : "size-6"}`}
-          title={`Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
-          aria-label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
         >
           <StatusIcon
             status={task.status}
             size={tight ? 14 : 16}
             claimed={Boolean(suggestion)}
           />
-        </button>
+        </IconButton>
         <div className="min-w-0 flex-1">
           <TaskRowBody
             task={task}
@@ -249,24 +252,20 @@ function FocusRow({
                   ? `Confirm "${task.title}" is done`
                   : `Put "${task.title}" back on the to-do pile`
               }
-              tone={
-                suggestion.to === "done"
-                  ? "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
-                  : "border-primary/50 text-primary hover:bg-primary/10"
-              }
+              variant={suggestion.to === "done" ? "secondary" : "ghost"}
               onClick={() => onAcceptSuggestion(task)}
               tight={tight}
             />
             <ClaimButton
               icon={<X size={13} />}
               label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
-              tone="border-border text-muted-foreground hover:bg-muted hover:text-muted-foreground"
+              variant="ghost"
               onClick={() => onDismissSuggestion(task)}
               tight={tight}
             />
           </span>
         ) : null}
-      </div>
+      </Item>
     </li>
   );
 }
@@ -274,30 +273,28 @@ function FocusRow({
 function ClaimButton({
   icon,
   label,
-  tone,
+  variant,
   onClick,
   tight,
 }: {
   icon: ReactNode;
   label: string;
-  tone: string;
+  variant: "secondary" | "ghost";
   onClick: () => void;
   tight: boolean;
 }) {
   return (
-    <button
-      type="button"
-      // Answering the suggestion is not opening the Task: the row around this
-      // opens it, on any click it is left.
+    <IconButton
+      label={label}
+      size={tight ? "icon-xs" : "icon-sm"}
+      variant={variant}
+      className="shrink-0"
       onClick={(event) => {
         event.stopPropagation();
         onClick();
       }}
-      title={label}
-      aria-label={label}
-      className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "size-6" : "size-7"} ${tone}`}
     >
       {icon}
-    </button>
+    </IconButton>
   );
 }
