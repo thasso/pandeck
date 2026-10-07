@@ -14,6 +14,11 @@ import { Item, ItemActions } from "@/components/ui/item";
 
 export interface PromptQueueLedgeProps {
   queue: PromptQueueState;
+  /**
+   * Messages this browser just queued that the server's queue does not carry
+   * yet; shown at the end as "Queuing…" so queueing answers at once.
+   */
+  queuing?: readonly { key: string; text: string }[];
   /** A turn is running, so a queued message can be steered into it. */
   running: boolean;
   /** The provider takes a steer at all. */
@@ -44,6 +49,7 @@ export interface PromptQueueLedgeProps {
  */
 export function PromptQueueLedge({
   queue,
+  queuing = [],
   running,
   canSteer,
   onRemove,
@@ -61,15 +67,22 @@ export function PromptQueueLedge({
   // Sends this browser asked for, shown as under way before the server's
   // `sending` arrives; a row leaves the set when it leaves the queue.
   const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
+  // A row also leaves it when its send failed: the server names the error on
+  // the row, and the row is the user's to act on again.
   useEffect(() => {
     setAsked((current) => {
-      const live = new Set(queue.items.map((item) => item.id));
-      const next = new Set([...current].filter((id) => live.has(id)));
+      const waiting = new Set(
+        queue.items.filter((item) => !item.error).map((item) => item.id),
+      );
+      const next = new Set([...current].filter((id) => waiting.has(id)));
       return next.size === current.size ? current : next;
     });
   }, [queue.items]);
+  useEffect(() => {
+    if (queuing.length > 0) setOpen(true);
+  }, [queuing.length]);
 
-  const count = queue.items.length;
+  const count = queue.items.length + queuing.length;
   if (count === 0) return null;
   const steering = running && canSteer;
   const Chevron = open ? ChevronDown : ChevronRight;
@@ -106,6 +119,23 @@ export function PromptQueueLedge({
                 onRemove={onRemove}
                 onSendNow={sendNow}
               />
+            ))}
+            {queuing.map((local) => (
+              <li key={local.key} className="min-w-0">
+                <div className="flex h-7 min-w-0 items-center gap-1 pr-1.5 pl-2.5">
+                  <ChevronRight
+                    aria-hidden="true"
+                    className="size-3.5 shrink-0 opacity-0"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-foreground">
+                    {local.text}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1.5 pr-1 text-xs">
+                    <Spinner size="xs" />
+                    Queuing…
+                  </span>
+                </div>
+              </li>
             ))}
           </ul>
           {queue.paused ? (

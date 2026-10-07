@@ -5064,6 +5064,19 @@ function AppContent() {
   } | null>(null);
   const shownPromptQueueRef = useRef(shownPromptQueue);
   shownPromptQueueRef.current = shownPromptQueue;
+  // A queued message shows in the strip the moment it is sent ("Queuing…"),
+  // not only once the server's queue update has made the round trip — which
+  // on a busy server took seconds with nothing on screen. Matched like the
+  // Alt+Enter steer: the first NEW row with exactly this text replaces it.
+  const [queuingLocally, setQueuingLocally] = useState<
+    {
+      key: string;
+      sessionId: string;
+      text: string;
+      knownIds: ReadonlySet<string>;
+      at: number;
+    }[]
+  >([]);
   const queuePrompt = useMemo(
     () =>
       queueSessionId
@@ -5074,16 +5087,25 @@ function AppContent() {
             steerNow?: boolean;
           }) => {
             const { steerNow, ...queued } = item;
+            const knownIds = new Set(
+              (shownPromptQueueRef.current?.items ?? []).map((row) => row.id),
+            );
             if (steerNow && !queued.command)
               pendingSteerRef.current = {
                 sessionId: queueSessionId,
                 text: queued.text,
-                knownIds: new Set(
-                  (shownPromptQueueRef.current?.items ?? []).map(
-                    (row) => row.id,
-                  ),
-                ),
+                knownIds,
               };
+            setQueuingLocally((current) => [
+              ...current,
+              {
+                key: createClientId(),
+                sessionId: queueSessionId,
+                text: queued.text,
+                knownIds,
+                at: Date.now(),
+              },
+            ]);
             sendPromptQueue({
               type: "queuePrompt",
               sessionId: queueSessionId,
@@ -5092,6 +5114,41 @@ function AppContent() {
           }
         : undefined,
     [queueSessionId, sendPromptQueue],
+  );
+  // Retire an optimistic row once the server's queue carries it, and give up
+  // on one the server never confirmed after a while.
+  useEffect(() => {
+    setQueuingLocally((current) => {
+      if (current.length === 0) return current;
+      const items = shownPromptQueue?.items ?? [];
+      const now = Date.now();
+      const next = current.filter(
+        (local) =>
+          now - local.at < 20_000 &&
+          !items.some(
+            (item) => !local.knownIds.has(item.id) && item.text === local.text,
+          ),
+      );
+      return next.length === current.length ? current : next;
+    });
+  }, [shownPromptQueue]);
+  useEffect(() => {
+    if (queuingLocally.length === 0) return;
+    const timer = window.setTimeout(
+      () =>
+        setQueuingLocally((current) =>
+          current.filter((local) => Date.now() - local.at < 20_000),
+        ),
+      20_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [queuingLocally]);
+  const shownQueuingLocally = useMemo(
+    () =>
+      queuingLocally
+        .filter((local) => local.sessionId === queueSessionId)
+        .map(({ key, text }) => ({ key, text })),
+    [queuingLocally, queueSessionId],
   );
   useEffect(() => {
     const pending = pendingSteerRef.current;
@@ -5114,9 +5171,10 @@ function AppContent() {
   const sessionCanSteer = Boolean(displaySession?.canSteer);
   const promptQueueLedge = useMemo(
     () =>
-      shownPromptQueue && queueSessionId ? (
+      (shownPromptQueue || shownQueuingLocally.length > 0) && queueSessionId ? (
         <PromptQueueLedge
-          queue={shownPromptQueue}
+          queue={shownPromptQueue ?? { items: [], paused: false }}
+          queuing={shownQueuingLocally}
           running={displayStreaming}
           canSteer={sessionCanSteer}
           onRemove={(id) =>
@@ -5143,6 +5201,7 @@ function AppContent() {
       ) : undefined,
     [
       shownPromptQueue,
+      shownQueuingLocally,
       queueSessionId,
       displayStreaming,
       sessionCanSteer,
