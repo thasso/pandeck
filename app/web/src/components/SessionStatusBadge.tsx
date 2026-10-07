@@ -19,9 +19,9 @@ import { Spinner } from "./common/load.tsx";
 export const SESSION_BADGE_TONE: Record<SessionStatusTone, string> = {
   accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
+  danger: "bg-destructive/10 text-destructive",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted-foreground",
+  muted: "bg-border text-muted-foreground",
 };
 
 const STATUS_ICON: Partial<Record<SessionInboxStatus, LucideIcon>> = {

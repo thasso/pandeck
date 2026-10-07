@@ -45,7 +45,7 @@ function DismissButton({ active, busy, onDismiss }: ControlProps) {
       onClick={onDismiss}
       disabled={!active}
       aria-busy={busy === "dismiss" || undefined}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-50"
     >
       {busy === "dismiss" ? <Spinner size="sm" /> : <XCircle size={12} />}
       Dismiss
@@ -91,10 +91,10 @@ function SecretControls(
               ? "Paste a new value to replace it"
               : "Paste the value"
           }
-          className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-fg placeholder:text-faint disabled:opacity-50"
+          className="min-w-0 flex-1 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-50"
         />
       </form>
-      <div className="text-sm text-faint">
+      <div className="text-sm text-muted-foreground">
         The value goes straight to the server. The assistant never sees it, and
         this card does not keep it.
       </div>
@@ -148,7 +148,7 @@ function ConnectControls(props: ControlProps) {
   };
   return (
     <>
-      <div className="text-sm text-faint">
+      <div className="text-sm text-muted-foreground">
         {connecting
           ? "Approve access in your browser. This card updates once the account is connected."
           : "Opens sign-in in your browser. This card updates once the account is connected."}
@@ -240,7 +240,7 @@ function SignInControls(props: ControlProps) {
   return (
     <>
       {verification && code && account?.enabled ? (
-        <div className="space-y-1 text-sm text-fg">
+        <div className="space-y-1 text-sm text-foreground">
           <div>
             Open{" "}
             <a
@@ -258,7 +258,7 @@ function SignInControls(props: ControlProps) {
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-sm text-faint">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
           {account === undefined && <Spinner size="sm" />}
           {status}
         </div>
@@ -314,7 +314,9 @@ export function SettingsInputApprovalBody({
   const controls = { body, active, busy, onDismiss };
   return (
     <div className="space-y-2">
-      {body.reason && <div className="text-sm text-fg">{body.reason}</div>}
+      {body.reason && (
+        <div className="text-sm text-foreground">{body.reason}</div>
+      )}
       {waiting &&
         (body.mode === "secret" ? (
           <SecretControls {...controls} onSubmit={onSubmit} />

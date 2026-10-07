@@ -244,7 +244,7 @@ export function SettingsPage({
   const agentModels = accountModels;
   return (
     <CredentialProfilesContext.Provider value={credentialProfiles}>
-      <div className="flex h-full w-full flex-col bg-surface text-fg">
+      <div className="flex h-full w-full flex-col bg-background text-foreground">
         <PageHeader
           back={back}
           icon={<Settings size={16} />}
@@ -529,8 +529,8 @@ function ClaudeSdkSection({
         Model, thinking level, and profile lock after the session's first turn.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={sdk.enabled}
@@ -594,11 +594,13 @@ export function CredentialProfileCard({
   onOpenSection?: ((section: SectionId) => void) | undefined;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-surface p-3">
+    <div className="rounded-lg border border-border bg-background p-3">
       <div className="flex min-w-0 items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-fg">{profile.name}</p>
-          <p className="text-sm text-faint">
+          <p className="truncate text-sm font-medium text-foreground">
+            {profile.name}
+          </p>
+          <p className="text-sm text-muted-foreground">
             {providerLabel} · {profile.enabled ? profile.status : "disabled"}
           </p>
         </div>
@@ -608,7 +610,7 @@ export function CredentialProfileCard({
               <button
                 type="button"
                 onClick={onRename}
-                className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
+                className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
                 aria-label={`Rename ${profile.name}`}
                 title="Rename profile"
               >
@@ -619,7 +621,7 @@ export function CredentialProfileCard({
               <button
                 type="button"
                 onClick={onDelete}
-                className="rounded-lg p-2 text-danger hover:bg-danger/10"
+                className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
                 aria-label={`Delete ${profile.name}`}
                 title="Delete profile"
               >
@@ -636,7 +638,7 @@ export function CredentialProfileCard({
           aria-checked={profile.enabled}
           aria-label={`${profile.enabled ? "Disable" : "Enable"} ${profile.name}`}
           onClick={onToggle}
-          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${profile.enabled ? "bg-primary" : "bg-line"}`}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${profile.enabled ? "bg-primary" : "bg-border"}`}
         >
           <span
             className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${profile.enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -646,7 +648,7 @@ export function CredentialProfileCard({
           type="button"
           disabled={connectionDisabled}
           onClick={onConnect}
-          className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-raised disabled:opacity-50"
+          className="inline-flex min-w-0 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
         >
           {profile.status === "connecting" ? (
             <Spinner size="sm" />
@@ -657,7 +659,7 @@ export function CredentialProfileCard({
         </button>
       </div>
       {profile.setup ? (
-        <div className="mt-2 rounded bg-raised p-2 text-sm text-muted-foreground">
+        <div className="mt-2 rounded bg-muted p-2 text-sm text-muted-foreground">
           <p>{profile.setup.detail}</p>
           {profile.setup.verificationUri ? (
             <a
@@ -670,19 +672,19 @@ export function CredentialProfileCard({
             </a>
           ) : null}
           {profile.setup.userCode ? (
-            <p className="mt-1 font-mono text-fg">
+            <p className="mt-1 font-mono text-foreground">
               Code: {profile.setup.userCode}
             </p>
           ) : null}
           {profile.setup.command ? (
-            <code className="mt-2 block break-all text-fg">
+            <code className="mt-2 block break-all text-foreground">
               {profile.setup.command}
             </code>
           ) : null}
         </div>
       ) : null}
       {profile.error ? (
-        <p className="mt-2 text-sm text-danger">{profile.error}</p>
+        <p className="mt-2 text-sm text-destructive">{profile.error}</p>
       ) : null}
       <CredentialProfileUsageBlock
         profile={profile}
@@ -720,8 +722,8 @@ function CredentialProfileUsageBlock({
   )
     return null;
   return (
-    <div className="mt-2 rounded bg-raised p-2 text-sm text-muted-foreground">
-      <p className="font-medium text-fg">Used by</p>
+    <div className="mt-2 rounded bg-muted p-2 text-sm text-muted-foreground">
+      <p className="font-medium text-foreground">Used by</p>
       {automaticForProvider ? (
         <p className="mt-1">
           Automatic account for unpinned work
@@ -745,7 +747,7 @@ function CredentialProfileUsageBlock({
               key={slot.key}
               type="button"
               onClick={() => onOpenSection?.(slot.section as SectionId)}
-              className="rounded border border-line px-1.5 py-0.5 text-fg hover:bg-surface"
+              className="rounded border border-border px-1.5 py-0.5 text-foreground hover:bg-background"
             >
               {slot.label}
             </button>
@@ -806,7 +808,7 @@ function CredentialProfilesSection({
   return (
     <>
       <div className="mx-auto max-w-2xl px-6 pb-6">
-        <div className="rounded-xl border border-line bg-panel p-4">
+        <div className="rounded-xl border border-border bg-card p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">
@@ -820,7 +822,7 @@ function CredentialProfilesSection({
             <button
               type="button"
               onClick={() => void refresh()}
-              className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
+              className="rounded-lg p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
               title={`Refresh ${providerLabel} profiles`}
             >
               <RefreshCw size={14} />
@@ -990,7 +992,7 @@ function ProfileSection({
         memory reminders, and the local times tools report.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <Field label="Name">
           <input
             value={displayName}
@@ -1002,7 +1004,7 @@ function ProfileSection({
             placeholder="Your name"
             className="settings-input"
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             Used to name you on your new comments. Left empty, you are
             &ldquo;the user&rdquo; and comments read &ldquo;You&rdquo;.
           </p>
@@ -1022,12 +1024,12 @@ function ProfileSection({
             className="settings-input"
           />
           {zoneValid ? (
-            <p className="mt-1 text-sm text-faint">
+            <p className="mt-1 text-sm text-muted-foreground">
               An IANA timezone such as America/New_York. Leave it empty to
               follow the server. In effect: {profile.effectiveTimeZone}.
             </p>
           ) : (
-            <p className="mt-1 text-sm text-danger">
+            <p className="mt-1 text-sm text-destructive">
               Not a valid IANA timezone; it is not saved until corrected.
             </p>
           )}
@@ -1058,8 +1060,8 @@ function AppearanceSection({
         Adjust local interface preferences for this browser.
       </p>
 
-      <div className="mt-6 space-y-3 rounded-xl border border-line bg-panel p-4">
-        <h3 className="text-sm font-semibold text-fg">Theme</h3>
+      <div className="mt-6 space-y-3 rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground">Theme</h3>
         <p className="text-sm text-muted-foreground">
           The color theme for this browser. On a wide layout the header's
           sun/moon button flips the same preference; a phone has no app header,
@@ -1079,8 +1081,8 @@ function AppearanceSection({
         </Field>
       </div>
 
-      <div className="mt-5 space-y-3 rounded-xl border border-line bg-panel p-4">
-        <h3 className="text-sm font-semibold text-fg">Text size</h3>
+      <div className="mt-5 space-y-3 rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground">Text size</h3>
         <p className="text-sm text-muted-foreground">
           Scale the interface typography for this browser only. Larger sizes
           affect text alone — panel widths, spacing, and icons stay the same.
@@ -1092,8 +1094,10 @@ function AppearanceSection({
         />
       </div>
 
-      <div className="mt-5 space-y-3 rounded-xl border border-line bg-panel p-4">
-        <h3 className="text-sm font-semibold text-fg">Navigation bar order</h3>
+      <div className="mt-5 space-y-3 rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground">
+          Navigation bar order
+        </h3>
         <p className="text-sm text-muted-foreground">
           Order the sidebar's bottom navigation bar — the sections and the
           app-level actions (New Session, the Personal Assistant, Usage) share
@@ -1108,9 +1112,11 @@ function AppearanceSection({
         />
       </div>
 
-      <div className="mt-5 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-5 space-y-5 rounded-xl border border-border bg-card p-4">
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-fg">Panel animations</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            Panel animations
+          </h3>
           <p className="text-sm text-muted-foreground">
             Slide side panels in quickly when they open. These settings are
             separate so the navigation sidebar and the object panel can be tuned
@@ -1137,9 +1143,11 @@ function AppearanceSection({
         </div>
       </div>
 
-      <div className="mt-5 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-5 space-y-5 rounded-xl border border-border bg-card p-4">
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-fg">Chat transcript</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            Chat transcript
+          </h3>
           <p className="text-sm text-muted-foreground">
             Make turn boundaries and token/cost usage visible in the chat. These
             are display-only and shared across your browsers; they never change
@@ -1231,20 +1239,20 @@ function NavOrderControl({
       {order.map((section, index) => (
         <div key={section} className="flex flex-col gap-1.5">
           {index === visibleCount && index > 0 ? (
-            <div className="flex items-center gap-2 py-2 text-xs text-faint">
-              <span className="h-px flex-1 bg-line" />
+            <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
               <span>
                 folds into “More” at the current width ({Math.round(barWidth)}
                 px)
               </span>
-              <span className="h-px flex-1 bg-line" />
+              <span className="h-px flex-1 bg-border" />
             </div>
           ) : null}
-          <div className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
             <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
               {PRIMARY_NAV_SLOTS[section].icon}
             </span>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
               {PRIMARY_NAV_SLOTS[section].label}
             </span>
             <button
@@ -1253,7 +1261,7 @@ function NavOrderControl({
               disabled={index === 0}
               title="Move up"
               aria-label={`Move ${PRIMARY_NAV_SLOTS[section].label} up`}
-              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
             >
               <ChevronUp size={15} />
             </button>
@@ -1263,7 +1271,7 @@ function NavOrderControl({
               disabled={index === order.length - 1}
               title="Move down"
               aria-label={`Move ${PRIMARY_NAV_SLOTS[section].label} down`}
-              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30 disabled:hover:bg-transparent"
             >
               <ChevronDown size={15} />
             </button>
@@ -1286,7 +1294,7 @@ function PreferenceToggle({
   description: string;
 }) {
   return (
-    <label className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-sm text-fg">
+    <label className="flex items-start gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground">
       <input
         type="checkbox"
         checked={checked}
@@ -1322,14 +1330,14 @@ function PermanentAssistantSection({
         This identity and model power one durable conversation shared by the web
         app and private Slack messages. Messages are processed in arrival order.
       </p>
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="block text-sm font-medium text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="block text-sm font-medium text-foreground">
           Name
           <input
             value={profile.name}
             onChange={(event) => save({ name: event.target.value })}
             maxLength={80}
-            className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+            className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
           />
         </label>
         <AgentModelFields
@@ -1341,7 +1349,7 @@ function PermanentAssistantSection({
           modelLabel="Assistant model"
           onChange={save}
         />
-        <label className="block text-sm font-medium text-fg">
+        <label className="block text-sm font-medium text-foreground">
           Additional instructions
           <textarea
             value={profile.additionalInstructions}
@@ -1350,14 +1358,14 @@ function PermanentAssistantSection({
             }
             rows={7}
             placeholder="Optional preferences, communication style, or durable role instructions…"
-            className="mt-1.5 w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-primary"
+            className="mt-1.5 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
           />
           <span className="mt-1 block text-sm font-normal text-muted-foreground">
             Added to the standard Personal Assistant instructions for both pi
             and Claude SDK. Do not enter credentials or secrets.
           </span>
         </label>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-muted-foreground">
+        <p className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           Changing the name, provider, model, thinking level, or additional
           instructions starts a new permanent conversation the next time you
           open the Personal Assistant. The previous conversation remains
@@ -1392,13 +1400,13 @@ function SessionNamingSection({
       </p>
       <p className="mt-2 text-sm text-muted-foreground">
         Recommendation:{" "}
-        <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
-        <span className="text-fg"> Thinking off</span>. It is non-reasoning,
-        fast, and more than capable of producing short titles.
+        <span className="text-foreground">GitHub Copilot / GPT-4.1</span> with
+        <span className="text-foreground"> Thinking off</span>. It is
+        non-reasoning, fast, and more than capable of producing short titles.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={naming.enabled}
@@ -1419,7 +1427,7 @@ function SessionNamingSection({
         />
 
         {models.length === 0 && (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
             No models are available. Log in with terminal pi first.
           </div>
         )}
@@ -1446,18 +1454,19 @@ function CommitAgentSection({
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Commit agent</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        The coding-session <span className="font-mono text-fg">/commit</span>{" "}
-        command uses a dedicated no-tool agent to review the diff for safety and
-        return a structured commit message decision.
+        The coding-session{" "}
+        <span className="font-mono text-foreground">/commit</span> command uses
+        a dedicated no-tool agent to review the diff for safety and return a
+        structured commit message decision.
       </p>
       <p className="mt-2 text-sm text-muted-foreground">
         Recommendation:{" "}
-        <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
-        <span className="text-fg"> Thinking off</span>. It is fast and
+        <span className="text-foreground">GitHub Copilot / GPT-4.1</span> with
+        <span className="text-foreground"> Thinking off</span>. It is fast and
         sufficient for concise commit messages.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <AgentModelFields
           models={models}
           provider={commitAgent.provider}
@@ -1468,7 +1477,7 @@ function CommitAgentSection({
           onChange={save}
         />
 
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           The commit agent returns JSON with either{" "}
           <span className="font-mono">commit</span> or
           <span className="font-mono"> block</span>. The caller blocks unsafe
@@ -1477,7 +1486,7 @@ function CommitAgentSection({
         </div>
 
         {models.length === 0 && (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
             No models are available. Log in with terminal pi first.
           </div>
         )}
@@ -1503,15 +1512,16 @@ function PrAgentSection({
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-sm font-semibold">Pull request agent</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        The coding-session <span className="font-mono text-fg">/pr</span>{" "}
-        command uses a dedicated no-tool agent to draft a structured pull
-        request title and body after committing and pushing the branch.
+        The coding-session{" "}
+        <span className="font-mono text-foreground">/pr</span> command uses a
+        dedicated no-tool agent to draft a structured pull request title and
+        body after committing and pushing the branch.
       </p>
       <p className="mt-2 text-sm text-muted-foreground">
         By default this uses the same fast model profile as the commit agent.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <AgentModelFields
           models={models}
           provider={prAgent.provider}
@@ -1523,7 +1533,7 @@ function PrAgentSection({
         />
 
         {models.length === 0 && (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
             No models are available. Log in with terminal pi first.
           </div>
         )}
@@ -1558,14 +1568,17 @@ function WorktreesSection({
       <h2 className="text-sm font-semibold">Worktrees</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Worktrees are spawned from a Project's main git checkout as
-        <span className="font-mono text-fg"> &lt;folder&gt;-&lt;name&gt;</span>;
-        the name is also the branch. A Project can override the root folder on
+        <span className="font-mono text-foreground">
+          {" "}
+          &lt;folder&gt;-&lt;name&gt;
+        </span>
+        ; the name is also the branch. A Project can override the root folder on
         its detail page.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <div>
-          <label className="mb-1 block text-sm font-medium text-fg">
+          <label className="mb-1 block text-sm font-medium text-foreground">
             Projects root folder
           </label>
           <input
@@ -1579,9 +1592,9 @@ function WorktreesSection({
                 onUpdate({ projectsRoot: projectsRoot.trim() });
             }}
             placeholder="~/projects"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-fg outline-none focus:border-primary"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             Projects are cloned into{" "}
             <span className="font-mono">
               &lt;projects root&gt;/&lt;project id&gt;
@@ -1591,7 +1604,7 @@ function WorktreesSection({
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-fg">
+          <label className="mb-1 block text-sm font-medium text-foreground">
             Worktree root folder
           </label>
           <input
@@ -1602,15 +1615,15 @@ function WorktreesSection({
                 save({ root: root.trim() });
             }}
             placeholder="~/worktrees"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-fg outline-none focus:border-primary"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             New worktree folders are created under this directory.
           </p>
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-fg">
+          <label className="mb-1 block text-sm font-medium text-foreground">
             Check remotes every N minutes (0 = never)
           </label>
           <input
@@ -1634,14 +1647,14 @@ function WorktreesSection({
             }}
             className="settings-input w-full"
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             Keeps ahead and behind counts current for repositories you are
             viewing.
           </p>
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-fg">
+          <label className="mb-1 block text-sm font-medium text-foreground">
             Default merge strategy
           </label>
           <select
@@ -1652,7 +1665,7 @@ function WorktreesSection({
                   .value as typeof worktrees.defaultMergeStrategy,
               })
             }
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none"
           >
             <option value="squash">
               Squash — one commit on the base branch
@@ -1667,9 +1680,9 @@ function WorktreesSection({
         </div>
       </div>
 
-      <div className="mt-4 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <p className="text-sm font-medium text-fg">Naming agent</p>
-        <p className="-mt-3 text-sm text-faint">
+      <div className="mt-4 space-y-5 rounded-xl border border-border bg-card p-4">
+        <p className="text-sm font-medium text-foreground">Naming agent</p>
+        <p className="-mt-3 text-sm text-muted-foreground">
           Proposes worktree/branch names from the task or prompt context (no
           tools; failures fall back to a timestamp name).
         </p>
@@ -1686,9 +1699,9 @@ function WorktreesSection({
         />
       </div>
 
-      <div className="mt-4 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <p className="text-sm font-medium text-fg">Merge agent</p>
-        <p className="-mt-3 text-sm text-faint">
+      <div className="mt-4 space-y-5 rounded-xl border border-border bg-card p-4">
+        <p className="text-sm font-medium text-foreground">Merge agent</p>
+        <p className="-mt-3 text-sm text-muted-foreground">
           A full Workshop session spawned to resolve merge conflicts (needs
           file/shell tools — pick a capable model).
         </p>
@@ -1732,8 +1745,8 @@ function KnowledgeBaseSection({
         hidden; the folder itself is left as it is.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={kb.enabled}
@@ -1744,7 +1757,7 @@ function KnowledgeBaseSection({
         </label>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-fg">
+          <label className="mb-1 block text-sm font-medium text-foreground">
             Folder
           </label>
           <input
@@ -1754,15 +1767,15 @@ function KnowledgeBaseSection({
               if (path.trim() !== kb.path) save({ path: path.trim() });
             }}
             placeholder="<data folder>/knowledge"
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 font-mono text-sm text-fg outline-none focus:border-primary"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground outline-none focus:border-primary"
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             Empty uses the data folder&apos;s <code>knowledge</code> folder; a
             relative path is taken under the data folder. A folder that is not a
             Git repository yet becomes one. Nothing is ever pushed or pulled.
           </p>
           {kb.effectivePath ? (
-            <p className="mt-1 text-sm text-faint">
+            <p className="mt-1 text-sm text-muted-foreground">
               In use: <span className="font-mono">{kb.effectivePath}</span>
             </p>
           ) : null}
@@ -1808,8 +1821,8 @@ function PdfConversionSection({
         as a document block. Only that fallback is configured here.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={pdf.fallbackEnabled}
@@ -1851,14 +1864,14 @@ function PdfConversionSection({
           </Field>
         </div>
 
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           The fallback is capped at 30 pages to bound cost; larger scanned PDFs
           return their (empty) text layer with a note. Disabling it makes
           scanned PDFs return low-text only, never calling Claude.
         </div>
 
         {claudeModels.length === 0 && (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
             No Claude SDK models are available. Enable the Claude SDK
             integration to configure the fallback.
           </div>
@@ -1962,14 +1975,15 @@ function DictationSection({
         <div
           className={`mt-4 rounded-lg border px-3 py-2 text-sm ${
             status.configured
-              ? "border-line bg-surface text-muted-foreground"
-              : "border-warning/40 bg-warning/10 text-fg"
+              ? "border-border bg-background text-muted-foreground"
+              : "border-warning/40 bg-warning/10 text-foreground"
           }`}
         >
           {status.configured ? (
             <>
-              Ready, using <span className="text-fg">{status.modelId}</span>.
-              The recognizer starts on first use (about two seconds to load) and
+              Ready, using{" "}
+              <span className="text-foreground">{status.modelId}</span>. The
+              recognizer starts on first use (about two seconds to load) and
               releases its memory after an idle period.
             </>
           ) : (
@@ -1980,7 +1994,7 @@ function DictationSection({
         </div>
       )}
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <PreferenceToggle
           checked={speech.enabled}
           onChange={(enabled) => save({ enabled })}
@@ -2004,7 +2018,7 @@ function DictationSection({
                 </option>
               ))}
             </select>
-            <p className="text-sm text-faint">
+            <p className="text-sm text-muted-foreground">
               Switching takes effect on the next dictation; the previous model
               is released.
             </p>
@@ -2012,7 +2026,7 @@ function DictationSection({
         )}
       </div>
 
-      <div className="mt-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-5 rounded-xl border border-border bg-card p-4">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-medium">Vocabulary</div>
@@ -2026,7 +2040,7 @@ function DictationSection({
           <button
             type="button"
             onClick={addRule}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
           >
             <Plus size={12} />
             Add rule
@@ -2034,7 +2048,7 @@ function DictationSection({
         </div>
 
         {draft.length === 0 ? (
-          <div className="rounded-lg border border-line bg-surface px-3 py-3 text-center text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-3 text-center text-sm text-muted-foreground">
             No rules. Transcripts are used exactly as the model produced them.
           </div>
         ) : (
@@ -2078,7 +2092,7 @@ function DictationSection({
                   onClick={() => removeRule(index)}
                   aria-label="Remove rule"
                   title="Remove rule"
-                  className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                  className="mb-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -2103,14 +2117,14 @@ function DictationSection({
             <div
               className={`rounded-lg border px-3 py-2 text-sm ${
                 previewChanged
-                  ? "border-primary/40 bg-accent text-fg"
-                  : "border-line bg-surface text-faint"
+                  ? "border-primary/40 bg-accent text-foreground"
+                  : "border-border bg-background text-muted-foreground"
               }`}
             >
               {previewChanged ? preview : "No rule matched this text."}
             </div>
           ) : (
-            <p className="text-sm text-faint">
+            <p className="text-sm text-muted-foreground">
               The preview runs the same rules the server applies, so a rule that
               works here works when you dictate.
             </p>
@@ -2119,7 +2133,7 @@ function DictationSection({
       </div>
 
       {recent.length > 0 && (
-        <div className="mt-5 rounded-xl border border-line bg-panel p-4">
+        <div className="mt-5 rounded-xl border border-border bg-card p-4">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-sm font-medium">Recent dictations</div>
@@ -2136,7 +2150,7 @@ function DictationSection({
                 clearRecentTranscripts();
                 setRecent([]);
               }}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
             >
               <Trash2 size={12} />
               Clear
@@ -2149,10 +2163,10 @@ function DictationSection({
                 type="button"
                 onClick={() => applyAsSample(entry.text)}
                 title="Load into Try it"
-                className="flex w-full items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2 text-left text-sm text-fg transition-colors hover:border-primary/40 hover:bg-accent"
+                className="flex w-full items-start gap-3 rounded-lg border border-border bg-background px-3 py-2 text-left text-sm text-foreground transition-colors hover:border-primary/40 hover:bg-accent"
               >
                 <span className="min-w-0 flex-1 break-words">{entry.text}</span>
-                <span className="shrink-0 tabular-nums text-faint">
+                <span className="shrink-0 tabular-nums text-muted-foreground">
                   {transcriptAge(entry.at)}
                 </span>
               </button>
@@ -2175,7 +2189,7 @@ function DictationSection({
               onChange={(e) => save({ numThreads: Number(e.target.value) })}
               className="settings-input w-full"
             />
-            <p className="text-sm text-faint">
+            <p className="text-sm text-muted-foreground">
               More threads decode faster up to a point; measured gains flatten
               past 8 on this machine.
             </p>
@@ -2194,7 +2208,7 @@ function DictationSection({
               }
               className="settings-input w-full"
             />
-            <p className="text-sm text-faint">
+            <p className="text-sm text-muted-foreground">
               The loaded model holds roughly 2 GB. 0 keeps it resident
               permanently, trading that memory for never paying the load again.
             </p>
@@ -2213,7 +2227,7 @@ function DictationSection({
               }
               className="settings-input w-full"
             />
-            <p className="text-sm text-faint">
+            <p className="text-sm text-muted-foreground">
               Recording stops automatically at this length.
             </p>
           </div>
@@ -2248,12 +2262,12 @@ function PromptRefinementSection({
       </p>
       <p className="mt-2 text-sm text-muted-foreground">
         Recommendation:{" "}
-        <span className="text-fg">GitHub Copilot / GPT-4.1</span> with
-        <span className="text-fg"> Thinking off</span> or minimal. The task is
-        mostly rewriting and should be fast.
+        <span className="text-foreground">GitHub Copilot / GPT-4.1</span> with
+        <span className="text-foreground"> Thinking off</span> or minimal. The
+        task is mostly rewriting and should be fast.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <AgentModelFields
           models={models}
           provider={refinement.provider}
@@ -2264,14 +2278,14 @@ function PromptRefinementSection({
           onChange={save}
         />
 
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           The refinement agent is instructed to preserve intent and meaning,
           avoid adding new facts or requirements, and return only the improved
           Markdown prompt.
         </div>
 
         {models.length === 0 && (
-          <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
             No models are available. Log in with terminal pi first.
           </div>
         )}
@@ -2312,7 +2326,7 @@ function TaskIntakeAgentSection({
         research, or curation fails, the saved Task remains marked for retry
         when you use the shortcut again.
       </p>
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
         <Field label="Automatic project">
           <select
             value={agent.projectId}
@@ -2331,7 +2345,7 @@ function TaskIntakeAgentSection({
               </option>
             ))}
           </select>
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             New Tasks created from the Slack message shortcut are linked to this
             project before the intake agent starts.
           </p>
@@ -2354,12 +2368,12 @@ function TaskIntakeAgentSection({
             className="settings-input resize-y"
             placeholder="For example: prefer concise technical titles and include unresolved questions."
           />
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             Optional style or context guidance. It cannot override the fixed
             safety and Task JSON contract.
           </p>
         </Field>
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           The agent can use a strict read-only subset of your enabled Personal
           Assistant integrations, with a ten-call research budget and no native
           file or shell access. It must return a validated title/description
@@ -2382,10 +2396,10 @@ function IntegrationStatusBanner({
       className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
         status.ok
           ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-          : "border-danger/30 bg-danger/10 text-danger"
+          : "border-destructive/30 bg-destructive/10 text-destructive"
       }`}
     >
-      <div className="flex items-center gap-2 font-medium text-fg">
+      <div className="flex items-center gap-2 font-medium text-foreground">
         {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
         {status.message}
       </div>
@@ -2448,8 +2462,8 @@ function JiraCard({
         is stored server-side and never sent back to the browser. The Atlassian
         host is set by the deployment.
       </p>
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -2496,7 +2510,7 @@ function JiraCard({
             <button
               type="button"
               onClick={clearToken}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Clear token
             </button>
@@ -2547,8 +2561,8 @@ function ConfluenceCard({
         Confluence is the same Atlassian site as Jira and uses the email and API
         token saved there. The host is set by the deployment.
       </p>
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -2678,8 +2692,8 @@ function TempoCard({
           ? ""
           : " Tempo OAuth is not configured in app config yet."}
       </p>
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -2879,7 +2893,7 @@ export function GoogleWorkspaceSection({
     <div className="mx-auto max-w-xl px-6 py-8">
       <div className="flex items-center gap-4">
         <div
-          className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-line bg-white shadow-sm"
+          className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-border bg-white shadow-sm"
           aria-hidden="true"
         >
           <span className="relative block size-8 rounded-full bg-[conic-gradient(#4285f4_0_25%,#34a853_0_42%,#fbbc05_0_67%,#ea4335_0_84%,#4285f4_0)] after:absolute after:inset-[7px] after:rounded-full after:bg-white">
@@ -2895,11 +2909,11 @@ export function GoogleWorkspaceSection({
         </div>
       </div>
 
-      <div className="mt-6 space-y-5 rounded-2xl border border-line bg-panel p-5 shadow-sm">
+      <div className="mt-6 space-y-5 rounded-2xl border border-border bg-card p-5 shadow-sm">
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-sm font-medium">Use Google Workspace</div>
-            <div className="mt-0.5 text-sm text-faint">
+            <div className="mt-0.5 text-sm text-muted-foreground">
               Allow the Assistant to use your connected account.
             </div>
           </div>
@@ -2910,7 +2924,7 @@ export function GoogleWorkspaceSection({
             aria-label="Enable Google Workspace"
             disabled={!connected}
             onClick={toggleEnabled}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-border"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -2919,21 +2933,23 @@ export function GoogleWorkspaceSection({
         </div>
 
         <div
-          className={`rounded-xl border px-4 py-3 ${connected ? (google.gmailArchiveAuthorized ? "border-emerald-500/30 bg-emerald-500/10" : "border-yellow-500/30 bg-yellow-500/10") : "border-line bg-surface"}`}
+          className={`rounded-xl border px-4 py-3 ${connected ? (google.gmailArchiveAuthorized ? "border-emerald-500/30 bg-emerald-500/10" : "border-yellow-500/30 bg-yellow-500/10") : "border-border bg-background"}`}
         >
-          <div className="flex items-center gap-2 text-sm font-medium text-fg">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             {connected && google.gmailArchiveAuthorized ? (
               <CheckCircle2 size={15} className="text-emerald-400" />
             ) : (
               <AlertTriangle
                 size={15}
-                className={connected ? "text-yellow-500" : "text-faint"}
+                className={
+                  connected ? "text-yellow-500" : "text-muted-foreground"
+                }
               />
             )}
             {connectedText}
           </div>
           {!connected ? (
-            <div className="mt-1 text-sm text-faint">
+            <div className="mt-1 text-sm text-muted-foreground">
               {google.oauthClientConfigured
                 ? "Sign in with Google to connect your account."
                 : "Google sign-in is not available yet. The app administrator needs to finish the Google setup."}
@@ -2977,7 +2993,7 @@ export function GoogleWorkspaceSection({
             <button
               type="button"
               onClick={disconnect}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Sign out
             </button>
@@ -2987,8 +3003,8 @@ export function GoogleWorkspaceSection({
 
       {oauthError && <ErrorNote message={oauthError} />}
       {visibleStatus && !visibleStatus.ok && (
-        <div className="mt-4 rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger">
-          <div className="mb-2 flex items-center gap-2 font-medium text-fg">
+        <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
             <XCircle size={15} />
             {visibleStatus.message}
           </div>
@@ -3086,11 +3102,11 @@ function SlackSection({
         title="Slack"
         subtitle="Connect Slack to search conversations, read messages, and create Tasks."
       />
-      <div className="mt-6 space-y-5 rounded-2xl border border-line bg-panel p-5 shadow-sm">
+      <div className="mt-6 space-y-5 rounded-2xl border border-border bg-card p-5 shadow-sm">
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-sm font-medium">Use Slack</div>
-            <div className="mt-0.5 text-sm text-faint">
+            <div className="mt-0.5 text-sm text-muted-foreground">
               Allow the Assistant to use your connected Slack account.
             </div>
           </div>
@@ -3101,7 +3117,7 @@ function SlackSection({
             aria-label="Enable Slack"
             disabled={!connected}
             onClick={toggleEnabled}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${enabled ? "bg-primary" : "bg-border"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -3110,17 +3126,17 @@ function SlackSection({
         </div>
 
         <div
-          className={`rounded-xl border px-4 py-3 ${healthy ? "border-emerald-500/30 bg-emerald-500/10" : warning ? "border-danger/30 bg-danger/10" : "border-line bg-surface"}`}
+          className={`rounded-xl border px-4 py-3 ${healthy ? "border-emerald-500/30 bg-emerald-500/10" : warning ? "border-destructive/30 bg-destructive/10" : "border-border bg-background"}`}
         >
-          <div className="flex items-center gap-2 text-sm font-medium text-fg">
+          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
             {checking ? (
-              <Spinner size="md" className="text-faint" />
+              <Spinner size="md" className="text-muted-foreground" />
             ) : healthy ? (
               <CheckCircle2 size={15} className="text-emerald-400" />
             ) : warning ? (
-              <AlertTriangle size={15} className="text-danger" />
+              <AlertTriangle size={15} className="text-destructive" />
             ) : (
-              <AlertTriangle size={15} className="text-faint" />
+              <AlertTriangle size={15} className="text-muted-foreground" />
             )}
             {checking
               ? "Checking Slack connection…"
@@ -3130,7 +3146,7 @@ function SlackSection({
                   ? "Slack needs attention"
                   : "Not connected"}
           </div>
-          <div className="mt-1 text-sm text-faint">
+          <div className="mt-1 text-sm text-muted-foreground">
             {warning
               ? "Sign out and connect Slack again. If the problem continues, ask the app administrator for help."
               : connected
@@ -3162,7 +3178,7 @@ function SlackSection({
             <button
               type="button"
               onClick={signOut}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Sign out
             </button>
@@ -3237,7 +3253,7 @@ function SlackHuddlesSection({
         title="Slack Huddles"
         subtitle="Experimental personal Huddle attendance through Slack’s undocumented browser API."
       />
-      <div className="mt-6 space-y-5 rounded-2xl border border-amber-500/25 bg-panel p-5 shadow-sm">
+      <div className="mt-6 space-y-5 rounded-2xl border border-amber-500/25 bg-card p-5 shadow-sm">
         <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           This capability may break when Slack changes its web client. Browser
           credentials are isolated from normal Slack reads, OAuth, Task intake,
@@ -3248,7 +3264,7 @@ function SlackHuddlesSection({
             <div className="text-sm font-medium">
               Enable experimental Huddle history
             </div>
-            <div className="mt-0.5 text-sm text-faint">
+            <div className="mt-0.5 text-sm text-muted-foreground">
               Expose only the dedicated Huddle attendance tool.
             </div>
           </div>
@@ -3257,7 +3273,7 @@ function SlackHuddlesSection({
             role="switch"
             aria-checked={enabled}
             onClick={() => setEnabled(!enabled)}
-            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${enabled ? "bg-primary" : "bg-line"}`}
+            className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${enabled ? "bg-primary" : "bg-border"}`}
           >
             <span
               className={`absolute left-0 top-0.5 size-5 rounded-full bg-white shadow transition-transform ${enabled ? "translate-x-5" : "translate-x-0.5"}`}
@@ -3266,7 +3282,7 @@ function SlackHuddlesSection({
         </div>
         <div>
           <div className="text-sm font-medium">Refresh browser session</div>
-          <p className="mt-1 text-sm text-faint">
+          <p className="mt-1 text-sm text-muted-foreground">
             In Slack DevTools, right-click a{" "}
             <span className="font-mono">huddles.history</span> request, choose{" "}
             <strong>Copy as cURL</strong>, and paste it below.
@@ -3282,7 +3298,7 @@ function SlackHuddlesSection({
         </div>
         {pasteStatus && (
           <div
-            className={`text-sm ${pasteStatus.tone === "ok" ? "text-emerald-200" : "text-danger"}`}
+            className={`text-sm ${pasteStatus.tone === "ok" ? "text-emerald-200" : "text-destructive"}`}
           >
             {pasteStatus.message}
           </div>
@@ -3306,7 +3322,7 @@ function SlackHuddlesSection({
             <button
               type="button"
               onClick={clear}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Clear browser session
             </button>
@@ -3315,7 +3331,7 @@ function SlackHuddlesSection({
       </div>
       {status && (
         <div
-          className={`mt-4 rounded-xl border px-4 py-3 text-sm ${status.ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-danger/30 bg-danger/10 text-danger"}`}
+          className={`mt-4 rounded-xl border px-4 py-3 text-sm ${status.ok ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-destructive/30 bg-destructive/10 text-destructive"}`}
         >
           {status.message}
         </div>
@@ -3334,7 +3350,7 @@ function SlackSettingsHeader({
   return (
     <div className="flex items-center gap-4">
       <div
-        className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-line bg-white shadow-sm"
+        className="flex size-14 shrink-0 items-center justify-center rounded-2xl border border-border bg-white shadow-sm"
         aria-hidden="true"
       >
         <div className="grid size-8 grid-cols-2 gap-0.5 rotate-45 overflow-hidden rounded-lg">
@@ -3402,8 +3418,8 @@ function Context7Section({
         is never sent back to the browser.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -3443,10 +3459,10 @@ function Context7Section({
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             status.ok
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-danger/30 bg-danger/10 text-danger"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
           }`}
         >
-          <div className="flex items-center gap-2 font-medium text-fg">
+          <div className="flex items-center gap-2 font-medium text-foreground">
             {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
             {status.message}
           </div>
@@ -3518,8 +3534,8 @@ function GithubSection({
         never sent back to the browser.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -3550,7 +3566,7 @@ function GithubSection({
         </div>
 
         <div className="space-y-1">
-          <label className="flex items-center gap-2 text-sm text-fg">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={packageProxyEnabled}
@@ -3592,10 +3608,10 @@ function GithubSection({
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             status.ok
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-danger/30 bg-danger/10 text-danger"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
           }`}
         >
-          <div className="flex items-center gap-2 font-medium text-fg">
+          <div className="flex items-center gap-2 font-medium text-foreground">
             {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
             {status.message}
           </div>
@@ -3661,8 +3677,8 @@ function ForgejoSection({
         never sent back to the browser.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -3731,10 +3747,10 @@ function ForgejoSection({
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             status.ok
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-danger/30 bg-danger/10 text-danger"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
           }`}
         >
-          <div className="flex items-center gap-2 font-medium text-fg">
+          <div className="flex items-center gap-2 font-medium text-foreground">
             {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
             {status.message}
           </div>
@@ -3798,8 +3814,8 @@ function BraveSection({
         <span className="font-mono">web_fetch</span> tool needs no key.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -3839,10 +3855,10 @@ function BraveSection({
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             status.ok
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-danger/30 bg-danger/10 text-danger"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
           }`}
         >
-          <div className="flex items-center gap-2 font-medium text-fg">
+          <div className="flex items-center gap-2 font-medium text-foreground">
             {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
             {status.message}
           </div>
@@ -3926,8 +3942,8 @@ function OpenAiCompatibleSection({
         browser.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-center gap-2 text-sm text-fg">
+      <div className="mt-6 space-y-5 rounded-xl border border-border bg-card p-4">
+        <label className="flex items-center gap-2 text-sm text-foreground">
           <input
             type="checkbox"
             checked={enabled}
@@ -3973,7 +3989,7 @@ function OpenAiCompatibleSection({
                 e.target.value as OpenAiCompatibleThinkingFormat,
               )
             }
-            className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-fg outline-none"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none"
           >
             {OPENAI_COMPATIBLE_THINKING_FORMATS.map((format) => (
               <option key={format} value={format}>
@@ -3983,7 +3999,7 @@ function OpenAiCompatibleSection({
           </select>
         </Field>
 
-        <div className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-faint">
+        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
           Save and discover calls <span className="font-mono">/models</span>,
           stores the discovered model metadata in app config, and refreshes the
           live model registry. Thinking control is how the server takes a
@@ -4014,7 +4030,7 @@ function OpenAiCompatibleSection({
             <button
               type="button"
               onClick={removeKey}
-              className="settings-button text-danger"
+              className="settings-button text-destructive"
             >
               Remove key
             </button>
@@ -4027,10 +4043,10 @@ function OpenAiCompatibleSection({
           className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
             status.ok
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-danger/30 bg-danger/10 text-danger"
+              : "border-destructive/30 bg-destructive/10 text-destructive"
           }`}
         >
-          <div className="flex items-center gap-2 font-medium text-fg">
+          <div className="flex items-center gap-2 font-medium text-foreground">
             {status.ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
             {status.message}
           </div>
@@ -4038,28 +4054,28 @@ function OpenAiCompatibleSection({
       )}
 
       {models.length > 0 && (
-        <div className="mt-4 rounded-xl border border-line bg-panel px-4 py-3">
-          <div className="mb-2 text-sm font-semibold text-fg">
+        <div className="mt-4 rounded-xl border border-border bg-card px-4 py-3">
+          <div className="mb-2 text-sm font-semibold text-foreground">
             Discovered models
           </div>
           <ul className="space-y-2">
             {models.map((model) => (
               <li
                 key={model.id}
-                className="rounded-lg border border-line bg-surface px-3 py-2"
+                className="rounded-lg border border-border bg-background px-3 py-2"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-fg">
+                    <div className="truncate text-sm font-medium text-foreground">
                       {model.name}
                     </div>
-                    <div className="mt-0.5 text-xs text-faint">
+                    <div className="mt-0.5 text-xs text-muted-foreground">
                       {model.input.join("+")} ·{" "}
                       {model.reasoning ? "reasoning" : "non-reasoning"}
                       {model.status ? ` · ${model.status}` : ""}
                     </div>
                   </div>
-                  <div className="shrink-0 text-right text-xs text-faint">
+                  <div className="shrink-0 text-right text-xs text-muted-foreground">
                     <div>{model.contextWindow.toLocaleString()} ctx</div>
                     <div>{model.maxTokens.toLocaleString()} max out</div>
                   </div>
@@ -4093,14 +4109,16 @@ function BrowserToolsSettingsSection({
         discovered on demand rather than requiring a separate enable step.
       </p>
       <div className="mt-6 space-y-4">
-        <section className="rounded-xl border border-line bg-panel p-4">
-          <h3 className="text-sm font-semibold text-fg">Browser testing</h3>
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h3 className="text-sm font-semibold text-foreground">
+            Browser testing
+          </h3>
           <p className="mt-1 text-sm text-muted-foreground">
             Curated Playwright MCP tools (navigate, snapshot, click, fill,
             screenshot, console, network). Screenshots/traces are stored as
             session artifacts, not in the repo.
           </p>
-          <label className="mt-4 flex items-center gap-2 text-sm text-fg">
+          <label className="mt-4 flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={browserTools.headed}
@@ -4110,14 +4128,16 @@ function BrowserToolsSettingsSection({
             Launch browser in headed/debug mode instead of headless
           </label>
         </section>
-        <section className="rounded-xl border border-line bg-panel p-4">
-          <h3 className="text-sm font-semibold text-fg">Raw browser MCP</h3>
+        <section className="rounded-xl border border-border bg-card p-4">
+          <h3 className="text-sm font-semibold text-foreground">
+            Raw browser MCP
+          </h3>
           <p className="mt-1 text-sm text-muted-foreground">
             Advanced escape hatch for direct Playwright MCP tool calls by name,
             for capabilities missing from the standard browser tools. Off by
             default.
           </p>
-          <label className="mt-4 flex items-center gap-2 text-sm text-fg">
+          <label className="mt-4 flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={browserTools.rawMcpEnabled}
@@ -4273,7 +4293,7 @@ function TextSizeControl({
       <div
         role="radiogroup"
         aria-label="Text size"
-        className="inline-flex rounded-lg border border-line bg-surface p-0.5"
+        className="inline-flex rounded-lg border border-border bg-background p-0.5"
       >
         {TEXT_SCALE_OPTIONS.map((option) => {
           const selected = option === value;
@@ -4287,7 +4307,7 @@ function TextSizeControl({
               className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
                 selected
                   ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-fg"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               {option}%
@@ -4297,9 +4317,11 @@ function TextSizeControl({
       </div>
       {/* Live preview: because the selected scale is applied to the document
           root immediately, this sample reflows at the chosen size right away. */}
-      <div className="rounded-lg border border-line bg-surface p-3">
-        <p className="text-xl font-semibold text-fg">The quick brown fox</p>
-        <p className="mt-1 text-sm text-fg">
+      <div className="rounded-lg border border-border bg-background p-3">
+        <p className="text-xl font-semibold text-foreground">
+          The quick brown fox
+        </p>
+        <p className="mt-1 text-sm text-foreground">
           Sample interface text jumps over the lazy dog at your selected size.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -4322,7 +4344,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium uppercase tracking-wide text-faint">
+      <span className="mb-1 block text-sm font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
       {children}
@@ -4346,7 +4368,7 @@ function SecretField({
       <div className="relative">
         <KeyRound
           size={13}
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
         />
         <input
           type="password"
@@ -4461,14 +4483,14 @@ export function ModelsSection({
       </p>
 
       {models.length === 0 && (
-        <div className="mt-6 rounded-lg border border-line bg-panel px-4 py-6 text-center text-sm text-faint">
+        <div className="mt-6 rounded-lg border border-border bg-card px-4 py-6 text-center text-sm text-muted-foreground">
           No models available. Enable and configure a provider first.
         </div>
       )}
 
       {items.length > 0 && (
         <div className="mt-6">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Visible · {items.length}
           </div>
           <p aria-live="polite" className="sr-only">
@@ -4480,10 +4502,10 @@ export function ModelsSection({
               return (
                 <li
                   key={key}
-                  className={`flex select-none items-center gap-2 rounded-lg border bg-panel px-3 py-2 transition-colors ${
+                  className={`flex select-none items-center gap-2 rounded-lg border bg-card px-3 py-2 transition-colors ${
                     draggingKey === key
                       ? "border-primary/50 shadow-sm"
-                      : "border-line hover:border-line-strong"
+                      : "border-border hover:border-input"
                   }`}
                 >
                   {/*
@@ -4494,27 +4516,34 @@ export function ModelsSection({
                   <button
                     type="button"
                     aria-label={`Reorder ${m.name} (${m.provider}), position ${i + 1} of ${items.length} — drag, or use the arrow keys`}
-                    className={`-ml-1 shrink-0 cursor-grab rounded-md p-1 text-faint transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
-                      draggingKey === key ? "cursor-grabbing text-fg" : ""
+                    className={`-ml-1 shrink-0 cursor-grab rounded-md p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary ${
+                      draggingKey === key
+                        ? "cursor-grabbing text-foreground"
+                        : ""
                     }`}
                     {...handleProps(i)}
                   >
                     <GripVertical size={15} />
                   </button>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5 text-sm text-fg">
+                    <div className="flex items-center gap-1.5 text-sm text-foreground">
                       <span className="truncate">{m.name}</span>
                       {m.reasoning && (
-                        <Brain size={11} className="shrink-0 text-faint" />
+                        <Brain
+                          size={11}
+                          className="shrink-0 text-muted-foreground"
+                        />
                       )}
                     </div>
-                    <div className="text-xs text-faint">{m.provider}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {m.provider}
+                    </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => hide(key)}
                     title="Hide model"
-                    className="shrink-0 rounded-md p-1.5 text-faint transition-colors hover:bg-raised hover:text-fg"
+                    className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   >
                     <Eye size={15} />
                   </button>
@@ -4527,26 +4556,28 @@ export function ModelsSection({
 
       {hidden.length > 0 && (
         <div className="mt-6">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-faint">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Hidden · {hidden.length}
           </div>
           <ul className="flex flex-col gap-1">
             {hidden.map((m) => (
               <li
                 key={modelKey(m)}
-                className="flex items-center gap-2 rounded-lg border border-line bg-panel/50 px-3 py-2"
+                className="flex items-center gap-2 rounded-lg border border-border bg-card/50 px-3 py-2"
               >
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-muted-foreground">
                     {m.name}
                   </div>
-                  <div className="text-xs text-faint">{m.provider}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {m.provider}
+                  </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => show(modelKey(m))}
                   title="Show model"
-                  className="shrink-0 rounded-md p-1.5 text-faint transition-colors hover:bg-raised hover:text-fg"
+                  className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   <EyeOff size={15} />
                 </button>

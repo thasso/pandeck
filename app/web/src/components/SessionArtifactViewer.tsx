@@ -175,7 +175,7 @@ function ArtifactImage({ rawUrl, name }: { rawUrl: string; name: string }) {
       </div>
     );
   return (
-    <div className="document-visual-content flex min-h-full items-center justify-center bg-panel p-4">
+    <div className="document-visual-content flex min-h-full items-center justify-center bg-card p-4">
       <img
         key={generation}
         src={rawUrl}

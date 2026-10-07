@@ -16,7 +16,7 @@ import { ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
 
 export function PendingSessionPanel({ title }: { title: string }) {
   return (
-    <div className="min-h-0 flex-1 overflow-hidden bg-surface">
+    <div className="min-h-0 flex-1 overflow-hidden bg-background">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
         {/* The card announces (its own heading names the session); the bars are
             `Skeleton`s standing in for the transcript's first lines, so they
@@ -24,14 +24,14 @@ export function PendingSessionPanel({ title }: { title: string }) {
             there as three dead rules. */}
         <div
           role="status"
-          className="rounded-2xl border border-line bg-panel p-4 shadow-sm"
+          className="rounded-2xl border border-border bg-card p-4 shadow-sm"
         >
           <div className="flex items-center gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-primary">
               <Spinner size="md" />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-fg">
+              <div className="truncate text-sm font-semibold text-foreground">
                 Opening {title}
               </div>
               <div className="mt-0.5 text-sm text-muted-foreground">
@@ -64,10 +64,10 @@ export function UnavailableSessionPanel({
   message: string;
 }) {
   return (
-    <div className="min-h-0 flex-1 overflow-hidden bg-surface">
+    <div className="min-h-0 flex-1 overflow-hidden bg-background">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <div className="truncate text-sm font-semibold text-fg">
+        <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+          <div className="truncate text-sm font-semibold text-foreground">
             Can't open {title}
           </div>
           <ErrorNote className="mt-3" message={message} />
@@ -116,7 +116,7 @@ export function SessionBootstrapNarration({
       ) : (
         <div
           role="status"
-          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-sm text-muted-foreground"
+          className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground"
         >
           <Spinner size="sm" />
           <span>{narration.label}</span>
@@ -142,7 +142,7 @@ export function SessionRefreshMark() {
     <div className="pointer-events-none absolute inset-x-0 top-20 z-20 flex justify-center px-3">
       <div
         role="status"
-        className="flex items-center gap-2 rounded-full border border-line-strong bg-panel px-4 py-2 text-sm font-medium text-fg shadow-lg shadow-black/20"
+        className="flex items-center gap-2 rounded-full border border-input bg-card px-4 py-2 text-sm font-medium text-foreground shadow-lg shadow-black/20"
       >
         <Spinner size="sm" />
         Updating session…

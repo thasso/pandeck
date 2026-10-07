@@ -129,7 +129,7 @@ export function SkillsSettingsSection({
         files and their Git history.
       </p>
       {list ? (
-        <p className="mt-2 text-sm text-faint">
+        <p className="mt-2 text-sm text-muted-foreground">
           Library folder: <code>{list.libraryPath}</code>
         </p>
       ) : null}
@@ -179,7 +179,7 @@ function SkillList({
   const empty = list.skills.length === 0 && list.diagnostics.length === 0;
   return (
     <>
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 rounded-xl border border-border bg-card p-4">
         <div className="text-sm font-medium">Available skills</div>
         <div className="mt-0.5 text-sm text-muted-foreground">
           A skill you turn on here is on everywhere; a new skill starts off
@@ -216,7 +216,7 @@ function SkillList({
       </div>
 
       {list.diagnostics.length > 0 ? (
-        <div className="mt-4 rounded-xl border border-line bg-panel p-4">
+        <div className="mt-4 rounded-xl border border-border bg-card p-4">
           <div className="text-sm font-medium">Folders that need a fix</div>
           <div className="mt-0.5 text-sm text-muted-foreground">
             These folders cannot be used as skills. They stay listed here so a
@@ -256,8 +256,8 @@ function SkillRow({
 }) {
   return (
     <li
-      className={`flex items-start justify-between gap-3 rounded-lg border bg-surface px-3 py-2.5 ${
-        open ? "border-primary" : "border-line"
+      className={`flex items-start justify-between gap-3 rounded-lg border bg-background px-3 py-2.5 ${
+        open ? "border-primary" : "border-border"
       }`}
     >
       <button
@@ -271,7 +271,7 @@ function SkillRow({
         <div className="mt-0.5 text-sm text-muted-foreground">
           {skill.description}
         </div>
-        <div className="mt-1 text-sm text-faint">
+        <div className="mt-1 text-sm text-muted-foreground">
           <code>{skill.path}</code>
         </div>
       </button>
@@ -321,7 +321,7 @@ function SkillDetailPane({
   return (
     <div
       id="skill-detail"
-      className="mt-4 rounded-xl border border-line bg-panel p-4"
+      className="mt-4 rounded-xl border border-border bg-card p-4"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -329,7 +329,7 @@ function SkillDetailPane({
           {/* The source path comes from the answer: a skill's folder need not
               be named after it, so there is nothing honest to show before. */}
           {detail?.path ? (
-            <div className="mt-0.5 text-sm text-faint">
+            <div className="mt-0.5 text-sm text-muted-foreground">
               <code>{detail.path}</code>
             </div>
           ) : null}
@@ -362,7 +362,7 @@ function SkillDetailPane({
       ) : null}
 
       {detail?.kind === "invalid" ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5">
           <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
           <div className="min-w-0 text-sm text-muted-foreground">
             {detail.error}
@@ -410,8 +410,8 @@ function SkillFileBrowser({
   );
 
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-line bg-surface">
-      <div className="border-b border-line p-3">
+    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-background">
+      <div className="border-b border-border p-3">
         <div className="text-sm font-medium">Files</div>
         <div className="mt-0.5 text-sm text-muted-foreground">
           {detail.files.entryCount}{" "}
@@ -448,7 +448,7 @@ function SkillFileBrowser({
           aria-label={`${detail.name} files`}
           className="max-h-64 overflow-y-auto p-1"
           getRowClassName={(node) =>
-            node.data.entry.type === "symlink" ? "text-faint" : ""
+            node.data.entry.type === "symlink" ? "text-muted-foreground" : ""
           }
           renderNode={(node) => <SkillFileTreeRow entry={node.data.entry} />}
         />
@@ -474,7 +474,7 @@ function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
       <Icon size={13} className="shrink-0 text-muted-foreground" />
       <span className="truncate">{entry.name}</span>
       {entry.type === "file" && entry.bytes !== undefined ? (
-        <span className="ml-auto shrink-0 text-faint">
+        <span className="ml-auto shrink-0 text-muted-foreground">
           {formatBytes(entry.bytes)}
         </span>
       ) : null}
@@ -493,7 +493,7 @@ function SkillFileViewer({
 }) {
   if (!entry || entry.type !== "file") {
     return (
-      <div className="border-t border-line p-3">
+      <div className="border-t border-border p-3">
         <EmptyBox>
           This file is no longer present in the bounded listing.
         </EmptyBox>
@@ -505,7 +505,7 @@ function SkillFileViewer({
   const textLike = isTextMimeType(entry.mimeType);
 
   return (
-    <div className="border-t border-line">
+    <div className="border-t border-border">
       <PageHeader
         density="compact"
         icon={<FileText size={15} />}
@@ -520,7 +520,7 @@ function SkillFileViewer({
               rel="noreferrer"
               aria-label={`Open raw ${path}`}
               title="Open raw file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
             >
               <ExternalLink size={14} />
             </a>
@@ -529,7 +529,7 @@ function SkillFileViewer({
               download={entry.name}
               aria-label={`Download ${path}`}
               title="Download file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
             >
               <Download size={14} />
             </a>
@@ -543,7 +543,7 @@ function SkillFileViewer({
           <img
             src={rawUrl}
             alt={entry.name}
-            className="max-h-96 max-w-full rounded-lg border border-line bg-panel object-contain"
+            className="max-h-96 max-w-full rounded-lg border border-border bg-card object-contain"
           />
         </div>
       ) : textLike ? (
@@ -559,7 +559,7 @@ function SkillMarkdown({ detail }: { detail: SkillDetail }) {
   return (
     <div className="p-3">
       {detail.truncated ? (
-        <div className="mb-3 text-sm text-faint">
+        <div className="mb-3 text-sm text-muted-foreground">
           Showing the first {formatBytes(MAX_SKILL_BODY_BYTES)} of this{" "}
           {formatBytes(detail.bytes)} file. Open it raw to read the rest.
         </div>
@@ -624,7 +624,7 @@ function SkillTextFile({
     <div className="space-y-3 p-3">
       {error ? <ErrorNote message={error} onRetry={reload} /> : null}
       {preview.truncated ? (
-        <div className="text-sm text-faint">
+        <div className="text-sm text-muted-foreground">
           Showing the first {formatBytes(MAX_SKILL_FILE_PREVIEW_BYTES)} of this{" "}
           {formatBytes(preview.bytes)} file.
         </div>
@@ -727,14 +727,14 @@ function formatBytes(value: number): string {
 
 function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
   return (
-    <li className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
+    <li className="flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5">
       <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
       <div className="min-w-0">
         <div className="text-sm font-medium">{diagnostic.folder}</div>
         <div className="mt-0.5 text-sm text-muted-foreground">
           {diagnostic.error}
         </div>
-        <div className="mt-1 text-sm text-faint">
+        <div className="mt-1 text-sm text-muted-foreground">
           <code>{diagnostic.path}</code>
         </div>
       </div>

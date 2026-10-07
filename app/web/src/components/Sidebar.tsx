@@ -230,9 +230,9 @@ function CalendarBrowser({
           key={view.id}
           type="button"
           onClick={() => onOpenView(view.id)}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
             <CalendarDays size={15} />
           </span>
           {view.label}
@@ -274,9 +274,9 @@ function KnowledgeBrowser({
           type="button"
           aria-current={active === view.id ? "page" : undefined}
           onClick={() => onOpen(view.id)}
-          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active === view.id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
+          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active === view.id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
         >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
             {view.icon}
           </span>
           <span className="min-w-0 flex-1 truncate">{view.label}</span>
@@ -338,7 +338,7 @@ function SettingsSectionList({
         <section key={group.id} aria-labelledby={`settings-group-${group.id}`}>
           <h2
             id={`settings-group-${group.id}`}
-            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-faint"
+            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
             {group.label}
           </h2>
@@ -350,12 +350,12 @@ function SettingsSectionList({
                 onClick={() => onOpenSection?.(section.id)}
                 className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                   activeSection === section.id
-                    ? "bg-accent text-fg"
-                    : "text-muted-foreground hover:bg-raised hover:text-fg"
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
               >
                 <span
-                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${activeSection === section.id ? "bg-surface text-primary" : "bg-raised text-muted-foreground"}`}
+                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${activeSection === section.id ? "bg-background text-primary" : "bg-muted text-muted-foreground"}`}
                 >
                   {section.icon}
                 </span>
@@ -650,7 +650,7 @@ function SidebarImpl({
     // its own last rows clear of it.
     <aside
       ref={containerRef}
-      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-line bg-panel sm:border-r"
+      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
     >
       {/* The shared inset every browser reads its first row in — except at the
           TOP for a browser that draws a header bar there. That bar owns the
@@ -730,7 +730,7 @@ function SidebarImpl({
             density={mobile ? "comfortable" : "tight"}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
-          <p className="px-2.5 py-2 text-sm text-faint">
+          <p className="px-2.5 py-2 text-sm text-muted-foreground">
             The Knowledge Base is turned off in Settings.
           </p>
         ) : section === "knowledge" ? (

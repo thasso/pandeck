@@ -124,7 +124,7 @@ describe("the composer's spawned-session ledge", () => {
     expect(working).toContain("text-primary hover:text-primary");
     const idle = renderToStaticMarkup(ledge([session("a")]));
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted-foreground hover:text-fg");
+    expect(idle).toContain("text-muted-foreground hover:text-foreground");
   });
 
   it("offers to dismiss a bubbled peer failure, and settles that peer", () => {

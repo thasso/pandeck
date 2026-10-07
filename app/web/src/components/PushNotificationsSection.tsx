@@ -291,11 +291,11 @@ export function PushNotificationsSection() {
         applies only to this installation.
       </p>
 
-      <div className="mt-6 space-y-4 rounded-xl border border-line bg-panel p-4">
+      <div className="mt-6 space-y-4 rounded-xl border border-border bg-card p-4">
         <div className="flex items-start gap-3">
           <Bell size={18} className="mt-0.5 shrink-0 text-primary" />
           <div>
-            <h3 className="text-sm font-semibold text-fg">
+            <h3 className="text-sm font-semibold text-foreground">
               Session turn notifications
             </h3>
             <p className="mt-1 text-sm text-muted-foreground">
@@ -379,7 +379,7 @@ export function PushNotificationsSection() {
         )}
       </div>
 
-      <p className="mt-4 text-sm text-faint">
+      <p className="mt-4 text-sm text-muted-foreground">
         Session names may be visible on the Lock Screen.{" "}
         {native
           ? "Every route shows the same text, so this reads the same however the alert reached you."

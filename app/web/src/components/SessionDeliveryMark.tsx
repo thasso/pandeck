@@ -22,7 +22,7 @@ import { Spinner } from "./common/load.tsx";
 const TONE_CLASS: Record<SessionDeliveryTone, string> = {
   accent: "text-primary",
   warning: "text-warning",
-  danger: "text-danger",
+  danger: "text-destructive",
   success: "text-success",
   muted: "text-muted-foreground",
 };

@@ -11,7 +11,7 @@ import type { PushDisplay } from "@assistant/shared";
 function tone(push: PushDisplay): string {
   if (push.status === "pushed") return "border-success/30 bg-success-soft";
   if (push.status === "up-to-date") return "border-primary/30 bg-accent";
-  return "border-danger/30 bg-danger-soft";
+  return "border-destructive/30 bg-destructive/10";
 }
 
 function statusIcon(push: PushDisplay) {
@@ -19,7 +19,7 @@ function statusIcon(push: PushDisplay) {
     return <CheckCircle2 size={16} className="text-success" />;
   if (push.status === "up-to-date")
     return <CloudCheck size={16} className="text-primary" />;
-  return <XCircle size={16} className="text-danger" />;
+  return <XCircle size={16} className="text-destructive" />;
 }
 
 function statusLabel(push: PushDisplay): string {
@@ -40,17 +40,21 @@ export function PushCard({ push }: { push: PushDisplay }) {
         <div className="mt-0.5">{statusIcon(push)}</div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="inline-flex items-center gap-1.5 text-sm font-semibold text-fg">
-              <CloudUpload size={13} className="text-faint" />
+            <div className="inline-flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              <CloudUpload size={13} className="text-muted-foreground" />
               {statusLabel(push)}
             </div>
             {target && (
-              <div className="font-mono text-sm text-faint">{target}</div>
+              <div className="font-mono text-sm text-muted-foreground">
+                {target}
+              </div>
             )}
           </div>
           <div className="mt-1 flex flex-wrap gap-2 text-sm text-muted-foreground">
             {push.repoRoot && (
-              <span className="font-mono text-faint">{push.repoRoot}</span>
+              <span className="font-mono text-muted-foreground">
+                {push.repoRoot}
+              </span>
             )}
             {push.setUpstream && (
               <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
@@ -58,18 +62,21 @@ export function PushCard({ push }: { push: PushDisplay }) {
               </span>
             )}
             {push.forced && (
-              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-fg">
+              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-foreground">
                 force-with-lease
               </span>
             )}
             {push.localHead && (
-              <span className="font-mono text-faint" title={push.localHead}>
+              <span
+                className="font-mono text-muted-foreground"
+                title={push.localHead}
+              >
                 local {push.localHead.slice(0, 12)}
               </span>
             )}
             {push.expectedRemoteHead && (
               <span
-                className="font-mono text-faint"
+                className="font-mono text-muted-foreground"
                 title={push.expectedRemoteHead}
               >
                 leased {push.expectedRemoteHead.slice(0, 12)}
@@ -80,9 +87,9 @@ export function PushCard({ push }: { push: PushDisplay }) {
       </div>
 
       {(push.output || push.error) && (
-        <div className="space-y-3 border-t border-line/60 px-3 py-3">
+        <div className="space-y-3 border-t border-border/60 px-3 py-3">
           {push.error && (
-            <div className="rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-sm text-fg">
+            <div className="rounded-lg border border-destructive/35 bg-destructive/10 px-2.5 py-2 text-sm text-foreground">
               {push.error}
             </div>
           )}
@@ -91,7 +98,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
               <button
                 type="button"
                 onClick={() => setOutputOpen((open) => !open)}
-                className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-faint hover:text-muted-foreground"
+                className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-muted-foreground"
               >
                 <ChevronDown
                   size={12}
@@ -100,7 +107,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
                 Git output
               </button>
               {outputOpen && (
-                <pre className="whitespace-pre-wrap rounded-lg bg-raised p-2 font-mono text-sm text-fg">
+                <pre className="whitespace-pre-wrap rounded-lg bg-muted p-2 font-mono text-sm text-foreground">
                   {push.output}
                 </pre>
               )}

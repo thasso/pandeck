@@ -82,21 +82,21 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
   if (!url) return null;
 
   return (
-    <span className="not-prose my-2 block overflow-hidden rounded-xl border border-line bg-surface text-left text-fg shadow-sm">
-      <span className="flex items-start justify-between gap-2 border-b border-line p-2.5">
+    <span className="not-prose my-2 block overflow-hidden rounded-xl border border-border bg-background text-left text-foreground shadow-sm">
+      <span className="flex items-start justify-between gap-2 border-b border-border p-2.5">
         <span className="flex min-w-0 items-start gap-2">
           <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
             <Icon size={14} />
           </span>
           <span className="min-w-0">
             <span
-              className="block truncate text-sm font-medium text-fg"
+              className="block truncate text-sm font-medium text-foreground"
               title={title}
             >
               {title}
             </span>
             <span
-              className="block truncate text-xs text-faint"
+              className="block truncate text-xs text-muted-foreground"
               title={path || name}
             >
               {path || name || "Served file"}
@@ -123,7 +123,7 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
             }}
             title="Open in the file viewer"
             aria-label="Open in the file viewer"
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <Eye size={14} />
           </a>
@@ -148,7 +148,7 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
             aria-label={
               kind === "other" ? "Download this file" : "Open in a new window"
             }
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
+            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
           >
             <ExternalLink size={14} />
           </button>
@@ -159,7 +159,7 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
             rel="noreferrer noopener"
             title="Open external file"
             aria-label="Open external file"
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg"
+            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <ExternalLink size={14} />
           </a>
@@ -172,7 +172,7 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
             onClick={() => setEnlarged(true)}
             title="Click to enlarge"
             aria-label={`Enlarge ${title}`}
-            className="block w-full cursor-zoom-in bg-panel"
+            className="block w-full cursor-zoom-in bg-card"
           >
             <img
               src={url}

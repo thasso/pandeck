@@ -193,7 +193,7 @@ function PeerPromptBubble({
         className={`block min-w-0 max-w-[85%] rounded-xl px-2 py-1 transition-colors ${
           sent
             ? "bg-accent hover:bg-primary/15"
-            : "border border-line bg-panel/60 hover:bg-surface"
+            : "border border-border bg-card/60 hover:bg-background"
         } ${busy ? "opacity-60" : ""}`}
         onClick={(event) => {
           if (
@@ -211,7 +211,7 @@ function PeerPromptBubble({
         {/* Already an excerpt when it arrives (`peerPromptExcerpt`): the full
             message is never on the wire, and truncating again here would only
             add a second ellipsis. */}
-        <p className="line-clamp-2 break-words text-sm text-fg">
+        <p className="line-clamp-2 break-words text-sm text-foreground">
           {message.message}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
@@ -221,7 +221,7 @@ function PeerPromptBubble({
         {message.failureReason ? (
           // The only detail kept: a failed message whose reason lived nowhere
           // else in the UI would show a state word and no way to understand it.
-          <p className="mt-0.5 line-clamp-2 break-words text-xs text-danger">
+          <p className="mt-0.5 line-clamp-2 break-words text-xs text-destructive">
             {message.failureReason}
           </p>
         ) : null}
@@ -268,13 +268,13 @@ export function PeerPromptsSection({
         {projection.threads.map((thread) => (
           <div
             key={thread.conversationId}
-            className="space-y-1 border-t border-line pt-2.5 first:border-t-0 first:pt-0"
+            className="space-y-1 border-t border-border pt-2.5 first:border-t-0 first:pt-0"
           >
             <div className="flex items-baseline gap-2">
               <a
                 href={sessionPath(thread.peerSessionId)}
                 title={thread.otherPartyTitle}
-                className="min-w-0 truncate text-sm font-medium text-fg underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                className="min-w-0 truncate text-sm font-medium text-foreground underline decoration-dotted underline-offset-2 hover:decoration-solid"
                 onClick={(event) => {
                   if (
                     !onOpenSession ||
@@ -290,7 +290,7 @@ export function PeerPromptsSection({
               >
                 {thread.otherPartyTitle}
               </a>
-              <span className="ml-auto shrink-0 text-xs text-faint">
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                 {relativeTime(
                   thread.messages[thread.messages.length - 1]?.createdAt ?? 0,
                 )}
@@ -312,12 +312,12 @@ export function PeerPromptsSection({
             <button
               type="button"
               onClick={() => onExpand()}
-              className="w-full rounded-lg border border-line px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-surface hover:text-fg"
+              className="w-full rounded-lg border border-border px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
             >
               Load more history
             </button>
           ) : (
-            <p className="text-xs text-faint">
+            <p className="text-xs text-muted-foreground">
               Older peer prompts are not shown.
             </p>
           )
@@ -456,7 +456,7 @@ export function ActiveSkillsSection({
               <li
                 key={name}
                 aria-label={`${name}: ${state}`}
-                className="flex items-center gap-2 rounded-xl border border-line bg-surface px-2.5 py-1.5"
+                className="flex items-center gap-2 rounded-xl border border-border bg-background px-2.5 py-1.5"
               >
                 <span
                   title={SKILL_STATE_TITLE[state]}
@@ -465,13 +465,13 @@ export function ActiveSkillsSection({
                       ? "bg-emerald-500"
                       : mounted.has(name)
                         ? "border border-emerald-500"
-                        : "bg-line-strong"
+                        : "bg-input"
                   }`}
                 />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                   {name}
                 </span>
-                <span className="shrink-0 text-xs text-faint">
+                <span className="shrink-0 text-xs text-muted-foreground">
                   {detail ?? state}
                 </span>
               </li>
@@ -561,7 +561,7 @@ function ToolsSection({
           return (
             <div
               key={group.id}
-              className="rounded-xl border border-line bg-surface"
+              className="rounded-xl border border-border bg-background"
             >
               <button
                 type="button"
@@ -577,27 +577,27 @@ function ToolsSection({
                         ? "Available (loads on demand)"
                         : "Unavailable"
                   }
-                  className={`size-2 shrink-0 rounded-full ${loaded > 0 ? "bg-emerald-500" : usable > 0 ? "bg-line-strong" : "bg-danger/40"}`}
+                  className={`size-2 shrink-0 rounded-full ${loaded > 0 ? "bg-emerald-500" : usable > 0 ? "bg-input" : "bg-destructive/40"}`}
                 />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                   {group.label}
                 </span>
-                <span className="shrink-0 text-xs tabular-nums text-faint">
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {loaded}/{group.tools.length}
                 </span>
               </button>
               {expanded && (
-                <div className="flex flex-wrap gap-1 border-t border-line px-2.5 py-2">
+                <div className="flex flex-wrap gap-1 border-t border-border px-2.5 py-2">
                   {group.tools.map((tool) => (
                     <span
                       key={tool.name}
                       title={`${tool.loaded ? "Loaded" : tool.usable ? "Loads on demand" : "Unavailable"} · ${tool.used ? "called" : "not called"} · ${tool.definitionChars.toLocaleString()} definition chars${tool.tokens ? ` · ~${tool.tokens} tokens` : ""}`}
                       className={`rounded-md border px-1.5 py-0.5 font-mono text-xs ${
                         tool.loaded
-                          ? "border-emerald-500/40 bg-emerald-500/10 text-fg"
+                          ? "border-emerald-500/40 bg-emerald-500/10 text-foreground"
                           : tool.usable
-                            ? "border-line text-muted-foreground"
-                            : "border-line text-faint line-through"
+                            ? "border-border text-muted-foreground"
+                            : "border-border text-muted-foreground line-through"
                       }`}
                     >
                       {tool.name}
@@ -611,7 +611,7 @@ function ToolsSection({
         })}
       </div>
       {exposure.counts.loadedButUnused > 0 && (
-        <p className="mt-2 px-0.5 text-xs text-faint">
+        <p className="mt-2 px-0.5 text-xs text-muted-foreground">
           {exposure.counts.loadedButUnused} loaded but unused ·{" "}
           {exposure.counts.loadedButUnusedDefinitionChars.toLocaleString()}{" "}
           definition chars
@@ -622,7 +622,7 @@ function ToolsSection({
           {recentLoads.map((event) => (
             <p
               key={`${event.at}-${event.via}`}
-              className="truncate text-xs text-faint"
+              className="truncate text-xs text-muted-foreground"
               title={event.names.join(", ")}
             >
               {new Date(event.at).toLocaleTimeString()} ·{" "}
@@ -661,19 +661,19 @@ function ApprovalGrantsSection({
         {grants.map((grant) => (
           <li
             key={grant.key}
-            className="flex items-center gap-2 text-sm text-fg"
+            className="flex items-center gap-2 text-sm text-foreground"
           >
             <span className="min-w-0 flex-1 truncate">
               {approvalGrantLabel(grant.key)}
             </span>
-            <span className="shrink-0 text-xs text-faint">
+            <span className="shrink-0 text-xs text-muted-foreground">
               {relativeTime(grant.grantedAt)}
             </span>
             {onRevoke && (
               <button
                 type="button"
                 onClick={() => onRevoke(sessionId, grant.key)}
-                className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-surface hover:text-fg"
+                className="shrink-0 rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
               >
                 Revoke
               </button>
@@ -703,22 +703,22 @@ function BrowserRuntimesSection({
       summary={runtime.status}
       defaultOpen={runtime.status === "error"}
     >
-      <div className="rounded-xl border border-line bg-surface p-2.5">
+      <div className="rounded-xl border border-border bg-background p-2.5">
         <div className="flex items-center gap-2">
           <div
-            className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-primary" : runtime.status === "error" ? "bg-danger" : "bg-line-strong"}`}
+            className={`size-2.5 shrink-0 rounded-full ${runtime.status === "running" ? "bg-emerald-500" : runtime.status === "starting" ? "bg-primary" : runtime.status === "error" ? "bg-destructive" : "bg-input"}`}
           />
-          <p className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             Playwright MCP
           </p>
           <span
-            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-line text-faint"}`}
+            className={`shrink-0 rounded-md border px-1.5 py-0.5 text-xs ${runtime.agentStatus === "running" ? "border-primary/30 text-primary" : "border-border text-muted-foreground"}`}
           >
             agent {runtime.agentStatus}
           </span>
         </div>
         {runtime.error && (
-          <p className="mt-1.5 line-clamp-2 text-sm text-danger">
+          <p className="mt-1.5 line-clamp-2 text-sm text-destructive">
             {runtime.error}
           </p>
         )}
@@ -786,7 +786,7 @@ function ArtifactsSection({
               key={artifact.id}
               type="button"
               onClick={() => setSelectedId(artifact.id)}
-              className={`overflow-hidden rounded-xl border bg-surface text-left transition-colors ${active ? "border-primary/50 ring-1 ring-primary/30" : "border-line hover:border-line-strong"}`}
+              className={`overflow-hidden rounded-xl border bg-background text-left transition-colors ${active ? "border-primary/50 ring-1 ring-primary/30" : "border-border hover:border-input"}`}
             >
               {artifact.mimeType.startsWith("image/") ? (
                 <img
@@ -795,18 +795,20 @@ function ArtifactsSection({
                   className="h-24 w-full object-cover"
                 />
               ) : (
-                <div className="flex h-24 items-center justify-center bg-panel text-muted-foreground">
+                <div className="flex h-24 items-center justify-center bg-card text-muted-foreground">
                   <ImageIcon size={22} />
                 </div>
               )}
               <div className="p-2">
                 <p
-                  className="truncate text-sm font-medium text-fg"
+                  className="truncate text-sm font-medium text-foreground"
                   title={artifact.label}
                 >
                   {artifact.label}
                 </p>
-                <p className="truncate text-xs text-faint">{artifact.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {artifact.name}
+                </p>
               </div>
             </button>
           );
@@ -845,16 +847,19 @@ function ArtifactPreview({
   const error = errorOf(state);
 
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-line bg-surface">
-      <div className="flex items-start justify-between gap-2 border-b border-line p-2.5">
+    <div className="mt-3 overflow-hidden rounded-xl border border-border bg-background">
+      <div className="flex items-start justify-between gap-2 border-b border-border p-2.5">
         <div className="min-w-0">
           <p
-            className="truncate text-sm font-medium text-fg"
+            className="truncate text-sm font-medium text-foreground"
             title={artifact.label}
           >
             {artifact.label}
           </p>
-          <p className="truncate text-xs text-faint" title={artifact.name}>
+          <p
+            className="truncate text-xs text-muted-foreground"
+            title={artifact.name}
+          >
             {artifact.name}
           </p>
         </div>
@@ -863,7 +868,7 @@ function ArtifactPreview({
             type="button"
             onClick={onCopyUrl}
             title="Copy artifact URL"
-            className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <Clipboard size={12} />
           </button>
@@ -872,7 +877,7 @@ function ArtifactPreview({
               type="button"
               onClick={onCopyImage}
               title="Copy image"
-              className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <ImageIcon size={12} />
             </button>
@@ -882,7 +887,7 @@ function ArtifactPreview({
             target="_blank"
             rel="noreferrer"
             title="Open artifact"
-            className="rounded-md p-1 text-muted-foreground hover:bg-raised hover:text-fg"
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           >
             <ExternalLink size={12} />
           </a>
@@ -900,7 +905,7 @@ function ArtifactPreview({
             <img
               src={url}
               alt={artifact.label}
-              className="max-h-72 w-full bg-panel object-contain"
+              className="max-h-72 w-full bg-card object-contain"
             />
           </button>
           {enlarged ? (

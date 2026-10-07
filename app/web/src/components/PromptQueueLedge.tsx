@@ -27,9 +27,9 @@ export interface PromptQueueLedgeProps {
 }
 
 const ROW_ACTION_CLASS =
-  "flex size-7 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-30";
+  "flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-30";
 const HEADER_ACTION_CLASS =
-  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
  * @component PromptQueueLedge
@@ -108,7 +108,7 @@ export function PromptQueueLedge({
             ? `Queue paused · ${count} ${count === 1 ? "message" : "messages"}`
             : `${count} queued`}
           {queue.paused ? null : (
-            <span className="hidden text-faint @md:inline">
+            <span className="hidden text-muted-foreground @md:inline">
               {` · sent ${running ? "after this response" : "next"}`}
             </span>
           )}
@@ -116,7 +116,7 @@ export function PromptQueueLedge({
         <button
           type="button"
           onClick={onClear}
-          className={`${HEADER_ACTION_CLASS} text-muted-foreground hover:text-fg`}
+          className={`${HEADER_ACTION_CLASS} text-muted-foreground hover:text-foreground`}
         >
           Clear
         </button>
@@ -131,11 +131,11 @@ export function PromptQueueLedge({
           </button>
         ) : null}
       </div>
-      <ol className="max-h-[30vh] overflow-y-auto border-t border-line px-1.5 py-1">
+      <ol className="max-h-[30vh] overflow-y-auto border-t border-border px-1.5 py-1">
         {queue.items.map((item, index) => (
           <li
             key={item.id}
-            className="rounded-lg px-1.5 py-1 hover:bg-raised/60"
+            className="rounded-lg px-1.5 py-1 hover:bg-muted/60"
           >
             {editing?.id === item.id ? (
               <div className="flex items-start gap-2">
@@ -151,7 +151,7 @@ export function PromptQueueLedge({
                     Math.max(1, editing.text.split("\n").length),
                   )}
                   aria-label="Edit queued message"
-                  className="min-w-0 flex-1 resize-none rounded-md border border-line-strong bg-surface px-2 py-1 text-sm text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="min-w-0 flex-1 resize-none rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 />
                 <button
                   type="button"
@@ -210,17 +210,17 @@ function QueuedRow({
   return (
     <div className="min-w-0">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-line bg-surface px-1 text-xs font-semibold text-muted-foreground">
+        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-border bg-background px-1 text-xs font-semibold text-muted-foreground">
           {index + 1}
         </span>
         <span
-          className={`min-w-0 flex-1 truncate text-sm text-fg ${item.command ? "font-mono" : ""}`}
+          className={`min-w-0 flex-1 truncate text-sm text-foreground ${item.command ? "font-mono" : ""}`}
           title={item.text}
         >
           {item.text}
         </span>
         {attachmentCount > 0 ? (
-          <span className="flex shrink-0 items-center gap-0.5 text-xs text-faint">
+          <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
             <Paperclip size={11} aria-hidden="true" />
             {attachmentCount}
           </span>
@@ -228,7 +228,9 @@ function QueuedRow({
         {/* A send under way is past changing: the server refuses an edit or
           removal, so the row says what is happening instead of offering them. */}
         {item.sending ? (
-          <span className="shrink-0 text-sm text-faint">Sending…</span>
+          <span className="shrink-0 text-sm text-muted-foreground">
+            Sending…
+          </span>
         ) : (
           // Its own line on a narrow ledge, beside the text on a wide one.
           <div className="flex basis-full justify-end @md:basis-auto">
@@ -285,7 +287,7 @@ function QueuedRow({
         )}
       </div>
       {item.error ? (
-        <p className="mt-0.5 pl-7 text-sm text-danger">{item.error}</p>
+        <p className="mt-0.5 pl-7 text-sm text-destructive">{item.error}</p>
       ) : null}
     </div>
   );

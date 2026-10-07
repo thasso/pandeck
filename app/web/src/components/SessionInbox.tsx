@@ -754,7 +754,7 @@ export function SessionInbox({
           {/* The separator belongs to the WHOLE fold, not its header. When
               roles open, it travels below their rows instead of cutting the
               run away from the sessions it contains. */}
-          <div className="border-b border-line/60">
+          <div className="border-b border-border/60">
             <WorkflowRunInboxCard
               item={item}
               now={now}
@@ -791,7 +791,7 @@ export function SessionInbox({
             {/* The separator wraps the card AND its disclosed peers. It stays
                 at the bottom of the cluster as rows open and close, making the
                 expansion part of the card rather than loose rows beneath it. */}
-            <div className="border-b border-line/60">
+            <div className="border-b border-border/60">
               {/* The swipe wraps the CARD, inside both exit stages: a card
                   leaving by keyboard is animated by the stages above, and one
                   leaving by thumb is animated by `SwipeRow` — whose height
@@ -838,7 +838,7 @@ export function SessionInbox({
                   type="button"
                   aria-expanded={settledHistory.includes(id)}
                   onClick={() => toggleSettledHistory(id)}
-                  className={`flex ${density === "comfortable" ? "min-h-8" : "min-h-7"} w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-sm text-faint outline-none transition-colors hover:bg-raised hover:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40`}
+                  className={`flex ${density === "comfortable" ? "min-h-8" : "min-h-7"} w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40`}
                 >
                   <ChevronRight
                     size={12}
@@ -919,7 +919,7 @@ export function SessionInbox({
             type="button"
             id="session-inbox-settled"
             onClick={() => setSettledOpen((value) => !value)}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
             aria-expanded={settledExpanded}
           >
             <ChevronRight
@@ -954,7 +954,7 @@ export function SessionInbox({
                   onClick={() =>
                     setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
                   }
-                  className="rounded-md px-2.5 py-1 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="rounded-md px-2.5 py-1 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
                   settled session
@@ -977,7 +977,7 @@ export function SessionInbox({
             type="button"
             id="session-inbox-archived"
             onClick={() => setShowArchived((value) => !value)}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
             aria-expanded={showArchived}
           >
             <ChevronRight
@@ -1006,7 +1006,7 @@ export function SessionInbox({
                 ))}
               </div>
             ) : (
-              <div className="px-3 py-2 text-sm text-faint">
+              <div className="px-3 py-2 text-sm text-muted-foreground">
                 Loading archived sessions…
               </div>
             )

@@ -334,7 +334,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                         SESSION_LIMIT_STEP,
                     }));
                   }}
-                  className="w-full rounded-md px-1 py-0.5 text-left text-sm font-medium text-faint transition-colors hover:bg-raised hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="w-full rounded-md px-1 py-0.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
                   session
@@ -382,9 +382,9 @@ const ProjectRowContent = memo(function ProjectRowContent({
           style={{ backgroundColor: color.dot }}
         />
       </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-fg">
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
         <span className="font-bold tracking-wide">{project.key}</span>
-        <span className="mx-1 text-faint">·</span>
+        <span className="mx-1 text-muted-foreground">·</span>
         <span className={selected ? "font-medium" : undefined}>
           {project.name}
         </span>
@@ -397,7 +397,7 @@ const ProjectRowContent = memo(function ProjectRowContent({
             e.stopPropagation();
             onStartSession(project.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="Start session in this project"
           aria-label={`Start session in project: ${project.key} ${project.name}`}
         >
@@ -431,14 +431,14 @@ function WorktreeRowContentImpl({
       title={`${branch}\n${worktree.path}`}
     >
       <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-surface text-primary" : "bg-raised text-muted-foreground"}`}
+        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-background text-primary" : "bg-muted text-muted-foreground"}`}
         aria-hidden
       >
         {worktree.isMain ? <House size={12} /> : <GitBranch size={12} />}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {branch}
           </span>
           <WorktreeLineDelta status={status} />
@@ -454,7 +454,7 @@ function WorktreeRowContentImpl({
             e.stopPropagation();
             onStartSession(worktree.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
+          className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="Start session in this worktree"
           aria-label={`Start session in worktree: ${branch}`}
         >

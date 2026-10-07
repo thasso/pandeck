@@ -178,7 +178,7 @@ function Field({
   const spec = descriptor.value;
   if (descriptor.access === "readonly" || !spec)
     return (
-      <div className="space-y-1 text-sm text-fg">
+      <div className="space-y-1 text-sm text-foreground">
         <Label descriptor={descriptor} />
         <div className="break-all font-mono text-sm text-muted-foreground">
           {readonlyText(value)}
@@ -187,7 +187,7 @@ function Field({
     );
   if (spec.kind === "boolean")
     return (
-      <label className="flex items-start gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-sm text-fg">
+      <label className="flex items-start gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground">
         <input
           type="checkbox"
           checked={value === true}
@@ -198,7 +198,7 @@ function Field({
       </label>
     );
   return (
-    <div className="space-y-1 text-sm text-fg">
+    <div className="space-y-1 text-sm text-foreground">
       <Label descriptor={descriptor} />
       {spec.kind === "enum" ? (
         <select
@@ -241,7 +241,7 @@ function Field({
         />
       )}
       {(spec.kind === "integer" || spec.kind === "number") && (
-        <div className="text-sm text-faint">
+        <div className="text-sm text-muted-foreground">
           {spec.min}–{spec.max}
         </div>
       )}
@@ -273,8 +273,8 @@ export function RegistrySettingFields({
   };
   return (
     <div className="mx-auto max-w-2xl px-6 pb-6">
-      <div className="space-y-3 rounded-xl border border-line bg-panel p-4">
-        <h3 className="text-sm font-semibold text-fg">More settings</h3>
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground">More settings</h3>
         {shown.map((descriptor) => (
           <Field
             key={descriptor.path}

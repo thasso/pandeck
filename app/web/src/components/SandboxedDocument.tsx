@@ -203,7 +203,7 @@ export function SandboxedDocument({
     return (
       <div className="flex min-h-full items-center justify-center p-6">
         <EmptyBox
-          className="w-full max-w-md bg-panel/60"
+          className="w-full max-w-md bg-card/60"
           action={
             <a
               {...openProps}
@@ -216,11 +216,11 @@ export function SandboxedDocument({
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent text-primary">
             <FileText size={22} />
           </div>
-          <h1 className="text-base font-semibold text-fg">
+          <h1 className="text-base font-semibold text-foreground">
             {name ?? "Document"}
           </h1>
           {sizeBytes === undefined ? null : (
-            <p className="mt-1 text-sm text-faint">
+            <p className="mt-1 text-sm text-muted-foreground">
               {formatFileSize(sizeBytes)}
             </p>
           )}
@@ -264,7 +264,7 @@ export function SandboxedDocument({
         <a
           {...openProps}
           aria-label={openProps.title}
-          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted-foreground transition-colors hover:text-fg"
+          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-border bg-background/90 text-muted-foreground transition-colors hover:text-foreground"
         >
           <ExternalLink size={14} />
         </a>

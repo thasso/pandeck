@@ -60,7 +60,7 @@ export function SessionInboxBar({
     // band the chips are not centred in — the whole complaint this bar exists
     // to answer. The height is a constant rather than padding around content
     // for the same reason the counts never unmount.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-line bg-panel px-2 sm:-mx-2 sm:px-3">
+    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
       <Chip
         label={
           needsYou === 0
@@ -114,7 +114,7 @@ type ChipTone = "accent" | "live" | "quiet";
 const TONE_CLASS: Record<ChipTone, string> = {
   accent: "bg-accent text-primary",
   live: "text-muted-foreground",
-  quiet: "text-faint",
+  quiet: "text-muted-foreground",
 };
 
 /**
@@ -179,7 +179,7 @@ function Chip({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={`${shape} transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
+      className={`${shape} transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
     >
       {glyph}
       {number}

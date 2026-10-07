@@ -57,19 +57,19 @@ interface RowProject {
 
 const CI_CLASS: Record<PullRequestCiTone, string> = {
   success: "text-success",
-  failure: "text-danger",
+  failure: "text-destructive",
   pending: "text-primary",
-  error: "text-danger",
-  none: "text-faint",
-  unknown: "text-faint",
+  error: "text-destructive",
+  none: "text-muted-foreground",
+  unknown: "text-muted-foreground",
 };
 
 const REVIEW_CLASS: Record<PullRequestReviewTone, string> = {
-  "changes-requested": "text-danger",
+  "changes-requested": "text-destructive",
   unresolved: "text-warning",
   requested: "text-primary",
   clear: "text-success",
-  unknown: "text-faint",
+  unknown: "text-muted-foreground",
 };
 
 /**
@@ -87,7 +87,7 @@ function StateIcon({ item }: { item: PullRequestInventoryItem }) {
     return (
       <GitPullRequestClosed
         size={size}
-        className="shrink-0 text-danger"
+        className="shrink-0 text-destructive"
         aria-hidden
       />
     );
@@ -95,7 +95,7 @@ function StateIcon({ item }: { item: PullRequestInventoryItem }) {
     return (
       <GitPullRequestDraft
         size={size}
-        className="shrink-0 text-faint"
+        className="shrink-0 text-muted-foreground"
         aria-hidden
       />
     );
@@ -149,21 +149,21 @@ const PullRequestRow = memo(function PullRequestRow({
       }}
       className={`group flex min-w-0 cursor-pointer select-none flex-col gap-0.5 rounded-md px-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
         density === "comfortable" ? "py-2" : "py-1.5"
-      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
     >
       <div className="flex min-w-0 items-center gap-1.5">
         <StateIcon item={item} />
-        <span className="shrink-0 font-mono text-xs tabular-nums text-faint">
+        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
           #{item.number}
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm text-fg">
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
           {item.title}
         </span>
       </div>
       <div className="flex min-w-0 items-center gap-1.5 pl-[1.15rem]">
         {project ? (
           <span
-            className="flex shrink-0 items-center gap-1 text-xs text-faint"
+            className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
             title={project.name}
           >
             <span
@@ -174,11 +174,13 @@ const PullRequestRow = memo(function PullRequestRow({
             {project.key}
           </span>
         ) : null}
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-faint">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
           {item.headBranch}
         </span>
         {item.draft ? (
-          <span className="shrink-0 text-xs font-medium text-faint">Draft</span>
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">
+            Draft
+          </span>
         ) : null}
         {item.worktreeId ? (
           // The one relation a ROW states: this pull request has a checkout on
@@ -312,7 +314,7 @@ export function PullRequestBrowser({
         <div className="relative min-w-0 flex-1">
           <Search
             size={13}
-            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
+            className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
             aria-hidden
           />
           <input
@@ -321,7 +323,7 @@ export function PullRequestBrowser({
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pull requests…"
             aria-label="Search pull requests"
-            className="w-full rounded-lg border border-line bg-surface py-1.5 pl-8 pr-2 text-sm text-fg outline-none placeholder:text-faint focus:border-primary"
+            className="w-full rounded-lg border border-border bg-background py-1.5 pl-8 pr-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary"
           />
         </div>
         {/* R2: a poll keeps the rows and says so here, rather than replacing
@@ -353,7 +355,9 @@ export function PullRequestBrowser({
           <h2
             id={`pull-requests-${group.id}`}
             className={`px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide ${
-              group.id === "needs-review" ? "text-primary" : "text-faint"
+              group.id === "needs-review"
+                ? "text-primary"
+                : "text-muted-foreground"
             }`}
           >
             {group.title} ({group.items.length})
