@@ -5264,9 +5264,9 @@ export class Connection implements Viewer {
    * Forward the engine's non-chat session envelopes to the client. The
    * RuntimeTransport owns the chat stream and run-state events, so without this
    * bridge engine metadata (`state`/`contextInfo`/`notice`) and store-backed
-   * overlay updates (approval, peer-prompt cards) would be lost on the
-   * runtime path. Viewed-chat run state remains on the runtime snapshot/event
-   * stream.
+   * overlay updates (approval, peer-prompt cards, the user's prompt queue, a
+   * failure told to this session) would be lost on the runtime path.
+   * Viewed-chat run state remains on the runtime snapshot/event stream.
    */
   private attachEngineStateViewer(live: HarnessDriver): void {
     const viewer: Viewer = {
@@ -5278,7 +5278,11 @@ export class Connection implements Viewer {
           m.type === "approvalUpdate" ||
           m.type === "approvalGrants" ||
           m.type === "pullRequestCardUpdate" ||
-          m.type === "peerPromptCardUpdate"
+          m.type === "peerPromptCardUpdate" ||
+          m.type === "promptQueue" ||
+          (m.type === "error" &&
+            m.target?.type === "session" &&
+            m.target.id === live.sessionId)
         )
           this.send(m);
       },
