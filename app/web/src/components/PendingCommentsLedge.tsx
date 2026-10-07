@@ -89,24 +89,28 @@ export function PendingCommentsLedge({
             ))}
           </ul>
           {confirmingClear ? (
-            <div className="flex items-center justify-end gap-1.5 py-1 pr-1.5 pl-2.5">
-              <span>Remove all {comments.length}?</span>
+            // The same 28px as the "Remove all" row it replaces, so asking does
+            // not move anything: xs buttons inside it, no vertical padding.
+            <div className="flex h-7 items-center justify-end gap-1.5 pr-1.5 pl-2.5">
+              <span>Remove all?</span>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setConfirmingClear(false)}
+              >
+                Keep
+              </Button>
+              {/* The destructive answer takes the far end, where the "Remove
+                  all" that asked the question sat. */}
               <Button
                 variant="destructive"
-                size="sm"
+                size="xs"
                 onClick={() => {
                   onClear();
                   setConfirmingClear(false);
                 }}
               >
-                Remove all
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmingClear(false)}
-              >
-                Keep
+                Remove
               </Button>
             </div>
           ) : (
@@ -161,7 +165,7 @@ const PendingCommentRow = memo(function PendingCommentRow({
           size="sm"
           // The whole row takes the hover (its `Item`), not just this toggle
           // beside the actions; open is not a hover state.
-          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
+          className="h-7 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           title={open ? "Hide the comment" : comment.body}

@@ -219,16 +219,19 @@ export function SpawnedSessionsLedge({
       ) : null}
       {stallLine}
       {open ? (
-        <div id={`spawned-sessions-ledge-${sessionId}`} className="border-t">
+        // `divide-y`, not a border on the rows: the line under them exists
+        // only while the settled toggle follows, so an open strip never ends
+        // in a line that doubles the next strip's divider.
+        <div
+          id={`spawned-sessions-ledge-${sessionId}`}
+          className="divide-y border-t"
+        >
           {/* The rows scroll in a box of bounded height, so listing every
               peer changes what is in the box and never how tall the
               composer's shelf is. The settled toggle below is OUTSIDE it: at
               the foot of the scroll box it would sit past the fold, and a
               control the user has to know to scroll for is not offered. */}
-          <div
-            data-spawned-sessions-rows
-            className="max-h-72 overflow-y-auto border-b"
-          >
+          <div data-spawned-sessions-rows className="max-h-72 overflow-y-auto">
             <ul className="divide-y">
               {view.rows.map((card) => (
                 <SpawnedSessionLedgeRow
@@ -320,7 +323,7 @@ const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
           size="sm"
           // The whole row takes the hover (its `Item`), not just this toggle
           // beside the actions; open is not a hover state.
-          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
+          className="h-7 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           title={open ? "Hide details" : "Show details"}
