@@ -4014,13 +4014,46 @@ function AppContent() {
     (isNewChatRoute
       ? sessionShell.titleGenerationPending
       : displaySessionListItem?.titleGenerationPending === true);
+  // The header's one compact row holds a second, smaller line when the session
+  // works in a worktree: its branch and uncommitted changes, so the space
+  // beside the title says where the work lands without opening the inspector.
+  const displayWorktreeBranch = displayWorktreeId
+    ? (displayWorktreeStatus?.branch ??
+      state.worktrees?.find((worktree) => worktree.id === displayWorktreeId)
+        ?.branch)
+    : undefined;
   const sessionTitleHeading = (
-    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-      <SessionTitleText
-        title={displaySessionTitle}
-        pending={displaySessionTitleGenerationPending}
-      />
-    </h2>
+    <div className="min-w-0">
+      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+        <SessionTitleText
+          title={displaySessionTitle}
+          pending={displaySessionTitleGenerationPending}
+        />
+      </h2>
+      {displayWorktreeBranch ? (
+        <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+          <GitBranch className="size-3 shrink-0" aria-hidden />
+          <span className="min-w-0 truncate font-mono">
+            {displayWorktreeBranch}
+          </span>
+          {displayWorktreeStatus &&
+          (displayWorktreeStatus.additions > 0 ||
+            displayWorktreeStatus.deletions > 0) ? (
+            <span
+              className="shrink-0 tabular-nums"
+              title="Uncommitted line changes in the worktree"
+            >
+              <span className="text-success">
+                +{displayWorktreeStatus.additions}
+              </span>{" "}
+              <span className="text-destructive">
+                −{displayWorktreeStatus.deletions}
+              </span>
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
   );
   const stagedContextBar: StagedContextData | undefined = showContextPicker
     ? {
