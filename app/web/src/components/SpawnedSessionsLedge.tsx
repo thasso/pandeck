@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Hourglass, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Hourglass, Users, X } from "lucide-react";
 import {
   clusterBubbleDismissible,
   sessionClusterBubbleLabel,
@@ -85,7 +85,7 @@ export function SpawnedSessionsLedge({
     ? bubbled.session.title.trim() || "Untitled session"
     : "";
   const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
-  const Chevron = open ? ChevronDown : ChevronUp;
+  const Chevron = open ? ChevronDown : ChevronRight;
   // The tree has stopped and a peer still owes this chat a reply: on a line
   // of its own, like the bubble, naming the peer to poke.
   const stallLine = view.stall ? (
@@ -223,7 +223,7 @@ export function SpawnedSessionsLedge({
             >
               <ChevronDown
                 aria-hidden="true"
-                className={view.settledShown ? "rotate-180" : ""}
+                className={view.settledShown ? "" : "-rotate-90"}
               />
               <span className="min-w-0 truncate">
                 {view.settledShown

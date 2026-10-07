@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Activity, ChevronDown, ChevronUp, Square } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, Square } from "lucide-react";
 import type {
   BackgroundWorkItemSummary,
   SessionBackgroundActivity,
@@ -72,7 +72,7 @@ export function BackgroundWorkLedge({
     activity.activeCount > 0 && activity.oldestStartedAt > 0
       ? elapsedLabel(now - activity.oldestStartedAt)
       : undefined;
-  const Chevron = open ? ChevronDown : ChevronUp;
+  const Chevron = open ? ChevronDown : ChevronRight;
   return (
     <div data-background-ledge className="min-w-0">
       <Button
