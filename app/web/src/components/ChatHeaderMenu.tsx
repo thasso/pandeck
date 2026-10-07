@@ -90,7 +90,10 @@ function viewRows(view: NonNullable<Props["view"]>) {
 }
 function GroupLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="text-xs font-medium text-muted-foreground">{children}</div>
+    // The rows' own inset, so a label lines up with the icons under it.
+    <div className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+      {children}
+    </div>
   );
 }
 // The object dock uses these same choices outside a Menu root. Item keeps their
@@ -108,14 +111,15 @@ export function TranscriptViewRows({
           size="sm"
           render={<button type="button" disabled={row.disabled} />}
           // `Item` has no disabled look of its own, and a dependent option
-          // has to read as off while its parent is.
-          className={`disabled:pointer-events-none disabled:opacity-50 ${row.child ? "pl-8" : ""}`}
+          // has to read as off while its parent is. A child's icon starts
+          // where its parent's label does (row inset + icon + gap).
+          className={`disabled:pointer-events-none disabled:opacity-50 ${row.child ? "pl-9.5" : ""}`}
           role="menuitemcheckbox"
           aria-checked={row.checked}
           title={row.hint}
           onClick={() => view.onChange(row.patch)}
         >
-          <ItemMedia>{row.icon}</ItemMedia>
+          <ItemMedia variant="icon">{row.icon}</ItemMedia>
           <ItemContent>
             <ItemTitle>{row.label}</ItemTitle>
           </ItemContent>
@@ -183,7 +187,9 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
                       action.onRun();
                     }}
                   >
-                    {action.icon ? <ItemMedia>{action.icon}</ItemMedia> : null}
+                    {action.icon ? (
+                      <ItemMedia variant="icon">{action.icon}</ItemMedia>
+                    ) : null}
                     <ItemContent>
                       <ItemTitle>
                         <span className="truncate">{action.label}</span>
@@ -220,7 +226,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
                 disabled={row.disabled ?? false}
                 closeOnClick={false}
                 title={row.hint}
-                className={row.child ? "pl-6" : undefined}
+                className={row.child ? "pl-7" : undefined}
                 onCheckedChange={() => view.onChange(row.patch)}
               >
                 {row.icon}
