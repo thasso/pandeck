@@ -179,6 +179,37 @@ describe("CalendarDetailPanel", () => {
     );
   });
 
+  it("joins a conference through a real link", () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() =>
+      root!.render(
+        <CalendarDetailPanel
+          calendar={controller({
+            selectedEvent: {
+              ...event("Standup"),
+              conferenceLinks: [
+                {
+                  provider: "google-meet",
+                  label: "Meet",
+                  uri: "https://meet.example/abc",
+                },
+              ],
+            },
+          })}
+          onNewSession={() => {}}
+        />,
+      ),
+    );
+    const join = [...container.querySelectorAll("a")].find((a) =>
+      a.textContent?.includes("Join Meet"),
+    );
+    expect(join?.getAttribute("href")).toBe("https://meet.example/abc");
+    expect(join?.getAttribute("target")).toBe("_blank");
+    expect(join?.getAttribute("role")).toBeNull();
+  });
+
   it("asks for an event when none is selected", () => {
     const html = panel(controller());
     expect(html).toContain("Select an event to see its details.");

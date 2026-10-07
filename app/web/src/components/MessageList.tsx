@@ -491,7 +491,9 @@ function MessageActionsBar({
     <div
       className={`mt-1 flex ${align === "right" ? "justify-end" : "justify-start"}`}
     >
-      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
+      {/* Revealed on hover or focus; a coarse pointer has no hover, so the row
+          is shown there rather than left as an invisible tap target. */}
+      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
         {canCopy && (
           <IconButton
             label={copied ? "Copied" : "Copy message text"}

@@ -22,7 +22,11 @@ the same parts a shadcn example would.
 - A local edit to a vendored file is allowed only for an app contract, and is
   listed here:
   - `button.tsx`: `busy` prop (spinner, disabled, `aria-busy`;
-    `loading-states.md` R5).
+    `loading-states.md` R5). Its spinner is decorative (`role="presentation"`,
+    `aria-hidden`, no label): the stock one is a `role="status"` live region,
+    which R6 forbids inside a control.
+  - `dialog.tsx`: `overlayClassName` on `DialogContent`, so a full-screen
+    takeover (the shortcuts help) puts its backdrop in band 100 with its popup.
   - `spinner.tsx`, `skeleton.tsx`: `motion-safe:` animations (R6).
   - `sonner.tsx`: reads the `.dark` class instead of `next-themes`.
   - `input-group.tsx`: dims only when its text control is disabled, not when any
@@ -49,6 +53,7 @@ the same parts a shadcn example would.
 | A link that looks like a button            | `common/LinkButton` (a real `<a>` with `buttonVariants`; never `Button render={<a>}`) |
 | Grouped or segmented actions               | `ButtonGroup`, `ToggleGroup`                                                          |
 | Text entry                                 | `Input`, `Textarea`, `InputGroup` (field with addons, the composer)                   |
+| Edit a shown text value in place           | `common/EditableText` (Save/Cancel, keeps the draft until the save succeeds)          |
 | Choice                                     | `Select`, `NativeSelect`, `Combobox`, `RadioGroup`, `Checkbox`, `Switch`              |
 | Form rows, labels, help and errors         | `Field`, `FieldLabel`, `FieldDescription`, `FieldError`, `FieldGroup`                 |
 | A list row (session, task, file, setting)  | `Item` (`ItemMedia`, `ItemContent`, `ItemTitle`, `ItemActions`)                       |
@@ -90,14 +95,20 @@ The audit does not count a `render={<button` target.
 ## Storybook
 
 Storybook (`pnpm --filter @assistant/web storybook`) is where UI work is looked
-at and discussed.
+at and discussed. Its sidebar has three groups, matching the layers:
 
-- Every `ui/` component has a gallery story under
-  `component-preview/stories/ui/` (`UI/<Component>`).
-- Every feature surface (a page, card, panel, dialog or row) has a story under
-  `component-preview/stories/<area>/` that renders the production component with
-  wire-level fixtures, per `docs/component-previews.md`.
-- A change to a surface updates or adds its story in the same change.
+- `shadcn/<Component>` — every vendored `ui/` component, under
+  `component-preview/stories/ui/`.
+- `Common/<Component>` — every app composite in `components/common/`, under
+  `component-preview/stories/common/`.
+- `App/<Area>/<Surface>` — every feature surface (a page, card, panel, dialog or
+  row), under `component-preview/stories/<area>/`, rendering the production
+  component with wire-level fixtures from `component-preview/fixtures/`, per
+  `docs/component-previews.md`.
+
+A change to a component or surface updates or adds its story in the same change.
+Helper components exported from a story file end in `Story` and are kept out of
+the index with `excludeStories: /.*Story$/`.
 
 ## Enforcement
 

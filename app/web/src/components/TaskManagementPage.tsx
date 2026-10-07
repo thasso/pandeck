@@ -19,9 +19,8 @@ import {
   CollapsibleTrigger,
 } from "./ui/collapsible.tsx";
 import { Button } from "./ui/button.tsx";
-import { Input } from "./ui/input.tsx";
-import { Textarea } from "./ui/textarea.tsx";
 import { IconButton } from "./common/IconButton.tsx";
+import { EditableText } from "./common/EditableText.tsx";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   PullRequestMergeMethod,
@@ -644,11 +643,6 @@ function TaskDetailPanel({
 
   // The prose is not clickable; the section action owns edit mode.
   const [editingDescription, setEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(descriptionText);
-  const beginDescriptionEdit = () => {
-    setDescriptionDraft(descriptionText);
-    setEditingDescription(true);
-  };
   // Brief confirmation on the header glyph after it copies the task id.
   const [idCopied, setIdCopied] = useState(false);
   useWorkflowRunAnchor(runs, runsLoaded);
@@ -756,7 +750,7 @@ function TaskDetailPanel({
                   {descriptionLoaded ? (
                     <IconButton
                       label="Edit description"
-                      onClick={beginDescriptionEdit}
+                      onClick={() => setEditingDescription(true)}
                       busy={isPending(descriptionMutation ?? idle())}
                     >
                       <Pencil />
@@ -768,38 +762,18 @@ function TaskDetailPanel({
               {detailError ? (
                 <ErrorNote message={detailError} onRetry={onRetryDetail} />
               ) : null}
-              {editingDescription ? (
-                <div className="flex flex-col gap-2">
-                  <Textarea
-                    value={descriptionDraft}
-                    onChange={(event) =>
-                      setDescriptionDraft(event.target.value)
-                    }
-                    aria-label="Task description"
-                    placeholder="Add a description…"
-                    className="min-h-32 resize-y"
-                  />
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => setEditingDescription(false)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      busy={isPending(descriptionMutation ?? idle())}
-                      onClick={() => {
-                        onSaveDescription(
-                          descriptionDraft.replace(/\\s+$/, ""),
-                        );
-                        setEditingDescription(false);
-                      }}
-                    >
-                      Save
-                    </Button>
-                  </div>
-                </div>
-              ) : (
+              <EditableText
+                value={descriptionText}
+                onSubmit={onSaveDescription}
+                submitState={descriptionMutation}
+                editing={editingDescription}
+                onEditingChange={setEditingDescription}
+                multiline
+                allowEmpty
+                label="Task description"
+                placeholder="Add a description…"
+                className="min-h-32 resize-y"
+              >
                 <div className="min-h-16 w-full py-1">
                   {descriptionText.trim() ? (
                     <Markdown
@@ -844,7 +818,7 @@ function TaskDetailPanel({
                     </span>
                   )}
                 </div>
-              )}
+              </EditableText>
             </TaskCollapsibleSection>
 
             <TaskCollapsibleSection
@@ -905,13 +879,6 @@ function TaskTitleBlock({
   const isDone = item.status === "done";
   const meta = onCycle || progress;
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(item.title);
-  const rename = () => {
-    const title = draft.trim();
-    if (!title || isPending(renameMutation ?? idle())) return;
-    onRename(title);
-    setEditing(false);
-  };
   return (
     <div className="mb-6 space-y-2">
       {meta ? (
@@ -938,27 +905,14 @@ function TaskTitleBlock({
       {errorOf(statusMutation ?? idle()) ? (
         <ErrorNote message={errorOf(statusMutation ?? idle())!} />
       ) : null}
-      {editing ? (
-        <div className="flex items-start gap-2">
-          <Input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") rename();
-              if (event.key === "Escape") setEditing(false);
-            }}
-            aria-label="Task title"
-            disabled={isPending(renameMutation ?? idle())}
-            autoFocus
-          />
-          <Button busy={isPending(renameMutation ?? idle())} onClick={rename}>
-            Save
-          </Button>
-          <Button variant="outline" onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
-        </div>
-      ) : (
+      <EditableText
+        value={item.title}
+        onSubmit={onRename}
+        submitState={renameMutation}
+        editing={editing}
+        onEditingChange={setEditing}
+        label="Task title"
+      >
         <div className="flex items-start gap-2">
           <h1
             className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
@@ -968,15 +922,12 @@ function TaskTitleBlock({
           <IconButton
             label="Rename task"
             className="mt-1"
-            onClick={() => {
-              setDraft(item.title);
-              setEditing(true);
-            }}
+            onClick={() => setEditing(true)}
           >
             <Pencil />
           </IconButton>
         </div>
-      )}
+      </EditableText>
     </div>
   );
 }

@@ -14,8 +14,7 @@ import {
 } from "../lib/nativeShell.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
-import { IconButton } from "./common/IconButton.tsx";
-import { Button } from "./ui/button.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
 
 /** Renew this far before expiry, so a reader never meets a dead frame. */
 const RENEW_MARGIN_MS = 60_000;
@@ -207,9 +206,9 @@ export function SandboxedDocument({
         <EmptyBox
           className="w-full max-w-md bg-card/60"
           action={
-            <Button nativeButton={false} render={<a {...openProps} />}>
+            <LinkButton variant="default" size="default" {...openProps}>
               <ExternalLink data-icon="inline-start" /> Open PDF
-            </Button>
+            </LinkButton>
           }
         >
           <FileText size={22} className="mx-auto mb-4 text-primary" />
@@ -258,15 +257,16 @@ export function SandboxedDocument({
         className={`block border-0 bg-white ${className}`}
       />
       {showOpenAction ? (
-        <IconButton
+        <LinkButton
+          {...openProps}
+          title={undefined}
           label={openProps.title}
           variant="outline"
-          nativeButton={false}
-          render={<a {...openProps} />}
+          size="icon-sm"
           className="absolute right-2 top-2"
         >
           <ExternalLink />
-        </IconButton>
+        </LinkButton>
       ) : null}
       {openError ? <ErrorNote message={openError} className="mt-2" /> : null}
     </span>

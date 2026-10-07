@@ -159,6 +159,22 @@ it("offers a PDF a real browser tab where a framed one cannot be scrolled", asyn
     "/api/file-grants/g1/page.html",
   );
   expect(action.getAttribute("target")).toBe("_blank");
+  // A navigation keeps link semantics; a Base UI button would add role=button.
+  expect(action.getAttribute("role")).toBeNull();
+});
+
+it("renders the in-frame open action as a named link, not a button", async () => {
+  stubMint(10 * 60_000);
+  await render();
+  const action = container!.querySelector<HTMLAnchorElement>("a")!;
+  expect(action.getAttribute("role")).toBeNull();
+  expect(action.getAttribute("aria-label")).toBe(
+    "Open this document in a new tab",
+  );
+  expect(action.getAttribute("href")).toContain(
+    "/api/file-grants/g1/page.html",
+  );
+  expect(action.getAttribute("target")).toBe("_blank");
 });
 
 it("keeps the embedded PDF frame on an engine that scrolls one", async () => {

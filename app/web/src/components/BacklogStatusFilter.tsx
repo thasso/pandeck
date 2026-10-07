@@ -23,6 +23,7 @@ export function BacklogStatusFilter({
 }) {
   return (
     <ToggleGroup
+      multiple
       value={[...statuses]}
       onValueChange={(values) => onChange(values as TaskStatus[])}
       variant="outline"

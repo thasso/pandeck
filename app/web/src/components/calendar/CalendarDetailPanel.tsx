@@ -15,7 +15,7 @@ import type { CalendarController } from "../../hooks/useCalendar.ts";
 import { EmptyBox } from "../common/load.tsx";
 import { Card } from "../ui/card.tsx";
 import { Badge } from "../ui/badge.tsx";
-import { Button } from "../ui/button.tsx";
+import { LinkButton } from "../common/LinkButton.tsx";
 import { Inspector, InspectorSection } from "../shell/Inspector.tsx";
 import { hm } from "./calendarDates.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
@@ -201,14 +201,16 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
 
 function ConferenceButton({ link }: { link: CalendarConferenceLink }) {
   return (
-    <Button
-      render={<a href={link.uri} target="_blank" rel="noopener noreferrer" />}
+    <LinkButton
+      href={link.uri}
+      target="_blank"
+      rel="noopener noreferrer"
       variant="outline"
       size="sm"
       className="justify-center"
     >
       <Video />
       Join {link.label}
-    </Button>
+    </LinkButton>
   );
 }

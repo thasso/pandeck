@@ -30,8 +30,7 @@ import {
   CollapsibleTrigger,
 } from "./ui/collapsible.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import { Input } from "./ui/input.tsx";
-import { Textarea } from "./ui/textarea.tsx";
+import { EditableText } from "./common/EditableText.tsx";
 import { Button } from "./ui/button.tsx";
 import { useDialogs } from "./common/dialogs.tsx";
 import {
@@ -159,11 +158,6 @@ function ProjectDetailPageView({
     : null;
   const selectedDocument = detailState ? dataOf(detailState) : undefined;
   const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
-  const beginRename = () => {
-    setNameDraft(selected?.name ?? "");
-    setEditingName(true);
-  };
   const [keyCopied, setKeyCopied] = useState(false);
   const copyKey = selected?.key
     ? () => {
@@ -209,21 +203,15 @@ function ProjectDetailPageView({
         }
         title={
           selected ? (
-            editingName ? (
-              <Input
-                value={nameDraft}
-                aria-label="Project name"
-                autoFocus
-                onChange={(event) => setNameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    onSave(selected.id, { name: nameDraft.trim() });
-                    setEditingName(false);
-                  }
-                  if (event.key === "Escape") setEditingName(false);
-                }}
-              />
-            ) : (
+            <EditableText
+              key={selected.id}
+              value={selected.name}
+              submitState={mutationStates[`${selected.id}:name`]}
+              onSubmit={(name) => onSave(selected.id, { name })}
+              editing={editingName}
+              onEditingChange={setEditingName}
+              label="Project name"
+            >
               <h2 className="truncate text-sm">
                 {selected.key ? (
                   <>
@@ -237,7 +225,7 @@ function ProjectDetailPageView({
                   {selected.name}
                 </span>
               </h2>
-            )
+            </EditableText>
           ) : (
             "Projects"
           )
@@ -257,7 +245,10 @@ function ProjectDetailPageView({
                   archived
                 </span>
               ) : null}
-              <IconButton label="Rename Project" onClick={beginRename}>
+              <IconButton
+                label="Rename Project"
+                onClick={() => setEditingName(true)}
+              >
                 <Pencil />
               </IconButton>
             </div>
@@ -424,11 +415,6 @@ function ProjectDetail({
 }) {
   const description = project.description ?? "";
   const [editingDescription, setEditingDescription] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(description);
-  const beginDescriptionEdit = () => {
-    setDescriptionDraft(description);
-    setEditingDescription(true);
-  };
   const cloneState = mutationStates[`${project.id}:clone`];
   const removeState = mutationStates[`${project.id}:remove`];
   const provisioning =
@@ -456,43 +442,26 @@ function ProjectDetail({
         title="Description"
         storageKey={`project.collapse.${project.id}.description`}
         trailing={
-          <IconButton label="Edit description" onClick={beginDescriptionEdit}>
+          <IconButton
+            label="Edit description"
+            onClick={() => setEditingDescription(true)}
+          >
             <Pencil />
           </IconButton>
         }
       >
-        {editingDescription ? (
-          <div className="flex flex-col gap-2">
-            <Textarea
-              value={descriptionDraft}
-              aria-label="Project description"
-              placeholder="Add a description…"
-              className="min-h-32 resize-y"
-              onChange={(event) => setDescriptionDraft(event.target.value)}
-            />
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setEditingDescription(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                busy={
-                  mutationStates[`${project.id}:description`]
-                    ? isPending(mutationStates[`${project.id}:description`]!)
-                    : false
-                }
-                onClick={() => {
-                  onSave({ description: descriptionDraft.trim() });
-                  setEditingDescription(false);
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        ) : (
+        <EditableText
+          value={description}
+          submitState={mutationStates[`${project.id}:description`]}
+          onSubmit={(next) => onSave({ description: next.trim() })}
+          editing={editingDescription}
+          onEditingChange={setEditingDescription}
+          multiline
+          allowEmpty
+          label="Project description"
+          placeholder="Add a description…"
+          className="min-h-32 resize-y"
+        >
           <div className="min-h-16 w-full py-1">
             {description.trim() ? (
               <Markdown
@@ -506,7 +475,7 @@ function ProjectDetail({
               </span>
             )}
           </div>
-        )}
+        </EditableText>
       </ProjectCollapsibleSection>
 
       {/* The project's Tasks and Worktrees are its CONTENT, so they live here
@@ -578,9 +547,9 @@ function ProjectDetail({
         provisioning={provisioning}
         provisionError={provisionError}
         mutationState={mutationStates[`${project.id}:field:repoUrl`]}
-        onSaveUrl={(repoUrl) =>
-          onSave({ ...(repoUrl !== undefined ? { repoUrl } : {}) })
-        }
+        // "" clears: the server drops an empty `repoUrl`, while an omitted one
+        // would be a no-op patch under a different mutation key.
+        onSaveUrl={(repoUrl) => onSave({ repoUrl })}
         onClone={onClone}
         onRemoveClone={onRemoveClone}
       />
@@ -735,14 +704,13 @@ function RepositorySection({
     message: string;
   } | null;
   mutationState?: LoadState<true> | undefined;
-  onSaveUrl: (repoUrl: string | undefined) => void;
+  onSaveUrl: (repoUrl: string) => void;
   onClone: () => void;
   onRemoveClone: () => void;
 }) {
   const dialogs = useDialogs();
   const url = project.repoUrl?.trim() ?? "";
   const [editingUrl, setEditingUrl] = useState(false);
-  const [urlDraft, setUrlDraft] = useState(url);
   const busy = provisioning !== null;
   const dependencyPending = spawnedWorktrees === null;
   const blocked = dependencyPending || spawnedWorktrees > 0;
@@ -832,52 +800,25 @@ function RepositorySection({
           </>
         ) : (
           <>
-            {editingUrl ? (
-              <div className="flex flex-col gap-1">
-                <Input
-                  className="font-mono"
-                  value={urlDraft}
-                  aria-label="Repository URL"
-                  placeholder="git@host:owner/repo.git"
-                  onChange={(event) => setUrlDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      onSaveUrl(urlDraft.trim() || undefined);
-                      setEditingUrl(false);
-                    }
-                    if (event.key === "Escape") setEditingUrl(false);
-                  }}
-                />
-                <div className="flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => setEditingUrl(false)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    busy={mutationState ? isPending(mutationState) : false}
-                    onClick={() => {
-                      onSaveUrl(urlDraft.trim() || undefined);
-                      setEditingUrl(false);
-                    }}
-                  >
-                    Save
-                  </Button>
-                </div>
-              </div>
-            ) : (
+            <EditableText
+              value={url}
+              submitState={mutationState}
+              onSubmit={onSaveUrl}
+              editing={editingUrl}
+              onEditingChange={setEditingUrl}
+              allowEmpty
+              label="Repository URL"
+              placeholder="git@host:owner/repo.git"
+              className="font-mono"
+            >
               <RepoRow
                 label="Clone from"
                 icon={<Link2 size={13} />}
                 value={url}
                 placeholder="Set a repository URL"
-                onClick={() => {
-                  setUrlDraft(url);
-                  setEditingUrl(true);
-                }}
+                onClick={() => setEditingUrl(true)}
               />
-            )}
+            </EditableText>
             <div className="pt-1">
               <Button
                 disabled={!url || busy}

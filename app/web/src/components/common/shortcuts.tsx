@@ -282,7 +282,12 @@ function ShortcutsHelpDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-4/5 overflow-y-auto">
+      {/* A full-screen takeover: band 100 for the popup AND its backdrop
+          (ui-shell.md Layers). */}
+      <DialogContent
+        className="z-100 max-h-4/5 overflow-y-auto"
+        overlayClassName="z-100"
+      >
         <DialogHeader>
           <DialogTitle>Keyboard shortcuts</DialogTitle>
           <DialogDescription>

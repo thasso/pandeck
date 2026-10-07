@@ -104,6 +104,20 @@ it("busies only the button, keeping its label and reporting aria-busy", () => {
   expect(button.querySelector("svg")).not.toBeNull();
 });
 
+it("draws a busy button's spinner as decoration, never a live region", () => {
+  // The button announces through its name and aria-busy; a status region
+  // inside every busy control would talk on each save (R6).
+  const host = render(<Button busy>Save</Button>);
+  const button = host.querySelector("button")!;
+  const spinner = button.querySelector("svg")!;
+  expect(spinner.getAttribute("role")).toBe("presentation");
+  expect(spinner.getAttribute("aria-hidden")).toBe("true");
+  expect(spinner.hasAttribute("aria-label")).toBe(false);
+  expect(button.querySelector('[role="status"]')).toBeNull();
+  expect(button.textContent).toBe("Save");
+  expect(button.getAttribute("aria-busy")).toBe("true");
+});
+
 it("swaps an icon-only button's icon for the spinner", () => {
   const host = render(
     <Button busy size="icon" aria-label="Refresh">

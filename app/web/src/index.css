@@ -700,18 +700,6 @@ body {
   }
 }
 
-/* Editable settings field: no explicit size here so the global input/textarea/
-   select `prose` rule owns the type size (1rem at 100%). */
-.settings-input {
-  @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary;
-}
-.settings-button {
-  @apply rounded-lg border border-border bg-muted px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-input;
-}
-.settings-button-primary {
-  @apply rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90;
-}
-
 /* Transcript rows start bounded by MessageList's render window, but skipping
    their layout still matters on desktop as the reader loads earlier rows. The
    scroll controller refines the intrinsic estimate after measuring real rows. */

@@ -63,7 +63,16 @@ function Button({
       aria-busy={busy || undefined}
       {...props}
     >
-      {busy ? <Spinner data-icon="inline-start" /> : null}
+      {/* Decorative: the button keeps its name and `aria-busy`; a stock
+          Spinner is a `role="status"` live region (loading-states.md R6). */}
+      {busy ? (
+        <Spinner
+          data-icon="inline-start"
+          role="presentation"
+          aria-hidden
+          aria-label={undefined}
+        />
+      ) : null}
       {busy && iconOnly ? null : children}
     </ButtonPrimitive>
   );
