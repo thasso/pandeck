@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity } from "lucide-react";
+import { Alert } from "./ui/alert.tsx";
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import type {
   BackgroundWorkItemSummary,
   SessionListItem,
@@ -163,49 +167,44 @@ export function BackgroundTasksPage({
         }
       />
       <div className="border-b border-border px-4 py-3">
-        <div
-          role="tablist"
-          aria-label="Filter background work"
-          className="flex flex-wrap items-center gap-2"
-        >
-          {FILTERS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === entry.id}
-              onClick={() => setFilter(entry.id)}
-              className={`h-9 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                filter === entry.id
-                  ? "bg-accent text-primary"
-                  : "text-muted-foreground hover:bg-card hover:text-foreground"
-              }`}
-            >
-              {entry.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            aria-label="Filter background work"
+            value={[filter]}
+            variant="outline"
+            size="sm"
+            onValueChange={(values) => {
+              const next = values[0] as BackgroundWorkFilter | undefined;
+              if (next) setFilter(next);
+            }}
+          >
+            {FILTERS.map((entry) => (
+              <ToggleGroupItem key={entry.id} value={entry.id}>
+                {entry.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
           <label className="ml-auto min-w-0 flex-1 sm:max-w-xs">
             <span className="sr-only">Search background work</span>
-            <input
+            <Input
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search label or session"
-              className="settings-input h-9 w-full"
             />
           </label>
         </div>
         {owners.length > 0 ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {owners.map((ownerSessionId) => (
-              <button
+              <Button
                 key={ownerSessionId}
                 type="button"
+                variant="outline"
                 onClick={() => onStopAllForOwner(ownerSessionId)}
-                className="h-9 rounded-lg border border-border px-3 text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Stop all in {ownerTitles.get(ownerSessionId) || "this session"}
-              </button>
+              </Button>
             ))}
           </div>
         ) : null}
@@ -237,16 +236,17 @@ export function BackgroundTasksPage({
                 ))}
               </ul>
               {view.hidden > 0 ? (
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  className="mt-3 w-full"
                   onClick={() =>
                     setLimit((value) => value + BACKGROUND_WORK_PAGE_SIZE)
                   }
-                  className="mt-3 h-9 w-full rounded-lg border border-border text-sm text-muted-foreground transition-colors hover:border-input hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(view.hidden, BACKGROUND_WORK_PAGE_SIZE)} more
                   of {view.total}
-                </button>
+                </Button>
               ) : null}
             </>
           )}
@@ -256,10 +256,10 @@ export function BackgroundTasksPage({
               plainly, because paging further is a request this surface cannot
               make yet. */}
           {truncated ? (
-            <p className="mt-3 text-sm text-muted-foreground">
+            <Alert variant="warning" role="note" className="mt-3">
               Only the most recent background work is loaded; older items are
               not shown.
-            </p>
+            </Alert>
           ) : null}
         </div>
       </div>

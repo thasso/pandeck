@@ -5,6 +5,16 @@ import type {
   WebPushConfigResponse,
 } from "@assistant/shared";
 import { ErrorNote, Spinner } from "./common/load.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import {
   nativeNotify,
   nativeShellPlatform,
@@ -94,60 +104,74 @@ function NativeNotificationsPanel() {
 
       {ios && state && (
         <ul className="space-y-1 text-sm text-muted-foreground">
-          <li className="flex items-center gap-2">
-            {state.registration?.allowed ? (
-              <CheckCircle2 size={14} className="shrink-0 text-success" />
-            ) : (
-              <AlertTriangle size={14} className="shrink-0 text-warning" />
-            )}
-            {state.registration?.allowed
-              ? "iOS allows notifications for this app."
-              : `iOS is not allowing notifications for this app — turn them on in ${settingsApp}.`}
+          <li>
+            <Alert
+              variant={state.registration?.allowed ? "success" : "warning"}
+              role="note"
+            >
+              {state.registration?.allowed ? (
+                <CheckCircle2 />
+              ) : (
+                <AlertTriangle />
+              )}
+              <AlertDescription>
+                {state.registration?.allowed
+                  ? "iOS allows notifications for this app."
+                  : `iOS is not allowing notifications for this app — turn them on in ${settingsApp}.`}
+              </AlertDescription>
+            </Alert>
           </li>
-          <li className="flex items-center gap-2">
-            {state.config?.configured ? (
-              <CheckCircle2 size={14} className="shrink-0 text-success" />
-            ) : (
-              <AlertTriangle size={14} className="shrink-0 text-warning" />
-            )}
-            {state.config?.configured
-              ? `The server can push to ${state.config.bundleId ?? "this app"} (${state.config.deviceCount} device${state.config.deviceCount === 1 ? "" : "s"} registered).`
-              : "The server has no Apple push key, so it can only reach this app while it is running."}
+          <li>
+            <Alert
+              variant={state.config?.configured ? "success" : "warning"}
+              role="note"
+            >
+              {state.config?.configured ? <CheckCircle2 /> : <AlertTriangle />}
+              <AlertDescription>
+                {state.config?.configured
+                  ? `The server can push to ${state.config.bundleId ?? "this app"} (${state.config.deviceCount} device${state.config.deviceCount === 1 ? "" : "s"} registered).`
+                  : "The server has no Apple push key, so it can only reach this app while it is running."}
+              </AlertDescription>
+            </Alert>
           </li>
-          <li className="flex items-center gap-2">
-            {state.registration?.deviceToken ? (
-              <CheckCircle2 size={14} className="shrink-0 text-success" />
-            ) : (
-              <AlertTriangle size={14} className="shrink-0 text-warning" />
-            )}
-            {state.registration?.deviceToken
-              ? `Apple issued this install a ${state.registration.apnsEnvironment} device token.`
-              : "Apple has not issued this install a device token."}
+          <li>
+            <Alert
+              variant={state.registration?.deviceToken ? "success" : "warning"}
+              role="note"
+            >
+              {state.registration?.deviceToken ? (
+                <CheckCircle2 />
+              ) : (
+                <AlertTriangle />
+              )}
+              <AlertDescription>
+                {state.registration?.deviceToken
+                  ? `Apple issued this install a ${state.registration.apnsEnvironment} device token.`
+                  : "Apple has not issued this install a device token."}
+              </AlertDescription>
+            </Alert>
           </li>
         </ul>
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={testing}
-          aria-busy={testing || undefined}
+        <Button
+          variant="outline"
+          busy={testing}
           onClick={() => {
             setTesting(true);
             void runTest(push)
               .then(setTest)
               .finally(() => setTesting(false));
           }}
-          className="settings-button inline-flex items-center gap-2 disabled:opacity-40"
         >
-          {testing ? <Spinner size="sm" /> : null}
           {push ? "Send a test push" : "Send a test notification"}
-        </button>
+        </Button>
         {test.state === "sent" && (
-          <span className="flex items-center gap-2 text-sm text-success">
-            <CheckCircle2 size={14} />
+          <Badge variant="success">
+            <CheckCircle2 />
             {test.detail}
-          </span>
+          </Badge>
         )}
         {test.state === "failed" && <ErrorNote message={test.detail} />}
       </div>
@@ -291,93 +315,81 @@ export function PushNotificationsSection() {
         applies only to this installation.
       </p>
 
-      <div className="mt-6 space-y-4 rounded-xl border border-border bg-card p-4">
-        <div className="flex items-start gap-3">
-          <Bell size={18} className="mt-0.5 shrink-0 text-primary" />
-          <div>
-            <h3 className="text-sm font-semibold text-foreground">
-              Session turn notifications
-            </h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Notifications show whether the turn finished, failed, or stopped,
-              together with the session name. Tapping one opens that session
-              directly.
-            </p>
-          </div>
-        </div>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bell />
+            Session turn notifications
+          </CardTitle>
+          <CardDescription>
+            Notifications show whether the turn finished, failed, or stopped,
+            together with the session name. Tapping one opens that session
+            directly.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {native && <NativeNotificationsPanel />}
 
-        {native && <NativeNotificationsPanel />}
+          {!native && !state && (
+            <div
+              role="status"
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+            >
+              <Spinner size="sm" />
+              Checking this installation…
+            </div>
+          )}
 
-        {!native && !state && (
-          <div
-            role="status"
-            className="flex items-center gap-2 text-sm text-muted-foreground"
-          >
-            <Spinner size="sm" />
-            Checking this installation…
-          </div>
-        )}
+          {state && !state.support.supported && (
+            <Alert variant="warning" role="note">
+              <AlertTriangle />
+              <AlertDescription>{state.support.reason}</AlertDescription>
+            </Alert>
+          )}
 
-        {state && !state.support.supported && (
-          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{state.support.reason}</span>
-          </div>
-        )}
+          {state?.support.supported && enabled && (
+            <Badge variant="success">
+              <CheckCircle2 />
+              Notifications are enabled for this installation.
+            </Badge>
+          )}
 
-        {state?.support.supported && enabled && (
-          <div className="flex items-center gap-2 text-sm text-success">
-            <CheckCircle2 size={14} />
-            Notifications are enabled for this installation.
-          </div>
-        )}
+          {state?.support.supported && permission === "denied" && (
+            <Alert variant="warning" role="note">
+              <AlertTriangle />
+              <AlertDescription>
+                Notifications are blocked for this installation. Allow them in
+                your browser's site settings — on iPhone, in Settings →
+                Notifications → Assistant — then return here.
+              </AlertDescription>
+            </Alert>
+          )}
 
-        {state?.support.supported && permission === "denied" && (
-          <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>
-              Notifications are blocked for this installation. Allow them in
-              your browser's site settings — on iPhone, in Settings →
-              Notifications → Assistant — then return here.
-            </span>
-          </div>
-        )}
+          {error && <ErrorNote message={error} />}
 
-        {error && <ErrorNote message={error} />}
-
-        {/* `settings-button` geometry, not `ui/Button`'s: these two sit among
-            ~20 buttons wearing that class across Settings, and the busy state
-            is what this change is for, not the shape. The three parts are here
-            all the same, with the label held still — "Enabling…" moved the
-            button's width at the moment it stopped accepting clicks. */}
-        {state?.support.supported && (
-          <div className="flex flex-wrap gap-2">
-            {state.subscription ? (
-              <button
-                type="button"
-                onClick={() => void disable()}
-                disabled={busy}
-                aria-busy={busy || undefined}
-                className="settings-button inline-flex items-center gap-2 disabled:opacity-40"
-              >
-                {busy ? <Spinner size="sm" /> : null}
-                Disable notifications
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void enable()}
-                disabled={busy || permission === "denied" || !state.config}
-                aria-busy={busy || undefined}
-                className="settings-button-primary inline-flex items-center gap-2 disabled:opacity-40"
-              >
-                {busy ? <Spinner size="sm" /> : null}
-                Enable notifications
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+          {state?.support.supported && (
+            <div className="flex flex-wrap gap-2">
+              {state.subscription ? (
+                <Button
+                  variant="outline"
+                  onClick={() => void disable()}
+                  busy={busy}
+                >
+                  Disable notifications
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => void enable()}
+                  disabled={permission === "denied" || !state.config}
+                  busy={busy}
+                >
+                  Enable notifications
+                </Button>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <p className="mt-4 text-sm text-muted-foreground">
         Session names may be visible on the Lock Screen.{" "}

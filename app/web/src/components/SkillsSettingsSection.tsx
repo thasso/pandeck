@@ -45,7 +45,14 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   isSkillEnabled,
   MAX_SKILL_BODY_BYTES,
@@ -73,7 +80,27 @@ import {
 } from "../lib/skillsApi.ts";
 import { Markdown } from "./Markdown.tsx";
 import { PageHeader } from "./PageHeader.tsx";
-import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Field, FieldTitle } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
+import { IconButton } from "./common/IconButton.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
 import { CodeBlock } from "./common/CodeBlock.tsx";
 import { Tree, type TreeNode } from "./common/Tree.tsx";
 import {
@@ -179,15 +206,17 @@ function SkillList({
   const empty = list.skills.length === 0 && list.diagnostics.length === 0;
   return (
     <>
-      <div className="mt-6 rounded-xl border border-border bg-card p-4">
-        <div className="text-sm font-medium">Available skills</div>
-        <div className="mt-0.5 text-sm text-muted-foreground">
-          A skill you turn on here is on everywhere; a new skill starts off
-          until you say otherwise. Per-project and per-session choices come
-          later, as does handing the enabled skills to a running agent. Select a
-          skill to read its <code>SKILL.md</code>.
-        </div>
-        <div className="mt-3">
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Available skills</CardTitle>
+          <CardDescription>
+            A skill you turn on here is on everywhere; a new skill starts off
+            until you say otherwise. Per-project and per-session choices come
+            later, as does handing the enabled skills to a running agent. Select
+            a skill to read its <code>SKILL.md</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
           {empty ? (
             <EmptyBox>
               No skills yet. Add a folder with a <code>SKILL.md</code> inside
@@ -199,7 +228,7 @@ function SkillList({
               below.
             </EmptyBox>
           ) : (
-            <ul className="space-y-2">
+            <ItemGroup className="gap-2">
               {list.skills.map((skill) => (
                 <SkillRow
                   key={skill.path}
@@ -210,27 +239,31 @@ function SkillList({
                   onSelect={onSelect}
                 />
               ))}
-            </ul>
+            </ItemGroup>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {list.diagnostics.length > 0 ? (
-        <div className="mt-4 rounded-xl border border-border bg-card p-4">
-          <div className="text-sm font-medium">Folders that need a fix</div>
-          <div className="mt-0.5 text-sm text-muted-foreground">
-            These folders cannot be used as skills. They stay listed here so a
-            typo does not simply make a skill disappear.
-          </div>
-          <ul className="mt-3 space-y-2">
-            {list.diagnostics.map((diagnostic) => (
-              <DiagnosticRow
-                key={`${diagnostic.path}:${diagnostic.code}`}
-                diagnostic={diagnostic}
-              />
-            ))}
-          </ul>
-        </div>
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Folders that need a fix</CardTitle>
+            <CardDescription>
+              These folders cannot be used as skills. They stay listed here so a
+              typo does not simply make a skill disappear.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ItemGroup className="gap-2">
+              {list.diagnostics.map((diagnostic) => (
+                <DiagnosticRow
+                  key={`${diagnostic.path}:${diagnostic.code}`}
+                  diagnostic={diagnostic}
+                />
+              ))}
+            </ItemGroup>
+          </CardContent>
+        </Card>
       ) : null}
     </>
   );
@@ -238,8 +271,8 @@ function SkillList({
 
 /**
  * One available skill. The metadata is a BUTTON that opens the body: a whole
- * clickable row would nest the toggle's checkbox inside a control, and the
- * toggle is a different decision from reading the instructions.
+ * clickable row would nest the toggle inside a control, and the toggle is a
+ * different decision from reading the instructions.
  */
 function SkillRow({
   skill,
@@ -255,37 +288,38 @@ function SkillRow({
   onSelect: (name: string) => void;
 }) {
   return (
-    <li
-      className={`flex items-start justify-between gap-3 rounded-lg border bg-background px-3 py-2.5 ${
-        open ? "border-primary" : "border-border"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={() => onSelect(skill.name)}
-        aria-expanded={open}
-        aria-controls="skill-detail"
-        className="min-w-0 flex-1 text-left"
+    <div role="listitem" className="flex items-center gap-3">
+      <Item
+        variant={open ? "muted" : "outline"}
+        className="min-w-0 flex-1"
+        render={
+          <button
+            type="button"
+            onClick={() => onSelect(skill.name)}
+            aria-expanded={open}
+            aria-controls="skill-detail"
+          />
+        }
       >
-        <div className="text-sm font-medium">{skill.name}</div>
-        <div className="mt-0.5 text-sm text-muted-foreground">
-          {skill.description}
-        </div>
-        <div className="mt-1 text-sm text-muted-foreground">
-          <code>{skill.path}</code>
-        </div>
-      </button>
-      <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
-        <input
-          type="checkbox"
+        <ItemContent className="min-w-0">
+          <ItemTitle>
+            <span className="truncate">{skill.name}</span>
+          </ItemTitle>
+          <ItemDescription>{skill.description}</ItemDescription>
+          <ItemDescription>
+            <code>{skill.path}</code>
+          </ItemDescription>
+        </ItemContent>
+      </Item>
+      <Field orientation="horizontal" className="w-auto">
+        <Switch
           checked={on}
-          onChange={(event) => onToggle(skill.name, event.target.checked)}
-          className="size-4 accent-primary"
+          onCheckedChange={(checked) => onToggle(skill.name, checked)}
           aria-label={`Enable skill ${skill.name}`}
         />
-        On
-      </label>
-    </li>
+        <FieldTitle>On</FieldTitle>
+      </Field>
+    </div>
   );
 }
 
@@ -319,70 +353,51 @@ function SkillDetailPane({
   const [selectedPath, setSelectedPath] = useState("SKILL.md");
 
   return (
-    <div
-      id="skill-detail"
-      className="mt-4 rounded-xl border border-border bg-card p-4"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-medium">{name}</div>
-          {/* The source path comes from the answer: a skill's folder need not
-              be named after it, so there is nothing honest to show before. */}
-          {detail?.path ? (
-            <div className="mt-0.5 text-sm text-muted-foreground">
-              <code>{detail.path}</code>
-            </div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <Card id="skill-detail" className="mt-4">
+      <CardHeader>
+        <CardTitle>{name}</CardTitle>
+        {/* The source path comes from the answer: a skill's folder need not
+            be named after it, so there is nothing honest to show before. */}
+        {detail?.path ? (
+          <CardDescription>
+            <code>{detail.path}</code>
+          </CardDescription>
+        ) : null}
+        <CardAction className="flex items-center gap-1">
           {rereading ? <RefreshIndicator label="Rereading SKILL.md" /> : null}
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Reread ${name}`}
-            onClick={onReload}
-          >
-            <RefreshCw size={14} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Close ${name}`}
-            onClick={onClose}
-          >
-            <X size={14} />
-          </Button>
-        </div>
-      </div>
+          <IconButton label={`Reread ${name}`} onClick={onReload}>
+            <RefreshCw />
+          </IconButton>
+          <IconButton label={`Close ${name}`} onClick={onClose}>
+            <X />
+          </IconButton>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {error ? <ErrorNote message={error} /> : null}
 
-      {error ? <ErrorNote className="mt-3" message={error} /> : null}
+        {isInitialLoad(state) ? (
+          <PaneLoading label={`Reading ${name}/SKILL.md…`} />
+        ) : null}
 
-      {isInitialLoad(state) ? (
-        <PaneLoading className="mt-3" label={`Reading ${name}/SKILL.md…`} />
-      ) : null}
+        {detail?.kind === "invalid" ? (
+          <SkillNote>{detail.error}</SkillNote>
+        ) : null}
 
-      {detail?.kind === "invalid" ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5">
-          <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-          <div className="min-w-0 text-sm text-muted-foreground">
-            {detail.error}
-          </div>
-        </div>
-      ) : null}
-
-      {detail?.kind === "skill" ? (
-        <div className="mt-3">
-          <div className="text-sm text-muted-foreground">
-            {detail.description}
-          </div>
-          <SkillFileBrowser
-            detail={detail}
-            selectedPath={selectedPath}
-            onSelectPath={setSelectedPath}
-          />
-        </div>
-      ) : null}
-    </div>
+        {detail?.kind === "skill" ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {detail.description}
+            </p>
+            <SkillFileBrowser
+              detail={detail}
+              selectedPath={selectedPath}
+              onSelectPath={setSelectedPath}
+            />
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -410,8 +425,8 @@ function SkillFileBrowser({
   );
 
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-border bg-background">
-      <div className="border-b border-border p-3">
+    <div className="mt-3 overflow-hidden rounded-lg border">
+      <div className="border-b p-3">
         <div className="text-sm font-medium">Files</div>
         <div className="mt-0.5 text-sm text-muted-foreground">
           {detail.files.entryCount}{" "}
@@ -419,15 +434,10 @@ function SkillFileBrowser({
           {detail.files.truncated ? ", bounded listing" : ""}
         </div>
         {detail.files.truncated ? (
-          <div className="mt-2 flex items-start gap-2 text-sm text-warning">
-            <TriangleAlert className="mt-0.5 shrink-0" size={13} />
-            <span>{skillTreeLimitDiagnostic(detail.files.limits)}</span>
-          </div>
+          <SkillNote>{skillTreeLimitDiagnostic(detail.files.limits)}</SkillNote>
         ) : null}
         {detail.files.diagnostics.map((diagnostic) => (
-          <div key={diagnostic} className="mt-2 text-sm text-warning">
-            {diagnostic}
-          </div>
+          <SkillNote key={diagnostic}>{diagnostic}</SkillNote>
         ))}
       </div>
       {nodes.length === 0 ? (
@@ -493,7 +503,7 @@ function SkillFileViewer({
 }) {
   if (!entry || entry.type !== "file") {
     return (
-      <div className="border-t border-border p-3">
+      <div className="border-t p-3">
         <EmptyBox>
           This file is no longer present in the bounded listing.
         </EmptyBox>
@@ -505,7 +515,7 @@ function SkillFileViewer({
   const textLike = isTextMimeType(entry.mimeType);
 
   return (
-    <div className="border-t border-border">
+    <div className="border-t">
       <PageHeader
         density="compact"
         icon={<FileText size={15} />}
@@ -514,25 +524,25 @@ function SkillFileViewer({
         objectOverflow={false}
         actions={
           <div className="flex items-center gap-1">
-            <a
+            <LinkButton
+              label={`Open raw ${path}`}
+              variant="ghost"
+              size="icon-sm"
               href={rawUrl}
               target="_blank"
               rel="noreferrer"
-              aria-label={`Open raw ${path}`}
-              title="Open raw file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
             >
-              <ExternalLink size={14} />
-            </a>
-            <a
+              <ExternalLink />
+            </LinkButton>
+            <LinkButton
+              label={`Download ${path}`}
+              variant="ghost"
+              size="icon-sm"
               href={rawUrl}
               download={entry.name}
-              aria-label={`Download ${path}`}
-              title="Download file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-card hover:text-foreground"
             >
-              <Download size={14} />
-            </a>
+              <Download />
+            </LinkButton>
           </div>
         }
       />
@@ -543,7 +553,7 @@ function SkillFileViewer({
           <img
             src={rawUrl}
             alt={entry.name}
-            className="max-h-96 max-w-full rounded-lg border border-border bg-card object-contain"
+            className="max-h-96 max-w-full rounded-lg border object-contain"
           />
         </div>
       ) : textLike ? (
@@ -658,13 +668,9 @@ function UnsupportedSkillFile({
     <EmptyBox
       className="m-3"
       action={
-        <a
-          href={rawUrl}
-          download={entry.name}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
-        >
-          <Download size={13} /> Download
-        </a>
+        <LinkButton variant="default" href={rawUrl} download={entry.name}>
+          <Download /> Download
+        </LinkButton>
       }
     >
       This file type cannot be previewed safely. Open it raw or download it.
@@ -727,17 +733,29 @@ function formatBytes(value: number): string {
 
 function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
   return (
-    <li className="flex items-start gap-2 rounded-lg border border-border bg-background px-3 py-2.5">
-      <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-      <div className="min-w-0">
-        <div className="text-sm font-medium">{diagnostic.folder}</div>
-        <div className="mt-0.5 text-sm text-muted-foreground">
-          {diagnostic.error}
-        </div>
-        <div className="mt-1 text-sm text-muted-foreground">
+    <Item variant="outline" role="listitem" className="items-start">
+      <ItemMedia variant="icon">
+        <TriangleAlert />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>
+          <span className="truncate">{diagnostic.folder}</span>
+        </ItemTitle>
+        <ItemDescription>{diagnostic.error}</ItemDescription>
+        <ItemDescription>
           <code>{diagnostic.path}</code>
-        </div>
-      </div>
-    </li>
+        </ItemDescription>
+      </ItemContent>
+    </Item>
+  );
+}
+
+/** A non-failure notice about the open skill: the reason IS the content. */
+function SkillNote({ children }: { children: ReactNode }) {
+  return (
+    <Alert variant="warning" role="note" className="mt-2">
+      <TriangleAlert />
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
   );
 }

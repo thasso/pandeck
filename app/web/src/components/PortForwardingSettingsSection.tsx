@@ -46,6 +46,10 @@ import { startPortForward } from "../lib/portForwards.ts";
 import { elapsedLabel } from "../lib/relativeTime.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Item } from "@/components/ui/item";
 import {
   EmptyBox,
   ErrorNote,
@@ -266,150 +270,148 @@ export function PortForwardingSettingsSection() {
       </p>
 
       {!supported ? (
-        <div className="mt-6 rounded-xl border border-border bg-card p-4">
-          <p className="text-sm text-muted-foreground">
-            Port forwarding needs the macOS app: it listens on this machine,
-            which a browser tab cannot do. Open Settings in the desktop app to
-            start one.
-          </p>
-        </div>
+        <Card className="mt-6">
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              Port forwarding needs the macOS app: it listens on this machine,
+              which a browser tab cannot do. Open Settings in the desktop app to
+              start one.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <>
-          <form
-            onSubmit={(event) => void submit(event)}
-            className="mt-6 rounded-xl border border-border bg-card p-4"
-          >
-            <label
-              htmlFor={PORT_INPUT_ID}
-              className="block text-sm font-medium text-foreground"
-            >
-              Server port
-            </label>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <input
-                id={PORT_INPUT_ID}
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                value={portText}
-                placeholder="8080"
-                aria-invalid={startError !== null || undefined}
-                aria-describedby={
-                  startError !== null
-                    ? `${PORT_ERROR_ID} ${PORT_HINT_ID}`
-                    : PORT_HINT_ID
-                }
-                onChange={(event) => {
-                  setPortText(event.target.value);
-                  if (startError) setStartError(null);
-                }}
-                className={`settings-input min-w-0 flex-1 basis-40 font-mono ${
-                  startError !== null
-                    ? "border-destructive focus:border-destructive"
-                    : ""
-                }`}
-              />
-              <Button type="submit" busy={starting}>
-                Start
-              </Button>
-            </div>
-            <p id={PORT_HINT_ID} className="mt-2 text-sm text-muted-foreground">
-              A port from {PORT_FORWARD_MIN_PORT} to {PORT_FORWARD_MAX_PORT}.
-              macOS asks before the app listens on 127.0.0.1 at that port. The
-              forward ends when it expires (24 hours), when you stop it, or when
-              the app quits.
-            </p>
-            {startError && (
-              <div id={PORT_ERROR_ID} className="mt-3">
-                <ErrorNote message={startError} />
-              </div>
-            )}
-          </form>
+          <Card className="mt-6">
+            <CardContent>
+              <form onSubmit={(event) => void submit(event)}>
+                <Field>
+                  <FieldLabel htmlFor={PORT_INPUT_ID}>Server port</FieldLabel>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <Input
+                      id={PORT_INPUT_ID}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={portText}
+                      placeholder="8080"
+                      aria-invalid={startError !== null || undefined}
+                      aria-describedby={
+                        startError !== null
+                          ? `${PORT_ERROR_ID} ${PORT_HINT_ID}`
+                          : PORT_HINT_ID
+                      }
+                      onChange={(event) => {
+                        setPortText(event.target.value);
+                        if (startError) setStartError(null);
+                      }}
+                      className="min-w-0 flex-1 basis-40"
+                    />
+                    <Button type="submit" busy={starting}>
+                      Start
+                    </Button>
+                  </div>
+                  <FieldDescription id={PORT_HINT_ID}>
+                    A port from {PORT_FORWARD_MIN_PORT} to{" "}
+                    {PORT_FORWARD_MAX_PORT}. macOS asks before the app listens
+                    on 127.0.0.1 at that port. The forward ends when it expires
+                    (24 hours), when you stop it, or when the app quits.
+                  </FieldDescription>
+                  {startError && (
+                    <div id={PORT_ERROR_ID} className="mt-3">
+                      <ErrorNote message={startError} />
+                    </div>
+                  )}
+                </Field>
+              </form>
+            </CardContent>
+          </Card>
 
-          <div className="mt-4 rounded-xl border border-border bg-card p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">
-                Forwards
-              </h3>
-              {state.status === "refreshing" && <RefreshIndicator />}
-            </div>
-            {errorOf(state) !== undefined && (
-              <ErrorNote
-                className="mt-3"
-                message={errorOf(state)}
-                onRetry={() => void reload()}
-              />
-            )}
-            {forwards === undefined ? (
-              state.status === "loading" ? (
-                <div
-                  role="status"
-                  aria-label="Loading forwards"
+          <Card className="mt-4">
+            <CardContent>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-foreground">
+                  Forwards
+                </h3>
+                {state.status === "refreshing" && <RefreshIndicator />}
+              </div>
+              {errorOf(state) !== undefined && (
+                <ErrorNote
                   className="mt-3"
-                >
-                  <Skeleton className="h-12" />
-                </div>
-              ) : null
-            ) : forwards.length === 0 ? (
-              <EmptyBox variant="inline" className="mt-3">
-                No forward is running. Start one above
-                {forwardsLoopbackLinks()
-                  ? ", or click a localhost link in a conversation."
-                  : "."}
-              </EmptyBox>
-            ) : (
-              <ul className="mt-1 divide-y divide-border">
-                {forwards.map((status) => {
-                  const rowError = rowErrors[status.port];
-                  return (
-                    <li key={status.port} className="py-3">
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        <div className="min-w-0 flex-1 basis-56">
-                          <div className="truncate font-mono text-sm text-foreground">
-                            {status.localUrl}
+                  message={errorOf(state)}
+                  onRetry={() => void reload()}
+                />
+              )}
+              {forwards === undefined ? (
+                state.status === "loading" ? (
+                  <div
+                    role="status"
+                    aria-label="Loading forwards"
+                    className="mt-3"
+                  >
+                    <Skeleton className="h-12" />
+                  </div>
+                ) : null
+              ) : forwards.length === 0 ? (
+                <EmptyBox variant="inline" className="mt-3">
+                  No forward is running. Start one above
+                  {forwardsLoopbackLinks()
+                    ? ", or click a localhost link in a conversation."
+                    : "."}
+                </EmptyBox>
+              ) : (
+                <ul className="mt-1 divide-y divide-border">
+                  {forwards.map((status) => {
+                    const rowError = rowErrors[status.port];
+                    return (
+                      <Item key={status.port} render={<li />} variant="outline">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          <div className="min-w-0 flex-1 basis-56">
+                            <div className="truncate font-mono text-sm text-foreground">
+                              {status.localUrl}
+                            </div>
+                            <div className="mt-0.5 flex flex-wrap gap-x-3 text-sm text-muted-foreground">
+                              <span>to {serverHost(status.serverOrigin)}</span>
+                              <span>
+                                {connectionsLabel(status.activeConnections)}
+                              </span>
+                              <span
+                                title={new Date(
+                                  status.expiresAt,
+                                ).toLocaleString()}
+                              >
+                                {expiryLabel(status.expiresAt, now)}
+                              </span>
+                            </div>
                           </div>
-                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-sm text-muted-foreground">
-                            <span>to {serverHost(status.serverOrigin)}</span>
-                            <span>
-                              {connectionsLabel(status.activeConnections)}
-                            </span>
-                            <span
-                              title={new Date(
-                                status.expiresAt,
-                              ).toLocaleString()}
+                          <div className="flex shrink-0 items-center gap-2">
+                            <Button
+                              variant="outline"
+                              busy={rowBusy[`${status.port}/open`] === true}
+                              onClick={() => void open(status)}
+                              aria-label={`Open ${status.localUrl} in your browser`}
                             >
-                              {expiryLabel(status.expiresAt, now)}
-                            </span>
+                              Open
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              busy={rowBusy[`${status.port}/stop`] === true}
+                              onClick={() => void stop(status)}
+                              aria-label={`Stop forwarding port ${status.port}`}
+                            >
+                              Stop
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <Button
-                            variant="outline"
-                            busy={rowBusy[`${status.port}/open`] === true}
-                            onClick={() => void open(status)}
-                            aria-label={`Open ${status.localUrl} in your browser`}
-                          >
-                            Open
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            busy={rowBusy[`${status.port}/stop`] === true}
-                            onClick={() => void stop(status)}
-                            aria-label={`Stop forwarding port ${status.port}`}
-                          >
-                            Stop
-                          </Button>
-                        </div>
-                      </div>
-                      {rowError && (
-                        <ErrorNote className="mt-2" message={rowError} />
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+                        {rowError && (
+                          <ErrorNote className="mt-2" message={rowError} />
+                        )}
+                      </Item>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

@@ -10,7 +10,19 @@
  * @useWhen Rendered by `SettingsPage` below every section; renders nothing
  *   when the section's own UI claims all its settings.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Field as UiField,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import type { AppSettings } from "@assistant/shared";
 import {
   INTEGRATION_SETTINGS_SECTIONS,
@@ -41,16 +53,20 @@ function readonlyText(value: unknown): string {
   return String(value);
 }
 
-function Label({ descriptor }: { descriptor: SettingDescriptor }) {
+function Label({
+  descriptor,
+  id,
+}: {
+  descriptor: SettingDescriptor;
+  id?: string;
+}) {
   return (
-    <span className="min-w-0">
-      <span className="block font-medium">{descriptor.label}</span>
+    <FieldContent>
+      <FieldLabel htmlFor={id}>{descriptor.label}</FieldLabel>
       {descriptor.hint && (
-        <span className="mt-0.5 block text-sm text-muted-foreground">
-          {descriptor.hint}
-        </span>
+        <FieldDescription>{descriptor.hint}</FieldDescription>
       )}
-    </span>
+    </FieldContent>
   );
 }
 
@@ -117,9 +133,8 @@ function TextValue({
     ) => draft.edit(event.target.value),
     onBlur: () => draft.commit(onSave),
     onKeyDown: draftKeys(draft, onSave),
-    className: "settings-input w-full",
   };
-  return multiline ? <textarea rows={4} {...props} /> : <input {...props} />;
+  return multiline ? <Textarea rows={4} {...props} /> : <Input {...props} />;
 }
 
 /**
@@ -152,7 +167,7 @@ function NumberValue({
     else draft.discard();
   };
   return (
-    <input
+    <Input
       type="text"
       inputMode={spec.kind === "integer" ? "numeric" : "decimal"}
       aria-label={descriptor.label}
@@ -160,7 +175,6 @@ function NumberValue({
       onChange={(event) => draft.edit(event.target.value)}
       onBlur={() => draft.commit(save)}
       onKeyDown={draftKeys(draft, save)}
-      className="settings-input w-full"
     />
   );
 }
@@ -176,32 +190,28 @@ function Field({
 }) {
   const value = valueAtPath(settings, descriptor.path);
   const spec = descriptor.value;
+  const id = useId();
   if (descriptor.access === "readonly" || !spec)
     return (
-      <div className="space-y-1 text-sm text-foreground">
+      <UiField>
         <Label descriptor={descriptor} />
-        <div className="break-all font-mono text-sm text-muted-foreground">
+        <FieldDescription className="break-all">
           {readonlyText(value)}
-        </div>
-      </div>
+        </FieldDescription>
+      </UiField>
     );
   if (spec.kind === "boolean")
     return (
-      <label className="flex items-start gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-sm text-foreground">
-        <input
-          type="checkbox"
-          checked={value === true}
-          onChange={(event) => onWrite(event.target.checked)}
-          className="mt-0.5 size-4 shrink-0 accent-primary"
-        />
-        <Label descriptor={descriptor} />
-      </label>
+      <UiField orientation="horizontal">
+        <Label descriptor={descriptor} id={id} />
+        <Switch id={id} checked={value === true} onCheckedChange={onWrite} />
+      </UiField>
     );
   return (
-    <div className="space-y-1 text-sm text-foreground">
+    <UiField>
       <Label descriptor={descriptor} />
       {spec.kind === "enum" ? (
-        <select
+        <NativeSelect
           aria-label={descriptor.label}
           value={
             typeof value === "string" && spec.values.includes(value)
@@ -209,7 +219,7 @@ function Field({
               : ""
           }
           onChange={(event) => onWrite(event.target.value)}
-          className="settings-input w-full"
+          className="w-full"
         >
           {/* A stored value outside the choices, or none, is shown as such
               rather than letting the browser pick the first option. */}
@@ -225,7 +235,7 @@ function Field({
               {option}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       ) : spec.kind === "integer" || spec.kind === "number" ? (
         <NumberValue
           descriptor={descriptor}
@@ -241,11 +251,11 @@ function Field({
         />
       )}
       {(spec.kind === "integer" || spec.kind === "number") && (
-        <div className="text-sm text-muted-foreground">
+        <FieldDescription>
           {spec.min}–{spec.max}
-        </div>
+        </FieldDescription>
       )}
-    </div>
+    </UiField>
   );
 }
 
@@ -273,17 +283,23 @@ export function RegistrySettingFields({
   };
   return (
     <div className="mx-auto max-w-2xl px-6 pb-6">
-      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
-        <h3 className="text-sm font-semibold text-foreground">More settings</h3>
-        {shown.map((descriptor) => (
-          <Field
-            key={descriptor.path}
-            descriptor={descriptor}
-            settings={settings}
-            onWrite={(value) => write(descriptor.path, value)}
-          />
-        ))}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>More settings</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            {shown.map((descriptor) => (
+              <Field
+                key={descriptor.path}
+                descriptor={descriptor}
+                settings={settings}
+                onWrite={(value) => write(descriptor.path, value)}
+              />
+            ))}
+          </FieldGroup>
+        </CardContent>
+      </Card>
     </div>
   );
 }
