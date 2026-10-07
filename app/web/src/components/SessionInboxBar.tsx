@@ -60,8 +60,9 @@ export function SessionInboxBar({
     // be a strip above a pinned bar for rows to scroll through, and at rest a
     // band the chips are not centred in — the whole complaint this bar exists
     // to answer. The height is a constant rather than padding around content
-    // for the same reason the counts never unmount.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
+    // for the same reason the counts never unmount, and it is the compact
+    // `PageHeader`'s `h-11` so its border lines up with the chat title bar's.
+    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
       <Chip
         label={
           needsYou === 0
