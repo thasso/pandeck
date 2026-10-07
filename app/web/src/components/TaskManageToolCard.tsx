@@ -138,8 +138,8 @@ export function TaskManageToolCard({
 
   return (
     <section className="my-2 rounded-xl border border-line bg-panel/60 px-3 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-micro font-medium text-muted">
-        <ClipboardList size={11} className="text-accent" />
+      <div className="mb-1 flex items-center gap-1.5 text-micro font-medium text-muted-foreground">
+        <ClipboardList size={11} className="text-primary" />
         <span>Tasks</span>
       </div>
       <ul className="flex flex-col gap-1">
@@ -167,7 +167,9 @@ export function TaskManageToolCard({
         {commentOnly.map((id) => (
           <li key={`comment-${id}`}>
             <TaskChip id={id} label={`Task-${id}`} onOpenTask={onOpenTask} />
-            <span className="ml-1.5 text-micro text-muted">comment added</span>
+            <span className="ml-1.5 text-micro text-muted-foreground">
+              comment added
+            </span>
           </li>
         ))}
         {deletedIds.map((id) => (
@@ -218,7 +220,9 @@ function TaskRow({
         />
         <TaskChip id={task.id} label={task.title} onOpenTask={onOpenTask} />
         {summary ? (
-          <span className="shrink-0 text-micro text-muted">{summary}</span>
+          <span className="shrink-0 text-micro text-muted-foreground">
+            {summary}
+          </span>
         ) : null}
       </span>
       {suggestion ? (
@@ -269,7 +273,7 @@ function SuggestionRow({
           className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${
             done
               ? "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
-              : "border-accent/50 text-accent hover:bg-accent/10"
+              : "border-primary/50 text-primary hover:bg-primary/10"
           }`}
           aria-label={
             done

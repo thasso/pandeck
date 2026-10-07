@@ -55,8 +55,8 @@ const DELIVERY_TONE: Record<HostingAttention, string> = {
   "ci-failed": "text-danger",
   "review-requested": "text-amber-500",
   merged: "text-emerald-500",
-  "ci-pending": "text-accent",
-  open: "text-muted",
+  "ci-pending": "text-primary",
+  open: "text-muted-foreground",
 };
 
 /**
@@ -193,7 +193,7 @@ export function TaskRowBody({
       ? { ...meta, session: null }
       : meta;
   const empty = !line2 || taskRowMetaEmpty(line2);
-  const titleClass = `min-w-0 flex-1 truncate text-caption ${done ? "text-faint line-through" : dimmed ? "text-muted" : selected ? "font-medium text-fg" : "text-fg"}`;
+  const titleClass = `min-w-0 flex-1 truncate text-caption ${done ? "text-faint line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-fg" : "text-fg"}`;
   return (
     <>
       <span className="flex min-w-0 items-baseline gap-1.5">
@@ -352,7 +352,7 @@ function TaskMetaItems({
         <MetaLink
           href={session ?? ""}
           title="An agent session started from this task is running now"
-          className="inline-flex shrink-0 items-center gap-0.5 text-accent"
+          className="inline-flex shrink-0 items-center gap-0.5 text-primary"
           onNavigate={session ? onNavigate : undefined}
         >
           <Spinner size="sm" />
@@ -365,7 +365,7 @@ function TaskMetaItems({
         <MetaLink
           href={session ?? ""}
           title="An agent session was started from this task"
-          className="inline-flex shrink-0 items-center gap-0.5 text-muted"
+          className="inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"
           onNavigate={onNavigate}
         >
           <MessageSquare size={10} aria-hidden />
@@ -445,7 +445,7 @@ function TaskMetaItems({
       {meta.workflow ? (
         <span
           role="img"
-          className={`inline-flex shrink-0 ${meta.workflow.attention ? "text-warning" : "text-accent"}`}
+          className={`inline-flex shrink-0 ${meta.workflow.attention ? "text-warning" : "text-primary"}`}
           aria-label={
             meta.workflow.attention
               ? "Workflow run needs attention"
@@ -462,7 +462,7 @@ function TaskMetaItems({
       ) : null}
       {meta.planned ? (
         <span
-          className="inline-flex shrink-0 items-center gap-0.5 text-muted"
+          className="inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"
           title={`Planned for ${meta.planned.toLowerCase()}`}
         >
           <CalendarCheck size={10} aria-hidden />
@@ -471,7 +471,7 @@ function TaskMetaItems({
       ) : null}
       {meta.due ? (
         <span
-          className={`inline-flex shrink-0 items-center gap-0.5 ${meta.overdue ? "text-danger" : "text-muted"}`}
+          className={`inline-flex shrink-0 items-center gap-0.5 ${meta.overdue ? "text-danger" : "text-muted-foreground"}`}
           title={`Due ${meta.due.toLowerCase()}`}
         >
           <Flag size={10} aria-hidden />
@@ -479,7 +479,9 @@ function TaskMetaItems({
         </span>
       ) : null}
       {meta.priority ? (
-        <span className={PRIORITY_TONE[meta.priority] ?? "text-muted"}>
+        <span
+          className={PRIORITY_TONE[meta.priority] ?? "text-muted-foreground"}
+        >
           {meta.priority}
         </span>
       ) : null}

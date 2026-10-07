@@ -45,7 +45,7 @@ export function WorkshopDraftHandoffToolCard({
   return (
     <div className="my-2 overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
       <div className="flex items-start gap-3 border-b border-line px-3 py-2.5">
-        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
           <Hammer size={15} />
         </div>
         <div className="min-w-0 flex-1">
@@ -57,13 +57,13 @@ export function WorkshopDraftHandoffToolCard({
               {payload.category}
             </span>
           </div>
-          <div className="mt-0.5 text-caption text-muted">
+          <div className="mt-0.5 text-caption text-muted-foreground">
             Workshop proposal saved. Opening a draft will not submit anything.
           </div>
         </div>
       </div>
       <div className="space-y-2 px-3 py-2.5">
-        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-raised px-2 py-1.5 text-caption text-muted">
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-raised px-2 py-1.5 text-caption text-muted-foreground">
           <FileText size={13} className="shrink-0 text-faint" />
           <span className="min-w-0 flex-1 truncate font-mono">
             {payload.proposalPath}
@@ -83,7 +83,7 @@ export function WorkshopDraftHandoffToolCard({
               "Workshop draft created — review model/thinking and edit before sending.",
             )
           }
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-caption font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           title={
             canOpen
               ? "Create a Workshop session with this prompt as an editable draft"

@@ -37,7 +37,7 @@ export function TaskStatusIcon({
   if (status === "done")
     return <CheckCircle2 size={size} className="text-emerald-500" />;
   if (status === "doing")
-    return <CircleDot size={size} className="text-accent" />;
+    return <CircleDot size={size} className="text-primary" />;
   return <Circle size={size} className="text-faint" />;
 }
 

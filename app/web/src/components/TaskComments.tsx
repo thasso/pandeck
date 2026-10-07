@@ -97,7 +97,7 @@ function CommentCard({ comment }: { comment: TaskComment }) {
         {comment.author.kind === "agent" && comment.author.sessionId ? (
           <a
             href={sessionPath(comment.author.sessionId)}
-            className="min-w-0 truncate text-caption font-medium text-accent hover:underline"
+            className="min-w-0 truncate text-caption font-medium text-primary hover:underline"
             title={`Open ${comment.author.name}'s session`}
           >
             {comment.author.name}
@@ -131,7 +131,7 @@ function CommentCard({ comment }: { comment: TaskComment }) {
         <CommentBody
           id={bodyId}
           body={comment.body}
-          className="mt-3 text-muted"
+          className="mt-3 text-muted-foreground"
         />
       ) : null}
     </div>
@@ -142,7 +142,7 @@ const AUTHOR_BADGES: Record<
   TaskCommentAuthorKind,
   { label: string; icon: typeof User; className: string }
 > = {
-  user: { label: "You", icon: User, className: "text-accent" },
+  user: { label: "You", icon: User, className: "text-primary" },
   agent: { label: "Agent", icon: Bot, className: "text-emerald-500" },
   system: { label: "System", icon: MessageSquare, className: "text-faint" },
 };

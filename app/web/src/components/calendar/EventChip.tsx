@@ -24,15 +24,15 @@ export function EventChip({
       }}
       title={`${event.allDay ? "All day" : hm(event.start, timeZone)} · ${event.title}`}
       className={`group flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-caption transition-colors ${
-        selected ? "bg-accent text-accent-fg" : "hover:bg-accent-soft"
+        selected ? "bg-primary text-primary-foreground" : "hover:bg-accent"
       } ${declined && !selected ? "text-faint line-through" : selected ? "" : "text-fg"}`}
     >
       <span
-        className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-accent-fg" : event.meetingUrl ? "bg-accent" : "bg-line-strong"}`}
+        className={`size-1.5 shrink-0 rounded-full ${selected ? "bg-primary-foreground" : event.meetingUrl ? "bg-primary" : "bg-line-strong"}`}
       />
       {!event.allDay && (
         <span
-          className={`shrink-0 tabular-nums ${selected ? "text-accent-fg/80" : "text-muted"}`}
+          className={`shrink-0 tabular-nums ${selected ? "text-primary-foreground/80" : "text-muted-foreground"}`}
         >
           {hm(event.start, timeZone)}
         </span>

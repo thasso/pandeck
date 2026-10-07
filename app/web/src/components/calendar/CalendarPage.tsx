@@ -69,7 +69,7 @@ export function CalendarPage({
         {back ? (
           <PageHeaderBackButton {...back} />
         ) : (
-          <CalendarDays size={17} className="text-accent" />
+          <CalendarDays size={17} className="text-primary" />
         )}
         <h1 className="mr-2 min-w-0 truncate text-prose font-semibold text-fg">
           {title}
@@ -79,14 +79,14 @@ export function CalendarPage({
             type="button"
             onClick={calendar.goPrev}
             aria-label="Previous"
-            className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
           >
             <ChevronLeft size={16} />
           </button>
           <button
             type="button"
             onClick={calendar.goToday}
-            className="rounded-lg px-2 py-1 text-caption font-medium text-muted hover:bg-panel hover:text-fg"
+            className="rounded-lg px-2 py-1 text-caption font-medium text-muted-foreground hover:bg-panel hover:text-fg"
           >
             Today
           </button>
@@ -94,7 +94,7 @@ export function CalendarPage({
             type="button"
             onClick={calendar.goNext}
             aria-label="Next"
-            className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
+            className="flex size-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-panel hover:text-fg"
           >
             <ChevronRight size={16} />
           </button>
@@ -117,7 +117,7 @@ export function CalendarPage({
             className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
               showTempo
                 ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-line text-muted hover:bg-panel hover:text-fg"
+                : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
             }`}
           >
             Tempo
@@ -132,8 +132,8 @@ export function CalendarPage({
               aria-pressed={showWeekends}
               className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
                 showWeekends
-                  ? "border-accent/40 bg-accent-soft text-accent"
-                  : "border-line text-muted hover:bg-panel hover:text-fg"
+                  ? "border-primary/40 bg-accent text-primary"
+                  : "border-line text-muted-foreground hover:bg-panel hover:text-fg"
               }`}
             >
               Weekends
@@ -147,8 +147,8 @@ export function CalendarPage({
                 onClick={() => calendar.setView(v)}
                 className={`rounded-md px-2.5 py-1 text-caption font-medium capitalize transition-colors ${
                   view === v
-                    ? "bg-accent text-accent-fg"
-                    : "text-muted hover:bg-panel hover:text-fg"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-panel hover:text-fg"
                 }`}
               >
                 {v}

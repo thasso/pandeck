@@ -53,7 +53,7 @@ export function ToastViewport() {
                 toast.action?.onClick();
                 dismissToast(toast.id);
               }}
-              className="ml-1 rounded-full bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-colors hover:bg-accent/90"
+              className="ml-1 rounded-full bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
               {toast.action.label}
             </button>
@@ -75,8 +75,8 @@ export function ToastViewport() {
 
 function ToastIcon({ tone }: { tone: ToastTone }) {
   if (tone === "success")
-    return <Check size={14} className="shrink-0 text-accent" />;
+    return <Check size={14} className="shrink-0 text-primary" />;
   if (tone === "error")
     return <Info size={14} className="shrink-0 text-danger" />;
-  return <Info size={14} className="shrink-0 text-muted" />;
+  return <Info size={14} className="shrink-0 text-muted-foreground" />;
 }

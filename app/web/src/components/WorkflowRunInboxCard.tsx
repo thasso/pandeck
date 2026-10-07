@@ -40,11 +40,11 @@ import { Spinner } from "./ui/load.tsx";
 
 /** The same semantic tones the session cards use, at the same weight. */
 const BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent-soft text-accent",
+  accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
   danger: "bg-danger-soft text-danger",
   success: "bg-success-soft text-success",
-  muted: "bg-line text-muted",
+  muted: "bg-line text-muted-foreground",
 };
 
 /** Every run state has a glyph, so its badge survives the icon-only rail. */
@@ -76,7 +76,7 @@ function RunBadgeIcon({
 
 /** Settle, inline at the end of the status row like a session card's. */
 const INLINE_ACTION =
-  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
   tight: "size-6 -my-0.5",
   comfortable: "size-8 -my-0.5",
@@ -208,7 +208,7 @@ function WorkflowRunInboxCardImpl({
           settle();
         }
       }}
-      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-raised focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-raised focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
     >
       {/* The session card's three rows, in the same places: context with the
           time, identity with the state in the leading slot, then signals with
@@ -259,7 +259,7 @@ function WorkflowRunInboxCardImpl({
             {moving ? (
               <Workflow
                 size={13}
-                className="shrink-0 text-accent"
+                className="shrink-0 text-primary"
                 aria-hidden
               />
             ) : (
@@ -299,10 +299,10 @@ function WorkflowRunInboxCardImpl({
                   e.stopPropagation();
                   onToggleRoles?.(run.id);
                 }}
-                className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                   item.counts.working > 0
-                    ? "text-accent hover:text-accent"
-                    : "text-muted hover:text-fg"
+                    ? "text-primary hover:text-primary"
+                    : "text-muted-foreground hover:text-fg"
                 }`}
               >
                 {item.counts.working > 0 ? (
@@ -330,7 +330,7 @@ function WorkflowRunInboxCardImpl({
                   e.stopPropagation();
                   onOpenSession(bubbled.session.id);
                 }}
-                className={`session-status-responsive-badge flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                className={`session-status-responsive-badge flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                   BADGE_TONE[bubbleTone ?? "accent"]
                 }`}
               >
@@ -350,7 +350,7 @@ function WorkflowRunInboxCardImpl({
               </span>
             ) : null}
             {phase ? (
-              <span className="min-w-0 flex-1 basis-0 truncate text-muted">
+              <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground">
                 {phase}
               </span>
             ) : null}

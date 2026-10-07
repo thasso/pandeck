@@ -176,7 +176,7 @@ export function TimeGrid({
                 onClick={() => onSelectDay(date)}
                 title="Select day"
                 className={`flex flex-1 items-baseline justify-center gap-1.5 border-l border-line py-1.5 text-left first:border-l-0 hover:bg-raised/60 ${
-                  date === selectedDate ? "bg-accent-soft/30" : ""
+                  date === selectedDate ? "bg-accent/30" : ""
                 }`}
               >
                 <span className="text-caption uppercase tracking-wide text-faint">
@@ -190,7 +190,7 @@ export function TimeGrid({
                     e.stopPropagation();
                     onOpenDay(date);
                   }}
-                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-accent ${isToday ? "bg-accent font-semibold text-accent-fg" : "text-fg"}`}
+                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-primary ${isToday ? "bg-primary font-semibold text-primary-foreground" : "text-fg"}`}
                 >
                   {dayOfMonth(date)}
                 </span>
@@ -320,8 +320,8 @@ function AllDayBand({
                 onClick={() => onSelectEvent(event.id)}
                 className={`truncate rounded px-1 py-0.5 text-left text-micro ${
                   event.id === selectedEventId
-                    ? "bg-accent text-accent-fg"
-                    : "bg-accent-soft text-accent hover:opacity-80"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-accent text-primary hover:opacity-80"
                 }`}
               >
                 {event.title}
@@ -433,8 +433,8 @@ function EventBlock({
       title={`${hm(event.start, timeZone)}–${hm(event.end, timeZone)} · ${event.title}`}
       className={`absolute z-[1] overflow-hidden rounded-md border px-1.5 py-0.5 text-left transition-shadow ${
         selected
-          ? "border-accent bg-accent-soft ring-1 ring-accent"
-          : "border-accent/30 bg-accent-soft/70 hover:border-accent/60"
+          ? "border-primary bg-accent ring-1 ring-primary"
+          : "border-primary/30 bg-accent/70 hover:border-primary/60"
       } ${declined ? "opacity-50" : ""}`}
       style={{
         top: topPx + 1,
@@ -447,16 +447,16 @@ function EventBlock({
         className={`flex items-center gap-1 ${declined ? "line-through" : ""}`}
       >
         {event.meetingUrl && (
-          <Video size={9} className="shrink-0 text-accent" />
+          <Video size={9} className="shrink-0 text-primary" />
         )}
         <span
-          className={`min-w-0 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
+          className={`min-w-0 truncate text-caption font-medium ${selected ? "text-primary" : "text-fg"}`}
         >
           {event.title}
         </span>
       </div>
       {!compact && (
-        <div className="truncate text-micro tabular-nums text-muted">
+        <div className="truncate text-micro tabular-nums text-muted-foreground">
           {hm(event.start, timeZone)}
         </div>
       )}

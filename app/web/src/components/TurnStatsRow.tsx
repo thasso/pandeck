@@ -109,7 +109,7 @@ function Detail({
   return (
     <div className="flex items-baseline justify-between gap-4" title={title}>
       <span className="text-faint">{label}</span>
-      <span className="tabular-nums text-muted">{value}</span>
+      <span className="tabular-nums text-muted-foreground">{value}</span>
     </div>
   );
 }
@@ -195,7 +195,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
             size={11}
             className={`shrink-0 text-faint/70 transition-transform ${expanded ? "rotate-90" : ""}`}
           />
-          <span className="font-medium text-muted">Turn</span>
+          <span className="font-medium text-muted-foreground">Turn</span>
           <span className="tabular-nums" title={INPUT_TITLE}>
             {fmtTokens(totalInput(totals))} in
           </span>
@@ -221,7 +221,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
 
         {showSessionCumulative && (
           <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-[15px]">
-            <span className="font-medium text-muted">Session</span>
+            <span className="font-medium text-muted-foreground">Session</span>
             <span className="tabular-nums" title={INPUT_TITLE}>
               {fmtTokens(totalInput(session))} in
             </span>
@@ -249,7 +249,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
         )}
 
         <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-[15px]">
-          <span className="font-medium text-muted">Context</span>
+          <span className="font-medium text-muted-foreground">Context</span>
           <span className="tabular-nums" title={contextTitle}>
             {contextUsed}
             {totals.contextWindow !== undefined

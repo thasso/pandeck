@@ -24,7 +24,7 @@ export const AGENT_TYPE_DISPLAY: Record<
     label: "Assistant",
     Icon: MessageSquare,
     pillColor: "text-faint",
-    activeColor: "text-accent",
+    activeColor: "text-primary",
     desc: "General purpose chat and assistance",
   },
   workshop: {
@@ -48,14 +48,14 @@ export const AGENT_TYPE_DISPLAY: Record<
     label: "Personal Assistant",
     Icon: MessageSquare,
     pillColor: "text-faint",
-    activeColor: "text-accent",
+    activeColor: "text-primary",
     desc: "Your permanent personal assistant",
   },
   "workflow-coordinator": {
     label: "Workflow coordinator",
     Icon: MessageSquare,
     pillColor: "text-faint",
-    activeColor: "text-accent",
+    activeColor: "text-primary",
     desc: "Constrained workflow planning and post-review decisions",
   },
 };

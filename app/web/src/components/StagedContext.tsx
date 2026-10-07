@@ -224,8 +224,8 @@ function ContextChip({
 }) {
   const toneClass =
     tone === "accent"
-      ? "border-accent/30 bg-accent-soft text-accent"
-      : "border-line bg-raised text-muted";
+      ? "border-primary/30 bg-accent text-primary"
+      : "border-line bg-raised text-muted-foreground";
   return (
     <span
       className={`flex min-w-0 max-w-[14rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-caption font-medium ${toneClass} ${dimmed ? "opacity-70" : ""}`}
@@ -470,7 +470,7 @@ function FieldRow({
         aria-expanded={expanded}
         className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground">
           {icon}
         </span>
         <span className="w-16 shrink-0 text-caption font-semibold uppercase tracking-wide text-faint">
@@ -571,7 +571,7 @@ function OptionList({
           onClick={leadingAction.onSelect}
           aria-pressed={leadingAction.selected}
           className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption transition-colors hover:bg-raised ${
-            leadingAction.selected ? "text-accent" : "text-fg"
+            leadingAction.selected ? "text-primary" : "text-fg"
           }`}
         >
           <Plus size={13} className="shrink-0" />
@@ -624,7 +624,9 @@ function OptionList({
                 type="button"
                 onClick={() => onSelect(item.id)}
                 className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-raised ${
-                  selectedId === item.id ? "font-medium text-fg" : "text-muted"
+                  selectedId === item.id
+                    ? "font-medium text-fg"
+                    : "text-muted-foreground"
                 }`}
               >
                 {item.dot ? (

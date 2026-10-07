@@ -44,7 +44,7 @@ export function WorktreeProvisionCard({
           ) : done ? (
             <GitBranch size={16} className="text-success" />
           ) : (
-            <Spinner className="text-muted" />
+            <Spinner className="text-muted-foreground" />
           )}
         </div>
         <div className="min-w-0 flex-1">
@@ -70,7 +70,7 @@ export function WorktreeProvisionCard({
               ))}
           </div>
           {provision.baseBranch && (
-            <div className="mt-1 text-caption text-muted">
+            <div className="mt-1 text-caption text-muted-foreground">
               forked from{" "}
               <span className="font-mono text-faint">
                 {provision.baseBranch}

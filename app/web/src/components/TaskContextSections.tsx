@@ -218,7 +218,7 @@ function JiraTicketsSection({
           const summary = summaries[key];
           const label = (
             <>
-              <span className="block truncate font-mono text-caption text-accent">
+              <span className="block truncate font-mono text-caption text-primary">
                 {key}
               </span>
               {summary ? (
@@ -233,7 +233,7 @@ function JiraTicketsSection({
               key={key}
               className="group flex min-w-0 items-start gap-2 py-2 first:pt-1"
             >
-              <Tickets size={13} className="mt-0.5 shrink-0 text-accent" />
+              <Tickets size={13} className="mt-0.5 shrink-0 text-primary" />
               {url ? (
                 <a
                   href={url}
@@ -277,7 +277,7 @@ function JiraTicketsSection({
               type="button"
               onClick={add}
               disabled={normalizeJiraKeys([draft]).length === 0}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -299,17 +299,17 @@ function githubIssueUrl(ref: string): string | undefined {
 function GithubIssueIcon({ issue }: { issue: GithubLinkedIssue | undefined }) {
   const cls = "mt-0.5 shrink-0";
   if (issue?.state === "merged")
-    return <GitMerge size={13} className={`${cls} text-accent`} />;
+    return <GitMerge size={13} className={`${cls} text-primary`} />;
   if (issue?.isPullRequest)
     return (
       <GitPullRequest
         size={13}
-        className={`${cls} ${issue.state === "closed" ? "text-faint" : "text-accent"}`}
+        className={`${cls} ${issue.state === "closed" ? "text-faint" : "text-primary"}`}
       />
     );
   if (issue?.state === "closed")
     return <CircleCheck size={13} className={`${cls} text-faint`} />;
-  return <CircleDot size={13} className={`${cls} text-accent`} />;
+  return <CircleDot size={13} className={`${cls} text-primary`} />;
 }
 
 function GithubIssuesSection({
@@ -380,7 +380,7 @@ function GithubIssuesSection({
                 className="min-w-0 flex-1 hover:[&>span]:underline"
                 title={`Open ${ref}${issue ? ` — ${issue.title} (${issue.state})` : ""} on GitHub`}
               >
-                <span className="block truncate font-mono text-caption text-accent">
+                <span className="block truncate font-mono text-caption text-primary">
                   {ref}
                 </span>
                 {issue?.title ? (
@@ -417,7 +417,7 @@ function GithubIssuesSection({
               type="button"
               onClick={add}
               disabled={!normalizeGithubIssueRef(draft)}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
             </button>
@@ -474,14 +474,14 @@ function LinksSection({
         {links.map((link) => (
           <div
             key={link.url}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted transition-colors hover:bg-raised"
+            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted-foreground transition-colors hover:bg-raised"
           >
             <ProviderIcon source={link.source} size={13} />
             <a
               href={link.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="min-w-0 flex-1 truncate text-fg hover:text-accent hover:underline"
+              className="min-w-0 flex-1 truncate text-fg hover:text-primary hover:underline"
               title={link.url}
             >
               {link.title?.trim() || link.url.replace(/^https?:\/\//, "")}
@@ -511,7 +511,7 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="https://…"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-primary"
             />
             <input
               value={title}
@@ -521,14 +521,14 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="Optional label"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-primary"
             />
             <div className="flex justify-end gap-1.5">
               <button
                 type="button"
                 onClick={() => add("source")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Link2 size={11} /> Source
               </button>
@@ -536,7 +536,7 @@ function LinksSection({
                 type="button"
                 onClick={() => add("related")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption font-medium text-accent-fg hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Plus size={11} /> Related
               </button>
@@ -618,9 +618,9 @@ function ProviderIcon({
   size?: number;
 }) {
   if (source === "slack")
-    return <MessageCircle size={size} className="shrink-0 text-accent" />;
+    return <MessageCircle size={size} className="shrink-0 text-primary" />;
   if (source === "jira")
-    return <Tickets size={size} className="shrink-0 text-accent" />;
+    return <Tickets size={size} className="shrink-0 text-primary" />;
   if (source === "github")
     return <GitBranch size={size} className="shrink-0 text-fg" />;
   if (source === "forgejo")

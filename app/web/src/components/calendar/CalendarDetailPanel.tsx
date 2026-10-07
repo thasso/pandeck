@@ -90,24 +90,24 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-surface p-3">
       <div className="flex items-center gap-1.5 text-caption text-fg">
-        <CalendarClock size={13} className="shrink-0 text-muted" />
+        <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
         <span className="tabular-nums">
           {event.allDay
             ? "All day"
             : `${hm(event.start, timeZone)} – ${hm(event.end, timeZone)}`}
         </span>
         {duration && !event.allDay && (
-          <span className="text-muted">· {duration}</span>
+          <span className="text-muted-foreground">· {duration}</span>
         )}
         {event.selfResponse && event.selfResponse !== "accepted" && (
-          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-micro capitalize text-muted">
+          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-micro capitalize text-muted-foreground">
             {event.selfResponse}
           </span>
         )}
       </div>
 
       {event.location && (
-        <div className="flex items-start gap-1.5 text-caption text-muted">
+        <div className="flex items-start gap-1.5 text-caption text-muted-foreground">
           <MapPin size={13} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{event.location}</span>
         </div>
@@ -146,7 +146,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
                   title={attendee.response ?? "no response"}
                 />
                 <span
-                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-fg" : "text-muted"}`}
+                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-fg" : "text-muted-foreground"}`}
                 >
                   {attendee.name ?? attendee.email}
                 </span>
@@ -167,7 +167,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
       )}
 
       {event.description && (
-        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-caption text-muted">
+        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-caption text-muted-foreground">
           {event.description}
         </div>
       )}
@@ -177,7 +177,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           href={event.htmlLink}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-caption text-muted hover:text-accent"
+          className="flex items-center gap-1 text-caption text-muted-foreground hover:text-primary"
         >
           <ExternalLink size={11} />
           Open in Google Calendar
@@ -193,7 +193,7 @@ function ConferenceButton({ link }: { link: CalendarConferenceLink }) {
       ? "border-blue-500/40 text-blue-600 dark:text-blue-300 hover:bg-blue-500/10"
       : link.provider === "teams"
         ? "border-indigo-500/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/10"
-        : "border-accent/40 text-accent hover:bg-accent-soft";
+        : "border-primary/40 text-primary hover:bg-accent";
   return (
     <a
       href={link.uri}

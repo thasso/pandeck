@@ -25,7 +25,7 @@ export function UnreadDot({
     <span
       aria-hidden="true"
       title={title}
-      className={`absolute z-20 rounded-full bg-accent ${placementClasses[placement]} ${className}`}
+      className={`absolute z-20 rounded-full bg-primary ${placementClasses[placement]} ${className}`}
     />
   );
 }

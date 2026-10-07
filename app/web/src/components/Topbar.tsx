@@ -66,7 +66,7 @@ interface Props {
 
 /** Shared shape of every header action: a muted icon button. */
 const ACTION_CLASS =
-  "relative flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg";
+  "relative flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg";
 
 export function Topbar({
   prefs,

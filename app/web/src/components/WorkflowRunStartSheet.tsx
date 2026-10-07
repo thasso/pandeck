@@ -555,7 +555,7 @@ export function WorkflowRunStartLayer({
     <div className="flex items-center gap-3 border-b border-line px-4 py-3">
       <div className="min-w-0 flex-1">
         <div className="text-body font-semibold text-fg">Run workflow</div>
-        <div className="mt-0.5 flex items-center gap-2 text-caption text-muted">
+        <div className="mt-0.5 flex items-center gap-2 text-caption text-muted-foreground">
           <TaskIdBadge id={task.id} />
           <span className="min-w-0 flex-1 truncate" title={task.title}>
             {task.title}
@@ -595,7 +595,7 @@ export function WorkflowRunStartLayer({
                     : event.target.value,
                 )
               }
-              className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-accent disabled:opacity-60"
+              className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-primary disabled:opacity-60"
             >
               {baseBranches.map((option) => (
                 <option key={option.branch} value={option.branch}>
@@ -605,12 +605,12 @@ export function WorkflowRunStartLayer({
               ))}
             </select>
           ) : (
-            <span className="block text-caption text-muted">
+            <span className="block text-caption text-muted-foreground">
               Main checkout branch (default)
             </span>
           )}
         </label>
-        <p className="mt-1.5 text-caption text-muted">
+        <p className="mt-1.5 text-caption text-muted-foreground">
           This run only. Active worktree branches in the Task&apos;s Project can
           be selected as epic bases.
         </p>
@@ -625,7 +625,7 @@ export function WorkflowRunStartLayer({
           onClick={onResetDefaults}
           disabled={pending}
           title="Put every runtime, limit and override back to the recommended run"
-          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-caption text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60"
+          className="inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-60"
         >
           <RotateCcw size={12} className="shrink-0" />
           Reset to recommended defaults
@@ -660,7 +660,7 @@ export function WorkflowRunStartLayer({
                   <span className="block text-body font-medium text-fg">
                     {label}
                   </span>
-                  <span className="block truncate text-caption text-muted">
+                  <span className="block truncate text-caption text-muted-foreground">
                     {roleSummary(state)}
                   </span>
                 </span>
@@ -745,7 +745,7 @@ export function WorkflowRunStartLayer({
                 {row !== "coordinator" ? (
                   <div className="grid gap-3 px-3 sm:grid-cols-2">
                     <label className="block">
-                      <span className="mb-1 block text-caption font-medium text-muted">
+                      <span className="mb-1 block text-caption font-medium text-muted-foreground">
                         Model family
                       </span>
                       <input
@@ -755,11 +755,11 @@ export function WorkflowRunStartLayer({
                         onChange={(event) =>
                           onChangeRole(row, { family: event.target.value })
                         }
-                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-accent disabled:opacity-60"
+                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-primary disabled:opacity-60"
                       />
                     </label>
                     <label className="block">
-                      <span className="mb-1 block text-caption font-medium text-muted">
+                      <span className="mb-1 block text-caption font-medium text-muted-foreground">
                         Selection notes (optional)
                       </span>
                       <input
@@ -769,7 +769,7 @@ export function WorkflowRunStartLayer({
                         onChange={(event) =>
                           onChangeRole(row, { notes: event.target.value })
                         }
-                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-accent disabled:opacity-60"
+                        className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-primary disabled:opacity-60"
                       />
                     </label>
                   </div>
@@ -790,7 +790,7 @@ export function WorkflowRunStartLayer({
               pending || !canAddConfiguration(role, roles.sets[role].length)
             }
             title={`Add a candidate to the ${role} role set`}
-            className="flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-caption text-muted transition-colors hover:bg-raised hover:text-fg disabled:opacity-60 disabled:hover:bg-transparent"
+            className="flex items-center justify-center gap-1.5 rounded-xl border border-line px-3 py-2 text-caption text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:opacity-60 disabled:hover:bg-transparent"
           >
             <Plus size={13} className="shrink-0" />
             Add {role} configuration
@@ -798,7 +798,7 @@ export function WorkflowRunStartLayer({
         ))}
       </div>
 
-      <p className="text-caption text-muted">
+      <p className="text-caption text-muted-foreground">
         Implementer and reviewer require at least one candidate. Empty fixer
         falls back to the implementer; empty verdict skips post-fix judgment.
       </p>
@@ -810,12 +810,12 @@ export function WorkflowRunStartLayer({
           <span className="text-caption font-medium uppercase tracking-wide text-faint">
             Upper limits
           </span>
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             Ceilings, not targets: the run uses what the work needs and stops
             here.
           </p>
         </div>
-        <label className="flex items-start gap-2 text-caption text-muted">
+        <label className="flex items-start gap-2 text-caption text-muted-foreground">
           <input
             type="checkbox"
             checked={customLimits}
@@ -863,7 +863,7 @@ export function WorkflowRunStartLayer({
 
       <Disclosure header={<span>Advanced: CI machine verification</span>}>
         <div className="flex flex-col gap-3 p-3">
-          <label className="flex items-start gap-2 text-caption text-muted">
+          <label className="flex items-start gap-2 text-caption text-muted-foreground">
             <input
               type="checkbox"
               checked={ciSettings.earlyPush}
@@ -879,7 +879,7 @@ export function WorkflowRunStartLayer({
             </span>
           </label>
           <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1 text-caption text-muted">
+            <label className="flex flex-col gap-1 text-caption text-muted-foreground">
               CI timeout (seconds)
               <input
                 type="number"
@@ -895,7 +895,7 @@ export function WorkflowRunStartLayer({
                 className="rounded-lg border border-line bg-transparent px-2 py-1.5 text-fg"
               />
             </label>
-            <label className="flex flex-col gap-1 text-caption text-muted">
+            <label className="flex flex-col gap-1 text-caption text-muted-foreground">
               Poll interval (seconds)
               <input
                 type="number"
@@ -920,7 +920,7 @@ export function WorkflowRunStartLayer({
           <span className="flex items-center gap-2">
             <span>Advanced: prompt overrides</span>
             {overrideCount > 0 ? (
-              <span className="rounded-md bg-accent-soft px-1.5 py-0.5 text-caption font-medium text-accent">
+              <span className="rounded-md bg-accent px-1.5 py-0.5 text-caption font-medium text-primary">
                 {overrideCount === 1 ? "1 override" : "2 overrides"}
               </span>
             ) : null}
@@ -934,7 +934,7 @@ export function WorkflowRunStartLayer({
           </p>
           {OVERRIDE_ROLES.map((role) => (
             <label key={role} className="block">
-              <span className="mb-1 block text-caption font-medium text-muted">
+              <span className="mb-1 block text-caption font-medium text-muted-foreground">
                 {OVERRIDE_LABEL[role]} instructions (optional)
               </span>
               <textarea
@@ -944,7 +944,7 @@ export function WorkflowRunStartLayer({
                 disabled={pending}
                 placeholder={`Extra instructions appended to the ${role}'s assignment.`}
                 onChange={(e) => onChangeOverride(role, e.target.value)}
-                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-accent disabled:opacity-60"
+                className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-caption text-fg outline-none focus:border-primary disabled:opacity-60"
               />
             </label>
           ))}
@@ -956,10 +956,10 @@ export function WorkflowRunStartLayer({
           hover (docs/agent-workflows.md, "Concurrency and safety"). */}
       <div className="rounded-xl border border-line bg-panel/60 px-3 py-2.5 text-caption">
         <div className="mb-1 flex items-center gap-1.5 font-medium text-fg">
-          <ShieldCheck size={14} className="text-accent" />
+          <ShieldCheck size={14} className="text-primary" />
           What starting allows
         </div>
-        <ul className="list-disc space-y-0.5 pl-5 text-muted">
+        <ul className="list-disc space-y-0.5 pl-5 text-muted-foreground">
           <li>
             Coordinator plus implementer and reviewer sessions for this run
           </li>
@@ -990,7 +990,7 @@ export function WorkflowRunStartLayer({
         <>
           <span
             role="status"
-            className="mr-auto inline-flex min-w-0 items-center gap-1.5 text-caption text-muted"
+            className="mr-auto inline-flex min-w-0 items-center gap-1.5 text-caption text-muted-foreground"
           >
             <Spinner size="sm" />
             <span className="truncate">
@@ -1084,7 +1084,9 @@ function LimitSlider({
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-caption font-medium text-muted">{label}</span>
+        <span className="text-caption font-medium text-muted-foreground">
+          {label}
+        </span>
         <span className="text-body font-medium text-fg">
           <span className="text-caption text-faint">{"up to "}</span>
           <span className="tabular-nums">{value}</span>

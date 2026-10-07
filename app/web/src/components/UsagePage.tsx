@@ -126,7 +126,7 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
               <h2 className="text-heading font-semibold text-fg">
                 At a glance
               </h2>
-              <p className="mt-0.5 text-caption text-muted">
+              <p className="mt-0.5 text-caption text-muted-foreground">
                 Current subscription limits across every enabled account.
               </p>
             </div>
@@ -395,7 +395,7 @@ export function UsageOverviewCard({
           provider={profile.provider}
           title={providerName}
           size={15}
-          className="shrink-0 text-accent"
+          className="shrink-0 text-primary"
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-caption font-semibold text-fg">
@@ -426,10 +426,10 @@ export function UsageOverviewCard({
           </div>
         ) : null}
         {unavailable ? (
-          <p className="text-caption text-muted">{unavailable}</p>
+          <p className="text-caption text-muted-foreground">{unavailable}</p>
         ) : null}
         {snapshot && rows.length === 0 && !unavailable ? (
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             No subscription windows reported.
           </p>
         ) : null}
@@ -448,7 +448,7 @@ function CompactUsageMeter({
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2 text-caption">
-        <span className="text-muted">{label}</span>
+        <span className="text-muted-foreground">{label}</span>
         <span className="font-semibold tabular-nums text-fg">
           {pct === null ? "—" : `${Math.round(pct)}%`}
         </span>
@@ -483,7 +483,7 @@ function UsageProviderSection({
   return (
     <section className="flex flex-col gap-4">
       <div className="flex items-center gap-2.5">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-panel text-accent">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-panel text-primary">
           <ProviderIcon provider={provider} size={15} />
         </span>
         <h2 className="text-body font-semibold text-fg">{title}</h2>
@@ -524,7 +524,7 @@ function UsageAccountSection<T>({
         <div className="min-w-0 flex-1">
           <div className="text-body font-semibold text-fg">{profile.name}</div>
           {subtitle ? (
-            <div className="text-caption text-muted">{subtitle}</div>
+            <div className="text-caption text-muted-foreground">{subtitle}</div>
           ) : null}
         </div>
         {/* R2: the section keeps its detail while the account refetches. */}
@@ -571,7 +571,7 @@ function meterColor(pct: number): string {
   const level = usageLevel(pct);
   if (level === "critical") return "bg-danger";
   if (level === "warn") return "bg-warning";
-  return "bg-accent";
+  return "bg-primary";
 }
 
 function severityTone(severity: string | null): string {
@@ -680,16 +680,16 @@ function ClaudeUsageContent({
             <table className="w-full border-collapse text-caption">
               <thead>
                 <tr>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
+                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted-foreground">
                     Kind
                   </th>
-                  <th className="border-b border-line px-2 py-1 text-right font-medium text-muted">
+                  <th className="border-b border-line px-2 py-1 text-right font-medium text-muted-foreground">
                     Used
                   </th>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
+                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted-foreground">
                     Resets
                   </th>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
+                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted-foreground">
                     Scope
                   </th>
                 </tr>
@@ -707,10 +707,10 @@ function ClaudeUsageContent({
                         ? "—"
                         : `${Math.round(limit.percent)}%`}
                     </td>
-                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted">
+                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted-foreground">
                       {resetCountdown(limit.resetsAt, now)}
                     </td>
-                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted">
+                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted-foreground">
                       {limit.scope?.modelDisplayName ?? "—"}
                     </td>
                   </tr>
@@ -784,7 +784,7 @@ function ExtraUsageCard({
     extraUsage.utilizationPct !== null && extraUsage.utilizationPct >= 100;
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="text-caption font-medium text-muted">
+      <div className="text-caption font-medium text-muted-foreground">
         Extra usage credits (this month)
       </div>
       <div className="mt-1 text-heading font-semibold tabular-nums text-fg">
@@ -829,13 +829,15 @@ function BehaviorWindow({
 }) {
   return (
     <div>
-      <div className="text-caption font-medium text-muted">{label}</div>
+      <div className="text-caption font-medium text-muted-foreground">
+        {label}
+      </div>
       <div className="text-caption text-fg">
         {window.requestCount.toLocaleString()} requests ·{" "}
         {window.sessionCount.toLocaleString()} sessions
       </div>
       {window.topContributors.length > 0 ? (
-        <ul className="mt-1 space-y-0.5 text-caption text-muted">
+        <ul className="mt-1 space-y-0.5 text-caption text-muted-foreground">
           {window.topContributors.slice(0, 4).map((c) => (
             <li key={`${c.kind}-${c.name}`}>
               {c.name} — {Math.round(c.pct)}%
@@ -899,7 +901,7 @@ function OpenAiUsageContent({
             ))}
           </div>
         ) : (
-          <div className="mt-2 text-caption text-muted">
+          <div className="mt-2 text-caption text-muted-foreground">
             No active rate-limit windows reported right now.
           </div>
         )}
@@ -944,7 +946,7 @@ function OpenAiSpendCard({
     spend.reached || (spend.usedPercent !== null && spend.usedPercent >= 100);
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="text-caption font-medium text-muted">
+      <div className="text-caption font-medium text-muted-foreground">
         Spend limit{spend.source ? ` · ${spend.source.replace(/_/g, " ")}` : ""}
       </div>
       <div className="mt-1 text-heading font-semibold tabular-nums text-fg">
@@ -1118,7 +1120,9 @@ export function OpenAiCreditsCard({
   return (
     <div className="rounded-xl border border-line bg-panel p-3">
       <div className="flex items-baseline justify-between gap-3">
-        <div className="text-caption font-medium text-muted">Credits</div>
+        <div className="text-caption font-medium text-muted-foreground">
+          Credits
+        </div>
         {resetCredits && (resetCredits.availableCount ?? 0) > 0 ? (
           <div className="text-caption text-faint">
             {resetCredits.availableCount} reset
@@ -1136,7 +1140,7 @@ export function OpenAiCreditsCard({
 
       {available.length + redeemed.length > 0 ? (
         <div className="mt-2 rounded-lg border border-line bg-surface p-2.5">
-          <div className="mb-1.5 flex items-center gap-1.5 text-caption font-semibold text-muted">
+          <div className="mb-1.5 flex items-center gap-1.5 text-caption font-semibold text-muted-foreground">
             <Ticket size={12} /> Banked rate-limit resets
           </div>
           <ul className="space-y-1 text-caption">
@@ -1178,7 +1182,7 @@ export function OpenAiCreditsCard({
                   disabled={!canRedeem}
                   onClick={() => setConfirming(true)}
                   title="Redeem the soonest-expiring reset"
-                  className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg disabled:opacity-40"
+                  className="rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground disabled:opacity-40"
                 >
                   Redeem a reset
                 </button>
@@ -1196,7 +1200,7 @@ export function OpenAiCreditsCard({
             </>
           ) : null}
           {done ? (
-            <div className="mt-2 text-caption text-accent">{done}</div>
+            <div className="mt-2 text-caption text-primary">{done}</div>
           ) : null}
           {error ? <ErrorNote message={error} className="mt-2" /> : null}
         </div>
@@ -1259,14 +1263,14 @@ function RedeemResetDialog({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className="rounded-lg p-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+            className="rounded-lg p-1 text-muted-foreground hover:bg-raised hover:text-fg disabled:opacity-40"
           >
             <X size={14} />
           </button>
         </div>
         <div className="flex gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-danger" />
-          <p className="text-caption text-muted">
+          <p className="text-caption text-muted-foreground">
             This immediately spends{" "}
             <span className="text-fg">one banked reset</span> to clear a
             currently-hit limit window. It is{" "}
@@ -1277,7 +1281,7 @@ function RedeemResetDialog({
         {!applicable ? (
           <div className="mt-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
-            <p className="text-caption text-muted">
+            <p className="text-caption text-muted-foreground">
               OpenAI reports{" "}
               <span className="font-semibold text-fg">
                 no limit is hit right now
@@ -1289,11 +1293,11 @@ function RedeemResetDialog({
         ) : null}
         <div className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 text-caption">
           <div className="flex items-baseline justify-between gap-3">
-            <span className="text-muted">Credit</span>
+            <span className="text-muted-foreground">Credit</span>
             <span className="text-fg">{credit.title ?? "Full reset"}</span>
           </div>
           <div className="mt-0.5 flex items-baseline justify-between gap-3">
-            <span className="text-muted">Expires</span>
+            <span className="text-muted-foreground">Expires</span>
             <span
               className={
                 expiry.level === "ok" ? "text-fg" : EXPIRY_TONE[expiry.level]
@@ -1310,7 +1314,7 @@ function RedeemResetDialog({
             type="button"
             disabled={busy}
             onClick={onClose}
-            className="rounded-lg border border-line px-3 py-1.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
+            className="rounded-lg border border-line px-3 py-1.5 text-caption text-muted-foreground hover:bg-raised hover:text-fg disabled:opacity-40"
           >
             Cancel
           </button>

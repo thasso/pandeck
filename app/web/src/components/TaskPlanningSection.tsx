@@ -19,7 +19,7 @@ const PRIORITY_TONE: Record<TaskPriority, string> = {
   urgent: "border-danger/50 bg-danger/10 text-fg",
   high: "border-amber-500/50 bg-amber-500/10 text-fg",
   normal: "border-line-strong bg-raised text-fg",
-  low: "border-line bg-panel text-muted",
+  low: "border-line bg-panel text-muted-foreground",
 };
 
 /**
@@ -86,10 +86,10 @@ export function TaskPlanningSection({
                   // Same geometry as `QuickPick` below: two rows of chips in one
                   // section at different heights read as two kinds of control,
                   // and the shorter one was a ~24px target on a phone.
-                  className={`cursor-pointer rounded-lg border px-2 py-1 text-caption capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                  className={`cursor-pointer rounded-lg border px-2 py-1 text-caption capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                     active
                       ? PRIORITY_TONE[value]
-                      : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"
+                      : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"
                   }`}
                 >
                   {value}
@@ -175,7 +175,7 @@ function DateRow({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-caption text-fg outline-none focus:border-primary"
       />
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {quickPicks ? (
@@ -219,10 +219,10 @@ function QuickPick({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         active
-          ? "border-accent/60 bg-accent-soft text-fg"
-          : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"
+          ? "border-primary/60 bg-accent text-fg"
+          : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"
       }`}
     >
       {label}
