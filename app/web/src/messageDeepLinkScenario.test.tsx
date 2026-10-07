@@ -33,7 +33,7 @@ class NoopObserver {
 
 await import("./components/MessageList.tsx");
 const App = (await import("./App.tsx")).default;
-const { ShortcutsProvider } = await import("./components/ui/shortcuts.tsx");
+const { ShortcutsProvider } = await import("./components/common/shortcuts.tsx");
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
 const FRAME_MS = 25;

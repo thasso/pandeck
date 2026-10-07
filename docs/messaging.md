@@ -399,7 +399,7 @@ overrides it. The seam:
 The app status slot and the toast viewport are one component each, named for the
 slot rather than the visual; a second renderer of either is the drift this is
 written to prevent. The other two in-app channels are vocabularies rather than
-single components — `ui/load.tsx` owns the in-place one under
+single components — `common/load.tsx` owns the in-place one under
 `loading-states.md`'s audit, and the inbox/session model owns object state — so
 what is enforced there is that nothing outside them invents a third. The audit
 this document adds fails on a new full-width tinted row anywhere but the app

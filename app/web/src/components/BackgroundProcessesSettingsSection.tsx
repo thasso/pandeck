@@ -15,6 +15,17 @@ import {
   type BackgroundWorkSettings,
 } from "@assistant/shared";
 
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { useId } from "react";
+
 const RANGES = BACKGROUND_WORK_SETTINGS_RANGES;
 
 function NumberField({
@@ -34,34 +45,38 @@ function NumberField({
   fallback: number;
   onChange: (value: number) => void;
 }) {
+  const id = useId();
   return (
-    <div className="mt-4 rounded-xl border border-line bg-panel p-4">
-      <label className="block text-caption font-medium text-fg">
-        {label}
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={1}
-          value={value}
-          onChange={(event) => {
-            const next = event.target.valueAsNumber;
-            // An emptied field is not a value: fall back to the shipped default
-            // rather than writing NaN, which the shared normalizer would only
-            // clamp back to the same place one round-trip later.
-            if (!Number.isFinite(next)) {
-              onChange(fallback);
-              return;
-            }
-            onChange(Math.min(max, Math.max(min, Math.round(next))));
-          }}
-          className="settings-input mt-1.5 w-full"
-        />
-      </label>
-      <p className="mt-2 text-caption text-faint">
-        {hint} Choose a value from {min} to {max}; the default is {fallback}.
-      </p>
-    </div>
+    <Card className="mt-4">
+      <CardContent>
+        <Field>
+          <FieldLabel htmlFor={id}>{label}</FieldLabel>
+          <Input
+            id={id}
+            type="number"
+            min={min}
+            max={max}
+            step={1}
+            value={value}
+            onChange={(event) => {
+              const next = event.target.valueAsNumber;
+              // An emptied field is not a value: fall back to the shipped default
+              // rather than writing NaN, which the shared normalizer would only
+              // clamp back to the same place one round-trip later.
+              if (!Number.isFinite(next)) {
+                onChange(fallback);
+                return;
+              }
+              onChange(Math.min(max, Math.max(min, Math.round(next))));
+            }}
+          />
+          <FieldDescription>
+            {hint} Choose a value from {min} to {max}; the default is {fallback}
+            .
+          </FieldDescription>
+        </Field>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -72,40 +87,43 @@ export function BackgroundProcessesSettingsSection({
   settings: AppSettings;
   onUpdate: (patch: Partial<AppSettings>) => void;
 }) {
+  const id = useId();
   const card = normalizeBackgroundWorkSettings(settings.backgroundWork);
   const save = (patch: Partial<BackgroundWorkSettings>) =>
     onUpdate({ backgroundWork: { ...card, ...patch } });
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Background processes</h2>
-      <p className="mt-1 text-caption text-muted">
+      <h2 className="text-sm font-semibold">Background processes</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Shell commands and monitors an agent session starts and leaves running
         after its turn ends. They are governed by PA, not by your provider
         account, and are always visible and stoppable in the background
         registry.
       </p>
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <label className="flex items-start gap-3">
-          <input
-            type="checkbox"
-            checked={card.enabled}
-            onChange={(event) => save({ enabled: event.target.checked })}
-            className="mt-0.5"
-          />
-          <span className="min-w-0">
-            <span className="block text-caption font-medium text-fg">
-              Allow sessions to start background work
-            </span>
-            <span className="mt-1 block text-caption text-faint">
-              Turning this off denies every NEW background process. Work that is
-              already running keeps running to its own deadline, stays listed,
-              and can still be stopped — disabling is not a kill switch.
-            </span>
-          </span>
-        </label>
-      </div>
+      <Card className="mt-6">
+        <CardContent>
+          <Field orientation="horizontal">
+            <FieldContent>
+              <FieldLabel htmlFor={id}>
+                Allow sessions to start background work
+              </FieldLabel>
+              <FieldDescription>
+                Turning this off denies every NEW background process. Work that
+                is already running keeps running to its own deadline, stays
+                listed, and can still be stopped — disabling is not a kill
+                switch.
+              </FieldDescription>
+            </FieldContent>
+            <Switch
+              id={id}
+              checked={card.enabled}
+              onCheckedChange={(enabled) => save({ enabled })}
+            />
+          </Field>
+        </CardContent>
+      </Card>
 
       <NumberField
         label="Sessions that may own background work at once"
@@ -150,30 +168,34 @@ export function BackgroundProcessesSettingsSection({
         }
       />
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4 text-caption text-muted">
-        <p className="font-medium text-fg">What these settings do not change</p>
-        <ul className="mt-2 list-disc space-y-1.5 pl-4">
-          <li>
-            PA enforces the owner cap BEFORE Claude runs a background tool. It
-            is a PA limit, not a setting on your Claude account, and Claude has
-            no equivalent control to keep in sync.
-          </li>
-          <li>
-            A persistent monitor survives the turn that started it and keeps
-            reporting while its session is idle — but it is still governed by
-            the lifetime above, and it is not exempt from Stop.
-          </li>
-          <li>
-            Nothing resumes after a server restart. Work that was running is
-            recorded as lost, and no process, monitor or retained host is
-            brought back.
-          </li>
-          <li>
-            Every value is read once, when a process is admitted. Editing this
-            card governs later admissions only.
-          </li>
-        </ul>
-      </div>
+      <Card className="mt-6">
+        <CardContent>
+          <p className="font-medium text-foreground">
+            What these settings do not change
+          </p>
+          <ul className="mt-2 list-disc space-y-1.5 pl-4">
+            <li>
+              PA enforces the owner cap BEFORE Claude runs a background tool. It
+              is a PA limit, not a setting on your Claude account, and Claude
+              has no equivalent control to keep in sync.
+            </li>
+            <li>
+              A persistent monitor survives the turn that started it and keeps
+              reporting while its session is idle — but it is still governed by
+              the lifetime above, and it is not exempt from Stop.
+            </li>
+            <li>
+              Nothing resumes after a server restart. Work that was running is
+              recorded as lost, and no process, monitor or retained host is
+              brought back.
+            </li>
+            <li>
+              Every value is read once, when a process is admitted. Editing this
+              card governs later admissions only.
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }

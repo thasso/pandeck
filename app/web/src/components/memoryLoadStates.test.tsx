@@ -103,7 +103,7 @@ it("draws a placeholder in the slot of the row whose lineage was opened", async 
   });
 
   const toggle = [...container!.querySelectorAll("button")].find(
-    (button) => button.getAttribute("title") === "Lineage / provenance",
+    (button) => button.getAttribute("aria-label") === "Lineage / provenance",
   );
   expect(toggle).toBeTruthy();
   await act(async () => {

@@ -13,7 +13,8 @@ import {
   openNativeServedFile,
 } from "../lib/nativeShell.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
 
 /** Renew this far before expiry, so a reader never meets a dead frame. */
 const RENEW_MARGIN_MS = 60_000;
@@ -203,28 +204,23 @@ export function SandboxedDocument({
     return (
       <div className="flex min-h-full items-center justify-center p-6">
         <EmptyBox
-          className="w-full max-w-md bg-panel/60"
+          className="w-full max-w-md bg-card/60"
           action={
-            <a
-              {...openProps}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:opacity-90"
-            >
-              <ExternalLink size={13} /> Open PDF
-            </a>
+            <LinkButton variant="default" size="default" {...openProps}>
+              <ExternalLink data-icon="inline-start" /> Open PDF
+            </LinkButton>
           }
         >
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-accent-soft text-accent">
-            <FileText size={22} />
-          </div>
-          <h1 className="text-prose font-semibold text-fg">
+          <FileText size={22} className="mx-auto mb-4 text-primary" />
+          <h1 className="text-base font-semibold text-foreground">
             {name ?? "Document"}
           </h1>
           {sizeBytes === undefined ? null : (
-            <p className="mt-1 text-caption text-faint">
+            <p className="mt-1 text-sm text-muted-foreground">
               {formatFileSize(sizeBytes)}
             </p>
           )}
-          <p className="mt-2 text-body text-muted">
+          <p className="mt-2 text-sm text-muted-foreground">
             This PDF opens in your browser: iPhone and iPad can't scroll one
             inside the app.
           </p>
@@ -261,13 +257,16 @@ export function SandboxedDocument({
         className={`block border-0 bg-white ${className}`}
       />
       {showOpenAction ? (
-        <a
+        <LinkButton
           {...openProps}
-          aria-label={openProps.title}
-          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-lg border border-line bg-surface/90 text-muted transition-colors hover:text-fg"
+          title={undefined}
+          label={openProps.title}
+          variant="outline"
+          size="icon-sm"
+          className="absolute right-2 top-2"
         >
-          <ExternalLink size={14} />
-        </a>
+          <ExternalLink />
+        </LinkButton>
       ) : null}
       {openError ? <ErrorNote message={openError} className="mt-2" /> : null}
     </span>

@@ -1,5 +1,7 @@
 import type { NewSessionNarration } from "../lib/newSessionShell.ts";
-import { ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Skeleton, Spinner } from "./common/load.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import { Item } from "./ui/item.tsx";
 
 /**
  * The chrome the chat stage draws while what it shows is not yet the live
@@ -16,35 +18,30 @@ import { ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
 
 export function PendingSessionPanel({ title }: { title: string }) {
   return (
-    <div className="min-h-0 flex-1 overflow-hidden bg-surface">
+    <div className="min-h-0 flex-1 overflow-hidden bg-background">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
         {/* The card announces (its own heading names the session); the bars are
             `Skeleton`s standing in for the transcript's first lines, so they
             pulse like every other placeholder in the app rather than sitting
             there as three dead rules. */}
-        <div
-          role="status"
-          className="rounded-2xl border border-line bg-panel p-4 shadow-sm"
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent">
+        <Card role="status">
+          <CardHeader className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-primary">
               <Spinner size="md" />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-body font-semibold text-fg">
-                Opening {title}
-              </div>
-              <div className="mt-0.5 text-caption text-muted">
+              <CardTitle className="truncate">Opening {title}</CardTitle>
+              <div className="mt-0.5 text-sm text-muted-foreground">
                 Keeping the app shell stable while the transcript catches up.
               </div>
             </div>
-          </div>
-          <div className="mt-4 space-y-2">
+          </CardHeader>
+          <CardContent className="space-y-2">
             <Skeleton className="h-3 w-2/3 rounded-full" />
             <Skeleton className="h-3 w-11/12 rounded-full" />
             <Skeleton className="h-3 w-3/4 rounded-full" />
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -64,14 +61,16 @@ export function UnavailableSessionPanel({
   message: string;
 }) {
   return (
-    <div className="min-h-0 flex-1 overflow-hidden bg-surface">
+    <div className="min-h-0 flex-1 overflow-hidden bg-background">
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 py-6">
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <div className="truncate text-body font-semibold text-fg">
-            Can't open {title}
-          </div>
-          <ErrorNote className="mt-3" message={message} />
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="truncate">Can't open {title}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ErrorNote message={message} />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
@@ -114,13 +113,10 @@ export function SessionBootstrapNarration({
           retryLabel="Retry send"
         />
       ) : (
-        <div
-          role="status"
-          className="flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-caption text-muted"
-        >
+        <Item variant="outline" size="sm" role="status">
           <Spinner size="sm" />
           <span>{narration.label}</span>
-        </div>
+        </Item>
       )}
     </div>
   );
@@ -140,13 +136,12 @@ export function SessionBootstrapNarration({
 export function SessionRefreshMark() {
   return (
     <div className="pointer-events-none absolute inset-x-0 top-20 z-20 flex justify-center px-3">
-      <div
-        role="status"
-        className="flex items-center gap-2 rounded-full border border-line-strong bg-panel px-4 py-2 text-body font-medium text-fg shadow-lg shadow-black/20"
-      >
-        <Spinner size="sm" />
-        Updating session…
-      </div>
+      <Card size="sm" role="status">
+        <CardContent className="flex items-center gap-2">
+          <Spinner size="sm" />
+          Updating session…
+        </CardContent>
+      </Card>
     </div>
   );
 }

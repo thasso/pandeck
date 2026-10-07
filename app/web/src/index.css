@@ -1,63 +1,77 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 
-/* Semantic color tokens, themed via :root / .dark on <html>. */
+@custom-variant dark (&:is(.dark *));
+
+/* App status colors (shadcn has no success/warning token), themed via :root / .dark. */
 @theme {
-  --color-surface: var(--surface);
-  --color-panel: var(--panel);
-  --color-raised: var(--raised);
-  --color-line: var(--line);
-  --color-line-strong: var(--line-strong);
-  --color-fg: var(--fg);
-  --color-muted: var(--muted);
-  --color-faint: var(--faint);
-  --color-accent: var(--accent);
-  --color-accent-fg: var(--accent-fg);
-  --color-accent-soft: var(--accent-soft);
-  --color-user: var(--user);
-  --color-danger: var(--danger);
-  --color-danger-soft: var(--danger-soft);
   --color-warning: var(--warning);
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
 
-  /* Two intentional system stacks. The app ships no font files, so the
-     primary family is always an honest platform stack (reliable + offline).
-     Keep these centrally replaceable if bundled fonts are evaluated later. */
-  --font-sans:
-    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
 
-  /* Six semantic font-size roles — the ONLY sizes the web client may use.
-     Each is a fixed rem base multiplied by the unitless `--text-scale` browser
-     preference so typography (and only typography) scales 100/110/120/130
-     without touching the browser root, spacing, or persisted geometry. Paired
-     unitless line heights let line boxes grow with the glyphs. Tailwind v4
-     turns each `--text-<role>` / `--text-<role>--line-height` pair into a
-     `text-<role>` utility that sets both font-size and line-height. */
-  --text-micro: calc(0.75rem * var(--text-scale));
-  --text-micro--line-height: 1.35;
-  --text-caption: calc(0.8125rem * var(--text-scale));
-  --text-caption--line-height: 1.5;
-  --text-body: calc(0.875rem * var(--text-scale));
-  --text-body--line-height: 1.5;
-  --text-prose: calc(1rem * var(--text-scale));
-  --text-prose--line-height: 1.6;
-  --text-heading: calc(1.125rem * var(--text-scale));
-  --text-heading--line-height: 1.35;
-  --text-title: calc(1.25rem * var(--text-scale));
-  --text-title--line-height: 1.25;
+  /* The type scale is Tailwind's stock one (xs/sm/base/lg/xl), which is what
+     shadcn components use. Each size is multiplied by the unitless
+     `--text-scale` browser preference so typography (and only typography)
+     scales 100/110/120/130 without touching the browser root, spacing, or
+     persisted geometry. */
+  --text-xs: calc(0.75rem * var(--text-scale));
+  --text-xs--line-height: calc(1 / 0.75);
+  --text-sm: calc(0.875rem * var(--text-scale));
+  --text-sm--line-height: calc(1.25 / 0.875);
+  --text-base: calc(1rem * var(--text-scale));
+  --text-base--line-height: calc(1.5 / 1);
+  --text-lg: calc(1.125rem * var(--text-scale));
+  --text-lg--line-height: calc(1.75 / 1.125);
+  --text-xl: calc(1.25rem * var(--text-scale));
+  --text-xl--line-height: calc(1.75 / 1.25);
 }
 
 /* Browser-local text scale. The base (and the persisted `100` value, which has
-   no override rule) resolves to 1; larger settings multiply every role token.
+   no override rule) resolves to 1; larger settings multiply every size token.
    Applied via a root `data-text-scale` attribute written before first paint in
    index.html and by usePrefs at runtime, so the size is correct as soon as the
    stylesheet applies — no React round-trip, no size flash. */
 :root {
   --text-scale: 1;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 :root[data-text-scale="110"] {
   --text-scale: 1.1;
@@ -69,16 +83,15 @@
   --text-scale: 1.3;
 }
 
-/* Viewer-local zoom. Text roles are recomputed so Markdown, source and prose
+/* Viewer-local zoom. Text sizes are recomputed so Markdown, source and prose
    reflow inside their existing width; visual documents alone use CSS zoom,
    which participates in the document scroller without scaling app chrome. */
 [data-document-zoom-mode="text"] {
-  --text-micro: calc(0.75rem * var(--text-scale) * var(--document-zoom, 1));
-  --text-caption: calc(0.8125rem * var(--text-scale) * var(--document-zoom, 1));
-  --text-body: calc(0.875rem * var(--text-scale) * var(--document-zoom, 1));
-  --text-prose: calc(1rem * var(--text-scale) * var(--document-zoom, 1));
-  --text-heading: calc(1.125rem * var(--text-scale) * var(--document-zoom, 1));
-  --text-title: calc(1.25rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-xs: calc(0.75rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-sm: calc(0.875rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-base: calc(1rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-lg: calc(1.125rem * var(--text-scale) * var(--document-zoom, 1));
+  --text-xl: calc(1.25rem * var(--text-scale) * var(--document-zoom, 1));
 }
 [data-document-zoom-mode="visual"] .document-visual-content {
   zoom: var(--document-zoom, 1);
@@ -86,23 +99,10 @@
 
 /* Light base. `.dark` overrides below win at equal specificity via source order. */
 :root {
-  --surface: #f7f8fa;
-  --panel: #ffffff;
-  --raised: #ffffff;
-  --line: #e8eaef;
-  --line-strong: #d6dae2;
-  --fg: #1a1d26;
-  --muted: #5b6472;
-  --faint: #8b93a3;
-  --accent: #5b62e6;
-  --accent-fg: #ffffff;
-  --accent-soft: color-mix(in oklab, #5b62e6 12%, transparent);
-  --user: #eef1f7;
-  --danger: #d20f39;
-  --danger-soft: color-mix(in oklab, var(--danger) 12%, transparent);
-  --warning: #df8e1d;
+  /* App status colors shadcn has no token for. */
+  --warning: oklch(0.666 0.179 58.318);
   --warning-soft: color-mix(in oklab, var(--warning) 14%, transparent);
-  --success: #40a02b;
+  --success: oklch(0.627 0.194 149.214);
   --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
   /* ANSI terminal palette (Catppuccin Latte) for colored tool output. */
   --ansi-black: #5c5f77;
@@ -138,23 +138,9 @@
 
 /* Dark theme (applied via <html class="dark">) */
 .dark {
-  --surface: #0b0c10;
-  --panel: #1b1f2d;
-  --raised: #2c3246;
-  --line: #3c4458;
-  --line-strong: #566078;
-  --fg: #e7e9ee;
-  --muted: #99a0ae;
-  --faint: #646b7a;
-  --accent: #7c83ff;
-  --accent-fg: #ffffff;
-  --accent-soft: color-mix(in oklab, #7c83ff 16%, transparent);
-  --user: #1c2030;
-  --danger: #f38ba8;
-  --danger-soft: color-mix(in oklab, var(--danger) 16%, transparent);
-  --warning: #f9e2af;
+  --warning: oklch(0.828 0.189 84.429);
   --warning-soft: color-mix(in oklab, var(--warning) 18%, transparent);
-  --success: #a6e3a1;
+  --success: oklch(0.792 0.209 151.711);
   --success-soft: color-mix(in oklab, var(--success) 16%, transparent);
   /* ANSI terminal palette (Catppuccin Mocha) for colored tool output. */
   --ansi-black: #45475a;
@@ -173,6 +159,37 @@
   --ansi-bright-magenta: #f5c2e7;
   --ansi-bright-cyan: #94e2d5;
   --ansi-bright-white: #a6adc8;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
 
 html,
@@ -223,8 +240,8 @@ body,
 input,
 textarea,
 select {
-  font-size: var(--text-prose);
-  line-height: var(--text-prose--line-height);
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
 }
 
 /* iOS auto-zooms when focusing a form control whose computed font-size is
@@ -236,7 +253,7 @@ select {
   input,
   textarea,
   select {
-    font-size: max(1rem, var(--text-prose));
+    font-size: max(1rem, var(--text-base));
   }
 }
 
@@ -245,10 +262,10 @@ body {
   font-family: var(--font-sans);
   /* The scaled `body` role is the app-wide inherited default; unclassed and
      inheriting content follows the text-scale preference from here down. */
-  font-size: var(--text-body);
-  line-height: var(--text-body--line-height);
-  background: var(--surface);
-  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -297,31 +314,31 @@ body {
 /* Slim, unobtrusive scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-color: var(--input) transparent;
 }
 *::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--line-strong);
+  background: var(--input);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--faint);
+  background: var(--muted-foreground);
   background-clip: content-box;
 }
 
 /* Markdown ("prose") styling. Body copy uses the `prose` role; headings map
    onto the shared `title`/`heading` roles (h3+ stay prose/body, differentiated
    by weight/color); inline code inherits the surrounding size; fenced code and
-   tables use `caption`. All sizes are role tokens so Markdown tracks the
+   tables use `sm`. All sizes are scale tokens so Markdown tracks the
    text-scale preference. */
 .prose {
-  font-size: var(--text-prose);
-  line-height: var(--text-prose--line-height);
+  font-size: var(--text-base);
+  line-height: 1.75;
   word-break: break-word;
 }
 .prose > :first-child {
@@ -337,25 +354,26 @@ body {
 .prose h2,
 .prose h3,
 .prose h4 {
-  font-weight: 650;
-  margin: 1.1em 0 0.5em;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 1.4em 0 0.5em;
 }
 .prose h1 {
-  font-size: var(--text-title);
-  line-height: var(--text-title--line-height);
+  font-size: var(--text-xl);
+  line-height: var(--text-xl--line-height);
 }
 .prose h2 {
-  font-size: var(--text-heading);
-  line-height: var(--text-heading--line-height);
+  font-size: var(--text-lg);
+  line-height: var(--text-lg--line-height);
 }
 /* h3–h6 reuse the prose/body sizes; hierarchy comes from weight and color. */
 .prose h3 {
-  font-size: var(--text-prose);
-  line-height: var(--text-prose--line-height);
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
 }
 .prose h4 {
-  font-size: var(--text-body);
-  line-height: var(--text-body--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
 }
 .prose ul,
 .prose ol {
@@ -372,36 +390,36 @@ body {
   margin: 0.2em 0;
 }
 .prose li::marker {
-  color: var(--faint);
+  color: var(--muted-foreground);
 }
 .prose a {
-  color: var(--accent);
-  text-decoration: none;
-}
-.prose a:hover {
+  color: var(--primary);
+  font-weight: 500;
   text-decoration: underline;
+  text-underline-offset: 4px;
 }
 .prose code {
   font-family: var(--font-mono);
-  /* Inline code inherits the surrounding size (no explicit font-size). */
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 0.08em 0.34em;
+  /* shadcn typography: InlineCode. */
+  font-size: 0.875em;
+  font-weight: 500;
+  background: var(--muted);
+  border-radius: calc(var(--radius) * 0.6);
+  padding: 0.2em 0.3em;
 }
 .prose pre {
   max-width: 100%;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   padding: 0.85em 1em;
   overflow-x: auto;
   margin: 0.7em 0;
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
 }
 /*
- * A fenced block routes through `ui/CodeBlock`, which puts a row UNDER the
+ * A fenced block routes through `common/CodeBlock`, which puts a row UNDER the
  * `pre` inside the same container (the copy button, the reveal controls). That
  * row is the gap to what follows, so the `pre`'s own bottom margin would double
  * it. Scoped to `pre.shiki` — the class both of `CodeBlock`'s paths carry — so a
@@ -415,21 +433,24 @@ body {
   border: 0;
   padding: 0;
   font-size: inherit;
+  font-weight: 400;
   white-space: pre;
 }
 .prose blockquote {
-  border-left: 2px solid var(--line-strong);
-  margin: 0.7em 0;
-  padding-left: 0.9em;
-  color: var(--muted);
+  border-left: 2px solid var(--border);
+  margin: 1em 0;
+  padding-left: 1.5em;
+  font-style: italic;
 }
 .prose .markdown-table-scroll {
   max-width: 100%;
-  margin: 0.7em 0;
+  margin: 1em 0;
   overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 .prose .markdown-table-scroll:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 /* Assistant prose opts into a wider viewport for top-level tables alone. The
@@ -440,6 +461,7 @@ body {
   position: relative;
   left: 50%;
   width: max-content;
+  min-width: 100%;
   max-width: min(70rem, calc(var(--shell-main-width, 100vw) - 2rem));
   transform: translateX(-50%);
 }
@@ -449,23 +471,32 @@ body {
 .prose table {
   border-collapse: collapse;
   margin: 0;
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
+  width: 100%;
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
   word-break: normal;
 }
 .prose th,
 .prose td {
-  border: 1px solid var(--line);
-  padding: 0.35em 0.6em;
+  border-bottom: 1px solid var(--border);
+  padding: 0.5em 0.75em;
   text-align: left;
+  white-space: nowrap;
+}
+.prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+.prose tbody tr:hover {
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
 }
 .prose th {
-  background: var(--raised);
-  font-weight: 600;
+  font-weight: 500;
+  color: var(--foreground);
+  height: 2.5rem;
 }
 .prose hr {
   border: 0;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid var(--border);
   margin: 1em 0;
 }
 
@@ -478,23 +509,23 @@ body {
  * being a modifier rather than a second stylesheet.
  */
 .prose-compact {
-  font-size: var(--text-body);
-  line-height: var(--text-body--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
 }
 .prose-compact h1,
 .prose-compact h2,
 .prose-compact h3,
 .prose-compact h4 {
-  font-size: var(--text-body);
-  line-height: var(--text-body--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
   margin: 0.8em 0 0.4em;
 }
 .prose-compact p {
   margin: 0.45em 0;
 }
 .prose-compact pre {
-  font-size: var(--text-micro);
-  line-height: var(--text-micro--line-height);
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
 }
 
 @keyframes blink {
@@ -509,7 +540,7 @@ body {
 .caret::after {
   content: "▋";
   margin-left: 1px;
-  color: var(--accent);
+  color: var(--primary);
   animation: blink 1s steps(1) infinite;
 }
 /* The caret and the progress label are the transcript's two "still working"
@@ -651,9 +682,9 @@ body {
 .shimmer {
   background: linear-gradient(
     90deg,
-    var(--muted) 0%,
-    var(--fg) 50%,
-    var(--muted) 100%
+    var(--muted-foreground) 0%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
@@ -664,21 +695,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .shimmer {
     background: none;
-    color: var(--muted);
+    color: var(--muted-foreground);
     animation: none;
   }
-}
-
-/* Editable settings field: no explicit size here so the global input/textarea/
-   select `prose` rule owns the type size (1rem at 100%). */
-.settings-input {
-  @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-fg outline-none transition-colors placeholder:text-faint focus:border-accent;
-}
-.settings-button {
-  @apply rounded-lg border border-line bg-raised px-3 py-2 text-body font-medium text-fg transition-colors hover:border-line-strong;
-}
-.settings-button-primary {
-  @apply rounded-lg bg-accent px-3 py-2 text-body font-medium text-accent-fg transition-opacity hover:opacity-90;
 }
 
 /* Transcript rows start bounded by MessageList's render window, but skipping
@@ -734,11 +753,11 @@ body {
   background-color: var(--shiki-light-bg);
   border-radius: 0.375rem;
   padding: 0.625rem 0.75rem;
-  /* Block code shares the central mono stack and the `caption` size/line
+  /* Block code shares the central mono stack and the `sm` size/line
      height with Markdown fences, JSON, ANSI, and Pierre diff code. */
   font-family: var(--font-mono);
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
   overflow-x: auto;
 }
 .shiki span {
@@ -769,7 +788,7 @@ html.dark .shiki span {
    cannot drop it; a Shiki row is inline by default, so widen it to read as a
    band rather than a box around the text. */
 .cb-anchored {
-  background-color: var(--accent-soft);
+  background-color: var(--accent);
 }
 /* An addressed RANGE is one region, not a stack of boxes: the rows are aligned
    to the top of their line box, so the half-leading a baseline-aligned row
@@ -796,12 +815,12 @@ html.dark .shiki span {
   width: 2rem;
   margin-right: 1rem;
   text-align: right;
-  color: var(--faint);
+  color: var(--muted-foreground);
 }
 
 /* Shared block shell for native tool bodies (`components/tools/NativeToolBodies.tsx`):
    the diff rows and the bash shell view. It mirrors `.shiki`'s look (same
-   background, padding, central mono stack and `caption` role) WITHOUT living
+   background, padding, central mono stack and `sm` size) WITHOUT living
    under `.shiki`, whose blanket `span` colour rule would override the per-row
    add/remove colouring. Rows are block-level inside a max-content code element,
    so a row's background spans the widest line rather than the viewport. */
@@ -811,8 +830,8 @@ html.dark .shiki span {
   border-radius: 0.375rem;
   padding: 0.625rem 0.75rem;
   font-family: var(--font-mono);
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
   white-space: pre;
 }
 html.dark .tool-code {
@@ -836,7 +855,7 @@ html.dark .tool-code {
 .tool-code-num {
   display: inline-block;
   margin-right: 0.75rem;
-  color: var(--faint);
+  color: var(--muted-foreground);
 }
 .tool-code-sign {
   display: inline-block;
@@ -844,18 +863,18 @@ html.dark .tool-code {
   margin-right: 0.5rem;
 }
 .tool-code-prompt {
-  color: var(--accent);
+  color: var(--primary);
 }
 .tool-code .tool-code-row.tool-diff-add {
   background-color: var(--success-soft);
   color: var(--success);
 }
 .tool-code .tool-code-row.tool-diff-del {
-  background-color: var(--danger-soft);
-  color: var(--danger);
+  background-color: color-mix(in oklab, var(--destructive) 12%, transparent);
+  color: var(--destructive);
 }
 .tool-code .tool-code-row.tool-diff-gap {
-  color: var(--faint);
+  color: var(--muted-foreground);
 }
 /* Word-level marks inside a replaced line: a stronger wash of the row's own
    colour, so WHAT changed reads at a glance (the @pierre/diffs `word-alt`
@@ -866,22 +885,22 @@ html.dark .tool-code {
   border-radius: 3px;
 }
 .tool-code .tool-diff-del .tool-diff-word {
-  background-color: color-mix(in oklab, var(--danger) 30%, transparent);
+  background-color: color-mix(in oklab, var(--destructive) 30%, transparent);
   border-radius: 3px;
 }
 
 /* @pierre/diffs host typography (Task-184/187). Pierre renders in shadow DOM
    and reads these four host custom properties (verified against 1.2.12); this
    is the ONLY supported typography integration path — never fork its internal
-   selectors. Diff code shares the central mono stack and the scaled `caption`
+   selectors. Diff code shares the central mono stack and the scaled `sm`
    size + unitless line height with Shiki, so the app's diff/file code matches
    block code exactly across every text scale; headers use the sans stack. This
    class is applied to every File/FileDiff/MultiFileDiff host. */
 .app-diff-host {
   --diffs-font-family: var(--font-mono);
   --diffs-header-font-family: var(--font-sans);
-  --diffs-font-size: var(--text-caption);
-  --diffs-line-height: var(--text-caption--line-height);
+  --diffs-font-size: var(--text-sm);
+  --diffs-line-height: var(--text-sm--line-height);
 }
 
 /* Inline word-level change marks in the Knowledge history "Rendered" diff. */
@@ -894,9 +913,68 @@ html.dark .tool-code {
 }
 .kb-md-diff del {
   text-decoration: line-through;
-  text-decoration-color: color-mix(in oklab, var(--danger) 60%, transparent);
-  background-color: var(--danger-soft);
-  color: var(--danger);
+  text-decoration-color: color-mix(
+    in oklab,
+    var(--destructive) 60%,
+    transparent
+  );
+  background-color: color-mix(in oklab, var(--destructive) 12%, transparent);
+  color: var(--destructive);
   border-radius: 3px;
   padding: 0 1px;
+}
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }

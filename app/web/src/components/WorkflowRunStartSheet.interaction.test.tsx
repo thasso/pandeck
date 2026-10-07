@@ -135,7 +135,8 @@ function button(match: string): HTMLButtonElement {
   const found = [...document.body.querySelectorAll("button")].find(
     (element) =>
       element.textContent?.includes(match) ||
-      element.getAttribute("title")?.includes(match),
+      element.getAttribute("title")?.includes(match) ||
+      element.getAttribute("aria-label")?.includes(match),
   );
   expect(found, `no button matching ${match}`).toBeTruthy();
   return found as HTMLButtonElement;
@@ -258,9 +259,9 @@ describe("workflow role-set start interaction", () => {
     const harness = renderSheet();
     act(() => button("Add fixer configuration").click());
     act(() => button("Add verdict configuration").click());
-    const custom = [...document.body.querySelectorAll("label")]
-      .find((label) => label.textContent?.includes("Set ceilings myself"))!
-      .querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const custom = [...document.body.querySelectorAll("label")].find((label) =>
+      label.textContent?.includes("Set ceilings myself"),
+    )!;
     act(() => custom.click());
     act(() => button("Start run").click());
 
@@ -275,14 +276,11 @@ describe("workflow role-set start interaction", () => {
   it("captures free family and operator notes", () => {
     const harness = renderSheet();
     act(() => button("Reviewer configuration A").click());
-    const inputs = document.querySelectorAll<HTMLInputElement>(
-      "#workflow-runtime-reviewer-0 input",
+    const family = document.querySelector<HTMLInputElement>(
+      "#workflow-family-reviewer-0",
     );
-    const family = [...inputs].find(
-      (input) => input.previousElementSibling?.textContent === "Model family",
-    );
-    const notes = [...inputs].find((input) =>
-      input.previousElementSibling?.textContent?.includes("Selection notes"),
+    const notes = document.querySelector<HTMLInputElement>(
+      "#workflow-notes-reviewer-0",
     );
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(

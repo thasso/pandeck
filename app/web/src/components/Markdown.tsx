@@ -61,12 +61,12 @@ import { fileViewerPath } from "../hooks/useSessionRouting.ts";
 import { InlineDocumentEmbed } from "./InlineDocumentEmbed.tsx";
 
 const CodeBlock = lazy(() =>
-  import("./ui/CodeBlock.tsx").then((module) => ({
+  import("./common/CodeBlock.tsx").then((module) => ({
     default: module.CodeBlock,
   })),
 );
 const ChartBlock = lazy(() =>
-  import("./ui/ChartBlock.tsx").then((module) => ({
+  import("./common/ChartBlock.tsx").then((module) => ({
     default: module.ChartBlock,
   })),
 );
@@ -534,7 +534,10 @@ function MarkdownAnchor({
       >
         {title && title !== session.id ? (
           <>
-            {title} <span className="font-mono text-faint">({session.id})</span>
+            {title}{" "}
+            <span className="font-mono text-muted-foreground">
+              ({session.id})
+            </span>
           </>
         ) : (
           <span className="font-mono">{session.id}</span>
@@ -903,7 +906,7 @@ function PaObjectLink({
           ? `Unresolved ${link.typeLabel.toLowerCase()} link: ${link.id}`
           : `${link.typeLabel}: ${link.title}${link.detail ? ` (${link.detail})` : ""}`
       }
-      className={broken ? "text-danger decoration-dotted" : undefined}
+      className={broken ? "text-destructive decoration-dotted" : undefined}
       aria-invalid={broken ? true : undefined}
       onClick={(event) => {
         if (
@@ -924,7 +927,7 @@ function PaObjectLink({
       {/* Live state the label cannot carry, e.g. whether a linked approval
           card is still waiting — so "approve this" reads as done once it is. */}
       {!broken && link.detail ? (
-        <span className="text-muted"> · {link.detail}</span>
+        <span className="text-muted-foreground"> · {link.detail}</span>
       ) : null}
     </a>
   );
@@ -977,7 +980,7 @@ function ChangedFileCodeLink({
     <a
       href={workspaceFilePathHref(path)}
       title={`Open workspace file ${path}`}
-      className="rounded-[5px] border border-line bg-raised px-[0.34em] py-[0.08em] font-mono"
+      className="rounded border border-border bg-muted px-1 py-0.5 font-mono"
       onClick={(event) => {
         if (
           !onOpenChangedFile ||

@@ -1,6 +1,22 @@
 import { useState } from "react";
-import { Sheet } from "../ui/Sheet.tsx";
+import { EdgeSheet } from "../common/EdgeSheet.tsx";
 import { useMobileLayout } from "../shell/useMobileLayout.ts";
+import { Button } from "../ui/button.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog.tsx";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+  FieldTitle,
+} from "../ui/field.tsx";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group.tsx";
+import { Textarea } from "../ui/textarea.tsx";
 
 /** Where a bundle of review comments is being sent. */
 export type SendCommentsTarget =
@@ -89,128 +105,108 @@ export function SendCommentsSheet({
   };
   const label = `${count} comment${count === 1 ? "" : "s"}`;
   const body = (
-    <div className="flex flex-col gap-2">
-      <p className="text-caption text-faint">
+    <div className="flex min-w-0 flex-col gap-2">
+      <p className="text-sm text-muted-foreground">
         {intro ??
           `The session is linked to this object and can reply, edit and resolve the ${count === 1 ? "thread" : "threads"} you send.`}
       </p>
-      <div className="flex max-h-64 flex-col overflow-y-auto">
-        <TargetRow
-          label={newLabel}
-          detail={newDetail}
-          selected={target.kind === "new"}
-          onSelect={() => setTarget({ kind: "new" })}
-        />
+      <RadioGroup
+        value={target.kind === "new" ? NEW_TARGET : target.sessionId}
+        onValueChange={(value) =>
+          setTarget(
+            value === NEW_TARGET
+              ? { kind: "new" }
+              : { kind: "existing", sessionId: value as string },
+          )
+        }
+        className="max-h-64 overflow-y-auto"
+      >
+        <TargetOption value={NEW_TARGET} label={newLabel} detail={newDetail} />
         {sessions.map((session) => (
-          <TargetRow
+          <TargetOption
             key={session.id}
+            value={session.id}
             label={session.title || session.id}
             detail={session.linked ? linkedDetail : undefined}
-            selected={
-              target.kind === "existing" && target.sessionId === session.id
-            }
-            onSelect={() =>
-              setTarget({ kind: "existing", sessionId: session.id })
-            }
           />
         ))}
-      </div>
+      </RadioGroup>
       {withMessage && target.kind === "existing" ? (
-        <textarea
+        <Textarea
           rows={2}
           value={additionalPrompt}
           onChange={(event) => setAdditionalPrompt(event.target.value)}
           placeholder="Anything to say about this review? (optional)"
           aria-label="Message for this session"
-          className="field-sizing-content min-h-16 w-full resize-none rounded-lg border border-line bg-surface px-2.5 py-2 text-prose text-fg outline-none focus:border-line-strong"
         />
       ) : null}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {startWithout ? (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            className="mr-auto"
             onClick={() => {
               startWithout.onRun();
               onClose();
             }}
-            className="mr-auto rounded-lg px-3 py-1.5 text-left text-caption text-muted transition-colors hover:bg-raised hover:text-fg"
           >
             {startWithout.label}
-          </button>
+          </Button>
         ) : null}
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg"
-        >
+        <Button variant="outline" onClick={onClose}>
           Cancel
-        </button>
-        <button
-          type="button"
-          onClick={send}
-          className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg transition-colors hover:bg-accent/90"
-        >
+        </Button>
+        <Button onClick={send}>
           {target.kind === "new" && newSubmitLabel
             ? newSubmitLabel
             : submitLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );
 
   if (mobile) {
     return (
-      <Sheet open title={`${verb} ${label}`} onClose={onClose}>
+      <EdgeSheet open title={`${verb} ${label}`} onClose={onClose}>
         {body}
-      </Sheet>
+      </EdgeSheet>
     );
   }
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl border border-line bg-panel p-4 shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <p className="mb-2 text-body font-semibold text-fg">
-          {verb} {label}
-        </p>
+    <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent showCloseButton={false} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {verb} {label}
+          </DialogTitle>
+        </DialogHeader>
         {body}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function TargetRow({
+/** The new-session option's value; session ids never collide with it. */
+const NEW_TARGET = "\u0000new";
+
+function TargetOption({
+  value,
   label,
   detail,
-  selected,
-  onSelect,
 }: {
+  value: string;
   label: string;
   detail?: string | undefined;
-  selected: boolean;
-  onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={`flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${selected ? "bg-accent-soft text-accent" : "text-muted hover:bg-raised hover:text-fg"}`}
-    >
-      <span
-        className={`size-2 shrink-0 rounded-full ${selected ? "bg-accent" : "bg-line"}`}
-        aria-hidden
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-caption">{label}</span>
-        {detail ? (
-          <span className="block truncate text-micro text-faint">{detail}</span>
-        ) : null}
-      </span>
-    </button>
+    <FieldLabel>
+      <Field orientation="horizontal">
+        <RadioGroupItem value={value} />
+        <FieldContent className="min-w-0">
+          <FieldTitle className="w-full truncate">{label}</FieldTitle>
+          {detail ? <FieldDescription>{detail}</FieldDescription> : null}
+        </FieldContent>
+      </Field>
+    </FieldLabel>
   );
 }

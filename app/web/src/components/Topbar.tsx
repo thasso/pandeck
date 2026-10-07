@@ -19,6 +19,7 @@ import { usesOverlayTitlebar } from "../lib/nativeShell.ts";
 import { AppHeaderBar } from "./AppHeaderBar.tsx";
 import { AppStatus } from "./AppStatus.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 
 /**
  * @component Topbar
@@ -65,9 +66,6 @@ interface Props {
 }
 
 /** Shared shape of every header action: a muted icon button. */
-const ACTION_CLASS =
-  "relative flex size-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg";
-
 export function Topbar({
   prefs,
   updatePrefs,
@@ -105,26 +103,22 @@ export function Topbar({
         data-tauri-drag-region={dragRegion || undefined}
         className="flex shrink-0 items-center gap-0.5 pl-[var(--app-drag-inset-left,0px)]"
       >
-        <button
-          type="button"
+        <IconButton
+          label="Back"
+          tooltipSide="bottom"
           onClick={() => window.history.back()}
           disabled={!backAvailable}
-          title="Back"
-          aria-label="Back"
-          className={`${ACTION_CLASS} disabled:pointer-events-none disabled:opacity-30`}
         >
-          <ArrowLeft size={15} />
-        </button>
-        <button
-          type="button"
+          <ArrowLeft />
+        </IconButton>
+        <IconButton
+          label="Forward"
+          tooltipSide="bottom"
           onClick={() => window.history.forward()}
           disabled={!forwardAvailable}
-          title="Forward"
-          aria-label="Forward"
-          className={`${ACTION_CLASS} disabled:pointer-events-none disabled:opacity-30`}
         >
-          <ArrowRight size={15} />
-        </button>
+          <ArrowRight />
+        </IconButton>
       </div>
 
       {/* The app status slot (`docs/messaging.md`): app-wide lifecycle state
@@ -143,39 +137,36 @@ export function Topbar({
         />
       </div>
 
-      <button
-        type="button"
+      <IconButton
+        label="Toggle theme"
+        tooltipSide="bottom"
         onClick={() =>
           updatePrefs({ theme: prefs.theme === "dark" ? "light" : "dark" })
         }
-        title="Toggle theme"
-        className={ACTION_CLASS}
       >
-        {prefs.theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-      </button>
+        {prefs.theme === "dark" ? <Sun /> : <Moon />}
+      </IconButton>
 
       {/* One pair, so they sit tighter than a lone action would. */}
       <div className="flex items-center gap-0.5">
-        <button
-          type="button"
+        <IconButton
+          label="Toggle sidebar"
+          tooltipSide="bottom"
           onClick={onToggleSidebar}
-          title="Toggle sidebar"
-          aria-label="Toggle sidebar"
-          className={ACTION_CLASS}
+          className="relative"
         >
-          <PanelLeft size={15} />
+          <PanelLeft />
           {sidebarOpen && <UnreadDot title="Sidebar open" />}
-        </button>
-        <button
-          type="button"
+        </IconButton>
+        <IconButton
+          label="Toggle inspector"
+          tooltipSide="bottom"
           onClick={onToggleInspector}
-          title="Toggle inspector"
-          aria-label="Toggle inspector"
-          className={ACTION_CLASS}
+          className="relative"
         >
-          <PanelRight size={15} />
+          <PanelRight />
           {inspectorOpen && <UnreadDot title="Inspector open" />}
-        </button>
+        </IconButton>
       </div>
     </AppHeaderBar>
   );

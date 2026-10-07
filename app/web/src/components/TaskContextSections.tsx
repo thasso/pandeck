@@ -32,7 +32,10 @@ import {
 import { fetchGithubLinkedIssues } from "../lib/githubApi.ts";
 import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
+import { Item } from "./ui/item.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import {
   TaskPlanningSection,
@@ -113,11 +116,12 @@ export function TaskContextSections({
             label={null}
           />
           {task.projectId && onOpenProject ? (
-            <GhostIconButton
-              icon={<ArrowUpRight size={13} />}
+            <IconButton
               label="Open project"
               onClick={() => onOpenProject(task.projectId!)}
-            />
+            >
+              <ArrowUpRight />
+            </IconButton>
           ) : null}
         </div>
       </InspectorSection>
@@ -147,11 +151,12 @@ export function TaskContextSections({
 
 function addAction(title: string, adding: boolean, onToggleAdd: () => void) {
   return (
-    <GhostIconButton
-      icon={adding ? <X size={13} /> : <Plus size={13} />}
+    <IconButton
       label={adding ? `Cancel adding to ${title}` : `Add to ${title}`}
       onClick={onToggleAdd}
-    />
+    >
+      {adding ? <X /> : <Plus />}
+    </IconButton>
   );
 }
 
@@ -212,28 +217,25 @@ function JiraTicketsSection({
       collapsible={keys.length > 0 || adding}
       forceOpen={adding}
     >
-      <div className="divide-y divide-line px-1">
+      <div className="divide-y divide-border px-1">
         {keys.map((key) => {
           const url = jiraUrlForKey(key, links, jiraHost);
           const summary = summaries[key];
           const label = (
             <>
-              <span className="block truncate font-mono text-caption text-accent">
+              <span className="block truncate font-mono text-sm text-primary">
                 {key}
               </span>
               {summary ? (
-                <span className="block truncate text-caption text-fg">
+                <span className="block truncate text-sm text-foreground">
                   {summary}
                 </span>
               ) : null}
             </>
           );
           return (
-            <div
-              key={key}
-              className="group flex min-w-0 items-start gap-2 py-2 first:pt-1"
-            >
-              <Tickets size={13} className="mt-0.5 shrink-0 text-accent" />
+            <Item key={key} size="sm" className="min-w-0 items-start gap-2">
+              <Tickets size={13} className="mt-0.5 shrink-0 text-primary" />
               {url ? (
                 <a
                   href={url}
@@ -249,20 +251,21 @@ function JiraTicketsSection({
                   {label}
                 </span>
               )}
-              <GhostIconButton
-                danger
-                revealOnHover
-                icon={<Trash2 size={12} />}
+              <IconButton
+                variant="destructive"
+                size="icon-xs"
                 label={`Unlink ${key}`}
                 onClick={() => onChange(keys.filter((item) => item !== key))}
-              />
-            </div>
+              >
+                <Trash2 />
+              </IconButton>
+            </Item>
           );
         })}
         {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5">
-            <Tickets size={13} className="shrink-0 text-faint" />
-            <input
+          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
+            <Tickets size={13} className="shrink-0 text-muted-foreground" />
+            <Input
               value={draft}
               autoFocus
               onChange={(event) => setDraft(event.target.value.toUpperCase())}
@@ -271,16 +274,16 @@ function JiraTicketsSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="ABC-123"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-caption text-fg outline-none placeholder:text-faint"
+              aria-label="Jira issue key"
+              className="min-w-0 flex-1 font-mono"
             />
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={add}
               disabled={normalizeJiraKeys([draft]).length === 0}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -299,17 +302,17 @@ function githubIssueUrl(ref: string): string | undefined {
 function GithubIssueIcon({ issue }: { issue: GithubLinkedIssue | undefined }) {
   const cls = "mt-0.5 shrink-0";
   if (issue?.state === "merged")
-    return <GitMerge size={13} className={`${cls} text-accent`} />;
+    return <GitMerge size={13} className={`${cls} text-primary`} />;
   if (issue?.isPullRequest)
     return (
       <GitPullRequest
         size={13}
-        className={`${cls} ${issue.state === "closed" ? "text-faint" : "text-accent"}`}
+        className={`${cls} ${issue.state === "closed" ? "text-muted-foreground" : "text-primary"}`}
       />
     );
   if (issue?.state === "closed")
-    return <CircleCheck size={13} className={`${cls} text-faint`} />;
-  return <CircleDot size={13} className={`${cls} text-accent`} />;
+    return <CircleCheck size={13} className={`${cls} text-muted-foreground`} />;
+  return <CircleDot size={13} className={`${cls} text-primary`} />;
 }
 
 function GithubIssuesSection({
@@ -363,15 +366,12 @@ function GithubIssuesSection({
       collapsible={refs.length > 0 || adding}
       forceOpen={adding}
     >
-      <div className="divide-y divide-line px-1">
+      <div className="divide-y divide-border px-1">
         {refs.map((ref) => {
           const issue = issues[ref];
           const url = issue?.url ?? githubIssueUrl(ref);
           return (
-            <div
-              key={ref}
-              className="group flex min-w-0 items-start gap-2 py-2 first:pt-1"
-            >
+            <Item key={ref} size="sm" className="min-w-0 items-start gap-2">
               <GithubIssueIcon issue={issue} />
               <a
                 href={url}
@@ -380,29 +380,30 @@ function GithubIssuesSection({
                 className="min-w-0 flex-1 hover:[&>span]:underline"
                 title={`Open ${ref}${issue ? ` — ${issue.title} (${issue.state})` : ""} on GitHub`}
               >
-                <span className="block truncate font-mono text-caption text-accent">
+                <span className="block truncate font-mono text-sm text-primary">
                   {ref}
                 </span>
                 {issue?.title ? (
-                  <span className="block truncate text-caption text-fg">
+                  <span className="block truncate text-sm text-foreground">
                     {issue.title}
                   </span>
                 ) : null}
               </a>
-              <GhostIconButton
-                danger
-                revealOnHover
-                icon={<Trash2 size={12} />}
+              <IconButton
+                variant="destructive"
+                size="icon-xs"
                 label={`Unlink ${ref}`}
                 onClick={() => onChange(refs.filter((item) => item !== ref))}
-              />
-            </div>
+              >
+                <Trash2 />
+              </IconButton>
+            </Item>
           );
         })}
         {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2 py-1.5">
-            <CircleDot size={13} className="shrink-0 text-faint" />
-            <input
+          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
+            <CircleDot size={13} className="shrink-0 text-muted-foreground" />
+            <Input
               value={draft}
               autoFocus
               onChange={(event) => setDraft(event.target.value)}
@@ -411,16 +412,16 @@ function GithubIssuesSection({
                 if (event.key === "Escape") setAdding(false);
               }}
               placeholder="owner/repo#123 or issue URL"
-              className="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-caption text-fg outline-none placeholder:text-faint"
+              aria-label="GitHub issue"
+              className="min-w-0 flex-1 font-mono"
             />
-            <button
-              type="button"
+            <Button
+              size="sm"
               onClick={add}
               disabled={!normalizeGithubIssueRef(draft)}
-              className="shrink-0 rounded-md border border-line px-2 py-0.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
             >
               Link
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -472,37 +473,39 @@ function LinksSection({
     >
       <div className="space-y-1 px-1">
         {links.map((link) => (
-          <div
+          <Item
             key={link.url}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted transition-colors hover:bg-raised"
+            size="sm"
+            className="min-w-0 items-center gap-1.5"
           >
             <ProviderIcon source={link.source} size={13} />
             <a
               href={link.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="min-w-0 flex-1 truncate text-fg hover:text-accent hover:underline"
+              className="min-w-0 flex-1 truncate text-foreground hover:text-primary hover:underline"
               title={link.url}
             >
               {link.title?.trim() || link.url.replace(/^https?:\/\//, "")}
             </a>
             {link.type === "source" ? (
-              <span className="shrink-0 rounded bg-raised px-1 py-0.5 text-micro uppercase tracking-wide text-faint">
+              <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
                 src
               </span>
             ) : null}
-            <GhostIconButton
-              danger
-              revealOnHover
-              icon={<Trash2 size={12} />}
+            <IconButton
+              variant="destructive"
+              size="icon-xs"
               label="Remove link"
               onClick={() => onRemove(link.url)}
-            />
-          </div>
+            >
+              <Trash2 />
+            </IconButton>
+          </Item>
         ))}
         {adding ? (
-          <div className="space-y-1.5 rounded-lg border border-line bg-surface p-2">
-            <input
+          <div className="space-y-1.5 rounded-lg border border-border bg-background p-2">
+            <Input
               value={url}
               autoFocus
               onChange={(event) => setUrl(event.target.value)}
@@ -511,9 +514,9 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="https://…"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+              aria-label="Link URL"
             />
-            <input
+            <Input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               onKeyDown={(event) => {
@@ -521,25 +524,24 @@ function LinksSection({
                 if (event.key === "Enter") add("related");
               }}
               placeholder="Optional label"
-              className="w-full rounded-md border border-line bg-panel px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+              aria-label="Optional link label"
             />
             <div className="flex justify-end gap-1.5">
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => add("source")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption text-muted hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Link2 size={11} /> Source
-              </button>
-              <button
-                type="button"
+                <Link2 /> Source
+              </Button>
+              <Button
+                size="sm"
                 onClick={() => add("related")}
                 disabled={!valid}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption font-medium text-accent-fg hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Plus size={11} /> Related
-              </button>
+                <Plus /> Related
+              </Button>
             </div>
           </div>
         ) : null}
@@ -618,12 +620,14 @@ function ProviderIcon({
   size?: number;
 }) {
   if (source === "slack")
-    return <MessageCircle size={size} className="shrink-0 text-accent" />;
+    return <MessageCircle size={size} className="shrink-0 text-primary" />;
   if (source === "jira")
-    return <Tickets size={size} className="shrink-0 text-accent" />;
+    return <Tickets size={size} className="shrink-0 text-primary" />;
   if (source === "github")
-    return <GitBranch size={size} className="shrink-0 text-fg" />;
+    return <GitBranch size={size} className="shrink-0 text-foreground" />;
   if (source === "forgejo")
-    return <Server size={size} className="shrink-0 text-fg" />;
-  return <ExternalLink size={size} className="shrink-0 text-faint" />;
+    return <Server size={size} className="shrink-0 text-foreground" />;
+  return (
+    <ExternalLink size={size} className="shrink-0 text-muted-foreground" />
+  );
 }

@@ -14,13 +14,23 @@ import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
 import { identityLabel } from "./SessionRow.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
 
 export interface ClusterChildRowProps {
   card: SessionInboxCard;
   /** Shared ticker value; the row never owns a timer of its own. */
   now: number;
   active: boolean;
-  /** The host's row density: both variants stay compact inside the parent fold. */
+  /**
+   * The host's row density. The row is one compact `Item` at both, since it
+   * sits inside the parent's fold; hosts pass it like every other row.
+   */
   density?: RowDensity;
   /**
    * How this row is related to the item above it, for the spoken label: peers
@@ -83,7 +93,6 @@ function ClusterChildRowImpl({
   card,
   now,
   active,
-  density = "tight",
   relation = "coordinated",
   tabbable = false,
   listRowId,
@@ -124,11 +133,13 @@ function ClusterChildRowImpl({
   const indent = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
 
   return (
-    <div
+    <Item
+      size="xs"
+      variant={active ? "muted" : "default"}
+      render={<button type="button" />}
       data-session-row
       data-list-row-id={listRowId ?? session.id}
       data-session-row-active={active ? "true" : undefined}
-      role="button"
       tabIndex={tabbable ? 0 : -1}
       aria-label={`Open ${relation} ${identityLabel(session)} session: ${title} — ${[
         sessionStatusText(session, status, now),
@@ -164,15 +175,11 @@ function ClusterChildRowImpl({
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
-        density === "comfortable" ? "min-h-8" : "min-h-7"
-      } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
+      className="cursor-pointer select-none flex-nowrap text-left hover:bg-muted"
     >
-      <AgentIcon
-        size={12}
-        className={`shrink-0 ${agent.activeColor}`}
-        aria-hidden
-      />
+      <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
+        <AgentIcon />
+      </ItemMedia>
       {/* The state reads before the title; a quiet row keeps the slot empty
           so every sibling's title starts at the same x. */}
       {badge ? (
@@ -180,38 +187,39 @@ function ClusterChildRowImpl({
       ) : (
         <span aria-hidden className="size-5 shrink-0" />
       )}
-      <span
-        className={`min-w-0 flex-1 truncate text-caption text-muted ${status === "unread" ? "font-semibold" : ""}`}
-      >
-        <SessionTitleText
-          title={title}
-          pending={session.titleGenerationPending}
-        />
-      </span>
-      {jobs > 0 ? (
-        <span
-          title={jobsText}
-          className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted"
-        >
-          <Activity size={10} aria-hidden />
-          {jobs}
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span
+            className={`truncate ${status === "unread" ? "font-semibold" : ""}`}
+          >
+            <SessionTitleText
+              title={title}
+              pending={session.titleGenerationPending}
+            />
+          </span>
+        </ItemTitle>
+      </ItemContent>
+      <ItemActions className="gap-1.5">
+        <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+          {jobs > 0 ? (
+            <span title={jobsText} className="flex items-center gap-0.5">
+              <Activity className="size-3" aria-hidden />
+              {jobs}
+            </span>
+          ) : null}
+          {peers ? (
+            <span
+              title={sessionClusterSummary(peers)}
+              className={`flex items-center gap-0.5 ${peers.working > 0 ? "text-primary" : ""}`}
+            >
+              <Users className="size-3" aria-hidden />
+              {peers.total}
+            </span>
+          ) : null}
+          <span>{relativeAge(session.updatedAt, now)}</span>
         </span>
-      ) : null}
-      {peers ? (
-        <span
-          title={sessionClusterSummary(peers)}
-          className={`flex shrink-0 items-center gap-0.5 text-micro tabular-nums ${
-            peers.working > 0 ? "text-accent" : "text-faint"
-          }`}
-        >
-          <Users size={10} aria-hidden />
-          {peers.total}
-        </span>
-      ) : null}
-      <span className="shrink-0 text-micro tabular-nums text-faint">
-        {relativeAge(session.updatedAt, now)}
-      </span>
-    </div>
+      </ItemActions>
+    </Item>
   );
 }
 

@@ -1,16 +1,13 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   CalendarDays,
   CheckCircle2,
-  ChevronDown,
   CircleHelp,
   Clock,
-  ExternalLink,
   AlertCircle,
   Bell,
   FileText,
   Inbox,
-  Info,
   Mail,
   MailOpen,
   Megaphone,
@@ -28,8 +25,43 @@ import {
 import type { DisplayBlock } from "@assistant/shared";
 import { authHeaders, serverHttpOrigin } from "../lib/serverOrigin.ts";
 import { normalizedToolName } from "./tools/toolName.ts";
-import { ChatWideCard } from "./ChatWideCard.tsx";
-import { Skeleton, Spinner } from "./ui/load.tsx";
+import {
+  ChatWideCard,
+  EmptyRow,
+  ExpandableRow,
+  ExternalTitle,
+  Panel,
+} from "./ChatWideCard.tsx";
+import { ErrorNote, Skeleton } from "./common/load.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -282,88 +314,67 @@ export function GoogleWorkspaceToolCard({ block }: { block: ToolBlock }) {
 function CalendarCard({ payload }: { payload: CalendarPayload }) {
   const events = payload.events ?? [];
   return (
-    <ChatWideCard maxWidth={1120}>
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <CalendarDays size={18} className="text-accent" />
-          <div>
-            <div className="text-body font-semibold text-fg">Calendar</div>
-            <div className="text-caption text-faint">
-              {payload.calendarSummary || "Primary calendar"}
-            </div>
-          </div>
-        </div>
-        <div className="text-right text-caption text-muted">
+    <ChatWideCard
+      icon={<CalendarDays className="size-4 text-primary" />}
+      title="Calendar"
+      description={payload.calendarSummary || "Primary calendar"}
+      meta={
+        <>
           <div>
             {payload.date || rangeLabel(payload.localFrom, payload.localTo)}
           </div>
           <div>
             {events.length} event{events.length === 1 ? "" : "s"}
           </div>
-        </div>
-      </header>
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] border-separate border-spacing-0 text-left text-caption">
-          <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
-            <tr>
-              <th className="w-36 px-4 py-2 font-medium">Time</th>
-              <th className="px-3 py-2 font-medium">Event</th>
-              <th
-                className="w-10 px-2 py-2 text-center font-medium"
-                title="Your response status"
-              >
-                ✓
-              </th>
-              <th
-                className="w-10 px-2 py-2 text-center font-medium"
-                title="Meeting link"
-              >
-                <Video size={12} className="mx-auto" />
-              </th>
-              <th
-                className="w-10 px-2 py-2 text-center font-medium"
-                title="Minutes/transcript link"
-              >
-                <FileText size={12} className="mx-auto" />
-              </th>
-              <th
-                className="w-10 px-2 py-2 text-center font-medium"
-                title="Meet attendance info"
-              >
-                <Users size={12} className="mx-auto" />
-              </th>
-              <th
-                className="w-10 px-3 py-2 text-center font-medium"
-                title="Details"
-              >
-                <Info size={12} className="mx-auto" />
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {events.map((event, index) => (
-              <CalendarEventRow
-                key={`${event.htmlLink ?? event.title ?? "event"}-${index}`}
-                event={event}
-              />
-            ))}
-            {events.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-muted">
-                  No calendar events found.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+        </>
+      }
+    >
+      <Table className="min-w-155">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-9" />
+            <TableHead className="w-36">Time</TableHead>
+            <TableHead>Event</TableHead>
+            <TableHead
+              className="w-10 text-center"
+              title="Your response status"
+            >
+              ✓
+            </TableHead>
+            <TableHead className="w-10 text-center" title="Meeting link">
+              <Video className="mx-auto size-3" />
+            </TableHead>
+            <TableHead
+              className="w-10 text-center"
+              title="Minutes/transcript link"
+            >
+              <FileText className="mx-auto size-3" />
+            </TableHead>
+            <TableHead
+              className="w-10 text-center"
+              title="Meet attendance info"
+            >
+              <Users className="mx-auto size-3" />
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {events.map((event, index) => (
+            <CalendarEventRow
+              key={`${event.htmlLink ?? event.title ?? "event"}-${index}`}
+              event={event}
+            />
+          ))}
+          {events.length === 0 && (
+            <EmptyRow span={7}>No calendar events found.</EmptyRow>
+          )}
+        </TableBody>
+      </Table>
     </ChatWideCard>
   );
 }
 
 function CalendarEventRow({ event }: { event: CalendarEvent }) {
-  const [open, setOpen] = useState(false);
   const meetRecords = event.meetRecords ?? [];
   const minutesLinks = minutesLinksForEvent(event);
   const hasDetails = Boolean(
@@ -372,99 +383,87 @@ function CalendarEventRow({ event }: { event: CalendarEvent }) {
     minutesLinks.length > 0,
   );
   return (
-    <Fragment>
-      <tr className="border-t border-line odd:bg-surface/30">
-        <td className="whitespace-nowrap border-t border-line px-4 py-3 align-top font-mono text-caption text-fg">
-          {timeRange(event.localStart, event.localEnd)}
-          {event.duration && (
-            <span className="text-muted"> · {event.duration}</span>
-          )}
-        </td>
-        <td className="min-w-0 border-t border-line px-3 py-3 align-top">
-          <ExternalTitle
-            title={event.title || "(untitled)"}
-            href={event.htmlLink}
-          />
-          {event.location && <LocationLine location={event.location} />}
-        </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top">
-          <StatusIcon status={event.selfAttendee?.responseStatus} />
-        </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top">
-          <MeetingLinkIcon event={event} />
-        </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top">
-          <MinutesIcon links={minutesLinks} />
-        </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top">
-          <AttendanceIcon records={meetRecords} />
-        </td>
-        <td className="border-t border-line px-3 py-3 text-center align-top">
-          {hasDetails ? (
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              title={
-                open
-                  ? "Hide details"
-                  : "Show description and attendance details"
-              }
-              className="inline-flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
-            >
-              <ChevronDown
-                size={15}
-                className={`transition-transform ${open ? "rotate-180" : ""}`}
-              />
-            </button>
-          ) : (
-            <span className="text-faint">—</span>
-          )}
-        </td>
-      </tr>
-      {open && hasDetails && (
-        <tr className="bg-surface/60">
-          <td colSpan={7} className="border-t border-line px-4 py-3">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(280px,0.7fr)]">
-              <DescriptionPanel
-                description={event.description}
-                location={event.location}
-              />
-              <AttendancePanel
-                records={meetRecords}
-                minutesLinks={minutesLinks}
-              />
-            </div>
-          </td>
-        </tr>
-      )}
-    </Fragment>
+    <ExpandableRow
+      expandLabel="Show description and attendance details"
+      collapseLabel="Hide details"
+      span={7}
+      cells={
+        <>
+          <TableCell className="align-top font-mono">
+            {timeRange(event.localStart, event.localEnd)}
+            {event.duration && (
+              <span className="text-muted-foreground"> · {event.duration}</span>
+            )}
+          </TableCell>
+          <TableCell className="min-w-0 align-top whitespace-normal">
+            <ExternalTitle
+              title={event.title || "(untitled)"}
+              href={event.htmlLink}
+            />
+            {event.location && <LocationLine location={event.location} />}
+          </TableCell>
+          <TableCell className="text-center align-top">
+            <StatusIcon status={event.selfAttendee?.responseStatus} />
+          </TableCell>
+          <TableCell className="text-center align-top">
+            <MeetingLinkIcon event={event} />
+          </TableCell>
+          <TableCell className="text-center align-top">
+            <MinutesIcon links={minutesLinks} />
+          </TableCell>
+          <TableCell className="text-center align-top">
+            <AttendanceIcon records={meetRecords} />
+          </TableCell>
+        </>
+      }
+      details={
+        hasDetails ? (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Panel title="Description">
+              {event.description?.trim() ? (
+                <div className="max-h-72 overflow-auto whitespace-pre-wrap">
+                  <LinkifiedText text={event.description} />
+                </div>
+              ) : event.location ? (
+                <LinkifiedText text={event.location} />
+              ) : (
+                <p className="text-muted-foreground">No description.</p>
+              )}
+            </Panel>
+            <AttendancePanel
+              records={meetRecords}
+              minutesLinks={minutesLinks}
+            />
+          </div>
+        ) : undefined
+      }
+    />
   );
 }
 
-function DescriptionPanel({
-  description,
-  location,
-}: {
-  description?: string | null | undefined;
-  location?: string | null | undefined;
-}) {
+/** One participant and the sessions they joined. */
+function ParticipantItem({ participant }: { participant: MeetParticipant }) {
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
-        Description
-      </div>
-      {description?.trim() ? (
-        <div className="max-h-72 overflow-auto whitespace-pre-wrap text-caption text-fg">
-          <LinkifiedText text={description} />
-        </div>
-      ) : location ? (
-        <div className="text-caption text-fg">
-          <LinkifiedText text={location} />
-        </div>
-      ) : (
-        <div className="text-caption text-faint">No description.</div>
-      )}
-    </div>
+    <Item variant="muted" size="xs">
+      <ItemContent>
+        <ItemTitle>
+          {participant.displayName ||
+            participant.signedInUser?.displayName ||
+            participant.signedInUser?.user ||
+            "Participant"}
+        </ItemTitle>
+        <ItemDescription>
+          {participant.participantSessions?.length
+            ? participant.participantSessions
+                .map(
+                  (s) =>
+                    `${timeRange(s.localStart, s.localEnd)}${s.duration ? ` (${s.duration})` : ""}`,
+                )
+                .join(", ")
+            : "No session details"}
+        </ItemDescription>
+      </ItemContent>
+    </Item>
   );
 }
 
@@ -480,214 +479,165 @@ function AttendancePanel({
     .flatMap((p) => p.participantSessions ?? []).length;
   const artifactCount = records.flatMap((r) => r.artifacts ?? []).length;
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-micro font-semibold uppercase tracking-wide text-faint">
-          Meet attendance
-        </div>
-        {records.length > 0 && (
-          <div className="text-micro text-faint">
+    <Panel
+      title="Meet attendance"
+      meta={
+        records.length > 0 ? (
+          <span>
             {records.length} record{records.length === 1 ? "" : "s"} ·{" "}
             {sessionCount} session{sessionCount === 1 ? "" : "s"} ·{" "}
             {artifactCount} artifact{artifactCount === 1 ? "" : "s"}
-          </div>
-        )}
-      </div>
+          </span>
+        ) : null
+      }
+    >
       <MinutesLinksList links={minutesLinks} />
       {records.length === 0 ? (
-        <div className="text-caption text-faint">
+        <p className="text-muted-foreground">
           No matching Meet attendance record.
-        </div>
+        </p>
       ) : (
-        <div className="max-h-72 space-y-2 overflow-auto pr-1">
+        <div className="flex max-h-72 flex-col gap-2 overflow-auto">
           {records.map((record, index) => (
             <div
               key={`${record.name ?? "record"}-${index}`}
-              className="rounded-lg bg-raised/60 p-2 text-caption"
+              className="flex flex-col gap-1"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="font-mono text-faint">
+                <span className="font-mono text-muted-foreground">
                   {timeRange(record.localStart, record.localEnd)}
-                </div>
+                </span>
                 {record.meetingUri && (
                   <a
                     href={record.meetingUri}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-accent hover:underline"
+                    className="inline-flex items-center gap-1 text-primary hover:underline"
                   >
-                    <Video size={12} /> Meet
+                    <Video className="size-3" /> Meet
                   </a>
                 )}
               </div>
-              <div className="mt-1 space-y-1">
-                {(record.participants ?? []).map((participant, pIndex) => (
-                  <div
-                    key={`${participant.displayName ?? participant.signedInUser?.user ?? "participant"}-${pIndex}`}
-                    className="rounded-md bg-panel/70 px-2 py-1"
-                  >
-                    <div className="font-medium text-fg">
-                      {participant.displayName ||
-                        participant.signedInUser?.displayName ||
-                        participant.signedInUser?.user ||
-                        "Participant"}
-                    </div>
-                    {participant.participantSessions?.length ? (
-                      <div className="text-faint">
-                        {participant.participantSessions
-                          .map(
-                            (s) =>
-                              `${timeRange(s.localStart, s.localEnd)}${s.duration ? ` (${s.duration})` : ""}`,
-                          )
-                          .join(", ")}
-                      </div>
-                    ) : (
-                      <div className="text-faint">No session details</div>
-                    )}
-                  </div>
-                ))}
-              </div>
+              {(record.participants ?? []).map((participant, pIndex) => (
+                <ParticipantItem
+                  key={`${participant.displayName ?? participant.signedInUser?.user ?? "participant"}-${pIndex}`}
+                  participant={participant}
+                />
+              ))}
               <ArtifactList
                 artifacts={record.artifacts ?? []}
                 errors={record.artifactErrors ?? []}
-                compact
               />
             </div>
           ))}
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
 function MeetCard({ payload }: { payload: MeetPayload }) {
   const records = payload.records ?? [];
   return (
-    <ChatWideCard maxWidth={1120}>
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Video size={18} className="text-accent" />
-          <div>
-            <div className="text-body font-semibold text-fg">
-              Google Meet records
-            </div>
-            <div className="text-caption text-faint">
-              Conference records and participant sessions
-            </div>
-          </div>
-        </div>
-        <div className="text-right text-caption text-muted">
+    <ChatWideCard
+      icon={<Video className="size-4 text-primary" />}
+      title="Google Meet records"
+      description="Conference records and participant sessions"
+      meta={
+        <>
           <div>{payload.date || rangeLabel(payload.from, payload.to)}</div>
           <div>
             {records.length} record{records.length === 1 ? "" : "s"}
           </div>
-        </div>
-      </header>
-
-      <div className="grid gap-3 p-3 md:grid-cols-2">
+        </>
+      }
+    >
+      <CardContent className="grid gap-3 md:grid-cols-2">
         {records.map((record, index) => (
-          <article
-            key={`${record.name ?? "meet"}-${index}`}
-            className="rounded-xl border border-line bg-surface p-3"
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="font-mono text-caption text-faint">
-                  {timeRange(record.localStart, record.localEnd)}
-                </div>
-                <div className="mt-1 text-body font-semibold text-fg">
-                  <ExternalTitle
-                    title={
-                      record.calendarMatches?.[0]?.title ||
-                      record.meetingCode ||
-                      "Meet record"
-                    }
-                    href={
-                      record.calendarMatches?.[0]?.htmlLink || record.meetingUri
-                    }
-                  />
-                </div>
-              </div>
+          <Card key={`${record.name ?? "meet"}-${index}`} size="sm">
+            <CardHeader>
+              <CardDescription className="font-mono">
+                {timeRange(record.localStart, record.localEnd)}
+              </CardDescription>
+              <CardTitle>
+                <ExternalTitle
+                  title={
+                    record.calendarMatches?.[0]?.title ||
+                    record.meetingCode ||
+                    "Meet record"
+                  }
+                  href={
+                    record.calendarMatches?.[0]?.htmlLink || record.meetingUri
+                  }
+                />
+              </CardTitle>
               {record.meetingUri && (
-                <a
-                  href={record.meetingUri}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="shrink-0 rounded-md border border-line px-2 py-1 text-caption text-accent hover:bg-raised"
-                >
-                  Meet
-                </a>
-              )}
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2 text-caption text-muted">
-              <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1">
-                <Users size={12} />{" "}
-                {record.participantCount ?? record.participants?.length ?? 0}{" "}
-                participants
-              </span>
-              {record.meetingCode && (
-                <span className="rounded-full bg-raised px-2 py-1 font-mono">
-                  {record.meetingCode}
-                </span>
-              )}
-              {record.calendarMatches?.[0]?.overlap && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1">
-                  <Clock size={12} /> {record.calendarMatches[0].overlap}{" "}
-                  overlap
-                </span>
-              )}
-              {(record.artifactSummary?.total ?? 0) > 0 && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1">
-                  <FileText size={12} /> {artifactSummaryLabel(record)}
-                </span>
-              )}
-            </div>
-
-            <div className="mt-3 space-y-1.5">
-              {(record.participants ?? [])
-                .slice(0, 6)
-                .map((participant, pIndex) => (
-                  <div
-                    key={`${participant.displayName ?? "participant"}-${pIndex}`}
-                    className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
+                <CardAction>
+                  <LinkButton
+                    variant="outline"
+                    size="sm"
+                    href={record.meetingUri}
+                    target="_blank"
+                    rel="noreferrer noopener"
                   >
-                    <div className="font-medium text-fg">
-                      {participant.displayName ||
-                        participant.signedInUser?.displayName ||
-                        participant.signedInUser?.user ||
-                        "Participant"}
-                    </div>
-                    {participant.participantSessions?.length ? (
-                      <div className="mt-0.5 text-faint">
-                        {participant.participantSessions
-                          .map(
-                            (s) =>
-                              `${timeRange(s.localStart, s.localEnd)}${s.duration ? ` (${s.duration})` : ""}`,
-                          )
-                          .join(", ")}
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              {(record.participants?.length ?? 0) > 6 && (
-                <div className="text-caption text-faint">
-                  +{(record.participants?.length ?? 0) - 6} more participants
-                </div>
+                    Meet
+                  </LinkButton>
+                </CardAction>
               )}
-            </div>
-            <ArtifactList
-              artifacts={record.artifacts ?? []}
-              errors={record.artifactErrors ?? []}
-            />
-          </article>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="secondary">
+                  <Users />
+                  {record.participantCount ??
+                    record.participants?.length ??
+                    0}{" "}
+                  participants
+                </Badge>
+                {record.meetingCode && (
+                  <Badge variant="secondary" className="font-mono">
+                    {record.meetingCode}
+                  </Badge>
+                )}
+                {record.calendarMatches?.[0]?.overlap && (
+                  <Badge variant="secondary">
+                    <Clock /> {record.calendarMatches[0].overlap} overlap
+                  </Badge>
+                )}
+                {(record.artifactSummary?.total ?? 0) > 0 && (
+                  <Badge variant="secondary">
+                    <FileText /> {artifactSummaryLabel(record)}
+                  </Badge>
+                )}
+              </div>
+              <ItemGroup className="gap-1.5">
+                {(record.participants ?? [])
+                  .slice(0, 6)
+                  .map((participant, pIndex) => (
+                    <ParticipantItem
+                      key={`${participant.displayName ?? "participant"}-${pIndex}`}
+                      participant={participant}
+                    />
+                  ))}
+              </ItemGroup>
+              {(record.participants?.length ?? 0) > 6 && (
+                <p className="text-muted-foreground">
+                  +{(record.participants?.length ?? 0) - 6} more participants
+                </p>
+              )}
+              <ArtifactList
+                artifacts={record.artifacts ?? []}
+                errors={record.artifactErrors ?? []}
+              />
+            </CardContent>
+          </Card>
         ))}
         {records.length === 0 && (
-          <div className="p-6 text-center text-muted">
+          <p className="p-6 text-center text-muted-foreground">
             No Meet records found.
-          </div>
+          </p>
         )}
-      </div>
+      </CardContent>
     </ChatWideCard>
   );
 }
@@ -695,42 +645,47 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
 function MinutesLinksList({ links }: { links: MinutesLink[] }) {
   if (links.length === 0) return null;
   return (
-    <div className="mb-2 space-y-1.5">
-      <div className="text-micro font-semibold uppercase tracking-wide text-faint">
+    <div className="mb-2 flex flex-col gap-1.5">
+      <p className="text-xs font-medium text-muted-foreground">
         Minutes / transcripts
-      </div>
+      </p>
       {links.map((link, index) => (
-        <div
+        <Item
           key={`${link.driveFileId ?? link.href ?? link.label}-${index}`}
-          className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
+          variant="muted"
+          size="xs"
         >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="inline-flex min-w-0 items-center gap-1 font-medium text-fg">
-              <FileText size={12} className="shrink-0 text-accent" />
+          <ItemMedia variant="icon">
+            <FileText className="text-primary" />
+          </ItemMedia>
+          <ItemContent className="min-w-0">
+            <ItemTitle className="w-full">
               {link.href ? (
                 <a
                   href={link.href}
                   target="_blank"
                   rel="noreferrer noopener"
-                  className="truncate text-accent hover:underline"
+                  className="truncate text-primary hover:underline"
                 >
                   {link.label}
                 </a>
               ) : (
                 <span className="truncate">{link.label}</span>
               )}
-            </div>
-            <span className="rounded-full bg-panel px-1.5 py-0.5 text-micro text-muted">
-              {link.source}
-            </span>
-          </div>
-          {link.driveFileId && <DrivePreviewButton fileId={link.driveFileId} />}
-        </div>
+            </ItemTitle>
+            {link.driveFileId && (
+              <DrivePreviewButton fileId={link.driveFileId} />
+            )}
+          </ItemContent>
+          <ItemActions>
+            <Badge variant="outline">{link.source}</Badge>
+          </ItemActions>
+        </Item>
       ))}
-      <div className="text-micro text-faint">
+      <p className="text-xs text-muted-foreground">
         Preview loads here only in the browser; it is not sent to the assistant
         context.
-      </div>
+      </p>
     </div>
   );
 }
@@ -738,73 +693,73 @@ function MinutesLinksList({ links }: { links: MinutesLink[] }) {
 function ArtifactList({
   artifacts,
   errors,
-  compact = false,
 }: {
   artifacts: MeetArtifact[];
   errors: string[];
-  compact?: boolean;
 }) {
   if (artifacts.length === 0 && errors.length === 0) return null;
   return (
-    <div className={`${compact ? "mt-2" : "mt-3"} space-y-1.5`}>
+    <div className="flex flex-col gap-1.5">
       {artifacts.length > 0 && (
-        <div className="text-micro font-semibold uppercase tracking-wide text-faint">
-          Artifacts
-        </div>
+        <p className="text-xs font-medium text-muted-foreground">Artifacts</p>
       )}
       {artifacts.map((artifact, index) => {
         const label =
           artifact.kind === "recording" ? "Recording" : "Transcript / notes";
         const href = artifact.webViewLink || artifact.exportUri || undefined;
         return (
-          <div
+          <Item
             key={`${artifact.kind ?? "artifact"}-${artifact.driveFileId ?? index}`}
-            className="rounded-lg bg-panel/70 px-2 py-1.5 text-caption"
+            variant="outline"
+            size="xs"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="inline-flex items-center gap-1 font-medium text-fg">
-                <FileText size={12} className="text-accent" />
+            <ItemMedia variant="icon">
+              <FileText className="text-primary" />
+            </ItemMedia>
+            <ItemContent className="min-w-0">
+              <ItemTitle>
                 {href ? (
                   <a
                     href={href}
                     target="_blank"
                     rel="noreferrer noopener"
-                    className="text-accent hover:underline"
+                    className="text-primary hover:underline"
                   >
                     {label}
                   </a>
                 ) : (
                   label
                 )}
-              </div>
-              {artifact.state && (
-                <span className="rounded-full bg-raised px-1.5 py-0.5 text-micro text-muted">
-                  {artifact.state}
-                </span>
+              </ItemTitle>
+              <ItemDescription>
+                {timeRange(artifact.localStart, artifact.localEnd)}
+                {artifact.entryCount !== undefined &&
+                artifact.entryCount !== null
+                  ? ` · ${artifact.entryCount} entries`
+                  : ""}
+                {artifact.driveFileId ? " · Drive doc available" : ""}
+              </ItemDescription>
+              {artifact.driveFileId && (
+                <DrivePreviewButton fileId={artifact.driveFileId} />
               )}
-            </div>
-            <div className="mt-0.5 text-faint">
-              {timeRange(artifact.localStart, artifact.localEnd)}
-              {artifact.entryCount !== undefined && artifact.entryCount !== null
-                ? ` · ${artifact.entryCount} entries`
-                : ""}
-              {artifact.driveFileId ? " · Drive doc available" : ""}
-            </div>
-            {artifact.driveFileId && (
-              <DrivePreviewButton fileId={artifact.driveFileId} />
+              {artifact.textPreview && (
+                <p className="max-h-16 overflow-hidden whitespace-pre-wrap">
+                  {artifact.textPreview}
+                </p>
+              )}
+            </ItemContent>
+            {artifact.state && (
+              <ItemActions>
+                <Badge variant="outline">{artifact.state}</Badge>
+              </ItemActions>
             )}
-            {artifact.textPreview && (
-              <div className="mt-1 max-h-16 overflow-hidden whitespace-pre-wrap text-fg">
-                {artifact.textPreview}
-              </div>
-            )}
-          </div>
+          </Item>
         );
       })}
       {errors.map((error, index) => (
-        <div key={index} className="text-caption text-faint">
+        <p key={index} className="text-muted-foreground">
           Artifact lookup: {error}
-        </div>
+        </p>
       ))}
     </div>
   );
@@ -849,14 +804,13 @@ function DrivePreviewButton({ fileId }: { fileId: string }) {
   }
 
   return (
-    <div className="mt-1">
-      <button
-        type="button"
+    <div className="flex flex-col items-start gap-2">
+      <Button
+        variant="outline"
+        size="xs"
         onClick={() => void loadPreview()}
-        className="inline-flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-caption text-accent transition-colors hover:bg-raised"
-        aria-busy={loading}
+        busy={loading}
       >
-        {loading ? <Spinner size="sm" /> : null}
         {loading
           ? "Loading preview…"
           : preview && open
@@ -864,21 +818,21 @@ function DrivePreviewButton({ fileId }: { fileId: string }) {
             : preview
               ? "Show preview"
               : "Load preview"}
-      </button>
+      </Button>
       {open && preview && (
-        <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-line bg-panel p-2">
+        <div className="max-h-72 w-full overflow-auto rounded-lg border p-2">
           {preview.error ? (
-            <div className="text-caption text-danger">{preview.error}</div>
+            <p className="text-destructive">{preview.error}</p>
           ) : (
             <>
-              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-micro text-faint">
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span>{preview.file?.name || "Drive document"}</span>
                 <span>
                   {preview.textCharCount?.toLocaleString()} chars
                   {preview.truncated ? " · truncated" : ""}
                 </span>
               </div>
-              <pre className="whitespace-pre-wrap break-words font-sans text-caption text-fg">
+              <pre className="font-sans whitespace-pre-wrap break-words">
                 {preview.text}
               </pre>
             </>
@@ -900,18 +854,15 @@ function GmailCard({ payload }: { payload: GmailPayload }) {
 function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
   const threads = payload.threads ?? [];
   return (
-    <ChatWideCard maxWidth={1180}>
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Mail size={18} className="shrink-0 text-accent" />
-          <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">Gmail search</div>
-            <div className="truncate font-mono text-caption text-faint">
-              {payload.query || "in:inbox"}
-            </div>
-          </div>
-        </div>
-        <div className="shrink-0 text-right text-caption text-muted">
+    <ChatWideCard
+      maxWidth={1180}
+      icon={<Mail className="size-4 shrink-0 text-primary" />}
+      title="Gmail search"
+      description={
+        <span className="font-mono">{payload.query || "in:inbox"}</span>
+      }
+      meta={
+        <>
           <div>
             {threads.length} thread{threads.length === 1 ? "" : "s"}
           </div>
@@ -919,46 +870,35 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
             payload.resultSizeEstimate !== null && (
               <div>estimate {payload.resultSizeEstimate}</div>
             )}
-        </div>
-      </header>
-
-      <table className="w-full table-fixed border-separate border-spacing-0 text-left text-caption">
-        <colgroup>
-          <col className="w-9" />
-          <col className="w-[6.4rem]" />
-          <col className="w-[10.5rem]" />
-          <col />
-          <col className="w-14" />
-        </colgroup>
-        <thead className="bg-surface/70 text-micro uppercase tracking-wide text-faint">
-          <tr>
-            <th className="px-2 py-2 font-medium" aria-label="Expand" />
-            <th className="px-2 py-2 font-medium">Date</th>
-            <th className="px-3 py-2 font-medium">From</th>
-            <th className="px-3 py-2 font-medium">Thread</th>
-            <th className="px-2 py-2 text-center font-medium" title="Messages">
+        </>
+      }
+    >
+      <Table className="table-fixed">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-9" aria-label="Expand" />
+            <TableHead className="w-26">Date</TableHead>
+            <TableHead className="w-42">From</TableHead>
+            <TableHead>Thread</TableHead>
+            <TableHead className="w-14 text-center" title="Messages">
               #
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {threads.map((thread) => (
             <GmailThreadRow key={thread.id} thread={thread} />
           ))}
           {threads.length === 0 && (
-            <tr>
-              <td colSpan={5} className="px-4 py-8 text-center text-muted">
-                No Gmail threads found.
-              </td>
-            </tr>
+            <EmptyRow span={5}>No Gmail threads found.</EmptyRow>
           )}
-        </tbody>
-      </table>
-      <div className="border-t border-line px-4 py-2 text-micro text-faint">
+        </TableBody>
+      </Table>
+      <CardFooter className="text-xs text-muted-foreground">
         Search results contain metadata and snippets only. Expanding a thread
         loads the email body in your browser without adding it to assistant
         context.
-      </div>
+      </CardFooter>
     </ChatWideCard>
   );
 }
@@ -1000,94 +940,72 @@ function GmailThreadRow({ thread }: { thread: GmailThreadSummary }) {
   const latest = splitGmailLocalDate(thread.localLatestDate);
   const sender = senderDisplay(thread);
   return (
-    <Fragment>
-      <tr className="border-t border-line odd:bg-surface/30">
-        <td className="border-t border-line px-2 py-3 text-center align-top">
-          <button
-            type="button"
-            onClick={() => void toggleThread()}
-            title={open ? "Collapse thread" : "Read thread"}
-            aria-label={open ? "Collapse thread" : "Read thread"}
-            className="inline-flex size-6 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-accent"
-          >
-            {loading ? (
-              <Spinner size="sm" />
-            ) : (
-              <ChevronDown
-                size={15}
-                className={`transition-transform ${open ? "rotate-180" : ""}`}
-              />
-            )}
-          </button>
-        </td>
-        <td className="border-t border-line px-2 py-3 align-top">
-          <div className="flex min-w-0 items-start gap-1.5">
-            <GmailStatusIcon unread={thread.unread} />
-            <div className="min-w-0 font-mono text-caption text-muted">
-              <div className="truncate">{latest.date}</div>
-              <div className="truncate text-faint">{latest.time}</div>
-            </div>
-          </div>
-        </td>
-        <td className="border-t border-line px-3 py-3 align-top text-muted">
-          <div className="truncate" title={sender}>
-            {sender}
-          </div>
-        </td>
-        <td className="min-w-0 border-t border-line px-3 py-3 align-top">
-          <div className="flex min-w-0 items-center gap-2">
-            <ExternalTitle
-              title={thread.subject || "(no subject)"}
-              href={thread.gmailUrl}
-            />
-            <GmailCategoryIcons thread={thread} />
-          </div>
-          {thread.snippet && (
-            <div className="mt-1 line-clamp-2 overflow-hidden text-ellipsis text-caption text-muted">
-              {thread.snippet}
-            </div>
-          )}
-        </td>
-        <td className="border-t border-line px-2 py-3 text-center align-top text-muted">
-          {thread.messageCount ?? 0}
-        </td>
-      </tr>
-      {open && (
-        <tr className="bg-surface/60">
-          <td colSpan={5} className="border-t border-line px-4 py-3">
-            {/* R4: the message rows this expands into, at their height, so the
-                table does not jump when the body lands. */}
-            {loading && (
-              <div
-                role="status"
-                aria-label="Loading Gmail thread"
-                className="space-y-2 rounded-xl border border-line bg-panel p-4"
-              >
-                <Skeleton className="h-3.5 w-1/3" />
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-11/12" />
-                <Skeleton className="h-3 w-2/3" />
+    <ExpandableRow
+      expandLabel="Read thread"
+      collapseLabel="Collapse thread"
+      span={5}
+      open={open}
+      onOpenChange={() => void toggleThread()}
+      busy={loading}
+      cells={
+        <>
+          <TableCell className="align-top">
+            <div className="flex min-w-0 items-start gap-1.5">
+              <GmailStatusIcon unread={thread.unread} />
+              <div className="min-w-0 font-mono text-muted-foreground">
+                <div className="truncate">{latest.date}</div>
+                <div className="truncate">{latest.time}</div>
               </div>
+            </div>
+          </TableCell>
+          <TableCell className="align-top text-muted-foreground">
+            <div className="truncate" title={sender}>
+              {sender}
+            </div>
+          </TableCell>
+          <TableCell className="min-w-0 align-top whitespace-normal">
+            <div className="flex min-w-0 items-center gap-2">
+              <ExternalTitle
+                title={thread.subject || "(no subject)"}
+                href={thread.gmailUrl}
+              />
+              <GmailCategoryIcons thread={thread} />
+            </div>
+            {thread.snippet && (
+              <p className="mt-1 line-clamp-2 text-muted-foreground">
+                {thread.snippet}
+              </p>
             )}
-            {!loading && preview && <GmailThreadInline payload={preview} />}
-            {!loading && !preview && (
-              <GmailSnippetList messages={thread.messages ?? []} />
-            )}
-          </td>
-        </tr>
-      )}
-    </Fragment>
+          </TableCell>
+          <TableCell className="text-center align-top text-muted-foreground">
+            {thread.messageCount ?? 0}
+          </TableCell>
+        </>
+      }
+      details={
+        loading ? (
+          // R4: the message rows this expands into, at their height, so the
+          // table does not jump when the body lands.
+          <div
+            role="status"
+            aria-label="Loading Gmail thread"
+            className="flex flex-col gap-2 rounded-xl border p-4"
+          >
+            <Skeleton className="h-3.5 w-1/3" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-11/12" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
+        ) : preview?.error ? (
+          <ErrorNote message={preview.error} />
+        ) : preview ? (
+          <GmailThreadCard payload={preview} embedded />
+        ) : (
+          <GmailSnippetList messages={thread.messages ?? []} />
+        )
+      }
+    />
   );
-}
-
-function GmailThreadInline({ payload }: { payload: GmailThreadPayload }) {
-  if (payload.error)
-    return (
-      <div className="rounded-xl border border-danger/40 bg-danger/10 p-3 text-caption text-danger">
-        {payload.error}
-      </div>
-    );
-  return <GmailThreadCard payload={payload} embedded />;
 }
 
 function GmailThreadCard({
@@ -1098,77 +1016,86 @@ function GmailThreadCard({
   embedded?: boolean;
 }) {
   const messages = payload.messages ?? [];
-  const body = (
-    <>
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
-        <div className="flex min-w-0 items-start gap-2">
-          {payload.unread ? (
-            <Mail size={18} className="mt-0.5 shrink-0 text-accent" />
-          ) : (
-            <MailOpen size={18} className="mt-0.5 shrink-0 text-muted" />
+  const count = messages.length || payload.messageCount || 0;
+  const header = {
+    icon: payload.unread ? (
+      <Mail className="size-4 shrink-0 text-primary" />
+    ) : (
+      <MailOpen className="size-4 shrink-0 text-muted-foreground" />
+    ),
+    title: (
+      <ExternalTitle
+        title={payload.subject || "(no subject)"}
+        href={payload.gmailUrl}
+      />
+    ),
+    description: (
+      <>
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          <span>{payload.unread ? "Unread" : "Read"}</span>
+          <span>
+            {count} message{count === 1 ? "" : "s"}
+          </span>
+          {payload.localLatestDate && (
+            <span>Latest {payload.localLatestDate}</span>
           )}
-          <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">
-              <ExternalTitle
-                title={payload.subject || "(no subject)"}
-                href={payload.gmailUrl}
-              />
-            </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted">
-              <span>{payload.unread ? "Unread" : "Read"}</span>
-              <span>
-                {messages.length || payload.messageCount || 0} message
-                {(messages.length || payload.messageCount || 0) === 1
-                  ? ""
-                  : "s"}
-              </span>
-              {payload.localLatestDate && (
-                <span>Latest {payload.localLatestDate}</span>
-              )}
-              {payload.totalTextCharCount !== undefined && (
-                <span>
-                  {payload.totalTextCharCount.toLocaleString()} chars
-                  {payload.truncated ? " · truncated" : ""}
-                </span>
-              )}
-            </div>
-            {payload.labels?.length ? (
-              <GmailLabelList
-                labels={payload.labels}
-                labelIds={payload.labelIds}
-              />
-            ) : null}
-          </div>
-        </div>
-        {payload.participants?.length ? (
-          <div className="max-w-72 text-right text-caption text-muted">
-            {payload.participants
-              .map((p) => p.name || p.email || p.label)
-              .filter(Boolean)
-              .slice(0, 4)
-              .join(", ")}
-          </div>
+          {payload.totalTextCharCount !== undefined && (
+            <span>
+              {payload.totalTextCharCount.toLocaleString()} chars
+              {payload.truncated ? " · truncated" : ""}
+            </span>
+          )}
+        </span>
+        {payload.labels?.length ? (
+          <GmailLabelList labels={payload.labels} labelIds={payload.labelIds} />
         ) : null}
-      </header>
-      <div className="max-h-[620px] space-y-3 overflow-auto p-4">
-        {messages.map((message, index) => (
-          <GmailMessageArticle key={message.id ?? index} message={message} />
-        ))}
-        {messages.length === 0 && (
-          <div className="py-8 text-center text-muted">
-            No readable messages returned.
-          </div>
-        )}
-      </div>
-    </>
+      </>
+    ),
+    meta: payload.participants?.length ? (
+      <span className="block max-w-72">
+        {payload.participants
+          .map((p) => p.name || p.email || p.label)
+          .filter(Boolean)
+          .slice(0, 4)
+          .join(", ")}
+      </span>
+    ) : null,
+  };
+  const body = (
+    <CardContent className="flex max-h-155 flex-col gap-3 overflow-auto">
+      {messages.map((message, index) => (
+        <GmailMessageArticle key={message.id ?? index} message={message} />
+      ))}
+      {messages.length === 0 && (
+        <p className="py-8 text-center text-muted-foreground">
+          No readable messages returned.
+        </p>
+      )}
+    </CardContent>
   );
   if (embedded)
     return (
-      <div className="overflow-hidden rounded-xl border border-line bg-panel">
+      <Card size="sm">
+        <CardHeader className="border-b">
+          <CardTitle className="flex min-w-0 items-center gap-2">
+            {header.icon}
+            {header.title}
+          </CardTitle>
+          <CardDescription>{header.description}</CardDescription>
+          {header.meta ? (
+            <CardAction className="text-right text-muted-foreground">
+              {header.meta}
+            </CardAction>
+          ) : null}
+        </CardHeader>
         {body}
-      </div>
+      </Card>
     );
-  return <ChatWideCard maxWidth={980}>{body}</ChatWideCard>;
+  return (
+    <ChatWideCard maxWidth={980} {...header}>
+      {body}
+    </ChatWideCard>
+  );
 }
 
 function GmailMessageCard({
@@ -1178,89 +1105,81 @@ function GmailMessageCard({
 }) {
   if (!message) return null;
   return (
-    <ChatWideCard maxWidth={900} className="p-4">
-      <GmailMessageArticle message={message} />
+    <ChatWideCard
+      maxWidth={900}
+      icon={<Mail className="size-4 shrink-0 text-primary" />}
+      title="Email"
+    >
+      <CardContent>
+        <GmailMessageArticle message={message} />
+      </CardContent>
     </ChatWideCard>
   );
 }
 
 function GmailMessageArticle({ message }: { message: GmailFullMessage }) {
   return (
-    <article
-      className={`rounded-xl border ${message.unread ? "border-accent/40 bg-accent-soft/20" : "border-line bg-surface"} p-3`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="font-medium text-fg">
-            {messageSenderDisplay(message)}
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>{messageSenderDisplay(message)}</CardTitle>
+        <CardDescription>
+          {message.localDate || ""}
+          {message.to ? ` · to ${message.to}` : ""}
+        </CardDescription>
+        <CardAction>
+          <Badge variant={message.unread ? "default" : "secondary"}>
+            {message.unread ? "Unread" : "Read"}
+          </Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {message.text ? (
+          <pre className="font-sans whitespace-pre-wrap break-words">
+            {message.text}
+          </pre>
+        ) : (
+          <p className="text-muted-foreground">No readable body text.</p>
+        )}
+        {message.truncated && (
+          <p className="text-muted-foreground">Message truncated.</p>
+        )}
+        {message.attachments?.length ? (
+          <div className="flex flex-wrap gap-1.5">
+            {message.attachments.map((attachment, index) => (
+              <Badge
+                key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
+                variant="secondary"
+              >
+                <Paperclip /> {attachment.filename || "attachment"}
+              </Badge>
+            ))}
           </div>
-          <div className="mt-0.5 text-caption text-muted">
-            {message.localDate || ""}
-            {message.to ? ` · to ${message.to}` : ""}
-          </div>
-        </div>
-        <span
-          className={`rounded-full px-2 py-1 text-micro ${message.unread ? "bg-accent-soft font-semibold text-accent" : "bg-raised text-muted"}`}
-        >
-          {message.unread ? "Unread" : "Read"}
-        </span>
-      </div>
-      {message.text ? (
-        <pre className="mt-3 whitespace-pre-wrap break-words font-sans text-caption text-fg">
-          {message.text}
-        </pre>
-      ) : (
-        <div className="mt-3 text-caption text-faint">
-          No readable body text.
-        </div>
-      )}
-      {message.truncated && (
-        <div className="mt-2 text-caption text-faint">Message truncated.</div>
-      )}
-      {message.attachments?.length ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {message.attachments.map((attachment, index) => (
-            <span
-              key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
-              className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-caption text-muted"
-            >
-              <Paperclip size={11} /> {attachment.filename || "attachment"}
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </article>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
 function GmailSnippetList({ messages }: { messages: GmailMessageSummary[] }) {
   if (messages.length === 0) return null;
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 text-micro font-semibold uppercase tracking-wide text-faint">
-        Thread snippets
-      </div>
-      <div className="space-y-1.5">
+    <Panel title="Thread snippets">
+      <ItemGroup className="gap-1.5">
         {messages.map((message, index) => (
-          <div
-            key={`${message.id ?? index}`}
-            className="rounded-lg bg-raised/60 px-2 py-1.5 text-caption"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="font-medium text-fg">
-                {messageSenderDisplay(message)}
-              </span>
-              <span className="font-mono text-faint">
-                {message.localDate || ""}
-              </span>
-            </div>
-            {message.snippet && (
-              <div className="mt-0.5 text-muted">{message.snippet}</div>
-            )}
-          </div>
+          <Item key={`${message.id ?? index}`} variant="muted" size="xs">
+            <ItemContent>
+              <ItemTitle>{messageSenderDisplay(message)}</ItemTitle>
+              {message.snippet && (
+                <ItemDescription>{message.snippet}</ItemDescription>
+              )}
+            </ItemContent>
+            <ItemActions className="font-mono text-muted-foreground">
+              {message.localDate || ""}
+            </ItemActions>
+          </Item>
         ))}
-      </div>
-    </div>
+      </ItemGroup>
+    </Panel>
   );
 }
 
@@ -1318,12 +1237,11 @@ function GmailLabelIcon({
   descriptor: GmailLabelDescriptor;
   compact?: boolean;
 }) {
-  const className = compact
-    ? "inline-flex size-4 items-center justify-center rounded-sm text-faint"
-    : "inline-flex size-5 items-center justify-center rounded-md bg-raised text-faint";
-  const iconClass = gmailLabelIconClass(descriptor.kind);
   return (
-    <span title={descriptor.title} className={`${className} ${iconClass}`}>
+    <span
+      title={descriptor.title}
+      className={`inline-flex items-center justify-center ${compact ? "size-4" : "size-5 rounded-md bg-muted"} ${gmailLabelIconClass(descriptor.kind)}`}
+    >
       {gmailLabelIcon(descriptor.kind, compact ? 13 : 12)}
     </span>
   );
@@ -1333,9 +1251,13 @@ function GmailStatusIcon({ unread }: { unread?: boolean | undefined }) {
   return (
     <span
       title={unread ? "Unread" : "Read"}
-      className={`mt-0.5 shrink-0 ${unread ? "text-accent" : "text-faint"}`}
+      className={`mt-0.5 shrink-0 ${unread ? "text-primary" : "text-muted-foreground"}`}
     >
-      {unread ? <Mail size={13} /> : <MailOpen size={13} />}
+      {unread ? (
+        <Mail className="size-3.5" />
+      ) : (
+        <MailOpen className="size-3.5" />
+      )}
     </span>
   );
 }
@@ -1395,14 +1317,11 @@ function gmailLabelIcon(kind: string, size: number) {
 }
 
 function gmailLabelIconClass(kind: string): string {
-  if (kind === "starred") return "text-yellow-300";
-  if (kind === "important" || kind === "spam") return "text-yellow-400";
-  if (kind === "personal") return "text-sky-300";
-  if (kind === "social") return "text-emerald-300";
-  if (kind === "promotions") return "text-pink-300";
-  if (kind === "updates") return "text-blue-300";
-  if (kind === "forums") return "text-violet-300";
-  return "text-faint";
+  if (kind === "starred" || kind === "important" || kind === "spam")
+    return "text-warning";
+  if (["personal", "social", "promotions", "updates", "forums"].includes(kind))
+    return "text-primary";
+  return "text-muted-foreground";
 }
 
 function normalizeGmailLabel(value: string): string {
@@ -1475,70 +1394,45 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
   const file = payload.file;
   const text = payload.text ?? "";
   return (
-    <ChatWideCard maxWidth={980}>
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-line bg-raised/40 px-4 py-3">
-        <div className="flex min-w-0 items-start gap-2">
-          <FileText size={18} className="mt-0.5 shrink-0 text-accent" />
-          <div className="min-w-0">
-            <div className="text-body font-semibold text-fg">
-              <ExternalTitle
-                title={file?.name || "Drive document"}
-                href={file?.webViewLink}
-              />
-            </div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-caption text-muted">
-              {file?.localModified && (
-                <span>Modified {file.localModified}</span>
-              )}
-              {payload.exportMimeType && <span>{payload.exportMimeType}</span>}
-              {payload.textCharCount !== undefined && (
-                <span>
-                  {payload.textCharCount.toLocaleString()} chars
-                  {payload.truncated ? " · truncated" : ""}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-        {file?.owners?.[0] && (
-          <div className="text-right text-caption text-muted">
-            {file.owners[0].displayName || file.owners[0].emailAddress}
-          </div>
-        )}
-      </header>
-      <div className="max-h-[520px] overflow-auto p-4">
+    <ChatWideCard
+      maxWidth={980}
+      icon={<FileText className="size-4 shrink-0 text-primary" />}
+      title={
+        <ExternalTitle
+          title={file?.name || "Drive document"}
+          href={file?.webViewLink}
+        />
+      }
+      description={
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {file?.localModified && <span>Modified {file.localModified}</span>}
+          {payload.exportMimeType && <span>{payload.exportMimeType}</span>}
+          {payload.textCharCount !== undefined && (
+            <span>
+              {payload.textCharCount.toLocaleString()} chars
+              {payload.truncated ? " · truncated" : ""}
+            </span>
+          )}
+        </span>
+      }
+      meta={
+        file?.owners?.[0]
+          ? file.owners[0].displayName || file.owners[0].emailAddress
+          : null
+      }
+    >
+      <CardContent className="max-h-130 overflow-auto">
         {text ? (
-          <pre className="whitespace-pre-wrap break-words font-sans text-body text-fg">
+          <pre className="font-sans whitespace-pre-wrap break-words">
             {text}
           </pre>
         ) : (
-          <div className="py-8 text-center text-muted">
+          <p className="py-8 text-center text-muted-foreground">
             No readable document text was returned.
-          </div>
+          </p>
         )}
-      </div>
+      </CardContent>
     </ChatWideCard>
-  );
-}
-
-function ExternalTitle({
-  title,
-  href,
-}: {
-  title: string;
-  href?: string | null | undefined;
-}) {
-  if (!href) return <span className="text-fg">{title}</span>;
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      className="inline-flex min-w-0 items-center gap-1 font-medium text-accent hover:underline"
-    >
-      <span className="truncate">{title}</span>
-      <ExternalLink size={12} className="shrink-0" />
-    </a>
   );
 }
 
@@ -1546,18 +1440,42 @@ function StatusIcon({ status }: { status?: string | null | undefined }) {
   const value = status || "unknown";
   const icon =
     value === "accepted" ? (
-      <CheckCircle2 size={16} className="text-emerald-300" />
+      <CheckCircle2 className="size-4 text-success" />
     ) : value === "declined" ? (
-      <XCircle size={16} className="text-danger" />
+      <XCircle className="size-4 text-destructive" />
     ) : value === "tentative" ? (
-      <Clock size={16} className="text-yellow-300" />
+      <Clock className="size-4 text-warning" />
     ) : (
-      <CircleHelp size={16} className="text-faint" />
+      <CircleHelp className="size-4 text-muted-foreground" />
     );
   return (
     <span title={value} className="inline-flex justify-center">
       {icon}
     </span>
+  );
+}
+
+/** An icon that opens an external link, named by its tooltip. */
+function IconLink({
+  href,
+  label,
+  children,
+}: {
+  href: string;
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <LinkButton
+      variant="ghost"
+      size="icon-xs"
+      label={label}
+      href={href}
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      {children}
+    </LinkButton>
   );
 }
 
@@ -1571,27 +1489,21 @@ function MeetingLinkIcon({ event }: { event: CalendarEvent }) {
           uri: event.meet.meetingUri,
         }
       : null);
-  if (!link?.uri) return <span className="text-faint">—</span>;
+  if (!link?.uri) return <span className="text-muted-foreground">—</span>;
   return (
-    <a
+    <IconLink
       href={link.uri}
-      target="_blank"
-      rel="noreferrer noopener"
-      title={`Open ${link.label ?? providerLabel(link.provider)}${link.source ? ` (${link.source})` : ""}`}
-      className="inline-flex size-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-raised hover:text-accent"
+      label={`Open ${link.label ?? providerLabel(link.provider)}${link.source ? ` (${link.source})` : ""}`}
     >
       <ProviderIcon provider={link.provider} />
-    </a>
+    </IconLink>
   );
 }
 
 function ProviderIcon({ provider }: { provider?: ConferenceLink["provider"] }) {
-  if (provider === "zoom")
-    return <span className="text-caption font-bold">Z</span>;
-  if (provider === "teams")
-    return <span className="text-caption font-bold">T</span>;
-  if (provider === "google-meet") return <Video size={15} />;
-  return <Video size={15} />;
+  if (provider === "zoom") return <span className="font-bold">Z</span>;
+  if (provider === "teams") return <span className="font-bold">T</span>;
+  return <Video />;
 }
 
 function providerLabel(provider?: ConferenceLink["provider"]): string {
@@ -1604,7 +1516,10 @@ function providerLabel(provider?: ConferenceLink["provider"]): string {
 function MinutesIcon({ links }: { links: MinutesLink[] }) {
   if (links.length === 0)
     return (
-      <span title="No minutes/transcript link found" className="text-faint">
+      <span
+        title="No minutes/transcript link found"
+        className="text-muted-foreground"
+      >
         —
       </span>
     );
@@ -1615,20 +1530,14 @@ function MinutesIcon({ links }: { links: MinutesLink[] }) {
       : `${links.length} minutes/transcript links`;
   if (!first.href)
     return (
-      <span title={title} className="inline-flex justify-center text-accent">
-        <FileText size={16} />
+      <span title={title} className="inline-flex justify-center text-primary">
+        <FileText className="size-4" />
       </span>
     );
   return (
-    <a
-      href={first.href}
-      target="_blank"
-      rel="noreferrer noopener"
-      title={title}
-      className="inline-flex size-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-raised hover:text-accent"
-    >
-      <FileText size={15} />
-    </a>
+    <IconLink href={first.href} label={title}>
+      <FileText />
+    </IconLink>
   );
 }
 
@@ -1646,9 +1555,9 @@ function AttendanceIcon({ records }: { records: MeetRecord[] }) {
     return (
       <span
         title={`${records.length} Meet record(s), ${sessionCount} participant session(s)${artifactText}`}
-        className="inline-flex justify-center text-emerald-300"
+        className="inline-flex justify-center text-success"
       >
-        <Users size={16} />
+        <Users className="size-4" />
       </span>
     );
   }
@@ -1656,18 +1565,18 @@ function AttendanceIcon({ records }: { records: MeetRecord[] }) {
     return (
       <span
         title={`${records.length} Meet record(s), no participant sessions${artifactText}`}
-        className="inline-flex justify-center text-yellow-300"
+        className="inline-flex justify-center text-warning"
       >
-        <Users size={16} />
+        <Users className="size-4" />
       </span>
     );
   }
   return (
     <span
       title="No matching Meet attendance record"
-      className="inline-flex justify-center text-faint"
+      className="inline-flex justify-center text-muted-foreground"
     >
-      <Users size={16} />
+      <Users className="size-4" />
     </span>
   );
 }
@@ -1727,7 +1636,7 @@ function isMinutesLike(title: string, mimeType?: string | null): boolean {
 
 function LocationLine({ location }: { location: string }) {
   return (
-    <div className="mt-0.5 truncate text-caption text-muted">
+    <div className="mt-0.5 truncate text-muted-foreground">
       <LinkifiedText text={location} />
     </div>
   );
@@ -1745,7 +1654,7 @@ function LinkifiedText({ text }: { text: string }) {
               href={part}
               target="_blank"
               rel="noreferrer noopener"
-              className="text-accent hover:underline"
+              className="text-primary hover:underline"
             >
               {part}
             </a>

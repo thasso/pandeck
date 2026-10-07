@@ -35,7 +35,7 @@ import {
   ErrorNote,
   RefreshIndicator,
   Skeleton,
-} from "../ui/load.tsx";
+} from "../common/load.tsx";
 import {
   resolveJoinRows,
   type JoinRowState,
@@ -55,6 +55,14 @@ import {
   type LoadState,
 } from "../../lib/loadState.ts";
 import { projectDisplayKey } from "../../lib/projectDisplay.ts";
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.tsx";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "../ui/item.tsx";
 
 interface Props {
   back?: PageHeaderBack | undefined;
@@ -93,25 +101,27 @@ function Block({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border border-line bg-panel/40 p-3">
-      <h2 className="mb-2 flex items-center gap-1.5 text-caption font-semibold text-muted">
-        <span className="text-faint" aria-hidden>
-          {icon}
-        </span>
-        {title}
-      </h2>
-      {children}
-    </section>
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle>
+          <h2 className="flex items-center gap-1.5">
+            <span aria-hidden>{icon}</span>
+            {title}
+          </h2>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   );
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex min-w-0 items-baseline gap-2 py-0.5">
-      <span className="w-28 shrink-0 text-micro uppercase tracking-wide text-faint">
+      <span className="w-28 shrink-0 text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="min-w-0 flex-1 text-caption text-fg">{children}</span>
+      <span className="min-w-0 flex-1 text-sm text-foreground">{children}</span>
     </div>
   );
 }
@@ -129,21 +139,22 @@ function RelationRow({
   onOpen: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Item
+      size="xs"
+      render={<button type="button" />}
       onClick={onOpen}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="flex-nowrap text-left"
     >
-      <span className="shrink-0 text-faint" aria-hidden>
+      <ItemMedia variant="icon" aria-hidden>
         {icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-fg">
-        {label}
-      </span>
-      {detail ? (
-        <span className="shrink-0 text-micro text-faint">{detail}</span>
-      ) : null}
-    </button>
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">{label}</span>
+        </ItemTitle>
+      </ItemContent>
+      {detail ? <ItemDescription>{detail}</ItemDescription> : null}
+    </Item>
   );
 }
 
@@ -187,7 +198,7 @@ function JoinGroup<T>({
   const pending = rows.filter((row) => row.kind === "pending");
   return (
     <>
-      <h3 className="mb-1 mt-3 text-micro uppercase tracking-wide text-faint">
+      <h3 className="mb-1 mt-3 text-xs uppercase tracking-wide text-muted-foreground">
         {title}
       </h3>
       {/* R2: the retained rows below stay, and the failure sits beside them. */}
@@ -357,14 +368,18 @@ export function PullRequestDetailPage({
       <Block title="Status" icon={<CircleDot size={13} />}>
         <Fact label="Checks">
           <span className="flex items-center gap-1.5">
-            <CircleDot size={12} aria-hidden className="text-faint" />
+            <CircleDot
+              size={12}
+              aria-hidden
+              className="text-muted-foreground"
+            />
             {ci.label}
             {item.ci?.url ? (
               <a
                 href={item.ci.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-accent underline underline-offset-2"
+                className="text-primary underline underline-offset-2"
               >
                 inspect
               </a>
@@ -382,7 +397,7 @@ export function PullRequestDetailPage({
         {/* Why the panel's Merge is disabled, as TEXT on the page: a disabled
             menu row's tooltip reaches neither a keyboard nor a phone. */}
         {mergeBlocked ? (
-          <p className="mt-1 text-caption text-amber-500">{mergeBlocked}</p>
+          <p className="mt-1 text-sm text-warning">{mergeBlocked}</p>
         ) : null}
       </Block>
 
@@ -461,7 +476,7 @@ function Shell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitPullRequest size={16} />}

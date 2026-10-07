@@ -36,7 +36,24 @@ import type {
 } from "@assistant/shared";
 import type { ClientPullRequestCard } from "../hooks/useAssistant.ts";
 import { Markdown } from "./Markdown.tsx";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
+import { NoticeList } from "./tools/NoticeList.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 /**
  * The wire card plus the reducer's browser-local click overlay — one type, so
@@ -45,101 +62,78 @@ import { ErrorNote, Spinner } from "./ui/load.tsx";
 type PullRequestCardData = ClientPullRequestCard;
 
 function HeaderIcon({ status }: { status: PullRequestCardData["status"] }) {
-  const cls = "mt-0.5 shrink-0";
-  if (status === "merged")
-    return <GitMerge size={16} className={`${cls} text-purple-500`} />;
+  if (status === "merged") return <GitMerge className="size-4 text-primary" />;
   if (status === "closed" || status === "failed")
     return (
       <GitPullRequestClosed
-        size={16}
-        className={`${cls} ${status === "failed" ? "text-danger" : "text-warning"}`}
+        className={`size-4 ${status === "failed" ? "text-destructive" : "text-warning"}`}
       />
     );
-  return <GitPullRequestArrow size={16} className={`${cls} text-success`} />;
+  return <GitPullRequestArrow className="size-4 text-success" />;
 }
 
 function StatusBadge({ card }: { card: PullRequestCardData }) {
-  const { status } = card;
-  if (status === "choosing-task")
-    return (
-      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
-        Choose a Task
-      </span>
-    );
-  if (status === "creating")
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
-        <Spinner size="sm" />
-        Creating
-      </span>
-    );
-  if (status === "failed")
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
-        <XCircle size={9} />
-        Failed
-      </span>
-    );
-  if (status === "merged")
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/15 px-2 py-0.5 text-micro font-medium text-purple-600 dark:text-purple-400">
-        <GitMerge size={9} />
-        Merged
-      </span>
-    );
-  if (status === "closed")
-    return (
-      <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
-        Closed
-      </span>
-    );
-  return (
-    <span className="rounded-full bg-success/15 px-2 py-0.5 text-micro font-medium text-success">
-      Open
-    </span>
-  );
+  switch (card.status) {
+    case "choosing-task":
+      return <Badge variant="warning">Choose a Task</Badge>;
+    case "creating":
+      return (
+        <Badge variant="secondary">
+          <Spinner size="sm" />
+          Creating
+        </Badge>
+      );
+    case "failed":
+      return (
+        <Badge variant="destructive">
+          <XCircle />
+          Failed
+        </Badge>
+      );
+    case "merged":
+      return (
+        <Badge>
+          <GitMerge />
+          Merged
+        </Badge>
+      );
+    case "closed":
+      return <Badge variant="outline">Closed</Badge>;
+    default:
+      return <Badge variant="success">Open</Badge>;
+  }
 }
 
 function CiBadge({ ci }: { ci: WorktreeCiStatus }) {
   if (ci.state === "pending")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
+      <Badge variant="secondary">
         <Spinner size="sm" />
         CI running
-      </span>
+      </Badge>
     );
   if (ci.state === "success")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-micro font-medium text-green-600 dark:text-green-400">
-        <CheckCircle2 size={9} />
+      <Badge variant="success">
+        <CheckCircle2 />
         CI passed
-      </span>
+      </Badge>
     );
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
-      <XCircle size={9} />
+    <Badge variant="destructive">
+      <XCircle />
       CI failed
-    </span>
-  );
-}
-
-function ReviewBadge({ changesRequested }: { changesRequested: boolean }) {
-  if (!changesRequested) return null;
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-warning-soft px-2 py-0.5 text-micro font-medium text-fg">
-      <AlertTriangle size={9} />
-      Changes requested
-    </span>
+    </Badge>
   );
 }
 
 function MergeabilityBadge({ card }: { card: PullRequestCardData }) {
   if (card.conflicts)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
-        <AlertTriangle size={9} />
+      <Badge variant="destructive">
+        <AlertTriangle />
         Conflicting
-      </span>
+      </Badge>
     );
   // Only a pull request someone might merge is "being checked": a draft's
   // mergeability is unknown because nobody asked for it (Forgejo answers
@@ -147,10 +141,10 @@ function MergeabilityBadge({ card }: { card: PullRequestCardData }) {
   // already says that.
   if (card.mergeable === null && !card.draft)
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
-        <CircleDot size={9} />
+      <Badge variant="outline">
+        <CircleDot />
         Checking mergeability…
-      </span>
+      </Badge>
     );
   return null;
 }
@@ -177,42 +171,40 @@ function TaskChooser({
   }, [busy]);
   const candidates = card.taskCandidates ?? [];
   return (
-    <div className="space-y-2 px-3 py-3">
-      <div className="text-caption text-muted">
+    <CardContent className="flex flex-col gap-2">
+      <p className="text-muted-foreground">
         Several linked Tasks qualify. Which one does this pull request address?
-      </div>
+      </p>
       <div className="flex flex-wrap gap-1.5">
         {candidates.map((task) => (
-          <button
+          <Button
             key={task.id}
-            type="button"
+            variant="outline"
+            size="sm"
             disabled={busy !== null}
-            aria-busy={busy === task.id || undefined}
+            busy={busy === task.id}
             onClick={() => {
               setBusy(task.id);
               onChooseTask?.(card.id, task.id);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-fg hover:bg-surface disabled:opacity-50"
           >
-            {busy === task.id && <Spinner size="sm" />}
             Task-{task.id}: {task.title}
-          </button>
+          </Button>
         ))}
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={busy !== null}
-          aria-busy={busy === "none" || undefined}
+          busy={busy === "none"}
           onClick={() => {
             setBusy("none");
             onChooseTask?.(card.id, null);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface disabled:opacity-50"
         >
-          {busy === "none" && <Spinner size="sm" />}
           None of these
-        </button>
+        </Button>
       </div>
-    </div>
+    </CardContent>
   );
 }
 
@@ -221,6 +213,70 @@ const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
   merge: "Merge commit",
   rebase: "Rebase",
 };
+
+/**
+ * The per-merge choices: the method, among those the repository allows, and
+ * whether the remote branch goes with it. Shared by every surface that merges a
+ * pull request, so a merge looks the same wherever it is offered.
+ */
+export function MergeMethodPicker({
+  offered,
+  known,
+  selected,
+  onSelect,
+  deleteBranch,
+  onDeleteBranchChange,
+  disabled,
+}: {
+  offered: readonly PullRequestMergeMethod[];
+  /** The repository's methods were read (an empty list then means "none"). */
+  known: boolean;
+  selected: PullRequestMergeMethod | undefined;
+  onSelect: (method: PullRequestMergeMethod) => void;
+  deleteBranch: boolean;
+  onDeleteBranchChange: (value: boolean) => void;
+  disabled: boolean;
+}) {
+  return (
+    <>
+      {offered.length > 0 ? (
+        <ToggleGroup
+          variant="outline"
+          size="sm"
+          spacing={0}
+          aria-label="Merge method"
+          value={selected ? [selected] : []}
+          disabled={disabled}
+          onValueChange={(next) => {
+            if (next[0]) onSelect(next[0] as PullRequestMergeMethod);
+          }}
+        >
+          {PULL_REQUEST_MERGE_METHODS.filter((id) => offered.includes(id)).map(
+            (id) => (
+              <ToggleGroupItem key={id} value={id}>
+                {MERGE_METHOD_LABELS[id]}
+              </ToggleGroupItem>
+            ),
+          )}
+        </ToggleGroup>
+      ) : (
+        <span className="text-muted-foreground">
+          {known
+            ? "This repository allows no merge method"
+            : "Merge methods are not known yet"}
+        </span>
+      )}
+      <Label>
+        <Checkbox
+          checked={deleteBranch}
+          disabled={disabled}
+          onCheckedChange={onDeleteBranchChange}
+        />
+        Delete remote branch
+      </Label>
+    </>
+  );
+}
 
 /** One action button; `busy` is the SERVER's running action, not a local guess. */
 function ActionButton({
@@ -244,25 +300,17 @@ function ActionButton({
   onRun: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant={danger ? "destructive" : primary ? "default" : "outline"}
+      size="sm"
       title={title}
-      disabled={disabled || busy}
-      aria-busy={busy || undefined}
+      disabled={disabled}
+      busy={busy}
       onClick={onRun}
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-caption transition-colors disabled:opacity-40 ${
-        danger
-          ? "border-danger/40 bg-raised text-danger hover:bg-danger/10"
-          : primary
-            ? "border-accent bg-accent font-medium text-white hover:bg-accent/90"
-            : "border-line bg-raised text-fg hover:bg-surface"
-      }`}
     >
-      <span className="flex size-3.5 items-center justify-center">
-        {busy ? <Spinner size="sm" /> : icon}
-      </span>
+      {busy ? null : icon}
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -353,55 +401,21 @@ function CardActions({
   if ((!open && !merged) || (!hasButton && !hasNote)) return null;
 
   return (
-    <div className="space-y-2 border-t border-line/60 px-3 py-2.5">
+    <CardFooter className="flex-col items-stretch gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
         {open && (
           <>
-            {offeredMethods.length > 0 ? (
-              <div className="inline-flex overflow-hidden rounded-lg border border-line">
-                {PULL_REQUEST_MERGE_METHODS.filter((id) =>
-                  offeredMethods.includes(id),
-                ).map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    disabled={Boolean(running) || conflicted}
-                    onClick={() => setMethod(id)}
-                    className={`px-2 py-1 text-caption transition-colors disabled:opacity-40 ${
-                      selectedMethod === id
-                        ? "bg-accent text-white"
-                        : "bg-raised text-muted hover:bg-surface"
-                    }`}
-                  >
-                    {MERGE_METHOD_LABELS[id]}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <span className="text-caption text-faint">
-                {supportedMethods
-                  ? "This repository allows no merge method"
-                  : "Merge methods are not known yet"}
-              </span>
-            )}
-            <label
-              className={`inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted ${
-                running || conflicted
-                  ? "opacity-40"
-                  : "cursor-pointer hover:bg-surface"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="size-3.5 accent-accent"
-                checked={deleteBranch}
-                disabled={Boolean(running) || conflicted}
-                onChange={(event) => setDeleteBranch(event.target.checked)}
-              />
-              Delete remote branch
-            </label>
+            <MergeMethodPicker
+              offered={offeredMethods}
+              known={Boolean(supportedMethods)}
+              selected={selectedMethod}
+              onSelect={setMethod}
+              deleteBranch={deleteBranch}
+              onDeleteBranchChange={setDeleteBranch}
+              disabled={Boolean(running) || conflicted}
+            />
             <ActionButton
-              icon={<GitMerge size={12} />}
+              icon={<GitMerge />}
               label="Merge"
               title={
                 conflicted
@@ -424,7 +438,7 @@ function CardActions({
         )}
         {open && local && (
           <ActionButton
-            icon={<RefreshCw size={12} />}
+            icon={<RefreshCw />}
             label={handedOff ? "Agent is rebasing" : "Update with main"}
             title={
               handedOff
@@ -440,7 +454,7 @@ function CardActions({
         {canCleanup && (
           <ActionButton
             danger
-            icon={<Eraser size={12} />}
+            icon={<Eraser />}
             label="Clean up worktree"
             title={
               sessionBusy
@@ -454,7 +468,7 @@ function CardActions({
         )}
         {merged && taskOpen && (
           <ActionButton
-            icon={<CheckSquare size={12} />}
+            icon={<CheckSquare />}
             label={`Mark Task-${card.linkedTask!.id} done`}
             busy={running === "mark-task-done"}
             disabled={Boolean(running)}
@@ -465,9 +479,9 @@ function CardActions({
       {/* Why merge is off, in text: a `title` tooltip is unreachable on a
           phone and on a disabled button, and the colour alone says nothing. */}
       {conflicted && (
-        <p className="flex items-start gap-1.5 text-caption text-fg">
-          <AlertTriangle size={13} className="mt-0.5 shrink-0 text-warning" />
-          <span>
+        <Alert variant="warning" role="note">
+          <AlertTriangle />
+          <AlertDescription>
             {card.headBranch} conflicts with {card.baseBranch}, so it cannot be
             merged.{" "}
             {/* Once the work is with the agent the instruction changes: the
@@ -477,21 +491,21 @@ function CardActions({
               : local
                 ? "Update with main rebases it and republishes the branch; a conflict git cannot resolve on its own is handed to this session's agent."
                 : `Resolve the conflicts on ${card.headBranch} and push it, then merge.`}
-          </span>
-        </p>
+          </AlertDescription>
+        </Alert>
       )}
       {/* What the merge will do to the remote branch — stated before the click,
           and only while there is a merge to click: pairing it with "cannot be
           merged" would describe a button that is off. */}
       {open && !conflicted && (
-        <p className="text-micro text-faint">
+        <p className="text-xs text-muted-foreground">
           {deleteBranch
             ? `Merging deletes the remote branch ${card.headBranch}; the local checkout stays until you clean it up.`
             : `The remote branch ${card.headBranch} is KEPT after the merge; delete it yourself when you are done with it.`}
         </p>
       )}
       {canCleanup && (
-        <p className="text-micro text-faint">
+        <p className="text-xs text-muted-foreground">
           Cleanup removes this worktree and deletes {card.headBranch} locally —
           only after {card.baseBranch} is confirmed to contain it.
           {siblings > 0 &&
@@ -499,15 +513,15 @@ function CardActions({
         </p>
       )}
       {card.cleanedUp && (
-        <p className="text-caption text-muted">
+        <p className="text-muted-foreground">
           Worktree removed and {card.headBranch} deleted locally.
         </p>
       )}
       {card.actionError && <ErrorNote message={card.actionError} />}
       {card.actionMessage && !card.actionError && (
-        <p className="text-caption text-muted">{card.actionMessage}</p>
+        <p className="text-muted-foreground">{card.actionMessage}</p>
       )}
-    </div>
+    </CardFooter>
   );
 }
 
@@ -542,62 +556,80 @@ export function PullRequestCard({
     ? { ...pullRequest, linkedTask: pullRequest.optimisticLinkedTask }
     : pullRequest;
   const open = card.status === "open";
-  const tone =
-    card.status === "failed"
-      ? "border-danger/30 bg-danger/5"
-      : open
-        ? "border-success/30 bg-success-soft"
-        : card.status === "merged"
-          ? "border-purple-500/30 bg-purple-500/5"
-          : "border-warning/35 bg-warning-soft";
 
   return (
-    <div className={`my-1.5 overflow-hidden rounded-xl border ${tone}`}>
-      <div className="flex items-start gap-3 border-b border-line/60 px-3 py-3">
-        <HeaderIcon status={card.status} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <div className="text-body font-semibold text-fg">
-              {card.reused ? "Pull request reused" : "Pull request"}
-            </div>
-            {card.provider && card.number !== undefined && (
-              <span className="text-caption text-faint">
-                {card.provider} #{card.number}
-              </span>
-            )}
-            <StatusBadge card={card} />
-            {card.draft && (
-              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-micro text-fg">
-                draft
-              </span>
-            )}
-            {open && card.ci && <CiBadge ci={card.ci} />}
-            {open && card.review && (
-              <ReviewBadge changesRequested={card.review.changesRequested} />
-            )}
-            {open && <MergeabilityBadge card={card} />}
-            {card.reused && <RotateCcw size={13} className="text-faint" />}
-          </div>
-          <div className="mt-1 truncate text-body text-fg">{card.title}</div>
-          <div className="mt-1 font-mono text-caption text-faint">
+    <Card size="sm" className="my-1.5">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <HeaderIcon status={card.status} />
+          {card.reused ? "Pull request reused" : "Pull request"}
+          {card.provider && card.number !== undefined && (
+            <span className="font-normal text-muted-foreground">
+              {card.provider} #{card.number}
+            </span>
+          )}
+          <StatusBadge card={card} />
+          {card.draft && <Badge variant="warning">draft</Badge>}
+          {open && card.ci && <CiBadge ci={card.ci} />}
+          {open && card.review?.changesRequested && (
+            <Badge variant="warning">
+              <AlertTriangle />
+              Changes requested
+            </Badge>
+          )}
+          {open && <MergeabilityBadge card={card} />}
+          {card.reused && (
+            <RotateCcw className="size-3.5 text-muted-foreground" />
+          )}
+        </CardTitle>
+        <CardDescription>
+          <p className="truncate text-foreground">{card.title}</p>
+          <p className="font-mono">
             {card.headBranch} → {card.baseBranch}
-          </div>
-        </div>
+          </p>
+        </CardDescription>
         {card.url && (
-          <a
-            href={card.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-white transition-colors hover:bg-accent/90"
-          >
-            Open
-            <ExternalLink size={12} />
-          </a>
+          <CardAction>
+            <LinkButton
+              size="sm"
+              href={card.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open
+              <ExternalLink data-icon="inline-end" />
+            </LinkButton>
+          </CardAction>
         )}
-      </div>
+      </CardHeader>
 
       {card.status === "choosing-task" && (
         <TaskChooser card={card} onChooseTask={onChooseTask} />
+      )}
+
+      {((card.status === "failed" && card.error) ||
+        (card.body?.length ?? 0) > 0 ||
+        card.warnings.length > 0 ||
+        card.linkedTask) && (
+        <CardContent className="flex flex-col gap-3">
+          {card.status === "failed" && card.error && (
+            <ErrorNote message={card.error} />
+          )}
+          {card.linkedTask && (
+            <p className="text-muted-foreground">
+              Linked to{" "}
+              <span className="font-medium text-foreground">
+                Task-{card.linkedTask.id}: {card.linkedTask.title}
+              </span>
+            </p>
+          )}
+          {(card.body?.length ?? 0) > 0 && (
+            <div className="rounded-lg border p-2">
+              <Markdown text={card.body!.join("\n\n")} />
+            </div>
+          )}
+          <NoticeList title="Warnings" items={card.warnings} />
+        </CardContent>
       )}
 
       {onAction && (
@@ -609,47 +641,6 @@ export function PullRequestCard({
           onAction={onAction}
         />
       )}
-
-      {card.status === "failed" && card.error && (
-        <div className="px-3 py-3">
-          <ErrorNote message={card.error} />
-        </div>
-      )}
-
-      {((card.body?.length ?? 0) > 0 ||
-        card.warnings.length > 0 ||
-        card.linkedTask) && (
-        <div className="space-y-3 px-3 py-3">
-          {card.linkedTask && (
-            <div className="text-caption text-muted">
-              Linked to{" "}
-              <span className="font-medium text-fg">
-                Task-{card.linkedTask.id}: {card.linkedTask.title}
-              </span>
-            </div>
-          )}
-
-          {(card.body?.length ?? 0) > 0 && (
-            <div className="rounded-lg border border-line bg-panel/50 p-2 text-body text-fg">
-              <Markdown text={card.body!.join("\n\n")} />
-            </div>
-          )}
-
-          {card.warnings.length > 0 && (
-            <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-caption text-fg">
-              <div className="mb-1 flex items-center gap-1.5 font-medium">
-                <AlertTriangle size={13} className="text-warning" />
-                Warnings
-              </div>
-              <ul className="list-disc space-y-1 pl-5 marker:text-warning">
-                {card.warnings.map((warning, index) => (
-                  <li key={index}>{warning}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    </Card>
   );
 }

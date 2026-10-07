@@ -8,6 +8,16 @@ import {
   useRef,
   useState,
 } from "react";
+import { Button } from "./ui/button.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Item } from "./ui/item.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
 import {
   Bot,
   Check,
@@ -55,7 +65,7 @@ import {
 } from "@assistant/shared/turnStats";
 import { PeerPromptCardView } from "./PeerPromptCard.tsx";
 import { BackgroundWorkPromptCard } from "./BackgroundWorkPromptCard.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import { activityPreview } from "../lib/activityPreview.ts";
 import { ProgressIndicator } from "./ProgressIndicator.tsx";
@@ -89,7 +99,6 @@ import type {
   NewPendingChatComment,
   PendingChatCommentsController,
 } from "../hooks/usePendingChatComments.ts";
-import { Popover } from "./Popover.tsx";
 
 const CHAT_COMMENT_HIGHLIGHT = "pending-chat-comment";
 /**
@@ -103,11 +112,11 @@ function chatCommentHighlightStyle(anchor: string): string {
   /* The composer-owned anchor; live selections use only the browser's paint. */
   ::highlight(${anchor}) {
     color: inherit;
-    background-color: color-mix(in oklab, var(--accent) 32%, transparent);
+    background-color: color-mix(in oklab, var(--primary) 32%, transparent);
   }
   ::highlight(${CHAT_COMMENT_HIGHLIGHT}) {
     color: inherit;
-    background-color: color-mix(in oklab, #f5c518 34%, transparent);
+    background-color: color-mix(in oklab, var(--warning) 34%, transparent);
   }
 `;
 }
@@ -302,45 +311,43 @@ function AttachmentChip({
         </span>
       </>
     );
-    const cls =
-      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-accent/30 bg-accent-soft px-2.5 py-1.5 text-caption text-accent";
     return taskId && onOpenTask ? (
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="sm"
         onClick={() => onOpenTask(taskId)}
-        className={`${cls} hover:bg-accent/15`}
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
         title="Open task details"
       >
         {inner}
-      </button>
+      </Button>
     ) : (
-      <div className={cls}>{inner}</div>
+      <Badge
+        variant="secondary"
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
+      >
+        {inner}
+      </Badge>
     );
   }
-  if (attachment.role === "project-context") {
+  if (
+    attachment.role === "project-context" ||
+    attachment.role === "file-context"
+  ) {
+    const project = attachment.role === "project-context";
     return (
-      <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted"
-        title="Project context was attached to this first prompt."
+      <Badge
+        variant="secondary"
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
+        title={
+          project
+            ? "Project context was attached to this first prompt."
+            : "This session was started from this file."
+        }
       >
-        <FolderKanban size={13} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
-          {attachment.name}
-        </span>
-      </div>
-    );
-  }
-  if (attachment.role === "file-context") {
-    return (
-      <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-line bg-raised/60 px-2.5 py-1.5 text-caption text-muted"
-        title="This session was started from this file."
-      >
-        <FileText size={13} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
-          {attachment.name}
-        </span>
-      </div>
+        {project ? <FolderKanban /> : <FileText />}
+        <span className="min-w-0 truncate">{attachment.name}</span>
+      </Badge>
     );
   }
   const isImage =
@@ -352,7 +359,11 @@ function AttachmentChip({
       ? withToken(`${serverHttpOrigin()}${attachment.url}`)
       : undefined;
   return (
-    <div className="mt-2 overflow-hidden rounded-xl border border-line bg-raised/60">
+    <Item
+      variant="muted"
+      size="sm"
+      className="mt-2 flex-col items-stretch overflow-hidden"
+    >
       {isImage && imageSrc ? (
         <img
           src={imageSrc}
@@ -360,20 +371,20 @@ function AttachmentChip({
           className="max-h-72 max-w-full object-contain"
         />
       ) : null}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-caption text-muted">
+      <div className="flex items-center gap-2">
         {attachment.mimeType.startsWith("image/") ? (
-          <ImageIcon size={14} className="text-accent" />
+          <ImageIcon size={14} className="text-primary" />
         ) : (
-          <FileText size={14} className="text-accent" />
+          <FileText size={14} className="text-primary" />
         )}
-        <span className="min-w-0 flex-1 truncate font-medium text-fg">
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
           {attachment.name}
         </span>
-        <span className="shrink-0 text-faint">
+        <span className="shrink-0 text-muted-foreground">
           {formatBytes(attachment.size)}
         </span>
       </div>
-    </div>
+    </Item>
   );
 }
 
@@ -480,62 +491,59 @@ function MessageActionsBar({
     <div
       className={`mt-1 flex ${align === "right" ? "justify-end" : "justify-start"}`}
     >
-      <div className="flex items-center gap-0.5 rounded-lg text-faint opacity-70 transition-opacity group-hover/message:opacity-100">
+      {/* Revealed on hover or focus; a coarse pointer has no hover, so the row
+          is shown there rather than left as an invisible tap target. */}
+      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
         {canCopy && (
-          <button
-            type="button"
+          <IconButton
+            label={copied ? "Copied" : "Copy message text"}
             onClick={() => void copy()}
-            title={copied ? "Copied" : "Copy message text"}
-            aria-label={copied ? "Copied" : "Copy message text"}
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-fg"
           >
-            {copied ? <Check size={13} /> : <Copy size={13} />}
-          </button>
+            {copied ? <Check /> : <Copy />}
+          </IconButton>
         )}
         {canResend && text && (
-          <button
-            type="button"
-            onClick={() => onResendPrompt?.(text)}
+          <IconButton
+            label="Resend prompt"
             title="Put this prompt back in the composer"
-            aria-label="Resend prompt"
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-accent"
+            onClick={() => onResendPrompt?.(text)}
           >
-            <RotateCcw size={13} />
-          </button>
+            <RotateCcw />
+          </IconButton>
         )}
         {canFork && forkEntryId && (
-          <button
-            type="button"
+          <IconButton
+            label={forkTitle}
             onClick={() => onForkMessage?.(forkEntryId, forkPosition)}
-            title={forkTitle}
-            aria-label={forkTitle}
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-accent"
           >
-            <GitFork size={13} />
-          </button>
+            <GitFork />
+          </IconButton>
         )}
         {canComment ? (
-          <Popover
-            align={align === "right" ? "right" : "left"}
-            placement="top"
-            title="More message actions"
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-fg"
-            button={<Ellipsis size={14} />}
-          >
-            {(close) => (
-              <button
-                type="button"
-                onClick={() => {
-                  close();
-                  onCommentMessage?.(message.id);
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-caption text-fg hover:bg-raised"
-              >
-                <MessageSquarePlus size={14} className="text-accent" />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="More message actions"
+                  title="More message actions"
+                />
+              }
+            >
+              <Ellipsis />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              side="top"
+              align={align === "right" ? "end" : "start"}
+              className="w-56"
+            >
+              <DropdownMenuItem onClick={() => onCommentMessage?.(message.id)}>
+                <MessageSquarePlus />
                 Comment on this message
-              </button>
-            )}
-          </Popover>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
       </div>
     </div>
@@ -668,7 +676,7 @@ const UserMessage = memo(function UserMessage({
     return (
       <div className="group/message min-w-0">
         <ChatActivityRow icon={Bot} title={originLabel} preview={preview}>
-          <p className="mb-2 break-words text-caption text-muted">
+          <p className="mb-2 break-words text-sm text-muted-foreground">
             {originLabel}
           </p>
           {message.promptDelivery ? (
@@ -688,7 +696,7 @@ const UserMessage = memo(function UserMessage({
       {message.promptDelivery ? (
         <PromptDeliveryNote delivery={message.promptDelivery} />
       ) : null}
-      <div className="min-w-0 max-w-[80%] rounded-2xl rounded-br-md bg-user px-3.5 py-2 text-body text-fg">
+      <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
         {body}
       </div>
       {promptQueueState ? (
@@ -715,7 +723,7 @@ const PROMPT_QUEUE_LABEL: Record<PromptQueueState, string> = {
 
 function PromptQueueCondition({ state }: { state: PromptQueueState }) {
   return (
-    <div className="mr-1 mt-1 flex items-center gap-1.5 text-caption text-muted">
+    <div className="mr-1 mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
       <Spinner size="xs" />
       <span>{PROMPT_QUEUE_LABEL[state]}</span>
     </div>
@@ -737,17 +745,18 @@ const ForkBoundaryMarker = memo(function ForkBoundaryMarker({
 }) {
   return (
     <div data-fork-boundary className="flex items-center gap-2">
-      <hr className="flex-1 border-line/60" />
-      <button
-        type="button"
+      <hr className="flex-1 border-border/60" />
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onOpen}
         title="Open the message this session was forked from"
-        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="min-w-0"
       >
         <GitFork size={12} className="shrink-0" />
         <span className="truncate">Forked from {parentTitle}</span>
-      </button>
-      <hr className="flex-1 border-line/60" />
+      </Button>
+      <hr className="flex-1 border-border/60" />
     </div>
   );
 });
@@ -764,8 +773,8 @@ function PromptDeliveryNote({
 }) {
   return (
     <div
-      className={`mb-0.5 mr-1 inline-flex items-center gap-1 text-micro ${
-        delivery === "steer" ? "text-accent" : "text-warning"
+      className={`mb-0.5 mr-1 inline-flex items-center gap-1 text-xs ${
+        delivery === "steer" ? "text-primary" : "text-warning"
       }`}
     >
       <CornerDownRight size={11} aria-hidden />
@@ -1783,7 +1792,7 @@ export function MessageList({
       [
         {
           backgroundColor:
-            "color-mix(in srgb, var(--color-accent) 18%, transparent)",
+            "color-mix(in srgb, var(--color-primary) 18%, transparent)",
         },
         { backgroundColor: "transparent" },
       ],
@@ -1858,30 +1867,26 @@ export function MessageList({
       >
         {hiddenRowCount > 0 ? (
           <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={showEarlierRows}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
+            <Button variant="outline" size="sm" onClick={showEarlierRows}>
               Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
               {hiddenRowCount === 1 ? "message" : "messages"}
               {hiddenRowCount > WINDOW_STEP_ROWS
                 ? ` (${hiddenRowCount} older)`
                 : ""}
-            </button>
+            </Button>
           </div>
         ) : hasOlderMessages ? (
           <div className="flex justify-center">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={loadOlderMessages}
-              disabled={loadingOlderMessages}
-              className="rounded-full border border-line bg-surface px-3 py-1.5 text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+              busy={loadingOlderMessages}
             >
               {loadingOlderMessages
                 ? "Loading earlier messages…"
                 : "Load earlier messages"}
-            </button>
+            </Button>
           </div>
         ) : null}
         {visibleRows.map(({ message: m, key }) => {
@@ -1963,7 +1968,7 @@ export function MessageList({
               {turnEnd && (
                 <div data-turn-end className="flex flex-col gap-1.5">
                   {appearance?.separatorAtTurnEnd && (
-                    <hr className="border-line/60" />
+                    <hr className="border-border/60" />
                   )}
                   {appearance?.turnStatsRow && (
                     <TurnStatsRow

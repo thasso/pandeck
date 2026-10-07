@@ -9,8 +9,8 @@
   its overlay title bar reuses the desktop top bar and adds no page height.
 - `window.confirm`/`alert`/`prompt` are banned (`nativeDialogAudit.test.ts`):
   the shell's webview never shows them, so the guarded action silently does
-  nothing. Ask through `components/ui/dialog.tsx` — `useDialogs()` to ask then
-  act, `ConfirmDialog` for a flow owning its own busy/error state.
+  nothing. Ask through `components/common/dialogs.tsx` — `useDialogs()` to ask
+  then act, `ConfirmDialog` for a flow owning its own busy/error state.
 - There is NO banner channel (`docs/messaging.md`, `messagingAudit.test.ts`): a
   failure belongs on its object (`ErrorNote`), an event whose surface is gone
   goes in a toast NAMING it, and only app-wide lifecycle state the user cannot

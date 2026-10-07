@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 /**
  * Loading-state source audit (Task-361 / Task-383).
  *
- * `components/ui/load.tsx` owns every loading, empty and error affordance the
+ * `components/common/load.tsx` owns every loading, empty and error affordance the
  * web client draws: the spinner glyph and its size tokens, the skeleton pulse,
  * the refresh indicator, the dashed empty box and the error note. A surface
  * that hand-rolls one of them drifts by construction — before this audit the
@@ -32,18 +32,12 @@ import { describe, expect, test } from "vitest";
  *
  * The two treatments that are NOT loading states kept their look and lost their
  * exemption, which is what "one owner" has to mean if it means anything:
- * `ui/load.tsx` exports them as named class tokens, so the vocabulary still
+ * `common/load.tsx` exports them as named class tokens, so the vocabulary still
  * lives in one module and a reviewer sees the import.
  *
  *  - `LIVE_PULSE` — the dictation `Mic` arming and a row's streaming
  *    underline. Nothing has been ASKED for in either, so a spinner would pose a
  *    question the user cannot answer.
- *  - `DASHED_EDGE` — a fillable slot (`NewSessionQuickStart`'s "New worktree"
- *    and "More…"), a provisional object (the queued-prompt bubble in
- *    `MessageList` and `PeerPromptCard`, the pending reply in
- *    `KnowledgeComments`), and an unresolved reference (`ProjectBadge`'s
- *    unknown project). A region with nothing in it is none of those: it uses
- *    `EmptyBox`.
  *
  * The scroller empty item Phase 5 flagged — `NewSessionQuickStart`'s "No
  * worktrees / in <project>" card, which has to carry the snapping and two-line
@@ -55,7 +49,9 @@ import { describe, expect, test } from "vitest";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** The module that owns all of it. */
-const OWNER_FILES = new Set([join(HERE, "components", "ui", "load.tsx")]);
+const OWNER_FILES = new Set([join(HERE, "components", "common", "load.tsx")]);
+/** Vendored shadcn components (`shadcn add`): the primitives `load.tsx` uses. */
+const VENDORED_DIR = join(HERE, "components", "ui");
 
 const SCAN_EXTENSIONS = new Set([".ts", ".tsx", ".css"]);
 
@@ -70,27 +66,28 @@ const RULES: readonly Rule[] = [
   {
     id: "animate-spin",
     pattern: /\banimate-spin\b/g,
-    fix: "use `Spinner`/`RefreshIndicator`/`Button busy` from `ui/load.tsx`",
+    fix: "use `Spinner`/`RefreshIndicator`/`Button busy` from `common/load.tsx`",
   },
   {
     id: "animate-pulse",
     pattern: /\banimate-pulse\b/g,
-    fix: "use `Skeleton` from `ui/load.tsx`",
+    fix: "use `Skeleton` from `common/load.tsx`",
   },
   {
     id: "spinner-icon",
     pattern: /\b(?:LoaderCircle|Loader2)\b/g,
-    fix: "use `Spinner` from `ui/load.tsx`",
+    fix: "use `Spinner` from `common/load.tsx`",
   },
   {
     id: "border-dashed",
     pattern: /\bborder-dashed\b/g,
-    fix: "use `EmptyBox` from `ui/load.tsx`",
+    fix: "use `EmptyBox` from `common/load.tsx`",
   },
 ];
 
 function shouldScan(path: string): boolean {
   if (OWNER_FILES.has(path)) return false;
+  if (path.startsWith(VENDORED_DIR)) return false;
   if (path.endsWith(".d.ts")) return false;
   if (/\.test\.[tj]sx?$/.test(path)) return false;
   if (/loadingStateAudit\./.test(path)) return false;
@@ -122,7 +119,7 @@ function sourcePath(file: string): string {
 /**
  * The file's lines with comment TEXT blanked out and the line count kept, so a
  * scan that reconstructs JSX cannot be tripped by prose about JSX — this file's
- * own rules are quoted in several doc comments, `ui/load.tsx`'s among them. Only
+ * own rules are quoted in several doc comments, `common/load.tsx`'s among them. Only
  * block comments and whole-line `//` are blanked: a trailing `//` is left alone
  * rather than risk eating code after a `https://` in an attribute.
  */
@@ -158,7 +155,7 @@ function violationsByRule(): Map<string, Set<string>> {
 }
 
 describe("loading-state source audit", () => {
-  test("loading, empty and error chrome comes only from ui/load.tsx", () => {
+  test("loading, empty and error chrome comes only from common/load.tsx", () => {
     const found = violationsByRule();
     const offenders: string[] = [];
     for (const rule of RULES) {
@@ -176,7 +173,7 @@ describe("loading-state source audit", () => {
   // see: a `.css` file that reaches for one through `@apply`, and any future
   // exception someone argues for — an animation may exist somewhere else only
   // if it still stops for a reader who asked the OS for less motion.
-  test("every animation still outside ui/load.tsx is motion-safe", () => {
+  test("every animation still outside common/load.tsx is motion-safe", () => {
     const bare = /(?<!motion-safe:)\banimate-(?:spin|pulse)\b/;
     const offenders: string[] = [];
     for (const file of collectFiles()) {
@@ -201,7 +198,7 @@ describe("loading-state source audit", () => {
    * "Loading Tasks" can be deferred into never being said. The flag belongs on
    * the persistent container being swapped (`Inspector`'s body, `QuickRow`'s
    * `busy`, a transcript block's body element), which really does go true→false
-   * in place. `ui/load.tsx` is scanned like every other file here, and
+   * in place. `common/load.tsx` is scanned like every other file here, and
    * `aria-live` counts as announcing too — the deferral applies to any live
    * region, not only the ones spelled `role="status"`.
    */

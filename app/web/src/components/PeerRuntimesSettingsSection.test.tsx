@@ -27,7 +27,17 @@ import { PeerRuntimesSettingsSection } from "./PeerRuntimesSettingsSection.tsx";
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
+const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  Element.prototype.scrollIntoView = () => {};
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -38,6 +48,8 @@ afterEach(() => {
   container?.remove();
   root = null;
   container = null;
+  vi.unstubAllGlobals();
+  Element.prototype.scrollIntoView = originalScrollIntoView;
 });
 
 const models: AccountModelOption[] = [
@@ -261,22 +273,24 @@ test("a level the MODEL cannot run also shows no selection", () => {
   expect(text()).toContain("does not support max thinking");
 });
 
+function selectOpus() {
+  const trigger = [...(container?.querySelectorAll("button") ?? [])].find(
+    (node) => node.textContent?.includes("Select a model"),
+  );
+  act(() => trigger?.click());
+  const option = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((node) => node.textContent?.includes("Claude Opus"));
+  expect(option).toBeDefined();
+  act(() => option?.click());
+}
+
 test("changing the model never writes a clamped neighbour level", () => {
-  // The row is (sonnet, max). Picking Opus, whose ladder stops at xhigh, must
-  // not persist xhigh: choosing a model says nothing about the thinking level.
+  // Choosing a model says nothing about its thinking level.
   const onUpdate = render([
     runtime({ modelId: "sonnet", thinkingLevel: "max" }),
   ]);
-
-  const modelTrigger = [...(container?.querySelectorAll("button") ?? [])].find(
-    (node) => node.textContent?.includes("Select a model"),
-  );
-  act(() => modelTrigger?.click());
-  const option = [...document.querySelectorAll("button")].find((node) =>
-    node.textContent?.includes("Claude Opus"),
-  );
-  act(() => option?.click());
-
+  selectOpus();
   const saved = onUpdate.mock.calls[0]?.[0]?.peerSpawnRuntimes as
     PeerSpawnRuntime[] | undefined;
   expect(saved?.[0]?.modelId).toBe("opus");
@@ -284,21 +298,10 @@ test("changing the model never writes a clamped neighbour level", () => {
 });
 
 test("a supported level still rides along when the model changes", () => {
-  // The exact rule must not break the ordinary case: xhigh is on Opus's ladder,
-  // so re-picking the model keeps the level the user chose.
   const onUpdate = render([
     runtime({ modelId: "sonnet", thinkingLevel: "xhigh" }),
   ]);
-
-  const modelTrigger = [...(container?.querySelectorAll("button") ?? [])].find(
-    (node) => node.textContent?.includes("Select a model"),
-  );
-  act(() => modelTrigger?.click());
-  const option = [...document.querySelectorAll("button")].find((node) =>
-    node.textContent?.includes("Claude Opus"),
-  );
-  act(() => option?.click());
-
+  selectOpus();
   expect(onUpdate.mock.calls[0]?.[0]?.peerSpawnRuntimes).toEqual([
     runtime({ modelId: "opus", thinkingLevel: "xhigh" }),
   ]);
@@ -306,34 +309,22 @@ test("a supported level still rides along when the model changes", () => {
 
 test("picking a level repairs the row and leaves everything else alone", () => {
   const onUpdate = render([runtime({ thinkingLevel: "maximum" })]);
-
   act(() => thinkingTrigger()?.click());
-  const high = [...(document.querySelectorAll("button") ?? [])].find((node) =>
-    node.textContent?.startsWith("High"),
-  );
+  const high = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((node) => node.textContent?.startsWith("High"));
+  expect(high).toBeDefined();
   act(() => high?.click());
-
   expect(onUpdate.mock.calls[0]?.[0]?.peerSpawnRuntimes).toEqual([
     runtime({ thinkingLevel: "high" }),
   ]);
 });
 
 test("repairing only the model keeps the unrunnable level recorded", () => {
-  // Choosing a model says nothing about the thinking level, so the row must
-  // keep what it records — and stay unavailable — until the human replaces it.
   const onUpdate = render([
     runtime({ thinkingLevel: "maximum", modelId: "sonnet" }),
   ]);
-
-  const modelTrigger = [...(container?.querySelectorAll("button") ?? [])].find(
-    (node) => node.textContent?.includes("Select a model"),
-  );
-  act(() => modelTrigger?.click());
-  const option = [...document.querySelectorAll("button")].find((node) =>
-    node.textContent?.includes("Claude Opus"),
-  );
-  act(() => option?.click());
-
+  selectOpus();
   const saved = onUpdate.mock.calls[0]?.[0]?.peerSpawnRuntimes as
     PeerSpawnRuntime[] | undefined;
   expect(saved?.[0]?.modelId).toBe("opus");

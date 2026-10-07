@@ -156,8 +156,8 @@ cannot retry from.
 
 ## Vocabulary
 
-`src/components/ui/load.tsx` is the only module allowed to spin, pulse, or draw
-a dashed box:
+`src/components/common/load.tsx` is the only module allowed to spin, pulse, or
+draw a dashed box:
 
 - `Spinner` — the one glyph (`LoaderCircle`), sizes `xs`/`sm`/`md`/`lg` =
   10/13/16/22px (`xs` fits inside `text-micro` chrome such as a card's state
@@ -194,8 +194,8 @@ a dashed box:
 - `DASHED_EDGE` and `LIVE_PULSE` — the two class tokens for treatments that look
   like a loading state and are not. See "What is not a loading state" below.
 - `ui/Button`'s `busy` prop — spinner + `disabled` + `aria-busy`, for R5;
-  `ui/GhostIconButton`'s `busy` is the same thing for an inline icon action. A
-  control with its own geometry (a transcript card's pill, a panel row, a
+  `common/GhostIconButton`'s `busy` is the same thing for an inline icon action.
+  A control with its own geometry (a transcript card's pill, a panel row, a
   dialog's confirm) does it by hand with `Spinner` — the three parts are the
   contract, not the component.
 
@@ -212,8 +212,8 @@ State plumbing:
 ## What is not a loading state
 
 Three treatments in this app look like one and mean something else. They kept
-their look and lost their exemption in Phase 6: `ui/load.tsx` exports them as
-named class tokens, so the vocabulary still has one owner and a reviewer sees
+their look and lost their exemption in Phase 6: `common/load.tsx` exports them
+as named class tokens, so the vocabulary still has one owner and a reviewer sees
 the import. Reach for them ONLY for the meanings listed here.
 
 - `LIVE_PULSE` (`motion-safe:animate-pulse`) — something is LIVE, not loading:
@@ -376,7 +376,7 @@ through one in-flight map, so a warm and a load read once.
 
 ## Staleness beyond loading
 
-`ui/UsageCycleMeters.tsx` is the exemplar for data that is present but AGED,
+`common/UsageCycleMeters.tsx` is the exemplar for data that is present but AGED,
 which is a different axis from the five states: it holds the slot's height in
 every state, shimmers only while a fetch is actually running, dims with a `⟳`
 when its snapshot is stale, and says WHY a row has no meter (`no plan limits`,
@@ -387,8 +387,8 @@ Contract: `docs/usage.md`.
 ## Enforcement
 
 `src/loadingStateAudit.test.ts` forbids `animate-spin`, `animate-pulse`,
-`LoaderCircle`/`Loader2` and `border-dashed` outside `ui/load.tsx`, and — for
-every file — an animation class without `motion-safe:`. It also fails a
+`LoaderCircle`/`Loader2` and `border-dashed` outside `common/load.tsx`, and —
+for every file — an animation class without `motion-safe:`. It also fails a
 `role="status"`/`aria-live` element that carries `aria-busy`, which is the R6
 trap that silences an announcement.
 
@@ -398,8 +398,8 @@ that only arrives at the end protects nothing in between; Phase 6 emptied and
 deleted it. This is now zero-bypass like `typographyAudit.test.ts`: a new bypass
 is a bug in the change that introduced it, not a line to add to a list. A
 treatment that genuinely is not a loading state gets a named token in
-`ui/load.tsx` and a bullet in "What is not a loading state" above — that is the
-only way an exception exists, and it is one an owner still holds.
+`common/load.tsx` and a bullet in "What is not a loading state" above — that is
+the only way an exception exists, and it is one an owner still holds.
 
 `RefreshCw` stays importable as a static refresh icon; spinning it is caught by
 the class rule. `SessionDeliveryMark`'s `creating` mark, the last still spinner

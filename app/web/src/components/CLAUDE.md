@@ -21,15 +21,15 @@
   provider-only label.
 - An async region renders one of loading/refreshing/ready/empty/error: empty
   only once the source answered, refreshing never blanks an object's data (a
-  different object gets a placeholder). That chrome comes from `ui/load.tsx` and
-  `Button`'s `busy` (`loadingStateAudit.test.ts`;
+  different object gets a placeholder). That chrome comes from `common/load.tsx`
+  and `Button`'s `busy` (`loadingStateAudit.test.ts`;
   `../../docs/loading-states.md`).
 - A memoized row (session, worktree, task, message) takes ids in its callbacks,
   never closes over the row, and gets stable handlers from its host; the parent
   file says why.
-- Import `diff/`, `ui/ChartBlock.tsx` and `rehype-katex` lazily — statically
+- Import `diff/`, `common/ChartBlock.tsx` and `rehype-katex` lazily — statically
   they pull pierre/Shiki, Chart.js and KaTeX into the main bundle — and never
-  call `ui/highlighter.ts` outside its cache on a render path.
+  call `common/highlighter.ts` outside its cache on a render path.
 - Nothing in a transcript row may rely on overflowing its box. Rows use
   `content-visibility: auto` off iOS, `visible` on iOS; portal popovers to the
   body. Keep hit-testable overlays and sticky headers off the transcript's top

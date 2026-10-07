@@ -10,7 +10,7 @@
  * @payload `approval` DisplayBlock (`ApprovalCard`).
  * @useWhen A mutation tool prepares a proposal or its status changes via approvalUpdate.
  */
-import { useEffect, useState } from "react";
+import { createElement, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -32,6 +32,7 @@ import {
   Trash2,
   UserPlus,
   XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import type {
   AccountModelOption,
@@ -53,12 +54,37 @@ import type {
   ThinkingLevel,
 } from "@assistant/shared";
 import { approvalGrantKeys, approvalGrantLabel } from "@assistant/shared";
-import { ErrorNote, Spinner } from "./ui/load.tsx";
-import { ModelSelect, ThinkingSelect } from "./ui/ModelThinkingSelect.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
+import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { ConfluencePageApprovalBody } from "./ConfluencePageApprovalBody.tsx";
 import { JiraIssueApprovalBody } from "./JiraIssueApprovalBody.tsx";
 import { SettingsInputApprovalBody } from "./SettingsInputApprovalBody.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
 
 /**
  * The two providers keep separate approval kinds (persisted cards must stay
@@ -72,61 +98,53 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
   const { status } = approval;
   if (status === "pending" && approval.autoApproved)
     return (
-      <span
-        className="rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400"
+      <Badge
+        variant="secondary"
         title="Approved for this session; runs when the agent's turn ends"
       >
         Queued
-      </span>
+      </Badge>
     );
   if (status === "pending")
-    return (
-      <span className="rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
-        Pending approval
-      </span>
-    );
+    return <Badge variant="warning">Pending approval</Badge>;
   if (status === "executing")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2 py-0.5 text-micro font-medium text-blue-600 dark:text-blue-400">
+      <Badge variant="secondary">
         <Spinner size="sm" />
         Executing
-      </span>
+      </Badge>
     );
   if (status === "executed" && approvalHasWarnings(approval))
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/15 px-2 py-0.5 text-micro font-medium text-yellow-600 dark:text-yellow-400">
-        <CheckCircle2 size={9} />
+      <Badge variant="warning">
+        <CheckCircle2 />
         Done with warnings
-      </span>
+      </Badge>
     );
   if (status === "executed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-micro font-medium text-green-600 dark:text-green-400">
-        <CheckCircle2 size={9} />
+      <Badge variant="success">
+        <CheckCircle2 />
         Done
-      </span>
+      </Badge>
     );
   if (status === "failed")
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-danger/15 px-2 py-0.5 text-micro font-medium text-danger">
-        <XCircle size={9} />
+      <Badge variant="destructive">
+        <XCircle />
         Failed
-      </span>
+      </Badge>
     );
   if (status === "superseded")
     return (
-      <span
-        className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted"
+      <Badge
+        variant="outline"
         title="A newer request from this session replaced it"
       >
         Superseded
-      </span>
+      </Badge>
     );
-  return (
-    <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
-      Rejected
-    </span>
-  );
+  return <Badge variant="outline">Rejected</Badge>;
 }
 
 function approvalHasWarnings(approval: ApprovalCardData): boolean {
@@ -147,177 +165,110 @@ function approvalHasWarnings(approval: ApprovalCardData): boolean {
   return false;
 }
 
-function HeaderIcon({ approval }: { approval: ApprovalCardData }) {
-  const cls =
-    "flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent";
-  if (
-    approval.body.kind === "githubPullRequest" ||
-    approval.body.kind === "forgejoPullRequest"
-  )
-    return (
-      <div className={cls}>
-        {approval.body.operation === "comment" ? (
-          <MessageSquare size={14} />
-        ) : approval.body.operation === "assign" ? (
-          <UserPlus size={14} />
-        ) : (
-          <GitPullRequestArrow size={14} />
-        )}
-      </div>
-    );
-  if (approval.body.kind === "githubIssue")
-    return (
-      <div className={cls}>
-        {approval.body.operation === "comment" ? (
-          <MessageSquare size={14} />
-        ) : approval.body.operation === "label" ? (
-          <Tag size={14} />
-        ) : (
-          <CircleDot size={14} />
-        )}
-      </div>
-    );
-  if (approval.body.kind === "githubBranchDelete")
-    return (
-      <div className={cls}>
-        <Trash2 size={14} />
-      </div>
-    );
-  if (approval.body.kind === "commit")
-    return (
-      <div className={cls}>
-        <GitCommitHorizontal size={14} />
-      </div>
-    );
-  if (approval.body.kind === "managedPullRequestMerge")
-    return (
-      <div className={cls}>
-        <GitMerge size={14} />
-      </div>
-    );
-  if (approval.body.kind === "sessionSpawn")
-    return (
-      <div className={cls}>
-        <Sparkles size={14} />
-      </div>
-    );
-  if (
-    approval.body.kind === "forgejoRelease" ||
-    approval.body.kind === "gitTag"
-  )
-    return (
-      <div className={cls}>
-        <Tag size={14} />
-      </div>
-    );
-  if (approval.body.kind === "confluencePage")
-    return (
-      <div className={cls}>
-        <FileText size={14} />
-      </div>
-    );
-  if (approval.body.kind === "gmailArchive")
-    return (
-      <div className={cls}>
-        <Archive size={14} />
-      </div>
-    );
-  if (approval.body.kind === "projectCreate")
-    return (
-      <div className={cls}>
-        <FolderPlus size={14} />
-      </div>
-    );
-  if (approval.body.kind === "settingsInput")
-    return (
-      <div className={cls}>
-        <KeyRound size={14} />
-      </div>
-    );
+const KIND_ICON: Partial<Record<ApprovalCardData["body"]["kind"], LucideIcon>> =
+  {
+    githubBranchDelete: Trash2,
+    commit: GitCommitHorizontal,
+    managedPullRequestMerge: GitMerge,
+    sessionSpawn: Sparkles,
+    forgejoRelease: Tag,
+    gitTag: Tag,
+    confluencePage: FileText,
+    gmailArchive: Archive,
+    projectCreate: FolderPlus,
+    settingsInput: KeyRound,
+  };
+
+function headerIcon(body: ApprovalCardData["body"]): LucideIcon {
+  if (body.kind === "githubPullRequest" || body.kind === "forgejoPullRequest")
+    return body.operation === "comment"
+      ? MessageSquare
+      : body.operation === "assign"
+        ? UserPlus
+        : GitPullRequestArrow;
+  if (body.kind === "githubIssue")
+    return body.operation === "comment"
+      ? MessageSquare
+      : body.operation === "label"
+        ? Tag
+        : CircleDot;
+  return KIND_ICON[body.kind] ?? SquarePen;
+}
+
+/** A labelled line of a proposal: "Label: value". */
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className={cls}>
-      <SquarePen size={14} />
+    <div>
+      <span className="text-muted-foreground">{label}:</span>{" "}
+      <span className="text-foreground">{children}</span>
     </div>
   );
 }
+
+const CLAMPED = "line-clamp-6 whitespace-pre-wrap";
 
 function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
   if (body.operation === "create") {
     return (
       <>
-        {body.title && (
-          <div>
-            <span className="text-faint">Title:</span>{" "}
-            <span className="text-fg">{body.title}</span>
-          </div>
-        )}
-        <div>
-          <span className="text-faint">Merge:</span>{" "}
-          <span className="font-mono text-caption text-fg">{body.head}</span> →{" "}
-          <span className="font-mono text-caption text-fg">{body.base}</span>
+        {body.title && <Fact label="Title">{body.title}</Fact>}
+        <Fact label="Merge">
+          <span className="font-mono">{body.head}</span> →{" "}
+          <span className="font-mono">{body.base}</span>
           {body.draft ? " · draft" : ""}
-        </div>
+        </Fact>
         {body.prBody && (
-          <div className="line-clamp-4 whitespace-pre-wrap text-caption text-muted">
-            {body.prBody}
-          </div>
+          <p className="line-clamp-4 whitespace-pre-wrap">{body.prBody}</p>
         )}
       </>
     );
   }
   if (body.operation === "ready") {
     return (
-      <div className="text-fg">
+      <p className="text-foreground">
         Mark pull request #{body.pullNumber} ready for review. This does not
         merge it.
-      </div>
+      </p>
     );
   }
   if (body.operation === "edit") {
     return (
       <>
-        <div className="text-faint">
-          Replace description on #{body.pullNumber} with:
-        </div>
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
+        <p>Replace description on #{body.pullNumber} with:</p>
+        <p className={CLAMPED}>
           {body.prBody === "" ? "(empty description)" : body.prBody}
-        </div>
+        </p>
       </>
     );
   }
   if (body.operation === "review") {
     return (
       <>
-        {body.reviewSummary && (
-          <div className="whitespace-pre-wrap text-caption text-muted line-clamp-6">
-            {body.reviewSummary}
-          </div>
-        )}
+        {body.reviewSummary && <p className={CLAMPED}>{body.reviewSummary}</p>}
         {body.inlineComments && body.inlineComments.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-caption text-faint">
+          <>
+            <p>
               {body.inlineComments.length} inline comment
               {body.inlineComments.length === 1 ? "" : "s"}:
-            </div>
-            <ul className="space-y-1">
+            </p>
+            <ItemGroup className="gap-1">
               {body.inlineComments.slice(0, 8).map((c, i) => (
-                <li
-                  key={i}
-                  className="rounded-md border border-line bg-raised px-2 py-1"
-                >
-                  <span className="font-mono text-micro text-faint">
-                    {c.path}:{c.line}
-                  </span>
-                  <div className="text-caption text-fg">{c.body}</div>
-                  {c.suggestion && (
-                    <pre className="mt-1 overflow-x-auto rounded bg-surface px-1.5 py-1 text-micro text-fg">
-                      <code>{c.suggestion}</code>
-                    </pre>
-                  )}
-                </li>
+                <Item key={i} variant="muted" size="xs">
+                  <ItemContent>
+                    <ItemDescription className="font-mono">
+                      {c.path}:{c.line}
+                    </ItemDescription>
+                    <p className="text-foreground">{c.body}</p>
+                    {c.suggestion && (
+                      <pre className="overflow-x-auto rounded-md bg-background p-1.5 text-xs text-foreground">
+                        <code>{c.suggestion}</code>
+                      </pre>
+                    )}
+                  </ItemContent>
+                </Item>
               ))}
-            </ul>
-          </div>
+            </ItemGroup>
+          </>
         )}
       </>
     );
@@ -342,20 +293,15 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     return (
       <>
         {rows.map((row) => (
-          <div key={row.label}>
-            <span className="text-faint">{row.label}:</span>{" "}
-            <span className="font-mono text-caption text-fg">
-              {row.people.join(", ")}
-            </span>
-          </div>
+          <Fact key={row.label} label={row.label}>
+            <span className="font-mono">{row.people.join(", ")}</span>
+          </Fact>
         ))}
       </>
     );
   }
   return body.commentBody ? (
-    <div className="whitespace-pre-wrap text-caption text-muted line-clamp-6">
-      {body.commentBody}
-    </div>
+    <p className={CLAMPED}>{body.commentBody}</p>
   ) : null;
 }
 
@@ -387,29 +333,24 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
   return (
     <>
       {rows.map((row) => (
-        <div key={row.label}>
-          <span className="text-faint">{row.label}:</span>{" "}
-          <span className="text-fg">{row.value}</span>
-        </div>
+        <Fact key={row.label} label={row.label}>
+          {row.value}
+        </Fact>
       ))}
       {text !== undefined && (
         <>
-          {body.operation === "edit" && (
-            <div className="text-faint">Replace description with:</div>
-          )}
-          <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
-            {text}
-          </div>
+          {body.operation === "edit" && <p>Replace description with:</p>}
+          <p className={CLAMPED}>{text}</p>
         </>
       )}
       {body.newLabels?.length ? (
-        <div className="flex items-start gap-1.5 text-caption text-warning">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-          <span>
+        <Alert variant="warning" role="note">
+          <AlertTriangle />
+          <AlertDescription>
             Not yet in {body.repo}, GitHub will create:{" "}
             {body.newLabels.join(", ")}
-          </span>
-        </div>
+          </AlertDescription>
+        </Alert>
       ) : null}
     </>
   );
@@ -421,46 +362,40 @@ function GithubBranchDeleteBody({
   body: GithubBranchDeleteApprovalBody;
 }) {
   return (
-    <ul className="space-y-1.5">
+    <ul className="flex flex-col gap-1.5">
       {body.items.map((item) => (
-        <li key={item.branch} className="space-y-0.5">
+        <li key={item.branch} className="flex flex-col gap-0.5">
           <div className="flex min-w-0 items-center gap-1.5">
-            <GitBranch size={12} className="shrink-0 text-faint" />
-            <span className="break-all font-mono text-caption text-fg">
+            <GitBranch className="size-3 shrink-0" />
+            <span className="font-mono break-all text-foreground">
               {item.branch}
             </span>
-            <span className="font-mono text-micro text-faint">
+            <span className="font-mono text-xs">
               {item.headSha.slice(0, 7)}
             </span>
-            {item.deleted ? (
-              <span className="text-green-600 dark:text-green-400">
-                · deleted
-              </span>
-            ) : null}
+            {item.deleted ? <Badge variant="success">deleted</Badge> : null}
           </div>
           {item.error ? (
-            <div className="break-words pl-4 text-caption text-danger">
-              {item.error}
-            </div>
+            <p className="pl-4 break-words text-destructive">{item.error}</p>
           ) : null}
           {item.openPullRequests?.map((pull) => (
-            <div
+            <p
               key={`${pull.role}-${pull.number}`}
-              className="flex items-start gap-1.5 pl-4 text-caption text-warning"
+              className="flex items-start gap-1.5 pl-4 text-warning"
             >
-              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+              <AlertTriangle className="mt-0.5 size-3 shrink-0" />
               <a
                 href={pull.url}
                 target="_blank"
                 rel="noreferrer"
-                className="min-w-0 break-words underline decoration-line underline-offset-2"
+                className="min-w-0 break-words underline underline-offset-2"
               >
                 #{pull.number} {pull.title}
               </a>
-              <span className="shrink-0 text-faint">
+              <span className="shrink-0 text-muted-foreground">
                 ({pull.role === "head" ? "its head" : "its base"}; will close)
               </span>
-            </div>
+            </p>
           ))}
         </li>
       ))}
@@ -470,57 +405,42 @@ function GithubBranchDeleteBody({
 
 function GitTagBody({ body }: { body: GitTagApprovalBody }) {
   return (
-    <div className="space-y-1 text-caption">
-      <div>
-        Tag <span className="font-mono text-fg">{body.tag}</span> at{" "}
-        <span className="break-all font-mono text-fg">{body.targetSha}</span>
-      </div>
-      <div>
-        Checkout{" "}
-        <span className="break-all font-mono text-fg">{body.repoPath}</span>
-      </div>
-      <div>
-        Push to{" "}
-        <span className="font-mono text-fg">
+    <>
+      <Fact label="Tag">
+        <span className="font-mono">{body.tag}</span> at{" "}
+        <span className="font-mono break-all">{body.targetSha}</span>
+      </Fact>
+      <Fact label="Checkout">
+        <span className="font-mono break-all">{body.repoPath}</span>
+      </Fact>
+      <Fact label="Push to">
+        <span className="font-mono">
           {body.remote}/{body.branch}
         </span>
-      </div>
-      <div>
-        Destination{" "}
-        <span className="break-all font-mono text-fg">
-          {body.pushUrlDisplay}
-        </span>
-      </div>
-    </div>
+      </Fact>
+      <Fact label="Destination">
+        <span className="font-mono break-all">{body.pushUrlDisplay}</span>
+      </Fact>
+    </>
   );
 }
 
 function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
   return (
     <>
-      <div>
-        <span className="text-faint">Tag:</span>{" "}
-        <span className="font-mono text-caption text-fg">{body.tag}</span>
+      <Fact label="Tag">
+        <span className="font-mono">{body.tag}</span>
         {body.draft ? " · draft" : ""}
         {body.prerelease ? " · prerelease" : ""}
-      </div>
-      <div>
-        <span className="text-faint">At:</span>{" "}
-        <span className="font-mono text-caption text-fg">
-          {body.targetSha.slice(0, 8)}
-        </span>
+      </Fact>
+      <Fact label="At">
+        <span className="font-mono">{body.targetSha.slice(0, 8)}</span>
         {body.targetRef ? (
-          <span className="text-muted"> ({body.targetRef})</span>
+          <span className="text-muted-foreground"> ({body.targetRef})</span>
         ) : null}
-        {body.targetSubject ? (
-          <div className="text-caption text-muted">{body.targetSubject}</div>
-        ) : null}
-      </div>
-      {body.notes && (
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
-          {body.notes}
-        </div>
-      )}
+      </Fact>
+      {body.targetSubject ? <p>{body.targetSubject}</p> : null}
+      {body.notes && <p className={CLAMPED}>{body.notes}</p>}
     </>
   );
 }
@@ -539,24 +459,18 @@ function ManagedMergeBody({
   const checks = body.checks;
   return (
     <>
-      <div>
-        <span className="text-faint">Merge:</span>{" "}
-        <span className="font-mono text-caption text-fg">
-          {body.headBranch}
-        </span>{" "}
-        →{" "}
-        <span className="font-mono text-caption text-fg">
-          {body.baseBranch}
-        </span>{" "}
-        <span className="text-faint">(default branch)</span>
-      </div>
-      <div className="text-caption text-muted">
+      <Fact label="Merge">
+        <span className="font-mono">{body.headBranch}</span> →{" "}
+        <span className="font-mono">{body.baseBranch}</span>{" "}
+        <span className="text-muted-foreground">(default branch)</span>
+      </Fact>
+      <p>
         {body.repo}#{body.number} · {body.method} ·{" "}
         {body.deleteRemoteBranch
           ? "delete the remote branch"
           : "keep the remote branch"}
-      </div>
-      <div className="text-caption text-faint">
+      </p>
+      <p>
         Head <span className="font-mono">{body.headSha.slice(0, 8)}</span> ·
         checks {checks.state}
         {checks.total !== undefined ? ` (${checks.total})` : ""}
@@ -572,14 +486,14 @@ function ManagedMergeBody({
             : "clear"
           : "unknown"}
         {body.draft ? " · draft" : ""}
-      </div>
-      <div className="text-caption text-faint">
+      </p>
+      <p>
         Repository allows: {body.supportedMethods.join(", ") || "no method"}
-      </div>
+      </p>
       {body.linkedTask ? (
-        <div className="text-caption text-faint">
+        <p>
           Task-{body.linkedTask.id}: {body.linkedTask.title}
-        </div>
+        </p>
       ) : null}
     </>
   );
@@ -676,96 +590,99 @@ function SpawnRow({
   const warning = edit?.model ? undefined : item.modelWarning;
 
   return (
-    <div
-      className={`rounded-lg border border-line bg-raised px-2.5 py-2 ${skipped ? "opacity-50" : ""}`}
+    <Item
+      variant="outline"
+      size="sm"
+      className={`items-start ${skipped ? "opacity-50" : ""}`}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-caption font-semibold text-fg">
-            {item.title}
-          </div>
-          <div className="truncate text-caption text-faint">
-            {spawnTargetLine(item)}
-          </div>
-        </div>
-        {editable && (
-          <button
-            type="button"
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">{item.title}</span>
+        </ItemTitle>
+        <ItemDescription className="truncate">
+          {spawnTargetLine(item)}
+        </ItemDescription>
+      </ItemContent>
+      {editable && (
+        <ItemActions>
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => onEdit({ skip: !skipped })}
-            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro text-muted hover:bg-surface hover:text-fg"
           >
             {skipped ? "Include" : "Skip"}
-          </button>
-        )}
-      </div>
-
-      {editable && !skipped ? (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          <ModelSelect
-            models={[...models]}
-            value={
-              selected ?? {
-                provider: item.provider,
-                id: item.modelId,
-                credentialProfileId: item.credentialProfileId,
+          </Button>
+        </ItemActions>
+      )}
+      <div className="flex basis-full flex-col items-start gap-1">
+        {editable && !skipped ? (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ModelSelect
+              models={[...models]}
+              value={
+                selected ?? {
+                  provider: item.provider,
+                  id: item.modelId,
+                  credentialProfileId: item.credentialProfileId,
+                }
               }
-            }
-            onChange={(model) => onEdit({ model })}
-            placeholder={item.modelName ?? item.modelId}
-          />
-          {/* With no matched model there is no ladder to offer, and an open
-              picker would show only `off` — one click silently downgrading the
-              row. Locked says "not yet" instead of offering a wrong answer. */}
-          <ThinkingSelect
-            model={ladderModel}
-            value={thinkingLevel}
-            onChange={(level) => onEdit({ thinkingLevel: level })}
-            locked={!ladderModel}
-            {...(ladderModel
-              ? {}
-              : {
-                  title: "Thinking needs the model list, which is not loaded",
-                })}
-          />
-        </div>
-      ) : (
-        <div className="mt-1 text-caption text-muted">
-          {[
-            selected?.name ?? item.modelName ?? item.modelId,
-            selected?.accountName ?? item.accountName,
-            `${thinkingLevel} thinking`,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-        </div>
-      )}
-
-      {warning && (
-        <div className="mt-1 flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
-          <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-          <span>{warning}</span>
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={() => setShowPrompt((open) => !open)}
-        aria-expanded={showPrompt}
-        className="mt-1 text-caption text-accent hover:underline"
-      >
-        {showPrompt ? "Hide opening message" : "more…"}
-      </button>
-      {showPrompt && (
-        <div className="mt-1 whitespace-pre-wrap rounded-md bg-surface px-2 py-1.5 text-caption text-fg">
-          {item.prompt}
-        </div>
-      )}
-
-      {item.resultSessionId && (
-        <div className="mt-1">
-          <a
+              onChange={(model) => onEdit({ model })}
+              placeholder={item.modelName ?? item.modelId}
+            />
+            {/* With no matched model there is no ladder to offer, and an open
+                picker would show only `off` — one click silently downgrading the
+                row. Locked says "not yet" instead of offering a wrong answer. */}
+            <ThinkingSelect
+              model={ladderModel}
+              value={thinkingLevel}
+              onChange={(level) => onEdit({ thinkingLevel: level })}
+              locked={!ladderModel}
+              {...(ladderModel
+                ? {}
+                : {
+                    title: "Thinking needs the model list, which is not loaded",
+                  })}
+            />
+          </div>
+        ) : (
+          <p className="text-muted-foreground">
+            {[
+              selected?.name ?? item.modelName ?? item.modelId,
+              selected?.accountName ?? item.accountName,
+              `${thinkingLevel} thinking`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        )}
+        {warning && (
+          <p className="flex items-start gap-1.5 text-warning">
+            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+            <span>{warning}</span>
+          </p>
+        )}
+        <Collapsible
+          open={showPrompt}
+          onOpenChange={setShowPrompt}
+          className="w-full"
+        >
+          <CollapsibleTrigger
+            render={<Button variant="link" size="xs" className="px-0" />}
+          >
+            {showPrompt ? "Hide opening message" : "more…"}
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <p className="rounded-md bg-muted p-2 whitespace-pre-wrap text-foreground">
+              {item.prompt}
+            </p>
+          </CollapsibleContent>
+        </Collapsible>
+        {item.resultSessionId && (
+          <LinkButton
+            variant="link"
+            size="xs"
+            className="px-0"
             href={sessionPath(item.resultSessionId)}
-            className="text-caption text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
             onClick={(event) => {
               const id = item.resultSessionId;
               if (
@@ -782,11 +699,11 @@ function SpawnRow({
             }}
           >
             Open session
-          </a>
-        </div>
-      )}
-      {item.error && <ErrorNote message={item.error} />}
-    </div>
+          </LinkButton>
+        )}
+        {item.error && <ErrorNote message={item.error} />}
+      </div>
+    </Item>
   );
 }
 
@@ -806,7 +723,7 @@ function SessionSpawnBody({
   onOpenSession?: ((id: string) => void) | undefined;
 }) {
   return (
-    <div className="space-y-2">
+    <ItemGroup className="gap-2">
       {body.items.map((item) => (
         <SpawnRow
           key={item.rowId}
@@ -818,6 +735,16 @@ function SessionSpawnBody({
           onOpenSession={onOpenSession}
         />
       ))}
+    </ItemGroup>
+  );
+}
+
+/** A label column beside a value, for bodies that list several facts per row. */
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 gap-2">
+      <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-foreground">{children}</span>
     </div>
   );
 }
@@ -825,29 +752,25 @@ function SessionSpawnBody({
 function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
   return (
     <div
-      className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border border-line"
+      className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border"
       role="region"
       tabIndex={0}
       aria-label={`${body.items.length} emails to archive`}
     >
-      <ul className="divide-y divide-line">
+      <ul className="divide-y">
         {body.items.map((item) => (
-          <li key={item.messageId} className="space-y-1 px-2.5 py-2">
-            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-caption">
-              <span className="text-faint">From</span>
-              <span className="break-words text-fg">{item.sender}</span>
-            </div>
-            <div className="grid min-w-0 grid-cols-[3.25rem_minmax(0,1fr)] gap-2 text-caption">
-              <span className="text-faint">Subject</span>
+          <li key={item.messageId} className="flex flex-col gap-1 px-2.5 py-2">
+            <Row label="From">{item.sender}</Row>
+            <Row label="Subject">
               <a
                 href={item.gmailUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="break-words text-fg underline decoration-line underline-offset-2 hover:decoration-fg"
+                className="underline underline-offset-2"
               >
                 {item.subject}
               </a>
-            </div>
+            </Row>
           </li>
         ))}
       </ul>
@@ -858,97 +781,77 @@ function GmailArchiveBody({ body }: { body: GmailArchiveApprovalBody }) {
 /** What approval will bring into existence, and after it runs, what did. */
 function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
   const { project, repository } = body;
-  const row = "grid min-w-0 grid-cols-[5.5rem_minmax(0,1fr)] gap-2";
-  const mono = "break-all font-mono text-caption text-fg";
   return (
-    <div className="space-y-1 text-caption">
-      <div className={row}>
-        <span className="text-faint">Project</span>
-        <span className="break-words text-fg">
-          {project.name}{" "}
-          <span className="font-mono text-muted">
-            {project.key} · {project.id}
-          </span>
+    <>
+      <Row label="Project">
+        {project.name}{" "}
+        <span className="font-mono text-muted-foreground">
+          {project.key} · {project.id}
         </span>
-      </div>
+      </Row>
       {project.parentId ? (
-        <div className={row}>
-          <span className="text-faint">Parent</span>
-          <span className="font-mono text-fg">{project.parentId}</span>
-        </div>
+        <Row label="Parent">
+          <span className="font-mono">{project.parentId}</span>
+        </Row>
       ) : null}
       {project.tags?.length ? (
-        <div className={row}>
-          <span className="text-faint">Tags</span>
-          <span className="text-fg">{project.tags.join(", ")}</span>
-        </div>
+        <Row label="Tags">{project.tags.join(", ")}</Row>
       ) : null}
       {project.jira?.length ? (
-        <div className={row}>
-          <span className="text-faint">Jira</span>
-          <span className="font-mono text-fg">
+        <Row label="Jira">
+          <span className="font-mono">
             {project.jira
               .map((link) => link.issueKey ?? link.projectKey)
               .filter(Boolean)
               .join(", ")}
           </span>
-        </div>
+        </Row>
       ) : null}
       {repository?.mode === "create" ? (
-        <div className={row}>
-          <span className="text-faint">Repository</span>
-          <span className="text-fg">
-            New {repository.private ? "private" : "public"}{" "}
-            {repository.provider === "github" ? "GitHub" : "Forgejo"} repository{" "}
-            <span className="font-mono">
-              {repository.owner}/{repository.name}
-            </span>
-            , initialized with a README
+        <Row label="Repository">
+          New {repository.private ? "private" : "public"}{" "}
+          {repository.provider === "github" ? "GitHub" : "Forgejo"} repository{" "}
+          <span className="font-mono">
+            {repository.owner}/{repository.name}
           </span>
-        </div>
+          , initialized with a README
+        </Row>
       ) : repository?.mode === "link" ? (
-        <div className={row}>
-          <span className="text-faint">Repository</span>
-          <span className="min-w-0">
-            <span className={mono}>{repository.url}</span>
-            {repository.seedReadme ? (
-              <span className="text-muted">
-                {" "}
-                · empty, a README commit is added
-              </span>
-            ) : null}
-          </span>
-        </div>
+        <Row label="Repository">
+          <span className="font-mono break-all">{repository.url}</span>
+          {repository.seedReadme ? (
+            <span className="text-muted-foreground">
+              {" "}
+              · empty, a README commit is added
+            </span>
+          ) : null}
+        </Row>
       ) : null}
       {repository?.mode === "create" && body.resultRepoUrl ? (
-        <div className={row}>
-          <span className="text-faint">Created</span>
+        <Row label="Created">
           {body.resultWebUrl ? (
             <a
               href={body.resultWebUrl}
               target="_blank"
               rel="noreferrer"
-              className={`${mono} underline decoration-line underline-offset-2 hover:decoration-fg`}
+              className="font-mono break-all underline underline-offset-2"
             >
               {body.resultRepoUrl}
             </a>
           ) : (
-            <span className={mono}>{body.resultRepoUrl}</span>
+            <span className="font-mono break-all">{body.resultRepoUrl}</span>
           )}
-        </div>
+        </Row>
       ) : null}
       {body.cloneDir ? (
-        <div className={row}>
-          <span className="text-faint">Clone into</span>
-          <span className={mono}>{body.cloneDir}</span>
-        </div>
+        <Row label="Clone into">
+          <span className="font-mono break-all">{body.cloneDir}</span>
+        </Row>
       ) : null}
       {project.description ? (
-        <div className="line-clamp-6 whitespace-pre-wrap text-muted">
-          {project.description}
-        </div>
+        <p className={CLAMPED}>{project.description}</p>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -1001,21 +904,18 @@ function Body({
     return <ConfluencePageApprovalBody body={b} />;
   if (b.kind === "tempoWorklog") {
     return (
-      <ul className="space-y-1">
+      <ul className="flex flex-col gap-1">
         {b.items.map((item, i) => (
-          <li key={i} className="text-caption">
-            <span className="font-mono text-fg">{item.issueKey}</span>
-            <span className="text-muted">
+          <li key={i}>
+            <span className="font-mono text-foreground">{item.issueKey}</span>
+            <span className="text-muted-foreground">
               {" "}
               · {item.date} · {item.duration}
             </span>
             {item.error ? (
-              <span className="text-danger"> · {item.error}</span>
+              <span className="text-destructive"> · {item.error}</span>
             ) : item.resultWorklogId ? (
-              <span className="text-green-600 dark:text-green-400">
-                {" "}
-                · done
-              </span>
+              <span className="text-success"> · done</span>
             ) : null}
           </li>
         ))}
@@ -1031,15 +931,13 @@ function Body({
   // commit
   return (
     <>
-      <div className="whitespace-pre-wrap text-caption text-fg">
-        {b.message}
-      </div>
-      <div className="text-caption text-faint">
+      <p className="whitespace-pre-wrap text-foreground">{b.message}</p>
+      <p>
         {b.files.length} file{b.files.length === 1 ? "" : "s"}
         {b.branch ? ` · ${b.branch}` : ""}
         {typeof b.insertions === "number" ? ` · +${b.insertions}` : ""}
         {typeof b.deletions === "number" ? ` · -${b.deletions}` : ""}
-      </div>
+      </p>
     </>
   );
 }
@@ -1117,34 +1015,32 @@ export function ApprovalCard({
     : [];
   const awaitingUser = approval.status === "pending" && !approval.autoApproved;
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
-      <div className="flex items-center gap-3 border-b border-line px-3 py-2.5">
-        <HeaderIcon approval={approval} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-caption font-semibold text-fg">
-              {approval.title}
-            </span>
-            <StatusBadge approval={approval} />
-            {approval.autoApproved && approval.status !== "pending" && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted"
-                title="Ran under an Approve-for-session grant"
-              >
-                <CheckCheck size={9} />
-                Auto-approved
-              </span>
-            )}
-          </div>
-          {approval.summary && (
-            <div className="truncate text-caption text-faint">
-              {approval.summary}
-            </div>
+    <Card size="sm" className="my-2">
+      <CardHeader>
+        <CardTitle className="flex min-w-0 items-center gap-2">
+          {createElement(headerIcon(approval.body), {
+            className: "size-4 shrink-0 text-primary",
+          })}
+          <span className="truncate">{approval.title}</span>
+          <StatusBadge approval={approval} />
+          {approval.autoApproved && approval.status !== "pending" && (
+            <Badge
+              variant="outline"
+              title="Ran under an Approve-for-session grant"
+            >
+              <CheckCheck />
+              Auto-approved
+            </Badge>
           )}
-        </div>
-      </div>
+        </CardTitle>
+        {approval.summary && (
+          <CardDescription className="truncate">
+            {approval.summary}
+          </CardDescription>
+        )}
+      </CardHeader>
 
-      <div className="space-y-2 px-3 py-3 text-caption text-muted">
+      <CardContent className="flex flex-col gap-2 text-muted-foreground">
         <Body
           approval={approval}
           onDecide={awaitingUser && busy === null ? decide : undefined}
@@ -1174,103 +1070,94 @@ export function ApprovalCard({
         {approval.status === "executed" &&
           (approval.resultUrl || approval.resultSummary) &&
           (approval.resultUrl ? (
-            <a
+            <LinkButton
+              variant="link"
+              size="sm"
+              className="self-start px-0"
               href={approval.resultUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-caption text-accent hover:underline"
             >
-              <ExternalLink size={12} />
+              <ExternalLink />
               {approval.resultSummary ?? "View result"}
-            </a>
+            </LinkButton>
           ) : (
-            <div className="text-caption text-green-600 dark:text-green-400">
-              {approval.resultSummary}
-            </div>
+            <p className="text-success">{approval.resultSummary}</p>
           ))}
         {approval.status === "failed" && (
           <ErrorNote message={approval.error ?? "The action failed."} />
         )}
         {approval.status === "superseded" && (
-          <div className="text-caption text-faint">
-            Replaced by a newer request for the same action; nothing ran.
-          </div>
+          <p>Replaced by a newer request for the same action; nothing ran.</p>
         )}
         {/* A refused auto-approval hands the card back with its reason; an
             executed one whose outcome could not reach the agent says so. */}
         {(approval.status === "pending" || approval.status === "executed") &&
           approval.error && <ErrorNote message={approval.error} />}
-      </div>
+      </CardContent>
 
-      {ownGrants.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-caption text-muted">
-          <CheckCheck size={12} className="shrink-0" />
-          <span className="min-w-0 flex-1 truncate">
-            Approved for this session:{" "}
-            {ownGrants.map((grant) => approvalGrantLabel(grant.key)).join(", ")}
-          </span>
-          {onRevokeGrant && (
-            <button
-              type="button"
-              onClick={() => {
-                for (const grant of ownGrants)
-                  onRevokeGrant(approval.sessionId, grant.key);
-              }}
-              className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted hover:bg-surface hover:text-fg"
-            >
-              Revoke
-            </button>
+      {(ownGrants.length > 0 ||
+        (awaitingUser && approval.body.kind !== "settingsInput")) && (
+        <CardFooter className="flex-col items-stretch gap-2">
+          {ownGrants.length > 0 && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <CheckCheck className="size-3 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">
+                Approved for this session:{" "}
+                {ownGrants
+                  .map((grant) => approvalGrantLabel(grant.key))
+                  .join(", ")}
+              </span>
+              {onRevokeGrant && (
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    for (const grant of ownGrants)
+                      onRevokeGrant(approval.sessionId, grant.key);
+                  }}
+                >
+                  Revoke
+                </Button>
+              )}
+            </div>
           )}
-        </div>
+          {awaitingUser && approval.body.kind !== "settingsInput" && (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => decide("rejected")}
+                disabled={busy !== null}
+                busy={busy === "rejected"}
+              >
+                {busy === "rejected" ? null : <XCircle />}
+                Reject
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => decide("approvedForSession")}
+                disabled={busy !== null}
+                busy={busy === "approvedForSession"}
+                title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
+              >
+                {busy === "approvedForSession" ? null : <CheckCheck />}
+                Approve for session
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => decide("approved")}
+                disabled={busy !== null}
+                busy={busy === "approved"}
+              >
+                {busy === "approved" ? null : <CheckCircle2 />}
+                Approve
+              </Button>
+            </div>
+          )}
+        </CardFooter>
       )}
-
-      {awaitingUser && approval.body.kind !== "settingsInput" && (
-        <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2.5">
-          <button
-            type="button"
-            onClick={() => decide("rejected")}
-            disabled={busy !== null}
-            aria-busy={busy === "rejected" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg disabled:opacity-50"
-          >
-            {busy === "rejected" ? (
-              <Spinner size="sm" />
-            ) : (
-              <XCircle size={12} />
-            )}
-            Reject
-          </button>
-          <button
-            type="button"
-            onClick={() => decide("approvedForSession")}
-            disabled={busy !== null}
-            aria-busy={busy === "approvedForSession" || undefined}
-            title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-raised px-2.5 py-1 text-caption text-accent hover:bg-accent/10 disabled:opacity-50"
-          >
-            {busy === "approvedForSession" ? (
-              <Spinner size="sm" />
-            ) : (
-              <CheckCheck size={12} />
-            )}
-            Approve for session
-          </button>
-          <button
-            type="button"
-            onClick={() => decide("approved")}
-            disabled={busy !== null}
-            aria-busy={busy === "approved" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
-          >
-            {busy === "approved" ? (
-              <Spinner size="sm" />
-            ) : (
-              <CheckCircle2 size={12} />
-            )}
-            Approve
-          </button>
-        </div>
-      )}
-    </div>
+    </Card>
   );
 }

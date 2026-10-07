@@ -1,7 +1,15 @@
 import { GitBranch, RotateCw, XCircle } from "lucide-react";
 import type { WorktreeProvisionDisplay } from "@assistant/shared";
 
-import { Spinner } from "./ui/load.tsx";
+import { ErrorNote, Spinner } from "./common/load.tsx";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 /**
  * @component WorktreeProvisionCard
@@ -29,72 +37,61 @@ export function WorktreeProvisionCard({
 }) {
   const failed = provision.state === "failed";
   const done = provision.state === "created";
-  const tone = failed
-    ? "border-danger/30 bg-danger-soft"
-    : done
-      ? "border-success/30 bg-success-soft"
-      : "border-line bg-panel";
 
   return (
-    <div className={`my-1.5 overflow-hidden rounded-xl border ${tone}`}>
-      <div className="flex items-start gap-3 px-3 py-3">
-        <div className="mt-0.5">
+    <Card size="sm" className="my-1.5">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-x-2">
           {failed ? (
-            <XCircle size={16} className="text-danger" />
+            <XCircle className="size-4 text-destructive" />
           ) : done ? (
-            <GitBranch size={16} className="text-success" />
+            <GitBranch className="size-4 text-success" />
           ) : (
-            <Spinner className="text-muted" />
+            <Spinner />
           )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="text-body font-semibold text-fg">
-              {phaseLabel(provision)}
-            </div>
-            {provision.branch &&
-              (done && provision.worktreeId && onOpenWorktree ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenWorktree(provision.worktreeId!)}
-                  className="min-w-0 truncate font-mono text-caption text-faint hover:text-fg hover:underline"
-                >
-                  {provision.branch}
-                </button>
-              ) : (
-                // Until the checkout exists there is nothing to open, so the
-                // name is just a name.
-                <span className="min-w-0 truncate font-mono text-caption text-faint">
-                  {provision.branch}
-                </span>
-              ))}
-          </div>
-          {provision.baseBranch && (
-            <div className="mt-1 text-caption text-muted">
-              forked from{" "}
-              <span className="font-mono text-faint">
-                {provision.baseBranch}
+          {phaseLabel(provision)}
+          {provision.branch &&
+            (done && provision.worktreeId && onOpenWorktree ? (
+              <Button
+                variant="link"
+                size="sm"
+                className="min-w-0 px-0 font-mono"
+                onClick={() => onOpenWorktree(provision.worktreeId!)}
+              >
+                <span className="truncate">{provision.branch}</span>
+              </Button>
+            ) : (
+              // Until the checkout exists there is nothing to open, so the
+              // name is just a name.
+              <span className="min-w-0 truncate font-mono font-normal text-muted-foreground">
+                {provision.branch}
               </span>
-            </div>
-          )}
+            ))}
+        </CardTitle>
+        {provision.baseBranch && (
+          <CardDescription>
+            forked from{" "}
+            <span className="font-mono">{provision.baseBranch}</span>
+          </CardDescription>
+        )}
+      </CardHeader>
+      {(provision.error || (failed && onRetry)) && (
+        <CardContent className="flex flex-col items-start gap-2">
           {provision.error && (
-            <div className="mt-2 rounded-lg border border-danger/35 bg-danger-soft px-2.5 py-2 text-caption text-fg">
-              {provision.error}
-            </div>
+            <ErrorNote
+              message={provision.error}
+              onRetry={failed ? onRetry : undefined}
+            />
           )}
-          {failed && onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-line bg-panel px-2.5 py-1.5 text-caption font-medium text-fg hover:border-line-strong hover:bg-raised"
-            >
-              <RotateCw size={13} />
+          {!provision.error && failed && onRetry && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              <RotateCw />
               Retry
-            </button>
+            </Button>
           )}
-        </div>
-      </div>
-    </div>
+        </CardContent>
+      )}
+    </Card>
   );
 }
 

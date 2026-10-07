@@ -50,10 +50,15 @@ only binding rules; everything else lives here.
 - `ui-shell.md` (under `app/web/docs/`) — the binding UI shell concept: the
   three-pane layout, navigation rules, object linking, the right object panel,
   and the small-screen screens model.
+- `ui-components.md` (under `app/web/docs/`) — the binding component contract:
+  vendored shadcn components in `components/ui/`, app composites in
+  `components/common/`, which component serves which need, the styling rules
+  (layout-only `className`, theme tokens, the stock type scale), the Storybook
+  coverage every surface carries, and the ratchet audit that enforces it.
 - `loading-states.md` (under `app/web/docs/`) — the binding loading-state model:
   the five states every async region renders, R1–R6 (empty is not loading,
   stale-while-refresh, a different object gets a placeholder, reserved layout,
-  per-control busy, a11y/motion), the shared `ui/load.tsx` vocabulary, the
+  per-control busy, a11y/motion), the shared `common/load.tsx` vocabulary, the
   inline-vs-toast error rule, and the audit that enforces it.
 - `messaging.md` — the binding model for what the app SAYS: the three questions
   that pick a channel, the channels themselves and the absence of a banner among

@@ -9,13 +9,15 @@
  * @payload `ConfluencePageApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "confluencePage"`.
  */
-import { AlertTriangle, ExternalLink, Paperclip } from "lucide-react";
+import { AlertTriangle, Paperclip } from "lucide-react";
 import type {
   ConfluencePageApprovalBody as ConfluencePageApprovalBodyData,
   ConfluencePageMutationItemDisplay,
 } from "@assistant/shared";
 import { formatFileSize } from "../lib/servedFiles.ts";
-import { ClippedMarkdown } from "./JiraIssueApprovalBody.tsx";
+import { ClippedMarkdown, MutationOutcome } from "./JiraIssueApprovalBody.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 
 type Item = ConfluencePageMutationItemDisplay;
 
@@ -25,9 +27,9 @@ export function ConfluencePageApprovalBody({
   body: ConfluencePageApprovalBodyData;
 }) {
   return (
-    <ul className="space-y-3">
+    <ul className="flex flex-col gap-3">
       {body.items.map((item, i) => (
-        <li key={item.clientId || i} className="space-y-1.5 text-caption">
+        <li key={item.clientId || i} className="flex flex-col gap-1.5">
           <Header item={item} />
           <LossWarning item={item} />
           <Attachment item={item} />
@@ -60,29 +62,29 @@ function Header({ item }: { item: Item }) {
   const title = item.newTitle || item.title || item.pageId || "page";
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent-soft px-1.5 py-0.5 text-micro text-accent">
-        {actionLabel(item)}
-      </span>
+      <Badge variant="secondary">{actionLabel(item)}</Badge>
       {item.pageUrl ? (
         <a
           href={item.pageUrl}
           target="_blank"
           rel="noreferrer noopener"
-          className="min-w-0 break-words font-medium text-fg hover:underline"
+          className="min-w-0 break-words font-medium text-foreground hover:underline"
         >
           {title}
         </a>
       ) : (
-        <span className="min-w-0 break-words font-medium text-fg">{title}</span>
+        <span className="min-w-0 break-words font-medium text-foreground">
+          {title}
+        </span>
       )}
       {item.spaceKey ? (
-        <span className="text-faint">
+        <span className="text-muted-foreground">
           in {item.spaceName || item.spaceKey}
           {item.parentTitle ? ` · under ${item.parentTitle}` : ""}
         </span>
       ) : null}
       {item.newTitle && item.title && item.newTitle !== item.title ? (
-        <span className="text-faint">renamed from {item.title}</span>
+        <span className="text-muted-foreground">renamed from {item.title}</span>
       ) : null}
     </div>
   );
@@ -93,37 +95,26 @@ function Header({ item }: { item: Item }) {
  * rewrite cannot carry macros, layouts or images back, so it silently removes
  * them. A delete gets the same treatment for the same reason.
  */
-function LossWarning({ item }: { item: Item }) {
+function lossWarning(item: Item): string | null {
   if (item.operation === "delete")
-    return (
-      <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
-        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-        <span>The page and its comments move to the trash.</span>
-      </div>
-    );
+    return "The page and its comments move to the trash.";
   if (item.operation === "deleteAttachment")
-    return (
-      <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
-        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-        <span>
-          The attachment moves to the trash; wherever the page embeds it shows
-          it as missing.
-        </span>
-      </div>
-    );
+    return "The attachment moves to the trash; wherever the page embeds it shows it as missing.";
   if (item.placement !== "replace" || !item.lossyNodes?.length) return null;
+  return `Replacing the body drops content Markdown cannot carry back: ${item.lossyNodes.join(", ")}.`;
+}
+
+function LossWarning({ item }: { item: Item }) {
+  const warning = lossWarning(item);
+  if (!warning) return null;
   return (
-    <div className="flex items-start gap-1.5 text-caption text-yellow-600 dark:text-yellow-400">
-      <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-      <span>
-        Replacing the body drops content Markdown cannot carry back:{" "}
-        {item.lossyNodes.join(", ")}.
-      </span>
-    </div>
+    <Alert variant="warning" role="note">
+      <AlertTriangle />
+      <AlertDescription>{warning}</AlertDescription>
+    </Alert>
   );
 }
 
-/** The file an attachment item writes or removes, and where its bytes came from. */
 function Attachment({ item }: { item: Item }) {
   const attachment = item.attachment;
   if (!attachment) return null;
@@ -139,21 +130,23 @@ function Attachment({ item }: { item: Item }) {
       : null,
   ].filter(Boolean);
   return (
-    <div className="space-y-0.5">
+    <div className="flex flex-col gap-0.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <Paperclip size={12} className="shrink-0 text-muted" />
-        <span className="min-w-0 break-all font-mono text-fg">
+        <Paperclip className="size-3 shrink-0" />
+        <span className="min-w-0 break-all font-mono text-foreground">
           {attachment.fileName}
         </span>
         {facts.length ? (
-          <span className="text-faint">{facts.join(" · ")}</span>
+          <span className="text-muted-foreground">{facts.join(" · ")}</span>
         ) : null}
       </div>
       {attachment.source ? (
-        <div className="break-all text-faint">from {attachment.source}</div>
+        <div className="break-all text-muted-foreground">
+          from {attachment.source}
+        </div>
       ) : null}
       {item.versionMessage ? (
-        <div className="text-muted">“{item.versionMessage}”</div>
+        <div className="text-muted-foreground">“{item.versionMessage}”</div>
       ) : null}
     </div>
   );
@@ -162,7 +155,7 @@ function Attachment({ item }: { item: Item }) {
 function Labels({ item }: { item: Item }) {
   if (!item.labelsAdded?.length && !item.labelsRemoved?.length) return null;
   return (
-    <div className="text-caption text-muted">
+    <div>
       {item.labelsAdded?.length ? `+${item.labelsAdded.join(" +")}` : ""}
       {item.labelsAdded?.length && item.labelsRemoved?.length ? " · " : ""}
       {item.labelsRemoved?.length ? `-${item.labelsRemoved.join(" -")}` : ""}
@@ -183,31 +176,13 @@ function outcomeLabel(item: Item): string {
 }
 
 function Outcome({ item }: { item: Item }) {
-  if (!item.error && !item.resultPageId && !item.warning) return null;
   return (
-    <div className="space-y-0.5">
-      {item.error ? (
-        <div className="text-caption text-danger">{item.error}</div>
-      ) : item.resultPageUrl ? (
-        <a
-          href={item.resultPageUrl}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 text-caption text-green-600 hover:underline dark:text-green-400"
-        >
-          <ExternalLink size={11} />
-          {outcomeLabel(item)}
-        </a>
-      ) : item.resultPageId ? (
-        <div className="text-caption text-green-600 dark:text-green-400">
-          {outcomeLabel(item)}
-        </div>
-      ) : null}
-      {item.warning ? (
-        <div className="text-caption text-yellow-600 dark:text-yellow-400">
-          {item.warning}
-        </div>
-      ) : null}
-    </div>
+    <MutationOutcome
+      error={item.error}
+      warning={item.warning}
+      url={item.resultPageUrl}
+      done={Boolean(item.resultPageId)}
+      label={outcomeLabel(item)}
+    />
   );
 }

@@ -12,7 +12,10 @@ import type {
   CalendarEventDto,
 } from "@assistant/shared";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
-import { EmptyBox } from "../ui/load.tsx";
+import { EmptyBox } from "../common/load.tsx";
+import { Card } from "../ui/card.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { LinkButton } from "../common/LinkButton.tsx";
 import { Inspector, InspectorSection } from "../shell/Inspector.tsx";
 import { hm } from "./calendarDates.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
@@ -88,26 +91,35 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
   const timeZone = useUserTimeZone();
   const duration = durationLabel(event.start, event.end);
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-surface p-3">
-      <div className="flex items-center gap-1.5 text-caption text-fg">
-        <CalendarClock size={13} className="shrink-0 text-muted" />
+    <Card className="gap-2.5">
+      <div className="flex items-center gap-1.5 text-sm text-foreground">
+        <CalendarClock size={13} className="shrink-0 text-muted-foreground" />
         <span className="tabular-nums">
           {event.allDay
             ? "All day"
             : `${hm(event.start, timeZone)} – ${hm(event.end, timeZone)}`}
         </span>
         {duration && !event.allDay && (
-          <span className="text-muted">· {duration}</span>
+          <span className="text-muted-foreground">· {duration}</span>
         )}
         {event.selfResponse && event.selfResponse !== "accepted" && (
-          <span className="ml-auto rounded bg-raised px-1.5 py-0.5 text-micro capitalize text-muted">
+          <Badge
+            variant={
+              event.selfResponse === "declined"
+                ? "destructive"
+                : event.selfResponse === "tentative"
+                  ? "warning"
+                  : "secondary"
+            }
+            className="ml-auto capitalize"
+          >
             {event.selfResponse}
-          </span>
+          </Badge>
         )}
       </div>
 
       {event.location && (
-        <div className="flex items-start gap-1.5 text-caption text-muted">
+        <div className="flex items-start gap-1.5 text-sm text-muted-foreground">
           <MapPin size={13} className="mt-0.5 shrink-0" />
           <span className="min-w-0 break-words">{event.location}</span>
         </div>
@@ -123,7 +135,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
 
       {event.attendees.length > 0 && (
         <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1.5 text-caption font-medium text-faint">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
             <Users size={12} />
             {event.attendeeCount} guest{event.attendeeCount === 1 ? "" : "s"}
           </div>
@@ -131,34 +143,34 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
             {event.attendees.slice(0, 12).map((attendee, attendeeIndex) => (
               <div
                 key={attendee.email ?? attendee.name ?? attendeeIndex}
-                className="flex items-center gap-1.5 text-caption"
+                className="flex items-center gap-1.5 text-sm"
               >
                 <span
                   className={`size-1.5 shrink-0 rounded-full ${
                     attendee.response === "accepted"
-                      ? "bg-emerald-500"
+                      ? "bg-success"
                       : attendee.response === "declined"
-                        ? "bg-red-500"
+                        ? "bg-destructive"
                         : attendee.response === "tentative"
-                          ? "bg-yellow-500"
-                          : "bg-line-strong"
+                          ? "bg-warning"
+                          : "bg-input"
                   }`}
                   title={attendee.response ?? "no response"}
                 />
                 <span
-                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-fg" : "text-muted"}`}
+                  className={`min-w-0 truncate ${attendee.self ? "font-medium text-foreground" : "text-muted-foreground"}`}
                 >
                   {attendee.name ?? attendee.email}
                 </span>
                 {attendee.organizer && (
-                  <span className="shrink-0 text-micro text-faint">
+                  <span className="shrink-0 text-xs text-muted-foreground">
                     organizer
                   </span>
                 )}
               </div>
             ))}
             {event.attendees.length > 12 && (
-              <span className="text-micro text-faint">
+              <span className="text-xs text-muted-foreground">
                 +{event.attendees.length - 12} more
               </span>
             )}
@@ -167,7 +179,7 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
       )}
 
       {event.description && (
-        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-line pt-2 text-caption text-muted">
+        <div className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words border-t border-border pt-2 text-sm text-muted-foreground">
           {event.description}
         </div>
       )}
@@ -177,32 +189,28 @@ function EventDetail({ event }: { event: CalendarEventDto }) {
           href={event.htmlLink}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 text-caption text-muted hover:text-accent"
+          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-primary"
         >
           <ExternalLink size={11} />
           Open in Google Calendar
         </a>
       )}
-    </div>
+    </Card>
   );
 }
 
 function ConferenceButton({ link }: { link: CalendarConferenceLink }) {
-  const tone =
-    link.provider === "zoom"
-      ? "border-blue-500/40 text-blue-600 dark:text-blue-300 hover:bg-blue-500/10"
-      : link.provider === "teams"
-        ? "border-indigo-500/40 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/10"
-        : "border-accent/40 text-accent hover:bg-accent-soft";
   return (
-    <a
+    <LinkButton
       href={link.uri}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-caption font-medium transition-colors ${tone}`}
+      variant="outline"
+      size="sm"
+      className="justify-center"
     >
-      <Video size={13} />
+      <Video />
       Join {link.label}
-    </a>
+    </LinkButton>
   );
 }

@@ -482,33 +482,34 @@ capability logic.
   `worktreeWatchAudit.test.ts` pins this as the only file that calls the two
   actions. Tested in `worktreeWatchRegistry.test.ts`.
 - `swipeGesture.ts` owns the row-swipe math consumed by
-  `components/ui/SwipeRow`, for a row carrying an action on EACH side. Direction
-  is part of every question here rather than a sign baked into the formulas, and
-  WHICH sides exist is the caller's to say (`SwipeAllowed`): the edge guard that
-  leaves iOS its back/forward gestures — now wider than `EDGE_SWIPE_ZONE_PX`,
-  because a row's rightward swipe is the shell's own back direction and only the
-  guard keeps one finger from arming both; `swipeClaimsTouch` (the lean at which
-  the row takes the touch from the scroller, short of the engage threshold
-  because the UA has decided about a pan by then, and only toward a side that
-  HAS an action, since a claim spends the touch); the engage threshold at which
-  the row starts following the finger; the vertical yield and dominance that
-  give the scroller back only a MOSTLY vertical drag it has NOT claimed (a tie
-  is a thumb's arc, not a scroll; `classifySwipeMove` takes `claimed` and
-  answers with the DIRECTION, and a claimed touch stops judging the vertical
-  entirely — there is nothing left to yield to once the pan has been vetoed);
-  `swipeTravel`, signed and CLAMPED to the engaged direction so dragging back
-  through zero cannot open the opposite action; the rubber band past full
-  travel; and the width-aware threshold so a sidebar row does not need a swipe
-  wider than itself. That threshold is asked as two questions: `swipeArms` is
-  the VISIBLE one the panel paints, distance only because distance is all a
-  reader can see, and `swipeCommits` is what a release asks — armed, OR a flick
-  past `SWIPE_FLICK_VELOCITY` in the gesture's own direction, which also refuses
-  a row thrown BACK however far it had travelled. The claim mirrors
-  `components/shell/edgeSwipe.ts` and keeps its own constants: that one only
-  judges touches from a reserved edge strip, this one is asked about every list
-  scroll that starts on a row. Pure, so the numbers are tested rather than tuned
-  by feel (`swipeGesture.test.ts`, which also pins the guard against the edge
-  strip — separate modules, so only a test holds them together).
+  `components/common/SwipeRow`, for a row carrying an action on EACH side.
+  Direction is part of every question here rather than a sign baked into the
+  formulas, and WHICH sides exist is the caller's to say (`SwipeAllowed`): the
+  edge guard that leaves iOS its back/forward gestures — now wider than
+  `EDGE_SWIPE_ZONE_PX`, because a row's rightward swipe is the shell's own back
+  direction and only the guard keeps one finger from arming both;
+  `swipeClaimsTouch` (the lean at which the row takes the touch from the
+  scroller, short of the engage threshold because the UA has decided about a pan
+  by then, and only toward a side that HAS an action, since a claim spends the
+  touch); the engage threshold at which the row starts following the finger; the
+  vertical yield and dominance that give the scroller back only a MOSTLY
+  vertical drag it has NOT claimed (a tie is a thumb's arc, not a scroll;
+  `classifySwipeMove` takes `claimed` and answers with the DIRECTION, and a
+  claimed touch stops judging the vertical entirely — there is nothing left to
+  yield to once the pan has been vetoed); `swipeTravel`, signed and CLAMPED to
+  the engaged direction so dragging back through zero cannot open the opposite
+  action; the rubber band past full travel; and the width-aware threshold so a
+  sidebar row does not need a swipe wider than itself. That threshold is asked
+  as two questions: `swipeArms` is the VISIBLE one the panel paints, distance
+  only because distance is all a reader can see, and `swipeCommits` is what a
+  release asks — armed, OR a flick past `SWIPE_FLICK_VELOCITY` in the gesture's
+  own direction, which also refuses a row thrown BACK however far it had
+  travelled. The claim mirrors `components/shell/edgeSwipe.ts` and keeps its own
+  constants: that one only judges touches from a reserved edge strip, this one
+  is asked about every list scroll that starts on a row. Pure, so the numbers
+  are tested rather than tuned by feel (`swipeGesture.test.ts`, which also pins
+  the guard against the edge strip — separate modules, so only a test holds them
+  together).
 - `taskDelete.ts` owns WHICH rows a delete really takes and how it asks.
   `deleteSet` is the subtree, deepest first: the server's `deleteTask` promotes
   a deleted Task's children to roots, so a parent removed first would have its
@@ -960,7 +961,7 @@ capability logic.
   (bar/line only — no pie/doughnut/contributor rankings — with hard item limits,
   strict shape validation, and a concrete error string; never throws) and the
   deterministic `CHART_PALETTE`/`chartColor`. Consumed by
-  `components/ui/ChartBlock.tsx` and its table fallback.
+  `components/common/ChartBlock.tsx` and its table fallback.
 - `credentialProfiles.ts` owns authenticated safe-profile fetch/create/delete
   and pi OpenAI-login-start calls plus `orderCredentialProfilesByProvider`, the
   shared stable Claude-then-OpenAI grouping used by New Session and Usage. It
@@ -1126,7 +1127,7 @@ capability logic.
   `speechCapture`'s `onFrame` already delivers — the audio thread stays
   untouched, no extra worklet messages exist to keep in sync, and the plot
   cannot drift from the audio actually captured.
-  `components/ui/WaveformStrip.tsx` renders it.
+  `components/common/WaveformStrip.tsx` renders it.
 - `speechCapture.ts` + `pcm16Worklet.js` own microphone capture for dictation,
   and `insertTranscript.ts` owns where the transcript lands in the draft (at the
   caret, spacing added only where missing, never auto-sent). The worklet runs on

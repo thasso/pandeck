@@ -9,21 +9,13 @@ import {
   stallTarget,
   stallTitle,
   sessionStatusBadge,
-  type SessionStatusTone,
   type SpawnedSessionsView,
 } from "../lib/sessionInbox.ts";
 import { ClusterChildRow } from "./ClusterChildRow.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
-
-/** Same semantic tones the cards and rows use, at the bubble badge's weight. */
-const BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
-  success: "bg-success-soft text-success",
-  muted: "bg-line text-muted",
-};
+import { Button } from "@/components/ui/button";
+import { IconButton } from "./common/IconButton.tsx";
 
 export interface SpawnedSessionsLedgeProps {
   sessionId: string;
@@ -98,27 +90,26 @@ export function SpawnedSessionsLedge({
   // of its own, like the bubble, naming the peer to poke.
   const stallLine = view.stall ? (
     <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="xs"
+        className="min-w-0"
         title={`Open “${stallTitle(view.stall)}”`}
         aria-label={`Stalled: ${stallLabel(view.stall)}`}
         onClick={() => {
           if (view.stall) onOpenSession(stallTarget(view.stall).id);
         }}
-        className={`flex min-w-0 items-center gap-1 rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${BADGE_TONE.warning}`}
       >
-        <Hourglass size={10} className="shrink-0" aria-hidden="true" />
+        <Hourglass aria-hidden="true" className="text-warning" />
         {stallParts(view.stall).before ? (
-          <span className="shrink-0">{stallParts(view.stall).before}</span>
+          <span>{stallParts(view.stall).before}</span>
         ) : null}
         <span className="min-w-0 truncate">{stallParts(view.stall).title}</span>
         {stallParts(view.stall).after ? (
-          <span className="shrink-0">{stallParts(view.stall).after}</span>
+          <span>{stallParts(view.stall).after}</span>
         ) : null}
-        {stallMore(view.stall) ? (
-          <span className="shrink-0">{stallMore(view.stall)}</span>
-        ) : null}
-      </button>
+        {stallMore(view.stall) ? <span>{stallMore(view.stall)}</span> : null}
+      </Button>
     </div>
   ) : null;
   // A chat that spawned nothing can still be owed a reply by a session it
@@ -131,8 +122,12 @@ export function SpawnedSessionsLedge({
     );
   return (
     <div data-spawned-sessions-ledge className="min-w-0">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
+        className={
+          working ? "w-full justify-start text-primary" : "w-full justify-start"
+        }
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`spawned-sessions-ledge-${sessionId}`}
@@ -143,63 +138,50 @@ export function SpawnedSessionsLedge({
         // to coordinate one the user now drives would be a relation that no
         // longer holds.
         aria-label={`${open ? "Hide" : "Show"} the sessions this chat spawned — ${summary}`}
-        className={`flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-          working ? "text-accent hover:text-accent" : "text-muted hover:text-fg"
-        }`}
       >
         {/* Same treatment as the cluster card's fold: while a peer runs, the
             spinner REPLACES the peer glyph and the line runs in the accent. The
             session you are typing into is often quiet while its peers work, so
             this strip is the only place that run is visible, and a static count
             reads as a stalled cluster. */}
-        {working ? (
-          <Spinner size="xs" className="shrink-0" />
-        ) : (
-          <Users size={13} className="shrink-0" aria-hidden="true" />
-        )}
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
-        <Chevron size={14} className="shrink-0 text-faint" aria-hidden="true" />
-      </button>
+        {working ? <Spinner size="xs" /> : <Users aria-hidden="true" />}
+        <span className="min-w-0 flex-1 truncate text-left">{summary}</span>
+        <Chevron aria-hidden="true" />
+      </Button>
       {/* Under the summary rather than beside it, exactly as the cluster card
           places it: a line of its own costs height only while a peer needs
           answering, and it keeps the two strips' chevrons in one column. */}
       {bubbled ? (
         <div className="flex min-w-0 items-center gap-1 px-3 pb-1.5">
-          <button
-            type="button"
+          <Button
+            variant={bubbleTone === "danger" ? "destructive" : "secondary"}
+            size="xs"
+            className="min-w-0"
             title={`Open “${bubbleTitle}”`}
             onClick={() => onOpenSession(bubbled.session.id)}
-            className={`flex min-w-0 items-center rounded-full px-1.5 py-px text-micro font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-              BADGE_TONE[bubbleTone ?? "accent"]
-            }`}
           >
             <span className="min-w-0 truncate">
               {sessionClusterBubbleLabel(bubbled, now)}
             </span>
-          </button>
+          </Button>
           {/* A peer failure the user has moved on from is dismissed WHERE it is
               shown, exactly as on the cluster card: it sends that peer's own
               Settle, so the peer lands on the Settled shelf and the bubble goes
               with it. Nothing is archived and nothing is deleted. */}
           {dismissBubble ? (
-            <button
-              type="button"
-              title={`Dismiss — settle “${bubbleTitle}”`}
-              aria-label={`Dismiss the failure in “${bubbleTitle}”`}
+            <IconButton
+              size="icon-xs"
+              label={`Dismiss the failure in “${bubbleTitle}”`}
               onClick={() => onSettleSession(bubbled.session.id, true)}
-              className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
-              <X size={12} aria-hidden />
-            </button>
+              <X aria-hidden />
+            </IconButton>
           ) : null}
         </div>
       ) : null}
       {stallLine}
       {open ? (
-        <div
-          id={`spawned-sessions-ledge-${sessionId}`}
-          className="border-t border-line"
-        >
+        <div id={`spawned-sessions-ledge-${sessionId}`} className="border-t">
           {/* The rows scroll in a box of bounded height, so listing every
               peer changes what is in the box and never how tall the
               composer's shelf is. The settled toggle below is OUTSIDE it: at
@@ -207,7 +189,7 @@ export function SpawnedSessionsLedge({
               control the user has to know to scroll for is not offered. */}
           <div
             data-spawned-sessions-rows
-            className="max-h-[40vh] overflow-y-auto py-1"
+            className="max-h-72 overflow-y-auto border-b py-1"
           >
             {view.rows.map((card) => (
               <ClusterChildRow
@@ -224,23 +206,23 @@ export function SpawnedSessionsLedge({
           {/* Under the list, always in view: the rows above are what is
               going on now, and this is where what already ended is. */}
           {view.settled > 0 ? (
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
-              className="flex h-8 w-full items-center gap-2 border-t border-line px-3 text-left text-caption text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
             >
               <ChevronDown
-                size={13}
-                className={`shrink-0 text-faint transition-transform ${view.settledShown ? "rotate-180" : ""}`}
                 aria-hidden="true"
+                className={view.settledShown ? "rotate-180" : ""}
               />
               <span className="min-w-0 truncate">
                 {view.settledShown
                   ? "Hide settled"
                   : `Show ${view.settled} settled`}
               </span>
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}

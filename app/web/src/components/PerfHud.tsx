@@ -6,6 +6,14 @@ import {
   subscribePerfStats,
   type PerfSnapshot,
 } from "../lib/perfStats.ts";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 
 /**
  * @component PerfHud
@@ -56,80 +64,70 @@ export function PerfHud() {
 
   if (!enabled || !snapshot) return null;
 
+  const load = snapshot.sessionLoad;
   return (
-    <div className="pointer-events-none fixed bottom-2 left-2 z-[100] max-h-[60vh] w-64 overflow-y-auto rounded-xl border border-line bg-panel/95 p-2 font-mono text-micro text-muted shadow-2xl">
-      <div className="mb-1 flex items-center justify-between text-fg">
-        <span>perf · {snapshot.windowMs}ms</span>
-        <span>
+    <Card
+      size="sm"
+      className="pointer-events-none fixed bottom-2 left-2 z-100 max-h-3/5 w-64 overflow-y-auto"
+    >
+      <CardHeader>
+        <CardTitle>perf · {snapshot.windowMs}ms</CardTitle>
+        <CardDescription>
           {formatBytes(snapshot.totalBytes)}/s · parse{" "}
           {snapshot.totalParseMs.toFixed(1)}ms
-        </span>
-      </div>
-      {snapshot.messages.length === 0 ? (
-        <div className="text-faint">no traffic</div>
-      ) : null}
-      {snapshot.messages.map((stat) => (
-        <div
-          key={stat.type}
-          className="flex items-center justify-between gap-2"
-        >
-          <span className="truncate">{stat.type}</span>
-          <span className="shrink-0 tabular-nums">
-            {stat.count}× {formatBytes(stat.bytes)}
-            {stat.parseMs >= 0.5 ? ` ${stat.parseMs.toFixed(1)}ms` : ""}
-          </span>
-        </div>
-      ))}
-      {snapshot.sessionLoad ? (
-        <>
-          <div className="mt-1 border-t border-line pt-1 text-fg">
-            session load
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate">request → snapshot</span>
-            <span className="shrink-0 tabular-nums">
-              {formatGap(
-                snapshot.sessionLoad.requestAt,
-                snapshot.sessionLoad.snapshotParsedAt,
-              )}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate">snapshot → commit</span>
-            <span className="shrink-0 tabular-nums">
-              {formatGap(
-                snapshot.sessionLoad.snapshotParsedAt,
-                snapshot.sessionLoad.committedAt,
-              )}
-            </span>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="truncate">commit → paint</span>
-            <span className="shrink-0 tabular-nums">
-              {formatGap(
-                snapshot.sessionLoad.committedAt,
-                snapshot.sessionLoad.paintedAt,
-              )}
-            </span>
-          </div>
-        </>
-      ) : null}
-      <div className="mt-1 border-t border-line pt-1 text-fg">renders/s</div>
-      {snapshot.renders.length === 0 ? (
-        <div className="text-faint">none</div>
-      ) : null}
-      {snapshot.renders.map((render) => (
-        <div
-          key={render.name}
-          className="flex items-center justify-between gap-2"
-        >
-          <span className="truncate">{render.name}</span>
-          <span className="shrink-0 tabular-nums">
-            {render.count}
-            {render.durationMs > 0 ? ` ${render.durationMs.toFixed(1)}ms` : ""}
-          </span>
-        </div>
-      ))}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="font-mono text-xs text-muted-foreground">
+        {snapshot.messages.length === 0 ? <div>no traffic</div> : null}
+        {snapshot.messages.map((stat) => (
+          <HudRow
+            key={stat.type}
+            label={stat.type}
+            value={`${stat.count}× ${formatBytes(stat.bytes)}${
+              stat.parseMs >= 0.5 ? ` ${stat.parseMs.toFixed(1)}ms` : ""
+            }`}
+          />
+        ))}
+        {load ? (
+          <>
+            <Separator className="my-1" />
+            <div className="text-foreground">session load</div>
+            <HudRow
+              label="request → snapshot"
+              value={formatGap(load.requestAt, load.snapshotParsedAt)}
+            />
+            <HudRow
+              label="snapshot → commit"
+              value={formatGap(load.snapshotParsedAt, load.committedAt)}
+            />
+            <HudRow
+              label="commit → paint"
+              value={formatGap(load.committedAt, load.paintedAt)}
+            />
+          </>
+        ) : null}
+        <Separator className="my-1" />
+        <div className="text-foreground">renders/s</div>
+        {snapshot.renders.length === 0 ? <div>none</div> : null}
+        {snapshot.renders.map((render) => (
+          <HudRow
+            key={render.name}
+            label={render.name}
+            value={`${render.count}${
+              render.durationMs > 0 ? ` ${render.durationMs.toFixed(1)}ms` : ""
+            }`}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HudRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="truncate">{label}</span>
+      <span className="shrink-0 tabular-nums">{value}</span>
     </div>
   );
 }

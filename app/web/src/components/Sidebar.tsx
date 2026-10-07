@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { CalendarDays, FileDiff, FolderOpen } from "lucide-react";
 import type {
   ProjectRecord,
@@ -11,6 +19,14 @@ import type {
 } from "@assistant/shared";
 import { KNOWLEDGE_WORKTREE_ID, isShelvedSession } from "@assistant/shared";
 import { PullRequestBrowser } from "./PullRequestBrowser.tsx";
+import { Badge } from "@/components/ui/badge";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
 import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
@@ -209,6 +225,50 @@ interface Props {
 }
 
 /**
+ * One destination in a section browser that lists views rather than objects
+ * (Calendar, Knowledge Base, Settings). `current` marks the open page for
+ * assistive technology; `selected` only highlights.
+ */
+function BrowserRow({
+  icon,
+  label,
+  current = false,
+  selected = current,
+  count = 0,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  current?: boolean;
+  selected?: boolean;
+  count?: number;
+  onClick: () => void;
+}) {
+  return (
+    <Item
+      size="xs"
+      variant={selected ? "muted" : "default"}
+      render={<button type="button" />}
+      aria-current={current ? "page" : undefined}
+      onClick={onClick}
+      className="text-left hover:bg-muted"
+    >
+      <ItemMedia variant="icon">{icon}</ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">{label}</span>
+        </ItemTitle>
+      </ItemContent>
+      {count > 0 ? (
+        <ItemActions>
+          <Badge variant="secondary">{count}</Badge>
+        </ItemActions>
+      ) : null}
+    </Item>
+  );
+}
+
+/**
  * Minimal calendar browser: the calendar's sidebar shape is not designed yet
  * (ui-shell.md allows shipping a minimal browser), so it only offers today's
  * views.
@@ -226,17 +286,12 @@ function CalendarBrowser({
   return (
     <div className="flex flex-col gap-0.5">
       {views.map((view) => (
-        <button
+        <BrowserRow
           key={view.id}
-          type="button"
+          icon={<CalendarDays />}
+          label={view.label}
           onClick={() => onOpenView(view.id)}
-          className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
-            <CalendarDays size={15} />
-          </span>
-          {view.label}
-        </button>
+        />
       ))}
     </div>
   );
@@ -259,33 +314,24 @@ function KnowledgeBrowser({
   onOpen: (view: KnowledgeView) => void;
 }) {
   const views = [
-    { id: "files" as const, label: "Files", icon: <FolderOpen size={15} /> },
+    { id: "files" as const, label: "Files", icon: <FolderOpen /> },
     {
       id: "changes" as const,
       label: "Uncommitted changes",
-      icon: <FileDiff size={15} />,
+      icon: <FileDiff />,
     },
   ];
   return (
     <div className="flex flex-col gap-0.5">
       {views.map((view) => (
-        <button
+        <BrowserRow
           key={view.id}
-          type="button"
-          aria-current={active === view.id ? "page" : undefined}
+          icon={view.icon}
+          label={view.label}
+          current={active === view.id}
+          count={view.id === "changes" ? uncommitted : 0}
           onClick={() => onOpen(view.id)}
-          className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${active === view.id ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
-            {view.icon}
-          </span>
-          <span className="min-w-0 flex-1 truncate">{view.label}</span>
-          {view.id === "changes" && uncommitted > 0 ? (
-            <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-micro font-medium text-accent">
-              {uncommitted}
-            </span>
-          ) : null}
-        </button>
+        />
       ))}
     </div>
   );
@@ -338,31 +384,19 @@ function SettingsSectionList({
         <section key={group.id} aria-labelledby={`settings-group-${group.id}`}>
           <h2
             id={`settings-group-${group.id}`}
-            className="px-2.5 pb-1 text-micro font-semibold uppercase tracking-wide text-faint"
+            className="px-2.5 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
             {group.label}
           </h2>
           <div className="flex flex-col gap-0.5">
             {group.sections.map((section) => (
-              <button
+              <BrowserRow
                 key={section.id}
-                type="button"
+                icon={section.icon}
+                label={section.label}
+                selected={activeSection === section.id}
                 onClick={() => onOpenSection?.(section.id)}
-                className={`flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                  activeSection === section.id
-                    ? "bg-accent-soft text-fg"
-                    : "text-muted hover:bg-raised hover:text-fg"
-                }`}
-              >
-                <span
-                  className={`flex size-7 shrink-0 items-center justify-center rounded-lg ${activeSection === section.id ? "bg-surface text-accent" : "bg-raised text-muted"}`}
-                >
-                  {section.icon}
-                </span>
-                <span className="text-caption font-medium">
-                  {section.label}
-                </span>
-              </button>
+              />
             ))}
           </div>
         </section>
@@ -652,7 +686,7 @@ function SidebarImpl({
     // its own last rows clear of it.
     <aside
       ref={containerRef}
-      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-line bg-panel sm:border-r"
+      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
     >
       {/* The shared inset every browser reads its first row in — except at the
           TOP for a browser that draws a header bar there. That bar owns the
@@ -732,7 +766,7 @@ function SidebarImpl({
             density={mobile ? "comfortable" : "tight"}
           />
         ) : section === "knowledge" && !knowledgeEnabled ? (
-          <p className="px-2.5 py-2 text-caption text-faint">
+          <p className="px-2.5 py-2 text-sm text-muted-foreground">
             The Knowledge Base is turned off in Settings.
           </p>
         ) : section === "knowledge" ? (

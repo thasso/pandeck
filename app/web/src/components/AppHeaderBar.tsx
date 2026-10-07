@@ -34,7 +34,7 @@ export function AppHeaderBar({
   const chromeClass =
     chrome === "transparent"
       ? "border-b border-transparent bg-transparent sm:bg-transparent sm:backdrop-blur-none"
-      : "border-b border-line bg-surface sm:bg-surface/80 sm:backdrop-blur";
+      : "border-b border-border bg-background sm:bg-background/80 sm:backdrop-blur";
   return (
     <header
       aria-hidden={ariaHidden || undefined}

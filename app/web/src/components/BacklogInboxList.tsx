@@ -1,5 +1,8 @@
 import { useMemo } from "react";
 import { Check } from "lucide-react";
+import { Button } from "./ui/button.tsx";
+import { Item, ItemContent, ItemTitle } from "./ui/item.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import type { ProjectRecord } from "@assistant/shared";
 import {
   TaskStatusIcon as StatusIcon,
@@ -7,7 +10,7 @@ import {
 } from "./TaskStatusIcon.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import {
   nextStatus,
   pendingStatusSuggestion,
@@ -110,37 +113,31 @@ function InboxRow({
 
   return (
     <li data-list-row-id={task.id}>
-      <div
-        className={`flex w-full min-w-0 items-start gap-1.5 rounded-lg px-1 ${tight ? "py-1" : "py-1.5"} ${selected ? "bg-raised" : "hover:bg-panel"}`}
-      >
-        <button
-          type="button"
+      <Item variant={selected ? "muted" : "outline"} size={tight ? "xs" : "sm"}>
+        <IconButton
+          label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
+          size={tight ? "icon-xs" : "icon-sm"}
           onClick={() => onCycle(task)}
-          className={`flex shrink-0 cursor-pointer items-center justify-center ${tight ? "size-5" : "size-6"}`}
-          title={`Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
-          aria-label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
         >
           <StatusIcon
             status={task.status}
             size={tight ? 14 : 16}
             claimed={Boolean(pendingStatusSuggestion(task))}
           />
-        </button>
-        <button
-          type="button"
-          onClick={() => onOpen(task.id)}
-          className="min-w-0 flex-1 cursor-pointer text-left"
-        >
-          <span className="flex min-w-0 items-baseline gap-1.5">
-            <span
-              className={`min-w-0 flex-1 truncate text-caption ${selected ? "font-medium text-fg" : "text-fg"}`}
+        </IconButton>
+        <ItemContent>
+          <ItemTitle>
+            <Button
+              variant="ghost"
+              className="h-auto min-w-0 max-w-full justify-start px-1 py-0 text-left"
+              onClick={() => onOpen(task.id)}
             >
-              {task.title}
-            </span>
+              <span className="truncate">{task.title}</span>
+            </Button>
             <TaskIdBadge id={task.id} />
-          </span>
-          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-micro">
-            <span className="shrink-0 text-muted">{origin}</span>
+          </ItemTitle>
+          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {origin}
             {showProjectBadge && task.projectId ? (
               <ProjectBadge
                 projectId={task.projectId}
@@ -150,21 +147,17 @@ function InboxRow({
             ) : null}
           </span>
           {preview ? (
-            <span className="mt-0.5 block truncate text-micro text-faint">
-              {preview}
-            </span>
+            <p className="truncate text-xs text-muted-foreground">{preview}</p>
           ) : null}
-        </button>
-        <button
-          type="button"
+        </ItemContent>
+        <IconButton
+          label={`Dismiss "${task.title}" from the Inbox`}
+          size={tight ? "icon-xs" : "icon-sm"}
           onClick={() => onDismiss(task)}
-          title={`Dismiss "${task.title}" from the Inbox`}
-          aria-label={`Dismiss "${task.title}" from the Inbox`}
-          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "size-6" : "size-7"}`}
         >
-          <Check size={13} />
-        </button>
-      </div>
+          <Check />
+        </IconButton>
+      </Item>
     </li>
   );
 }

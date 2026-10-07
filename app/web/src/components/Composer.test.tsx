@@ -34,6 +34,33 @@ import { mount } from "../test/mount.tsx";
 import { Composer, ModeSelector, resolveSlashSubmit } from "./Composer.tsx";
 
 stubMatchMedia();
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "scrollIntoView",
+);
+beforeAll(() =>
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  }),
+);
+afterAll(() => {
+  if (scrollIntoViewDescriptor)
+    Object.defineProperty(
+      HTMLElement.prototype,
+      "scrollIntoView",
+      scrollIntoViewDescriptor,
+    );
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
 
 describe("resolveSlashSubmit", () => {
   const commands: SlashCommandInfo[] = [
@@ -430,9 +457,9 @@ describe("Composer client commands", () => {
         trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
 
-      const plan = [...document.body.querySelectorAll("button")].find(
-        (button) => button.textContent?.trim() === "Plan",
-      );
+      const plan = [
+        ...document.body.querySelectorAll('[role="menuitem"]'),
+      ].find((button) => button.textContent?.trim() === "Plan");
       expect(plan).toBeDefined();
       act(() => {
         plan?.dispatchEvent(new MouseEvent("click", { bubbles: true }));

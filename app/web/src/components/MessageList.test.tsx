@@ -504,8 +504,10 @@ describe("MessageList chat comments", () => {
           )!
           .click(),
       );
-      const namedAction = [...document.body.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("Comment on this message"),
+      const namedAction = [
+        ...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ].find((button) =>
+        button.textContent?.includes("Comment on this message"),
       )!;
       act(() => namedAction.click());
       submitEditor();
@@ -596,8 +598,10 @@ describe("MessageList chat comments", () => {
           )!
           .click(),
       );
-      const named = [...document.body.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("Comment on this message"),
+      const named = [
+        ...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ].find((button) =>
+        button.textContent?.includes("Comment on this message"),
       )!;
       act(() => named.click());
       expect(container.textContent).toContain("Comment on “A previous prompt”");
@@ -831,6 +835,27 @@ describe("MessageList prompt delivery", () => {
     expect(rowText("u1")).not.toMatch(/Steered|after the reply/);
     expect(rowText("u2")).toContain("Steered");
     expect(rowText("u3")).toContain("Arrived after the reply");
+  });
+
+  // Hover is the desktop reveal; a touch screen has no hover, so the row is
+  // shown outright there instead of being an invisible tap target.
+  it("shows message actions on coarse pointers and reveals them on hover elsewhere", () => {
+    act(() =>
+      root.render(
+        <MessageList
+          sessionId="s"
+          view={view}
+          messages={[user("u1", "fix the test")]}
+        />,
+      ),
+    );
+    const bar = container
+      .querySelector('[data-message-id="u1"] [aria-label="Copy message text"]')
+      ?.closest("div");
+    expect(bar?.className).toContain("opacity-0");
+    expect(bar?.className).toContain("group-hover/message:opacity-100");
+    expect(bar?.className).toContain("focus-within:opacity-100");
+    expect(bar?.className).toContain("pointer-coarse:opacity-100");
   });
 });
 

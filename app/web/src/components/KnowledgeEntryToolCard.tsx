@@ -1,6 +1,15 @@
 import { BookOpen, PanelRight, SquareArrowOutUpRight } from "lucide-react";
 import type { KnowledgeEntryCard } from "@assistant/shared";
 import { useKnowledgeOpenTargets } from "./KnowledgeOpenTargets.tsx";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 /**
  * @component KnowledgeEntryToolCard
@@ -18,55 +27,49 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   const targets = useKnowledgeOpenTargets();
   const openInPanel = targets?.openInPanel;
   return (
-    <div className="not-prose my-2 overflow-hidden rounded-xl border border-line bg-surface text-left shadow-sm">
-      <div className="flex items-start gap-2 p-2.5">
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-          <BookOpen size={14} />
-        </span>
-        <div className="min-w-0 flex-1">
-          <span
-            className="block truncate text-caption font-medium text-fg"
-            title={card.title}
-          >
+    <Card size="sm" className="not-prose my-2 text-left">
+      <CardHeader>
+        <CardTitle className="flex min-w-0 items-center gap-2">
+          <BookOpen className="size-4 shrink-0 text-primary" />
+          <span className="truncate" title={card.title}>
             {card.title}
           </span>
-          {card.path ? (
-            <span
-              className="block truncate text-micro text-faint"
-              title={card.path}
-            >
-              {card.path}
-            </span>
-          ) : null}
-          {(card.note ?? card.summary) ? (
-            <p className="mt-1 line-clamp-3 text-micro text-muted">
-              {card.note ?? card.summary}
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {targets ? (
-        <div className="flex items-center gap-1 border-t border-line px-2.5 py-1.5">
-          {openInPanel ? (
-            <button
-              type="button"
-              onClick={() => openInPanel(card.path)}
-              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              <PanelRight size={13} />
-              Open in side panel
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => targets.openInMain(card.path)}
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption font-medium text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <SquareArrowOutUpRight size={13} />
-            Open in Knowledge
-          </button>
-        </div>
+        </CardTitle>
+        {card.path ? (
+          <CardDescription className="truncate text-xs" title={card.path}>
+            {card.path}
+          </CardDescription>
+        ) : null}
+      </CardHeader>
+      {(card.note ?? card.summary) ? (
+        <CardContent>
+          <p className="line-clamp-3 text-xs text-muted-foreground">
+            {card.note ?? card.summary}
+          </p>
+        </CardContent>
       ) : null}
-    </div>
+      {targets ? (
+        <CardFooter className="gap-1">
+          {openInPanel ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => openInPanel(card.path)}
+            >
+              <PanelRight />
+              Open in side panel
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => targets.openInMain(card.path)}
+          >
+            <SquareArrowOutUpRight />
+            Open in Knowledge
+          </Button>
+        </CardFooter>
+      ) : null}
+    </Card>
   );
 }

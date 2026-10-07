@@ -20,8 +20,11 @@ import type { SelectorBundle } from "@assistant/shared/comments";
 import { bundleFromOffsets } from "../../lib/describeAnchor.ts";
 import { showToast } from "../../lib/toast.ts";
 import { usePublishCommentActuation } from "../review/CommentActuation.tsx";
-import { CommentBody } from "../ui/CommentBody.tsx";
-import { CommentComposer as CommentComposerRow } from "../ui/CommentComposer.tsx";
+import { CommentBody } from "../common/CommentBody.tsx";
+import { CommentComposer as CommentComposerRow } from "../common/CommentComposer.tsx";
+import { IconButton } from "../common/IconButton.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { Button } from "../ui/button.tsx";
 
 /** Callbacks the surfaces need to mutate comments (wired to WS actions). */
 export interface CommentActions {
@@ -324,18 +327,16 @@ export interface LineCommentsConfig {
 
 function AuthorChip({ comment }: { comment: WorktreeComment }) {
   return comment.author.kind === "agent" ? (
-    <span
-      className="rounded bg-accent-soft px-1 py-0.5 text-micro font-medium text-accent"
+    <Badge
+      variant="secondary"
       title={[comment.author.sessionId, comment.author.thinkingLevel]
         .filter(Boolean)
         .join(" · ")}
     >
       {comment.author.model ?? "agent"} · {comment.author.sessionId.slice(0, 8)}
-    </span>
+    </Badge>
   ) : (
-    <span className="rounded bg-raised px-1 py-0.5 text-micro font-medium text-muted">
-      you
-    </span>
+    <Badge variant="outline">you</Badge>
   );
 }
 
@@ -364,30 +365,32 @@ export function CommentThread({
 
   return (
     <div
-      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-line opacity-70" : "border-accent/50"}`}
+      className={`mx-1 my-1 border-l-2 px-2 py-1.5 text-left font-sans ${resolved ? "border-border opacity-70" : "border-primary/50"}`}
     >
       <div className="flex items-start gap-1.5">
         <AuthorChip comment={root} />
-        <CommentBody body={root.body} className="min-w-0 flex-1 text-fg" />
+        <CommentBody
+          body={root.body}
+          className="min-w-0 flex-1 text-foreground"
+        />
         {root.severity ? (
-          <span className="shrink-0 rounded bg-raised px-1.5 py-0.5 text-micro font-medium text-muted">
-            {root.severity}
-          </span>
+          <Badge variant="outline">{root.severity}</Badge>
         ) : null}
         {/* A badge only when the anchor is in trouble; an ordinary one says nothing. */}
         {root.anchorState === "moved" ? (
-          <span className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-micro text-amber-500">
-            moved
-          </span>
+          <Badge variant="warning">moved</Badge>
         ) : null}
       </div>
       {replies.map((reply) => (
         <div
           key={reply.id}
-          className="mt-1.5 flex items-start gap-1.5 border-t border-line/70 pt-1.5"
+          className="mt-1.5 flex items-start gap-1.5 border-t border-border/70 pt-1.5"
         >
           <AuthorChip comment={reply} />
-          <CommentBody body={reply.body} className="min-w-0 flex-1 text-fg" />
+          <CommentBody
+            body={reply.body}
+            className="min-w-0 flex-1 text-foreground"
+          />
         </div>
       ))}
       {replying ? (
@@ -409,48 +412,50 @@ export function CommentThread({
         </div>
       ) : null}
       <div className="mt-1.5 flex items-center gap-0.5">
-        <ThreadAction
-          icon={<Reply size={13} />}
+        <IconButton
           label={replying ? "Cancel reply" : "Reply"}
-          active={replying}
+          aria-pressed={replying || undefined}
           onClick={() => setReplying((value) => !value)}
-        />
-        <ThreadAction
-          icon={resolved ? <RotateCcw size={13} /> : <Check size={13} />}
+        >
+          <Reply />
+        </IconButton>
+        <IconButton
           label={resolved ? "Reopen thread" : "Resolve thread"}
           onClick={() => actions.onResolveComment(root.id, !resolved)}
-        />
+        >
+          {resolved ? <RotateCcw /> : <Check />}
+        </IconButton>
         {/* Deleting a thread was one unguarded tap here while every other delete in
             the app confirms; it now asks like the rest. */}
         {confirmingDelete ? (
-          <span className="ml-auto flex items-center gap-1.5 text-caption">
-            <span className="text-faint">Delete?</span>
-            <button
-              type="button"
+          <span className="ml-auto flex items-center gap-1 text-sm text-muted-foreground">
+            Delete?
+            <Button
+              variant="destructive"
+              size="xs"
               onClick={() => {
                 actions.onDeleteComment(root.id);
                 setConfirmingDelete(false);
               }}
-              className="text-danger hover:underline"
             >
               Yes
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => setConfirmingDelete(false)}
-              className="text-muted hover:text-fg"
             >
               No
-            </button>
+            </Button>
           </span>
         ) : (
           <span className="ml-auto">
-            <ThreadAction
-              danger
-              icon={<Trash2 size={13} />}
+            <IconButton
               label="Delete thread"
               onClick={() => setConfirmingDelete(true)}
-            />
+            >
+              <Trash2 />
+            </IconButton>
           </span>
         )}
       </div>
@@ -458,40 +463,9 @@ export function CommentThread({
   );
 }
 
-/** One icon action in a thread's bottom row (the app-wide row-action shape). */
-function ThreadAction({
-  icon,
-  label,
-  onClick,
-  active = false,
-  danger = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  danger?: boolean;
-}) {
-  const tone = danger
-    ? "hover:bg-danger/10 hover:text-danger"
-    : "hover:bg-raised hover:text-fg";
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active || undefined}
-      className={`flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors ${active ? "text-accent" : "text-muted"} ${tone}`}
-    >
-      {icon}
-    </button>
-  );
-}
-
 /**
  * The composer for a comment on a LINE: the app's one comment row
- * (`ui/CommentComposer`), on the line it annotates.
+ * (`common/CommentComposer`), on the line it annotates.
  *
  * It says nothing about which line that is. It opens directly under it, the
  * reader is the one who just pressed the gutter there, and the caption that used
@@ -522,7 +496,7 @@ export function CommentComposer({
     typeof window !== "undefined" &&
     window.matchMedia("(pointer: fine)").matches;
   return (
-    <div className="mx-1 my-1 border-l-2 border-accent pl-2 font-sans">
+    <div className="mx-1 my-1 border-l-2 border-primary pl-2 font-sans">
       <CommentComposerRow
         onSubmit={onSubmit}
         onCancel={onCancel}
@@ -583,10 +557,10 @@ export function useFocusComment(
         return;
       }
       marker.scrollIntoView({ behavior: "smooth", block: "center" });
-      marker.classList.add("rounded-lg", "ring-2", "ring-accent");
+      marker.classList.add("rounded-lg", "ring-2", "ring-primary");
       marked = marker;
       timer = window.setTimeout(() => {
-        marker.classList.remove("rounded-lg", "ring-2", "ring-accent");
+        marker.classList.remove("rounded-lg", "ring-2", "ring-primary");
         marked = null;
       }, FOCUS_FLASH_MS);
     };
@@ -594,7 +568,7 @@ export function useFocusComment(
     return () => {
       if (raf) cancelAnimationFrame(raf);
       if (timer) window.clearTimeout(timer);
-      marked?.classList.remove("rounded-lg", "ring-2", "ring-accent");
+      marked?.classList.remove("rounded-lg", "ring-2", "ring-primary");
     };
     // One object per (commentId, nonce), built above: a new nonce re-fires this
     // for the same comment, and nothing else can.

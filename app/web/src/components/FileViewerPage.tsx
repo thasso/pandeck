@@ -36,12 +36,18 @@ import {
 import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { DocumentNavigationShell } from "./DocumentNavigationShell.tsx";
 import { DocumentCommentLayer } from "./DocumentComments.tsx";
-import { EmptyBox, ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import {
   DeferredGrantedMedia,
   mediaElementForPath,
 } from "./InlineDocumentEmbed.tsx";
+import { Alert, AlertDescription } from "./ui/alert.tsx";
 
 const KIND_ICONS = {
   image: ImageIcon,
@@ -163,7 +169,7 @@ export function FileViewerPage({
             {path}
           </span>
           {meta ? (
-            <span className="shrink-0 text-faint">
+            <span className="shrink-0 text-muted-foreground">
               {formatFileSize(meta.sizeBytes)} ·{" "}
               {new Date(meta.modifiedMs).toLocaleString()}
             </span>
@@ -282,7 +288,7 @@ function ViewerBody({
   }
   if (kind === "image") {
     return (
-      <div className="document-visual-content flex h-full items-center justify-center bg-panel p-4">
+      <div className="document-visual-content flex h-full items-center justify-center bg-card p-4">
         <img src={versionedUrl} alt={name} className="max-h-full max-w-full" />
       </div>
     );
@@ -343,9 +349,11 @@ function ViewerBody({
     );
   }
   const truncatedNote = body.truncated ? (
-    <p className="mb-3 rounded-lg border border-line bg-panel p-2 text-caption text-muted">
-      Showing the first part of this file only — download it to read the rest.
-    </p>
+    <Alert role="note" className="mb-3">
+      <AlertDescription>
+        Showing the first part of this file only — download it to read the rest.
+      </AlertDescription>
+    </Alert>
   ) : null;
   if (kind === "markdown") {
     return (

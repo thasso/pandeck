@@ -3,7 +3,7 @@ import { Composer } from "../Composer.tsx";
 import { MessageList } from "../MessageList.tsx";
 import type { TranscriptViewPrefs } from "../transcriptView.ts";
 import { useAssistant } from "../../hooks/useAssistant.ts";
-import { PaneLoading } from "../ui/load.tsx";
+import { PaneLoading } from "../common/load.tsx";
 
 const PANEL_TRANSCRIPT_VIEW: TranscriptViewPrefs = {
   showThinking: false,

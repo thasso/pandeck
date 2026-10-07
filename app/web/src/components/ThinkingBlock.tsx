@@ -2,8 +2,14 @@ import { useEffect, useId, useRef, useState, type HTMLAttributes } from "react";
 import { Brain, ChevronDown } from "lucide-react";
 
 import { Markdown } from "./Markdown.tsx";
-import { Spinner } from "./ui/load.tsx";
-import { useViewportProximity } from "./ui/useNearViewport.ts";
+import { Spinner } from "./common/load.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
+import { useViewportProximity } from "./common/useNearViewport.ts";
 
 export interface ThinkingBlockProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -161,20 +167,16 @@ export function ThinkingBlock({
       : "Thought process";
 
   return (
-    <div
+    <Collapsible
       ref={rootRef}
+      open={isOpen}
+      onOpenChange={toggle}
       className={cx("flex w-full flex-col", className)}
       {...props}
     >
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={isOpen}
+      <CollapsibleTrigger
+        render={<Button variant="ghost" size="sm" className="w-fit" />}
         aria-controls={bodyId}
-        className={cx(
-          "inline-flex w-fit items-center gap-1.5 rounded-md py-1 pr-2 text-body font-medium text-muted transition-colors",
-          "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-        )}
       >
         {streaming ? (
           <Spinner size="sm" variant="ring" />
@@ -190,24 +192,24 @@ export function ThinkingBlock({
             isOpen ? "rotate-0" : "-rotate-90",
           )}
         />
-      </button>
-      {isOpen && hasBody && (
+      </CollapsibleTrigger>
+      {hasBody && (
         // `aria-busy` sits on the body element, which survives the viewport
         // gate and clears the flag in place once the text renders (R6); the
         // placeholder inside only holds the height — also while a withheld
         // body is on its way.
-        <div
+        <CollapsibleContent
           id={bodyId}
           aria-busy={!everNear || text.length === 0 || undefined}
-          className="mt-1 border-l-2 border-line pl-3 text-muted"
+          className="mt-1 border-l-2 border-border pl-3 text-muted-foreground"
         >
-          {everNear && text.length > 0 ? (
+          {isOpen && everNear && text.length > 0 ? (
             <Markdown text={text} />
           ) : (
             <div className="min-h-8" />
           )}
-        </div>
+        </CollapsibleContent>
       )}
-    </div>
+    </Collapsible>
   );
 }

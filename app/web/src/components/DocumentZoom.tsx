@@ -13,7 +13,8 @@ import {
   steppedDocumentZoom,
   type DocumentZoomMode,
 } from "../lib/documentZoom.ts";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Button } from "./ui/button.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 
 export interface DocumentZoomRegistration {
@@ -69,24 +70,27 @@ export function DocumentZoomActions({
 }) {
   return (
     <>
-      <GhostIconButton
+      <IconButton
         label="Zoom out"
         onClick={zoom.decrease}
         disabled={!zoom.canDecrease}
-        icon={<Minus size={16} />}
-      />
-      <GhostIconButton
+      >
+        <Minus />
+      </IconButton>
+      <IconButton
         label={`Reset zoom (${Math.round(zoom.scale * 100)}%)`}
         onClick={zoom.reset}
         disabled={zoom.scale === DOCUMENT_ZOOM_DEFAULT}
-        icon={<RotateCcw size={16} />}
-      />
-      <GhostIconButton
+      >
+        <RotateCcw />
+      </IconButton>
+      <IconButton
         label="Zoom in"
         onClick={zoom.increase}
         disabled={!zoom.canIncrease}
-        icon={<Plus size={16} />}
-      />
+      >
+        <Plus />
+      </IconButton>
     </>
   );
 }
@@ -114,34 +118,37 @@ export function DocumentZoomSection({
       summary={`${percent}%`}
     >
       <div className="flex items-center gap-2">
-        <GhostIconButton
+        <IconButton
           label="Zoom out"
           onClick={zoom.decrease}
           disabled={!zoom.canDecrease}
-          icon={<Minus size={16} />}
-        />
+        >
+          <Minus />
+        </IconButton>
         {/* The number is the state these controls change, so it is announced. */}
         <span
           aria-live="polite"
-          className="min-w-12 text-center text-caption tabular-nums text-fg"
+          className="min-w-12 text-center text-sm tabular-nums text-foreground"
         >
           {percent}%
         </span>
-        <GhostIconButton
+        <IconButton
           label="Zoom in"
           onClick={zoom.increase}
           disabled={!zoom.canIncrease}
-          icon={<Plus size={16} />}
-        />
-        <button
-          type="button"
+        >
+          <Plus />
+        </IconButton>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={zoom.reset}
           disabled={zoom.scale === DOCUMENT_ZOOM_DEFAULT}
           aria-label="Reset zoom to 100%"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-caption text-muted transition-colors hover:bg-panel hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+          className="ml-auto"
         >
-          <RotateCcw size={13} /> Reset
-        </button>
+          <RotateCcw data-icon="inline-start" /> Reset
+        </Button>
       </div>
     </InspectorSection>
   );

@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { GitCommitHorizontal } from "lucide-react";
 import type { WorktreeFileLogEntry } from "@assistant/shared";
 import { useFetchState, useReloadOnToken } from "../../hooks/useFetchState.ts";
@@ -10,7 +10,59 @@ import {
   ErrorNote,
   PaneLoading,
   RefreshIndicator,
-} from "../ui/load.tsx";
+} from "../common/load.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "../ui/item.tsx";
+
+/** One commit as a clickable row: subject, a byline, the short oid. */
+export function CommitItem({
+  subject,
+  shortOid,
+  children,
+  selected = false,
+  dimmed = false,
+  onClick,
+}: {
+  subject: string;
+  shortOid: string;
+  /** The byline under the subject. */
+  children: ReactNode;
+  selected?: boolean;
+  dimmed?: boolean | undefined;
+  onClick: (event: MouseEvent) => void;
+}) {
+  return (
+    <Item
+      size="xs"
+      variant={selected ? "muted" : "default"}
+      render={<button type="button" />}
+      onClick={onClick}
+      className={`flex-nowrap text-left ${dimmed ? "opacity-50" : ""}`}
+    >
+      <ItemMedia variant="icon">
+        <GitCommitHorizontal />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">{subject}</span>
+        </ItemTitle>
+        <ItemDescription className="truncate">{children}</ItemDescription>
+      </ItemContent>
+      <ItemActions>
+        <span className="font-mono text-xs text-muted-foreground">
+          {shortOid}
+        </span>
+      </ItemActions>
+    </Item>
+  );
+}
 
 /**
  * @component FileHistoryList
@@ -58,7 +110,7 @@ export function FileHistoryList({
       </div>
     );
   return (
-    <div className="flex flex-col gap-px p-2">
+    <div className="flex flex-col p-2">
       {state.status === "refreshing" ? (
         <div className="mb-1 flex justify-end">
           <RefreshIndicator label="Refreshing the history" />
@@ -72,33 +124,21 @@ export function FileHistoryList({
           onRetry={reload}
         />
       ) : null}
-      {log.entries.map((entry) => (
-        <button
-          key={entry.oid}
-          type="button"
-          onClick={() => onOpenCommit(entry)}
-          className="flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-muted hover:bg-raised hover:text-fg"
-        >
-          <GitCommitHorizontal
-            size={13}
-            className="mt-0.5 shrink-0 text-faint"
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-caption font-medium">
-              {entry.subject}
-            </span>
-            <span className="block truncate text-micro text-faint">
-              {entry.author} · {relativeTime(entry.authoredAt)}
-              {entry.path !== path ? ` · as ${entry.path}` : ""}
-            </span>
-          </span>
-          <span className="shrink-0 font-mono text-micro text-faint">
-            {entry.shortOid}
-          </span>
-        </button>
-      ))}
+      <ItemGroup className="gap-1">
+        {log.entries.map((entry) => (
+          <CommitItem
+            key={entry.oid}
+            subject={entry.subject}
+            shortOid={entry.shortOid}
+            onClick={() => onOpenCommit(entry)}
+          >
+            {entry.author} · {relativeTime(entry.authoredAt)}
+            {entry.path !== path ? ` · as ${entry.path}` : ""}
+          </CommitItem>
+        ))}
+      </ItemGroup>
       {log.truncated ? (
-        <p className="px-2 py-1.5 text-micro text-faint">
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
           Showing the {log.entries.length} most recent commits.
         </p>
       ) : null}

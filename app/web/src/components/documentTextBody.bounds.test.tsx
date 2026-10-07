@@ -7,7 +7,7 @@ import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { FileViewerPage } from "./FileViewerPage.tsx";
 import { SessionArtifactViewer } from "./SessionArtifactViewer.tsx";
 import { initHistoryNav, resetHistoryNavForTests } from "../lib/historyNav.ts";
-import { clearHighlightCache } from "./ui/highlighter.ts";
+import { clearHighlightCache } from "./common/highlighter.ts";
 
 /**
  * The host and artifact viewers draw the SAME bounded body as Knowledge does.

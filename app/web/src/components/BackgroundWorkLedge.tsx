@@ -11,6 +11,7 @@ import {
 import { elapsedLabel } from "../lib/relativeTime.ts";
 import { BackgroundWorkRow } from "./BackgroundWorkRow.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
+import { Button } from "@/components/ui/button";
 
 /** How many active rows the ledge lists before pointing at the registry. */
 const BACKGROUND_WORK_LEDGE_LIMIT = 10;
@@ -74,28 +75,25 @@ export function BackgroundWorkLedge({
   const Chevron = open ? ChevronDown : ChevronUp;
   return (
     <div data-background-ledge className="min-w-0">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-start"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}
-        className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-caption text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
-        <Activity
-          size={13}
-          className="shrink-0 text-accent"
-          aria-hidden="true"
-        />
-        <span className="min-w-0 flex-1 truncate">
+        <Activity aria-hidden="true" className="text-primary" />
+        <span className="min-w-0 flex-1 truncate text-left">
           {summary}
-          {age ? <span className="text-faint"> · {age}</span> : null}
+          {age ? <span className="text-muted-foreground"> · {age}</span> : null}
         </span>
-        <Chevron size={14} className="shrink-0 text-faint" aria-hidden="true" />
-      </button>
+        <Chevron aria-hidden="true" />
+      </Button>
       {open ? (
         <div
           id={`background-ledge-${sessionId}`}
-          className="max-h-[40vh] overflow-y-auto border-t border-line px-2 py-2"
+          className="flex max-h-72 flex-col gap-2 overflow-y-auto border-t p-2 text-sm text-muted-foreground"
         >
           {active.total > 0 ? (
             <ul className="flex flex-col gap-2">
@@ -111,26 +109,25 @@ export function BackgroundWorkLedge({
               ))}
             </ul>
           ) : activity.activeCount > 0 ? (
-            <p className="px-1 text-caption text-faint">Loading the rows…</p>
+            <p>Loading the rows…</p>
           ) : (
-            <p className="px-1 text-caption text-muted">
+            <p>
               Nothing is running; this session still holds a retained background
               host.
             </p>
           )}
           {active.hidden > 0 ? (
-            <p className="mt-2 px-1 text-caption text-faint">
-              {active.hidden} more in the registry.
-            </p>
+            <p>{active.hidden} more in the registry.</p>
           ) : null}
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full"
             onClick={() => onStopAll(sessionId)}
-            className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-line text-caption text-muted transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           >
-            <Square size={12} aria-hidden="true" />
+            <Square aria-hidden="true" />
             Stop all background work in this session
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

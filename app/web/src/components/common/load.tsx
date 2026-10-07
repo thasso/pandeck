@@ -1,0 +1,290 @@
+import { CircleAlert } from "lucide-react";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
+import { cn } from "cn";
+
+import { Alert, AlertAction, AlertDescription } from "../ui/alert.tsx";
+import { Button } from "../ui/button.tsx";
+import { Empty } from "../ui/empty.tsx";
+import { Spinner as ShadcnSpinner } from "../ui/spinner.tsx";
+
+/**
+ * The app's loading, empty and error presentation (Task-361 / Task-383).
+ *
+ * This is the ONLY module allowed to spin, pulse or draw a dashed box:
+ * `loadingStateAudit.test.ts` forbids `animate-spin`, `animate-pulse`,
+ * `LoaderCircle`/`Loader2` and `border-dashed` everywhere else with no
+ * exceptions, so a surface gets its five states from here or not at all. The
+ * one treatment that is NOT a loading state — a pulse that means live — is a
+ * named class token here (`LIVE_PULSE`) rather than an audit bypass. Sizes are
+ * tokens, not per-caller numbers — the pre-Task-383 code used every value
+ * between 9 and 22 and no two spinners matched.
+ *
+ * Every animation is `motion-safe:` (R6) and every indicator carries a
+ * `role="status"` with a label, so a fetch is announced without any surface
+ * having to remember to. The model is `app/web/docs/loading-states.md`.
+ */
+
+/**
+ * The pulse of something LIVE, which is not a loading state and must not be
+ * read as one: the dictation `Mic` while the microphone is opening (nothing has
+ * been asked for, so a spinner would pose a question the user cannot answer).
+ * Waiting for an ANSWER is `Spinner`; standing in for content that has not arrived is
+ * `Skeleton`.
+ */
+export const LIVE_PULSE = "motion-safe:animate-pulse";
+
+type SpinnerSize = "xs" | "sm" | "md" | "lg";
+
+/**
+ * Pixel sizes for the spinner tokens: `xs` fits inside `text-xs` chrome (a
+ * card's state badge), `sm` sits inline in a caption row, `md` matches a
+ * control's icon, `lg` is the whole-pane one.
+ */
+const SPINNER_PX: Record<SpinnerSize, number> = {
+  xs: 10,
+  sm: 14,
+  md: 16,
+  lg: 24,
+};
+
+const SPINNER_SIZE_CLASS: Record<SpinnerSize, string> = {
+  xs: "size-2.5",
+  sm: "size-3.5",
+  md: "size-4",
+  lg: "size-6",
+};
+
+/**
+ * The ring variant sizes a border box rather than an SVG, so it takes the same
+ * tokens as pixels. One frozen object per token: these sit on the transcript's
+ * hottest render paths (every streaming tool call and thinking block), and an
+ * inline object literal would allocate on each of them.
+ */
+const RING_STYLE: Record<SpinnerSize, CSSProperties> = {
+  xs: { width: SPINNER_PX.xs, height: SPINNER_PX.xs },
+  sm: { width: SPINNER_PX.sm, height: SPINNER_PX.sm },
+  md: { width: SPINNER_PX.md, height: SPINNER_PX.md },
+  lg: { width: SPINNER_PX.lg, height: SPINNER_PX.lg },
+};
+
+/**
+ * `glyph` is the app's spinner everywhere; `ring` is the transcript's — the
+ * bordered circle the tool-call and thinking headers drew by hand, kept as a
+ * variant so those two hot paths render ONE element with no icon module behind
+ * it (Task-390) instead of buying an audit exemption.
+ */
+type SpinnerVariant = "glyph" | "ring";
+
+export interface SpinnerProps {
+  size?: SpinnerSize;
+  variant?: SpinnerVariant;
+  className?: string;
+}
+
+/**
+ * The app's one spinner. Decorative by construction (`aria-hidden`): the region
+ * around it owns the announcement, so a spinner never reads out on its own and
+ * two nested ones never announce twice.
+ */
+export function Spinner({
+  size = "md",
+  variant = "glyph",
+  className,
+}: SpinnerProps) {
+  if (variant === "ring") {
+    return (
+      <span
+        aria-hidden
+        style={RING_STYLE[size]}
+        className={cn(
+          "inline-block shrink-0 rounded-full border-2 border-border border-t-primary motion-safe:animate-spin",
+          className,
+        )}
+      />
+    );
+  }
+  return (
+    <ShadcnSpinner
+      role="presentation"
+      aria-hidden
+      aria-label={undefined}
+      className={cn("shrink-0", SPINNER_SIZE_CLASS[size], className)}
+    />
+  );
+}
+
+export interface PaneLoadingProps {
+  /** Announced and shown under the spinner. */
+  label?: string;
+  className?: string;
+}
+
+/**
+ * A whole pane's first load. Use it only where the surface has no stable
+ * silhouette to reserve — where it has one, `Skeleton` rows keep the layout
+ * still and are the better answer (R4).
+ *
+ * It announces and it is NOT `aria-busy`: this element is a live region, and
+ * `aria-busy` on a live region tells assistive tech it may hold the output back
+ * until busy clears — which never happens here, because the pane unmounts this
+ * whole node the moment the data lands. The busy flag belongs on the PERSISTENT
+ * container whose content is being swapped, where it really does go true→false
+ * (`QuickRow`'s `busy`, a transcript block's body element while its children
+ * are deferred). See R6 in the model.
+ */
+export function PaneLoading({
+  label = "Loading…",
+  className,
+}: PaneLoadingProps) {
+  return (
+    <div
+      role="status"
+      className={cn(
+        "flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground",
+        className,
+      )}
+    >
+      <Spinner size="lg" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+export type SkeletonProps = HTMLAttributes<HTMLElement> & {
+  /**
+   * Render a `span` instead of the default `div`, for a skeleton that stands
+   * inside phrasing content — a button's label, a meter track, a text row. The
+   * caller gives it `block`/`inline-block` where it needs box geometry.
+   */
+  as?: "div" | "span";
+};
+
+/**
+ * A layout-stable placeholder block: the caller sizes it with `className` to
+ * the height of the content it stands in for, so nothing jumps when the data
+ * lands. Decorative — the surrounding region carries the `role="status"`.
+ */
+export function Skeleton({
+  as: Tag = "div",
+  className,
+  ...rest
+}: SkeletonProps) {
+  return (
+    <Tag
+      aria-hidden
+      className={cn("rounded-md bg-muted motion-safe:animate-pulse", className)}
+      {...rest}
+    />
+  );
+}
+
+export interface RefreshIndicatorProps {
+  /** Announced; not drawn, so it fits in a header or a corner. */
+  label?: string;
+  size?: SpinnerSize;
+  className?: string;
+}
+
+/**
+ * The stale-while-refresh marker (R2): a small spinner next to content that
+ * STAYS on screen while a fetch for the same query runs.
+ */
+export function RefreshIndicator({
+  label = "Refreshing",
+  size = "sm",
+  className,
+}: RefreshIndicatorProps) {
+  return (
+    <span
+      role="status"
+      className={cn(
+        "inline-flex items-center text-muted-foreground",
+        className,
+      )}
+    >
+      <Spinner size={size} />
+      <span className="sr-only">{label}</span>
+    </span>
+  );
+}
+
+/**
+ * `box` is the empty state: a full-width centred card standing where the
+ * content would be. `inline` is the same box at a caption's height, for an
+ * empty state inside a panel section rather than in place of a pane. `item` is
+ * the one that is neither: an empty state that is a ROW in a horizontal
+ * scroller (`NewSessionQuickStart`'s worktree row), so it has to carry the
+ * snapping and the two-line geometry of the cards it sits beside — the height
+ * of a `box` in that row would resize the whole scroller.
+ */
+type EmptyBoxVariant = "box" | "inline" | "item";
+
+const EMPTY_BOX_CLASS: Record<EmptyBoxVariant, string> = {
+  box: "border text-sm text-muted-foreground",
+  inline:
+    "items-start gap-2 border px-3 py-2 text-left text-sm text-muted-foreground",
+  item: "min-w-[9.5rem] flex-none snap-start items-start gap-1 border px-3 py-2.5 text-left text-sm text-muted-foreground",
+};
+
+export interface EmptyBoxProps {
+  /** What is not here, and how to get one — a sentence, not a word. */
+  children: ReactNode;
+  /** The way out of the empty state, normally a small `Button`. */
+  action?: ReactNode;
+  variant?: EmptyBoxVariant;
+  className?: string;
+}
+
+/**
+ * The app's one empty state. Render it ONLY when the source has authoritatively
+ * answered with nothing (R1); while the answer is outstanding the region is
+ * still loading, and "No X yet" would be a lie.
+ */
+export function EmptyBox({
+  children,
+  action,
+  variant = "box",
+  className,
+}: EmptyBoxProps) {
+  return (
+    <Empty className={cn(EMPTY_BOX_CLASS[variant], className)}>
+      <div className="flex w-full min-w-0 flex-col gap-1">{children}</div>
+      {action}
+    </Empty>
+  );
+}
+
+export interface ErrorNoteProps {
+  message: ReactNode;
+  /** Renders the retry affordance; omit it where there is nothing to retry. */
+  onRetry?: (() => void) | undefined;
+  retryLabel?: string;
+  className?: string;
+}
+
+/**
+ * A failure that has a home on screen. Inline beside (or instead of) the
+ * content it belongs to — a toast is for fire-and-forget acts whose surface is
+ * already gone. It never replaces retained data: under R2 a refresh that fails
+ * keeps the stale content and adds this note above it.
+ */
+export function ErrorNote({
+  message,
+  onRetry,
+  retryLabel = "Retry",
+  className,
+}: ErrorNoteProps) {
+  return (
+    <Alert variant="destructive" className={className}>
+      <CircleAlert />
+      <AlertDescription>{message}</AlertDescription>
+      {onRetry ? (
+        <AlertAction>
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            {retryLabel}
+          </Button>
+        </AlertAction>
+      ) : null}
+    </Alert>
+  );
+}

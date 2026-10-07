@@ -18,6 +18,7 @@ import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
+import { Button } from "@/components/ui/button";
 
 type BackgroundWorkPromptUpdate =
   BackgroundWorkPromptPresentation["updates"][number];
@@ -103,7 +104,9 @@ function BackgroundWorkPromptRow({
             <p className="font-medium break-words">{clippedTitle}</p>
           ) : null}
           {(outcome ?? exitDetail) ? (
-            <p className="text-caption text-muted">{outcome ?? exitDetail}</p>
+            <p className="text-sm text-muted-foreground">
+              {outcome ?? exitDetail}
+            </p>
           ) : null}
           {command ? (
             <BackgroundWorkCommand
@@ -121,17 +124,16 @@ function BackgroundWorkPromptRow({
               className="mt-1"
             />
           ) : null}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-caption">
-            <button
-              type="button"
-              onClick={() => onOpenBackgroundWork?.(update.taskId)}
-              disabled={!onOpenBackgroundWork}
-              title={update.taskId}
-              className="text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:no-underline"
-            >
-              Open in registry
-            </button>
-          </div>
+          <Button
+            variant="link"
+            size="sm"
+            className="px-0"
+            onClick={() => onOpenBackgroundWork?.(update.taskId)}
+            disabled={!onOpenBackgroundWork}
+            title={update.taskId}
+          >
+            Open in registry
+          </Button>
           {actions}
         </div>
       </ChatActivityRow>
@@ -184,7 +186,7 @@ export function BackgroundWorkPromptCard({
       {/* Dropped updates stay visible while collapsed: a signal the reader has
           to open the card to discover is one this card swallowed. */}
       {presentation.omittedCount ? (
-        <p className="pl-5 text-micro text-faint">
+        <p className="pl-5 text-xs text-muted-foreground">
           {presentation.omittedCount} more update
           {presentation.omittedCount === 1 ? "" : "s"} omitted
         </p>

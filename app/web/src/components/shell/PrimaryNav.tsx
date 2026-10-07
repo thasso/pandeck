@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { IconButton } from "../common/IconButton.tsx";
 import { BottomCard, bottomCardInset } from "./BottomCard.tsx";
 import { planNavSlots } from "./navOverflow.ts";
 import { OverflowList, SectionOverflow } from "./SectionOverflow.tsx";
@@ -20,10 +22,6 @@ interface Props<Id extends string> {
   /** Opens the nav-order settings from the overflow surface. */
   onCustomizeOrder?: (() => void) | undefined;
 }
-
-/** Shared geometry of the 36px icon slots; mirrored by `navOverflow.ts`. */
-const SLOT_CLASS =
-  "flex size-9 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 /**
  * Space the sidebar's browser must keep clear on a phone, where this bar is the
@@ -94,32 +92,28 @@ export function PrimaryNav<Id extends string>({
     <>
       {visible.map((section) =>
         section.id === activeId ? (
-          <button
+          // The 36px slots and the 104px pill are mirrored by `navOverflow.ts`.
+          <Button
             key={section.id}
-            type="button"
+            variant="secondary"
+            size="lg"
             aria-current="true"
             onClick={() => select(section.id)}
             title={section.label}
-            className="flex h-9 w-26 shrink-0 items-center gap-0.5 rounded-lg bg-accent-soft px-1 text-caption font-medium text-fg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <span className="flex size-5 shrink-0 items-center justify-center text-accent">
-              {section.icon}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-left">
-              {section.label}
-            </span>
-          </button>
-        ) : (
-          <button
-            key={section.id}
-            type="button"
-            onClick={() => select(section.id)}
-            title={section.label}
-            aria-label={section.label}
-            className={`${SLOT_CLASS} text-muted hover:bg-raised hover:text-fg`}
+            className="w-26 justify-start"
           >
             {section.icon}
-          </button>
+            <span className="min-w-0 truncate">{section.label}</span>
+          </Button>
+        ) : (
+          <IconButton
+            key={section.id}
+            label={section.label}
+            size="icon-lg"
+            onClick={() => select(section.id)}
+          >
+            {section.icon}
+          </IconButton>
         ),
       )}
     </>
@@ -166,7 +160,7 @@ export function PrimaryNav<Id extends string>({
     <nav
       ref={barRef}
       aria-label="Primary"
-      className="flex shrink-0 items-center justify-center gap-0.5 border-t border-line px-2 pt-1.5 pb-[max(0.375rem,var(--app-safe-area-bottom))]"
+      className="flex shrink-0 items-center justify-center gap-0.5 border-t border-border px-2 pt-1.5 pb-[max(0.375rem,var(--app-safe-area-bottom))]"
     >
       {renderSlots(onSelect)}
       {overflow.length > 0 ? (
@@ -175,7 +169,6 @@ export function PrimaryNav<Id extends string>({
           activeId={activeId}
           onSelect={onSelect}
           onCustomize={onCustomizeOrder}
-          triggerClassName={SLOT_CLASS}
         />
       ) : null}
     </nav>

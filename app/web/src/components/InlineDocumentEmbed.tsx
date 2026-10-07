@@ -20,8 +20,9 @@ import { dataOf, errorOf, isInitialLoad } from "../lib/loadState.ts";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { pushDocumentEntryAndAnnounce } from "../lib/historyNav.ts";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
-import { ImageLightbox } from "./ui/ImageLightbox.tsx";
-import { ErrorNote, Skeleton } from "./ui/load.tsx";
+import { ImageLightbox } from "./common/ImageLightbox.tsx";
+import { Button } from "./ui/button.tsx";
+import { ErrorNote, Skeleton } from "./common/load.tsx";
 
 function targetPath(target: DocumentTarget): string {
   return target.path;
@@ -86,7 +87,7 @@ export function InlineDocumentEmbed({
         src={rawUrl}
         alt={label ?? ""}
         loading="lazy"
-        className="max-h-[32rem] max-w-full object-contain"
+        className="max-h-128 max-w-full object-contain"
       />
     );
     // Inside an authored link that anchor owns the click, so the picture stays
@@ -123,7 +124,7 @@ export function InlineDocumentEmbed({
 
   return (
     <span ref={ref} className="not-prose my-2 block max-w-full">
-      <span className="block max-h-96 overflow-hidden rounded-lg border border-line bg-panel">
+      <span className="block max-h-96 overflow-hidden rounded-lg border border-border bg-card">
         {visible ? (
           <SandboxedDocument
             target={target}
@@ -144,7 +145,7 @@ export function InlineDocumentEmbed({
           event.preventDefault();
           pushDocumentEntryAndAnnounce(viewerHref);
         }}
-        className="mt-1 inline-flex items-center gap-1 text-micro text-muted hover:text-fg"
+        className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
         <Eye size={12} /> Open in viewer
       </a>
@@ -293,14 +294,14 @@ function GrantedMediaPlayer({
 
   if (!activated) {
     return (
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="lg"
         onClick={() => setActivated(true)}
         aria-label={`Play ${label}`}
-        className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-caption text-fg hover:bg-raised"
       >
-        <Play size={16} /> Play {label}
-      </button>
+        <Play data-icon="inline-start" /> Play {label}
+      </Button>
     );
   }
   if (error)
@@ -370,7 +371,7 @@ function GrantedMediaPlayer({
       // Without this iOS takes every video fullscreen the moment it plays,
       // which throws the reader out of the surface they pressed Play in.
       playsInline
-      className="max-h-96 max-w-full rounded-lg bg-black"
+      className="max-h-96 max-w-full rounded-lg"
     />
   );
 }

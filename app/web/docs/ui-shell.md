@@ -74,7 +74,7 @@ it belongs to rather than a number that looks free:
 | 60    | Toasts (`ToastViewport`)                                                             |
 | 66–70 | Modal surfaces: the bottom card in overlay position, sheets, dialogs                 |
 | 80    | Portaled `Popover` panels — above the modal layer, on purpose                        |
-| 90    | A confirmation raised OVER any of them (`ui/dialog.tsx`, `raised`)                   |
+| 90    | A confirmation raised OVER any of them (`common/dialogs.tsx`, `raised`)              |
 | 100   | Full-screen takeovers and dev overlays (login terminal, shortcuts, the image viewer) |
 
 Comment actuation is shell furniture, never a floating bar over content. A
@@ -103,11 +103,11 @@ with `raised`, which hosts no picker of its own.
 ## Asking the user
 
 Confirmations, destructive guards and rename prompts are the app's own DOM, from
-`components/ui/dialog.tsx` — never `window.confirm`/`alert`/`prompt`, which the
-Tauri shell's WKWebView silently drops, turning the guarded action into a dead
-control (`nativeDialogAudit.test.ts` enforces this). A handler that asks and
-then acts awaits `useDialogs().confirm` / `.promptText`; a flow that owns its
-own open/busy/error state (the worktree clean and removal guards) renders
+`components/common/dialogs.tsx` — never `window.confirm`/`alert`/`prompt`, which
+the Tauri shell's WKWebView silently drops, turning the guarded action into a
+dead control (`nativeDialogAudit.test.ts` enforces this). A handler that asks
+and then acts awaits `useDialogs().confirm` / `.promptText`; a flow that owns
+its own open/busy/error state (the worktree clean and removal guards) renders
 `ConfirmDialog` directly. Both are the same surface, so a confirmation looks and
 behaves the same wherever it is raised: Escape, the backdrop and Cancel all
 answer no, Enter answers yes, and the keys it consumes never reach the app-wide
@@ -639,7 +639,7 @@ it is gone. A merge the pull request itself blocks (draft, a KNOWN conflict,
 unreadable capabilities) is disabled with its reason, and because a disabled
 row's tooltip reaches neither a keyboard nor a phone the page's Status block
 states the same sentence as TEXT. The merge confirmation is one
-`components/ui/dialog.tsx` dialog listing every consequence with a per-item
+`components/common/dialogs.tsx` dialog listing every consequence with a per-item
 opt-out and the sentence under each control describing what THIS click will do;
 it is owned by the panel, which the app keys by the pull request so no
 consent-bearing refusal survives into another one. Each action busies only its
@@ -978,8 +978,8 @@ safe-area inset in its place, so an installed PWA still clears the notch.
   yet, not for the one already following. The math is
   `components/shell/edgeSwipe.ts`, on the same rule as the row swipe below:
   thresholds belong in a tested module, not in a component tuned by feel.
-- A LIST ROW may carry one swipe action PER SIDE (`components/ui/SwipeRow`), and
-  it obeys the edge rule above rather than being an exception to it: a touch
+- A LIST ROW may carry one swipe action PER SIDE (`components/common/SwipeRow`),
+  and it obeys the edge rule above rather than being an exception to it: a touch
   starting within `SWIPE_EDGE_GUARD_PX` of either edge belongs to the edge's
   owner — the browser's gesture, or the shell's back — and never becomes a row
   swipe. That guard is load-bearing now rather than courteous: a row's rightward

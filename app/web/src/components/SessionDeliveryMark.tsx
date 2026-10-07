@@ -14,18 +14,10 @@ import type { SessionListItem } from "@assistant/shared";
 import {
   sessionDelivery,
   type SessionDeliveryState,
-  type SessionDeliveryTone,
 } from "../lib/sessionDelivery.ts";
-import { Spinner } from "./ui/load.tsx";
-
-/** Tone → theme tokens. Text only: this sits inside rows that own their fill. */
-const TONE_CLASS: Record<SessionDeliveryTone, string> = {
-  accent: "text-accent",
-  warning: "text-warning",
-  danger: "text-danger",
-  success: "text-success",
-  muted: "text-muted",
-};
+import { Badge } from "@/components/ui/badge";
+import { Spinner } from "./common/load.tsx";
+import { TONE_BADGE, TONE_TEXT } from "./common/statusBadge.ts";
 
 /**
  * A SHAPE per state, not a tint per state. On a one-line row the glyph is the
@@ -97,14 +89,13 @@ export function SessionDeliveryMark({
 }) {
   const delivery = sessionDelivery(session);
   if (!delivery) return null;
-  const tone = TONE_CLASS[delivery.tone];
   const Icon =
     delivery.state === "creating" ? null : STATE_ICON[delivery.state];
 
   if (variant === "glyph") {
     return (
       <span
-        className={`flex size-4 shrink-0 items-center justify-center ${tone}`}
+        className={`flex size-4 shrink-0 items-center justify-center ${TONE_TEXT[delivery.tone]}`}
         title={delivery.title}
         aria-label={`Pull request: ${delivery.title}`}
         role="img"
@@ -120,19 +111,20 @@ export function SessionDeliveryMark({
   const labelIsNumber =
     number !== undefined && delivery.label.includes(`#${number}`);
   return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-0.5 font-medium ${tone} ${
+    <Badge
+      variant={TONE_BADGE[delivery.tone]}
+      className={
         // The square collapse would clip the number, so a numbered mark only
         // hides its label.
         variant === "responsive" && number === undefined
           ? "session-status-responsive-badge"
-          : ""
-      }`}
+          : undefined
+      }
       title={delivery.title}
       aria-label={`Pull request: ${delivery.title}`}
       role="img"
     >
-      {Icon ? <Icon size={10} aria-hidden /> : <Spinner size="xs" />}
+      {Icon ? <Icon aria-hidden /> : <Spinner size="xs" />}
       {labelIsNumber ? null : (
         <span
           className={
@@ -145,6 +137,6 @@ export function SessionDeliveryMark({
       {number !== undefined ? (
         <span className="tabular-nums">#{number}</span>
       ) : null}
-    </span>
+    </Badge>
   );
 }

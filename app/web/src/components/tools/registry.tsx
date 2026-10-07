@@ -17,18 +17,18 @@ import type {
   LazyBlockRef,
   LiveBodyKey,
 } from "@assistant/shared/session";
-import { ToolCallBlock, type ToolStatus } from "../ui/ToolCallBlock.tsx";
+import { ToolCallBlock, type ToolStatus } from "../common/ToolCallBlock.tsx";
 import { PeerPromptCardView } from "../PeerPromptCard.tsx";
 import { KnowledgeEntryToolCard } from "../KnowledgeEntryToolCard.tsx";
 import { ServedFileCard } from "../ServedFileCard.tsx";
 import { TaskManageToolCard } from "../TaskManageToolCard.tsx";
-import { CollapsibleOutput } from "../ui/CollapsibleOutput.tsx";
+import { CollapsibleOutput } from "../common/CollapsibleOutput.tsx";
 import {
   BashBody,
   EditDiffBody,
   FileExcerptBody,
 } from "./NativeToolBodies.tsx";
-import { JsonView } from "../ui/JsonView.tsx";
+import { JsonView } from "../common/JsonView.tsx";
 import {
   acceptsAgentQuestionCard,
   acceptsGoogleWorkspaceCard,
@@ -45,6 +45,7 @@ import {
 } from "@assistant/shared/toolCards";
 import { resolveShowFilesTarget } from "../../lib/showFilesCard.ts";
 import { normalizedToolName } from "./toolName.ts";
+import { Card, CardContent } from "@/components/ui/card";
 
 export type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -141,9 +142,9 @@ const LazyPushToolCard = lazy(() =>
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted">
-      {label}
-    </div>
+    <Card size="sm" className="my-2">
+      <CardContent className="text-muted-foreground">{label}</CardContent>
+    </Card>
   );
 }
 
@@ -347,7 +348,9 @@ function defaultToolBody(block: ToolBlock): ReactNode {
       {showInput && (
         <section className="flex flex-col gap-1">
           {labeled && (
-            <span className="text-caption font-medium text-faint">Input</span>
+            <span className="text-sm font-medium text-muted-foreground">
+              Input
+            </span>
           )}
           <JsonView value={block.args} defaultExpandedDepth={1} />
         </section>
@@ -355,7 +358,9 @@ function defaultToolBody(block: ToolBlock): ReactNode {
       {showOutput && (
         <section className="flex flex-col gap-1">
           {labeled && (
-            <span className="text-caption font-medium text-faint">Output</span>
+            <span className="text-sm font-medium text-muted-foreground">
+              Output
+            </span>
           )}
           {!block.done ? (
             // Streaming: incomplete output may not parse — show plain text and

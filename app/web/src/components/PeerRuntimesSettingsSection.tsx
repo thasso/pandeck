@@ -13,7 +13,17 @@
  * exposed to coordinating agents; only model family is inferred.
  */
 import { Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Switch } from "@/components/ui/switch";
+import { Item } from "@/components/ui/item";
+import { IconButton } from "./common/IconButton.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import {
   isPeerRuntimeRelativeCost,
   isThinkingLevel,
@@ -96,93 +106,101 @@ export function PeerRuntimesSettingsSection({
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Peer sessions</h2>
-      <p className="mt-1 text-caption text-muted">
+      <h2 className="text-sm font-semibold">Peer sessions</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         Control how agents coordinate with ordinary peer sessions and which
         runtimes they may start without asking you first.
       </p>
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <label className="block text-caption font-medium text-fg">
-          Maximum uninterrupted peer-prompt hops
-          <input
-            type="number"
-            min={MIN_SESSION_PEER_PROMPT_MAX_HOPS}
-            max={MAX_SESSION_PEER_PROMPT_MAX_HOPS}
-            step={1}
-            value={settings.sessionPeerPromptMaxHops}
-            onChange={(event) => {
-              const value = event.target.valueAsNumber;
-              if (!Number.isFinite(value)) return;
-              onUpdate({ sessionPeerPromptMaxHops: value });
-            }}
-            className="settings-input mt-1.5 w-full"
-          />
-        </label>
-        <p className="mt-2 text-caption text-faint">
-          A causal agent-to-agent conversation is blocked after this many sends
-          without you in the loop. Your next prompt closes the chain. Choose a
-          value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
-          {MAX_SESSION_PEER_PROMPT_MAX_HOPS}; changes apply to the next peer
-          send, including an existing conversation.
-        </p>
-      </div>
+      <Card className="mt-6">
+        <CardContent>
+          <Field>
+            <FieldLabel htmlFor="peer-prompt-hops">
+              Maximum uninterrupted peer-prompt hops
+            </FieldLabel>
+            <Input
+              id="peer-prompt-hops"
+              type="number"
+              min={MIN_SESSION_PEER_PROMPT_MAX_HOPS}
+              max={MAX_SESSION_PEER_PROMPT_MAX_HOPS}
+              step={1}
+              value={settings.sessionPeerPromptMaxHops}
+              onChange={(event) => {
+                const value = event.target.valueAsNumber;
+                if (!Number.isFinite(value)) return;
+                onUpdate({ sessionPeerPromptMaxHops: value });
+              }}
+            />
+            <FieldDescription>
+              A causal agent-to-agent conversation is blocked after this many
+              sends without you in the loop. Your next prompt closes the chain.
+              Choose a value from {MIN_SESSION_PEER_PROMPT_MAX_HOPS} to{" "}
+              {MAX_SESSION_PEER_PROMPT_MAX_HOPS}; changes apply to the next peer
+              send, including an existing conversation.
+            </FieldDescription>
+          </Field>
+        </CardContent>
+      </Card>
 
-      <p className="mt-6 text-caption text-muted">
+      <p className="mt-6 text-sm text-muted-foreground">
         Approving a runtime permits paid sessions on exactly that account, model
         and thinking level. Anything else still comes to you as an approval
         card. Spawned sessions appear in your sidebar, where you can read,
         re-prompt or take over any of them.
       </p>
 
-      <div className="mt-4 rounded-xl border border-line bg-panel p-4">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-caption font-medium">Approved runtimes</div>
-            <div className="mt-0.5 text-caption text-muted">
-              Two thinking levels for one model are two rows. Cost and the
-              description help agents choose; changes apply to the next session
-              an agent starts and never change a running one.
+      <Card className="mt-4">
+        <CardContent>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Approved runtimes</div>
+              <div className="mt-0.5 text-sm text-muted-foreground">
+                Two thinking levels for one model are two rows. Cost and the
+                description help agents choose; changes apply to the next
+                session an agent starts and never change a running one.
+              </div>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={addRuntime}
+              disabled={noModels || rows.length >= MAX_PEER_SPAWN_RUNTIMES}
+            >
+              <Plus />
+              Add runtime
+            </Button>
           </div>
-          <button
-            type="button"
-            onClick={addRuntime}
-            disabled={noModels || rows.length >= MAX_PEER_SPAWN_RUNTIMES}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg disabled:opacity-50"
-          >
-            <Plus size={12} />
-            Add runtime
-          </button>
-        </div>
 
-        {noModels ? (
-          <p className="mb-3 text-caption text-warning">
-            No account offers a model right now, so there is nothing to approve.
-            Enable an account under Models &amp; providers first.
-          </p>
-        ) : null}
+          {noModels ? (
+            <Alert variant="warning" role="note" className="mb-3">
+              <AlertDescription>
+                No account offers a model right now, so there is nothing to
+                approve. Enable an account under Models &amp; providers first.
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
-        {rows.length === 0 ? (
-          <div className="rounded-lg border border-line bg-surface px-3 py-3 text-center text-caption text-faint">
-            No approved runtimes. Agents must ask you to approve every batch.
-          </div>
-        ) : (
-          <ul className="space-y-3">
-            {rows.map((row) => (
-              <RuntimeRow
-                key={row.id}
-                row={row}
-                models={models}
-                justAdded={row.id === addedId}
-                onRevealed={clearAdded}
-                onChange={updateRuntime}
-                onRemove={removeRuntime}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+          {rows.length === 0 ? (
+            <EmptyBox>
+              No approved runtimes. Agents must ask you to approve every batch.
+            </EmptyBox>
+          ) : (
+            <ul className="space-y-3">
+              {rows.map((row) => (
+                <RuntimeRow
+                  key={row.id}
+                  row={row}
+                  models={models}
+                  justAdded={row.id === addedId}
+                  onRevealed={clearAdded}
+                  onChange={updateRuntime}
+                  onRemove={removeRuntime}
+                />
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -202,6 +220,7 @@ function RuntimeRow({
   onChange: (id: string, patch: Partial<PeerSpawnRuntime>) => void;
   onRemove: (id: string) => void;
 }) {
+  const fieldId = useId();
   const family = peerRuntimeFamilyOf(row.provider, row.modelId);
   const unavailable = peerRuntimeUnavailableReason(row, models);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -222,28 +241,27 @@ function RuntimeRow({
     onRevealed();
   }, [justAdded, onRevealed]);
   return (
-    <li className="rounded-lg border border-line bg-surface p-3">
+    <Item render={<li />} variant="outline" className="flex-col items-stretch">
       <div className="flex items-start justify-between gap-2">
-        <label className="min-w-0 flex-1 space-y-1">
-          <span className="text-caption font-medium text-muted">Name</span>
-          <input
+        <Field className="min-w-0 flex-1">
+          <FieldLabel htmlFor={`${fieldId}-name`}>Name</FieldLabel>
+          <Input
+            id={`${fieldId}-name`}
             ref={nameRef}
             type="text"
             value={row.name ?? ""}
             onChange={(event) => onChange(row.id, { name: event.target.value })}
             placeholder={`${row.modelId || "model"} · ${row.thinkingLevel} thinking`}
-            className="settings-input w-full"
           />
-        </label>
-        <button
-          type="button"
+        </Field>
+        <IconButton
           onClick={() => onRemove(row.id)}
-          aria-label={`Remove runtime ${row.name?.trim() || row.modelId}`}
+          label={`Remove runtime ${row.name?.trim() || row.modelId}`}
           title="Remove runtime"
-          className="mt-6 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          className="mt-6"
         >
-          <Trash2 size={13} />
-        </button>
+          <Trash2 />
+        </IconButton>
       </div>
 
       <div className="mt-3">
@@ -287,39 +305,39 @@ function RuntimeRow({
       </div>
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
-        <label className="block text-caption font-medium text-muted">
-          Cost
-          <select
+        <Field>
+          <FieldLabel htmlFor={`${fieldId}-cost`}>Cost</FieldLabel>
+          <NativeSelect
+            id={`${fieldId}-cost`}
             value={row.relativeCost}
             onChange={(event) => {
               const relativeCost = event.target.value;
               if (isPeerRuntimeRelativeCost(relativeCost))
                 onChange(row.id, { relativeCost });
             }}
-            className="settings-input mt-1 w-full"
+            className="w-full"
           >
             {PEER_RUNTIME_RELATIVE_COSTS.map((cost) => (
               <option key={cost} value={cost}>
                 {COST_LABEL[cost]}
               </option>
             ))}
-          </select>
-        </label>
-        <label className="flex items-end gap-2 pb-2 text-caption text-muted">
-          <input
-            type="checkbox"
+          </NativeSelect>
+        </Field>
+        <Field orientation="horizontal" className="self-end">
+          <FieldLabel htmlFor={`${fieldId}-enabled`}>Enabled</FieldLabel>
+          <Switch
+            id={`${fieldId}-enabled`}
             checked={row.enabled}
-            onChange={(event) =>
-              onChange(row.id, { enabled: event.target.checked })
-            }
+            onCheckedChange={(enabled) => onChange(row.id, { enabled })}
           />
-          Enabled
-        </label>
+        </Field>
       </div>
 
-      <label className="mt-3 block text-caption font-medium text-muted">
-        Description
-        <input
+      <Field className="mt-3">
+        <FieldLabel htmlFor={`${fieldId}-description`}>Description</FieldLabel>
+        <Input
+          id={`${fieldId}-description`}
           type="text"
           value={row.description ?? ""}
           onChange={(event) =>
@@ -327,20 +345,21 @@ function RuntimeRow({
           }
           maxLength={MAX_PEER_RUNTIME_DESCRIPTION_CHARS}
           placeholder="For example: Fast fixer for focused TypeScript changes; use a different-family reviewer."
-          className="settings-input mt-1 w-full"
         />
-      </label>
-      <p className="mt-1 text-caption text-faint">
-        Shown to agents as your hint for when to select this runtime. Family:{" "}
-        {family}.
-      </p>
+        <FieldDescription>
+          Shown to agents as your hint for when to select this runtime. Family:{" "}
+          {family}.
+        </FieldDescription>
+      </Field>
 
       {row.enabled && unavailable ? (
-        <p className="mt-2 text-caption text-warning">
-          Unavailable: {unavailable} Agents cannot use this row until you repair
-          or remove it; it never moves to another runtime.
-        </p>
+        <Alert variant="warning" role="note" className="mt-2">
+          <AlertDescription>
+            Unavailable: {unavailable} Agents cannot use this row until you
+            repair or remove it; it never moves to another runtime.
+          </AlertDescription>
+        </Alert>
       ) : null}
-    </li>
+    </Item>
   );
 }

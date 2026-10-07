@@ -164,8 +164,8 @@ Guidelines for briefs:
 - Render both user and assistant chat text through the shared `Markdown`
   component so sent prompts, relay prompts, and assistant prose use one
   Markdown/link/code treatment.
-- Copy affordances inside content use `ui/CopyButton`'s `InlineCopyButton` (a
-  small ghost icon that swaps to an accent check and raises the copy toast).
+- Copy affordances inside content use `common/CopyButton`'s `InlineCopyButton`
+  (a small ghost icon that swaps to an accent check and raises the copy toast).
   Fenced Markdown code blocks carry one under the block via `CodeBlock`'s
   `copyable`; inline code does not.
 - Synthetic resume/control prompts that are useful to the user should render as
@@ -299,7 +299,7 @@ Guidelines for briefs:
 
 ## Keyboard shortcuts
 
-- There is one app-wide shortcut system in `components/ui/shortcuts.tsx`: a
+- There is one app-wide shortcut system in `components/common/shortcuts.tsx`: a
   `ShortcutsProvider` (mounted once around the app in `main.tsx`), a
   `useShortcuts(group)` hook that registers a `ShortcutGroup` while the calling
   surface is mounted, and a `?` help overlay that lists every
@@ -315,7 +315,7 @@ Guidelines for briefs:
   letters across surfaces for muscle memory.
 - Row-scoped keys that must act on the focused item are handled by the widget
   that owns focus, not the global dispatcher. The generic `Tree`
-  (`components/ui/Tree.tsx`) takes `rowActions` (keys + label +
+  (`components/common/Tree.tsx`) takes `rowActions` (keys + label +
   `run(targetIds)`, acting on the whole multi-selection when the focused row is
   part of one) and a `shortcutsTitle` that registers those keys `display`-only
   in the help overlay. Flat lists like the sidebar `SessionRow` handle the same
@@ -619,11 +619,11 @@ Guidelines for briefs:
 - Animate the compact ⇄ expanded transition with the CSS
   `grid-template-rows: 0fr ↔ 1fr` pattern plus an `overflow-hidden` inner cell,
   keeping both layouts mounted so focus, text state, and attachments are
-  preserved across collapses. Use `ui/composerShell.ts`'s `composerFoldClass`
-  rather than a hand-written variant, and never collapse a composer card by
-  cutting its own height (`h-0`): a height animates from a pixel value, not from
-  `auto`, so that surface snaps while every other one glides. Fold the card's
-  BODY and let the card's height follow it.
+  preserved across collapses. Use `common/composerShell.ts`'s
+  `composerFoldClass` rather than a hand-written variant, and never collapse a
+  composer card by cutting its own height (`h-0`): a height animates from a
+  pixel value, not from `auto`, so that surface snaps while every other one
+  glides. Fold the card's BODY and let the card's height follow it.
 - Every transition and animation is `motion-safe:` (or stilled under a
   `prefers-reduced-motion` rule in `index.css`), including fold/collapse
   transitions. Prefix the duration and easing utilities as well as the

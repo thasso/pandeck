@@ -1,10 +1,12 @@
 import type { CalendarEventDto, CalendarWorklogDto } from "@assistant/shared";
+import { Button } from "../ui/button.tsx";
+import { Badge } from "../ui/badge.tsx";
+import { Item } from "../ui/item.tsx";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
 import { EventChip } from "./EventChip.tsx";
 import {
   dayOfMonth,
   monthMatrix,
-  monthOf,
   shortWeekday,
   todayIso,
 } from "./calendarDates.ts";
@@ -43,17 +45,16 @@ export function MonthView({
 }: MonthViewProps) {
   const weeks = monthMatrix(anchor, showWeekends);
   const today = todayIso(useUserTimeZone());
-  const currentMonth = monthOf(anchor);
   const cols = weeks[0]!.length;
   const gridStyle = { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="grid border-b border-line" style={gridStyle}>
+      <div className="grid border-b border-border" style={gridStyle}>
         {weeks[0]!.map((date) => (
           <div
             key={date}
-            className="px-2 py-1.5 text-caption font-medium uppercase tracking-wide text-faint"
+            className="px-2 py-1.5 text-sm font-medium uppercase tracking-wide text-muted-foreground"
           >
             {shortWeekday(date)}
           </div>
@@ -63,48 +64,42 @@ export function MonthView({
         {weeks.flat().map((date) => {
           const events = eventsByDay.get(date) ?? [];
           const worklogs = worklogsByDay?.get(date) ?? [];
-          const inMonth = monthOf(date) === currentMonth;
           const isToday = date === today;
           const isSelected = date === selectedDate;
           return (
-            <button
-              type="button"
+            <Item
               key={date}
-              onClick={() => onSelectDate(date)}
-              onDoubleClick={() => onOpenDay(date)}
-              className={`flex min-h-0 flex-col gap-0.5 border-b border-r border-line p-1 text-left transition-colors hover:bg-raised/60 ${
-                inMonth ? "bg-surface" : "bg-panel/40"
-              } ${isSelected ? "ring-1 ring-inset ring-accent" : ""}`}
+              size="xs"
+              variant={isSelected ? "muted" : "outline"}
+              className="relative min-h-0 flex-col items-stretch justify-start gap-0.5 rounded-none border-0 border-b border-r p-1"
             >
-              <div className="flex items-center justify-between px-0.5">
-                <span
-                  role="button"
-                  tabIndex={-1}
+              <Button
+                variant="ghost"
+                className="absolute inset-0 z-0 h-full w-full rounded-none"
+                aria-label={`${date}, select day`}
+                onClick={() => onSelectDate(date)}
+                onDoubleClick={() => onOpenDay(date)}
+              />
+              <div className="z-10 flex items-center justify-between px-0.5">
+                <Button
+                  variant={isToday ? "default" : "ghost"}
+                  size="icon-xs"
                   title="Open day view"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenDay(date);
-                  }}
-                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-accent ${
-                    isToday
-                      ? "bg-accent font-semibold text-accent-fg"
-                      : inMonth
-                        ? "text-fg"
-                        : "text-faint"
-                  }`}
+                  aria-label={`Open ${date} day view`}
+                  onClick={() => onOpenDay(date)}
                 >
                   {dayOfMonth(date)}
-                </span>
-                {worklogs.length > 0 && (
-                  <span
+                </Button>
+                {worklogs.length > 0 ? (
+                  <Badge
+                    variant="success"
                     title={`${loggedHoursLabel(worklogs)} logged to Tempo`}
-                    className="rounded bg-emerald-500/15 px-1 text-micro font-medium tabular-nums text-emerald-600 dark:text-emerald-400"
                   >
                     {loggedHoursLabel(worklogs)}
-                  </span>
-                )}
+                  </Badge>
+                ) : null}
               </div>
-              <div className="flex min-h-0 flex-col gap-px overflow-hidden">
+              <div className="z-10 flex min-h-0 flex-col gap-px overflow-hidden">
                 {events.slice(0, MAX_CHIPS).map((event) => (
                   <EventChip
                     key={event.id}
@@ -113,21 +108,18 @@ export function MonthView({
                     onSelect={onSelectEvent}
                   />
                 ))}
-                {events.length > MAX_CHIPS && (
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenDay(date);
-                    }}
-                    className="px-1 text-micro text-muted hover:text-fg"
+                {events.length > MAX_CHIPS ? (
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="justify-start"
+                    onClick={() => onOpenDay(date)}
                   >
                     +{events.length - MAX_CHIPS} more
-                  </span>
-                )}
+                  </Button>
+                ) : null}
               </div>
-            </button>
+            </Item>
           );
         })}
       </div>

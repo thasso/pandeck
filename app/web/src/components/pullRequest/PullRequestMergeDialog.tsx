@@ -19,19 +19,18 @@
  * @related usePullRequestMergeCleanup, RemoveWorktreeDialog, pullRequestInbox
  */
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import {
   PULL_REQUEST_MERGE_METHODS,
   type PullRequestInventoryItem,
   type PullRequestMergeMethod,
 } from "@assistant/shared";
-import { ConfirmDialog } from "../ui/dialog.tsx";
-
-const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
-  squash: "Squash — one commit on the base branch",
-  merge: "Merge commit — keep individual commits",
-  rebase: "Rebase — replay the commits onto the base",
-};
+import { ConfirmDialog } from "../common/dialogs.tsx";
+import {
+  CheckRow,
+  ChoiceGroup,
+  ForceConsent,
+  MERGE_METHOD_LABELS,
+} from "../worktree/WorktreeDialogs.tsx";
 
 export interface PullRequestMergeChoice {
   method?: PullRequestMergeMethod;
@@ -193,7 +192,9 @@ export function PullRequestMergeDialog({
       }
     >
       {/* What a check ACCOUNTED for, above the decision it hands back. */}
-      {note ? <p className="mt-2 text-caption text-muted">{note}</p> : null}
+      {note ? (
+        <p className="mt-2 text-sm text-muted-foreground">{note}</p>
+      ) : null}
 
       {/* --------------------------- the merge ---------------------------- */}
       {merging ? (
@@ -201,12 +202,12 @@ export function PullRequestMergeDialog({
           {conflicts ? (
             // As TEXT under the row, in place of the controls' own sentences: a
             // tooltip on a disabled button reaches neither keyboard nor phone.
-            <p className="text-caption text-amber-500">
+            <p className="text-sm text-warning">
               #{item.number} conflicts with {item.baseBranch}, so no merge is
               offered and nothing here can run. Update the branch first.
             </p>
           ) : offered.length === 0 ? (
-            <p className="text-caption text-amber-500">
+            <p className="text-sm text-warning">
               {supported
                 ? "This repository allows no merge method for pull requests, so nothing can be merged here."
                 : `The merge methods this repository allows could not be read${
@@ -216,42 +217,28 @@ export function PullRequestMergeDialog({
                   }, so no merge is offered.`}
             </p>
           ) : (
-            <div className="flex flex-col gap-1">
-              {offered.map((id) => (
-                <label
-                  key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-accent bg-accent-soft text-fg" : "border-line text-muted hover:bg-raised"}`}
-                >
-                  <input
-                    type="radio"
-                    name="pull-request-merge-method"
-                    checked={selected === id}
-                    disabled={busy}
-                    onChange={() => setMethod(id)}
-                  />
-                  {MERGE_METHOD_LABELS[id]}
-                </label>
-              ))}
-            </div>
+            <ChoiceGroup
+              options={offered}
+              labels={MERGE_METHOD_LABELS}
+              value={selected}
+              disabled={busy}
+              onChange={setMethod}
+            />
           )}
 
           {/* ---------------------- the remote branch ---------------------- */}
           {canDeleteRemoteBranch ? (
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-caption text-fg">
-              <input
-                type="checkbox"
-                checked={deleteRemoteBranch}
-                disabled={busy || conflicts}
-                onChange={(event) =>
-                  setDeleteRemoteBranch(event.target.checked)
-                }
-              />
+            <CheckRow
+              checked={deleteRemoteBranch}
+              disabled={busy || conflicts}
+              onChange={setDeleteRemoteBranch}
+            >
               Delete the remote branch{" "}
               <span className="font-mono">{item.headBranch}</span>
-            </label>
+            </CheckRow>
           ) : null}
           {conflicts ? null : (
-            <p className="mt-1 text-caption text-faint">
+            <p className="mt-1 text-sm text-muted-foreground">
               {!canDeleteRemoteBranch
                 ? `Deleting the remote branch is not offered for this repository, so ${item.headBranch} is kept.`
                 : deleteRemoteBranch
@@ -265,17 +252,16 @@ export function PullRequestMergeDialog({
       {/* -------------------------- the checkout --------------------------- */}
       {hasCheckout && !outcomeUnknown ? (
         <div className="mt-3">
-          <label className="flex cursor-pointer items-center gap-2 text-caption text-fg">
-            <input
-              type="checkbox"
-              checked={removeWorktree}
-              disabled={busy}
-              onChange={(event) => setRemoveWorktree(event.target.checked)}
-            />
+          <CheckRow
+            checked={removeWorktree}
+            disabled={busy}
+            onChange={setRemoveWorktree}
+            className=""
+          >
             Remove the local worktree and delete the branch{" "}
             <span className="font-mono">{item.headBranch}</span>
-          </label>
-          <p className="mt-1 text-caption text-faint">
+          </CheckRow>
+          <p className="mt-1 text-sm text-muted-foreground">
             {removeWorktree
               ? `The checkout of ${item.headBranch} is removed once delivery into ${item.baseBranch} is verified, its local branch deleted, and the sessions working in it are settled — one that is running, or waiting on an answer or approval, refuses the removal instead.`
               : `The local checkout of ${item.headBranch} is kept; it stays listed here until it is cleaned up.`}
@@ -285,7 +271,7 @@ export function PullRequestMergeDialog({
 
       {/* -------------------------- always stated -------------------------- */}
       {merging ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-muted-foreground">
           Any Task this pull request's card links is SUGGESTED done for you to
           answer; merging never writes a Task's status itself.
         </p>
@@ -293,29 +279,24 @@ export function PullRequestMergeDialog({
 
       {/* -------------------------- the consent ---------------------------- */}
       {needsForce ? (
-        <div className="mt-2 rounded-lg border border-red-400/40 bg-red-500/10 p-2.5">
-          <p className="flex items-start gap-1.5 text-caption text-red-400">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            {/* The server's own words: this consent answers the refusal its
-                refreshed verification actually produced, which is what makes
-                the answer match the question. */}
+        <ForceConsent
+          consent="remove it anyway"
+          checked={confirmForce}
+          disabled={busy}
+          onChange={setConfirmForce}
+        >
+          {/* The server's own words: this consent answers the refusal its
+              refreshed verification actually produced, which is what makes
+              the answer match the question. */}
+          <p>
             The cleanup was refused: {refusal} Removing it anyway may LOSE every
             commit on <span className="font-mono">{item.headBranch}</span>.
           </p>
-          <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-caption text-fg">
-            <input
-              type="checkbox"
-              checked={confirmForce}
-              disabled={busy}
-              onChange={(event) => setConfirmForce(event.target.checked)}
-            />
-            I understand, remove it anyway
-          </label>
-        </div>
+        </ForceConsent>
       ) : null}
 
       {!merging && !hasCheckout && !outcomeUnknown ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-muted-foreground">
           Nothing is left to do here: this pull request is {item.state} and no
           local worktree holds {item.headBranch}.
         </p>

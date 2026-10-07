@@ -16,6 +16,18 @@ const config: StorybookConfig = {
   async viteFinal(viteConfig) {
     viteConfig.plugins ??= [];
     viteConfig.plugins.push(tailwindcss());
+    viteConfig.resolve ??= {};
+    viteConfig.resolve.alias = [
+      {
+        find: /^@\//,
+        replacement: `${resolve(import.meta.dirname, "../../src")}/`,
+      },
+      ...(Array.isArray(viteConfig.resolve.alias)
+        ? viteConfig.resolve.alias
+        : Object.entries(viteConfig.resolve.alias ?? {}).map(
+            ([find, replacement]) => ({ find, replacement }),
+          )),
+    ];
     return viteConfig;
   },
 };

@@ -207,7 +207,7 @@ it("keeps its own navigation inside the panel", async () => {
   await act(async () => tab("Files")!.click());
   // The view moved in the panel, and nothing was handed to the main pane.
   expect(navigated).toEqual([]);
-  expect(tab("Files")!.className).toContain("bg-raised");
+  expect(tab("Files")!.getAttribute("aria-selected")).toBe("true");
 });
 
 it("hands the worktree to the main pane with the view it is on", async () => {

@@ -171,7 +171,7 @@ describe("Markdown pa:// links", () => {
       />,
     );
     expect(html).toContain('href="#"');
-    expect(html).toContain("text-danger");
+    expect(html).toContain("text-destructive");
   });
 });
 

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ClipboardList, TriangleAlert, Undo2 } from "lucide-react";
+import { Check, ClipboardList, Undo2 } from "lucide-react";
 import type {
   DisplayBlock,
   TaskStatus,
@@ -12,6 +12,9 @@ import {
 import { pendingStatusSuggestion } from "../lib/backlogTree.ts";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
+import { NoticeList } from "./tools/NoticeList.tsx";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -137,56 +140,57 @@ export function TaskManageToolCard({
   const commentOnly = commentedIds.filter((id) => !changedIds.has(id));
 
   return (
-    <section className="my-2 rounded-xl border border-line bg-panel/60 px-3 py-2">
-      <div className="mb-1 flex items-center gap-1.5 text-micro font-medium text-muted">
-        <ClipboardList size={11} className="text-accent" />
-        <span>Tasks</span>
-      </div>
-      <ul className="flex flex-col gap-1">
-        {changed.map((task, index) => (
-          <TaskRow
-            key={`${task.id}-${index}`}
-            task={task}
-            summary={changeSummary(
-              task,
-              kinds?.[index],
-              commented.has(task.id),
-            )}
-            confirmedTo={confirmed[task.id]}
-            onOpenTask={onOpenTask}
-            onConfirm={
-              onApplyTaskStatusSuggestion
-                ? (to) => {
-                    onApplyTaskStatusSuggestion({ id: task.id, status: to });
-                    setConfirmed((current) => ({ ...current, [task.id]: to }));
-                  }
-                : undefined
-            }
-          />
-        ))}
-        {commentOnly.map((id) => (
-          <li key={`comment-${id}`}>
-            <TaskChip id={id} label={`Task-${id}`} onOpenTask={onOpenTask} />
-            <span className="ml-1.5 text-micro text-muted">comment added</span>
-          </li>
-        ))}
-        {deletedIds.map((id) => (
-          <li key={`deleted-${id}`} className="text-caption text-faint">
-            <span className="line-through">Task-{id}</span>
-            <span className="ml-1.5 text-micro">deleted</span>
-          </li>
-        ))}
-      </ul>
-      {warnings.map((warning) => (
-        <p
-          key={warning}
-          className="mt-1 flex items-start gap-1.5 text-micro text-amber-500"
-        >
-          <TriangleAlert size={11} className="mt-0.5 shrink-0" aria-hidden />
-          <span className="min-w-0 break-words">{warning}</span>
-        </p>
-      ))}
-    </section>
+    <Card size="sm" className="my-2">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-1.5">
+          <ClipboardList className="size-3.5 text-primary" />
+          Tasks
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-1">
+          {changed.map((task, index) => (
+            <TaskRow
+              key={`${task.id}-${index}`}
+              task={task}
+              summary={changeSummary(
+                task,
+                kinds?.[index],
+                commented.has(task.id),
+              )}
+              confirmedTo={confirmed[task.id]}
+              onOpenTask={onOpenTask}
+              onConfirm={
+                onApplyTaskStatusSuggestion
+                  ? (to) => {
+                      onApplyTaskStatusSuggestion({ id: task.id, status: to });
+                      setConfirmed((current) => ({
+                        ...current,
+                        [task.id]: to,
+                      }));
+                    }
+                  : undefined
+              }
+            />
+          ))}
+          {commentOnly.map((id) => (
+            <li key={`comment-${id}`} className="flex items-center gap-1.5">
+              <TaskChip id={id} label={`Task-${id}`} onOpenTask={onOpenTask} />
+              <span className="text-xs text-muted-foreground">
+                comment added
+              </span>
+            </li>
+          ))}
+          {deletedIds.map((id) => (
+            <li key={`deleted-${id}`} className="text-muted-foreground">
+              <span className="line-through">Task-{id}</span>
+              <span className="ml-1.5 text-xs">deleted</span>
+            </li>
+          ))}
+        </ul>
+        <NoticeList items={warnings} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -218,7 +222,9 @@ function TaskRow({
         />
         <TaskChip id={task.id} label={task.title} onOpenTask={onOpenTask} />
         {summary ? (
-          <span className="shrink-0 text-micro text-muted">{summary}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {summary}
+          </span>
         ) : null}
       </span>
       {suggestion ? (
@@ -251,39 +257,31 @@ function SuggestionRow({
   const done = suggestion.to === "done";
   if (confirmed)
     return (
-      <span className="ml-[22px] inline-flex items-center gap-1 text-micro text-emerald-500">
-        <Check size={11} aria-hidden />
+      <span className="ml-5 inline-flex items-center gap-1 text-xs text-success">
+        <Check className="size-3" aria-hidden />
         {done ? "Confirmed done" : "Put back on the to-do pile"}
       </span>
     );
   return (
-    <span className="ml-[22px] flex min-w-0 items-center gap-1.5">
-      <span className="min-w-0 truncate text-micro text-amber-500">
+    <span className="ml-5 flex min-w-0 items-center gap-1.5">
+      <span className="min-w-0 truncate text-xs text-warning">
         {done ? "says done" : "says not done"}
         {suggestion.reason ? `: ${suggestion.reason}` : ""}
       </span>
       {onConfirm ? (
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="xs"
           onClick={() => onConfirm(suggestion.to)}
-          className={`inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${
-            done
-              ? "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
-              : "border-accent/50 text-accent hover:bg-accent/10"
-          }`}
           aria-label={
             done
               ? `Confirm "${title}" is done`
               : `Put "${title}" back on the to-do pile`
           }
         >
-          {done ? (
-            <Check size={11} aria-hidden />
-          ) : (
-            <Undo2 size={11} aria-hidden />
-          )}
+          {done ? <Check aria-hidden /> : <Undo2 aria-hidden />}
           {done ? "Confirm done" : "Put back"}
-        </button>
+        </Button>
       ) : null}
     </span>
   );
@@ -304,18 +302,19 @@ function TaskChip({
       <TaskIdBadge id={id} />
     </>
   );
-  const className =
-    "inline-flex min-w-0 max-w-full items-baseline gap-1.5 rounded-md px-1 py-0.5 text-caption text-fg";
   return onOpenTask ? (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="xs"
+      className="min-w-0 max-w-full"
       onClick={() => onOpenTask(id)}
-      className={`${className} cursor-pointer hover:bg-raised`}
       title="Open task details"
     >
       {inner}
-    </button>
+    </Button>
   ) : (
-    <span className={className}>{inner}</span>
+    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1.5 px-2">
+      {inner}
+    </span>
   );
 }

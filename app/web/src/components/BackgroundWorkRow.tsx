@@ -12,20 +12,20 @@ import {
   backgroundWorkRowKey,
   backgroundWorkStateBadge,
   backgroundWorkStopDisabledReason,
-  type BackgroundWorkTone,
 } from "../lib/backgroundWork.ts";
-import { Button } from "./ui/Button.tsx";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
-
-/** Badge colours, keyed on the projection's semantic tone. */
-const TONE_CLASS: Record<BackgroundWorkTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
-  success: "bg-success-soft text-success",
-  muted: "bg-panel text-muted",
-};
+import { TONE_BADGE } from "./common/statusBadge.ts";
 
 export interface BackgroundWorkRowProps {
   item: BackgroundWorkItemSummary;
@@ -108,24 +108,15 @@ function BackgroundWorkRowImpl({
       data-list-row-id={item.id}
       data-background-item={item.id}
       data-background-anchored={anchored ? "true" : undefined}
-      className={`rounded-xl border bg-panel p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        anchored ? "border-accent/50 ring-1 ring-accent/30" : "border-line"
-      }`}
+      className={`rounded-xl outline-none ${anchored ? "ring-2 ring-primary/40" : ""}`}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <p
-            className="truncate text-body font-medium text-fg"
-            title={item.label}
-          >
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle className="truncate" title={item.label}>
             {item.label}
-          </p>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
-            <span
-              className={`rounded-full px-2 py-0.5 text-micro font-medium ${TONE_CLASS[badge.tone]}`}
-            >
-              {badge.label}
-            </span>
+          </CardTitle>
+          <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Badge variant={TONE_BADGE[badge.tone]}>{badge.label}</Badge>
             <span>{backgroundWorkKindLabel(item)}</span>
             <span aria-hidden="true">·</span>
             <span>{backgroundWorkBackendLabel(item)}</span>
@@ -133,67 +124,72 @@ function BackgroundWorkRowImpl({
             <span>{backgroundWorkAgeLabel(item, now)}</span>
             <span aria-hidden="true">·</span>
             <span>{backgroundWorkDeadlineLabel(item, now)}</span>
-          </p>
+          </CardDescription>
+          <CardAction>
+            <Button
+              variant="outline"
+              busy={stopPending}
+              disabled={Boolean(stopBlocked)}
+              title={stopBlocked ?? "Stop this background work"}
+              aria-label={`Stop ${item.label}`}
+              onClick={() => onStop(item.id)}
+            >
+              <Square aria-hidden="true" />
+              Stop
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col items-start gap-1 text-muted-foreground">
           {command ? (
             <BackgroundWorkCommand
               command={command}
               truncated={item.commandTruncated}
-              className="mt-1.5"
+              className="w-full"
             />
           ) : null}
-          {host ? <p className="mt-1 text-caption text-faint">{host}</p> : null}
+          {host ? <p>{host}</p> : null}
           {onOpenOwner ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="sm"
+              className="max-w-full px-0"
               onClick={() => onOpenOwner(item.ownerSessionId)}
-              className="mt-1 max-w-full truncate text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
-              {ownerTitle || "Open owning session"}
-            </button>
+              <span className="truncate">
+                {ownerTitle || "Open owning session"}
+              </span>
+            </Button>
           ) : null}
           {onOpenRegistry ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="sm"
+              className="px-0"
               onClick={() => onOpenRegistry(item.id)}
-              className="mt-1 block text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               Open in the background registry
-            </button>
+            </Button>
           ) : null}
           {evidenceUrl ? (
             <BackgroundWorkOutput
               url={evidenceUrl}
               capturedBytes={item.evidence?.capturedBytes}
               truncated={item.evidence?.truncated}
-              className="mt-1"
+              className="w-full"
             />
           ) : null}
           {facts.length > 0 ? (
-            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-caption">
+            <dl className="mt-1 flex flex-col gap-0.5">
               {facts.map((fact) => (
-                <div key={fact.label} className="contents">
-                  <dt className="text-faint">{fact.label}</dt>
-                  <dd className="min-w-0 break-words text-muted">
-                    {fact.value}
-                  </dd>
+                <div key={fact.label} className="flex gap-3">
+                  <dt className="shrink-0">{fact.label}</dt>
+                  <dd className="min-w-0 break-words">{fact.value}</dd>
                 </div>
               ))}
             </dl>
           ) : null}
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          busy={stopPending}
-          disabled={Boolean(stopBlocked)}
-          title={stopBlocked ?? "Stop this background work"}
-          aria-label={`Stop ${item.label}`}
-          onClick={() => onStop(item.id)}
-        >
-          <Square size={13} aria-hidden="true" />
-          Stop
-        </Button>
-      </div>
+        </CardContent>
+      </Card>
     </li>
   );
 }

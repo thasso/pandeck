@@ -1,8 +1,11 @@
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { Button } from "../ui/button.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
+import { IconButton } from "../common/IconButton.tsx";
 import type { CalendarController } from "../../hooks/useCalendar.ts";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import { errorOf, isInitialLoad, isPending } from "../../lib/loadState.ts";
-import { ErrorNote, RefreshIndicator } from "../ui/load.tsx";
+import { ErrorNote, RefreshIndicator } from "../common/load.tsx";
 import { MonthView } from "./MonthView.tsx";
 import { TimeGrid } from "./TimeGrid.tsx";
 import { PageHeaderBackButton, type PageHeaderBack } from "../PageHeader.tsx";
@@ -64,40 +67,26 @@ export function CalendarPage({
         : formatFullDate(selectedDate);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         {back ? (
           <PageHeaderBackButton {...back} />
         ) : (
-          <CalendarDays size={17} className="text-accent" />
+          <CalendarDays size={17} className="text-primary" />
         )}
-        <h1 className="mr-2 min-w-0 truncate text-prose font-semibold text-fg">
+        <h1 className="mr-2 min-w-0 truncate text-base font-semibold text-foreground">
           {title}
         </h1>
         <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={calendar.goPrev}
-            aria-label="Previous"
-            className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <button
-            type="button"
-            onClick={calendar.goToday}
-            className="rounded-lg px-2 py-1 text-caption font-medium text-muted hover:bg-panel hover:text-fg"
-          >
+          <IconButton label="Previous" onClick={calendar.goPrev}>
+            <ChevronLeft />
+          </IconButton>
+          <Button variant="ghost" size="sm" onClick={calendar.goToday}>
             Today
-          </button>
-          <button
-            type="button"
-            onClick={calendar.goNext}
-            aria-label="Next"
-            className="flex size-7 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
-          >
-            <ChevronRight size={16} />
-          </button>
+          </Button>
+          <IconButton label="Next" onClick={calendar.goNext}>
+            <ChevronRight />
+          </IconButton>
         </div>
         {isPending(events) && (
           <RefreshIndicator
@@ -107,60 +96,57 @@ export function CalendarPage({
           />
         )}
         <div className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
+          <Button
+            variant={showTempo ? "secondary" : "outline"}
+            size="sm"
             onClick={() => onUpdatePrefs({ calendarShowTempo: !showTempo })}
             title={
               showTempo ? "Hide logged Tempo time" : "Show logged Tempo time"
             }
             aria-pressed={showTempo}
-            className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
-              showTempo
-                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-line text-muted hover:bg-panel hover:text-fg"
-            }`}
           >
             Tempo
-          </button>
+          </Button>
           {view !== "day" && (
-            <button
-              type="button"
+            <Button
+              variant={showWeekends ? "secondary" : "outline"}
+              size="sm"
               onClick={() =>
                 onUpdatePrefs({ calendarShowWeekends: !showWeekends })
               }
               title={showWeekends ? "Hide weekends" : "Show weekends"}
               aria-pressed={showWeekends}
-              className={`rounded-lg border px-2 py-1 text-caption font-medium transition-colors ${
-                showWeekends
-                  ? "border-accent/40 bg-accent-soft text-accent"
-                  : "border-line text-muted hover:bg-panel hover:text-fg"
-              }`}
             >
               Weekends
-            </button>
+            </Button>
           )}
-          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5">
+          <ToggleGroup
+            value={[view]}
+            onValueChange={(values) => {
+              const selected = values[0] as CalendarView | undefined;
+              if (selected) calendar.setView(selected);
+            }}
+            variant="outline"
+            size="sm"
+            aria-label="Calendar view"
+          >
             {VIEWS.map((v) => (
-              <button
+              <ToggleGroupItem
                 key={v}
-                type="button"
-                onClick={() => calendar.setView(v)}
-                className={`rounded-md px-2.5 py-1 text-caption font-medium capitalize transition-colors ${
-                  view === v
-                    ? "bg-accent text-accent-fg"
-                    : "text-muted hover:bg-panel hover:text-fg"
-                }`}
+                value={v}
+                aria-label={`${v} view`}
+                className="capitalize"
               >
                 {v}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </div>
       </div>
 
       {/* Non-blocking (R2): the grid below keeps the entries it already has. */}
       {(eventsError || worklogsError) && (
-        <div className="flex shrink-0 flex-col gap-1.5 border-b border-line px-4 py-2">
+        <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-4 py-2">
           {eventsError && (
             <ErrorNote
               message={`Could not load calendar events: ${eventsError}`}

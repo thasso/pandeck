@@ -7,7 +7,7 @@
  * restore) driven by the CURRENT live card (fetched on demand per row) so an
  * action is never guessed from a stale historical snapshot.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentProps } from "react";
 import {
   Sparkles,
   Pin,
@@ -19,18 +19,26 @@ import {
   ExternalLink,
   Pencil,
   Check,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import type {
   MemoryLoadBatch,
+  MemoryLoadDeliveryState,
   MemoryLoadItem,
   MemoryScope,
   MemorySettings,
 } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { Skeleton } from "./ui/load.tsx";
+import { ErrorNote, Skeleton } from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Item, ItemActions, ItemContent } from "@/components/ui/item";
+import { Textarea } from "@/components/ui/textarea";
 
 export interface StagedMemoryScope {
   persona?: MemoryScope["persona"];
@@ -104,37 +112,33 @@ export function LoadedMemorySection({
         summary="Draft"
         defaultOpen={defaultOpen}
       >
-        <p className="text-caption text-faint">
+        <p className="text-sm text-muted-foreground">
           Draft — memory scope is staged but nothing has been loaded yet; it
           applies once the first message is sent.
         </p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5 text-caption text-faint">
-          {stagedScope?.persona && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
-              persona: {stagedScope.persona}
-            </span>
-          )}
+        <ul className="mt-1.5 space-y-0.5 text-sm text-muted-foreground">
+          {stagedScope?.persona && <li>persona: {stagedScope.persona}</li>}
           {stagedScope?.projectId && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <li>
               project: {stagedScope.projectId}
               {stagedScope.pendingTaskTitle
                 ? ` (from Task "${stagedScope.pendingTaskTitle}")`
                 : ""}
-            </span>
+            </li>
           )}
           {stagedScope?.projectIsGlobal && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <li>
               project: global (Task "{stagedScope.pendingTaskTitle}" has no
               project)
-            </span>
+            </li>
           )}
           {stagedScope?.projectUnresolved && (
-            <span className="rounded bg-panel px-1.5 py-0.5">
+            <li>
               project scope from attached Task "{stagedScope.pendingTaskTitle}"
               (resolves once sent)
-            </span>
+            </li>
           )}
-        </div>
+        </ul>
       </InspectorSection>
     );
   }
@@ -167,67 +171,76 @@ export function LoadedMemorySection({
       defaultOpen={defaultOpen}
     >
       {!loadingEnabled ? (
-        <p className="text-caption text-faint">
+        <p className="text-sm text-muted-foreground">
           Memory loading is disabled in Memory settings — existing memories are
           kept but nothing is injected.
         </p>
       ) : notYetLoaded ? (
-        <p className="text-caption text-faint">Not yet loaded.</p>
+        <p className="text-sm text-muted-foreground">Not yet loaded.</p>
       ) : !batch ? (
-        <p className="text-caption text-faint">
+        <p className="text-sm text-muted-foreground">
           No memory has been loaded for this session yet.
         </p>
       ) : (
         <div className="space-y-2">
           {batches.length > 1 && (
-            <div className="flex items-center justify-between text-caption text-faint">
-              <button
-                type="button"
-                title="Older turn"
+            <div className="flex items-center justify-between text-sm text-muted-foreground">
+              <Button
+                variant="outline"
+                size="xs"
                 aria-label="Older turn"
                 disabled={clampedIndex >= batches.length - 1}
                 onClick={() =>
                   setIndex((i) => Math.min(batches.length - 1, i + 1))
                 }
-                className="inline-flex items-center gap-0.5 rounded border border-line bg-panel px-1.5 py-0.5 disabled:opacity-40"
               >
-                <ChevronLeft size={11} />
+                <ChevronLeft />
                 Older
-              </button>
+              </Button>
               <span>
                 Turn {clampedIndex + 1} of {batches.length}
                 {clampedIndex === 0 ? " (latest)" : ""}
               </span>
-              <button
-                type="button"
-                title="Newer turn"
+              <Button
+                variant="outline"
+                size="xs"
                 aria-label="Newer turn"
                 disabled={clampedIndex <= 0}
                 onClick={() => setIndex((i) => Math.max(0, i - 1))}
-                className="inline-flex items-center gap-0.5 rounded border border-line bg-panel px-1.5 py-0.5 disabled:opacity-40"
               >
                 Newer
-                <ChevronRight size={11} />
-              </button>
+                <ChevronRight />
+              </Button>
             </div>
           )}
           <LoadBatch batch={batch} memory={memory} />
         </div>
       )}
       {onOpenManager ? (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="xs"
+          className="mt-2"
           onClick={onOpenManager}
-          title="Open Memory settings"
-          className="mt-2 inline-flex items-center gap-1 rounded px-1 py-0.5 text-caption text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
-          <ExternalLink size={11} />
+          <ExternalLink />
           Manage memory
-        </button>
+        </Button>
       ) : null}
     </InspectorSection>
   );
 }
+
+const DELIVERY: Record<
+  MemoryLoadDeliveryState,
+  { label: string; variant: ComponentProps<typeof Badge>["variant"] }
+> = {
+  injected: { label: "Injected", variant: "default" },
+  reused: { label: "Reused", variant: "secondary" },
+  cleared: { label: "Cleared", variant: "warning" },
+  failed: { label: "Failed", variant: "destructive" },
+  none: { label: "No memory", variant: "secondary" },
+};
 
 function LoadBatch({
   batch,
@@ -236,54 +249,50 @@ function LoadBatch({
   batch: MemoryLoadBatch;
   memory: UseMemory;
 }) {
+  const delivery = DELIVERY[batch.deliveryState];
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5 text-caption text-faint">
-        <span
-          className={`rounded px-1.5 py-0.5 ${badgeTone(batch.deliveryState)}`}
-        >
-          {deliveryLabel(batch.deliveryState)}
-        </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge variant={delivery.variant}>{delivery.label}</Badge>
+        <Badge variant="secondary">
           {batch.items.length} card{batch.items.length === 1 ? "" : "s"}
-        </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
-          {batch.renderedChars} chars
-        </span>
-        <span className="rounded bg-panel px-1.5 py-0.5">
-          {batch.injectedChars} injected
-        </span>
-        <span
-          className="rounded bg-panel px-1.5 py-0.5"
+        </Badge>
+        <Badge variant="secondary">{batch.renderedChars} chars</Badge>
+        <Badge variant="secondary">{batch.injectedChars} injected</Badge>
+        <Badge
+          variant="secondary"
           title="Cumulative injected characters since the last compaction/rotation reset"
         >
           {batch.cumulativeInjectedChars} cumulative
-        </span>
+        </Badge>
       </div>
 
       {batch.deliveryState === "reused" && (
-        <p className="text-caption text-muted">
+        <p className="text-sm text-muted-foreground">
           No new memory block was sent — the same snapshot is already in the
           model's session context.
         </p>
       )}
       {batch.deliveryState === "cleared" && (
-        <p className="text-caption text-muted">
+        <p className="text-sm text-muted-foreground">
           A clearing marker superseded the previous snapshot; no memories
           currently apply.
         </p>
       )}
       {batch.deliveryState === "none" && batch.items.length === 0 && (
-        <p className="text-caption text-muted">
+        <p className="text-sm text-muted-foreground">
           No eligible memory for this turn.
         </p>
       )}
       {batch.deliveryState === "failed" && (
-        <p className="text-caption text-amber-500">
-          Memory selection/delivery failed for this turn — the turn itself
-          completed normally, but no memory snapshot could be computed. Not
-          advanced; the next turn retries normally.
-        </p>
+        <Alert variant="warning" role="note">
+          <TriangleAlert />
+          <AlertDescription>
+            Memory selection/delivery failed for this turn — the turn itself
+            completed normally, but no memory snapshot could be computed. Not
+            advanced; the next turn retries normally.
+          </AlertDescription>
+        </Alert>
       )}
 
       {/* Rendered from the persisted audit (effective text at delivery), never recomputed. */}
@@ -328,48 +337,44 @@ function LoadItemRow({
             : result.error,
       );
   };
+  const apply = (op: "pin" | "unpin" | "archive" | "restore") => {
+    if (live) void run({ op, id: live.id, expectedRevision: live.revision });
+  };
 
   return (
-    <div className="rounded-lg border border-line bg-surface px-2.5 py-1.5 text-caption">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1">
-          <div className="text-fg">
-            {item.text || "(memory text unavailable)"}
-          </div>
-          <div className="mt-0.5 flex flex-wrap gap-1 text-micro text-faint">
-            <span className="rounded bg-panel px-1 py-0.5">#{item.rank}</span>
-            <span className="rounded bg-panel px-1 py-0.5">{item.kind}</span>
-            <span className="rounded bg-panel px-1 py-0.5">
-              {scopeLabel(item.scope)}
-            </span>
-            <span className="rounded bg-panel px-1 py-0.5">{item.reason}</span>
-            {item.provenance && (
-              <span className="rounded bg-panel px-1 py-0.5">
-                {provenanceLabel(item.provenance.sourceKind)}
-              </span>
-            )}
-          </div>
+    <Item variant="outline" size="xs" className="items-start">
+      <ItemContent>
+        <div>{item.text || "(memory text unavailable)"}</div>
+        <div className="flex flex-wrap gap-1">
+          <Badge variant="secondary">#{item.rank}</Badge>
+          <Badge variant="secondary">{item.kind}</Badge>
+          <Badge variant="secondary">{scopeLabel(item.scope)}</Badge>
+          <Badge variant="secondary">{item.reason}</Badge>
+          {item.provenance && (
+            <Badge variant="outline">
+              {provenanceLabel(item.provenance.sourceKind)}
+            </Badge>
+          )}
         </div>
-        <div className="flex shrink-0 gap-1">
-          <button
-            title={open ? "Hide details" : "Details / actions"}
-            aria-label={open ? "Hide details" : "Details / actions"}
-            onClick={() => setOpen((v) => !v)}
-            className="rounded border border-line bg-panel p-1 text-muted hover:text-fg"
-          >
-            {open ? <ChevronLeft size={12} /> : <ChevronRight size={12} />}
-          </button>
-        </div>
-      </div>
+      </ItemContent>
+      <ItemActions>
+        <IconButton
+          label={open ? "Hide details" : "Details / actions"}
+          size="icon-xs"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? <ChevronLeft /> : <ChevronRight />}
+        </IconButton>
+      </ItemActions>
 
       {open && (
-        <div className="mt-2 border-t border-line pt-2">
+        <div className="basis-full space-y-1.5 border-t pt-2 text-sm text-muted-foreground">
           {item.provenance?.sessionId && (
-            <div className="mb-1.5 text-caption text-faint">
+            <div>
               Source: {provenanceLabel(item.provenance.sourceKind)} in{" "}
               <a
                 href={sessionPath(item.provenance.sessionId)}
-                className="text-accent underline decoration-dotted"
+                className="text-primary underline decoration-dotted"
               >
                 session {item.provenance.sessionId.slice(0, 8)}
               </a>
@@ -386,19 +391,18 @@ function LoadItemRow({
               <Skeleton className="h-3 w-1/2" />
             </div>
           ) : !live ? (
-            <p className="text-caption text-faint">
-              This memory no longer exists.
-            </p>
+            <p>This memory no longer exists.</p>
           ) : editing ? (
-            <div>
-              <textarea
+            <>
+              <Textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 rows={2}
-                className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
+                aria-label="Memory text"
               />
-              <div className="mt-1 flex gap-2">
-                <button
+              <div className="flex gap-2">
+                <Button
+                  size="xs"
                   onClick={() => {
                     void run({
                       op: "correct",
@@ -410,151 +414,79 @@ function LoadItemRow({
                     });
                     setEditing(false);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption text-white"
                 >
-                  <Check size={11} />
+                  <Check />
                   Save (supersede)
-                </button>
-                <button
+                </Button>
+                <Button
+                  size="xs"
+                  variant="outline"
                   onClick={() => {
                     setEditing(false);
                     setDraft(live.text);
                   }}
-                  className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption"
                 >
-                  <X size={11} />
+                  <X />
                   Cancel
-                </button>
+                </Button>
               </div>
-            </div>
+            </>
           ) : (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="rounded bg-panel px-1.5 py-0.5 text-micro text-faint">
+            <div className="flex flex-wrap items-center gap-1">
+              <Badge variant="outline">
                 {live.state}
                 {live.pinned ? " · pinned" : ""}
-              </span>
-              <IconBtn
-                title="Edit / correct"
+              </Badge>
+              <IconButton
+                label="Edit / correct"
                 onClick={() => {
                   setDraft(live.text);
                   setEditing(true);
                 }}
               >
-                <Pencil size={12} />
-              </IconBtn>
-              <IconBtn
-                title={live.pinned ? "Unpin" : "Pin"}
-                onClick={() =>
-                  void run({
-                    op: live.pinned ? "unpin" : "pin",
-                    id: live.id,
-                    expectedRevision: live.revision,
-                  })
-                }
+                <Pencil />
+              </IconButton>
+              <IconButton
+                label={live.pinned ? "Unpin" : "Pin"}
+                onClick={() => apply(live.pinned ? "unpin" : "pin")}
               >
-                {live.pinned ? <PinOff size={12} /> : <Pin size={12} />}
-              </IconBtn>
+                {live.pinned ? <PinOff /> : <Pin />}
+              </IconButton>
               {live.state === "archived" ? (
-                <IconBtn
-                  title="Restore"
-                  onClick={() =>
-                    void run({
-                      op: "restore",
-                      id: live.id,
-                      expectedRevision: live.revision,
-                    })
-                  }
-                >
-                  <ArchiveRestore size={12} />
-                </IconBtn>
+                <IconButton label="Restore" onClick={() => apply("restore")}>
+                  <ArchiveRestore />
+                </IconButton>
               ) : (
                 live.state === "active" && (
-                  <IconBtn
-                    title="Archive"
-                    onClick={() =>
-                      void run({
-                        op: "archive",
-                        id: live.id,
-                        expectedRevision: live.revision,
-                      })
-                    }
-                  >
-                    <Archive size={12} />
-                  </IconBtn>
+                  <IconButton label="Archive" onClick={() => apply("archive")}>
+                    <Archive />
+                  </IconButton>
                 )
               )}
             </div>
           )}
-          {feedback && (
-            <div className="mt-1 text-caption text-amber-500">{feedback}</div>
-          )}
+          {feedback && <ErrorNote message={feedback} />}
         </div>
       )}
-    </div>
+    </Item>
   );
 }
 
-function IconBtn({
-  title,
-  onClick,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted hover:text-fg"
-    >
-      {children}
-    </button>
-  );
-}
-
-function deliveryLabel(state: MemoryLoadBatch["deliveryState"]): string {
-  return state === "injected"
-    ? "Injected"
-    : state === "reused"
-      ? "Reused"
-      : state === "cleared"
-        ? "Cleared"
-        : state === "failed"
-          ? "Failed"
-          : "No memory";
-}
-
-function badgeTone(state: MemoryLoadBatch["deliveryState"]): string {
-  return state === "injected"
-    ? "bg-accent/15 text-accent"
-    : state === "reused"
-      ? "bg-panel text-muted"
-      : state === "cleared"
-        ? "bg-amber-500/15 text-amber-500"
-        : state === "failed"
-          ? "bg-red-500/15 text-red-500"
-          : "bg-panel text-faint";
-}
-
-function scopeLabel(scope: { persona?: string; projectId?: string }): string {
+export function scopeLabel(scope: {
+  persona?: string;
+  projectId?: string;
+}): string {
   return (
     [scope.persona, scope.projectId].filter(Boolean).join(" / ") || "global"
   );
 }
 
-function provenanceLabel(sourceKind: string): string {
-  return sourceKind === "manual"
-    ? "manual"
-    : sourceKind === "agent"
-      ? "agent"
-      : sourceKind === "processor"
-        ? "auto-captured"
-        : sourceKind === "consolidation"
-          ? "consolidated"
-          : sourceKind === "import"
-            ? "imported"
-            : sourceKind;
+const PROVENANCE_LABELS: Record<string, string> = {
+  processor: "auto-captured",
+  consolidation: "consolidated",
+  import: "imported",
+};
+
+export function provenanceLabel(sourceKind: string): string {
+  return PROVENANCE_LABELS[sourceKind] ?? sourceKind;
 }

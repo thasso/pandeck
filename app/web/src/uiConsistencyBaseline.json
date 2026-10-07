@@ -1,0 +1,81 @@
+{
+  "src/components/AppHeaderBar.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/AppStatus.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/ChatDockPanel.tsx": {
+    "arbitrary-value": 3
+  },
+  "src/components/ChatHeaderMenu.tsx": {
+    "hand-menu": 3
+  },
+  "src/components/Composer.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/InlineDocumentEmbed.tsx": {
+    "raw-button": 1
+  },
+  "src/components/MessageList.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/SandboxedDocument.tsx": {
+    "palette-color": 1
+  },
+  "src/components/SessionInbox.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/Topbar.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/agentTypeDisplay.ts": {
+    "palette-color": 4
+  },
+  "src/components/common/ChartBlock.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/CollapsibleOutput.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/CommentComposer.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/EdgeSheet.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/ImageLightbox.tsx": {
+    "arbitrary-value": 3
+  },
+  "src/components/common/JsonView.tsx": {
+    "raw-button": 1
+  },
+  "src/components/common/UsageCycleMeters.tsx": {
+    "arbitrary-value": 5
+  },
+  "src/components/common/bottomSheet.ts": {
+    "arbitrary-value": 2
+  },
+  "src/components/common/composerShell.ts": {
+    "arbitrary-value": 5
+  },
+  "src/components/common/dialogs.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/common/load.tsx": {
+    "arbitrary-value": 1
+  },
+  "src/components/shell/AppShell.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/shell/BottomCard.tsx": {
+    "arbitrary-value": 1,
+    "hand-dialog": 1
+  },
+  "src/components/shell/Inspector.tsx": {
+    "arbitrary-value": 2
+  },
+  "src/components/shell/PrimaryNav.tsx": {
+    "arbitrary-value": 1
+  }
+}

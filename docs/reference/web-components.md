@@ -76,9 +76,9 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   the body goes to `Markdown` with the caller's props unchanged.
 - `Markdown.tsx` owns shared chat/prose Markdown rendering. `density="compact"`
   is the same prose one size down (`.prose-compact`) for text that sits INSIDE
-  another surface rather than owning the column — what `ui/CommentBody` renders
-  a comment at. It also carries title-inferred `pa://` app-object links from
-  compact reference metadata, an optional `onResolveUrl` hook for rewriting
+  another surface rather than owning the column — what `common/CommentBody`
+  renders a comment at. It also carries title-inferred `pa://` app-object links
+  from compact reference metadata, an optional `onResolveUrl` hook for rewriting
   relative link/image URLs (e.g. KB entry-local `assets/...` paths), and opt-in
   source-line stamps for rendered KB selection anchoring; chat rendering leaves
   those stamps off. Raw HTML is rendered app-wide via `rehype-raw` and then
@@ -87,7 +87,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   content may use inline HTML like the history diff's `<ins>`/`<del>` marks
   while scripts, event handlers, and unknown-scheme URLs are stripped. Do NOT
   disable the sanitizer or render untrusted HTML by another path. A `chart`
-  fenced code block routes to the lazy `ui/ChartBlock.tsx` Chart.js renderer
+  fenced code block routes to the lazy `common/ChartBlock.tsx` Chart.js renderer
   (Task 139) — a constrained bar/line spec with an always-available accessible
   data table, degrading to a plain data block on a malformed/oversized spec. A
   Markdown LINK whose source is a file the app serves
@@ -97,14 +97,14 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   intent, so neither becomes a card. Cards come from structured tool output —
   `show_files` (`tools/registry.tsx` → `ServedFileCard`) — loaded from the
   origin+token URL, since a bare API path would resolve against the web origin
-  without a token. An image enlarges into `ui/ImageLightbox.tsx` on click; an
-  HTML document runs in `SandboxedDocument`; a Markdown or text file offers the
-  `/files/...` viewer route (`docs/served-files.md`). Every other image is left
-  exactly as authored, so KB entry assets and external images are unaffected
-  (Task-636). The element types it maps (`MARKDOWN_COMPONENTS`) and its
-  `urlTransform` are fixed at module scope, and everything per-instance — the
-  session/file/`pa://` lookups and the open handlers, the latter behind a ref so
-  an inline caller arrow costs nothing — travels through
+  without a token. An image enlarges into `common/ImageLightbox.tsx` on click;
+  an HTML document runs in `SandboxedDocument`; a Markdown or text file offers
+  the `/files/...` viewer route (`docs/served-files.md`). Every other image is
+  left exactly as authored, so KB entry assets and external images are
+  unaffected (Task-636). The element types it maps (`MARKDOWN_COMPONENTS`) and
+  its `urlTransform` are fixed at module scope, and everything per-instance —
+  the session/file/`pa://` lookups and the open handlers, the latter behind a
+  ref so an inline caller arrow costs nothing — travels through
   `MarkdownRenderContext`; the rendered `ReactMarkdown` element is itself held
   until `text` or the remark plugins change. Together those make a re-render a
   reconciliation of the existing DOM rather than a rebuild of it, which is what
@@ -277,16 +277,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   activator and a swipe surface, a rotator would be a fourth interaction on one
   box, and the actions face measures 43% of a card's DOM on a list memoized
   against ~226 Tasks. Keyboard: Enter belongs to whatever is FOCUSED, so
-  `ui/Tree`'s row handler leaves it alone when the keydown came from a control
-  inside the row (it used to `preventDefault` unconditionally, which cancels the
-  browser's implicit click and would have made the row's own primary action
-  select the row instead), and the row registers itself as @dnd-kit's ACTIVATOR
-  node so a Space on one of those controls activates it rather than picking the
-  row up. The accepted cost is tab stops: a `comfortable` row carries two or
-  three controls (status, the hover Archive, the gutter) plus line 2's links, so
-  a long Backlog is a long tab sequence — the same trade every rich row in this
-  app makes, and the reason each of those controls also has a key or a gesture
-  that does not need it.
+  `common/Tree`'s row handler leaves it alone when the keydown came from a
+  control inside the row (it used to `preventDefault` unconditionally, which
+  cancels the browser's implicit click and would have made the row's own primary
+  action select the row instead), and the row registers itself as @dnd-kit's
+  ACTIVATOR node so a Space on one of those controls activates it rather than
+  picking the row up. The accepted cost is tab stops: a `comfortable` row
+  carries two or three controls (status, the hover Archive, the gutter) plus
+  line 2's links, so a long Backlog is a long tab sequence — the same trade
+  every rich row in this app makes, and the reason each of those controls also
+  has a key or a gesture that does not need it.
 - The Backlog list is ONE surface with a VIEW switcher, not one list with a sort
   control. `BacklogToolbar.tsx` holds that switcher in the slot the open/done
   counts vacated, and the two views differ in more than order — which is why it
@@ -513,51 +513,53 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `pointerdowncapture` guard on that button lands before the input's blur and
   suppresses the commit. `hidePath` keeps the managed clone out of the list,
   since the page's Repository section states it.
-- `ui/dialog.tsx` owns the app's modal chrome (`DialogOverlay`, `DialogHeader`,
-  `DialogAction`, `DialogCancelButton`) and the single confirmation surface
-  built from it. `ConfirmDialog` is the declarative half — title, body, optional
-  single field, caller-owned `busy`/`error`, extra gates as children (the
-  worktree removal's "also delete the branch" and force checkboxes) — and
-  `DialogProvider`/`useDialogs` the imperative half, awaiting a `confirm` or
-  `promptText` from an ordinary handler. `main.tsx` mounts the provider once
-  around `App`; its context value never changes, so opening a dialog re-renders
-  the provider alone, and the two members stay referentially stable for the
-  memoized rows whose handlers close over them. Native `window.confirm`/`alert`/
-  `prompt` are banned app-wide because the Tauri shell's WKWebView never shows
-  them (`src/nativeDialogAudit.test.ts`); `WorktreeDialogs.tsx` builds its
-  clean/removal guards on `ConfirmDialog` and its form dialogs on the same
-  primitives, so all of them share one idea of chrome, focus and busy state.
-- `ui/CommentComposer.tsx` owns the app's shared comment-entry silhouette for
-  unanchored and anchored comments: an optional host-supplied anchor header over
-  one growing field, with optional text refinement and dictation controls in the
-  row before Send. Refinement uses `lib/refineText.ts`, while dictation uses the
-  same single-owner `useDictation` recorder and `DictationControls` recording UI
-  as chat; a transcript returns to the captured caret and never auto-submits. By
-  default it owns and clears its draft after submit; a host that supplies both
-  `value` and `onChange` owns that draft instead, and submit deliberately leaves
-  the controlled value intact (for example, until a persisted mutation is
-  acknowledged). Hosts opt into capabilities and supply context/availability
-  only — the component owns no anchor, transport, or domain state. Enter submits
-  and Shift+Enter breaks the line — the chat composer's rule and its touch
-  exception (`hooks/useTouchComposerMode`), because writing a comment is the
-  same act as writing a prompt and two different Enters in one app is a coin
-  toss; Cmd/Ctrl+Enter still submits, and the Send tooltip states the rule.
+- `common/dialogs.tsx` owns the app's modal chrome (`DialogOverlay`,
+  `DialogHeader`, `DialogAction`, `DialogCancelButton`) and the single
+  confirmation surface built from it. `ConfirmDialog` is the declarative half —
+  title, body, optional single field, caller-owned `busy`/`error`, extra gates
+  as children (the worktree removal's "also delete the branch" and force
+  checkboxes) — and `DialogProvider`/`useDialogs` the imperative half, awaiting
+  a `confirm` or `promptText` from an ordinary handler. `main.tsx` mounts the
+  provider once around `App`; its context value never changes, so opening a
+  dialog re-renders the provider alone, and the two members stay referentially
+  stable for the memoized rows whose handlers close over them. Native
+  `window.confirm`/`alert`/ `prompt` are banned app-wide because the Tauri
+  shell's WKWebView never shows them (`src/nativeDialogAudit.test.ts`);
+  `WorktreeDialogs.tsx` builds its clean/removal guards on `ConfirmDialog` and
+  its form dialogs on the same primitives, so all of them share one idea of
+  chrome, focus and busy state.
+- `common/CommentComposer.tsx` owns the app's shared comment-entry silhouette
+  for unanchored and anchored comments: an optional host-supplied anchor header
+  over one growing field, with optional text refinement and dictation controls
+  in the row before Send. Refinement uses `lib/refineText.ts`, while dictation
+  uses the same single-owner `useDictation` recorder and `DictationControls`
+  recording UI as chat; a transcript returns to the captured caret and never
+  auto-submits. By default it owns and clears its draft after submit; a host
+  that supplies both `value` and `onChange` owns that draft instead, and submit
+  deliberately leaves the controlled value intact (for example, until a
+  persisted mutation is acknowledged). Hosts opt into capabilities and supply
+  context/availability only — the component owns no anchor, transport, or domain
+  state. Enter submits and Shift+Enter breaks the line — the chat composer's
+  rule and its touch exception (`hooks/useTouchComposerMode`), because writing a
+  comment is the same act as writing a prompt and two different Enters in one
+  app is a coin toss; Cmd/Ctrl+Enter still submits, and the Send tooltip states
+  the rule.
 - `TaskComments.tsx` owns the presentational Task activity-trace list + composer
   (Markdown bodies, author-kind badge, chronological oldest-first, append-only —
-  no threading/resolve/edit). Its composer is the shared `ui/CommentComposer`
-  (also used by a Knowledge entry's comments): ONE row, send INSIDE the card,
-  growing with the text up to a cap — it is the same act, and it was the last
-  text entry in the app that looked like a form field with a button parked
-  beside it, and Enter submits with Shift+Enter for a newline, exactly as the
-  chat composer does. Bodies render through the shared `ui/CommentBody`
-  (Markdown, `compact`), the same renderer the diff and Knowledge threads use.
-  Comments are ruler-separated rather than cards, collapse individually to their
-  header, and agent authors link to their originating session when `sessionId`
-  is present. `TaskManagementPage.tsx` mounts it in the Task detail's
-  **Activity** `CollapsibleSection`. It renders the per-Task `LoadState`
-  honestly, watches and revalidates on open, unwatches on close, retains
-  comments during refresh or failure, and keeps a comment draft until correlated
-  add success.
+  no threading/resolve/edit). Its composer is the shared
+  `common/CommentComposer` (also used by a Knowledge entry's comments): ONE row,
+  send INSIDE the card, growing with the text up to a cap — it is the same act,
+  and it was the last text entry in the app that looked like a form field with a
+  button parked beside it, and Enter submits with Shift+Enter for a newline,
+  exactly as the chat composer does. Bodies render through the shared
+  `common/CommentBody` (Markdown, `compact`), the same renderer the diff and
+  Knowledge threads use. Comments are ruler-separated rather than cards,
+  collapse individually to their header, and agent authors link to their
+  originating session when `sessionId` is present. `TaskManagementPage.tsx`
+  mounts it in the Task detail's **Activity** `CollapsibleSection`. It renders
+  the per-Task `LoadState` honestly, watches and revalidates on open, unwatches
+  on close, retains comments during refresh or failure, and keeps a comment
+  draft until correlated add success.
 - `TaskManageToolCard.tsx` owns the in-chat card for a `task_manage` result: the
   Tasks a turn created or changed, as chips that open them, plus the confirm
   button for a pending status suggestion. It is registered in `tools/` and
@@ -647,11 +649,11 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   with a Project; the server owns the real git-backed refusal, shown inline). It
   rests as a compact CONFIGURATION SUMMARY, not a wizard: one collapsed line per
   runtime (`roleSummary` — model · account · thinking), and exactly one row
-  expands at a time into the new-session runtime controls (`ui/RuntimePicker`:
-  metered provider-account cards, an account-scoped model row, the stepped
-  thinking slider). The rows are the **Coordinator** runtime plus independent
-  implementer, reviewer, fixer, and verdict candidate sets
-  (`WORKFLOW_ROLE_SET_BOUNDS`). Implementer/reviewer keep at least one row;
+  expands at a time into the new-session runtime controls
+  (`common/RuntimePicker`: metered provider-account cards, an account-scoped
+  model row, the stepped thinking slider). The rows are the **Coordinator**
+  runtime plus independent implementer, reviewer, fixer, and verdict candidate
+  sets (`WORKFLOW_ROLE_SET_BOUNDS`). Implementer/reviewer keep at least one row;
   fixer/verdict may be empty to preserve implementer fallback and skip post-fix
   judgment respectively. Each candidate also exposes a free family string and
   bounded optional selection notes. Per-role add/remove controls enforce each
@@ -693,16 +695,17 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   its entry. While the sheet is open `App.tsx` declares the `usage` topic for it
   (`topicsForSurface`'s `meteringOverlayOpen`), so its account cards carry live
   meters; usage is display-only and never travels to the coordinator.
-- `ui/RuntimePicker.tsx` owns the shared runtime quick-pick controls — "who runs
-  this, on which model, thinking how hard" — so the new-session landing and the
-  workflow start sheet ask that question identically: `QuickRow` (the labelled
-  snap-scroll `listbox` that scrolls its `data-quick-selected` item into view)
-  and `QuickPill`, `ProviderAccountRow` (account cards with the fixed-height
-  `UsageCycleMeters` slot and its once-a-minute `useCoarseNow` clock),
-  `ModelQuickRow`, `ThinkingSlider`, and the `DiscreteSlider` both sliders are
-  built on (native `range` over a stopped track, so drag/tap/keyboard come for
-  free; `aria-valuetext` carries the spoken value because the raw index means
-  nothing). Callers own only what is offered and what a pick does.
+- `common/RuntimePicker.tsx` owns the shared runtime quick-pick controls — "who
+  runs this, on which model, thinking how hard" — so the new-session landing and
+  the workflow start sheet ask that question identically: `QuickRow` (the
+  labelled snap-scroll `listbox` that scrolls its `data-quick-selected` item
+  into view) and `QuickPill`, `ProviderAccountRow` (account cards with the
+  fixed-height `UsageCycleMeters` slot and its once-a-minute `useCoarseNow`
+  clock), `ModelQuickRow`, `ThinkingSlider`, and the `DiscreteSlider` both
+  sliders are built on (native `range` over a stopped track, so
+  drag/tap/keyboard come for free; `aria-valuetext` carries the spoken value
+  because the raw index means nothing). Callers own only what is offered and
+  what a pick does.
 - `MemorySettingsSection.tsx` owns the canonical **Memory** Settings section:
   independent use/load, learning-mode (Off/Adaptive/Every turn — experimental),
   maintenance, budget, processor model, and global calls/hour + cost/day ceiling
@@ -836,25 +839,25 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   whole-section replacement: that map has to be built on the one last SENT while
   a save is in flight, which only the hook holds, and a skill momentarily
   missing from the scan keeps its stored entry either way. It reuses the generic
-  `Tree`, `PageHeader`, `CodeBlock`, `Markdown`, and `ui/load.tsx` primitives.
-  Opening a row reads that skill's `SKILL.md` and recursive supporting-file tree
-  into a detail pane below the list ([Task-614](pa://task/614)): the body is NOT
-  in the list, it is `fetchSkillDetail` through `useFetchState` KEYED BY THE
-  SELECTED NAME, which is what makes R3 structural here — switching rows drops
-  the previous document during render and a late answer for it is discarded, so
-  one skill's instructions can never be read under another skill's heading. The
-  row's metadata is the button (a whole-row target would nest the toggle's
-  checkbox inside a control); the body renders through the shared sanitized
-  `Markdown`, never raw HTML; a truncated body says how much of the file it is
-  showing; an `invalid` answer renders the scan/read race's reason as content
-  rather than as an error; and a new scan rereads the open skill in place,
-  keeping it on screen (R2) so browse and injection cannot disagree about the
-  file. File selection is independently keyed by name + relative path: Markdown
-  is sanitized, text/code is highlighted, images use the bounded raw URL, and
-  binary/unsupported files get raw/download actions only. First load, file
-  switches, refresh failure, binary detection, and body/tree/preview truncation
-  each render their own state rather than borrowing the previously selected
-  file's content.
+  `Tree`, `PageHeader`, `CodeBlock`, `Markdown`, and `common/load.tsx`
+  primitives. Opening a row reads that skill's `SKILL.md` and recursive
+  supporting-file tree into a detail pane below the list
+  ([Task-614](pa://task/614)): the body is NOT in the list, it is
+  `fetchSkillDetail` through `useFetchState` KEYED BY THE SELECTED NAME, which
+  is what makes R3 structural here — switching rows drops the previous document
+  during render and a late answer for it is discarded, so one skill's
+  instructions can never be read under another skill's heading. The row's
+  metadata is the button (a whole-row target would nest the toggle's checkbox
+  inside a control); the body renders through the shared sanitized `Markdown`,
+  never raw HTML; a truncated body says how much of the file it is showing; an
+  `invalid` answer renders the scan/read race's reason as content rather than as
+  an error; and a new scan rereads the open skill in place, keeping it on screen
+  (R2) so browse and injection cannot disagree about the file. File selection is
+  independently keyed by name + relative path: Markdown is sanitized, text/code
+  is highlighted, images use the bounded raw URL, and binary/unsupported files
+  get raw/download actions only. First load, file switches, refresh failure,
+  binary detection, and body/tree/preview truncation each render their own state
+  rather than borrowing the previously selected file's content.
 - Configured agents choose an ACCOUNT/MODEL COMBINATION: `AgentModelFields.tsx`
   (its own module, because both `SettingsPage.tsx` and
   `MemorySettingsSection.tsx` render it) takes `AccountModelOption`s, so
@@ -1004,7 +1007,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
 - `MessageList.tsx` renders one CONDITION on a row rather than on the session:
   `promptQueueStates` maps a row id to where that prompt stands in the permanent
   Assistant's queue, and the user row under it says "Queued" or "Working" with
-  the shared `ui/load.tsx` spinner. Per-row on purpose — a session-wide
+  the shared `common/load.tsx` spinner. Per-row on purpose — a session-wide
   indicator would be a second, disagreeing copy of the transcript's own run
   state, and these are conditions that may never be announced
   (`../messaging.md`). Only rows named in the map say anything, so the value a
@@ -1303,41 +1306,41 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   removable review-comment-count chip beside their required worktree; the
   ordinary Project/Worktree/Task picker does not edit the bundle itself.
 - `NewSessionQuickStart.tsx` owns the new-session landing's quick-pick rows. The
-  rows, cards and sliders themselves come from `ui/RuntimePicker.tsx` (shared
-  with the workflow start sheet); this file owns which of them the landing
-  shows, in what order, and what a pick stages. Enabled credential profiles are
-  selectable as horizontal account cards in the runtime block immediately after
-  Agent and before Model; cards carry the provider brand icon and are grouped
-  Claude profiles first, then OpenAI profiles, preserving registry order within
-  each provider. Each card carries a fixed-height subscription-usage slot
-  (`ui/UsageCycleMeters.tsx`) in place of the old provider label line, fed by
-  `usageIndicators` from the `usage` broadcast topic; the provider word moved
-  into the card's `title` (and the provider icon's own label — deliberately NOT
-  an `aria-label` on the button, which would replace the accessible name and
-  hide the meters from a screen reader) because several accounts can share one
-  provider, so the NAME has to stay visible. A once-a-minute local clock ages
-  those rows, since a snapshot goes stale (and a window rolls over) with nothing
-  arriving to say so. Choosing one scopes the model cards to that
-  account/provider and the profile is sent only on the session's first prompt.
-  There is no profile dropdown. Settings profile changes notify the new-session
-  picker immediately, while an established session always keeps its own model
-  list and binding. It renders (Tasks 119/120; there is NO Task row — staging a
-  Task from here went unused, and the space belongs to the rows that are; a Task
-  is still staged through the composer's context sheet. There is NO hero
-  greeting line — layout stability beats a greeting, the composer placeholder
-  carries it), top to bottom — context rows, then an `<hr>` ruler, then the
-  runtime block (Agent/Provider/Model/Thinking): Project (chips, active projects
-  only, >1 only; staging narrows the worktree cards; while `projectsLoaded` is
-  false the row renders same-height skeleton pills), Worktree (ALWAYS rendered:
-  snap-scroll two-line cards, main checkouts included, tapping the selected card
-  clears; the project line stays even when a project is staged; an empty scope
-  renders a same-height dashed "No worktrees" placeholder so the row never
-  collapses; a "More…" card (Ellipsis icon — the semantic is "there is more to
-  select") opens the composer's context sheet on the Worktree field, rendered
-  ONLY when the row shows worktrees AND the scope hides others; while
-  `worktreesLoaded` is false the row renders same-height skeleton cards so the
-  landing doesn't jump; the row ends with a dashed "+ New worktree" card,
-  rendered only with a project staged and staging through App's
+  rows, cards and sliders themselves come from `common/RuntimePicker.tsx`
+  (shared with the workflow start sheet); this file owns which of them the
+  landing shows, in what order, and what a pick stages. Enabled credential
+  profiles are selectable as horizontal account cards in the runtime block
+  immediately after Agent and before Model; cards carry the provider brand icon
+  and are grouped Claude profiles first, then OpenAI profiles, preserving
+  registry order within each provider. Each card carries a fixed-height
+  subscription-usage slot (`common/UsageCycleMeters.tsx`) in place of the old
+  provider label line, fed by `usageIndicators` from the `usage` broadcast
+  topic; the provider word moved into the card's `title` (and the provider
+  icon's own label — deliberately NOT an `aria-label` on the button, which would
+  replace the accessible name and hide the meters from a screen reader) because
+  several accounts can share one provider, so the NAME has to stay visible. A
+  once-a-minute local clock ages those rows, since a snapshot goes stale (and a
+  window rolls over) with nothing arriving to say so. Choosing one scopes the
+  model cards to that account/provider and the profile is sent only on the
+  session's first prompt. There is no profile dropdown. Settings profile changes
+  notify the new-session picker immediately, while an established session always
+  keeps its own model list and binding. It renders (Tasks 119/120; there is NO
+  Task row — staging a Task from here went unused, and the space belongs to the
+  rows that are; a Task is still staged through the composer's context sheet.
+  There is NO hero greeting line — layout stability beats a greeting, the
+  composer placeholder carries it), top to bottom — context rows, then an `<hr>`
+  ruler, then the runtime block (Agent/Provider/Model/Thinking): Project (chips,
+  active projects only, >1 only; staging narrows the worktree cards; while
+  `projectsLoaded` is false the row renders same-height skeleton pills),
+  Worktree (ALWAYS rendered: snap-scroll two-line cards, main checkouts
+  included, tapping the selected card clears; the project line stays even when a
+  project is staged; an empty scope renders a same-height dashed "No worktrees"
+  placeholder so the row never collapses; a "More…" card (Ellipsis icon — the
+  semantic is "there is more to select") opens the composer's context sheet on
+  the Worktree field, rendered ONLY when the row shows worktrees AND the scope
+  hides others; while `worktreesLoaded` is false the row renders same-height
+  skeleton cards so the landing doesn't jump; the row ends with a dashed "+ New
+  worktree" card, rendered only with a project staged and staging through App's
   `stageNewWorktree` so the first send provisions it), Agent (`QuickPill` chips
   like every other row, personas from `agentTypeDisplay.ts`'s
   `AGENT_TYPE_DISPLAY`, hidden with <2 personas; picking Developer without a
@@ -1453,13 +1456,14 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   for `awaitingInput`, and two identical accent circles say "something is
   asking" twice without saying which. `creating` is the one state with no glyph
   at all: it is an act under way rather than a shape, so it draws
-  `ui/load.tsx`'s `Spinner` (Task-391) — what stood there before was the app's
-  spinner glyph held still, which to a reader who knows it is a spinner that
-  died. It reads `lib/sessionDelivery.ts` and renders no link: the card lives IN
-  the session, so the row is what opens it, and a second target inside the row
-  would compete with the one already leading there. Every host also names the
-  state in its own `aria-label` — those rows are single `role="button"`s whose
-  label REPLACES their content, so a chip left out of it is announced nowhere.
+  `common/load.tsx`'s `Spinner` (Task-391) — what stood there before was the
+  app's spinner glyph held still, which to a reader who knows it is a spinner
+  that died. It reads `lib/sessionDelivery.ts` and renders no link: the card
+  lives IN the session, so the row is what opens it, and a second target inside
+  the row would compete with the one already leading there. Every host also
+  names the state in its own `aria-label` — those rows are single
+  `role="button"`s whose label REPLACES their content, so a chip left out of it
+  is announced nowhere.
 - `SessionStage.tsx` owns the chrome the chat stage draws while what it shows is
   not the live transcript: `PendingSessionPanel` (the R4 silhouette that names
   the session being opened — every in-app switch, and any chat this browser has
@@ -1701,17 +1705,17 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `prefs.animateListChanges` (Settings → Appearance, Panel animations) AND the
   OS reduce-motion setting; with either off the command is sent immediately, so
   the outcome never depends on the preference.
-- A card also carries a SWIPE per side (`ui/SwipeRow`, wrapping the card inside
-  both exit stages): rightward settles, leftward archives. The order is the same
-  as the keyboard settle's and for the same reason — the command is sent from
-  `onExited`, so the list update that removes the card cannot cut the animation
-  short — but the MOTION is `SwipeRow`'s, not the stages', because a card that
-  flew off the side the finger did not pull would read as a different act. Only
-  one of the two exits ever runs for a given card. The Settle side is omitted
-  where `card.settleBlocked` is set, the same predicate `s` and the gutter
-  button disable themselves on and the server refuses the command with: a swipe
-  cannot explain a refusal, and one offered here would slide a running session
-  away and have the optimistic row roll back underneath its own receipt.
+- A card also carries a SWIPE per side (`common/SwipeRow`, wrapping the card
+  inside both exit stages): rightward settles, leftward archives. The order is
+  the same as the keyboard settle's and for the same reason — the command is
+  sent from `onExited`, so the list update that removes the card cannot cut the
+  animation short — but the MOTION is `SwipeRow`'s, not the stages', because a
+  card that flew off the side the finger did not pull would read as a different
+  act. Only one of the two exits ever runs for a given card. The Settle side is
+  omitted where `card.settleBlocked` is set, the same predicate `s` and the
+  gutter button disable themselves on and the server refuses the command with: a
+  swipe cannot explain a refusal, and one offered here would slide a running
+  session away and have the optimistic row roll back underneath its own receipt.
 - The pending command is held by the LIST, with a backstop, because `onExited`
   is not guaranteed to arrive: `needsYou` and `active` are separate parents, so
   a session that changes tier while its card is leaving unmounts the very
@@ -1930,9 +1934,9 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `sidebar:<section>`, so every browser reopens where it was left — per section,
   because they share that container, and across the unmount a phone performs
   every time an object screen opens. Rows anchor that restore through
-  `data-list-row-id` (`ui/Tree.tsx` for the Backlog/Projects/Knowledge trees,
-  the session and worktree rows, the Focus and Inbox lists); a row without one
-  degrades the restore to a pixel offset rather than breaking it.
+  `data-list-row-id` (`common/Tree.tsx` for the Backlog/Projects/Knowledge
+  trees, the session and worktree rows, the Focus and Inbox lists); a row
+  without one degrades the restore to a pixel offset rather than breaking it.
   `SettingsPage.tsx`'s `AppearanceSection` owns the **Navigation bar order**
   editor: up/down reordering of `prefs.navSlots` (no drag-and-drop — the list is
   short and buttons work on touch and keyboard alike) with a live marker showing
@@ -1960,13 +1964,13 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   transcript-view toggles no longer sit in the header itself.
   `expandThinking`/`expandTools` (browser-local `usePrefs`) are live
   expand-all/collapse-all AND the default for blocks that arrive later:
-  `ThinkingBlock`/`ui/ToolCallBlock` re-sync their uncontrolled open state
+  `ThinkingBlock`/`common/ToolCallBlock` re-sync their uncontrolled open state
   whenever `defaultOpen` CHANGES, so one control covers both without a one-shot
   action, and per-block toggling still works afterwards. That sync is adjusted
   DURING RENDER, not in an effect (an effect commits and paints, then re-renders
   every block again — double work for one toggle on a long chat), and it keys on
   the change rather than the value so a hand-opened block is still closed by a
-  later collapse-all (`ui/toolCallOpenState.test.ts`). Each `expand` row is
+  later collapse-all (`common/toolCallOpenState.test.ts`). Each `expand` row is
   disabled while its `show` row is off. Presentation is `Popover` on desktop and
   a `ui/Sheet side="top"` on mobile, anchored to the chat header's bottom edge
   (measured from the trigger's `closest("header")`) so it drops out of that bar
@@ -2018,8 +2022,8 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   and the fold cannot oscillate. While the strip is folded there is nothing left
   to measure, so that signature must carry EVERY width-bearing input, not just
   the content: it keys on the pills' presentation mode too
-  (`RUNTIME_LABEL_MEDIA`, Tailwind's `sm`, where `ui/ModelThinkingSelect` widens
-  the model cap and swaps in the full thinking label) and the root
+  (`RUNTIME_LABEL_MEDIA`, Tailwind's `sm`, where `common/ModelThinkingSelect`
+  widens the model cap and swaps in the full thinking label) and the root
   `data-text-scale` invalidates it outright. A signature change renders the
   strip again to be re-measured, inside the same pre-paint commit, so the probe
   is never seen. An unmeasured row (a hidden or never-laid-out composer) means
@@ -2499,18 +2503,18 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   `sessionSpawn` is the only EDITABLE arm: each proposed session renders its
   title, persona/target line, a `ModelSelect` + `ThinkingSelect` fed by App's
   `accountModels` (so picking a model also picks its account — the compact
-  account-grouped selects rather than `ui/RuntimePicker.tsx`'s full-width rows,
-  which do not tile for up to eight rows inside a transcript), a Skip toggle, a
-  `more…` disclosure for the opening prompt, and — once executed — a link to the
-  session it created or its own error. Those changes live in the card's local
-  state and travel with Approve as `ApprovalResolutionEdits`: the stored card
-  must keep reading as the agent's proposal, so a reload shows what was
-  proposed, never a half-edit. The pickers disappear the moment the card leaves
-  `pending`, leaving the resolved runtime as plain text. Two states this arm has
-  to get right because the server can refuse an approval and leave the card
-  pending: ANY authoritative card echo clears the local Approve/Reject spinner
-  (the status alone cannot see a pending→pending re-send, and 15 seconds of dead
-  buttons is not a recovery), and a row whose model is missing from
+  account-grouped selects rather than `common/RuntimePicker.tsx`'s full-width
+  rows, which do not tile for up to eight rows inside a transcript), a Skip
+  toggle, a `more…` disclosure for the opening prompt, and — once executed — a
+  link to the session it created or its own error. Those changes live in the
+  card's local state and travel with Approve as `ApprovalResolutionEdits`: the
+  stored card must keep reading as the agent's proposal, so a reload shows what
+  was proposed, never a half-edit. The pickers disappear the moment the card
+  leaves `pending`, leaving the resolved runtime as plain text. Two states this
+  arm has to get right because the server can refuse an approval and leave the
+  card pending: ANY authoritative card echo clears the local Approve/Reject
+  spinner (the status alone cannot see a pending→pending re-send, and 15 seconds
+  of dead buttons is not a recovery), and a row whose model is missing from
   `accountModels` LOCKS its thinking control rather than offering the `off`-only
   ladder an unmatched model yields. The same model on ANOTHER account stands in
   for the ladder only — never for display, which would otherwise name an account

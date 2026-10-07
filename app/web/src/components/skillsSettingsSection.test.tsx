@@ -25,7 +25,7 @@ import { SkillsSettingsSection } from "./SkillsSettingsSection.tsx";
  * like a deleted library.
  *
  * The toggles ([Task-613](pa://task/613)) are held to the same standard: a
- * checkbox reports the settings it was given and nothing else, so a click that
+ * switch reports the settings it was given and nothing else, so a click that
  * was never persisted cannot leave a skill looking enabled.
  */
 
@@ -89,10 +89,12 @@ function text(): string {
   return container!.textContent ?? "";
 }
 
-function toggles(): HTMLInputElement[] {
-  return [
-    ...container!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-  ];
+function toggles(): HTMLElement[] {
+  return [...container!.querySelectorAll<HTMLElement>('[role="switch"]')];
+}
+
+function isOn(toggle: HTMLElement | undefined): boolean {
+  return toggle?.getAttribute("aria-checked") === "true";
 }
 
 it("waits for the scan before claiming the library is empty", () => {
@@ -147,14 +149,14 @@ it("keeps the rows on screen while a rescan runs and when it fails", () => {
 it("shows a skill as off until the settings say otherwise", () => {
   show(ready(LIST));
   expect(toggles()).toHaveLength(1);
-  expect(toggles()[0]?.checked).toBe(false);
+  expect(isOn(toggles()[0])).toBe(false);
 
   show(ready(LIST), { "release-notes": "on" });
-  expect(toggles()[0]?.checked).toBe(true);
+  expect(isOn(toggles()[0])).toBe(true);
 
   // A deliberate "off" reads exactly like an absent entry.
   show(ready(LIST), { "release-notes": "off" });
-  expect(toggles()[0]?.checked).toBe(false);
+  expect(isOn(toggles()[0])).toBe(false);
 });
 
 it("gives a broken folder no way to be turned on", () => {
@@ -195,7 +197,7 @@ it("keeps no state of its own, so an unpersisted click claims nothing", () => {
   // The save has not come back (here it never will). Re-rendering with the
   // settings unchanged must leave the skill off: only the echo may say on.
   show(ready(LIST));
-  expect(toggles()[0]?.checked).toBe(false);
+  expect(isOn(toggles()[0])).toBe(false);
 });
 
 it("reports a first scan that failed without inventing an empty library", () => {

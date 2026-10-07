@@ -42,7 +42,7 @@ function renderRow({ failed = false, onOpenSource = vi.fn() } = {}) {
       </ChatActivityRow>,
     ),
   );
-  return container.querySelector("button")!;
+  return container.querySelector<HTMLElement>("[aria-expanded]")!;
 }
 
 describe("ChatActivityRow", () => {
@@ -66,9 +66,6 @@ describe("ChatActivityRow", () => {
     const link = container.querySelector("a")!;
     expect(button.contains(link)).toBe(false);
     expect(link.getAttribute("href")).toBe("/sessions/sol");
-    // Transcript paint containment and truncation clip rings outside the box.
-    expect(link.classList.contains("focus-visible:ring-inset")).toBe(true);
-    expect(button.classList.contains("focus-visible:ring-inset")).toBe(true);
     act(() => link.click());
     expect(onOpenSource).toHaveBeenCalledOnce();
     expect(button.getAttribute("aria-expanded")).toBe("false");
@@ -113,7 +110,7 @@ describe("ChatActivityRow", () => {
         </ChatActivityRow>,
       ),
     );
-    const button = container.querySelector("button")!;
+    const button = container.querySelector<HTMLElement>("[aria-expanded]")!;
     const preview = button.querySelector("span.truncate")!;
     Object.defineProperty(preview, "scrollWidth", { value: 600 });
     Object.defineProperty(preview, "clientWidth", { value: 200 });

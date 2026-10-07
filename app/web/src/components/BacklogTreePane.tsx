@@ -18,10 +18,12 @@ import {
   type TreeNodeState,
   type TreeRowAction,
   type TreeRowSwipe,
-} from "./ui/Tree.tsx";
-import type { SwipeAction } from "./ui/SwipeRow.tsx";
+} from "./common/Tree.tsx";
+import type { SwipeAction } from "./common/SwipeRow.tsx";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
+import { Button } from "./ui/button.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskRowBody } from "./TaskRowBody.tsx";
 import {
@@ -86,7 +88,7 @@ export type ProjectAssignTarget = { projectId: string | null; label: string };
 
 /**
  * @component BacklogTreePane
- * @purpose The Backlog list body, built on the generic `components/ui/Tree`:
+ * @purpose The Backlog list body, built on the generic `components/common/Tree`:
  * the Normal view (task hierarchy with drag-reorder/reparent, multi-select,
  * keyboard) and the By-Project view (projects as collapsible depth-0 nodes;
  * dragging tasks across project nodes reassigns their `projectId`). The status
@@ -94,13 +96,13 @@ export type ProjectAssignTarget = { projectId: string | null; label: string };
  * dimmed context.
  * @useWhen Rendering the durable-Task list (via BacklogList) on the full Tasks
  * page, in the sidebar Tasks tab, or as a Task picker — `density` says which.
- * @avoidWhen A non-Task hierarchy; use `components/ui/Tree` directly.
+ * @avoidWhen A non-Task hierarchy; use `components/common/Tree` directly.
  * @intent Presentational + interaction only; the page owns the optimistic task
  * order and project-assignment/undo state and receives `onReorder` (full
  * placements) and `onAssignProjectsForRoots` (selection roots → target project).
  * Normal-view reorder works even while filtered: the move is reconstructed
  * against the full task tree so hidden rows keep their place.
- * @related lib/backlogTreeModel.ts, components/ui/Tree.tsx, TaskManagementPage.tsx
+ * @related lib/backlogTreeModel.ts, components/common/Tree.tsx, TaskManagementPage.tsx
  */
 export function BacklogTreePane({
   tasks,
@@ -645,14 +647,14 @@ function BacklogRowContent({
             aria-hidden
           />
         ) : (
-          <FolderKanban size={13} className="shrink-0 text-faint" />
+          <FolderKanban size={13} className="shrink-0 text-muted-foreground" />
         )}
         <span
-          className={`min-w-0 flex-1 truncate text-caption font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted"}`}
+          className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-foreground" : "text-muted-foreground"}`}
         >
           {data.label}
         </span>
-        <span className="shrink-0 text-caption text-muted">
+        <span className="shrink-0 text-sm text-muted-foreground">
           {data.taskCount}
         </span>
       </div>
@@ -675,19 +677,18 @@ function BacklogRowContent({
   // shuffle the badges sideways — which is also why it goes on line 1: it is a
   // FIXED width, and line 1's right edge is a column.
   const archive = onQuickArchive ? (
-    <button
-      type="button"
+    <IconButton
+      label={`Archive “${task.title}”`}
+      size={tight ? "icon-xs" : "icon-sm"}
+      className="shrink-0 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         onQuickArchive([task.id]);
       }}
-      className={`flex shrink-0 items-center justify-center rounded text-faint opacity-0 hover:bg-raised hover:text-fg focus-visible:opacity-100 group-hover/row:opacity-100 ${tight ? "size-5" : "size-6"}`}
-      title="Archive task"
-      aria-label={`Archive “${task.title}”`}
     >
-      <Archive size={tight ? 12 : 14} />
-    </button>
+      <Archive />
+    </IconButton>
   ) : null;
   // A single line has no line 2 to move the chip to, so there it stays here.
   const chip =
@@ -702,30 +703,25 @@ function BacklogRowContent({
     <div
       className={`group/row flex min-w-0 ${tight ? "items-center gap-1" : "min-h-11 items-stretch gap-1.5"}`}
     >
-      <button
-        type="button"
+      <IconButton
+        size={tight ? "icon-xs" : "icon-sm"}
+        className={`shrink-0 ${tight ? "" : "self-stretch pt-1"}`}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
           onCycle(task);
         }}
+        label={`Status: ${task.status}${claim ? `, ${claim}` : ""}. Mark as ${nextStatus(task.status)}`}
         // Two lines means the target can be TALL: full row height (well past the
         // 44px a thumb needs) with the glyph on the title line rather than
         // floating between the lines beside the chevron.
-        className={`flex shrink-0 justify-center ${tight ? "size-5 items-center" : "w-6 items-start self-stretch pt-1"}`}
-        title={
-          claim
-            ? `${claim[0]!.toUpperCase()}${claim.slice(1)}. Mark as ${nextStatus(task.status)}`
-            : `Mark as ${nextStatus(task.status)}`
-        }
-        aria-label={`Status: ${task.status}${claim ? `, ${claim}` : ""}. Mark as ${nextStatus(task.status)}`}
       >
         <StatusIcon
           status={task.status}
           size={tight ? 14 : 16}
           claimed={Boolean(suggestion)}
         />
-      </button>
+      </IconButton>
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <TaskRowBody
           task={task}
@@ -789,25 +785,21 @@ function SessionGutterAction({
       : `Open the session started from “${task.title}”`
     : `Start a session for “${task.title}”`;
   return (
-    <button
-      type="button"
+    <IconButton
+      size="icon-sm"
+      className="w-9 shrink-0 self-stretch"
       // The row is a drag activator (`Tree`), so a control inside it has to stop
-      // `pointerdown` as well as `click` or pressing it starts a drag. That also
-      // takes this box out of the row's swipe surface, which is why the gutter
-      // stays narrow: a left swipe may no longer START on the last ~44px of the
-      // row, where `SWIPE_EDGE_GUARD_PX` already claimed 24 of them.
+      // pointerdown as well as click or pressing it starts a drag.
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
         if (session) onOpenSession(session.id);
         else onStartSession(task);
       }}
-      className="flex w-9 shrink-0 items-center justify-center self-stretch rounded text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-      title={label}
-      aria-label={label}
+      label={label}
     >
       {session ? <MessageSquare size={15} /> : <MessageSquarePlus size={15} />}
-    </button>
+    </IconButton>
   );
 }
 
@@ -820,16 +812,12 @@ function FilteredEmptyState({
 }) {
   return (
     <EmptyBox
-      className="bg-panel"
+      className="bg-card"
       action={
         filtered ? (
-          <button
-            type="button"
-            onClick={onClear}
-            className="rounded-lg border border-line px-2.5 py-1 text-caption font-medium text-muted hover:bg-raised hover:text-fg"
-          >
+          <Button variant="outline" size="sm" onClick={onClear}>
             Clear filters
-          </button>
+          </Button>
         ) : undefined
       }
     >

@@ -7,7 +7,24 @@ import type {
   AnsweredAgentQuestion,
   DisplayBlock,
 } from "@assistant/shared";
+import type { ReactNode } from "react";
 import { AgentQuestionForm } from "./AgentQuestionForm.tsx";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -43,7 +60,7 @@ export function AgentQuestionToolCard({
       : undefined;
 
   return (
-    <div className="my-2 rounded-2xl border border-line bg-panel/60 p-3">
+    <Card size="sm" className="my-2">
       {pending && onRespond ? (
         <AgentQuestionForm
           request={pending}
@@ -55,16 +72,28 @@ export function AgentQuestionToolCard({
       ) : (
         <FallbackView block={block} />
       )}
-    </div>
+    </Card>
   );
 }
 
-function CardHeader({ title }: { title: string }) {
+function QuestionHeader({
+  title,
+  intro,
+  status,
+}: {
+  title: string;
+  intro?: string | undefined;
+  status?: ReactNode;
+}) {
   return (
-    <div className="flex items-center gap-2 text-fg">
-      <MessageCircleQuestion size={15} className="shrink-0 text-accent" />
-      <span className="min-w-0 truncate font-medium text-caption">{title}</span>
-    </div>
+    <CardHeader>
+      <CardTitle className="flex items-center gap-2">
+        <MessageCircleQuestion className="size-4 shrink-0 text-primary" />
+        <span className="min-w-0 truncate">{title}</span>
+      </CardTitle>
+      {intro ? <CardDescription>{intro}</CardDescription> : null}
+      {status ? <CardAction>{status}</CardAction> : null}
+    </CardHeader>
   );
 }
 
@@ -72,35 +101,43 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
   const cancelled = answered.response.status === "cancelled";
   const byId = new Map(answered.response.answers.map((a) => [a.questionId, a]));
   return (
-    <div className="space-y-2.5 text-caption">
-      <CardHeader title={answered.title} />
-      {answered.intro ? (
-        <p className="text-caption text-faint">{answered.intro}</p>
-      ) : null}
-      {cancelled ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-caption text-muted">
-          <CircleSlash size={13} className="shrink-0 text-faint" />
-          You cancelled this question flow.
-        </div>
-      ) : (
-        <ul className="space-y-2">
-          {answered.questions.map((q) => (
-            <li
-              key={q.id}
-              className="rounded-xl border border-line bg-surface px-3 py-2"
-            >
-              <div className="text-caption font-medium text-fg">{q.title}</div>
-              <AnswerLine question={q} answer={byId.get(q.id)} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {!cancelled && (
-        <div className="flex items-center gap-1 text-caption text-faint">
-          <Check size={12} className="text-accent" /> Answered
-        </div>
-      )}
-    </div>
+    <>
+      <QuestionHeader
+        title={answered.title}
+        intro={answered.intro}
+        status={
+          cancelled ? (
+            <Badge variant="outline">
+              <CircleSlash />
+              Cancelled
+            </Badge>
+          ) : (
+            <Badge variant="success">
+              <Check />
+              Answered
+            </Badge>
+          )
+        }
+      />
+      <CardContent>
+        {cancelled ? (
+          <p className="text-muted-foreground">
+            You cancelled this question flow.
+          </p>
+        ) : (
+          <ItemGroup className="gap-2">
+            {answered.questions.map((q) => (
+              <Item key={q.id} variant="outline" size="sm">
+                <ItemContent>
+                  <ItemTitle>{q.title}</ItemTitle>
+                  <AnswerLine question={q} answer={byId.get(q.id)} />
+                </ItemContent>
+              </Item>
+            ))}
+          </ItemGroup>
+        )}
+      </CardContent>
+    </>
   );
 }
 
@@ -186,42 +223,36 @@ function AnswerLine({
   question: AgentQuestion;
   answer?: AgentQuestionAnswer | undefined;
 }) {
-  if (!answer || answer.disposition === "skipped") {
-    return (
-      <div className="mt-0.5 text-caption text-faint italic">No answer</div>
-    );
-  }
-  const labels = (answer.choiceIds ?? [])
-    .map((id) => question.choices?.find((c) => c.id === id)?.label ?? id)
-    .filter(Boolean);
+  const labels =
+    answer && answer.disposition !== "skipped"
+      ? (answer.choiceIds ?? [])
+          .map((id) => question.choices?.find((c) => c.id === id)?.label ?? id)
+          .filter(Boolean)
+      : [];
+  if (
+    !answer ||
+    answer.disposition === "skipped" ||
+    (labels.length === 0 && !answer.text && answer.disposition !== "discuss")
+  )
+    return <ItemDescription className="italic">No answer</ItemDescription>;
   return (
-    <div className="mt-1 space-y-1">
+    <div className="flex flex-col gap-1">
       {answer.disposition === "discuss" && (
-        <div className="text-caption font-medium text-accent">
-          Marked to discuss in chat
-        </div>
+        <p className="font-medium text-primary">Marked to discuss in chat</p>
       )}
       {labels.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {labels.map((label, i) => (
-            <span
-              key={i}
-              className="rounded-md bg-accent-soft px-1.5 py-0.5 text-caption text-accent"
-            >
+            <Badge key={i} variant="secondary">
               {label}
-            </span>
+            </Badge>
           ))}
         </div>
       )}
       {answer.text ? (
-        <div className="whitespace-pre-wrap text-caption text-muted">
+        <ItemDescription className="whitespace-pre-wrap">
           {answer.text}
-        </div>
-      ) : null}
-      {labels.length === 0 &&
-      !answer.text &&
-      answer.disposition !== "discuss" ? (
-        <div className="text-caption text-faint italic">No answer</div>
+        </ItemDescription>
       ) : null}
     </div>
   );
@@ -242,25 +273,27 @@ function FallbackView({ block }: { block: ToolBlock }) {
   const intro = typeof args?.intro === "string" ? args.intro : undefined;
   const questions = Array.isArray(args?.questions) ? args!.questions : [];
   return (
-    <div className="space-y-2 text-caption">
-      <CardHeader title={title} />
-      {intro ? <p className="text-caption text-faint">{intro}</p> : null}
-      <ul className="space-y-1.5">
-        {questions.map((q, i) => {
-          const qt =
-            q && typeof q === "object"
-              ? (q as { title?: unknown }).title
-              : undefined;
-          return (
-            <li
-              key={i}
-              className="rounded-xl border border-line bg-surface px-3 py-2 text-caption text-muted"
-            >
-              {typeof qt === "string" ? qt : `Question ${i + 1}`}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <>
+      <QuestionHeader title={title} intro={intro} />
+      <CardContent>
+        <ItemGroup className="gap-1.5">
+          {questions.map((q, i) => {
+            const qt =
+              q && typeof q === "object"
+                ? (q as { title?: unknown }).title
+                : undefined;
+            return (
+              <Item key={i} variant="outline" size="xs">
+                <ItemContent>
+                  <ItemTitle className="font-normal text-muted-foreground">
+                    {typeof qt === "string" ? qt : `Question ${i + 1}`}
+                  </ItemTitle>
+                </ItemContent>
+              </Item>
+            );
+          })}
+        </ItemGroup>
+      </CardContent>
+    </>
   );
 }

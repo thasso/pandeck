@@ -6,8 +6,22 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowLeft, Check, ClipboardList, Pencil } from "lucide-react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import {
+  ArrowLeft,
+  Check,
+  ChevronRight,
+  ClipboardList,
+  Pencil,
+} from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
+import { Button } from "./ui/button.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { EditableText } from "./common/EditableText.tsx";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   PullRequestMergeMethod,
   SessionListItem,
@@ -28,20 +42,19 @@ import { AppHeaderBar } from "./AppHeaderBar.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
 import { copyWithToast } from "../lib/clipboard.ts";
-import { InlineEdit } from "./InlineEdit.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
-import { CollapsibleSection } from "./CollapsibleSection.tsx";
 import { TaskComments, taskCommentCount } from "./TaskComments.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { ResizableSeparator, useResizeDrag } from "./ui/ResizableSeparator.tsx";
+import {
+  ResizableSeparator,
+  useResizeDrag,
+} from "./common/ResizableSeparator.tsx";
 import {
   EmptyBox,
   ErrorNote,
   PaneLoading,
   RefreshIndicator,
   Skeleton,
-  Spinner,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -321,26 +334,21 @@ export function TaskManagementPage({
   return (
     <div
       ref={pageRef}
-      className="flex h-full min-w-0 flex-1 flex-col bg-surface text-fg"
+      className="flex h-full min-w-0 flex-1 flex-col bg-background text-foreground"
     >
       {!detailOnlyActive ? (
         <AppHeaderBar className="gap-3" safeAreaTop={false}>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
-            title="Back to chat"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <IconButton label="Back to chat" onClick={onClose}>
+            <ArrowLeft />
+          </IconButton>
+          <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
             <ClipboardList size={16} />
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-body font-semibold tracking-tight text-fg">
+            <h1 className="truncate text-sm font-semibold tracking-tight text-foreground">
               Backlog
             </h1>
-            <p className="truncate text-caption text-muted">
+            <p className="truncate text-sm text-muted-foreground">
               Your durable list of Tasks.
             </p>
           </div>
@@ -350,7 +358,7 @@ export function TaskManagementPage({
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         {!detailOnlyActive ? (
           <section
-            className={`relative h-full min-h-0 flex-col ${wide ? "flex shrink-0 border-r border-line" : selectedId ? "hidden" : "flex w-full"}`}
+            className={`relative h-full min-h-0 flex-col ${wide ? "flex shrink-0 border-r border-border" : selectedId ? "hidden" : "flex w-full"}`}
             style={
               wide
                 ? { width: clampMasterWidth(masterWidth, effectivePageWidth) }
@@ -358,7 +366,7 @@ export function TaskManagementPage({
             }
           >
             <div ref={listScrollRef} className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-[760px] px-4 py-5">
+              <div className="mx-auto w-full max-w-3xl px-4 py-5">
                 <BacklogList
                   state={backlogState}
                   actions={actions}
@@ -467,19 +475,19 @@ export function TaskManagementPage({
               </EmptyBox>
             </div>
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-panel text-faint">
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-muted-foreground">
+              <div className="flex size-10 items-center justify-center rounded-xl bg-card text-muted-foreground">
                 <ClipboardList size={18} />
               </div>
-              <p className="text-body">Select a task to see its details.</p>
+              <p className="text-sm">Select a task to see its details.</p>
               {detailOnlyActive ? (
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  className="mt-2"
                   onClick={onCloseDetail}
-                  className="mt-2 rounded-lg border border-line px-3 py-1.5 text-caption font-medium text-muted transition-colors hover:bg-panel hover:text-fg"
                 >
                   Open Backlog list
-                </button>
+                </Button>
               ) : null}
             </div>
           )}
@@ -537,7 +545,7 @@ function useWorkflowRunAnchor(
 /**
  * Task detail: status, inline-editable title, subtle source links, markdown
  * description, explicit Jira links, related links, and linked agent sessions.
- * Editing still uses the shared InlineEdit pattern for low-risk text fields.
+ * Low-risk title and description edits use the shared shadcn inputs in place.
  */
 function TaskDetailPanel({
   back,
@@ -633,9 +641,8 @@ function TaskDetailPanel({
     detailState.status === "idle" || detailState.status === "loading";
   const detailError = errorOf(detailState);
 
-  // InlineEdit trigger for the description, stashed so the section header's
-  // ghost edit button can start editing (the prose itself is not clickable).
-  const beginDescriptionEdit = useRef<(() => void) | null>(null);
+  // The prose is not clickable; the section action owns edit mode.
+  const [editingDescription, setEditingDescription] = useState(false);
   // Brief confirmation on the header glyph after it copies the task id.
   const [idCopied, setIdCopied] = useState(false);
   useWorkflowRunAnchor(runs, runsLoaded);
@@ -669,14 +676,14 @@ function TaskDetailPanel({
           }}
           iconLabel={idCopied ? "Copied!" : `Copy Task-${item.id}`}
           title={
-            <span className="select-all font-mono text-body text-muted">
+            <span className="select-all font-mono text-sm text-muted-foreground">
               Task-{item.id}
             </span>
           }
         />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[760px] px-5 py-6">
+          <div className="mx-auto w-full max-w-3xl px-5 py-6">
             <TaskTitleBlock
               item={item}
               progress={progress}
@@ -710,7 +717,7 @@ function TaskDetailPanel({
                     key={run.id}
                     id={workflowRunAnchorId(run.id)}
                     tabIndex={-1}
-                    className="scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    className="scroll-mt-4 outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     <WorkflowRunCard
                       run={run}
@@ -732,7 +739,7 @@ function TaskDetailPanel({
               </div>
             ) : null}
 
-            <CollapsibleSection
+            <TaskCollapsibleSection
               title="Description"
               storageKey={`wf.collapse.${item.id}.description`}
               trailing={
@@ -741,12 +748,13 @@ function TaskDetailPanel({
                     <RefreshIndicator label="Refreshing description" />
                   ) : null}
                   {descriptionLoaded ? (
-                    <GhostIconButton
-                      icon={<Pencil size={13} />}
+                    <IconButton
                       label="Edit description"
-                      onClick={() => beginDescriptionEdit.current?.()}
+                      onClick={() => setEditingDescription(true)}
                       busy={isPending(descriptionMutation ?? idle())}
-                    />
+                    >
+                      <Pencil />
+                    </IconButton>
                   ) : null}
                 </div>
               }
@@ -754,75 +762,71 @@ function TaskDetailPanel({
               {detailError ? (
                 <ErrorNote message={detailError} onRetry={onRetryDetail} />
               ) : null}
-              <InlineEdit
+              <EditableText
                 value={descriptionText}
                 onSubmit={onSaveDescription}
                 submitState={descriptionMutation}
+                editing={editingDescription}
+                onEditingChange={setEditingDescription}
                 multiline
                 allowEmpty
-                ariaLabel="Task description"
+                label="Task description"
                 placeholder="Add a description…"
-                editorClassName="min-h-[8rem] w-full resize-y rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-accent"
-                renderDisplay={(begin) => {
-                  // Editing is triggered only by the section's ghost edit button
-                  // (clicking prose selected text and entered edit mode too easily).
-                  beginDescriptionEdit.current = begin;
-                  return (
-                    <div className="min-h-[4rem] w-full py-1">
-                      {descriptionText.trim() ? (
-                        <Markdown
-                          text={descriptionText}
-                          paObjectReferences={paObjectReferences}
-                          onOpenPaObject={onOpenPaObject}
-                        />
-                      ) : !descriptionLoaded ? (
-                        // The summary's preview stands in while the body loads, so
-                        // a Task that HAS a description never flashes "none yet".
-                        // It is raw source, not rendered Markdown: a URL or other
-                        // unbreakable token would run off the pane without
-                        // `break-words`. With no preview to show there is nothing
-                        // to say yet, so the paragraph is RESERVED rather than
-                        // filled with the word "Loading" (R4).
-                        item.descriptionPreview ? (
-                          <span
-                            role={detailLoading ? "status" : undefined}
-                            aria-label={
-                              detailLoading ? "Loading description" : undefined
-                            }
-                            className="break-words text-body text-faint"
-                          >
-                            {item.descriptionPreview}
-                          </span>
-                        ) : (
-                          <div
-                            role={detailLoading ? "status" : undefined}
-                            aria-label={
-                              detailLoading ? "Loading description" : undefined
-                            }
-                            className="flex flex-col gap-2 pt-1"
-                          >
-                            <Skeleton className="h-3.5 w-full" />
-                            <Skeleton className="h-3.5 w-11/12" />
-                            <Skeleton className="h-3.5 w-2/3" />
-                          </div>
-                        )
-                      ) : (
-                        <span className="text-body text-faint">
-                          No description yet. Use the edit button to add one.
-                        </span>
-                      )}
-                    </div>
-                  );
-                }}
-              />
-            </CollapsibleSection>
+                className="min-h-32 resize-y"
+              >
+                <div className="min-h-16 w-full py-1">
+                  {descriptionText.trim() ? (
+                    <Markdown
+                      text={descriptionText}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  ) : !descriptionLoaded ? (
+                    // The summary's preview stands in while the body loads, so
+                    // a Task that HAS a description never flashes "none yet".
+                    // It is raw source, not rendered Markdown: a URL or other
+                    // unbreakable token would run off the pane without
+                    // `break-words`. With no preview to show there is nothing
+                    // to say yet, so the paragraph is RESERVED rather than
+                    // filled with the word "Loading" (R4).
+                    item.descriptionPreview ? (
+                      <span
+                        role={detailLoading ? "status" : undefined}
+                        aria-label={
+                          detailLoading ? "Loading description" : undefined
+                        }
+                        className="break-words text-sm text-muted-foreground"
+                      >
+                        {item.descriptionPreview}
+                      </span>
+                    ) : (
+                      <div
+                        role={detailLoading ? "status" : undefined}
+                        aria-label={
+                          detailLoading ? "Loading description" : undefined
+                        }
+                        className="flex flex-col gap-2 pt-1"
+                      >
+                        <Skeleton className="h-3.5 w-full" />
+                        <Skeleton className="h-3.5 w-11/12" />
+                        <Skeleton className="h-3.5 w-2/3" />
+                      </div>
+                    )
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      No description yet. Use the edit button to add one.
+                    </span>
+                  )}
+                </div>
+              </EditableText>
+            </TaskCollapsibleSection>
 
-            <CollapsibleSection
+            <TaskCollapsibleSection
               title="Activity"
               storageKey={`wf.collapse.${item.id}.activity`}
               trailing={
                 taskCommentCount(dataOf(commentsState)) ? (
-                  <span className="text-caption text-faint">
+                  <span className="text-sm text-muted-foreground">
                     {taskCommentCount(dataOf(commentsState))}
                   </span>
                 ) : undefined
@@ -834,7 +838,7 @@ function TaskDetailPanel({
                 onRetry={onRetryComments}
                 onAddComment={onAddComment}
               />
-            </CollapsibleSection>
+            </TaskCollapsibleSection>
           </div>
         </div>
       </div>
@@ -874,30 +878,25 @@ function TaskTitleBlock({
 }) {
   const isDone = item.status === "done";
   const meta = onCycle || progress;
+  const [editing, setEditing] = useState(false);
   return (
     <div className="mb-6 space-y-2">
       {meta ? (
         <div className="flex items-center gap-2">
           {onCycle ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              busy={isPending(statusMutation ?? idle())}
               onClick={onCycle}
-              disabled={isPending(statusMutation ?? idle())}
-              aria-busy={isPending(statusMutation ?? idle()) || undefined}
               title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
               aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-              className="flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-panel px-2 py-0.5 text-caption text-muted transition-colors hover:border-line-strong hover:text-fg"
             >
-              {isPending(statusMutation ?? idle()) ? (
-                <Spinner size="sm" />
-              ) : (
-                <TaskStatusIcon status={item.status} size={15} />
-              )}
-              <span>{TASK_STATUS_LABEL[item.status]}</span>
-            </button>
+              <TaskStatusIcon status={item.status} size={15} />
+              {TASK_STATUS_LABEL[item.status]}
+            </Button>
           ) : null}
           {progress ? (
-            <span className="shrink-0 rounded-full bg-panel px-2 py-0.5 text-caption text-muted">
+            <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-sm text-muted-foreground">
               {progress.done}/{progress.total} subtasks
             </span>
           ) : null}
@@ -906,28 +905,82 @@ function TaskTitleBlock({
       {errorOf(statusMutation ?? idle()) ? (
         <ErrorNote message={errorOf(statusMutation ?? idle())!} />
       ) : null}
-      <InlineEdit
+      <EditableText
         value={item.title}
         onSubmit={onRename}
         submitState={renameMutation}
-        ariaLabel="Task title"
-        editorClassName="w-full rounded-lg border border-line bg-surface px-2 py-1 text-heading font-semibold text-fg outline-none focus:border-accent"
-        renderDisplay={(begin) => (
-          <div className="flex items-start gap-2">
-            <h1
-              className={`min-w-0 flex-1 text-heading font-semibold ${isDone ? "text-faint line-through" : "text-fg"}`}
-            >
-              {item.title}
-            </h1>
-            <GhostIconButton
-              icon={<Pencil size={13} />}
-              label="Rename task"
-              onClick={begin}
-              className="mt-1"
-            />
-          </div>
-        )}
-      />
+        editing={editing}
+        onEditingChange={setEditing}
+        label="Task title"
+      >
+        <div className="flex items-start gap-2">
+          <h1
+            className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
+          >
+            {item.title}
+          </h1>
+          <IconButton
+            label="Rename task"
+            className="mt-1"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil />
+          </IconButton>
+        </div>
+      </EditableText>
     </div>
+  );
+}
+
+function TaskCollapsibleSection({
+  title,
+  storageKey,
+  defaultOpen = true,
+  trailing,
+  children,
+}: {
+  title: string;
+  storageKey: string;
+  defaultOpen?: boolean;
+  trailing?: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => {
+    try {
+      const value = localStorage.getItem(storageKey);
+      return value === null ? defaultOpen : value === "1";
+    } catch {
+      return defaultOpen;
+    }
+  });
+  const changeOpen = (next: boolean) => {
+    setOpen(next);
+    try {
+      localStorage.setItem(storageKey, next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
+  return (
+    <section className="mb-4">
+      <Collapsible open={open} onOpenChange={changeOpen}>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <CollapsibleTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-w-0 justify-start uppercase tracking-wide text-muted-foreground"
+              />
+            }
+          >
+            <ChevronRight className={`shrink-0 ${open ? "rotate-90" : ""}`} />
+            <span className="truncate">{title}</span>
+          </CollapsibleTrigger>
+          {trailing ? <div className="shrink-0">{trailing}</div> : null}
+        </div>
+        <CollapsibleContent>{children}</CollapsibleContent>
+      </Collapsible>
+    </section>
   );
 }

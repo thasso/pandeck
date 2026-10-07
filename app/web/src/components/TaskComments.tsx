@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { Bot, ChevronDown, MessageSquare, User } from "lucide-react";
+import { Badge } from "./ui/badge.tsx";
+import { Card } from "./ui/card.tsx";
+import { Separator } from "./ui/separator.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import type { TaskComment, TaskCommentAuthorKind } from "@assistant/shared";
 import { sessionPath } from "../lib/sessionRoutes.ts";
-import { CommentBody } from "./ui/CommentBody.tsx";
-import { CommentComposer } from "./ui/CommentComposer.tsx";
-import { ErrorNote, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import { CommentBody } from "./common/CommentBody.tsx";
+import { CommentComposer } from "./common/CommentComposer.tsx";
+import { ErrorNote, RefreshIndicator, Skeleton } from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -22,7 +26,7 @@ import {
  * `taskComments` broadcasts and are added via a `useAssistant` action.
  * @intent Presentational and flat: oldest-first list, author kind badge, no
  * threading/resolve/edit/delete (an auditable trace). The composer is the shared
- * `ui/CommentComposer` — the same one row a document's comment tray uses.
+ * `common/CommentComposer` — the same one row a document's comment tray uses.
  * @related TaskManagementPage, DocumentComments.
  */
 export function TaskComments({
@@ -56,7 +60,7 @@ export function TaskComments({
       {error ? <ErrorNote message={error} onRetry={onRetry} /> : null}
       {comments ? (
         comments.length === 0 ? (
-          <p className="text-body text-faint">
+          <p className="text-sm text-muted-foreground">
             No activity yet. Add the first comment below.
           </p>
         ) : (
@@ -90,74 +94,71 @@ function CommentCard({ comment }: { comment: TaskComment }) {
   const bodyId = `task-comment-body-${comment.id}`;
 
   return (
-    <div className="pb-3">
-      <hr className="mb-2.5 border-0 border-t border-line" />
+    <Card className="mb-2 gap-2 p-3">
+      <Separator />
       <div className="flex min-w-0 items-center gap-1.5">
         <AuthorBadge kind={comment.author.kind} />
         {comment.author.kind === "agent" && comment.author.sessionId ? (
           <a
             href={sessionPath(comment.author.sessionId)}
-            className="min-w-0 truncate text-caption font-medium text-accent hover:underline"
+            className="min-w-0 truncate text-sm font-medium text-primary hover:underline"
             title={`Open ${comment.author.name}'s session`}
           >
             {comment.author.name}
           </a>
         ) : (
-          <span className="truncate text-caption font-medium text-fg">
+          <span className="truncate text-sm font-medium text-foreground">
             {comment.author.name}
           </span>
         )}
         <time
-          className="ml-auto shrink-0 text-micro text-faint"
+          className="ml-auto shrink-0 text-xs text-muted-foreground"
           dateTime={dateTimeWhen(comment.createdAt)}
         >
           {formatWhen(comment.createdAt)}
         </time>
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-raised hover:text-fg"
+        <IconButton
+          label={collapsed ? "Expand comment" : "Collapse comment"}
+          size="icon-xs"
           aria-expanded={!collapsed}
           aria-controls={bodyId}
-          title={collapsed ? "Expand comment" : "Collapse comment"}
+          onClick={() => setCollapsed((value) => !value)}
         >
-          <ChevronDown
-            size={14}
-            className={`transition-transform ${collapsed ? "-rotate-90" : ""}`}
-          />
-        </button>
+          <ChevronDown className={collapsed ? "-rotate-90" : ""} />
+        </IconButton>
       </div>
       {!collapsed ? (
         <CommentBody
           id={bodyId}
           body={comment.body}
-          className="mt-3 text-muted"
+          className="mt-3 text-muted-foreground"
         />
       ) : null}
-    </div>
+    </Card>
   );
 }
 
 const AUTHOR_BADGES: Record<
   TaskCommentAuthorKind,
-  { label: string; icon: typeof User; className: string }
+  {
+    label: string;
+    icon: typeof User;
+    variant: "default" | "warning" | "secondary";
+  }
 > = {
-  user: { label: "You", icon: User, className: "text-accent" },
-  agent: { label: "Agent", icon: Bot, className: "text-emerald-500" },
-  system: { label: "System", icon: MessageSquare, className: "text-faint" },
+  user: { label: "You", icon: User, variant: "default" },
+  agent: { label: "Agent", icon: Bot, variant: "warning" },
+  system: { label: "System", icon: MessageSquare, variant: "secondary" },
 };
 
 function AuthorBadge({ kind }: { kind: TaskCommentAuthorKind }) {
   const badge = AUTHOR_BADGES[kind];
   const Icon = badge.icon;
   return (
-    <span
-      className={`flex shrink-0 items-center ${badge.className}`}
-      title={badge.label}
-      aria-label={badge.label}
-    >
-      <Icon size={13} />
-    </span>
+    <Badge variant={badge.variant} title={badge.label} aria-label={badge.label}>
+      <Icon />
+      {badge.label}
+    </Badge>
   );
 }
 

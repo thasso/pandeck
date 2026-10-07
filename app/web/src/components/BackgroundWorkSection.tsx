@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Activity } from "lucide-react";
+import { Activity, TriangleAlert } from "lucide-react";
 import type {
   BackgroundWorkItemSummary,
   SessionArtifact,
@@ -15,7 +15,9 @@ import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { BackgroundWorkRow } from "./BackgroundWorkRow.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { EmptyBox } from "./ui/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 export interface BackgroundWorkSectionProps {
   sessionId: string | undefined;
@@ -106,6 +108,20 @@ export function BackgroundWorkSection({
   // provider query the user can still stop.
   if (!hasRows && !activity) return null;
 
+  const list = (rows: BackgroundWorkItemSummary[]) => (
+    <ul className="flex flex-col gap-2">
+      {rows.map((item) => (
+        <BackgroundWorkRow
+          key={item.id}
+          item={item}
+          now={now}
+          stopPending={stopPending.has(item.id)}
+          evidenceUrl={evidenceUrls(item.evidence?.artifactId)}
+          onStop={onStop}
+        />
+      ))}
+    </ul>
+  );
   const summary = activity
     ? String(Math.max(activity.activeCount, active?.activeTotal ?? 0))
     : String(active?.activeTotal ?? 0);
@@ -122,7 +138,7 @@ export function BackgroundWorkSection({
       defaultOpen
     >
       {activity ? (
-        <p className="mb-2 text-caption text-muted">
+        <p className="mb-2 text-sm text-muted-foreground">
           {backgroundActivityText(activity)}
         </p>
       ) : null}
@@ -130,67 +146,51 @@ export function BackgroundWorkSection({
           one a refused delete answers with are the same one — said here where
           there is room to say what to do about it. */}
       {blocked ? (
-        <p className="mb-2 text-caption text-faint">
+        <p className="mb-2 text-sm text-muted-foreground">
           Settling and deleting this session are blocked while {blocked} Stop it
           first, here or in the registry.
         </p>
       ) : null}
       {protectedTurnWait ? (
-        <p className="mb-2 rounded-lg bg-warning-soft px-2 py-1.5 text-caption text-warning">
-          Stop-all is waiting: this session&rsquo;s retained background host
-          closes once your own prompted turn finishes. Your turn is never
-          interrupted.
-        </p>
+        <Alert role="note" className="mb-2">
+          <TriangleAlert />
+          <AlertDescription>
+            Stop-all is waiting: this session&rsquo;s retained background host
+            closes once your own prompted turn finishes. Your turn is never
+            interrupted.
+          </AlertDescription>
+        </Alert>
       ) : null}
       {active && active.total > 0 ? (
-        <ul className="flex flex-col gap-2">
-          {active.rows.map((item) => (
-            <BackgroundWorkRow
-              key={item.id}
-              item={item}
-              now={now}
-              stopPending={stopPending.has(item.id)}
-              evidenceUrl={evidenceUrls(item.evidence?.artifactId)}
-              onStop={onStop}
-            />
-          ))}
-        </ul>
+        <>
+          {list(active.rows)}
+          <Button
+            variant="outline"
+            className="mt-2 w-full"
+            onClick={() => onStopAll(sessionId)}
+          >
+            Stop all background work in this session
+          </Button>
+        </>
       ) : (
         <EmptyBox variant="inline">Nothing is running right now.</EmptyBox>
       )}
-      {active && active.total > 0 ? (
-        <button
-          type="button"
-          onClick={() => onStopAll(sessionId)}
-          className="mt-2 h-9 w-full rounded-lg border border-line text-caption text-muted transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        >
-          Stop all background work in this session
-        </button>
-      ) : null}
       {recent && recent.total > 0 ? (
         <>
-          <p className="mt-3 text-caption font-medium text-faint">Recent</p>
-          <ul className="mt-1 flex flex-col gap-2">
-            {recent.rows.map((item) => (
-              <BackgroundWorkRow
-                key={item.id}
-                item={item}
-                now={now}
-                stopPending={stopPending.has(item.id)}
-                evidenceUrl={evidenceUrls(item.evidence?.artifactId)}
-                onStop={onStop}
-              />
-            ))}
-          </ul>
+          <p className="mt-3 mb-1 text-sm font-medium text-muted-foreground">
+            Recent
+          </p>
+          {list(recent.rows)}
         </>
       ) : null}
-      <button
-        type="button"
+      <Button
+        variant="link"
+        size="sm"
+        className="mt-2 px-0"
         onClick={onOpenRegistry}
-        className="mt-2 text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         Open the background registry
-      </button>
+      </Button>
     </InspectorSection>
   );
 }

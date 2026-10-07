@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { CalendarCheck, CalendarClock, Flag } from "lucide-react";
 import type { TaskPriority, TaskSummary } from "@assistant/shared";
 import { InspectorSection } from "./shell/Inspector.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
 import { focusDateLabel } from "../lib/backlogFocus.ts";
 import { addDays, todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
@@ -14,13 +17,6 @@ export interface TaskPlanningPatch {
 }
 
 const PRIORITIES: TaskPriority[] = ["low", "normal", "high", "urgent"];
-
-const PRIORITY_TONE: Record<TaskPriority, string> = {
-  urgent: "border-danger/50 bg-danger/10 text-fg",
-  high: "border-amber-500/50 bg-amber-500/10 text-fg",
-  normal: "border-line-strong bg-raised text-fg",
-  low: "border-line bg-panel text-muted",
-};
 
 /**
  * @component TaskPlanningSection
@@ -69,34 +65,23 @@ export function TaskPlanningSection({
     >
       <div className="space-y-3 px-1">
         <div>
-          <div className="mb-1 text-micro text-faint">Priority</div>
-          <div
-            className="flex flex-wrap items-center gap-1"
-            role="group"
+          <div className="mb-1 text-xs text-muted-foreground">Priority</div>
+          <ToggleGroup
+            value={[priority]}
+            onValueChange={(values) => {
+              const value = values[0] as TaskPriority | undefined;
+              if (value) onPatch({ priority: value });
+            }}
+            variant="outline"
+            size="sm"
             aria-label="Task priority"
           >
-            {PRIORITIES.map((value) => {
-              const active = priority === value;
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onPatch({ priority: value })}
-                  aria-pressed={active}
-                  // Same geometry as `QuickPick` below: two rows of chips in one
-                  // section at different heights read as two kinds of control,
-                  // and the shorter one was a ~24px target on a phone.
-                  className={`cursor-pointer rounded-lg border px-2 py-1 text-caption capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                    active
-                      ? PRIORITY_TONE[value]
-                      : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"
-                  }`}
-                >
-                  {value}
-                </button>
-              );
-            })}
-          </div>
+            {PRIORITIES.map((value) => (
+              <ToggleGroupItem key={value} value={value} className="capitalize">
+                {value}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </div>
 
         <DateRow
@@ -148,7 +133,7 @@ function DateRow({
 }) {
   return (
     <div>
-      <div className="mb-1 flex items-center gap-1.5 text-micro text-faint">
+      <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
         {icon}
         <span>{label}</span>
       </div>
@@ -170,12 +155,12 @@ function DateRow({
           `auto` vs `none` is pixel-identical here, same box and placeholder and
           picker indicator. If iOS regresses the display, drop `appearance-none`
           first. */}
-      <input
+      <Input
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         aria-label={label}
-        className="w-full max-w-full appearance-none rounded-lg border border-line bg-surface px-2 py-1 text-caption text-fg outline-none focus:border-accent"
+        className="w-full max-w-full"
       />
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {quickPicks ? (
@@ -199,7 +184,7 @@ function DateRow({
             active={false}
           />
         ) : null}
-        <p className="ml-auto text-micro text-faint">{hint}</p>
+        <p className="ml-auto text-xs text-muted-foreground">{hint}</p>
       </div>
     </div>
   );
@@ -215,17 +200,14 @@ function QuickPick({
   active: boolean;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant={active ? "secondary" : "outline"}
+      size="sm"
       onClick={onClick}
       aria-pressed={active}
-      className={`shrink-0 cursor-pointer rounded-lg border px-2 py-1 text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        active
-          ? "border-accent/60 bg-accent-soft text-fg"
-          : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"
-      }`}
     >
       {label}
-    </button>
+    </Button>
   );
 }

@@ -6,6 +6,7 @@
  */
 import type { WorktreeGitStatus } from "@assistant/shared";
 import type { WorktreeAxes } from "../lib/worktreeAxes.ts";
+import { Badge } from "./ui/badge.tsx";
 
 export function WorktreeLineDelta({
   status,
@@ -16,11 +17,11 @@ export function WorktreeLineDelta({
   const title = `${status.filesChanged + status.untracked} changed file${status.filesChanged + status.untracked === 1 ? "" : "s"}`;
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 font-mono text-micro font-semibold"
+      className="inline-flex shrink-0 items-center gap-1 font-mono text-xs font-semibold"
       title={title}
     >
-      <span className="text-emerald-400">+{status.additions}</span>
-      <span className="text-red-400">−{status.deletions}</span>
+      <span className="text-success">+{status.additions}</span>
+      <span className="text-destructive">−{status.deletions}</span>
     </span>
   );
 }
@@ -33,9 +34,9 @@ export function WorktreeMergedBadge({
 }) {
   if (!status?.merged || status.ahead <= 0) return null;
   return (
-    <span className="shrink-0 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-micro font-medium text-emerald-500">
+    <Badge variant="success" className="shrink-0">
       merged
-    </span>
+    </Badge>
   );
 }
 
@@ -64,45 +65,29 @@ export function AxesSummary({
       // apply to them and they keep their static position out at the untruncated
       // end of the axes text — pushing the sidebar's scrollWidth ~110px past its
       // client width and letting the whole pane pan sideways on a phone.
-      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-micro tabular-nums text-faint ${dim}`}
+      className={`relative inline-block min-w-0 max-w-full truncate align-bottom font-mono text-xs tabular-nums text-muted-foreground ${dim}`}
     >
       {axes.base ? (
-        <span
-          data-worktree-axis="base"
-          className="mr-2 last:mr-0"
+        <Axis
+          id="base"
+          label={axes.base.label}
+          ahead={axes.base.ahead}
+          behind={axes.base.behind}
           title={`This branch is ${axisDivergence(axes.base.ahead, axes.base.behind, axes.base.label)}${staleNote}`}
-        >
-          <span className="text-muted">{axes.base.label}</span>{" "}
-          {axes.base.ahead > 0 ? (
-            <span className="text-emerald-400">↑{axes.base.ahead}</span>
-          ) : null}
-          {axes.base.behind > 0 ? (
-            <span className="text-amber-400">↓{axes.base.behind}</span>
-          ) : null}
-        </span>
+        />
       ) : null}
       {axes.baseUpstream ? (
         <>
           {/* A plain whitespace-only sr-only node is dropped from Chromium's
               accessibility tree; NBSP survives without adding visual width. */}
           {axes.base ? <span className="sr-only">{"\u00a0"}</span> : null}
-          <span
-            data-worktree-axis="base-upstream"
-            className="mr-2 last:mr-0"
+          <Axis
+            id="base-upstream"
+            label={axes.baseUpstream.label}
+            ahead={axes.baseUpstream.ahead}
+            behind={axes.baseUpstream.behind}
             title={`${baseLabel} is ${axisDivergence(axes.baseUpstream.ahead, axes.baseUpstream.behind, axes.baseUpstream.label)}${staleNote}`}
-          >
-            <span className="text-muted">{axes.baseUpstream.label}</span>{" "}
-            {axes.baseUpstream.ahead > 0 ? (
-              <span className="text-emerald-400">
-                ↑{axes.baseUpstream.ahead}
-              </span>
-            ) : null}
-            {axes.baseUpstream.behind > 0 ? (
-              <span className="text-amber-400">
-                ↓{axes.baseUpstream.behind}
-              </span>
-            ) : null}
-          </span>
+          />
         </>
       ) : null}
       {axes.upstream ? (
@@ -111,19 +96,13 @@ export function AxesSummary({
             <span className="sr-only">{"\u00a0"}</span>
           ) : null}
           {axes.upstream.published ? (
-            <span
-              data-worktree-axis="upstream"
-              className="mr-2 last:mr-0"
+            <Axis
+              id="upstream"
+              label={axes.upstream.label}
+              ahead={axes.upstream.ahead}
+              behind={axes.upstream.behind}
               title={`This branch has ${pushPullDivergence(axes.upstream.ahead, axes.upstream.behind)} against ${axes.upstream.label}${staleNote}`}
-            >
-              <span className="text-muted">{axes.upstream.label}</span>{" "}
-              {axes.upstream.ahead > 0 ? (
-                <span className="text-emerald-400">↑{axes.upstream.ahead}</span>
-              ) : null}
-              {axes.upstream.behind > 0 ? (
-                <span className="text-amber-400">↓{axes.upstream.behind}</span>
-              ) : null}
-            </span>
+            />
           ) : (
             <span
               data-worktree-axis="upstream"
@@ -135,6 +114,29 @@ export function AxesSummary({
           )}
         </>
       ) : null}
+    </span>
+  );
+}
+
+/** One axis: its label, then commits ahead (↑) and behind (↓). */
+function Axis({
+  id,
+  label,
+  ahead,
+  behind,
+  title,
+}: {
+  id: string;
+  label: string;
+  ahead: number;
+  behind: number;
+  title: string;
+}) {
+  return (
+    <span data-worktree-axis={id} className="mr-2 last:mr-0" title={title}>
+      {label}{" "}
+      {ahead > 0 ? <span className="text-success">↑{ahead}</span> : null}
+      {behind > 0 ? <span className="text-warning">↓{behind}</span> : null}
     </span>
   );
 }

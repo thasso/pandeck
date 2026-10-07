@@ -1,8 +1,9 @@
+import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
-import { DialogProvider } from "./components/ui/dialog.tsx";
-import { ShortcutsProvider } from "./components/ui/shortcuts.tsx";
+import { DialogProvider } from "./components/common/dialogs.tsx";
+import { ShortcutsProvider } from "./components/common/shortcuts.tsx";
 import { initHistoryNav } from "./lib/historyNav.ts";
 import "./index.css";
 
@@ -12,11 +13,13 @@ initHistoryNav();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ShortcutsProvider>
-      <DialogProvider>
-        <App />
-      </DialogProvider>
-    </ShortcutsProvider>
+    <TooltipProvider delay={400}>
+      <ShortcutsProvider>
+        <DialogProvider>
+          <App />
+        </DialogProvider>
+      </ShortcutsProvider>
+    </TooltipProvider>
   </StrictMode>,
 );
 

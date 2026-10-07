@@ -5,6 +5,16 @@ import {
   type PendingChatComment,
 } from "../lib/chatCommentPrompt.ts";
 import type { PendingChatCommentsController } from "../hooks/usePendingChatComments.ts";
+import { IconButton } from "./common/IconButton.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Button } from "./ui/button.tsx";
+import { Card } from "./ui/card.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
+import { Separator } from "./ui/separator.tsx";
 
 /**
  * @component ChatCommentChip
@@ -50,139 +60,114 @@ export function ChatCommentChip({
   if (comments.length === 0) return null;
 
   return (
-    <div className="mb-2 overflow-hidden rounded-xl border border-accent/25 bg-accent-soft">
-      <div className="flex min-w-0 items-center">
-        <button
-          type="button"
-          onClick={() => {
-            setExpanded((value) => !value);
-            setConfirmingClear(false);
-          }}
-          aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-caption font-medium text-accent hover:bg-accent/10"
-        >
-          <MessageSquareText size={14} className="shrink-0" />
-          <span className="min-w-0 flex-1">Comments</span>
-          <span className="shrink-0 rounded-full bg-accent/15 px-1.5 text-micro font-semibold tabular-nums">
-            {comments.length}
-          </span>
-          <ChevronDown
-            size={13}
-            className={`shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
-          />
-        </button>
-        {action ? <div className="shrink-0 pr-1">{action}</div> : null}
-      </div>
-      {expanded ? (
-        <div className="border-t border-accent/20 p-1">
+    <Collapsible
+      open={expanded}
+      onOpenChange={(open) => {
+        setExpanded(open);
+        setConfirmingClear(false);
+      }}
+      className="mb-2"
+    >
+      <Card size="sm" className="gap-1 py-1">
+        <div className="flex min-w-0 items-center px-1">
+          <CollapsibleTrigger
+            render={
+              <Button variant="ghost" size="sm" className="min-w-0 flex-1" />
+            }
+          >
+            <MessageSquareText data-icon="inline-start" />
+            <span className="min-w-0 flex-1 text-left">Comments</span>
+            <Badge variant="secondary">{comments.length}</Badge>
+            <ChevronDown
+              data-icon="inline-end"
+              className={`transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+          </CollapsibleTrigger>
+          {action ? <div className="shrink-0 pl-1">{action}</div> : null}
+        </div>
+        <CollapsibleContent className="flex flex-col gap-1 px-1">
+          <Separator />
           <ul className="flex flex-col">
             {comments.map((comment) => {
               const editing = comment.id === activeCommentId;
               return (
                 <li
                   key={comment.id}
-                  className={`flex min-w-0 items-center gap-1 rounded-lg pl-2 pr-1 ${
-                    editing ? "bg-accent/10" : ""
-                  }`}
+                  className="flex min-w-0 items-center gap-1"
                 >
-                  <button
-                    type="button"
+                  <Button
+                    variant={editing ? "secondary" : "ghost"}
+                    size="sm"
                     onClick={() => onReveal?.(comment)}
                     disabled={!onReveal}
                     // The whole comment on hover: the row shows one line, and
                     // the rest is worth reading without opening the editor.
                     title={comment.body}
-                    className="min-w-0 flex-1 truncate py-1.5 text-left text-caption text-fg hover:text-accent disabled:cursor-default disabled:hover:text-fg"
+                    className="min-w-0 flex-1 justify-start font-normal"
                   >
-                    {labelSources && comment.anchor.kind === "document" ? (
-                      <span className="text-faint">
-                        {commentDocumentLabel(comment.anchor.document)} ·{" "}
-                      </span>
-                    ) : null}
-                    {comment.body}
-                  </button>
-                  <RowAction
-                    icon={<Pencil size={13} />}
+                    <span className="truncate">
+                      {labelSources && comment.anchor.kind === "document" ? (
+                        <span className="text-muted-foreground">
+                          {commentDocumentLabel(comment.anchor.document)} ·{" "}
+                        </span>
+                      ) : null}
+                      {comment.body}
+                    </span>
+                  </Button>
+                  <IconButton
                     label={editing ? "Editing in the composer" : "Edit comment"}
-                    active={editing}
+                    aria-pressed={editing || undefined}
                     onClick={() => onSelect(editing ? null : comment.id)}
-                  />
-                  <RowAction
-                    danger
-                    icon={<Trash2 size={13} />}
+                  >
+                    <Pencil />
+                  </IconButton>
+                  <IconButton
                     label="Remove comment"
                     onClick={() => onRemove(comment.id)}
-                  />
+                  >
+                    <Trash2 />
+                  </IconButton>
                 </li>
               );
             })}
           </ul>
-          <div className="flex items-center justify-end gap-1.5 border-t border-accent/20 px-1 pt-1 text-caption">
+          <Separator />
+          <div className="flex items-center justify-end gap-1.5 text-sm">
             {confirmingClear ? (
               <>
-                <span className="mr-auto pl-1 text-faint">
+                <span className="mr-auto pl-1 text-muted-foreground">
                   Remove all {comments.length}?
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="destructive"
+                  size="sm"
                   onClick={() => {
                     onClear();
                     setConfirmingClear(false);
                   }}
-                  className="rounded-lg px-2 py-1 font-medium text-danger hover:bg-danger/10"
                 >
                   Remove all
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setConfirmingClear(false)}
-                  className="rounded-lg px-2 py-1 text-muted hover:bg-raised hover:text-fg"
                 >
                   Keep
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={() => setConfirmingClear(true)}
-                className="rounded-lg px-2 py-1 text-muted hover:bg-raised hover:text-fg"
               >
                 Remove all
-              </button>
+              </Button>
             )}
           </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/** One ghost icon action at the end of a comment row. */
-function RowAction({
-  icon,
-  label,
-  onClick,
-  active = false,
-  danger = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-  active?: boolean;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active || undefined}
-      className={`flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
-        active ? "text-accent" : "text-faint"
-      } ${danger ? "hover:bg-danger/10 hover:text-danger" : "hover:bg-accent/10 hover:text-fg"}`}
-    >
-      {icon}
-    </button>
+        </CollapsibleContent>
+      </Card>
+    </Collapsible>
   );
 }

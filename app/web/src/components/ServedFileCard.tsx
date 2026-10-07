@@ -23,7 +23,18 @@ import {
   externalDocumentActionEnabled,
   runExternalDocumentAction,
 } from "../lib/documentActions.ts";
-import { ImageLightbox } from "./ui/ImageLightbox.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { ImageLightbox } from "./common/ImageLightbox.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 /**
  * One served file, as its producer described it: a captured `SessionArtifact`
@@ -82,119 +93,111 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
   if (!url) return null;
 
   return (
-    <span className="not-prose my-2 block overflow-hidden rounded-xl border border-line bg-surface text-left text-fg shadow-sm">
-      <span className="flex items-start justify-between gap-2 border-b border-line p-2.5">
-        <span className="flex min-w-0 items-start gap-2">
-          <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
-            <Icon size={14} />
+    <Card size="sm" className="not-prose my-2 text-left">
+      <CardHeader>
+        <CardTitle className="flex min-w-0 items-center gap-2">
+          <Icon className="size-4 shrink-0 text-primary" />
+          <span className="truncate" title={title}>
+            {title}
           </span>
-          <span className="min-w-0">
-            <span
-              className="block truncate text-caption font-medium text-fg"
-              title={title}
-            >
-              {title}
-            </span>
-            <span
-              className="block truncate text-micro text-faint"
-              title={path || name}
-            >
-              {path || name || "Served file"}
-              {size ? ` · ${size}` : ""}
-            </span>
-            <span className="block truncate text-micro text-muted">
-              Preview only · not added to assistant context
-            </span>
+        </CardTitle>
+        <CardDescription className="min-w-0 text-xs">
+          <span className="block truncate" title={path || name}>
+            {path || name || "Served file"}
+            {size ? ` · ${size}` : ""}
           </span>
-        </span>
-        {viewerHref ? (
-          <a
-            href={viewerHref}
-            onClick={(event) => {
-              if (
-                event.metaKey ||
-                event.ctrlKey ||
-                event.shiftKey ||
-                event.altKey
-              )
-                return;
-              event.preventDefault();
-              pushDocumentEntryAndAnnounce(viewerHref);
-            }}
-            title="Open in the file viewer"
-            aria-label="Open in the file viewer"
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg"
-          >
-            <Eye size={14} />
-          </a>
-        ) : null}
-        {target ? (
-          <button
-            type="button"
-            onClick={() =>
-              void runExternalDocumentAction(
-                target,
-                kind === "other" ? "download" : "open",
-              )
-            }
-            disabled={!externalEnabled}
-            title={
-              externalEnabled
-                ? kind === "other"
-                  ? "Download this file"
-                  : "Open in a new window"
-                : "External opening is unavailable for this source in the native app"
-            }
-            aria-label={
-              kind === "other" ? "Download this file" : "Open in a new window"
-            }
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            <ExternalLink size={14} />
-          </button>
-        ) : (
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer noopener"
-            title="Open external file"
-            aria-label="Open external file"
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg"
-          >
-            <ExternalLink size={14} />
-          </a>
-        )}
-      </span>
-      {kind === "image" ? (
-        <>
-          <button
-            type="button"
-            onClick={() => setEnlarged(true)}
-            title="Click to enlarge"
-            aria-label={`Enlarge ${title}`}
-            className="block w-full cursor-zoom-in bg-panel"
-          >
-            <img
-              src={url}
-              alt={title}
-              className="max-h-[32rem] w-full object-contain"
-            />
-          </button>
-          {enlarged ? (
-            <ImageLightbox
-              src={url}
-              alt={title}
-              caption={name ?? title}
-              onClose={() => setEnlarged(false)}
-            />
+          <span className="block truncate">
+            Preview only · not added to assistant context
+          </span>
+        </CardDescription>
+        <CardAction className="flex">
+          {viewerHref ? (
+            <LinkButton
+              variant="ghost"
+              label="Open in the file viewer"
+              size="icon-sm"
+              href={viewerHref}
+              onClick={(event) => {
+                if (
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                )
+                  return;
+                event.preventDefault();
+                pushDocumentEntryAndAnnounce(viewerHref);
+              }}
+            >
+              <Eye />
+            </LinkButton>
           ) : null}
-        </>
-      ) : (
-        <span className="block p-3 text-caption text-muted">
-          {viewerHref ? VIEWER_COPY[kind] : NO_VIEWER_COPY[kind]}
-        </span>
-      )}
-    </span>
+          {target ? (
+            <IconButton
+              label={
+                kind === "other" ? "Download this file" : "Open in a new window"
+              }
+              onClick={() =>
+                void runExternalDocumentAction(
+                  target,
+                  kind === "other" ? "download" : "open",
+                )
+              }
+              disabled={!externalEnabled}
+              title={
+                externalEnabled
+                  ? undefined
+                  : "External opening is unavailable for this source in the native app"
+              }
+            >
+              <ExternalLink />
+            </IconButton>
+          ) : (
+            <LinkButton
+              variant="ghost"
+              label="Open external file"
+              size="icon-sm"
+              href={url}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              <ExternalLink />
+            </LinkButton>
+          )}
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {kind === "image" ? (
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => setEnlarged(true)}
+              title="Click to enlarge"
+              aria-label={`Enlarge ${title}`}
+              className="h-auto w-full cursor-zoom-in p-0"
+            >
+              <img
+                src={url}
+                alt={title}
+                className="max-h-128 w-full object-contain"
+              />
+            </Button>
+            {enlarged ? (
+              <ImageLightbox
+                src={url}
+                alt={title}
+                caption={name ?? title}
+                onClose={() => setEnlarged(false)}
+              />
+            ) : null}
+          </>
+        ) : (
+          <p className="text-muted-foreground">
+            {viewerHref ? VIEWER_COPY[kind] : NO_VIEWER_COPY[kind]}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

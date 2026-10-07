@@ -343,15 +343,16 @@ import { UnreadDot } from "./components/UnreadDot.tsx";
 import {
   useShortcuts,
   type ShortcutGroup,
-} from "./components/ui/shortcuts.tsx";
+} from "./components/common/shortcuts.tsx";
 import {
   EmptyBox,
   ErrorNote,
   PaneLoading,
   Skeleton,
-} from "./components/ui/load.tsx";
-import { Button } from "./components/ui/Button.tsx";
-import { useDialogs } from "./components/ui/dialog.tsx";
+} from "./components/common/load.tsx";
+import { Button } from "@/components/ui/button";
+import { useDialogs } from "./components/common/dialogs.tsx";
+import { IconButton } from "./components/common/IconButton.tsx";
 
 const SIDEBAR_MIN_WIDTH = 220;
 
@@ -715,7 +716,7 @@ function useMobileKeyboardInset() {
  */
 function LoadingShell({ label = "Loading session…" }: { label?: string }) {
   return (
-    <div className="flex h-full min-h-dvh flex-col bg-surface text-fg">
+    <div className="flex h-full min-h-dvh flex-col bg-background text-foreground">
       <PaneLoading label={label} />
     </div>
   );
@@ -728,7 +729,7 @@ function LoadingShell({ label = "Loading session…" }: { label?: string }) {
  */
 function LazySurfaceFallback({ label = "Opening…" }: { label?: string }) {
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-background">
       <PaneLoading label={label} />
     </div>
   );
@@ -752,10 +753,10 @@ function TranscriptChunkFallback() {
     <div
       role="status"
       aria-label="Opening transcript"
-      className="min-h-0 flex-1 overflow-hidden bg-surface"
+      className="min-h-0 flex-1 overflow-hidden bg-background"
     >
       <div className="mx-auto flex h-full w-full max-w-3xl flex-col justify-end gap-3 px-4 py-6">
-        <div className="ml-auto w-2/3 rounded-2xl border border-line bg-panel p-4">
+        <div className="ml-auto w-2/3 rounded-2xl border border-border bg-card p-4">
           <Skeleton className="h-3 w-full rounded-full" />
           <Skeleton className="mt-2 h-3 w-3/4 rounded-full" />
         </div>
@@ -778,13 +779,13 @@ function WorktreePlaceholder({
   back?: PageHeaderBack | undefined;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitBranch size={16} />}
         title="Worktrees"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-sm text-muted-foreground">
         {detail}
       </div>
     </div>
@@ -803,13 +804,13 @@ function PullRequestIndexPlaceholder({
   back?: PageHeaderBack | undefined;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <PageHeader
         back={back}
         icon={<GitPullRequest size={16} />}
         title="Pull Requests"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-sm text-muted-foreground">
         Pick a pull request to see its checks, its review and what it is joined
         to on this machine.
       </div>
@@ -822,7 +823,7 @@ function AppContent() {
   useMobileKeyboardInset();
   // The app's own confirm/prompt surface. Native dialogs are banned: the Tauri
   // shell's webview never shows them, so the action they guard silently does
-  // nothing (`components/ui/dialog.tsx`). Both members are stable, so the
+  // nothing (`components/common/dialogs.tsx`). Both members are stable, so the
   // handlers below stay referentially stable for memoized rows.
   const dialogs = useDialogs();
   // Register the always-present General group last (lowest priority) so it sorts
@@ -4013,7 +4014,7 @@ function AppContent() {
       ? sessionShell.titleGenerationPending
       : displaySessionListItem?.titleGenerationPending === true);
   const sessionTitleHeading = (
-    <h2 className="truncate text-body font-semibold tracking-tight text-fg">
+    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
       <SessionTitleText
         title={displaySessionTitle}
         pending={displaySessionTitleGenerationPending}
@@ -4054,7 +4055,7 @@ function AppContent() {
         renderTaskPicker: () => (
           <Suspense
             fallback={
-              <div className="px-1 py-2 text-caption text-faint">
+              <div className="px-1 py-2 text-sm text-muted-foreground">
                 Loading tasks…
               </div>
             }
@@ -6762,8 +6763,7 @@ function AppContent() {
                   className="m-6"
                   action={
                     <Button
-                      variant="secondary"
-                      size="sm"
+                      variant="outline"
                       onClick={() => openSettingsSection("knowledge-base")}
                     >
                       Open Knowledge Base settings
@@ -6966,24 +6966,23 @@ function AppContent() {
                         mobileLayout ? undefined : (
                           <div className="flex items-center gap-1">
                             {displayWorktreeId && (
-                              <button
-                                type="button"
+                              <IconButton
+                                label="View this session's worktree changes"
+                                size="icon"
                                 onClick={() =>
                                   navigate(
                                     worktreePath(displayWorktreeId, "changes"),
                                   )
                                 }
-                                title="View this session's worktree changes"
-                                aria-label="View this session's worktree changes"
-                                className="relative flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg"
+                                className="relative"
                               >
                                 {/* Same rule as the dock's row and the inspector's action: the
                       glyph is the worktree this leaves for, not the diff it opens on. */}
-                                <GitBranch size={16} />
+                                <GitBranch />
                                 {displayWorktreeStatus?.dirty && (
                                   <UnreadDot title="Worktree has uncommitted changes" />
                                 )}
-                              </button>
+                              </IconButton>
                             )}
                             <ChatHeaderMenu
                               mobile={mobileLayout}

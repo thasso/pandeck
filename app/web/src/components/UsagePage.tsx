@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AlertTriangle, Gauge, RefreshCw, Ticket, X } from "lucide-react";
+import { Gauge, RefreshCw, Ticket } from "lucide-react";
 import type {
   ClaudeUsageSnapshot,
   OpenAiResetCredit,
@@ -32,15 +32,42 @@ import {
   orderCredentialProfilesByProvider,
 } from "../lib/credentialProfiles.ts";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
-import { ProviderIcon } from "./ui/ProviderIcon.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Alert } from "./ui/alert.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Button } from "./ui/button.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+  ItemTitle,
+} from "./ui/item.tsx";
+import { Progress } from "./ui/progress.tsx";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import {
   EmptyBox,
   ErrorNote,
   RefreshIndicator,
   Skeleton,
-  Spinner,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 import { useFetchState } from "../hooks/useFetchState.ts";
 import { useNow } from "../hooks/useNow.ts";
 import {
@@ -97,7 +124,7 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
     claude.pending || openai.pending || isPending(profileState);
 
   return (
-    <div className="flex h-full w-full flex-col bg-surface text-fg">
+    <div className="flex h-full w-full flex-col bg-background text-foreground">
       <PageHeader
         back={back}
         icon={<Gauge size={16} />}
@@ -105,8 +132,8 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
         title="Usage"
         subtitle="Provider account limits"
         actions={
-          <GhostIconButton
-            icon={refreshing ? <Spinner size="md" /> : <RefreshCw size={15} />}
+          <IconButton
+            busy={refreshing}
             label="Refresh usage"
             // The accounts themselves are not refetched here: a new list
             // identity restarts every account's cached load, which would race
@@ -116,17 +143,19 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
               void claude.loadAll({ refresh: true });
               void openai.loadAll({ refresh: true });
             }}
-          />
+          >
+            <RefreshCw />
+          </IconButton>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-8">
           <section className="flex flex-col gap-3">
             <div>
-              <h2 className="text-heading font-semibold text-fg">
+              <h2 className="text-lg font-semibold text-foreground">
                 At a glance
               </h2>
-              <p className="mt-0.5 text-caption text-muted">
+              <p className="mt-0.5 text-sm text-muted-foreground">
                 Current subscription limits across every enabled account.
               </p>
             </div>
@@ -142,8 +171,8 @@ export function UsagePage({ back }: { back?: PageHeaderBack | undefined }) {
                 aria-label="Loading provider accounts"
                 className="grid grid-cols-1 gap-3 sm:grid-cols-2"
               >
-                <Skeleton className="h-[7.5rem]" />
-                <Skeleton className="h-[7.5rem]" />
+                <Skeleton className="h-30" />
+                <Skeleton className="h-30" />
               </div>
             ) : profilesLoaded && orderedProfiles.length === 0 ? (
               <EmptyBox>No enabled provider accounts.</EmptyBox>
@@ -389,26 +418,28 @@ export function UsageOverviewCard({
         : undefined;
   const providerName = profile.provider === "claude" ? "Claude" : "OpenAI";
   return (
-    <div className="rounded-xl border border-line bg-panel p-3.5">
-      <div className="flex items-center gap-2">
-        <ProviderIcon
-          provider={profile.provider}
-          title={providerName}
-          size={15}
-          className="shrink-0 text-accent"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-caption font-semibold text-fg">
-            {profile.name}
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <ProviderIcon
+            provider={profile.provider}
+            title={providerName}
+            size={15}
+            className="shrink-0 text-primary"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-foreground">
+              {profile.name}
+            </div>
+            <div className="text-sm text-muted-foreground">{providerName}</div>
           </div>
-          <div className="text-caption text-faint">{providerName}</div>
         </div>
         {/* R2: the meters below stay up while the account refetches. */}
         {snapshot && state && isPending(state) ? (
           <RefreshIndicator label={`Refreshing ${profile.name} usage`} />
         ) : null}
-      </div>
-      <div className="mt-3 flex flex-col gap-2.5">
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2.5">
         {rows.map((row) => (
           <CompactUsageMeter key={row.label} {...row} now={now} />
         ))}
@@ -421,20 +452,20 @@ export function UsageOverviewCard({
             aria-label={`Loading ${profile.name} usage`}
             className="flex flex-col gap-2.5"
           >
-            <Skeleton className="h-[2.85rem]" />
-            <Skeleton className="h-[2.85rem]" />
+            <Skeleton className="h-12" />
+            <Skeleton className="h-12" />
           </div>
         ) : null}
         {unavailable ? (
-          <p className="text-caption text-muted">{unavailable}</p>
+          <p className="text-sm text-muted-foreground">{unavailable}</p>
         ) : null}
         {snapshot && rows.length === 0 && !unavailable ? (
-          <p className="text-caption text-muted">
+          <p className="text-sm text-muted-foreground">
             No subscription windows reported.
           </p>
         ) : null}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -447,19 +478,17 @@ function CompactUsageMeter({
   const clamped = pct === null ? 0 : Math.min(100, Math.max(0, pct));
   return (
     <div>
-      <div className="flex items-baseline justify-between gap-2 text-caption">
-        <span className="text-muted">{label}</span>
-        <span className="font-semibold tabular-nums text-fg">
+      <div className="flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        <Badge
+          variant={pct === null ? "outline" : usageBadgeVariant(clamped)}
+          className="tabular-nums"
+        >
           {pct === null ? "—" : `${Math.round(pct)}%`}
-        </span>
+        </Badge>
       </div>
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-line">
-        <div
-          className={`h-full rounded-full ${meterColor(clamped)}`}
-          style={{ width: `${clamped}%` }}
-        />
-      </div>
-      <div className="mt-0.5 text-right text-micro text-faint">
+      <Progress aria-label={label} value={clamped} className="mt-1 w-full" />
+      <div className="mt-0.5 text-right text-xs text-muted-foreground">
         {resetCountdown(resetsAt, now)}
       </div>
     </div>
@@ -483,10 +512,10 @@ function UsageProviderSection({
   return (
     <section className="flex flex-col gap-4">
       <div className="flex items-center gap-2.5">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-panel text-accent">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-card text-primary">
           <ProviderIcon provider={provider} size={15} />
         </span>
-        <h2 className="text-body font-semibold text-fg">{title}</h2>
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       </div>
       {loading ? (
         <div role="status" aria-label={`Loading ${title} accounts`}>
@@ -519,12 +548,14 @@ function UsageAccountSection<T>({
   const snapshot = state ? dataOf(state) : undefined;
   const error = state ? errorOf(state) : undefined;
   return (
-    <section className="flex flex-col gap-3 border-t border-line pt-4 first:border-t-0 first:pt-0">
+    <section className="flex flex-col gap-3 border-t border-border pt-4 first:border-t-0 first:pt-0">
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-body font-semibold text-fg">{profile.name}</div>
+          <div className="text-sm font-semibold text-foreground">
+            {profile.name}
+          </div>
           {subtitle ? (
-            <div className="text-caption text-muted">{subtitle}</div>
+            <div className="text-sm text-muted-foreground">{subtitle}</div>
           ) : null}
         </div>
         {/* R2: the section keeps its detail while the account refetches. */}
@@ -536,7 +567,7 @@ function UsageAccountSection<T>({
       {/* R4: the meters card's silhouette, so nothing jumps when it lands. */}
       {!snapshot && !error ? (
         <div role="status" aria-label={fetchingLabel} className="space-y-3">
-          <Skeleton className="h-[9.5rem]" />
+          <Skeleton className="h-38" />
         </div>
       ) : (
         children
@@ -567,18 +598,21 @@ function resetCountdown(iso: string | null, now: number): string {
 }
 
 /** Shared thresholds so the cards and this page never disagree (`usageLevel`). */
-function meterColor(pct: number): string {
+function usageBadgeVariant(pct: number): "destructive" | "warning" | "success" {
   const level = usageLevel(pct);
-  if (level === "critical") return "bg-danger";
-  if (level === "warn") return "bg-warning";
-  return "bg-accent";
+  return level === "critical"
+    ? "destructive"
+    : level === "warn"
+      ? "warning"
+      : "success";
 }
 
-function severityTone(severity: string | null): string {
-  if (severity === "critical") return "text-danger";
-  if (severity === "warning") return "text-amber-500";
-  return "text-fg";
-}
+const severityVariant = (severity: string | null) =>
+  severity === "critical"
+    ? "destructive"
+    : severity === "warning"
+      ? "warning"
+      : "outline";
 
 /** A horizontal "% used" meter with a live reset countdown, shared across providers. */
 function UsageMeter({
@@ -596,18 +630,16 @@ function UsageMeter({
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-caption text-fg">{title}</span>
-        <span className="text-caption font-semibold tabular-nums text-fg">
+        <span className="text-sm text-foreground">{title}</span>
+        <Badge
+          variant={pct === null ? "outline" : usageBadgeVariant(clamped)}
+          className="tabular-nums"
+        >
           {pct === null ? "—" : `${Math.round(pct)}% used`}
-        </span>
+        </Badge>
       </div>
-      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-line">
-        <div
-          className={`h-full rounded-full transition-[width] ${meterColor(clamped)}`}
-          style={{ width: `${clamped}%` }}
-        />
-      </div>
-      <div className="mt-1 flex items-baseline justify-between gap-3 text-caption text-faint">
+      <Progress aria-label={title} value={clamped} className="mt-1 w-full" />
+      <div className="mt-1 flex items-baseline justify-between gap-3 text-sm text-muted-foreground">
         <span>
           {pct === null
             ? ""
@@ -639,16 +671,14 @@ function ClaudeUsageContent({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-xl border border-line bg-panel p-3.5">
-        <div className="mb-1 flex items-baseline justify-between">
-          <div className="text-caption font-semibold text-fg">
-            Plan limits used
-          </div>
-          <div className="text-caption text-faint">
+      <Card>
+        <CardHeader>
+          <CardTitle>Plan limits used</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Percent consumed — 100% means the cap is reached
-          </div>
-        </div>
-        <div className="mt-2 flex flex-col gap-3.5">
+          </p>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3.5">
           <ClaudeMeter
             title="5-hour session"
             window={snapshot.fiveHour}
@@ -664,68 +694,56 @@ function ClaudeUsageContent({
               now={now}
             />
           ))}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {snapshot.extraUsage?.enabled ? (
         <ExtraUsageCard extraUsage={snapshot.extraUsage} />
       ) : null}
 
       {snapshot.limits.length > 0 ? (
-        <div className="rounded-xl border border-line bg-panel p-3">
-          <div className="mb-2 text-caption font-semibold text-fg">
-            All reported limits
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-caption">
-              <thead>
-                <tr>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
-                    Kind
-                  </th>
-                  <th className="border-b border-line px-2 py-1 text-right font-medium text-muted">
-                    Used
-                  </th>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
-                    Resets
-                  </th>
-                  <th className="border-b border-line px-2 py-1 text-left font-medium text-muted">
-                    Scope
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+        <Card>
+          <CardHeader>
+            <CardTitle>All reported limits</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Kind</TableHead>
+                  <TableHead className="text-right">Used</TableHead>
+                  <TableHead>Resets</TableHead>
+                  <TableHead>Scope</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {snapshot.limits.map((limit, index) => (
-                  <tr key={`${limit.kind}-${index}`}>
-                    <td className="border-b border-line/50 px-2 py-1 text-left text-fg">
-                      {limit.kind}
-                    </td>
-                    <td
-                      className={`border-b border-line/50 px-2 py-1 text-right tabular-nums ${severityTone(limit.severity)}`}
-                    >
-                      {limit.percent === null
-                        ? "—"
-                        : `${Math.round(limit.percent)}%`}
-                    </td>
-                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted">
-                      {resetCountdown(limit.resetsAt, now)}
-                    </td>
-                    <td className="border-b border-line/50 px-2 py-1 text-left text-muted">
+                  <TableRow key={`${limit.kind}-${index}`}>
+                    <TableCell>{limit.kind}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <Badge variant={severityVariant(limit.severity)}>
+                        {limit.percent === null
+                          ? "—"
+                          : `${Math.round(limit.percent)}%`}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{resetCountdown(limit.resetsAt, now)}</TableCell>
+                    <TableCell>
                       {limit.scope?.modelDisplayName ?? "—"}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       ) : null}
 
       {snapshot.behaviors ? (
         <BehaviorsSection behaviors={snapshot.behaviors} />
       ) : null}
 
-      <div className="text-caption text-faint">
+      <div className="text-sm text-muted-foreground">
         Last updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
       </div>
     </div>
@@ -783,22 +801,18 @@ function ExtraUsageCard({
   const over =
     extraUsage.utilizationPct !== null && extraUsage.utilizationPct >= 100;
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="text-caption font-medium text-muted">
-        Extra usage credits (this month)
-      </div>
-      <div className="mt-1 text-heading font-semibold tabular-nums text-fg">
+    <Card>
+      <CardTitle>Extra usage credits (this month)</CardTitle>
+      <div className="text-lg font-semibold tabular-nums text-foreground">
         {used === null || limit === null ? "—" : `${used} / ${limit}`}
       </div>
       {extraUsage.utilizationPct !== null ? (
-        <div
-          className={`mt-1 text-caption ${over ? "text-danger" : "text-faint"}`}
-        >
+        <Badge variant={over ? "destructive" : "outline"}>
           {Math.round(extraUsage.utilizationPct)}% used
           {over ? " · spend cap reached" : ""}
-        </div>
+        </Badge>
       ) : null}
-    </div>
+    </Card>
   );
 }
 
@@ -808,15 +822,13 @@ function BehaviorsSection({
   behaviors: NonNullable<ClaudeUsageSnapshot["behaviors"]>;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="mb-2 text-caption font-semibold text-fg">
-        Local activity (approximate, this machine only)
-      </div>
+    <Card>
+      <CardTitle>Local activity (approximate, this machine only)</CardTitle>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <BehaviorWindow label="Last 24 hours" window={behaviors.day} />
         <BehaviorWindow label="Last 7 days" window={behaviors.week} />
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -829,13 +841,13 @@ function BehaviorWindow({
 }) {
   return (
     <div>
-      <div className="text-caption font-medium text-muted">{label}</div>
-      <div className="text-caption text-fg">
+      <div className="text-sm font-medium text-muted-foreground">{label}</div>
+      <div className="text-sm text-foreground">
         {window.requestCount.toLocaleString()} requests ·{" "}
         {window.sessionCount.toLocaleString()} sessions
       </div>
       {window.topContributors.length > 0 ? (
-        <ul className="mt-1 space-y-0.5 text-caption text-muted">
+        <ul className="mt-1 space-y-0.5 text-sm text-muted-foreground">
           {window.topContributors.slice(0, 4).map((c) => (
             <li key={`${c.kind}-${c.name}`}>
               {c.name} — {Math.round(c.pct)}%
@@ -877,33 +889,33 @@ function OpenAiUsageContent({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-xl border border-line bg-panel p-3.5">
-        <div className="mb-1 flex items-baseline justify-between">
-          <div className="text-caption font-semibold text-fg">
-            Plan limits used
-          </div>
-          <div className="text-caption text-faint">
+      <Card>
+        <CardHeader>
+          <CardTitle>Plan limits used</CardTitle>
+          <p className="text-sm text-muted-foreground">
             Percent consumed — 100% means the cap is reached
-          </div>
-        </div>
-        {snapshot.windows.length > 0 ? (
-          <div className="mt-2 flex flex-col gap-3.5">
-            {snapshot.windows.map((w, index) => (
-              <UsageMeter
-                key={`${w.kind}-${w.label ?? index}`}
-                title={openAiWindowTitle(w)}
-                pct={w.usedPercent}
-                resetsAt={w.resetsAt}
-                now={now}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="mt-2 text-caption text-muted">
-            No active rate-limit windows reported right now.
-          </div>
-        )}
-      </div>
+          </p>
+        </CardHeader>
+        <CardContent>
+          {snapshot.windows.length > 0 ? (
+            <div className="flex flex-col gap-3.5">
+              {snapshot.windows.map((w, index) => (
+                <UsageMeter
+                  key={`${w.kind}-${w.label ?? index}`}
+                  title={openAiWindowTitle(w)}
+                  pct={w.usedPercent}
+                  resetsAt={w.resetsAt}
+                  now={now}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2 text-sm text-muted-foreground">
+              No active rate-limit windows reported right now.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {snapshot.spendControl ? (
         <OpenAiSpendCard spend={snapshot.spendControl} now={now} />
@@ -918,7 +930,7 @@ function OpenAiUsageContent({
         />
       ) : null}
 
-      <div className="text-caption text-faint">
+      <div className="text-sm text-muted-foreground">
         Last updated {new Date(snapshot.fetchedAt).toLocaleTimeString()}
       </div>
     </div>
@@ -943,26 +955,27 @@ function OpenAiSpendCard({
   const over =
     spend.reached || (spend.usedPercent !== null && spend.usedPercent >= 100);
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="text-caption font-medium text-muted">
-        Spend limit{spend.source ? ` · ${spend.source.replace(/_/g, " ")}` : ""}
-      </div>
-      <div className="mt-1 text-heading font-semibold tabular-nums text-fg">
+    <Card>
+      <CardTitle>
+        Spend limit
+        {spend.source ? ` · ${spend.source.replace(/_/g, " ")}` : ""}
+      </CardTitle>
+      <div className="text-lg font-semibold tabular-nums text-foreground">
         {fmt(spend.used)} / {fmt(spend.limit)}
       </div>
-      <div
-        className={`mt-1 text-caption ${over ? "text-danger" : "text-faint"}`}
-      >
-        {spend.usedPercent !== null
-          ? `${Math.round(spend.usedPercent)}% used`
-          : ""}
-        {over ? " · spend cap reached" : ""}
-        {spend.resetsAt ? ` · ${resetCountdown(spend.resetsAt, now)}` : ""}
-      </div>
-      <div className="mt-1 text-caption text-faint">
+      {spend.usedPercent !== null || over ? (
+        <Badge variant={over ? "destructive" : "outline"}>
+          {spend.usedPercent !== null
+            ? `${Math.round(spend.usedPercent)}% used`
+            : "Spend cap reached"}
+          {over && spend.usedPercent !== null ? " · spend cap reached" : ""}
+          {spend.resetsAt ? ` · ${resetCountdown(spend.resetsAt, now)}` : ""}
+        </Badge>
+      ) : null}
+      <div className="mt-1 text-sm text-muted-foreground">
         Amounts as reported by OpenAI (currency not specified; typically USD).
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -1035,14 +1048,14 @@ function expiryLabel(
   return { text: `expires ${moment} · in ${countdown}`, level };
 }
 
-const EXPIRY_TONE: Record<ResetCreditExpiryLevel, string> = {
-  ok: "text-faint",
-  soon: "text-warning",
-  imminent: "text-danger",
-  pending: "text-danger",
-  expired: "text-faint line-through",
-  unknown: "text-faint",
-};
+const expiryBadgeVariant = (level: ResetCreditExpiryLevel) =>
+  level === "soon"
+    ? "warning"
+    : level === "imminent" || level === "pending"
+      ? "destructive"
+      : level === "ok"
+        ? "success"
+        : "outline";
 
 /** "redeemed Sep 21, 22:06" for a spent row the provider still lists. */
 function redeemedLabel(iso: string | null, now: number): string {
@@ -1116,109 +1129,137 @@ export function OpenAiCreditsCard({
   };
 
   return (
-    <div className="rounded-xl border border-line bg-panel p-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <div className="text-caption font-medium text-muted">Credits</div>
+    <Card>
+      <CardHeader className="flex flex-row items-baseline justify-between gap-3">
+        <CardTitle>Credits</CardTitle>
         {resetCredits && (resetCredits.availableCount ?? 0) > 0 ? (
-          <div className="text-caption text-faint">
+          <div className="text-sm text-muted-foreground">
             {resetCredits.availableCount} reset
             {resetCredits.availableCount === 1 ? "" : "s"} banked
             {applicable > 0 ? ` · ${applicable} usable now` : ""}
           </div>
         ) : null}
-      </div>
-      <div className="mt-1 text-body text-fg">
-        {status}
-        {credits.balance !== null
-          ? ` · balance ${credits.balance.toLocaleString()}`
-          : ""}
-      </div>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-2">
+          <Badge
+            variant={
+              credits.overageLimitReached
+                ? "warning"
+                : credits.hasCredits || credits.unlimited
+                  ? "success"
+                  : "outline"
+            }
+          >
+            {status}
+          </Badge>
+          {credits.balance !== null ? (
+            <span className="text-sm text-muted-foreground">
+              Balance {credits.balance.toLocaleString()}
+            </span>
+          ) : null}
+        </div>
 
-      {available.length + redeemed.length > 0 ? (
-        <div className="mt-2 rounded-lg border border-line bg-surface p-2.5">
-          <div className="mb-1.5 flex items-center gap-1.5 text-caption font-semibold text-muted">
-            <Ticket size={12} /> Banked rate-limit resets
-          </div>
-          <ul className="space-y-1 text-caption">
-            {available.map((c) => {
-              const expiry = expiryLabel(c.expiresAt, now);
-              return (
-                <li
-                  key={c.id}
-                  className="flex items-baseline justify-between gap-3"
-                >
-                  <span className="text-fg">{c.title ?? "Full reset"}</span>
-                  <span
-                    className={EXPIRY_TONE[expiry.level]}
-                    title={c.expiresAt ?? undefined}
+        {available.length + redeemed.length > 0 ? (
+          <div className="mt-2">
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+              <Ticket aria-hidden="true" /> Banked rate-limit resets
+            </div>
+            <ItemGroup>
+              {available.map((credit) => {
+                const expiry = expiryLabel(credit.expiresAt, now);
+                return (
+                  <Item key={credit.id} variant="outline" size="sm">
+                    <ItemContent>
+                      <ItemTitle>
+                        <span className="truncate">
+                          {credit.title ?? "Full reset"}
+                        </span>
+                      </ItemTitle>
+                    </ItemContent>
+                    <ItemActions>
+                      <Badge
+                        variant={expiryBadgeVariant(expiry.level)}
+                        title={credit.expiresAt ?? undefined}
+                      >
+                        {expiry.text}
+                      </Badge>
+                    </ItemActions>
+                  </Item>
+                );
+              })}
+              {redeemed.map((credit) => (
+                <Item key={credit.id} variant="outline" size="sm">
+                  <ItemContent>
+                    <ItemTitle>
+                      <span className="truncate">
+                        {credit.title ?? "Full reset"}
+                      </span>
+                    </ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <Badge
+                      variant="outline"
+                      title={credit.redeemedAt ?? undefined}
+                    >
+                      {redeemedLabel(credit.redeemedAt, now)}
+                    </Badge>
+                  </ItemActions>
+                </Item>
+              ))}
+            </ItemGroup>
+
+            {available.length > 0 ? (
+              <>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    disabled={!canRedeem}
+                    onClick={() => setConfirming(true)}
+                    title="Redeem the soonest-expiring reset"
                   >
-                    {expiry.text}
+                    Redeem a reset
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    {applicable > 0
+                      ? "Resets one currently-hit window. This is irreversible."
+                      : "No limit is hit right now, so OpenAI may spend the reset for nothing. You will be asked to confirm."}
                   </span>
-                </li>
-              );
-            })}
-            {redeemed.map((c) => (
-              <li
-                key={c.id}
-                className="flex items-baseline justify-between gap-3 text-faint"
-              >
-                <span>{c.title ?? "Full reset"}</span>
-                <span title={c.redeemedAt ?? undefined}>
-                  {redeemedLabel(c.redeemedAt, now)}
-                </span>
-              </li>
-            ))}
-          </ul>
+                </div>
+                <div className="mt-1.5 text-sm text-muted-foreground">
+                  An unspent reset is redeemed automatically{" "}
+                  {OPENAI_RESET_AUTO_REDEEM_LEAD_MS / 3_600_000}h before it
+                  expires rather than lost.
+                </div>
+              </>
+            ) : null}
+            {done ? (
+              <Alert variant="success" role="status" className="mt-2">
+                {done}
+              </Alert>
+            ) : null}
+            {error ? <ErrorNote message={error} className="mt-2" /> : null}
+          </div>
+        ) : resetCredits && (resetCredits.availableCount ?? 0) > 0 ? (
+          <div className="mt-1 text-sm text-muted-foreground">
+            {resetCredits.availableCount} rate-limit reset{" "}
+            {resetCredits.availableCount === 1 ? "credit" : "credits"}{" "}
+            available.
+          </div>
+        ) : null}
 
-          {available.length > 0 ? (
-            <>
-              <div className="mt-2.5 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={!canRedeem}
-                  onClick={() => setConfirming(true)}
-                  title="Redeem the soonest-expiring reset"
-                  className="rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg disabled:opacity-40"
-                >
-                  Redeem a reset
-                </button>
-                <span className="text-caption text-faint">
-                  {applicable > 0
-                    ? "Resets one currently-hit window. This is irreversible."
-                    : "No limit is hit right now, so OpenAI may spend the reset for nothing. You will be asked to confirm."}
-                </span>
-              </div>
-              <div className="mt-1.5 text-caption text-faint">
-                An unspent reset is redeemed automatically{" "}
-                {OPENAI_RESET_AUTO_REDEEM_LEAD_MS / 3_600_000}h before it
-                expires rather than lost.
-              </div>
-            </>
-          ) : null}
-          {done ? (
-            <div className="mt-2 text-caption text-accent">{done}</div>
-          ) : null}
-          {error ? <ErrorNote message={error} className="mt-2" /> : null}
-        </div>
-      ) : resetCredits && (resetCredits.availableCount ?? 0) > 0 ? (
-        <div className="mt-1 text-caption text-faint">
-          {resetCredits.availableCount} rate-limit reset{" "}
-          {resetCredits.availableCount === 1 ? "credit" : "credits"} available.
-        </div>
-      ) : null}
-
-      {confirming && target ? (
-        <RedeemResetDialog
-          credit={target}
-          applicable={applicable > 0}
-          now={now}
-          busy={busy}
-          error={error}
-          onConfirm={() => void redeem()}
-          onClose={() => setConfirming(false)}
-        />
-      ) : null}
-    </div>
+        {confirming && target ? (
+          <RedeemResetDialog
+            credit={target}
+            applicable={applicable > 0}
+            now={now}
+            busy={busy}
+            error={error}
+            onConfirm={() => void redeem()}
+            onClose={() => setConfirming(false)}
+          />
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1243,89 +1284,55 @@ function RedeemResetDialog({
 }) {
   const expiry = expiryLabel(credit.expiresAt, now);
   return (
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-      onClick={busy ? undefined : onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-2xl border border-line bg-panel p-4 shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <p className="text-body font-semibold text-fg">
-            Redeem a rate-limit reset?
-          </p>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="rounded-lg p-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="flex gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-danger" />
-          <p className="text-caption text-muted">
-            This immediately spends{" "}
-            <span className="text-fg">one banked reset</span> to clear a
-            currently-hit limit window. It is{" "}
-            <span className="font-semibold text-fg">irreversible</span> —
-            exactly like the button in the ChatGPT app. There is no undo.
-          </p>
-        </div>
+    <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
+      <DialogContent className="sm:max-w-md" showCloseButton={!busy}>
+        <DialogHeader>
+          <DialogTitle>Redeem a rate-limit reset?</DialogTitle>
+          <DialogDescription>
+            This immediately spends one banked reset to clear a currently-hit
+            limit window. It is irreversible. There is no undo.
+          </DialogDescription>
+        </DialogHeader>
         {!applicable ? (
-          <div className="mt-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3">
-            <AlertTriangle size={16} className="mt-0.5 shrink-0 text-warning" />
-            <p className="text-caption text-muted">
-              OpenAI reports{" "}
-              <span className="font-semibold text-fg">
-                no limit is hit right now
-              </span>
-              , so this reset may be spent without clearing anything. Redeem
-              anyway only if you would rather use it than let it expire.
-            </p>
-          </div>
+          <Alert variant="warning" role="note" className="mt-2">
+            OpenAI reports no limit is hit right now, so this reset may be spent
+            without clearing anything. Redeem anyway only if you would rather
+            use it than let it expire.
+          </Alert>
         ) : null}
-        <div className="mt-3 rounded-lg border border-line bg-surface px-3 py-2 text-caption">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-muted">Credit</span>
-            <span className="text-fg">{credit.title ?? "Full reset"}</span>
-          </div>
-          <div className="mt-0.5 flex items-baseline justify-between gap-3">
-            <span className="text-muted">Expires</span>
-            <span
-              className={
-                expiry.level === "ok" ? "text-fg" : EXPIRY_TONE[expiry.level]
-              }
-              title={credit.expiresAt ?? undefined}
-            >
-              {expiry.text}
-            </span>
-          </div>
-        </div>
+        <ItemGroup className="mt-2">
+          <Item variant="outline" size="sm">
+            <ItemContent>
+              <ItemTitle>Credit</ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <span className="truncate">{credit.title ?? "Full reset"}</span>
+            </ItemActions>
+          </Item>
+          <Item variant="outline" size="sm">
+            <ItemContent>
+              <ItemTitle>Expires</ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <Badge
+                variant={expiryBadgeVariant(expiry.level)}
+                title={credit.expiresAt ?? undefined}
+              >
+                {expiry.text}
+              </Badge>
+            </ItemActions>
+          </Item>
+        </ItemGroup>
         {error ? <ErrorNote message={error} className="mt-2" /> : null}
-        <div className="mt-3 flex justify-end gap-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            className="rounded-lg border border-line px-3 py-1.5 text-caption text-muted hover:bg-raised hover:text-fg disabled:opacity-40"
-          >
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            aria-busy={busy || undefined}
-            onClick={onConfirm}
-            className="flex items-center gap-1.5 rounded-lg bg-danger px-3 py-1.5 text-caption font-medium text-white disabled:opacity-40"
-          >
-            {busy ? <Spinner size="sm" /> : null}{" "}
+          </Button>
+          <Button variant="destructive" busy={busy} onClick={onConfirm}>
             {applicable ? "Redeem now" : "Redeem anyway"}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

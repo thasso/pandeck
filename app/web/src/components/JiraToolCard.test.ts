@@ -106,7 +106,7 @@ describe("JiraToolCard rendering", () => {
       });
     const host = renderCard(issueBlock());
     const expand = host.querySelector<HTMLButtonElement>(
-      'button[title="Expand issue"]',
+      'button[aria-label="Expand issue"]',
     );
     if (!expand) throw new Error("issue expand button did not render");
 
@@ -114,7 +114,9 @@ describe("JiraToolCard rendering", () => {
     expect(host.textContent).toContain("Issue details");
 
     renderCard(issueBlock());
-    expect(host.querySelector('button[title="Collapse issue"]')).toBe(expand);
+    expect(host.querySelector('button[aria-label="Collapse issue"]')).toBe(
+      expand,
+    );
     expect(host.textContent).toContain("Issue details");
   });
 
@@ -133,7 +135,7 @@ describe("JiraToolCard rendering", () => {
       });
     const host = renderCard(projectsBlock());
     const expand = host.querySelector<HTMLButtonElement>(
-      'button[title="Expand"]',
+      'button[aria-label="Expand project"]',
     );
     if (!expand) throw new Error("project expand button did not render");
     act(() => expand.click());
@@ -143,7 +145,9 @@ describe("JiraToolCard rendering", () => {
     if (!issueType) throw new Error("issue type did not render");
 
     renderCard(projectsBlock());
-    expect(host.querySelector('button[title="Collapse"]')).toBe(expand);
+    expect(host.querySelector('button[aria-label="Collapse project"]')).toBe(
+      expand,
+    );
     expect(host.querySelector('img[src="/type.svg"]')?.closest("span")).toBe(
       issueType,
     );

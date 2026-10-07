@@ -52,16 +52,17 @@ import {
   type SendCommentsTarget,
 } from "./review/SendCommentsSheet.tsx";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
-import { ErrorNote } from "./ui/load.tsx";
+import { ErrorNote } from "./common/load.tsx";
+import { Button } from "./ui/button.tsx";
 import {
   CommentComposer,
   type CommentDictationOptions,
   type CommentRefineOptions,
-} from "./ui/CommentComposer.tsx";
+} from "./common/CommentComposer.tsx";
 import {
   COMPOSER_SHELL_CLASS,
   COMPOSER_SHELL_PADDING_CLASS,
-} from "./ui/composerShell.ts";
+} from "./common/composerShell.ts";
 
 /**
  * What the app supplies to every document that collects comments: where a
@@ -532,7 +533,7 @@ function DocumentCommentLayerBody({
       <style>{`
   ::highlight(${highlightName}) {
     color: inherit;
-    background-color: color-mix(in oklab, var(--accent) 32%, transparent);
+    background-color: color-mix(in oklab, var(--primary) 32%, transparent);
   }
   ::highlight(${pendingHighlight}) {
     color: inherit;
@@ -542,7 +543,7 @@ function DocumentCommentLayerBody({
       {count > 0 && !composer.open ? (
         <div
           data-comment-bar
-          className="shrink-0 border-t border-line bg-surface px-3 pt-2"
+          className="shrink-0 border-t border-border bg-background px-3 pt-2"
         >
           <div className="mx-auto w-full max-w-3xl">
             {trayError ? (
@@ -558,14 +559,10 @@ function DocumentCommentLayerBody({
               onClear={() => void tray.clear()}
               onReveal={selectable ? reveal : undefined}
               action={
-                <button
-                  type="button"
-                  onClick={openSend}
-                  className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-caption font-medium text-accent hover:bg-accent/10"
-                >
-                  <SendHorizontal size={14} />
+                <Button size="sm" onClick={openSend}>
+                  <SendHorizontal data-icon="inline-start" />
                   Send to session
-                </button>
+                </Button>
               }
             />
           </div>

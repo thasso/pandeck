@@ -7,8 +7,10 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import { Tree, type TreeNode } from "./ui/Tree.tsx";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { Tree, type TreeNode } from "./common/Tree.tsx";
+import { Button } from "./ui/button.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 import {
   buildTaskNodes,
@@ -38,7 +40,7 @@ const MORE_NODE_PREFIX = "more-sessions:";
 /**
  * @component ProjectTreePane
  * @purpose The sidebar Projects browser: the project registry as a compact,
- * collapsible tree on the shared `components/ui/Tree` chrome, with each Project
+ * collapsible tree on the shared `components/common/Tree` chrome, with each Project
  * revealing bounded direct sessions, Worktrees, and bounded sessions under each
  * Worktree.
  * @useWhen Rendering the Projects section of the sidebar.
@@ -47,7 +49,7 @@ const MORE_NODE_PREFIX = "more-sessions:";
  * related sessions/worktrees are read-only tree children that reuse SessionRow
  * and WorktreeBrowser row pieces. Session children are paged in the same 5-at-a-
  * time style as the Worktrees browser so the sidebar remains compact.
- * @related Sidebar, BacklogTreePane, WorktreeBrowser, SessionRow, components/ui/Tree.tsx
+ * @related Sidebar, BacklogTreePane, WorktreeBrowser, SessionRow, components/common/Tree.tsx
  */
 export const ProjectTreePane = memo(function ProjectTreePane({
   projects,
@@ -322,8 +324,10 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "moreSessions":
               return (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -334,14 +338,13 @@ export const ProjectTreePane = memo(function ProjectTreePane({
                         SESSION_LIMIT_STEP,
                     }));
                   }}
-                  className="w-full rounded-md px-1 py-0.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 >
                   Show {Math.min(SESSION_LIMIT_STEP, data.remaining)} more
                   session
                   {Math.min(SESSION_LIMIT_STEP, data.remaining) === 1
                     ? ""
                     : "s"}
-                </button>
+                </Button>
               );
           }
         }}
@@ -382,27 +385,26 @@ const ProjectRowContent = memo(function ProjectRowContent({
           style={{ backgroundColor: color.dot }}
         />
       </span>
-      <span className="min-w-0 flex-1 truncate text-caption text-fg">
+      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
         <span className="font-bold tracking-wide">{project.key}</span>
-        <span className="mx-1 text-faint">·</span>
+        <span className="mx-1 text-muted-foreground">·</span>
         <span className={selected ? "font-medium" : undefined}>
           {project.name}
         </span>
       </span>
       {onStartSession ? (
-        <button
-          type="button"
+        <IconButton
+          size="icon-xs"
+          className="shrink-0"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onStartSession(project.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
-          title="Start session in this project"
-          aria-label={`Start session in project: ${project.key} ${project.name}`}
+          label={`Start session in project: ${project.key} ${project.name}`}
         >
-          <MessageSquarePlus size={12} />
-        </button>
+          <MessageSquarePlus />
+        </IconButton>
       ) : null}
     </div>
   );
@@ -431,14 +433,14 @@ function WorktreeRowContentImpl({
       title={`${branch}\n${worktree.path}`}
     >
       <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-surface text-accent" : "bg-raised text-muted"}`}
+        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-background text-primary" : "bg-muted text-muted-foreground"}`}
         aria-hidden
       >
         {worktree.isMain ? <House size={12} /> : <GitBranch size={12} />}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {branch}
           </span>
           <WorktreeLineDelta status={status} />
@@ -447,19 +449,18 @@ function WorktreeRowContentImpl({
         <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
       </span>
       {onStartSession ? (
-        <button
-          type="button"
+        <IconButton
+          size="icon-xs"
+          className="shrink-0"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onStartSession(worktree.id);
           }}
-          className="flex size-5 shrink-0 items-center justify-center rounded-md text-faint transition-colors hover:bg-raised hover:text-fg"
-          title="Start session in this worktree"
-          aria-label={`Start session in worktree: ${branch}`}
+          label={`Start session in worktree: ${branch}`}
         >
-          <MessageSquarePlus size={12} />
-        </button>
+          <MessageSquarePlus />
+        </IconButton>
       ) : null}
     </div>
   );

@@ -2,7 +2,7 @@ type UnreadDotPlacement = "toolbar" | "avatar";
 
 const placementClasses: Record<UnreadDotPlacement, string> = {
   toolbar: "right-1 top-1 size-1.5",
-  avatar: "-right-0.5 -top-0.5 size-2.5 border-2 border-panel",
+  avatar: "-right-0.5 -top-0.5 size-2.5 border-2 border-card",
 };
 
 /**
@@ -25,7 +25,7 @@ export function UnreadDot({
     <span
       aria-hidden="true"
       title={title}
-      className={`absolute z-20 rounded-full bg-accent ${placementClasses[placement]} ${className}`}
+      className={`absolute z-20 rounded-full bg-primary ${placementClasses[placement]} ${className}`}
     />
   );
 }

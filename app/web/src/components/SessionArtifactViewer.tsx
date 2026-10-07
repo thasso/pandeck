@@ -14,7 +14,7 @@ import {
 import { DocumentTextBody } from "./DocumentTextBody.tsx";
 import { DocumentNavigationShell } from "./DocumentNavigationShell.tsx";
 import { MarkdownFile } from "./MarkdownFile.tsx";
-import { EmptyBox, ErrorNote, Skeleton } from "./ui/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
 import { SandboxedDocument } from "./SandboxedDocument.tsx";
 import { DeferredGrantedMedia } from "./InlineDocumentEmbed.tsx";
 
@@ -175,7 +175,7 @@ function ArtifactImage({ rawUrl, name }: { rawUrl: string; name: string }) {
       </div>
     );
   return (
-    <div className="document-visual-content flex min-h-full items-center justify-center bg-panel p-4">
+    <div className="document-visual-content flex min-h-full items-center justify-center bg-card p-4">
       <img
         key={generation}
         src={rawUrl}

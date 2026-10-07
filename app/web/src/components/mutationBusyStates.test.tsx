@@ -15,7 +15,7 @@ import { ApprovalCard } from "./ApprovalCard.tsx";
 import { PullRequestCard } from "./PullRequestCard.tsx";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
 import { CommitWorktreeDialog } from "./worktree/WorktreeDialogs.tsx";
-import { DialogProvider } from "./ui/dialog.tsx";
+import { DialogProvider } from "./common/dialogs.tsx";
 
 /**
  * How a MUTATION says it is running (`app/web/docs/loading-states.md` R5,
@@ -47,7 +47,7 @@ function render(node: React.ReactNode): HTMLDivElement {
 
 /** The one `<button>` whose trimmed text is exactly `label`. */
 function button(label: string): HTMLButtonElement {
-  const match = [...container!.querySelectorAll("button")].find(
+  const match = [...document.querySelectorAll("button")].find(
     (element) => (element.textContent ?? "").trim() === label,
   );
   expect(match, `no button labelled ${label}`).toBeDefined();
@@ -99,7 +99,7 @@ it("busies only the approval decision that was pressed, and keeps the proposal r
   expect(button("Reject").getAttribute("aria-busy")).toBe(null);
   // R5: the proposal itself stays on screen. Deciding to approve is not a
   // reason to take away what was approved.
-  expect(container!.textContent).toContain("Standardize busy states");
+  expect(document.body.textContent).toContain("Standardize busy states");
 });
 
 it("puts a failed approval inline, as an alert, with the card intact", () => {
@@ -111,7 +111,7 @@ it("puts a failed approval inline, as an alert, with the card intact", () => {
 
   const alert = container!.querySelector('[role="alert"]');
   expect(alert?.textContent).toContain("remote rejected it");
-  expect(container!.textContent).toContain("Standardize busy states");
+  expect(document.body.textContent).toContain("Standardize busy states");
 });
 
 const pullRequest: PullRequestCardData = {
@@ -141,8 +141,8 @@ it("busies the pull request action the SERVER is running, not the card", () => {
   // Everything else is still there and still says what it would do — the card
   // is the reason the user can tell whether to wait or to update the branch.
   expect(button("Update with main").getAttribute("aria-busy")).toBe(null);
-  expect(container!.textContent).toContain("feature");
-  expect(container!.textContent).toContain("main");
+  expect(document.body.textContent).toContain("feature");
+  expect(document.body.textContent).toContain("main");
 });
 
 it("busies a card action immediately, before the server reports it durable", () => {
@@ -184,7 +184,7 @@ it("drops a refused linked-Task overlay so its retry control returns", () => {
       onAction={() => undefined}
     />,
   );
-  expect(container!.textContent).not.toContain("Mark Task-625 done");
+  expect(document.body.textContent).not.toContain("Mark Task-625 done");
 
   act(() => {
     root!.render(
@@ -331,7 +331,7 @@ it("shows the failure a pressed delivery control is still carrying, not the last
 });
 
 it("busies a dialog's confirm button and leaves the dialog usable", () => {
-  const host = render(
+  render(
     <CommitWorktreeDialog
       busy
       error="pre-commit hook failed"
@@ -344,8 +344,8 @@ it("busies a dialog's confirm button and leaves the dialog usable", () => {
   expect(button("Commit").disabled).toBe(true);
   // The message the commit is running with stays editable-looking and present;
   // the failure is an alert in the dialog, where the retry is.
-  expect(host.querySelector("textarea")).not.toBeNull();
-  expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+  expect(document.querySelector("textarea")).not.toBeNull();
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(
     "pre-commit hook failed",
   );
 });

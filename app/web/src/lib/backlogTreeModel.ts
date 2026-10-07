@@ -3,14 +3,14 @@ import {
   applyGroupMove,
   applyMove,
   type TreeNode,
-} from "../components/ui/tree-model.ts";
+} from "../components/common/tree-model.ts";
 import { flattenTasks, type FlatTask, type Task } from "./backlogTree.ts";
 import { projectColor, resolveProjectDisplay } from "./projectDisplay.ts";
 import type { RowDensity } from "./rowDensity.ts";
 
 /**
  * Domain → `TreeNode` mapping for the Backlog, layered on the generic
- * `components/ui/Tree`. The Tree stays domain-free (it speaks `TreeNode<T>`);
+ * `components/common/Tree`. The Tree stays domain-free (it speaks `TreeNode<T>`);
  * this module turns the app's flat `Task[]` (each carrying `parentId` +
  * `sortOrder`) into the two hierarchies the Backlog renders:
  *

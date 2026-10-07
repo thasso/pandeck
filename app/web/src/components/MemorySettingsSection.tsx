@@ -4,7 +4,7 @@ import { applyPatch, MEMORY_KINDS } from "@assistant/shared";
  * pending-review concepts — automatic operations are already applied; the user
  * configures behavior and edits/pins/archives/corrects memories after the fact.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   AlertTriangle,
   History,
@@ -28,7 +28,13 @@ import type {
 } from "@assistant/shared";
 import type { UseMemory } from "../hooks/useMemory.ts";
 import { dataOf, isEmpty, isInitialLoad, isPending } from "../lib/loadState.ts";
-import { EmptyBox, RefreshIndicator, Skeleton } from "./ui/load.tsx";
+import {
+  EmptyBox,
+  ErrorNote,
+  RefreshIndicator,
+  Skeleton,
+} from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import {
   isValidTimezone,
@@ -38,13 +44,50 @@ import {
   zonedWallTimeToUtcMs,
 } from "../lib/timezone.ts";
 import { AgentModelFields } from "./AgentModelFields.tsx";
+import { provenanceLabel, scopeLabel } from "./LoadedMemorySection.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Item, ItemActions, ItemContent } from "@/components/ui/item";
+import { Label } from "@/components/ui/label";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
-const PERSONA_OPTIONS: { id: AgentType; label: string }[] = [
-  { id: "assistant", label: "Assistant" },
-  { id: "personal-assistant", label: "Personal Assistant" },
-  { id: "developer", label: "Developer" },
-  { id: "workshop", label: "Workshop" },
-];
+const PERSONA_OPTIONS = (
+  <>
+    <NativeSelectOption value="">Any persona</NativeSelectOption>
+    <NativeSelectOption value="assistant">Assistant</NativeSelectOption>
+    <NativeSelectOption value="personal-assistant">
+      Personal Assistant
+    </NativeSelectOption>
+    <NativeSelectOption value="developer">Developer</NativeSelectOption>
+    <NativeSelectOption value="workshop">Workshop</NativeSelectOption>
+  </>
+);
 
 const PAGE_SIZE = 20;
 
@@ -98,131 +141,138 @@ export function MemorySettingsSection({
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <h2 className="text-body font-semibold">Memory</h2>
-      <p className="mt-1 text-caption text-muted">
+      <h2 className="text-sm font-semibold">Memory</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
         A small long-term memory of scoped preferences, facts, constraints, and
         near-term working state. Processing is asynchronous and never blocks a
         reply. Coding personas (Developer/Workshop) load memory but do not
         auto-capture in v1.
       </p>
 
-      <div className="mt-6 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <Toggle
-          label="Use memory (load into turns)"
-          checked={m.loadingEnabled}
-          onChange={(v) => save({ loadingEnabled: v })}
-          help="When off, memories are neither loaded nor injected. Turning this off does not delete anything."
-        />
-
-        <div>
-          <div className="text-caption font-medium text-fg">
-            Automatic learning
-          </div>
-          <div className="mt-2 space-y-2">
-            {LEARNING_MODES.map((mode) => (
-              <label
-                key={mode.id}
-                className="flex items-start gap-2 text-caption text-fg"
+      <Card className="mt-6">
+        <CardContent>
+          <FieldGroup>
+            <SwitchField
+              label="Use memory (load into turns)"
+              checked={m.loadingEnabled}
+              onChange={(v) => save({ loadingEnabled: v })}
+              help="When off, memories are neither loaded nor injected. Turning this off does not delete anything."
+            />
+            <FieldSet>
+              <FieldLegend variant="label">Automatic learning</FieldLegend>
+              <RadioGroup
+                value={m.learningMode}
+                onValueChange={(v) =>
+                  save({ learningMode: v as MemoryLearningMode })
+                }
               >
-                <input
-                  type="radio"
-                  name="learning-mode"
-                  checked={m.learningMode === mode.id}
-                  onChange={() => save({ learningMode: mode.id })}
-                  className="mt-0.5 size-4 accent-accent"
-                />
-                <span>
-                  <span className="font-medium">{mode.label}</span>
-                  <span className="block text-caption text-muted">
-                    {mode.help}
-                  </span>
-                </span>
-              </label>
-            ))}
-          </div>
-        </div>
+                {LEARNING_MODES.map((mode) => (
+                  <Field key={mode.id} orientation="horizontal">
+                    <RadioGroupItem
+                      value={mode.id}
+                      id={`learning-mode-${mode.id}`}
+                    />
+                    <FieldContent>
+                      <FieldLabel htmlFor={`learning-mode-${mode.id}`}>
+                        {mode.label}
+                      </FieldLabel>
+                      <FieldDescription>{mode.help}</FieldDescription>
+                    </FieldContent>
+                  </Field>
+                ))}
+              </RadioGroup>
+            </FieldSet>
+            <SwitchField
+              label="Automatic maintenance"
+              checked={m.maintenanceEnabled}
+              onChange={(v) => save({ maintenanceEnabled: v })}
+              help="Deterministic expiry of ended working memories plus periodic consolidation. Expiry needs no model call."
+            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <NumberField
+                label="Max loaded cards"
+                value={m.maxCards}
+                min={1}
+                max={32}
+                onChange={(v) => save({ maxCards: v })}
+              />
+              <NumberField
+                label="Max rendered characters"
+                value={m.maxRenderedChars}
+                min={200}
+                max={8000}
+                onChange={(v) => save({ maxRenderedChars: v })}
+              />
+            </div>
+          </FieldGroup>
+        </CardContent>
+      </Card>
 
-        <Toggle
-          label="Automatic maintenance"
-          checked={m.maintenanceEnabled}
-          onChange={(v) => save({ maintenanceEnabled: v })}
-          help="Deterministic expiry of ended working memories plus periodic consolidation. Expiry needs no model call."
-        />
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            label="Max loaded cards"
-            value={m.maxCards}
-            min={1}
-            max={32}
-            onChange={(v) => save({ maxCards: v })}
-          />
-          <NumberField
-            label="Max rendered characters"
-            value={m.maxRenderedChars}
-            min={200}
-            max={8000}
-            onChange={(v) => save({ maxRenderedChars: v })}
-          />
-        </div>
-      </div>
-
-      <h3 className="mt-8 text-body font-semibold">Processor</h3>
-      <p className="mt-1 text-caption text-muted">
-        A small, cheap model extracts and maintains memories in the background.
-      </p>
-      <div className="mt-3 space-y-5 rounded-xl border border-line bg-panel p-4">
-        <AgentModelFields
-          models={models}
-          provider={m.processor.provider}
-          modelId={m.processor.modelId}
-          thinkingLevel={m.processor.thinkingLevel}
-          credentialProfileId={m.processor.credentialProfileId}
-          modelLabel="Processor model"
-          // The processor always HAS a level, so the picker never omits one;
-          // keeping the current value makes that explicit rather than implied.
-          onChange={(next) =>
-            save({
-              processor: {
-                ...next,
-                thinkingLevel: next.thinkingLevel ?? m.processor.thinkingLevel,
-              },
-            })
-          }
-        />
-        {status && !status.configured && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-caption text-amber-600 dark:text-amber-400">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>
-              {status.message ??
-                "The memory processor is not configured; automatic learning is paused until a valid model is selected."}
-            </span>
-          </div>
-        )}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <NumberField
-            label="Max processor calls / hour"
-            value={m.maxCallsPerHour}
-            min={0}
-            max={240}
-            onChange={(v) => save({ maxCallsPerHour: v })}
-          />
-          <NumberField
-            label="Max reported cost / day (USD)"
-            value={m.maxCostPerDayUsd}
-            min={0}
-            max={50}
-            step={0.5}
-            onChange={(v) => save({ maxCostPerDayUsd: v })}
-          />
-        </div>
-        <p className="rounded-lg border border-line bg-surface px-3 py-2 text-caption text-muted">
-          These global safety ceilings apply across every session and mode —
-          including Every turn, high-signal triggers, retries, and maintenance.
-          They cannot be bypassed by a learning mode. Set calls/hour to 0 to
-          stop all automatic model calls while keeping existing memory.
-        </p>
-      </div>
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle>Processor</CardTitle>
+          <CardDescription>
+            A small, cheap model extracts and maintains memories in the
+            background.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <AgentModelFields
+              models={models}
+              provider={m.processor.provider}
+              modelId={m.processor.modelId}
+              thinkingLevel={m.processor.thinkingLevel}
+              credentialProfileId={m.processor.credentialProfileId}
+              modelLabel="Processor model"
+              // The processor always HAS a level, so the picker never omits one;
+              // keeping the current value makes that explicit rather than implied.
+              onChange={(next) =>
+                save({
+                  processor: {
+                    ...next,
+                    thinkingLevel:
+                      next.thinkingLevel ?? m.processor.thinkingLevel,
+                  },
+                })
+              }
+            />
+            {status && !status.configured && (
+              <Alert variant="warning" role="status">
+                <AlertTriangle />
+                <AlertDescription>
+                  {status.message ??
+                    "The memory processor is not configured; automatic learning is paused until a valid model is selected."}
+                </AlertDescription>
+              </Alert>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <NumberField
+                label="Max processor calls / hour"
+                value={m.maxCallsPerHour}
+                min={0}
+                max={240}
+                onChange={(v) => save({ maxCallsPerHour: v })}
+              />
+              <NumberField
+                label="Max reported cost / day (USD)"
+                value={m.maxCostPerDayUsd}
+                min={0}
+                max={50}
+                step={0.5}
+                onChange={(v) => save({ maxCostPerDayUsd: v })}
+              />
+            </div>
+            <FieldDescription>
+              These global safety ceilings apply across every session and mode —
+              including Every turn, high-signal triggers, retries, and
+              maintenance. They cannot be bypassed by a learning mode. Set
+              calls/hour to 0 to stop all automatic model calls while keeping
+              existing memory.
+            </FieldDescription>
+          </FieldGroup>
+        </CardContent>
+      </Card>
 
       <MemoryManager
         memory={memory}
@@ -297,86 +347,66 @@ function MemoryManager({
   return (
     <div className="mt-8">
       <div className="flex items-center gap-2">
-        <h3 className="text-body font-semibold">Manage memories</h3>
+        <h3 className="text-sm font-semibold">Manage memories</h3>
         {/* R2: an invalidation refetch keeps the rows and says so here. */}
         {page && isPending(memory.list) ? (
           <RefreshIndicator label="Refreshing memories" />
         ) : null}
       </div>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-sm text-muted-foreground">
         Search, correct, pin, and archive existing memories. There is no review
         inbox — automatic changes are already applied.
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <input
+        <Input
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Search text…"
-          className="min-w-40 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-caption outline-none focus:border-accent"
+          aria-label="Search memories"
+          className="min-w-40 flex-1"
         />
-        <select
+        <NativeSelect
           value={state}
           onChange={(e) => setState(e.target.value as typeof state)}
-          className="rounded-lg border border-line bg-surface px-2 py-1.5 text-caption"
           aria-label="State"
         >
-          <option value="active">Active</option>
-          <option value="archived">Archived</option>
-          <option value="superseded">Superseded</option>
-        </select>
-        <select
+          <NativeSelectOption value="active">Active</NativeSelectOption>
+          <NativeSelectOption value="archived">Archived</NativeSelectOption>
+          <NativeSelectOption value="superseded">Superseded</NativeSelectOption>
+        </NativeSelect>
+        <NativeSelect
           value={persona}
           onChange={(e) => setPersona(e.target.value as AgentType | "")}
-          className="rounded-lg border border-line bg-surface px-2 py-1.5 text-caption"
           aria-label="Persona"
         >
-          <option value="">Any persona</option>
-          {PERSONA_OPTIONS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <input
+          {PERSONA_OPTIONS}
+        </NativeSelect>
+        <Input
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
           placeholder="Project id…"
-          className="w-32 rounded-lg border border-line bg-surface px-2 py-1.5 text-caption outline-none focus:border-accent"
           aria-label="Project id"
+          className="w-32"
         />
-        <label className="flex items-center gap-1.5 text-caption text-muted">
-          <input
-            type="checkbox"
-            checked={pinnedOnly}
-            onChange={(e) => setPinnedOnly(e.target.checked)}
-            className="size-3.5 accent-accent"
-          />
-          Pinned
-        </label>
-        <label className="flex items-center gap-1.5 text-caption text-muted">
-          <input
-            type="checkbox"
-            checked={activeNow}
-            onChange={(e) => setActiveNow(e.target.checked)}
-            className="size-3.5 accent-accent"
-          />
-          Active now
-        </label>
+        <CheckField
+          label="Pinned"
+          checked={pinnedOnly}
+          onChange={setPinnedOnly}
+        />
+        <CheckField
+          label="Active now"
+          checked={activeNow}
+          onChange={setActiveNow}
+        />
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-3">
         {MEMORY_KINDS.map((k) => (
-          <label
+          <CheckField
             key={k}
-            className="flex items-center gap-1 text-caption text-muted"
-          >
-            <input
-              type="checkbox"
-              checked={kinds.includes(k)}
-              onChange={() => toggleKind(k)}
-              className="size-3.5 accent-accent"
-            />
-            {k}
-          </label>
+            label={k}
+            checked={kinds.includes(k)}
+            onChange={() => toggleKind(k)}
+          />
         ))}
       </div>
 
@@ -390,7 +420,7 @@ function MemoryManager({
             className="space-y-2"
           >
             {[0, 1, 2].map((row) => (
-              <Skeleton key={row} className="h-[4.5rem]" />
+              <Skeleton key={row} className="h-18" />
             ))}
           </div>
         )}
@@ -409,26 +439,26 @@ function MemoryManager({
       </div>
 
       {((page?.total ?? 0) > 0 || offset > 0) && (
-        <div className="mt-2 flex items-center justify-between text-caption text-faint">
-          <button
-            type="button"
+        <div className="mt-2 flex items-center justify-between text-sm text-muted-foreground">
+          <Button
+            variant="outline"
+            size="sm"
             disabled={offset === 0}
             onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
-            className="rounded-md border border-line bg-panel px-2 py-1 disabled:opacity-40"
           >
             Prev
-          </button>
+          </Button>
           <span>
             {pageStart}–{pageEnd} of {page?.total ?? 0}
           </span>
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             disabled={!page?.hasMore}
             onClick={() => setOffset((o) => o + PAGE_SIZE)}
-            className="rounded-md border border-line bg-panel px-2 py-1 disabled:opacity-40"
           >
             Next
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -506,6 +536,15 @@ function MemoryRow({
     if (mode !== "window" && mode !== "recurring") setTzText("");
     setDraftTemporal((t) => normalizeTemporalForMode(mode, t));
   };
+  const toggleWeekday = (day: number, on: boolean) =>
+    setDraftTemporal((t) => {
+      const current =
+        t.recurrence?.kind === "weekly" ? t.recurrence.weekdays : [];
+      const weekdays = on
+        ? [...current, day].sort((a, b) => a - b)
+        : current.filter((d) => d !== day);
+      return { ...t, recurrence: { kind: "weekly", weekdays } };
+    });
 
   // As above: the two stable methods, never the controller object.
   const { openLineage, clearLineage } = memory;
@@ -514,9 +553,6 @@ function MemoryRow({
     else clearLineage(card.id);
   }, [showLineage, card.id, openLineage, clearLineage]);
 
-  const scopeLabel =
-    [card.scope.persona, card.scope.projectId].filter(Boolean).join(" / ") ||
-    "global";
   const run = async (op: Parameters<UseMemory["mutate"]>[0]) => {
     setConflict(null);
     const result = await memory.mutate(op);
@@ -529,6 +565,8 @@ function MemoryRow({
             : result.error,
       );
   };
+  const apply = (op: "pin" | "unpin" | "archive" | "restore") =>
+    void run({ op, id: card.id, expectedRevision: card.revision });
 
   const startEdit = () => {
     setDraft(card.text);
@@ -556,352 +594,235 @@ function MemoryRow({
       ...(draftProjectId.trim() ? { projectId: draftProjectId.trim() } : {}),
       ...(draftPersona ? { persona: draftPersona } : {}),
     };
-    const textChanged = draft !== card.text;
-    if (textChanged) {
-      void run({
-        op: "correct",
-        id: card.id,
-        expectedRevision: card.revision,
-        text: draft,
-        kind: card.kind,
-        scope,
-        temporal: draftTemporal,
-      });
-    } else {
-      // Scope/time-only changes are a non-semantic edit (no supersession/new id).
-      void run({
-        op: "edit",
-        id: card.id,
-        expectedRevision: card.revision,
-        kind: card.kind,
-        scope,
-        temporal: draftTemporal,
-      });
-    }
+    const edit = {
+      id: card.id,
+      expectedRevision: card.revision,
+      kind: card.kind,
+      scope,
+      temporal: draftTemporal,
+    };
+    // Scope/time-only changes are a non-semantic edit (no supersession/new id).
+    void run(
+      draft !== card.text
+        ? { op: "correct", ...edit, text: draft }
+        : { op: "edit", ...edit },
+    );
     setEditing(false);
   };
 
   const lineage = memory.lineageById[card.id];
 
   return (
-    <div className="rounded-lg border border-line bg-surface px-3 py-2 text-caption">
-      <div className="flex items-start justify-between gap-2">
+    <Item variant="outline" className="items-start">
+      <ItemContent>
         {editing ? (
-          <div className="flex-1 space-y-2">
-            <textarea
+          <>
+            <Textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               rows={2}
-              className="w-full resize-y rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
+              aria-label="Memory text"
             />
             <div className="flex flex-wrap gap-2">
-              <select
+              <NativeSelect
                 value={draftPersona}
                 onChange={(e) =>
                   setDraftPersona(e.target.value as AgentType | "")
                 }
-                className="rounded-md border border-line bg-panel px-2 py-1 text-caption"
                 aria-label="Persona scope"
               >
-                <option value="">Any persona</option>
-                {PERSONA_OPTIONS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <input
+                {PERSONA_OPTIONS}
+              </NativeSelect>
+              <Input
                 value={draftProjectId}
                 onChange={(e) => setDraftProjectId(e.target.value)}
                 placeholder="Project id (any if empty)"
-                className="w-40 rounded-md border border-line bg-panel px-2 py-1 text-caption outline-none focus:border-accent"
                 aria-label="Project scope"
+                className="w-40"
               />
-              <select
+              <NativeSelect
                 value={draftTemporal.mode}
                 onChange={(e) =>
                   changeTemporalMode(e.target.value as MemoryTemporal["mode"])
                 }
-                className="rounded-md border border-line bg-panel px-2 py-1 text-caption"
                 aria-label="Temporal mode"
               >
-                <option value="persistent">Persistent</option>
-                <option value="until-changed">Until changed</option>
-                <option value="window">Time window</option>
-                <option value="recurring">Recurring</option>
-              </select>
+                <NativeSelectOption value="persistent">
+                  Persistent
+                </NativeSelectOption>
+                <NativeSelectOption value="until-changed">
+                  Until changed
+                </NativeSelectOption>
+                <NativeSelectOption value="window">
+                  Time window
+                </NativeSelectOption>
+                <NativeSelectOption value="recurring">
+                  Recurring
+                </NativeSelectOption>
+              </NativeSelect>
             </div>
-            {draftTemporal.mode === "window" && (
+            {usesTimezone && (
               <div className="flex flex-wrap items-center gap-2">
-                <label className="flex items-center gap-1 text-caption text-muted">
-                  From
-                  <input
-                    type="datetime-local"
-                    value={
-                      draftTemporal.validFromMs
-                        ? utcMsToZonedWallTimeValue(
-                            draftTemporal.validFromMs,
-                            effectiveTimezone,
-                          )
-                        : ""
-                    }
-                    onChange={(e) =>
-                      setDraftTemporal((t) =>
-                        applyPatch(t, {
-                          validFromMs: e.target.value
-                            ? zonedWallTimeToUtcMs(
-                                e.target.value,
-                                effectiveTimezone,
-                              )
-                            : undefined,
-                        }),
-                      )
-                    }
-                    className="rounded-md border border-line bg-panel px-2 py-1 text-caption"
-                    aria-label="Valid from"
-                  />
-                </label>
-                <label className="flex items-center gap-1 text-caption text-muted">
-                  Until
-                  <input
-                    type="datetime-local"
-                    value={
-                      draftTemporal.validUntilMs
-                        ? utcMsToZonedWallTimeValue(
-                            draftTemporal.validUntilMs,
-                            effectiveTimezone,
-                          )
-                        : ""
-                    }
-                    onChange={(e) =>
-                      setDraftTemporal((t) =>
-                        applyPatch(t, {
-                          validUntilMs: e.target.value
-                            ? zonedWallTimeToUtcMs(
-                                e.target.value,
-                                effectiveTimezone,
-                              )
-                            : undefined,
-                        }),
-                      )
-                    }
-                    className="rounded-md border border-line bg-panel px-2 py-1 text-caption"
-                    aria-label="Valid until"
-                  />
-                </label>
-                <input
-                  value={tzText}
-                  onChange={(e) => setTemporalTimezone(e.target.value)}
-                  placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-accent ${tzValid ? "border-line" : "border-red-500"}`}
-                  aria-label="Window timezone"
-                />
-              </div>
-            )}
-            {!tzValid && usesTimezone && (
-              <p className="text-caption text-red-500">
-                Not a valid IANA timezone — using {timezone} until corrected.
-              </p>
-            )}
-            {draftTemporal.mode === "recurring" && (
-              <div className="flex flex-wrap items-center gap-2">
-                {WEEKDAY_LABELS.map((label, day) => (
-                  <label
-                    key={day}
-                    className="flex items-center gap-1 text-caption text-muted"
-                  >
-                    <input
-                      type="checkbox"
+                {draftTemporal.mode === "window" ? (
+                  <>
+                    <ZonedTimeInput
+                      label="From"
+                      name="Valid from"
+                      ms={draftTemporal.validFromMs}
+                      timezone={effectiveTimezone}
+                      onChange={(validFromMs) =>
+                        setDraftTemporal((t) => applyPatch(t, { validFromMs }))
+                      }
+                    />
+                    <ZonedTimeInput
+                      label="Until"
+                      name="Valid until"
+                      ms={draftTemporal.validUntilMs}
+                      timezone={effectiveTimezone}
+                      onChange={(validUntilMs) =>
+                        setDraftTemporal((t) => applyPatch(t, { validUntilMs }))
+                      }
+                    />
+                  </>
+                ) : (
+                  WEEKDAY_LABELS.map((label, day) => (
+                    <CheckField
+                      key={day}
+                      label={label}
                       checked={
                         draftTemporal.recurrence?.weekdays.includes(day) ??
                         false
                       }
-                      onChange={(e) =>
-                        setDraftTemporal((t) => {
-                          const current =
-                            t.recurrence?.kind === "weekly"
-                              ? t.recurrence.weekdays
-                              : [];
-                          const weekdays = e.target.checked
-                            ? [...current, day].sort((a, b) => a - b)
-                            : current.filter((d) => d !== day);
-                          return {
-                            ...t,
-                            recurrence: { kind: "weekly", weekdays },
-                          };
-                        })
-                      }
-                      className="size-3.5 accent-accent"
+                      onChange={(on) => toggleWeekday(day, on)}
                     />
-                    {label}
-                  </label>
-                ))}
-                <input
+                  ))
+                )}
+                <Input
                   value={tzText}
                   onChange={(e) => setTemporalTimezone(e.target.value)}
                   placeholder={`Timezone (default ${timezone})`}
-                  className={`w-44 rounded-md border bg-panel px-2 py-1 text-caption outline-none focus:border-accent ${tzValid ? "border-line" : "border-red-500"}`}
-                  aria-label="Recurrence timezone"
+                  aria-invalid={!tzValid || undefined}
+                  aria-label={
+                    draftTemporal.mode === "window"
+                      ? "Window timezone"
+                      : "Recurrence timezone"
+                  }
+                  className="w-44"
                 />
               </div>
             )}
+            {!tzValid && usesTimezone && (
+              <FieldError>
+                Not a valid IANA timezone — using {timezone} until corrected.
+              </FieldError>
+            )}
             <div className="flex gap-2">
-              <button
-                onClick={save}
-                disabled={!tzValid}
-                className="inline-flex items-center gap-1 rounded-md bg-accent px-2 py-1 text-caption text-white disabled:opacity-50"
-              >
-                <Check size={12} />
+              <Button size="sm" onClick={save} disabled={!tzValid}>
+                <Check />
                 Save{draft !== card.text ? " (supersede)" : ""}
-              </button>
-              <button
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={() => setEditing(false)}
-                className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-caption"
               >
-                <X size={12} />
+                <X />
                 Cancel
-              </button>
+              </Button>
             </div>
-            {conflict && (
-              <div className="text-caption text-amber-500">{conflict}</div>
-            )}
-          </div>
+          </>
         ) : (
-          <div className="flex-1">
-            <div className="text-fg">{card.text}</div>
-            <div className="mt-0.5 flex flex-wrap gap-1.5 text-caption text-faint">
-              <span className="rounded bg-panel px-1.5 py-0.5">
-                {card.kind}
-              </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
-                {scopeLabel}
-              </span>
-              {card.pinned && (
-                <span className="rounded bg-panel px-1.5 py-0.5 text-accent">
-                  pinned
-                </span>
-              )}
-              <span className="rounded bg-panel px-1.5 py-0.5">
+          <>
+            <div>{card.text}</div>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge variant="secondary">{card.kind}</Badge>
+              <Badge variant="secondary">{scopeLabel(card.scope)}</Badge>
+              {card.pinned && <Badge>pinned</Badge>}
+              <Badge variant="secondary">
                 {temporalLabel(card.temporal, timezone)}
-              </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
-                {card.state}
-              </span>
-              <span className="rounded bg-panel px-1.5 py-0.5">
+              </Badge>
+              <Badge variant="secondary">{card.state}</Badge>
+              <Badge variant="outline">
                 {provenanceLabel(card.provenance.sourceKind)}
-              </span>
+              </Badge>
             </div>
-            {conflict && (
-              <div className="mt-1 text-caption text-amber-500">{conflict}</div>
-            )}
-            {showLineage && (
-              <div className="mt-1.5 rounded-md border border-line bg-panel px-2 py-1.5 text-caption text-muted">
-                {!lineage ? (
-                  // The per-id slot is deliberate (`useMemory`): each expanded
-                  // row loads on its own, so each draws its own placeholder.
-                  <div
-                    role="status"
-                    aria-label="Loading lineage"
-                    className="space-y-1"
-                  >
-                    <Skeleton className="h-3 w-4/5" />
-                    <Skeleton className="h-3 w-3/5" />
+          </>
+        )}
+        {conflict && <ErrorNote message={conflict} />}
+        {!editing && showLineage && (
+          <div className="rounded-md bg-muted px-2 py-1.5 text-muted-foreground">
+            {!lineage ? (
+              // The per-id slot is deliberate (`useMemory`): each expanded
+              // row loads on its own, so each draws its own placeholder.
+              <div
+                role="status"
+                aria-label="Loading lineage"
+                className="space-y-1"
+              >
+                <Skeleton className="h-3 w-4/5" />
+                <Skeleton className="h-3 w-3/5" />
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {lineage.predecessor && (
+                  <div>Superseded: {lineage.predecessor.text}</div>
+                )}
+                {lineage.supersededBy.length > 0 && (
+                  <div>
+                    Replaced by:{" "}
+                    {lineage.supersededBy.map((c) => c.text).join(", ")}
                   </div>
-                ) : (
-                  <div className="space-y-1">
-                    {lineage.predecessor && (
-                      <div>
-                        Superseded:{" "}
-                        <span className="text-faint">
-                          {lineage.predecessor.text}
-                        </span>
-                      </div>
-                    )}
-                    {lineage.supersededBy.length > 0 && (
-                      <div>
-                        Replaced by:{" "}
-                        <span className="text-faint">
-                          {lineage.supersededBy.map((c) => c.text).join(", ")}
-                        </span>
-                      </div>
-                    )}
-                    {!lineage.predecessor &&
-                      lineage.supersededBy.length === 0 && (
-                        <div>No correction history.</div>
-                      )}
-                    {card.provenance.sessionId && (
-                      <div>
-                        Source session:{" "}
-                        <a
-                          href={sessionPath(card.provenance.sessionId)}
-                          className="text-accent underline decoration-dotted"
-                        >
-                          {card.provenance.sessionId.slice(0, 8)}
-                        </a>
-                      </div>
-                    )}
+                )}
+                {!lineage.predecessor && lineage.supersededBy.length === 0 && (
+                  <div>No correction history.</div>
+                )}
+                {card.provenance.sessionId && (
+                  <div>
+                    Source session:{" "}
+                    <a
+                      href={sessionPath(card.provenance.sessionId)}
+                      className="text-primary underline decoration-dotted"
+                    >
+                      {card.provenance.sessionId.slice(0, 8)}
+                    </a>
                   </div>
                 )}
               </div>
             )}
           </div>
         )}
-        {!editing && (
-          <div className="flex shrink-0 gap-1">
-            <IconBtn
-              title="Lineage / provenance"
-              onClick={() => setShowLineage((v) => !v)}
-            >
-              <History size={13} />
-            </IconBtn>
-            <IconBtn title="Edit / correct" onClick={startEdit}>
-              <Pencil size={13} />
-            </IconBtn>
-            <IconBtn
-              title={card.pinned ? "Unpin" : "Pin"}
-              onClick={() =>
-                void run({
-                  op: card.pinned ? "unpin" : "pin",
-                  id: card.id,
-                  expectedRevision: card.revision,
-                })
-              }
-            >
-              {card.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-            </IconBtn>
-            {card.state === "archived" ? (
-              <IconBtn
-                title="Restore"
-                onClick={() =>
-                  void run({
-                    op: "restore",
-                    id: card.id,
-                    expectedRevision: card.revision,
-                  })
-                }
-              >
-                <ArchiveRestore size={13} />
-              </IconBtn>
-            ) : (
-              card.state === "active" && (
-                <IconBtn
-                  title="Archive"
-                  onClick={() =>
-                    void run({
-                      op: "archive",
-                      id: card.id,
-                      expectedRevision: card.revision,
-                    })
-                  }
-                >
-                  <Archive size={13} />
-                </IconBtn>
-              )
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+      </ItemContent>
+      {!editing && (
+        <ItemActions className="gap-1">
+          <IconButton
+            label="Lineage / provenance"
+            onClick={() => setShowLineage((v) => !v)}
+          >
+            <History />
+          </IconButton>
+          <IconButton label="Edit / correct" onClick={startEdit}>
+            <Pencil />
+          </IconButton>
+          <IconButton
+            label={card.pinned ? "Unpin" : "Pin"}
+            onClick={() => apply(card.pinned ? "unpin" : "pin")}
+          >
+            {card.pinned ? <PinOff /> : <Pin />}
+          </IconButton>
+          {card.state === "archived" ? (
+            <IconButton label="Restore" onClick={() => apply("restore")}>
+              <ArchiveRestore />
+            </IconButton>
+          ) : (
+            card.state === "active" && (
+              <IconButton label="Archive" onClick={() => apply("archive")}>
+                <Archive />
+              </IconButton>
+            )
+          )}
+        </ItemActions>
+      )}
+    </Item>
   );
 }
 
@@ -945,23 +866,9 @@ function temporalLabel(
   return `active since ${formatInTimezone(temporal.validFromMs!, tz)}`;
 }
 
-function provenanceLabel(sourceKind: string): string {
-  return sourceKind === "manual"
-    ? "manual"
-    : sourceKind === "agent"
-      ? "agent"
-      : sourceKind === "processor"
-        ? "auto-captured"
-        : sourceKind === "consolidation"
-          ? "consolidated"
-          : sourceKind === "import"
-            ? "imported"
-            : sourceKind;
-}
-
 /* -------------------------------- widgets -------------------------------- */
 
-function Toggle({
+function SwitchField({
   label,
   checked,
   onChange,
@@ -970,33 +877,42 @@ function Toggle({
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
-  help?: string;
+  help: string;
 }) {
+  const id = useId();
   return (
-    <label className="block">
-      <span className="flex items-center gap-2 text-caption text-fg">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="size-4 accent-accent"
-        />
-        {label}
-      </span>
-      {help && (
-        <span className="mt-1 block pl-6 text-caption text-muted">{help}</span>
-      )}
-    </label>
+    <Field orientation="horizontal">
+      <FieldContent>
+        <FieldLabel htmlFor={id}>{label}</FieldLabel>
+        <FieldDescription>{help}</FieldDescription>
+      </FieldContent>
+      <Switch id={id} checked={checked} onCheckedChange={onChange} />
+    </Field>
+  );
+}
+
+function CheckField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <Field orientation="horizontal" className="w-auto">
+      <Checkbox id={id} checked={checked} onCheckedChange={onChange} />
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+    </Field>
   );
 }
 
 function NumberField({
   label,
-  value,
-  min,
-  max,
-  step,
   onChange,
+  ...input
 }: {
   label: string;
   value: number;
@@ -1005,39 +921,50 @@ function NumberField({
   step?: number;
   onChange: (v: number) => void;
 }) {
+  const id = useId();
   return (
-    <label className="block text-caption font-medium text-fg">
-      {label}
-      <input
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <Input
+        id={id}
         type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step ?? 1}
+        {...input}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1.5 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body outline-none focus:border-accent"
       />
-    </label>
+    </Field>
   );
 }
 
-function IconBtn({
-  title,
-  onClick,
-  children,
+/** A `datetime-local` bound edited as wall time in the row's timezone. */
+function ZonedTimeInput({
+  label,
+  name,
+  ms,
+  timezone,
+  onChange,
 }: {
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
+  label: string;
+  name: string;
+  ms: number | undefined;
+  timezone: string;
+  onChange: (ms: number | undefined) => void;
 }) {
   return (
-    <button
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className="rounded-md border border-line bg-panel p-1.5 text-muted hover:text-fg"
-    >
-      {children}
-    </button>
+    <Label>
+      {label}
+      <Input
+        type="datetime-local"
+        aria-label={name}
+        className="w-auto"
+        value={ms ? utcMsToZonedWallTimeValue(ms, timezone) : ""}
+        onChange={(e) =>
+          onChange(
+            e.target.value
+              ? zonedWallTimeToUtcMs(e.target.value, timezone)
+              : undefined,
+          )
+        }
+      />
+    </Label>
   );
 }

@@ -33,7 +33,7 @@ import {
   type DocumentZoomRegistration,
 } from "./DocumentZoom.tsx";
 import { PageHeader, type PageHeaderIconTone } from "./PageHeader.tsx";
-import { GhostIconButton } from "./ui/GhostIconButton.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { worktreePath } from "../hooks/useSessionRouting.ts";
 
 export interface DocumentSourceAction {
@@ -124,24 +124,24 @@ export function DocumentNavigationActions({
   // is last — the same order the phone's dock row uses.
   return (
     <div className={`items-center gap-1 ${className}`}>
-      <GhostIconButton
+      <IconButton
         label="Back"
         onClick={() => void navigation.back()}
         disabled={!navigation.canBack}
-        icon={<ArrowLeft size={16} />}
-      />
-      <GhostIconButton
+      >
+        <ArrowLeft />
+      </IconButton>
+      <IconButton
         label="Forward"
         onClick={navigation.forward}
         disabled={!navigation.canForward}
-        icon={<ArrowRight size={16} />}
-      />
+      >
+        <ArrowRight />
+      </IconButton>
       {navigation.zoom ? <DocumentZoomActions zoom={navigation.zoom} /> : null}
-      <GhostIconButton
-        label="Close document"
-        onClick={navigation.close}
-        icon={<X size={16} />}
-      />
+      <IconButton label="Close document" onClick={navigation.close}>
+        <X />
+      </IconButton>
     </div>
   );
 }
@@ -413,21 +413,23 @@ export function DocumentNavigationShell({
             mobile ? undefined : (
               // Back and Forward lead as one pair.
               <div className="flex items-center gap-1">
-                <GhostIconButton
+                <IconButton
                   label="Back"
                   onClick={() => void goBack()}
                   disabled={!registration.canBack}
-                  icon={<ArrowLeft size={16} />}
-                />
-                <GhostIconButton
+                >
+                  <ArrowLeft />
+                </IconButton>
+                <IconButton
                   label="Forward"
                   onClick={goForward}
                   disabled={!registration.canForward}
-                  icon={<ArrowRight size={16} />}
-                />
+                >
+                  <ArrowRight />
+                </IconButton>
                 {actions}
                 {sourceActions.map((action) => (
-                  <GhostIconButton
+                  <IconButton
                     key={action.id}
                     label={
                       action.disabled && action.disabledReason
@@ -438,8 +440,9 @@ export function DocumentNavigationShell({
                     {...(action.disabled !== undefined
                       ? { disabled: action.disabled }
                       : {})}
-                    icon={action.icon}
-                  />
+                  >
+                    {action.icon}
+                  </IconButton>
                 ))}
                 {registration.zoom ? (
                   <DocumentZoomActions zoom={registration.zoom} />
@@ -451,11 +454,9 @@ export function DocumentNavigationShell({
           // comment controls, as it is the last control in the phone's dock row.
           close={
             mobile ? undefined : (
-              <GhostIconButton
-                label="Close document"
-                onClick={close}
-                icon={<X size={16} />}
-              />
+              <IconButton label="Close document" onClick={close}>
+                <X />
+              </IconButton>
             )
           }
         />

@@ -57,8 +57,8 @@ import {
   type InspectorRelationGroup,
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
-import { THINKING_LABELS } from "./ui/ModelThinkingSelect.tsx";
-import { EmptyBox, ErrorNote, Spinner } from "./ui/load.tsx";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
 import {
   dataOf,
   errorOf,
@@ -69,6 +69,15 @@ import {
 // roster can live in this main-bundle module.
 import { worktreeReviewThreads } from "./worktree/worktreeReview.tsx";
 import { ReviewCommentList } from "./review/ReviewCommentList.tsx";
+import { Badge } from "@/components/ui/badge";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
 import { ProjectSettingsFields } from "./ProjectSettingsFields.tsx";
 import { ProjectLocalPathsSection } from "./ProjectLocalPaths.tsx";
 import {
@@ -251,10 +260,10 @@ function taskStatusSummary(
 
 function taskStatusIcon(status: TaskStatus): ReactNode {
   if (status === "done")
-    return <CheckCircle2 size={16} className="text-emerald-500" />;
+    return <CheckCircle2 size={16} className="text-success" />;
   if (status === "doing")
-    return <Circle size={16} className="fill-accent text-accent" />;
-  return <Circle size={16} className="text-faint" />;
+    return <Circle size={16} className="fill-primary text-primary" />;
+  return <Circle size={16} className="text-muted-foreground" />;
 }
 
 function taskObjectRef(
@@ -1174,7 +1183,7 @@ export function ProjectInspector({
       ) : worktreesPending ? (
         <div
           role="status"
-          className="flex items-center gap-2 text-caption text-faint"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
         >
           <Spinner size="sm" /> Refreshing Project worktrees…
         </div>
@@ -1391,30 +1400,29 @@ function WorktreeReviewSection({
       summary={rows.length ? `${open}/${rows.length}` : undefined}
     >
       {reviewSets.length ? (
-        <div className="mb-2 space-y-1.5">
+        <ItemGroup className="mb-2 gap-1.5">
           {reviewSets.map((set) => (
-            <div
-              key={set.id}
-              className="rounded-md border border-line px-2 py-1.5"
-            >
-              <div className="flex items-center gap-1.5 text-caption">
-                <span className="rounded bg-accent-soft px-1 py-0.5 text-micro font-medium text-accent">
-                  {set.authorModel ?? "agent"} ·{" "}
-                  {set.authorSessionId.slice(0, 8)}
-                </span>
-                <span className="font-medium text-fg">
+            <Item key={set.id} role="listitem" variant="outline" size="xs">
+              <ItemContent>
+                <ItemTitle>
+                  <Badge variant="secondary">
+                    {set.authorModel ?? "agent"} ·{" "}
+                    {set.authorSessionId.slice(0, 8)}
+                  </Badge>
                   {set.verdict ?? "review in progress"}
-                </span>
-                <span className="ml-auto text-micro text-muted">
+                </ItemTitle>
+                {set.summary ? (
+                  <ItemDescription>{set.summary}</ItemDescription>
+                ) : null}
+              </ItemContent>
+              <ItemActions className="self-start">
+                <span className="text-xs text-muted-foreground">
                   {set.openCount} open · {set.addressedCount} addressed
                 </span>
-              </div>
-              {set.summary ? (
-                <p className="mt-1 text-caption text-muted">{set.summary}</p>
-              ) : null}
-            </div>
+              </ItemActions>
+            </Item>
           ))}
-        </div>
+        </ItemGroup>
       ) : null}
       <ReviewCommentList
         threads={rows}
@@ -1516,7 +1524,7 @@ export function WorktreeInspector({
       sectionStorageScope={`worktree:${worktree?.id ?? "loading"}`}
     >
       {worktree ? (
-        <div className="space-y-4 text-caption">
+        <div className="space-y-4 text-sm">
           <InspectorSection
             id="checkout"
             storageScope={`worktree:${worktree.id}`}

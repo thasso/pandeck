@@ -21,8 +21,10 @@ import type { Prefs } from "../../hooks/usePrefs.ts";
 import { DiffSurface } from "../diff/DiffSurface.tsx";
 import type { LineCommentsConfig } from "../diff/comments.tsx";
 import { fetchWorktreeFileDiff, hashContent } from "../../lib/worktrees.ts";
-import { useNearViewport } from "../ui/useNearViewport.ts";
-import { Spinner } from "../ui/load.tsx";
+import { useNearViewport } from "../common/useNearViewport.ts";
+import { Spinner } from "../common/load.tsx";
+import { IconButton } from "../common/IconButton.tsx";
+import { Toggle } from "../ui/toggle.tsx";
 
 /** Diffs beyond this many changed lines start collapsed. */
 const LARGE_DIFF_LINES = 600;
@@ -58,11 +60,13 @@ export function WorktreeChangesetList({
 }: WorktreeChangesetListProps) {
   if (files.length === 0) {
     return (
-      <div className="p-6 text-body text-muted">No changes in this scope.</div>
+      <div className="p-6 text-sm text-muted-foreground">
+        No changes in this scope.
+      </div>
     );
   }
   return (
-    <div className="border-y border-line">
+    <div className="border-y border-border">
       {files.map((file) => (
         <ChangesetFileSection
           key={file.path}
@@ -164,51 +168,47 @@ function ChangesetFileSection({
   return (
     <div
       ref={sectionRef}
-      className={`overflow-hidden border-b border-line last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
+      className={`overflow-hidden border-b border-border last:border-b-0 ${collapsed ? "" : "min-h-24"}`}
     >
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-surface px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          title={collapsed ? "Expand diff" : "Collapse diff"}
-          aria-label={
-            collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`
-          }
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background px-2 py-1.5">
+        <IconButton
+          size="icon-xs"
+          label={collapsed ? `Expand ${file.path}` : `Collapse ${file.path}`}
           aria-expanded={!collapsed}
-          className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-raised hover:text-fg"
+          onClick={() => setCollapsed((value) => !value)}
         >
-          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        </button>
-        <span className="min-w-0 flex-1 truncate text-caption">
-          <span className="font-medium text-fg">{parts.name}</span>
+          {collapsed ? <ChevronRight /> : <ChevronDown />}
+        </IconButton>
+        <span className="min-w-0 flex-1 truncate text-sm">
+          <span className="font-medium text-foreground">{parts.name}</span>
           {parts.dir ? (
-            <span className="ml-1.5 font-mono text-micro text-faint">
+            <span className="ml-1.5 font-mono text-xs text-muted-foreground">
               {parts.dir}
             </span>
           ) : null}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-micro text-faint">
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground">
           {file.additions > 0 ? (
-            <span className="text-emerald-400">+{file.additions}</span>
+            <span className="text-success">+{file.additions}</span>
           ) : null}
           {file.deletions > 0 ? (
-            <span className="ml-1 text-red-400">−{file.deletions}</span>
+            <span className="ml-1 text-destructive">−{file.deletions}</span>
           ) : null}
         </span>
-        <button
-          type="button"
-          onClick={toggleViewed}
+        <Toggle
+          variant="outline"
+          size="sm"
+          pressed={viewed}
+          onPressedChange={toggleViewed}
           title={viewed ? "Mark as not viewed" : "Mark as viewed"}
-          aria-pressed={viewed}
-          className={`flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-micro ${viewed ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-400" : "border-line text-muted hover:bg-raised hover:text-fg"}`}
         >
-          <Check size={11} /> Viewed
-        </button>
+          <Check data-icon="inline-start" /> Viewed
+        </Toggle>
       </div>
       {collapsed ? null : file.binary ? (
-        <div className="p-4 text-caption text-muted">Binary file.</div>
+        <div className="p-4 text-sm text-muted-foreground">Binary file.</div>
       ) : failed ? (
-        <div className="p-4 text-caption text-muted">
+        <div className="p-4 text-sm text-muted-foreground">
           This file is no longer changed in this scope.
         </div>
       ) : !diff ? (
@@ -217,7 +217,7 @@ function ChangesetFileSection({
         // will be. The deferral above it is the perf contract, untouched.
         <div
           role="status"
-          className="flex items-center gap-2 p-4 text-caption text-muted"
+          className="flex items-center gap-2 p-4 text-sm text-muted-foreground"
         >
           <Spinner size="sm" /> Loading diff…
         </div>

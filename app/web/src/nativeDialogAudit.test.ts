@@ -13,7 +13,7 @@ import { describe, expect, test } from "vitest";
  * A browser tab where the user ticked "prevent additional dialogs" fails the
  * same way, and neither failure produces an error anyone could see.
  *
- * The replacement is `components/ui/dialog.tsx`: `useDialogs().confirm` /
+ * The replacement is `components/common/dialogs.tsx`: `useDialogs().confirm` /
  * `.promptText` for the ask-then-act case, `ConfirmDialog` for a flow that owns
  * its own open/busy/error state. Both are ordinary DOM and behave identically
  * in every client.
@@ -92,7 +92,7 @@ describe("native dialog audit", () => {
     }
     expect(
       offenders,
-      `Native dialogs never appear in the Tauri shell's webview — ask through useDialogs()/ConfirmDialog in components/ui/dialog.tsx:\n${offenders.join("\n")}`,
+      `Native dialogs never appear in the Tauri shell's webview — ask through useDialogs()/ConfirmDialog in components/common/dialogs.tsx:\n${offenders.join("\n")}`,
     ).toEqual([]);
   });
 

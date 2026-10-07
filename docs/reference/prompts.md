@@ -40,7 +40,8 @@ Agent persona prompts, project prompts, and workshop UI/tool widget conventions.
   `[…](/api/files/...)` for a link into the in-app viewer — and it composes into
   every persona that gets `project-registry.md`. The web side that honors it is
   `Markdown.tsx` and `tools/registry.tsx` → `ServedFileCard` →
-  `ui/ImageLightbox.tsx`, `SandboxedDocument` and the `/files/...` viewer route.
+  `common/ImageLightbox.tsx`, `SandboxedDocument` and the `/files/...` viewer
+  route.
 - `workshop-ui-conventions.md` and `workshop-tool-widget-conventions.md` own
   durable UI/tool output expectations for workshop changes.
 - Other prompt files own focused system instructions for named server features.

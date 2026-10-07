@@ -153,8 +153,7 @@ export function backgroundWorkListView(
 }
 
 /** Semantic colour of a row's state marker; the renderer maps it to tokens. */
-export type BackgroundWorkTone =
-  "accent" | "warning" | "danger" | "muted" | "success";
+type BackgroundWorkTone = "accent" | "warning" | "danger" | "muted" | "success";
 
 export interface BackgroundWorkStateBadge {
   label: string;

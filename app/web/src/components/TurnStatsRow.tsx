@@ -1,5 +1,11 @@
 import { memo, useState } from "react";
 import { ChevronRight } from "lucide-react";
+import { Button } from "./ui/button.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
 import type { SessionTotals, Turn } from "@assistant/shared/turnStats";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import {
@@ -93,7 +99,7 @@ const TURN_TIME_TITLE =
   "First provider run's start to the last one's end, so tool execution between runs is included — not model generation time alone.";
 
 function Dot() {
-  return <span className="text-faint/60">·</span>;
+  return <span className="text-muted-foreground/60">·</span>;
 }
 
 /** One label/value detail line (vertical layout — never overflows on mobile). */
@@ -108,15 +114,15 @@ function Detail({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-4" title={title}>
-      <span className="text-faint">{label}</span>
-      <span className="tabular-nums text-muted">{value}</span>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="tabular-nums text-muted-foreground">{value}</span>
     </div>
   );
 }
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <div className="mt-1.5 text-micro font-medium uppercase tracking-wide text-faint/70">
+    <div className="mt-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground/70">
       {children}
     </div>
   );
@@ -180,22 +186,27 @@ export const TurnStatsRow = memo(function TurnStatsRow({
     : CONTEXT_TITLE;
 
   return (
-    <div
+    <Collapsible
+      open={expanded}
+      onOpenChange={setExpanded}
       data-turn-stats-row=""
-      className="flex flex-col gap-0.5 px-1 text-caption text-faint"
+      className="flex flex-col gap-0.5 text-sm text-muted-foreground"
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        className="flex w-full flex-col gap-0.5 text-left"
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-auto w-full flex-col items-start gap-0.5"
+          />
+        }
       >
         <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
           <ChevronRight
             size={11}
-            className={`shrink-0 text-faint/70 transition-transform ${expanded ? "rotate-90" : ""}`}
+            className={`shrink-0 text-muted-foreground/70 transition-transform ${expanded ? "rotate-90" : ""}`}
           />
-          <span className="font-medium text-muted">Turn</span>
+          <span className="font-medium text-muted-foreground">Turn</span>
           <span className="tabular-nums" title={INPUT_TITLE}>
             {fmtTokens(totalInput(totals))} in
           </span>
@@ -220,8 +231,8 @@ export const TurnStatsRow = memo(function TurnStatsRow({
         </div>
 
         {showSessionCumulative && (
-          <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-[15px]">
-            <span className="font-medium text-muted">Session</span>
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-4">
+            <span className="font-medium text-muted-foreground">Session</span>
             <span className="tabular-nums" title={INPUT_TITLE}>
               {fmtTokens(totalInput(session))} in
             </span>
@@ -248,8 +259,8 @@ export const TurnStatsRow = memo(function TurnStatsRow({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-[15px]">
-          <span className="font-medium text-muted">Context</span>
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 pl-4">
+          <span className="font-medium text-muted-foreground">Context</span>
           <span className="tabular-nums" title={contextTitle}>
             {contextUsed}
             {totals.contextWindow !== undefined
@@ -277,10 +288,10 @@ export const TurnStatsRow = memo(function TurnStatsRow({
             {fmtDelta(contextDelta)}
           </span>
         </div>
-      </button>
+      </CollapsibleTrigger>
 
       {expanded && (
-        <div className="mt-0.5 flex flex-col gap-0.5 pl-[15px]">
+        <CollapsibleContent className="mt-0.5 flex flex-col gap-0.5 pl-4">
           <SectionLabel>Turn</SectionLabel>
           <Detail
             label="billed input"
@@ -378,7 +389,7 @@ export const TurnStatsRow = memo(function TurnStatsRow({
                   key={run.id}
                   className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
                 >
-                  <span className="text-faint/80">#{run.index}</span>
+                  <span className="text-muted-foreground/80">#{run.index}</span>
                   <span title={INPUT_TITLE}>
                     {fmtTokens(totalInput(run))} billed in
                   </span>
@@ -404,8 +415,8 @@ export const TurnStatsRow = memo(function TurnStatsRow({
               ))}
             </>
           )}
-        </div>
+        </CollapsibleContent>
       )}
-    </div>
+    </Collapsible>
   );
 });

@@ -33,13 +33,13 @@ function renderCard(
   props: Omit<Parameters<typeof PeerPromptCardView>[0], "card"> = {},
 ) {
   act(() => root.render(<PeerPromptCardView card={card} {...props} />));
-  return container.querySelector<HTMLButtonElement>("button[aria-controls]")!;
+  return container.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
 }
 
 function expandCard() {
   act(() =>
     container
-      .querySelector<HTMLButtonElement>("button[aria-controls]")!
+      .querySelector<HTMLButtonElement>("button[aria-expanded]")!
       .click(),
   );
 }
@@ -226,9 +226,9 @@ describe("PeerPromptCardView", () => {
   it.each([
     ["retrying", "Retrying", "lucide-refresh-cw", "text-warning"],
     ["interrupted", "Interrupted", "lucide-triangle-alert", "text-warning"],
-    ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted"],
+    ["cancelled", "Cancelled", "lucide-circle-slash", "text-muted-foreground"],
     ["expired", "Expired", "lucide-clock-alert", "text-warning"],
-    ["failed", "Failed", "lucide-circle-x", "text-danger"],
+    ["failed", "Failed", "lucide-circle-x", "text-destructive"],
   ] as const)(
     "keeps %s visible and distinct from success while collapsed",
     (state, label, icon, tone) => {
@@ -272,7 +272,7 @@ describe("PeerPromptCardView", () => {
     expect(html).not.toContain("<details");
     renderCard(retrying);
     expandCard();
-    expect(container.querySelector("p.text-danger")?.textContent).toBe("boom");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("boom");
     expect(container.querySelector("details")).toBeNull();
   });
 });

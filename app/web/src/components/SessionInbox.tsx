@@ -24,9 +24,15 @@ import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
-import { useShortcuts, type ShortcutGroup } from "./ui/shortcuts.tsx";
-import { EmptyBox } from "./ui/load.tsx";
-import { SwipeRow, type SwipeAction } from "./ui/SwipeRow.tsx";
+import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
+import { EmptyBox, PaneLoading } from "./common/load.tsx";
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { SwipeRow, type SwipeAction } from "./common/SwipeRow.tsx";
 import { useNow } from "../hooks/useNow.ts";
 import { dismissToastKey, showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
@@ -754,7 +760,7 @@ export function SessionInbox({
           {/* The separator belongs to the WHOLE fold, not its header. When
               roles open, it travels below their rows instead of cutting the
               run away from the sessions it contains. */}
-          <div className="border-b border-line/60">
+          <div className="border-b border-border/60">
             <WorkflowRunInboxCard
               item={item}
               now={now}
@@ -791,7 +797,7 @@ export function SessionInbox({
             {/* The separator wraps the card AND its disclosed peers. It stays
                 at the bottom of the cluster as rows open and close, making the
                 expansion part of the card rather than loose rows beneath it. */}
-            <div className="border-b border-line/60">
+            <div className="border-b border-border/60">
               {/* The swipe wraps the CARD, inside both exit stages: a card
                   leaving by keyboard is animated by the stages above, and one
                   leaving by thumb is animated by `SwipeRow` — whose height
@@ -834,21 +840,21 @@ export function SessionInbox({
                   while the fold is open and has any. */}
               {expandedClusters.has(id) &&
               (card.cluster?.settledCount ?? 0) > 0 ? (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   aria-expanded={settledHistory.includes(id)}
                   onClick={() => toggleSettledHistory(id)}
-                  className={`flex ${density === "comfortable" ? "min-h-8" : "min-h-7"} w-full items-center gap-1.5 py-0.5 pl-3 pr-2 text-left text-caption text-faint outline-none transition-colors hover:bg-raised hover:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40`}
+                  className="w-full justify-start"
                 >
                   <ChevronRight
-                    size={12}
-                    aria-hidden
-                    className={`shrink-0 transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
+                    data-icon="inline-start"
+                    className={`transition-transform ${settledHistory.includes(id) ? "rotate-90" : ""}`}
                   />
                   {settledHistory.includes(id)
                     ? "Hide settled"
                     : `Show ${card.cluster?.settledCount} settled`}
-                </button>
+                </Button>
               ) : null}
             </div>
           </ExitStage>
@@ -900,7 +906,7 @@ export function SessionInbox({
               stated whether or not this block exists. */}
           <h2
             id="session-inbox-needs-you"
-            className="px-2 pb-0.5 text-micro font-semibold uppercase tracking-wide text-accent"
+            className="px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide text-primary"
           >
             Needs you
           </h2>
@@ -911,83 +917,74 @@ export function SessionInbox({
       {renderCardList(view.active)}
 
       {view.settledTotal > 0 ? (
-        <section
-          aria-labelledby="session-inbox-settled"
+        <Collapsible
+          render={<section aria-labelledby="session-inbox-settled" />}
+          open={settledExpanded}
+          onOpenChange={() => setSettledOpen((value) => !value)}
           className="mt-1 flex flex-col gap-px"
         >
-          <button
-            type="button"
+          <ShelfTrigger
             id="session-inbox-settled"
-            onClick={() => setSettledOpen((value) => !value)}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
-            aria-expanded={settledExpanded}
+            open={settledExpanded}
+            density={density}
           >
-            <ChevronRight
-              size={13}
-              className={`transition-transform ${settledExpanded ? "rotate-90" : ""}`}
-            />
             {/* No count: "Settled (1573)" stated the size of the history, a
                 number with no decision behind it. The shelf's own paging says
                 how much more there is once it is open. */}
-            <span>Settled</span>
-          </button>
-          {settledExpanded ? (
-            <>
-              {view.settled.map((session) => (
-                <InboxShelfRow
-                  key={session.id}
-                  session={session}
-                  kind="settled"
-                  active={session.id === currentId}
-                  now={now}
-                  density={density}
-                  onOpen={() => onSelect(session.id)}
-                  onRestore={() => onSettle(session.id, false)}
-                  onArchive={() => onArchive(session.id, true)}
-                  onDelete={() => onDeleteSession(session.id)}
-                  onFocusSibling={focusSibling}
-                />
-              ))}
-              {view.settledHidden > 0 ? (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
-                  }
-                  className="rounded-md px-2.5 py-1 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
-                  settled session
-                  {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1
-                    ? ""
-                    : "s"}
-                </button>
-              ) : null}
-            </>
-          ) : null}
-        </section>
+            Settled
+          </ShelfTrigger>
+          <CollapsibleContent className="flex flex-col gap-px">
+            {view.settled.map((session) => (
+              <InboxShelfRow
+                key={session.id}
+                session={session}
+                kind="settled"
+                active={session.id === currentId}
+                now={now}
+                density={density}
+                onOpen={() => onSelect(session.id)}
+                onRestore={() => onSettle(session.id, false)}
+                onArchive={() => onArchive(session.id, true)}
+                onDelete={() => onDeleteSession(session.id)}
+                onFocusSibling={focusSibling}
+              />
+            ))}
+            {view.settledHidden > 0 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  setSettledLimit((limit) => limit + SETTLED_PAGE_STEP)
+                }
+                className="justify-start"
+              >
+                Show {Math.min(SETTLED_PAGE_STEP, view.settledHidden)} more
+                settled session
+                {Math.min(SETTLED_PAGE_STEP, view.settledHidden) === 1
+                  ? ""
+                  : "s"}
+              </Button>
+            ) : null}
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
 
       {archivedAvailableCount > 0 ? (
-        <section
-          aria-labelledby="session-inbox-archived"
+        <Collapsible
+          render={<section aria-labelledby="session-inbox-archived" />}
+          open={showArchived}
+          onOpenChange={setShowArchived}
           className="mt-1 flex flex-col gap-px"
         >
-          <button
-            type="button"
+          <ShelfTrigger
             id="session-inbox-archived"
-            onClick={() => setShowArchived((value) => !value)}
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 text-left text-caption font-medium text-faint transition-colors hover:bg-raised hover:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${density === "comfortable" ? "min-h-11" : "py-1.5"}`}
-            aria-expanded={showArchived}
+            open={showArchived}
+            density={density}
           >
-            <ChevronRight
-              size={13}
-              className={`transition-transform ${showArchived ? "rotate-90" : ""}`}
-            />
-            <span>Archived</span>
-          </button>
-          {showArchived ? (
-            archivedSessionsLoaded ? (
+            Archived
+          </ShelfTrigger>
+          <CollapsibleContent>
+            {archivedSessionsLoaded ? (
               <div className="flex flex-col gap-px">
                 {archivedSessions.map((session) => (
                   <InboxShelfRow
@@ -1006,14 +1003,47 @@ export function SessionInbox({
                 ))}
               </div>
             ) : (
-              <div className="px-3 py-2 text-caption text-faint">
-                Loading archived sessions…
-              </div>
-            )
-          ) : null}
-        </section>
+              <PaneLoading
+                label="Loading archived sessions…"
+                className="flex-none p-3"
+              />
+            )}
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
     </div>
+  );
+}
+
+/** The heading of a history shelf (Settled, Archived): it opens the shelf. */
+function ShelfTrigger({
+  id,
+  open,
+  density,
+  children,
+}: {
+  id: string;
+  open: boolean;
+  density: RowDensity;
+  children: ReactNode;
+}) {
+  return (
+    <CollapsibleTrigger
+      id={id}
+      render={
+        <Button
+          variant="ghost"
+          size={density === "comfortable" ? "lg" : "sm"}
+          className={`justify-start ${density === "comfortable" ? "min-h-11" : ""}`}
+        />
+      }
+    >
+      <ChevronRight
+        data-icon="inline-start"
+        className={`transition-transform ${open ? "rotate-90" : ""}`}
+      />
+      {children}
+    </CollapsibleTrigger>
   );
 }
 
@@ -1040,14 +1070,14 @@ function ExitStage({
       inert={leaving}
       className={`grid ${
         leaving
-          ? "grid-rows-[0fr] motion-safe:delay-200 motion-safe:duration-150 motion-safe:transition-[grid-template-rows] motion-safe:ease-out"
+          ? "grid-rows-[0fr] motion-safe:transition-all motion-safe:delay-200 motion-safe:duration-150 motion-safe:ease-out"
           : "grid-rows-[1fr]"
       }`}
     >
       <div
         className={`min-h-0 overflow-hidden ${
           leaving
-            ? "-translate-x-full opacity-0 motion-safe:duration-200 motion-safe:transition-[transform,opacity] motion-safe:ease-in"
+            ? "-translate-x-full opacity-0 motion-safe:transition motion-safe:duration-200 motion-safe:ease-in"
             : ""
         }`}
       >

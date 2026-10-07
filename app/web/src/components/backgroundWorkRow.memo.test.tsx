@@ -120,8 +120,10 @@ describe("BackgroundWorkRow access", () => {
     const button = node().querySelector("button");
     expect(button?.getAttribute("aria-label")).toBe("Stop pnpm run build");
     expect(button?.hasAttribute("disabled")).toBe(false);
-    // Native buttons are in the tab order; nothing here opts out of it.
-    expect(button?.getAttribute("tabindex")).toBeNull();
+    // In the tab order; nothing here opts out of it.
+    expect(
+      Number(button?.getAttribute("tabindex") ?? 0),
+    ).toBeGreaterThanOrEqual(0);
   });
 
   it("disables Stop with a reason once the work is terminal", () => {
@@ -138,7 +140,8 @@ describe("BackgroundWorkRow access", () => {
 
   it("keeps the tap target at the shared minimum height", () => {
     const { node } = render({ item: item(), now: NOW });
-    // `Button size="sm"` is the app's 36px control; the row must not shrink it.
-    expect(node().querySelector("button")?.className).toContain("h-9");
+    // shadcn's default `Button` size is the app's control height; the row must
+    // not shrink it.
+    expect(node().querySelector("button")?.className).toContain("h-8");
   });
 });

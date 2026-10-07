@@ -1,4 +1,6 @@
 import { CalendarClock, FolderTree, Inbox, ListTree } from "lucide-react";
+import { Button } from "./ui/button.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import type { ProjectRecord, TaskStatus } from "@assistant/shared";
 import {
   BacklogProjectFilterControl,
@@ -62,7 +64,7 @@ export function BacklogToolbar({
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-micro" : "text-caption"} text-muted`}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-xs" : "text-sm"} text-muted-foreground`}
     >
       {!hideProjectControls && (
         <BacklogViewSwitcher
@@ -95,22 +97,20 @@ export function BacklogToolbar({
         />
       )}
       {!hideProjectControls && view === "backlog" && (
-        <button
-          type="button"
+        <Button
+          variant={byProject ? "secondary" : "outline"}
+          size={tight ? "xs" : "sm"}
+          className="ml-auto"
           onClick={() => onViewModeChange(byProject ? "normal" : "project")}
           disabled={!projectsLoaded}
           aria-pressed={byProject}
           title={
             byProject ? "Switch to the flat list" : "Group tasks by Project"
           }
-          className={`ml-auto inline-flex items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${byProject ? "border-accent/60 bg-accent-soft text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"}`}
         >
-          <FolderTree
-            size={tight ? 11 : 12}
-            className={byProject ? "text-accent" : ""}
-          />
+          <FolderTree />
           {tight ? "Project" : "By Project"}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -162,41 +162,32 @@ function BacklogViewSwitcher({
   inboxWaiting: boolean;
 }) {
   return (
-    <div
-      className="inline-flex items-center gap-1"
-      role="group"
+    <ToggleGroup
+      value={[view]}
+      onValueChange={(values) => {
+        const next = values[0] as BacklogView | undefined;
+        if (next) onChange(next);
+      }}
+      variant="outline"
+      size={tight ? "sm" : "default"}
       aria-label="Backlog view"
     >
       {(Object.keys(VIEW_META) as BacklogView[]).map((id) => {
         const meta = VIEW_META[id];
-        const active = view === id;
         const Icon = meta.Icon;
         return (
-          <button
-            key={id}
-            type="button"
-            onClick={() => onChange(id)}
-            aria-pressed={active}
-            title={meta.title}
-            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? "border-accent/60 bg-accent-soft text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"}`}
-          >
-            <Icon
-              size={tight ? 11 : 12}
-              className={active ? "text-accent" : ""}
-            />
+          <ToggleGroupItem key={id} value={id} title={meta.title}>
+            <Icon />
             {meta.label}
-            {/* A DOT, not a count: what matters is whether anything is waiting,
-                and the counts this toolbar used to lead with were exactly the
-                numbers nobody acted on. */}
             {id === "inbox" && inboxWaiting ? (
               <span
-                className="size-1.5 shrink-0 rounded-full bg-accent"
+                className="size-1.5 shrink-0 rounded-full bg-primary"
                 aria-label="Tasks waiting"
               />
             ) : null}
-          </button>
+          </ToggleGroupItem>
         );
       })}
-    </div>
+    </ToggleGroup>
   );
 }

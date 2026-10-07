@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock, Video } from "lucide-react";
 import type { CalendarEventDto, CalendarWorklogDto } from "@assistant/shared";
+import { Button } from "../ui/button.tsx";
 import { useNow } from "../../hooks/useNow.ts";
 import { useUserTimeZone } from "../../hooks/useUserTimeZone.ts";
 import {
@@ -166,35 +167,39 @@ export function TimeGrid({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {showHeaders && (
-        <div className="flex shrink-0 border-b border-line pl-12">
+        <div className="flex shrink-0 border-b border-border pl-12">
           {days.map((date) => {
             const isToday = date === today;
             return (
-              <button
+              <div
                 key={date}
-                type="button"
-                onClick={() => onSelectDay(date)}
-                title="Select day"
-                className={`flex flex-1 items-baseline justify-center gap-1.5 border-l border-line py-1.5 text-left first:border-l-0 hover:bg-raised/60 ${
-                  date === selectedDate ? "bg-accent-soft/30" : ""
-                }`}
+                className="flex flex-1 items-center justify-center gap-1.5 border-l border-border first:border-l-0"
               >
-                <span className="text-caption uppercase tracking-wide text-faint">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto uppercase tracking-wide"
+                  title="Select day"
+                  onClick={() => onSelectDay(date)}
+                >
                   {shortWeekday(date)}
-                </span>
-                <span
-                  role="button"
-                  tabIndex={-1}
+                </Button>
+                <Button
+                  variant={
+                    isToday
+                      ? "default"
+                      : date === selectedDate
+                        ? "secondary"
+                        : "ghost"
+                  }
+                  size="icon-xs"
                   title="Open day view"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenDay(date);
-                  }}
-                  className={`flex size-5 items-center justify-center rounded-full text-caption hover:ring-1 hover:ring-accent ${isToday ? "bg-accent font-semibold text-accent-fg" : "text-fg"}`}
+                  aria-label={`Open ${date} day view`}
+                  onClick={() => onOpenDay(date)}
                 >
                   {dayOfMonth(date)}
-                </span>
-              </button>
+                </Button>
+              </div>
             );
           })}
         </div>
@@ -216,7 +221,7 @@ export function TimeGrid({
             {Array.from({ length: 24 }, (_, h) => (
               <div
                 key={h}
-                className="absolute right-1 -translate-y-1/2 text-micro tabular-nums text-faint"
+                className="absolute right-1 -translate-y-1/2 text-xs tabular-nums text-muted-foreground"
                 style={{ top: h * zoom }}
               >
                 {h === 0 ? "" : `${String(h).padStart(2, "0")}:00`}
@@ -238,22 +243,22 @@ export function TimeGrid({
             return (
               <div
                 key={date}
-                className="relative min-w-0 flex-1 border-l border-line"
+                className="relative min-w-0 flex-1 border-l border-border"
                 onClick={() => onSelectDay(date)}
               >
                 {Array.from({ length: 24 }, (_, h) => (
                   <div
                     key={h}
-                    className="absolute inset-x-0 border-t border-line/50"
+                    className="absolute inset-x-0 border-t border-border/50"
                     style={{ top: h * zoom }}
                   />
                 ))}
                 {isToday && (
                   <div
-                    className="absolute inset-x-0 z-10 border-t-2 border-red-500"
+                    className="absolute inset-x-0 z-10 border-t-2 border-destructive"
                     style={{ top: (nowMinutes / 60) * zoom }}
                   >
-                    <span className="absolute -left-1 -top-1 size-2 rounded-full bg-red-500" />
+                    <span className="absolute -left-1 -top-1 size-2 rounded-full bg-destructive" />
                   </div>
                 )}
                 {positioned.map(
@@ -303,7 +308,7 @@ function AllDayBand({
   );
   if (!anyAllDay) return null;
   return (
-    <div className="flex shrink-0 border-b border-line pl-12">
+    <div className="flex shrink-0 border-b border-border pl-12">
       {days.map((date) => {
         const allDay = (eventsByDay.get(date) ?? []).filter(
           (event) => event.allDay,
@@ -311,21 +316,18 @@ function AllDayBand({
         return (
           <div
             key={date}
-            className="flex min-w-0 flex-1 flex-col gap-0.5 border-l border-line p-1 first:border-l-0"
+            className="flex min-w-0 flex-1 flex-col gap-0.5 border-l border-border p-1 first:border-l-0"
           >
             {allDay.map((event) => (
-              <button
+              <Button
                 key={event.id}
-                type="button"
+                variant={event.id === selectedEventId ? "default" : "secondary"}
+                size="xs"
+                className="w-full justify-start truncate"
                 onClick={() => onSelectEvent(event.id)}
-                className={`truncate rounded px-1 py-0.5 text-left text-micro ${
-                  event.id === selectedEventId
-                    ? "bg-accent text-accent-fg"
-                    : "bg-accent-soft text-accent hover:opacity-80"
-                }`}
               >
                 {event.title}
-              </button>
+              </Button>
             ))}
           </div>
         );
@@ -366,14 +368,14 @@ function TempoBlock({
         <span className="min-w-0 truncate font-medium">{label}</span>
       </div>
       {heightPx > 26 && (
-        <div className="truncate text-micro tabular-nums opacity-80">
+        <div className="truncate text-xs tabular-nums opacity-80">
           {hoursLabel}
         </div>
       )}
     </>
   );
   const className =
-    "absolute z-[1] overflow-hidden rounded-md border border-emerald-500/40 bg-emerald-500/15 px-1 py-0.5 text-left text-micro text-emerald-700 dark:text-emerald-300";
+    "absolute overflow-hidden rounded-md border border-success bg-success-soft px-1 py-0.5 text-left text-xs text-foreground";
   const style = {
     top: topPx + 1,
     height: heightPx - 2,
@@ -387,8 +389,8 @@ function TempoBlock({
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
       title={`${hoursLabel} · ${worklog.description || label}`}
-      className={`${className} hover:bg-emerald-500/25`}
-      style={style}
+      className={`${className} hover:bg-success-soft`}
+      style={{ ...style, zIndex: 1 }}
     >
       {body}
     </a>
@@ -424,19 +426,17 @@ function EventBlock({
   const declined = event.selfResponse === "declined";
   const compact = heightPx < 34;
   return (
-    <button
+    <Button
       type="button"
+      variant={selected ? "default" : "secondary"}
       onClick={(e) => {
         e.stopPropagation();
         onSelect(event.id);
       }}
       title={`${hm(event.start, timeZone)}–${hm(event.end, timeZone)} · ${event.title}`}
-      className={`absolute z-[1] overflow-hidden rounded-md border px-1.5 py-0.5 text-left transition-shadow ${
-        selected
-          ? "border-accent bg-accent-soft ring-1 ring-accent"
-          : "border-accent/30 bg-accent-soft/70 hover:border-accent/60"
-      } ${declined ? "opacity-50" : ""}`}
+      className={`absolute overflow-hidden text-left ${declined ? "opacity-50" : ""}`}
       style={{
+        zIndex: 1,
         top: topPx + 1,
         height: heightPx - 2,
         left: `calc(${leftPct}% + 2px)`,
@@ -447,19 +447,19 @@ function EventBlock({
         className={`flex items-center gap-1 ${declined ? "line-through" : ""}`}
       >
         {event.meetingUrl && (
-          <Video size={9} className="shrink-0 text-accent" />
+          <Video size={9} className="shrink-0 text-primary" />
         )}
         <span
-          className={`min-w-0 truncate text-caption font-medium ${selected ? "text-accent" : "text-fg"}`}
+          className={`min-w-0 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
         >
           {event.title}
         </span>
       </div>
       {!compact && (
-        <div className="truncate text-micro tabular-nums text-muted">
+        <div className="truncate text-xs tabular-nums text-muted-foreground">
           {hm(event.start, timeZone)}
         </div>
       )}
-    </button>
+    </Button>
   );
 }

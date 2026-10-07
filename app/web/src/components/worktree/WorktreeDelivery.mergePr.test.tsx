@@ -116,7 +116,7 @@ async function openMergeDialog(): Promise<void> {
 
 /** The element whose text is exactly `label`. */
 function find<T extends Element>(selector: string, label: string): T {
-  const match = [...container!.querySelectorAll(selector)].find(
+  const match = [...document.querySelectorAll(selector)].find(
     (element) => (element.textContent ?? "").trim() === label,
   );
   expect(match, `nothing matching ${selector} labelled ${label}`).toBeDefined();
@@ -131,7 +131,7 @@ function click(element: Element): void {
 
 /** The dialog's remote-branch checkbox. */
 function branchCheckbox(): HTMLInputElement {
-  const label = [...container!.querySelectorAll("label")].find((element) =>
+  const label = [...document.querySelectorAll("label")].find((element) =>
     (element.textContent ?? "").includes("Delete the remote branch"),
   );
   expect(label, "no remote-branch checkbox in the merge dialog").toBeDefined();
@@ -185,7 +185,7 @@ it("carries the dialog's opt-out into the request and reports the branch kept", 
   mergeResponse = { ...mergeResponse, branchDeleted: false };
   await openMergeDialog();
   click(branchCheckbox());
-  expect(container!.textContent).toContain("The remote branch is kept");
+  expect(document.body.textContent).toContain("The remote branch is kept");
   await confirmMerge();
 
   expect(merges).toEqual([{ method: "squash", deleteBranch: false }]);

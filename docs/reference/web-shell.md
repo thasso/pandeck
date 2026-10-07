@@ -92,8 +92,9 @@ Generic app shell frame per `app/web/docs/ui-shell.md`: the three-pane layout
   needs that shape (the object dock; the browser screen's navigation bar). Not
   two surfaces handing over — that split is what made the gesture feel clunky,
   because a resting row and a portaled sheet are different elements and neither
-  can be grown live. What hosts share here is not a LOOK (`../ui/bottomSheet.ts`
-  tokens already give every bottom surface that) but the MECHANICS:
+  can be grown live. What hosts share here is not a LOOK
+  (`../common/bottomSheet.ts` tokens already give every bottom surface that) but
+  the MECHANICS:
   - The header (grabber + the host's row) is the card's top edge in both
     positions and ALL of it drags, in both directions: the target is the full
     card width and every row of it. Never the body below it — that scrolls, and
@@ -142,9 +143,9 @@ Generic app shell frame per `app/web/docs/ui-shell.md`: the three-pane layout
     the card. Its opacity is constant: with the card tracking the finger there
     is nothing left for a drag-linked fade to communicate. The home-indicator
     inset below the card is a strip of the card's own background
-    (`../ui/bottomSheet.ts`'s skirt), not empty space: the content has to stay
-    out of the inset, but a bar with the page scrolling past underneath it is
-    not docked. It is a sibling rather than padding on the card so the inset
+    (`../common/bottomSheet.ts`'s skirt), not empty space: the content has to
+    stay out of the inset, but a bar with the page scrolling past underneath it
+    is not docked. It is a sibling rather than padding on the card so the inset
     never enters the heights the gesture measures, and it is positioned so the
     expanded backdrop cannot dim it.
   - `bottomCardRestingPx` → `bottomCardInset` is the ONE source for the resting

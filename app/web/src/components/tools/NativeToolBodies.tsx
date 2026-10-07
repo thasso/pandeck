@@ -10,9 +10,9 @@
  * `lib/toolOutput.ts` for what each harness actually provides.
  */
 import { useMemo } from "react";
-import { CodeBlock } from "../ui/CodeBlock.tsx";
-import { CollapsibleOutput } from "../ui/CollapsibleOutput.tsx";
-import { AnsiText } from "../ui/AnsiText.tsx";
+import { CodeBlock } from "../common/CodeBlock.tsx";
+import { CollapsibleOutput } from "../common/CollapsibleOutput.tsx";
+import { AnsiText } from "../common/AnsiText.tsx";
 import {
   diffMarkdownLines,
   diffMarkdownWords,
@@ -56,7 +56,9 @@ export function FileExcerptBody({
         wrap={wrap}
       />
       {parsed?.notice ? (
-        <div className="mt-1 px-1 text-caption text-faint">{parsed.notice}</div>
+        <div className="mt-1 px-1 text-sm text-muted-foreground">
+          {parsed.notice}
+        </div>
       ) : null}
     </>
   );
@@ -205,7 +207,7 @@ export function BashBody({
 
   if (!hasOutput) {
     return shell(
-      <span className="tool-code-row text-faint">
+      <span className="tool-code-row text-muted-foreground">
         {running ? "Running…" : "(no output)"}
       </span>,
     );

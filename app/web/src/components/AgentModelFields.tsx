@@ -7,11 +7,9 @@ import {
   clampThinkingLevelForModel,
   supportedThinkingLevelsForModel,
 } from "@assistant/shared";
-import {
-  ModelSelect,
-  ThinkingSelect,
-  SelectField,
-} from "./ui/ModelThinkingSelect.tsx";
+import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { accountPinWarning } from "../lib/credentialProfiles.ts";
 
 /**
@@ -113,7 +111,8 @@ export function AgentModelFields({
   return (
     <div className="space-y-2">
       <div className="grid gap-4 sm:grid-cols-2">
-        <SelectField label={modelLabel}>
+        <Field>
+          <FieldLabel>{modelLabel}</FieldLabel>
           <ModelSelect
             models={models}
             value={
@@ -136,8 +135,9 @@ export function AgentModelFields({
               })
             }
           />
-        </SelectField>
-        <SelectField label={thinkingLabel}>
+        </Field>
+        <Field>
+          <FieldLabel>{thinkingLabel}</FieldLabel>
           <ThinkingSelect
             model={selected}
             value={shownLevel}
@@ -156,9 +156,13 @@ export function AgentModelFields({
               })
             }
           />
-        </SelectField>
+        </Field>
       </div>
-      {warning ? <p className="text-caption text-warning">{warning}</p> : null}
+      {warning ? (
+        <Alert variant="warning" role="note">
+          <AlertDescription>{warning}</AlertDescription>
+        </Alert>
+      ) : null}
     </div>
   );
 }

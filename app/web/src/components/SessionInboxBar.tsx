@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Activity, CircleDashed, CircleHelp } from "lucide-react";
-import { Spinner } from "./ui/load.tsx";
+import { Spinner } from "./common/load.tsx";
+import { Badge } from "@/components/ui/badge";
 
 interface Props {
   /** Items in the `needs-you` tier — the same count the block used to state. */
@@ -60,7 +61,7 @@ export function SessionInboxBar({
     // band the chips are not centred in — the whole complaint this bar exists
     // to answer. The height is a constant rather than padding around content
     // for the same reason the counts never unmount.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-line bg-panel px-2 sm:-mx-2 sm:px-3">
+    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
       <Chip
         label={
           needsYou === 0
@@ -68,10 +69,10 @@ export function SessionInboxBar({
             : `${needsYou} ${needsYou === 1 ? "session is" : "sessions are"} waiting for you`
         }
         count={needsYou}
-        tone={needsYou > 0 ? "accent" : "quiet"}
+        attention={needsYou > 0}
         onClick={needsYou > 0 ? onNeedsYou : undefined}
       >
-        <CircleHelp size={12} aria-hidden />
+        <CircleHelp aria-hidden />
       </Chip>
       <Chip
         label={
@@ -80,16 +81,11 @@ export function SessionInboxBar({
             : `${working} session${working === 1 ? "" : "s"} running`
         }
         count={working}
-        tone={working > 0 ? "live" : "quiet"}
       >
         {/* The spinner is the running indicator everywhere in this browser, so
             it stays the glyph — and at zero it becomes the same circle standing
             still, which keeps the slot exactly as wide either way. */}
-        {working > 0 ? (
-          <Spinner size="sm" />
-        ) : (
-          <CircleDashed size={12} aria-hidden />
-        )}
+        {working > 0 ? <Spinner size="xs" /> : <CircleDashed aria-hidden />}
       </Chip>
       <Chip
         label={
@@ -100,70 +96,44 @@ export function SessionInboxBar({
               }`
         }
         count={activeCount}
-        tone={activeCount > 0 ? "live" : "quiet"}
         onClick={onOpenBackgroundTasks}
       >
-        <Activity size={12} aria-hidden />
+        <Activity aria-hidden />
       </Chip>
     </div>
   );
 }
 
-type ChipTone = "accent" | "live" | "quiet";
-
-const TONE_CLASS: Record<ChipTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  live: "text-muted",
-  quiet: "text-faint",
-};
-
 /**
  * One count. A chip with somewhere to go is a button and a chip without one is
  * a `<span>` — a control that does nothing when clicked is worse than a plain
- * number — but both draw at the same size, because the whole promise of this
+ * number — but both are the same `Badge`, because the whole promise of this
  * bar is that its height and width do not move.
  */
 function Chip({
   label,
   count,
-  tone,
+  attention = false,
   onClick,
   children,
 }: {
   label: string;
   count: number;
-  tone: ChipTone;
+  /** Something here is waiting for the user. */
+  attention?: boolean;
   onClick?: (() => void) | undefined;
   children: ReactNode;
 }) {
-  const shape = `flex items-center gap-1 rounded-full px-1.5 py-0.5 text-micro font-medium tabular-nums ${TONE_CLASS[tone]}`;
-  // Every glyph gets the SAME box, whatever it is: a 12px icon, a 13px spinner
-  // and whatever the next one is all centre in it, so the three chips sit on
-  // one line and the digit beside them has a constant thing to centre against.
-  const glyph = (
-    <span className="flex size-3.5 shrink-0 items-center justify-center">
-      {children}
-    </span>
-  );
-  // The number is nudged DOWN, and the nudge is what `items-center` cannot
-  // reach. Every BOX here — chip, glyph box, svg, number — centres on exactly
-  // the same y; that was measured in the browser. What does not line up is the
-  // INK: a glyph fills its box, while a digit fills only the cap height of its
-  // line box and hangs nothing below the baseline, so it draws ~1.7px ABOVE the
-  // centre everything else is aligned on and the glyph next to it reads as
-  // sitting low. Measured off the rendered pixels, not derived from the font's
-  // metrics, which disagreed with what Chromium actually drew. The number is
-  // what moves because the glyph was already where it belongs. `em`, because
-  // the type scale is a user preference: at twice the size the error doubles.
+  const variant = attention ? "secondary" : "ghost";
   const number = (
-    <span aria-hidden className="relative top-[0.14em]">
+    <span aria-hidden className="tabular-nums">
       {count}
     </span>
   );
   if (!onClick)
     return (
-      <span className={shape} title={label}>
-        {glyph}
+      <Badge variant={variant} title={label}>
+        {children}
         {/* The glyph carries the meaning visually and the number carries it in
             text, so the words go to assistive technology as content rather than
             as an `aria-label` — which a plain `span` has no role to attach it
@@ -171,18 +141,19 @@ function Chip({
             times a minute and none of them is an announcement. */}
         <span className="sr-only">{label}</span>
         {number}
-      </span>
+      </Badge>
     );
   return (
-    <button
-      type="button"
+    <Badge
+      variant={variant}
+      render={<button type="button" />}
       onClick={onClick}
       title={label}
       aria-label={label}
-      className={`${shape} transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+      className="cursor-pointer"
     >
-      {glyph}
+      {children}
       {number}
-    </button>
+    </Badge>
   );
 }

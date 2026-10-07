@@ -36,15 +36,17 @@ import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Spinner } from "./common/load.tsx";
+import { Button } from "@/components/ui/button";
 
-/** The same semantic tones the session cards use, at the same weight. */
-const BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  warning: "bg-warning-soft text-warning",
-  danger: "bg-danger-soft text-danger",
-  success: "bg-success-soft text-success",
-  muted: "bg-line text-muted",
+/** The run state's glyph colour, by the same semantic tones the session cards use. */
+const TONE_TEXT: Record<SessionStatusTone, string> = {
+  accent: "text-primary",
+  warning: "text-warning",
+  danger: "text-destructive",
+  success: "text-success",
+  muted: "text-muted-foreground",
 };
 
 /** Every run state has a glyph, so its badge survives the icon-only rail. */
@@ -75,11 +77,9 @@ function RunBadgeIcon({
 }
 
 /** Settle, inline at the end of the status row like a session card's. */
-const INLINE_ACTION =
-  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
-const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
-  tight: "size-6 -my-0.5",
-  comfortable: "size-8 -my-0.5",
+const INLINE_ACTION_SIZE: Record<RowDensity, "icon-xs" | "icon-sm"> = {
+  tight: "icon-xs",
+  comfortable: "icon-sm",
 };
 
 export interface WorkflowRunInboxCardProps {
@@ -208,7 +208,7 @@ function WorkflowRunInboxCardImpl({
           settle();
         }
       }}
-      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-raised focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      className="group flex w-full cursor-pointer select-none overflow-hidden text-left outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
     >
       {/* The session card's three rows, in the same places: context with the
           time, identity with the state in the leading slot, then signals with
@@ -217,7 +217,7 @@ function WorkflowRunInboxCardImpl({
         className={`flex min-w-0 flex-1 flex-col justify-center gap-0.5 pl-2 pr-1 ${density === "comfortable" ? "py-2.5" : "py-2"}`}
       >
         <div
-          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-micro text-faint`}
+          className={`flex ${CARD_OUTER_ROW[density].row} min-w-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground`}
         >
           <div className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden">
             {projectKey ? (
@@ -259,7 +259,7 @@ function WorkflowRunInboxCardImpl({
             {moving ? (
               <Workflow
                 size={13}
-                className="shrink-0 text-accent"
+                className="shrink-0 text-primary"
                 aria-hidden
               />
             ) : (
@@ -267,19 +267,19 @@ function WorkflowRunInboxCardImpl({
                 role="img"
                 aria-label={badge.label}
                 title={badge.label}
-                className={`flex size-4 shrink-0 items-center justify-center rounded-full ${BADGE_TONE[badge.tone]}`}
+                className={`flex size-4 shrink-0 items-center justify-center ${TONE_TEXT[badge.tone]}`}
               >
-                <RunBadgeIcon kind={badge.kind} size={10} />
+                <RunBadgeIcon kind={badge.kind} size={13} />
               </span>
             )}
           </span>
-          <span className="min-w-0 flex-1 truncate text-caption font-medium text-fg">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {title}
           </span>
         </div>
 
         <div
-          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-micro`}
+          className={`flex ${CARD_OUTER_ROW[density].min} min-w-0 items-center gap-1.5 text-xs`}
         >
           {/* Signals show whole or not at all; DOM order is the drop order, so
               the role session that needs you outlasts the phase. */}
@@ -288,8 +288,12 @@ function WorkflowRunInboxCardImpl({
             className="session-card-status-line flex h-5 min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
           >
             {item.counts.total > 0 ? (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
+                className={
+                  item.counts.working > 0 ? "-mx-1 text-primary" : "-mx-1"
+                }
                 title={roles ?? undefined}
                 aria-expanded={expanded}
                 aria-label={`${expanded ? "Hide" : "Show"} the ${item.counts.total} workflow session${
@@ -299,46 +303,39 @@ function WorkflowRunInboxCardImpl({
                   e.stopPropagation();
                   onToggleRoles?.(run.id);
                 }}
-                className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                  item.counts.working > 0
-                    ? "text-accent hover:text-accent"
-                    : "text-muted hover:text-fg"
-                }`}
               >
                 {item.counts.working > 0 ? (
-                  <Spinner size="xs" className="shrink-0" />
+                  <Spinner size="xs" />
                 ) : (
-                  <Users size={11} className="shrink-0" aria-hidden />
+                  <Users aria-hidden />
                 )}
                 <span>
                   {item.counts.total} session
                   {item.counts.total === 1 ? "" : "s"}
                 </span>
                 <ChevronRight
-                  size={11}
                   aria-hidden
-                  className={`shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+                  className={expanded ? "rotate-90" : ""}
                 />
-              </button>
+              </Button>
             ) : null}
             {bubbled ? (
-              <button
-                type="button"
+              <Button
+                variant={bubbleTone === "danger" ? "destructive" : "secondary"}
+                size="xs"
+                className="session-status-responsive-badge min-w-0"
                 title={`Open “${bubbled.session.title.trim() || "Untitled session"}”`}
                 aria-label={bubbleLabel ?? undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onOpenSession(bubbled.session.id);
                 }}
-                className={`session-status-responsive-badge flex min-w-0 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                  BADGE_TONE[bubbleTone ?? "accent"]
-                }`}
               >
                 <SessionStatusIcon status={bubbled.status} />
                 <span className="session-status-badge-label min-w-0 truncate">
                   {bubbleLabel}
                 </span>
-              </button>
+              </Button>
             ) : null}
             {prSession ? (
               <span className="flex shrink-0 items-center">
@@ -350,7 +347,7 @@ function WorkflowRunInboxCardImpl({
               </span>
             ) : null}
             {phase ? (
-              <span className="min-w-0 flex-1 basis-0 truncate text-muted">
+              <span className="min-w-0 flex-1 basis-0 truncate text-muted-foreground">
                 {phase}
               </span>
             ) : null}
@@ -359,19 +356,21 @@ function WorkflowRunInboxCardImpl({
               card's spoken label, so the refusal is readable without a
               pointer. */}
           {settleOffered ? (
-            <button
-              type="button"
-              className={`${INLINE_ACTION} ${INLINE_ACTION_SIZE[density]}`}
+            // `title` too: a disabled trigger opens no tooltip, and the
+            // reason Settle is refused must stay readable on hover.
+            <IconButton
+              size={INLINE_ACTION_SIZE[density]}
+              className="-my-0.5"
+              label={settleLabel}
               title={settleLabel}
-              aria-label={settleLabel}
               disabled={Boolean(item.settleBlocked)}
               onClick={(e) => {
                 e.stopPropagation();
                 settle();
               }}
             >
-              <Check size={14} />
-            </button>
+              <Check />
+            </IconButton>
           ) : null}
         </div>
       </div>

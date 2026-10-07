@@ -18,7 +18,9 @@ export function DocumentRangeNotice({
   const shown = shownAnchorRange(anchor);
   const notice = shown?.truncated ? partialRangeNotice(anchor, shown) : null;
   if (!notice) return null;
-  return <p className={`text-caption text-faint ${className}`}>{notice}</p>;
+  return (
+    <p className={`text-sm text-muted-foreground ${className}`}>{notice}</p>
+  );
 }
 
 /**
@@ -28,10 +30,10 @@ export function DocumentRangeNotice({
  */
 const ANCHOR_MARK = [
   "rounded-sm",
-  "bg-accent-soft",
+  "bg-accent",
   "ring-1",
   "ring-inset",
-  "ring-accent/30",
+  "ring-primary/30",
 ];
 
 /** Scroll a source renderer to the first block containing a 1-based line. */

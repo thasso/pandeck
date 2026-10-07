@@ -12,7 +12,8 @@ import { isWorkspaceAware } from "../lib/sessionCapabilities.ts";
 import { relativeTime, sameSessionRowProps } from "../lib/sessionRows.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
-import { Spinner } from "./ui/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Spinner } from "./common/load.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 
 /**
@@ -63,8 +64,8 @@ function SessionRowContentImpl({
       <span
         className={`relative flex size-5 shrink-0 items-center justify-center rounded-md ${
           isWorkspaceAware(identity)
-            ? "bg-amber-400/10 text-amber-500"
-            : "bg-accent-soft text-accent"
+            ? "bg-warning-soft text-warning"
+            : "bg-accent text-primary"
         }`}
         aria-hidden
       >
@@ -82,7 +83,7 @@ function SessionRowContentImpl({
         ) : null}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate text-caption text-fg ${showUnread ? "font-semibold" : ""}`}
+        className={`min-w-0 flex-1 truncate text-sm text-foreground ${showUnread ? "font-semibold" : ""}`}
       >
         <SessionTitleText
           title={rowTitle}
@@ -91,7 +92,7 @@ function SessionRowContentImpl({
       </span>
       {awaitingInput ? (
         <span
-          className="flex size-4 shrink-0 items-center justify-center rounded bg-accent/15 text-accent"
+          className="flex size-4 shrink-0 items-center justify-center rounded bg-primary/15 text-primary"
           title={`This session is waiting for ${awaitingWhat}`}
           aria-label={`Waiting for ${awaitingWhat}`}
         >
@@ -103,29 +104,22 @@ function SessionRowContentImpl({
           the row itself is what opens the session holding the card. */}
       <SessionDeliveryMark session={session} variant="glyph" />
       <span
-        className={`shrink-0 text-micro tabular-nums text-faint ${onArchive ? "group-hover/session-content:hidden group-focus-within/session-content:hidden" : ""}`}
+        className={`shrink-0 text-xs tabular-nums text-muted-foreground ${onArchive ? "group-hover/session-content:hidden group-focus-within/session-content:hidden" : ""}`}
       >
         {relativeTime(session.updatedAt)}
       </span>
       {onArchive ? (
-        <button
-          type="button"
+        <IconButton
+          label={session.archived ? "Unarchive session" : "Archive session"}
+          size="icon-xs"
           onClick={(e) => {
             e.stopPropagation();
             onArchive(session.id, !session.archived);
           }}
-          className="hidden size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-line/60 hover:text-fg group-hover/session-content:flex group-focus-within/session-content:flex"
-          title={session.archived ? "Unarchive session" : "Archive session"}
-          aria-label={
-            session.archived ? "Unarchive session" : "Archive session"
-          }
+          className="hidden shrink-0 group-hover/session-content:flex group-focus-within/session-content:flex"
         >
-          {session.archived ? (
-            <ArchiveRestore size={12} />
-          ) : (
-            <Archive size={12} />
-          )}
-        </button>
+          {session.archived ? <ArchiveRestore /> : <Archive />}
+        </IconButton>
       ) : null}
     </span>
   );

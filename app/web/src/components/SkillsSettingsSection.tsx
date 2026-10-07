@@ -45,7 +45,14 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   isSkillEnabled,
   MAX_SKILL_BODY_BYTES,
@@ -73,15 +80,35 @@ import {
 } from "../lib/skillsApi.ts";
 import { Markdown } from "./Markdown.tsx";
 import { PageHeader } from "./PageHeader.tsx";
-import { Button } from "./ui/Button.tsx";
-import { CodeBlock } from "./ui/CodeBlock.tsx";
-import { Tree, type TreeNode } from "./ui/Tree.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Field, FieldTitle } from "@/components/ui/field";
+import { Switch } from "@/components/ui/switch";
+import { IconButton } from "./common/IconButton.tsx";
+import { LinkButton } from "./common/LinkButton.tsx";
+import { CodeBlock } from "./common/CodeBlock.tsx";
+import { Tree, type TreeNode } from "./common/Tree.tsx";
 import {
   EmptyBox,
   ErrorNote,
   PaneLoading,
   RefreshIndicator,
-} from "./ui/load.tsx";
+} from "./common/load.tsx";
 
 export function SkillsSettingsSection({
   library,
@@ -119,17 +146,17 @@ export function SkillsSettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <div className="flex items-start justify-between gap-3">
-        <h2 className="text-body font-semibold">Skills</h2>
+        <h2 className="text-sm font-semibold">Skills</h2>
         {refreshing ? <RefreshIndicator label="Rescanning skills" /> : null}
       </div>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-sm text-muted-foreground">
         Reusable agent skills you write yourself. Each skill is a folder with a{" "}
         <code>SKILL.md</code> whose frontmatter declares a name and a
         description. The library is read here and never written: you own the
         files and their Git history.
       </p>
       {list ? (
-        <p className="mt-2 text-caption text-faint">
+        <p className="mt-2 text-sm text-muted-foreground">
           Library folder: <code>{list.libraryPath}</code>
         </p>
       ) : null}
@@ -179,15 +206,17 @@ function SkillList({
   const empty = list.skills.length === 0 && list.diagnostics.length === 0;
   return (
     <>
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4">
-        <div className="text-caption font-medium">Available skills</div>
-        <div className="mt-0.5 text-caption text-muted">
-          A skill you turn on here is on everywhere; a new skill starts off
-          until you say otherwise. Per-project and per-session choices come
-          later, as does handing the enabled skills to a running agent. Select a
-          skill to read its <code>SKILL.md</code>.
-        </div>
-        <div className="mt-3">
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Available skills</CardTitle>
+          <CardDescription>
+            A skill you turn on here is on everywhere; a new skill starts off
+            until you say otherwise. Per-project and per-session choices come
+            later, as does handing the enabled skills to a running agent. Select
+            a skill to read its <code>SKILL.md</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
           {empty ? (
             <EmptyBox>
               No skills yet. Add a folder with a <code>SKILL.md</code> inside
@@ -199,7 +228,7 @@ function SkillList({
               below.
             </EmptyBox>
           ) : (
-            <ul className="space-y-2">
+            <ItemGroup className="gap-2">
               {list.skills.map((skill) => (
                 <SkillRow
                   key={skill.path}
@@ -210,29 +239,31 @@ function SkillList({
                   onSelect={onSelect}
                 />
               ))}
-            </ul>
+            </ItemGroup>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {list.diagnostics.length > 0 ? (
-        <div className="mt-4 rounded-xl border border-line bg-panel p-4">
-          <div className="text-caption font-medium">
-            Folders that need a fix
-          </div>
-          <div className="mt-0.5 text-caption text-muted">
-            These folders cannot be used as skills. They stay listed here so a
-            typo does not simply make a skill disappear.
-          </div>
-          <ul className="mt-3 space-y-2">
-            {list.diagnostics.map((diagnostic) => (
-              <DiagnosticRow
-                key={`${diagnostic.path}:${diagnostic.code}`}
-                diagnostic={diagnostic}
-              />
-            ))}
-          </ul>
-        </div>
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Folders that need a fix</CardTitle>
+            <CardDescription>
+              These folders cannot be used as skills. They stay listed here so a
+              typo does not simply make a skill disappear.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ItemGroup className="gap-2">
+              {list.diagnostics.map((diagnostic) => (
+                <DiagnosticRow
+                  key={`${diagnostic.path}:${diagnostic.code}`}
+                  diagnostic={diagnostic}
+                />
+              ))}
+            </ItemGroup>
+          </CardContent>
+        </Card>
       ) : null}
     </>
   );
@@ -240,8 +271,8 @@ function SkillList({
 
 /**
  * One available skill. The metadata is a BUTTON that opens the body: a whole
- * clickable row would nest the toggle's checkbox inside a control, and the
- * toggle is a different decision from reading the instructions.
+ * clickable row would nest the toggle inside a control, and the toggle is a
+ * different decision from reading the instructions.
  */
 function SkillRow({
   skill,
@@ -257,37 +288,38 @@ function SkillRow({
   onSelect: (name: string) => void;
 }) {
   return (
-    <li
-      className={`flex items-start justify-between gap-3 rounded-lg border bg-surface px-3 py-2.5 ${
-        open ? "border-accent" : "border-line"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={() => onSelect(skill.name)}
-        aria-expanded={open}
-        aria-controls="skill-detail"
-        className="min-w-0 flex-1 text-left"
+    <div role="listitem" className="flex items-center gap-3">
+      <Item
+        variant={open ? "muted" : "outline"}
+        className="min-w-0 flex-1"
+        render={
+          <button
+            type="button"
+            onClick={() => onSelect(skill.name)}
+            aria-expanded={open}
+            aria-controls="skill-detail"
+          />
+        }
       >
-        <div className="text-caption font-medium">{skill.name}</div>
-        <div className="mt-0.5 text-caption text-muted">
-          {skill.description}
-        </div>
-        <div className="mt-1 text-caption text-faint">
-          <code>{skill.path}</code>
-        </div>
-      </button>
-      <label className="flex shrink-0 items-center gap-2 text-caption text-muted">
-        <input
-          type="checkbox"
+        <ItemContent className="min-w-0">
+          <ItemTitle>
+            <span className="truncate">{skill.name}</span>
+          </ItemTitle>
+          <ItemDescription>{skill.description}</ItemDescription>
+          <ItemDescription>
+            <code>{skill.path}</code>
+          </ItemDescription>
+        </ItemContent>
+      </Item>
+      <Field orientation="horizontal" className="w-auto">
+        <Switch
           checked={on}
-          onChange={(event) => onToggle(skill.name, event.target.checked)}
-          className="size-4 accent-accent"
+          onCheckedChange={(checked) => onToggle(skill.name, checked)}
           aria-label={`Enable skill ${skill.name}`}
         />
-        On
-      </label>
-    </li>
+        <FieldTitle>On</FieldTitle>
+      </Field>
+    </div>
   );
 }
 
@@ -321,68 +353,51 @@ function SkillDetailPane({
   const [selectedPath, setSelectedPath] = useState("SKILL.md");
 
   return (
-    <div
-      id="skill-detail"
-      className="mt-4 rounded-xl border border-line bg-panel p-4"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-caption font-medium">{name}</div>
-          {/* The source path comes from the answer: a skill's folder need not
-              be named after it, so there is nothing honest to show before. */}
-          {detail?.path ? (
-            <div className="mt-0.5 text-caption text-faint">
-              <code>{detail.path}</code>
-            </div>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+    <Card id="skill-detail" className="mt-4">
+      <CardHeader>
+        <CardTitle>{name}</CardTitle>
+        {/* The source path comes from the answer: a skill's folder need not
+            be named after it, so there is nothing honest to show before. */}
+        {detail?.path ? (
+          <CardDescription>
+            <code>{detail.path}</code>
+          </CardDescription>
+        ) : null}
+        <CardAction className="flex items-center gap-1">
           {rereading ? <RefreshIndicator label="Rereading SKILL.md" /> : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            iconOnly
-            aria-label={`Reread ${name}`}
-            onClick={onReload}
-          >
-            <RefreshCw size={14} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            iconOnly
-            aria-label={`Close ${name}`}
-            onClick={onClose}
-          >
-            <X size={14} />
-          </Button>
-        </div>
-      </div>
+          <IconButton label={`Reread ${name}`} onClick={onReload}>
+            <RefreshCw />
+          </IconButton>
+          <IconButton label={`Close ${name}`} onClick={onClose}>
+            <X />
+          </IconButton>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {error ? <ErrorNote message={error} /> : null}
 
-      {error ? <ErrorNote className="mt-3" message={error} /> : null}
+        {isInitialLoad(state) ? (
+          <PaneLoading label={`Reading ${name}/SKILL.md…`} />
+        ) : null}
 
-      {isInitialLoad(state) ? (
-        <PaneLoading className="mt-3" label={`Reading ${name}/SKILL.md…`} />
-      ) : null}
+        {detail?.kind === "invalid" ? (
+          <SkillNote>{detail.error}</SkillNote>
+        ) : null}
 
-      {detail?.kind === "invalid" ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
-          <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-          <div className="min-w-0 text-caption text-muted">{detail.error}</div>
-        </div>
-      ) : null}
-
-      {detail?.kind === "skill" ? (
-        <div className="mt-3">
-          <div className="text-caption text-muted">{detail.description}</div>
-          <SkillFileBrowser
-            detail={detail}
-            selectedPath={selectedPath}
-            onSelectPath={setSelectedPath}
-          />
-        </div>
-      ) : null}
-    </div>
+        {detail?.kind === "skill" ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {detail.description}
+            </p>
+            <SkillFileBrowser
+              detail={detail}
+              selectedPath={selectedPath}
+              onSelectPath={setSelectedPath}
+            />
+          </>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -410,24 +425,19 @@ function SkillFileBrowser({
   );
 
   return (
-    <div className="mt-3 overflow-hidden rounded-lg border border-line bg-surface">
-      <div className="border-b border-line p-3">
-        <div className="text-caption font-medium">Files</div>
-        <div className="mt-0.5 text-caption text-muted">
+    <div className="mt-3 overflow-hidden rounded-lg border">
+      <div className="border-b p-3">
+        <div className="text-sm font-medium">Files</div>
+        <div className="mt-0.5 text-sm text-muted-foreground">
           {detail.files.entryCount}{" "}
           {detail.files.entryCount === 1 ? "entry" : "entries"}
           {detail.files.truncated ? ", bounded listing" : ""}
         </div>
         {detail.files.truncated ? (
-          <div className="mt-2 flex items-start gap-2 text-caption text-warning">
-            <TriangleAlert className="mt-0.5 shrink-0" size={13} />
-            <span>{skillTreeLimitDiagnostic(detail.files.limits)}</span>
-          </div>
+          <SkillNote>{skillTreeLimitDiagnostic(detail.files.limits)}</SkillNote>
         ) : null}
         {detail.files.diagnostics.map((diagnostic) => (
-          <div key={diagnostic} className="mt-2 text-caption text-warning">
-            {diagnostic}
-          </div>
+          <SkillNote key={diagnostic}>{diagnostic}</SkillNote>
         ))}
       </div>
       {nodes.length === 0 ? (
@@ -448,7 +458,7 @@ function SkillFileBrowser({
           aria-label={`${detail.name} files`}
           className="max-h-64 overflow-y-auto p-1"
           getRowClassName={(node) =>
-            node.data.entry.type === "symlink" ? "text-faint" : ""
+            node.data.entry.type === "symlink" ? "text-muted-foreground" : ""
           }
           renderNode={(node) => <SkillFileTreeRow entry={node.data.entry} />}
         />
@@ -470,11 +480,11 @@ function SkillFileTreeRow({ entry }: { entry: SkillFileTreeEntry }) {
         ? ExternalLink
         : File;
   return (
-    <div className="flex min-w-0 items-center gap-2 py-1 text-caption">
-      <Icon size={13} className="shrink-0 text-muted" />
+    <div className="flex min-w-0 items-center gap-2 py-1 text-sm">
+      <Icon size={13} className="shrink-0 text-muted-foreground" />
       <span className="truncate">{entry.name}</span>
       {entry.type === "file" && entry.bytes !== undefined ? (
-        <span className="ml-auto shrink-0 text-faint">
+        <span className="ml-auto shrink-0 text-muted-foreground">
           {formatBytes(entry.bytes)}
         </span>
       ) : null}
@@ -493,7 +503,7 @@ function SkillFileViewer({
 }) {
   if (!entry || entry.type !== "file") {
     return (
-      <div className="border-t border-line p-3">
+      <div className="border-t p-3">
         <EmptyBox>
           This file is no longer present in the bounded listing.
         </EmptyBox>
@@ -505,7 +515,7 @@ function SkillFileViewer({
   const textLike = isTextMimeType(entry.mimeType);
 
   return (
-    <div className="border-t border-line">
+    <div className="border-t">
       <PageHeader
         density="compact"
         icon={<FileText size={15} />}
@@ -514,25 +524,25 @@ function SkillFileViewer({
         objectOverflow={false}
         actions={
           <div className="flex items-center gap-1">
-            <a
+            <LinkButton
+              label={`Open raw ${path}`}
+              variant="ghost"
+              size="icon-sm"
               href={rawUrl}
               target="_blank"
               rel="noreferrer"
-              aria-label={`Open raw ${path}`}
-              title="Open raw file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
             >
-              <ExternalLink size={14} />
-            </a>
-            <a
+              <ExternalLink />
+            </LinkButton>
+            <LinkButton
+              label={`Download ${path}`}
+              variant="ghost"
+              size="icon-sm"
               href={rawUrl}
               download={entry.name}
-              aria-label={`Download ${path}`}
-              title="Download file"
-              className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-panel hover:text-fg"
             >
-              <Download size={14} />
-            </a>
+              <Download />
+            </LinkButton>
           </div>
         }
       />
@@ -543,7 +553,7 @@ function SkillFileViewer({
           <img
             src={rawUrl}
             alt={entry.name}
-            className="max-h-96 max-w-full rounded-lg border border-line bg-panel object-contain"
+            className="max-h-96 max-w-full rounded-lg border object-contain"
           />
         </div>
       ) : textLike ? (
@@ -559,7 +569,7 @@ function SkillMarkdown({ detail }: { detail: SkillDetail }) {
   return (
     <div className="p-3">
       {detail.truncated ? (
-        <div className="mb-3 text-caption text-faint">
+        <div className="mb-3 text-sm text-muted-foreground">
           Showing the first {formatBytes(MAX_SKILL_BODY_BYTES)} of this{" "}
           {formatBytes(detail.bytes)} file. Open it raw to read the rest.
         </div>
@@ -624,7 +634,7 @@ function SkillTextFile({
     <div className="space-y-3 p-3">
       {error ? <ErrorNote message={error} onRetry={reload} /> : null}
       {preview.truncated ? (
-        <div className="text-caption text-faint">
+        <div className="text-sm text-muted-foreground">
           Showing the first {formatBytes(MAX_SKILL_FILE_PREVIEW_BYTES)} of this{" "}
           {formatBytes(preview.bytes)} file.
         </div>
@@ -658,13 +668,9 @@ function UnsupportedSkillFile({
     <EmptyBox
       className="m-3"
       action={
-        <a
-          href={rawUrl}
-          download={entry.name}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-accent-fg"
-        >
-          <Download size={13} /> Download
-        </a>
+        <LinkButton variant="default" href={rawUrl} download={entry.name}>
+          <Download /> Download
+        </LinkButton>
       }
     >
       This file type cannot be previewed safely. Open it raw or download it.
@@ -727,15 +733,29 @@ function formatBytes(value: number): string {
 
 function DiagnosticRow({ diagnostic }: { diagnostic: SkillDiagnostic }) {
   return (
-    <li className="flex items-start gap-2 rounded-lg border border-line bg-surface px-3 py-2.5">
-      <TriangleAlert className="mt-0.5 shrink-0 text-warning" size={13} />
-      <div className="min-w-0">
-        <div className="text-caption font-medium">{diagnostic.folder}</div>
-        <div className="mt-0.5 text-caption text-muted">{diagnostic.error}</div>
-        <div className="mt-1 text-caption text-faint">
+    <Item variant="outline" role="listitem" className="items-start">
+      <ItemMedia variant="icon">
+        <TriangleAlert />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>
+          <span className="truncate">{diagnostic.folder}</span>
+        </ItemTitle>
+        <ItemDescription>{diagnostic.error}</ItemDescription>
+        <ItemDescription>
           <code>{diagnostic.path}</code>
-        </div>
-      </div>
-    </li>
+        </ItemDescription>
+      </ItemContent>
+    </Item>
+  );
+}
+
+/** A non-failure notice about the open skill: the reason IS the content. */
+function SkillNote({ children }: { children: ReactNode }) {
+  return (
+    <Alert variant="warning" role="note" className="mt-2">
+      <TriangleAlert />
+      <AlertDescription>{children}</AlertDescription>
+    </Alert>
   );
 }

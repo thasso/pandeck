@@ -78,7 +78,7 @@ class NearObserver {
 
 await import("./components/MessageList.tsx");
 const App = (await import("./App.tsx")).default;
-const { ShortcutsProvider } = await import("./components/ui/shortcuts.tsx");
+const { ShortcutsProvider } = await import("./components/common/shortcuts.tsx");
 
 const FRAME_MS = 25;
 let root: Root | null = null;

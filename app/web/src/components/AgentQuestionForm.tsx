@@ -1,5 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, CircleHelp, MessageCircleQuestion } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Check, CircleHelp, Info, MessageCircleQuestion } from "lucide-react";
 import { applyPatch } from "@assistant/shared";
 import type {
   AgentQuestion,
@@ -9,6 +16,41 @@ import type {
   AgentQuestionRequest,
   AgentQuestionResponse,
 } from "@assistant/shared";
+import { ErrorNote } from "./common/load.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+  FieldTitle,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Progress, ProgressLabel } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
+
 const QUESTION_DRAFT_STORAGE_PREFIX = "assistant.agentQuestionDraft.";
 const QUESTION_DRAFT_STORAGE_VERSION = 1;
 
@@ -117,89 +159,79 @@ export function AgentQuestionForm({
   };
 
   return (
-    <div className="space-y-3 text-caption">
-      <div className="flex items-center gap-2 text-fg">
-        <MessageCircleQuestion size={15} className="shrink-0 text-accent" />
-        <span className="min-w-0 truncate font-medium">{request.title}</span>
-      </div>
-      {request.intro ? (
-        <p className="rounded-xl border border-line bg-raised/40 px-3 py-2 text-muted">
-          {request.intro}
-        </p>
-      ) : null}
-      <div className="flex items-center justify-between gap-3 text-caption text-faint">
-        <span>
-          {summary ? "Review" : `Question ${index + 1} of ${questions.length}`}
-        </span>
-        <span>{questions.length} total · review before submit</span>
-      </div>
-      <ProgressBar
-        value={summary ? questions.length : index}
-        max={questions.length}
-      />
-
-      {summary ? (
-        <QuestionSummary
-          questions={questions}
-          answers={answers}
-          onEdit={(questionIndex) => setIndex(questionIndex)}
-        />
-      ) : current ? (
-        <QuestionStep
-          question={current}
-          draft={drafts[current.id] ?? initialDraft(current)}
-          onDraft={setDraft}
-        />
-      ) : null}
-
-      {notice ? (
-        <div className="rounded-lg border border-line bg-raised/40 px-3 py-2 text-faint">
-          {notice}
-        </div>
-      ) : null}
-      {error ? (
-        <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-danger">
-          {error}
-        </div>
-      ) : null}
-
-      <div className="flex items-center justify-between gap-2 pt-1">
-        <button
-          type="button"
-          onClick={cancel}
-          className="rounded-lg px-2 py-1 text-caption text-faint transition-colors hover:bg-raised hover:text-fg"
+    <>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <MessageCircleQuestion className="size-4 shrink-0 text-primary" />
+          <span className="min-w-0 truncate">{request.title}</span>
+        </CardTitle>
+        {request.intro ? (
+          <CardDescription>{request.intro}</CardDescription>
+        ) : null}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <Progress
+          value={
+            questions.length > 0
+              ? ((summary ? questions.length : index) / questions.length) * 100
+              : 0
+          }
         >
+          <ProgressLabel>
+            {summary
+              ? "Review"
+              : `Question ${index + 1} of ${questions.length}`}
+          </ProgressLabel>
+          <span className="ml-auto text-sm text-muted-foreground">
+            {questions.length} total · review before submit
+          </span>
+        </Progress>
+        {summary ? (
+          <QuestionSummary
+            questions={questions}
+            answers={answers}
+            onEdit={(questionIndex) => setIndex(questionIndex)}
+          />
+        ) : current ? (
+          <QuestionStep
+            question={current}
+            draft={drafts[current.id] ?? initialDraft(current)}
+            onDraft={setDraft}
+          />
+        ) : null}
+        {notice ? (
+          <Alert role="note">
+            <Info />
+            <AlertDescription>{notice}</AlertDescription>
+          </Alert>
+        ) : null}
+        {error ? <ErrorNote message={error} /> : null}
+      </CardContent>
+      <CardFooter className="justify-between gap-2">
+        <Button variant="ghost" size="sm" onClick={cancel}>
           Cancel
-        </button>
+        </Button>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             disabled={index === 0}
-            className="rounded-lg border border-line px-2 py-1 text-caption text-muted transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
           >
             Back
-          </button>
+          </Button>
           {summary ? (
-            <button
-              type="button"
-              onClick={submit}
-              className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-opacity hover:opacity-90"
-            >
-              <Check size={12} /> {discussCount ? "Submit + discuss" : "Submit"}
-            </button>
+            <Button size="sm" onClick={submit}>
+              <Check /> {discussCount ? "Submit + discuss" : "Submit"}
+            </Button>
           ) : (
-            <button
-              type="button"
-              onClick={goNext}
-              className="rounded-lg bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-opacity hover:opacity-90"
-            >
+            <Button size="sm" onClick={goNext}>
               {index === questions.length - 1 ? "Review" : "Next"}
-            </button>
+            </Button>
           )}
         </div>
-      </div>
-    </div>
+      </CardFooter>
+    </>
   );
 }
 
@@ -340,117 +372,104 @@ function QuestionStep({
   draft: QuestionDraft;
   onDraft: (questionId: string, patch: Patch<QuestionDraft>) => void;
 }) {
+  const id = useId();
   const typedLabel =
     question.typedAnswerLabel ??
     (isChoiceStyle(question) ? "Typed answer or extra context" : "Answer");
+  const active = draft.disposition === "discuss";
   return (
-    <section className="space-y-3 rounded-2xl border border-line bg-panel/60 p-3">
-      <div>
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-body font-semibold text-fg">{question.title}</h3>
-          {!question.required && (
-            <span className="shrink-0 rounded-full bg-raised px-2 py-0.5 text-micro text-faint">
-              Optional
-            </span>
-          )}
-        </div>
-        {question.prompt ? (
-          <p className="mt-1 whitespace-pre-wrap text-caption text-muted">
-            {question.prompt}
-          </p>
-        ) : null}
-        {question.helpText ? (
-          <p className="mt-1 text-caption text-faint">{question.helpText}</p>
-        ) : null}
-      </div>
-
-      {isChoiceStyle(question) ? (
-        <ChoiceList question={question} draft={draft} onDraft={onDraft} />
+    <FieldSet>
+      <FieldLegend className="flex w-full items-start justify-between gap-3">
+        {question.title}
+        {!question.required && <Badge variant="secondary">Optional</Badge>}
+      </FieldLegend>
+      {question.prompt ? (
+        <FieldDescription className="whitespace-pre-wrap">
+          {question.prompt}
+        </FieldDescription>
       ) : null}
-
-      {question.style === "text" ||
-      question.style === "textarea" ||
-      question.allowTypedAnswer ? (
-        <label className="block space-y-1.5">
-          <span className="text-caption font-medium text-faint">
-            {typedLabel}
-          </span>
-          {question.style === "text" ? (
-            <input
-              value={draft.text}
-              onChange={(event) =>
-                onDraft(question.id, { text: event.target.value })
-              }
-              placeholder={question.placeholder ?? "Type your answer…"}
-              className="w-full rounded-xl border border-line bg-surface px-3 py-2 text-body text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
-            />
-          ) : (
-            <textarea
-              value={draft.text}
-              onChange={(event) =>
-                onDraft(question.id, { text: event.target.value })
-              }
-              rows={3}
-              placeholder={question.placeholder ?? "Type your answer…"}
-              className="max-h-36 min-h-20 w-full resize-y rounded-xl border border-line bg-surface px-3 py-2 text-body text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong"
-            />
-          )}
-        </label>
+      {question.helpText ? (
+        <FieldDescription>{question.helpText}</FieldDescription>
       ) : null}
-
-      <DiscussAnswerOption
-        question={question}
-        draft={draft}
-        onDraft={onDraft}
-      />
-    </section>
+      <FieldGroup className="gap-3">
+        {isChoiceStyle(question) ? (
+          <ChoiceList question={question} draft={draft} onDraft={onDraft} />
+        ) : null}
+        {question.style === "text" ||
+        question.style === "textarea" ||
+        question.allowTypedAnswer ? (
+          <Field>
+            <FieldLabel htmlFor={`${id}-text`}>{typedLabel}</FieldLabel>
+            {question.style === "text" ? (
+              <Input
+                id={`${id}-text`}
+                value={draft.text}
+                onChange={(event) =>
+                  onDraft(question.id, { text: event.target.value })
+                }
+                placeholder={question.placeholder ?? "Type your answer…"}
+              />
+            ) : (
+              <Textarea
+                id={`${id}-text`}
+                value={draft.text}
+                onChange={(event) =>
+                  onDraft(question.id, { text: event.target.value })
+                }
+                placeholder={question.placeholder ?? "Type your answer…"}
+                className="max-h-36"
+              />
+            )}
+          </Field>
+        ) : null}
+        <Field orientation="horizontal">
+          <Checkbox
+            id={`${id}-discuss`}
+            checked={active}
+            onCheckedChange={(checked) =>
+              onDraft(question.id, {
+                disposition: checked ? "discuss" : undefined,
+              })
+            }
+          />
+          <FieldContent>
+            <FieldLabel htmlFor={`${id}-discuss`}>
+              <CircleHelp className="size-3 text-primary" /> Discuss in chat
+              instead
+            </FieldLabel>
+            <FieldDescription>
+              Return this item as a follow-up topic rather than an assumed
+              answer.
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+      </FieldGroup>
+    </FieldSet>
   );
 }
 
-function DiscussAnswerOption({
-  question,
-  draft,
-  onDraft,
+/** One choice: the whole row is the label of its radio or checkbox. */
+function ChoiceField({
+  id,
+  choice,
+  control,
 }: {
-  question: AgentQuestion;
-  draft: QuestionDraft;
-  onDraft: (questionId: string, patch: Patch<QuestionDraft>) => void;
+  id: string;
+  choice: NonNullable<AgentQuestion["choices"]>[number];
+  control: ReactNode;
 }) {
-  const active = draft.disposition === "discuss";
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={active}
-      onClick={() =>
-        onDraft(question.id, { ...(!active ? { disposition: "discuss" } : {}) })
-      }
-      className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
-        active
-          ? "border-accent/40 bg-accent-soft text-fg"
-          : "border-line bg-surface text-muted hover:border-line-strong hover:bg-raised hover:text-fg"
-      }`}
-    >
-      <span
-        className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border ${
-          active
-            ? "border-accent bg-accent text-accent-fg"
-            : "border-line-strong"
-        }`}
-        aria-hidden="true"
-      >
-        {active ? <Check size={11} /> : null}
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1.5 text-caption font-medium">
-          <CircleHelp size={12} className="text-accent" /> Discuss in chat
-          instead
-        </span>
-        <span className="mt-0.5 block text-caption text-faint">
-          Return this item as a follow-up topic rather than an assumed answer.
-        </span>
-      </span>
-    </button>
+    <FieldLabel htmlFor={id}>
+      <Field orientation="horizontal">
+        {control}
+        <FieldContent>
+          <FieldTitle>{choice.label}</FieldTitle>
+          {choice.description ? (
+            <FieldDescription>{choice.description}</FieldDescription>
+          ) : null}
+        </FieldContent>
+      </Field>
+    </FieldLabel>
   );
 }
 
@@ -463,65 +482,55 @@ function ChoiceList({
   draft: QuestionDraft;
   onDraft: (questionId: string, patch: Patch<QuestionDraft>) => void;
 }) {
-  const multiple = question.style === "multi_choice";
+  const id = useId();
   const choices = question.choices ?? [];
-  const toggle = (id: string) => {
-    const selected = new Set(draft.choiceIds);
-    if (multiple) {
-      if (selected.has(id)) selected.delete(id);
-      else selected.add(id);
-      onDraft(question.id, {
-        choiceIds: [...selected],
-        disposition: undefined,
-      });
-    } else {
-      onDraft(question.id, { choiceIds: [id], disposition: undefined });
-    }
-  };
-
-  return (
-    <div
-      className="space-y-1.5"
-      role={multiple ? "group" : "radiogroup"}
-      aria-label={question.title}
-    >
-      {choices.map((choice) => {
-        const active = draft.choiceIds.includes(choice.id);
-        return (
-          <button
+  if (question.style !== "multi_choice")
+    return (
+      <RadioGroup
+        aria-label={question.title}
+        value={draft.choiceIds[0] ?? null}
+        onValueChange={(value) =>
+          onDraft(question.id, {
+            choiceIds: [value as string],
+            disposition: undefined,
+          })
+        }
+      >
+        {choices.map((choice) => (
+          <ChoiceField
             key={choice.id}
-            type="button"
-            role={multiple ? "checkbox" : "radio"}
-            aria-checked={active}
-            onClick={() => toggle(choice.id)}
-            className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
-              active
-                ? "border-accent/40 bg-accent-soft text-fg"
-                : "border-line bg-surface text-muted hover:border-line-strong hover:bg-raised hover:text-fg"
-            }`}
-          >
-            <span
-              className={`mt-0.5 flex size-4 shrink-0 items-center justify-center border ${
-                multiple ? "rounded" : "rounded-full"
-              } ${active ? "border-accent bg-accent text-accent-fg" : "border-line-strong"}`}
-              aria-hidden="true"
-            >
-              {active ? <Check size={11} /> : null}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-caption font-medium">
-                {choice.label}
-              </span>
-              {choice.description ? (
-                <span className="mt-0.5 block text-caption text-faint">
-                  {choice.description}
-                </span>
-              ) : null}
-            </span>
-          </button>
-        );
-      })}
-    </div>
+            id={`${id}-${choice.id}`}
+            choice={choice}
+            control={
+              <RadioGroupItem value={choice.id} id={`${id}-${choice.id}`} />
+            }
+          />
+        ))}
+      </RadioGroup>
+    );
+  const toggle = (choiceId: string, checked: boolean) => {
+    const selected = new Set(draft.choiceIds);
+    if (checked) selected.add(choiceId);
+    else selected.delete(choiceId);
+    onDraft(question.id, { choiceIds: [...selected], disposition: undefined });
+  };
+  return (
+    <FieldGroup role="group" aria-label={question.title} className="gap-2">
+      {choices.map((choice) => (
+        <ChoiceField
+          key={choice.id}
+          id={`${id}-${choice.id}`}
+          choice={choice}
+          control={
+            <Checkbox
+              id={`${id}-${choice.id}`}
+              checked={draft.choiceIds.includes(choice.id)}
+              onCheckedChange={(checked) => toggle(choice.id, checked)}
+            />
+          }
+        />
+      ))}
+    </FieldGroup>
   );
 }
 
@@ -535,45 +544,32 @@ function QuestionSummary({
   onEdit: (index: number) => void;
 }) {
   return (
-    <section className="space-y-2 rounded-2xl border border-line bg-panel/60 p-3">
+    <section className="flex flex-col gap-2">
       <div>
-        <h3 className="text-body font-semibold text-fg">
-          Review before submitting
-        </h3>
-        <p className="mt-0.5 text-caption text-muted">
+        <h3 className="font-medium">Review before submitting</h3>
+        <p className="text-muted-foreground">
           Answers marked “Discuss in chat” will be returned to the agent as
           follow-up topics, not assumptions.
         </p>
       </div>
-      <div className="space-y-2">
-        {questions.map((question, index) => {
-          const answer = answers.find(
-            (item) => item.questionId === question.id,
-          );
-          return (
-            <div
-              key={question.id}
-              className="rounded-xl border border-line bg-surface px-3 py-2"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-caption font-medium text-fg">
-                    {question.title}
-                  </div>
-                  <AnswerPreview question={question} answer={answer} />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onEdit(index)}
-                  className="shrink-0 rounded-lg px-2 py-1 text-caption text-accent transition-colors hover:bg-accent-soft"
-                >
-                  Edit
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <ItemGroup className="gap-2">
+        {questions.map((question, index) => (
+          <Item key={question.id} variant="outline" size="sm">
+            <ItemContent className="min-w-0">
+              <ItemTitle>{question.title}</ItemTitle>
+              <AnswerPreview
+                question={question}
+                answer={answers.find((item) => item.questionId === question.id)}
+              />
+            </ItemContent>
+            <ItemActions>
+              <Button variant="ghost" size="sm" onClick={() => onEdit(index)}>
+                Edit
+              </Button>
+            </ItemActions>
+          </Item>
+        ))}
+      </ItemGroup>
     </section>
   );
 }
@@ -586,12 +582,12 @@ function AnswerPreview({
   answer: AgentQuestionAnswer | undefined;
 }) {
   if (!answer || answer.disposition === "skipped")
-    return <div className="mt-1 text-caption text-faint">Skipped</div>;
+    return <ItemDescription>Skipped</ItemDescription>;
   if (answer.disposition === "discuss") {
     return (
-      <div className="mt-1 whitespace-pre-wrap text-caption text-accent">
+      <ItemDescription className="whitespace-pre-wrap text-primary">
         Discuss in chat{answer.text?.trim() ? ` · ${answer.text.trim()}` : ""}
-      </div>
+      </ItemDescription>
     );
   }
   const choiceLabels = (answer.choiceIds ?? []).map(
@@ -599,24 +595,9 @@ function AnswerPreview({
   );
   const pieces = [...choiceLabels, answer.text?.trim()].filter(Boolean);
   return (
-    <div className="mt-1 whitespace-pre-wrap text-caption text-muted">
+    <ItemDescription className="whitespace-pre-wrap">
       {pieces.join(choiceLabels.length && answer.text ? " · " : "") || "—"}
-    </div>
-  );
-}
-
-function ProgressBar({ value, max }: { value: number; max: number }) {
-  const percent = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
-  return (
-    <div
-      className="h-1.5 overflow-hidden rounded-full bg-raised"
-      aria-hidden="true"
-    >
-      <div
-        className="h-full rounded-full bg-accent transition-[width]"
-        style={{ width: `${percent}%` }}
-      />
-    </div>
+    </ItemDescription>
   );
 }
 

@@ -103,14 +103,18 @@ it("turns a guarded 409 into the warned 'redeem anyway' confirmation", async () 
   );
   expect(host.textContent).toContain("1 usable now");
   await act(async () => button("Redeem a reset").click());
-  expect(host.textContent).toContain("Redeem now");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
+    "Redeem now",
+  );
   await act(async () => button("Redeem now").click());
   expect(sent).toEqual([{ creditId: credit.id, force: false }]);
 
   // Refused: the dialog stays open, warns, and now offers the forced path.
-  expect(host.textContent).toContain("No reset is applicable right now");
-  expect(host.textContent).toContain("no limit is hit right now");
-  expect(host.textContent).not.toContain("usable now");
+  const dialogText =
+    document.querySelector('[role="dialog"]')?.textContent ?? "";
+  expect(dialogText).toContain("No reset is applicable right now");
+  expect(dialogText).toContain("no limit is hit right now");
+  expect(dialogText).not.toContain("usable now");
   await act(async () => button("Redeem anyway").click());
   expect(sent[1]).toEqual({ creditId: credit.id, force: true });
   expect(host.textContent).toContain("Reset applied — 1 window reset.");

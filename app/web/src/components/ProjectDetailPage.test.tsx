@@ -9,7 +9,14 @@ import type {
   WorktreeRecord,
 } from "@assistant/shared";
 import { ProjectDetailPage } from "./ProjectDetailPage.tsx";
-import { beginLoad, idle, ready, type LoadState } from "../lib/loadState.ts";
+import {
+  beginLoad,
+  failed,
+  idle,
+  loading,
+  ready,
+  type LoadState,
+} from "../lib/loadState.ts";
 import { perfSnapshot, setPerfStatsEnabled } from "../lib/perfStats.ts";
 
 (
@@ -26,7 +33,7 @@ if (!("ResizeObserver" in globalThis)) {
 /**
  * The reference behaviour for R1: this page has always kept "still loading",
  * "not in the registry" and "registry is empty" apart. The assertions exist so
- * the Task-384 migration to `ui/load.tsx` kept all three.
+ * the Task-384 migration to `common/load.tsx` kept all three.
  */
 
 function render(options: {
@@ -418,6 +425,206 @@ describe("ProjectDetailPage worktree rows", () => {
       setPerfStatsEnabled(false);
       await act(async () => root.unmount());
       container.remove();
+    }
+  });
+});
+
+async function typeInto(
+  el: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  const proto =
+    el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function keyDown(el: Element, init: KeyboardEventInit) {
+  await act(async () => {
+    el.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      }),
+    );
+  });
+}
+
+/**
+ * The name, description and repository URL editors keep their draft until the
+ * correlated `saveProject` succeeds, and show a refusal with a retry.
+ */
+describe("ProjectDetailPage edits", () => {
+  const project: ProjectRecord = {
+    id: "alpha",
+    name: "Alpha",
+    key: "AA",
+    description: "Alpha body",
+  };
+
+  async function mount(
+    onSave: (id: string, patch: object) => void,
+    record: ProjectRecord = project,
+  ) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const rerender = (mutationStates: Record<string, LoadState<true>>) =>
+      act(async () =>
+        root.render(
+          <ProjectDetailPage
+            projects={[record]}
+            loaded
+            selectedId="alpha"
+            detailState={ready(record)}
+            mutationStates={mutationStates}
+            onLoadDetail={() => {}}
+            onBackToList={() => {}}
+            onSave={onSave}
+            onCloneRepo={() => {}}
+            onRemoveClone={() => {}}
+          />,
+        ),
+      );
+    await rerender({});
+    const button = (name: string) =>
+      [...container.querySelectorAll("button")].find(
+        (el) =>
+          el.getAttribute("aria-label") === name ||
+          el.textContent?.trim() === name,
+      )!;
+    return {
+      container,
+      rerender,
+      button,
+      async unmount() {
+        await act(async () => root.unmount());
+        container.remove();
+      },
+    };
+  }
+
+  it("renames through Save, holding the draft through a refusal", async () => {
+    const onSave = vi.fn();
+    const view = await mount(onSave);
+    const input = () =>
+      view.container.querySelector<HTMLInputElement>(
+        'input[aria-label="Project name"]',
+      );
+    try {
+      await act(async () => view.button("Rename Project").click());
+      expect(document.activeElement).toBe(input());
+      await typeInto(input()!, " Alpha two ");
+      await act(async () => view.button("Save").click());
+      expect(onSave).toHaveBeenLastCalledWith("alpha", { name: "Alpha two" });
+
+      await view.rerender({ "alpha:name": loading() });
+      expect(view.button("Save").getAttribute("aria-busy")).toBe("true");
+      await keyDown(input()!, { key: "Enter" });
+      expect(onSave).toHaveBeenCalledTimes(1);
+
+      await view.rerender({ "alpha:name": failed("Name taken") });
+      expect(input()!.value).toBe(" Alpha two ");
+      expect(view.container.textContent).toContain("Name taken");
+
+      await act(async () => view.button("Retry").click());
+      expect(onSave).toHaveBeenCalledTimes(2);
+      await view.rerender({ "alpha:name": loading() });
+      await view.rerender({ "alpha:name": ready(true) });
+      expect(input()).toBeNull();
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("saves the description on Cmd/Ctrl+Enter and cancels on Escape", async () => {
+    const onSave = vi.fn();
+    const view = await mount(onSave);
+    const textarea = () =>
+      view.container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Project description"]',
+      );
+    try {
+      await act(async () => view.button("Edit description").click());
+      expect(document.activeElement).toBe(textarea());
+      await typeInto(textarea()!, "Discarded");
+      await keyDown(textarea()!, { key: "Escape" });
+      expect(textarea()).toBeNull();
+
+      await act(async () => view.button("Edit description").click());
+      await typeInto(textarea()!, "New body\n");
+      await keyDown(textarea()!, { key: "Enter", metaKey: true });
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onSave).toHaveBeenLastCalledWith("alpha", {
+        description: "New body",
+      });
+
+      await view.rerender({ "alpha:description": loading() });
+      expect(view.button("Save").disabled).toBe(true);
+      await view.rerender({ "alpha:description": failed("Too long") });
+      expect(textarea()!.value).toBe("New body\n");
+      expect(view.container.textContent).toContain("Too long");
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  const editUrl = () =>
+    document.querySelector<HTMLButtonElement>(
+      'button[title="Edit clone from"]',
+    )!;
+
+  it("commits the repository URL on blur, keeping it open until saved", async () => {
+    const onSave = vi.fn();
+    const view = await mount(onSave);
+    const input = () =>
+      view.container.querySelector<HTMLInputElement>(
+        'input[aria-label="Repository URL"]',
+      );
+    try {
+      await act(async () => editUrl().click());
+      expect(document.activeElement).toBe(input());
+      await typeInto(input()!, "git@host:owner/repo.git");
+      await act(async () => input()!.blur());
+      expect(onSave).toHaveBeenLastCalledWith("alpha", {
+        repoUrl: "git@host:owner/repo.git",
+      });
+      expect(input()).not.toBeNull();
+
+      await view.rerender({ "alpha:field:repoUrl": loading() });
+      await view.rerender({ "alpha:field:repoUrl": failed("Bad URL") });
+      expect(view.container.textContent).toContain("Bad URL");
+      expect(input()!.value).toBe("git@host:owner/repo.git");
+
+      await act(async () => view.button("Retry").click());
+      expect(onSave).toHaveBeenCalledTimes(2);
+      await view.rerender({ "alpha:field:repoUrl": loading() });
+      await view.rerender({ "alpha:field:repoUrl": ready(true) });
+      expect(input()).toBeNull();
+    } finally {
+      await view.unmount();
+    }
+  });
+
+  it("clears the repository URL with an empty value", async () => {
+    const onSave = vi.fn();
+    const view = await mount(onSave, { ...project, repoUrl: "git@old:x.git" });
+    try {
+      await act(async () => editUrl().click());
+      const input = view.container.querySelector<HTMLInputElement>(
+        'input[aria-label="Repository URL"]',
+      )!;
+      await typeInto(input, "  ");
+      await keyDown(input, { key: "Enter" });
+      // "" is what the server clears on; an omitted key would be a no-op patch.
+      expect(onSave).toHaveBeenLastCalledWith("alpha", { repoUrl: "" });
+    } finally {
+      await view.unmount();
     }
   });
 });

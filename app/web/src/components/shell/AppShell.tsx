@@ -11,7 +11,7 @@ import {
   ResizableSeparator,
   RESIZE_KEYBOARD_STEP,
   useResizeDrag,
-} from "../ui/ResizableSeparator.tsx";
+} from "../common/ResizableSeparator.tsx";
 import { dockMode } from "./dockState.ts";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion.ts";
 import {
@@ -375,7 +375,7 @@ export function AppShell({
         // height of the notch inset at the moment the navigation lands, which is
         // the one frame the whole gesture exists to make invisible.
         <div
-          className={`fixed inset-0 z-0 flex flex-col overflow-hidden bg-surface text-fg ${header ? "" : "pt-[var(--app-safe-area-top)]"}`}
+          className={`fixed inset-0 z-0 flex flex-col overflow-hidden bg-background text-foreground ${header ? "" : "pt-[var(--app-safe-area-top)]"}`}
           aria-hidden
           inert
           style={{
@@ -392,7 +392,7 @@ export function AppShell({
           standalone PWA draws under it, and every surface below would otherwise
           have to pad its own top edge. */}
       <div
-        className={`relative z-10 flex h-full flex-col overflow-hidden bg-surface text-fg ${header ? "" : "pt-[var(--app-safe-area-top)]"}`}
+        className={`relative z-10 flex h-full flex-col overflow-hidden bg-background text-foreground ${header ? "" : "pt-[var(--app-safe-area-top)]"}`}
         // Left at `none` at rest, which is every moment but the gesture: a
         // standing transform makes this the containing block for every fixed
         // descendant, and the dock's backdrop is one.

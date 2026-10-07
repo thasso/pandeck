@@ -1,5 +1,7 @@
 import { TriangleAlert } from "lucide-react";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 /**
  * The worktree this session ran in is gone (removed, or its folder deleted), so
@@ -16,23 +18,21 @@ export function SessionWorktreeMissingBanner({
   onAcknowledge: () => void;
 }) {
   return (
-    <div className="mx-auto w-full max-w-3xl px-4">
-      <div
-        role="status"
-        className="mb-2 flex flex-col gap-2 rounded-xl border border-amber-500/40 bg-amber-400/10 px-3 py-2 text-caption text-fg sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-2"
-      >
-        <div className="flex items-start gap-2">
-          <TriangleAlert size={14} className="mt-0.5 shrink-0 text-amber-500" />
-          <p className="min-w-0 flex-1">{WORKTREE_MISSING_BLOCKED_REASON}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onAcknowledge}
-          className="shrink-0 rounded-lg border border-amber-500/50 px-3 py-1.5 font-medium text-amber-500 transition-colors hover:bg-amber-400/20 sm:ml-auto sm:px-2 sm:py-1"
-        >
-          Run in the app directory anyway
-        </button>
-      </div>
+    <div className="mx-auto mb-2 w-full max-w-3xl px-4">
+      <Alert variant="warning" role="status">
+        <TriangleAlert />
+        <AlertDescription>
+          <p>{WORKTREE_MISSING_BLOCKED_REASON}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onAcknowledge}
+            className="mt-2"
+          >
+            Run in the app directory anyway
+          </Button>
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }

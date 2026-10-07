@@ -1,4 +1,7 @@
 import type { ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { InputGroup } from "@/components/ui/input-group";
 import { UnreadDot } from "../UnreadDot.tsx";
 import { BottomCard, bottomCardInset } from "./BottomCard.tsx";
 import { InspectorChromeProvider } from "./Inspector.tsx";
@@ -109,7 +112,7 @@ export function ObjectDock({
           // it at the two ends, so a row with more actions than fit loses none
           // of them to a scroll the reader has no reason to suspect.
           //
-          // `px-2` doubles the card's own 8px gutter (`ui/bottomSheet`) at both ends,
+          // `px-2` doubles the card's own 8px gutter (`common/bottomSheet`) at both ends,
           // so the control at each end sits 16px off the screen rather than 12px.
           // It is the same inset on both sides — the row's symmetry is what puts the
           // field on the grabber's axis — and it costs the field 8px, which is the
@@ -140,7 +143,7 @@ export function ObjectDock({
 /**
  * One control in the dock's action row. Icon-only and ghost-styled, the app's
  * chrome-row icon button (`Topbar`, the composer's toolbar) rather than
- * `ui/GhostIconButton`, which is sized for inline actions inside content.
+ * the `icon-xs` `common/IconButton` used for inline actions inside content.
  *
  * Icon-only because a labelled accent pill was the widest thing in the row and read
  * as the screen's call to action, which "Start session" on a task you are only
@@ -179,8 +182,9 @@ export function DockAction({
 }) {
   return (
     <span title={disabled ? disabledReason : label} className="shrink-0">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-lg"
         data-comment-actuation={commentActuation || undefined}
         onPointerDown={
           commentActuation ? (event) => event.preventDefault() : undefined
@@ -188,19 +192,17 @@ export function DockAction({
         onClick={onRun}
         disabled={disabled}
         aria-label={label}
-        className="relative flex size-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted"
+        className="relative"
       >
         {icon}
         {/* A count is news; a zero is not. An action whose badge is 0 wears
             whatever it would wear without one. */}
         {badge ? (
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent px-1 text-micro font-semibold text-accent-fg">
-            {badge}
-          </span>
+          <Badge className="absolute -right-1 -top-1">{badge}</Badge>
         ) : marked ? (
           <UnreadDot title={label} />
         ) : null}
-      </button>
+      </Button>
     </span>
   );
 }
@@ -230,11 +232,7 @@ export function DockAction({
  * centred under the card's grabber.
  */
 export function DockComposerField({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex h-9 min-w-0 flex-1 items-center gap-1 rounded-[1.15rem] border border-line bg-raised/60 px-1 transition-colors focus-within:border-line-strong hover:border-line-strong">
-      {children}
-    </div>
-  );
+  return <InputGroup className="h-9 flex-1 gap-1 px-1">{children}</InputGroup>;
 }
 
 /**
@@ -263,8 +261,8 @@ export function DockComposerFace({
   commentActuation?: boolean;
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       data-comment-actuation={commentActuation || undefined}
       onPointerDown={
         commentActuation ? (event) => event.preventDefault() : undefined
@@ -273,11 +271,15 @@ export function DockComposerFace({
       disabled={disabled}
       title={label}
       aria-label={label}
-      className={`flex h-8 min-w-0 flex-1 items-center rounded-2xl px-2 text-left text-body transition-colors disabled:cursor-default ${
-        text.placeholder ? "text-faint" : "text-fg"
-      }`}
+      className="min-w-0 flex-1 justify-start"
     >
-      <span className="min-w-0 flex-1 truncate">{text.value}</span>
-    </button>
+      <span
+        className={`min-w-0 flex-1 truncate text-left font-normal ${
+          text.placeholder ? "text-muted-foreground" : ""
+        }`}
+      >
+        {text.value}
+      </span>
+    </Button>
   );
 }

@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
 import {
   taskMutationKey,
   type AssistantActions,
@@ -21,7 +23,7 @@ import { BacklogTreePane } from "./BacklogTreePane.tsx";
 import { BacklogFocusList } from "./BacklogFocusList.tsx";
 import { BacklogInboxList } from "./BacklogInboxList.tsx";
 import { hasInboxWork } from "../lib/backlogInbox.ts";
-import { ErrorNote, Skeleton, Spinner } from "./ui/load.tsx";
+import { ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, idle, isPending } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -224,26 +226,28 @@ function BacklogListImpl({
     <div className="flex flex-col gap-2">
       {showAddTask ? (
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 rounded-xl border border-line bg-panel p-2">
-            <Plus size={16} className="ml-1 shrink-0 text-muted" />
-            <input
+          <div className="flex items-center gap-2">
+            <Plus
+              className="shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <Input
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") addTask();
               }}
               placeholder="Add a task…"
-              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-body text-fg outline-none placeholder:text-faint"
+              aria-label="Add a task"
             />
-            <button
+            <Button
               type="button"
               onClick={addTask}
-              disabled={!newTitle.trim() || createPending}
-              aria-busy={createPending || undefined}
-              className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!newTitle.trim()}
+              busy={createPending}
             >
-              {createPending ? <Spinner size="sm" /> : null} Add
-            </button>
+              Add
+            </Button>
           </div>
           {createError ? <ErrorNote message={createError} /> : null}
         </div>
@@ -279,7 +283,7 @@ function BacklogListImpl({
       {density === "comfortable" &&
       view === "backlog" &&
       c.viewMode === "project" ? (
-        <p className="px-1 text-caption text-faint">
+        <p className="px-1 text-sm text-muted-foreground">
           Drag a Task onto another Project to reassign it, or within a Project
           to reorder. Collapse a Project to fold it away.
         </p>

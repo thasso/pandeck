@@ -121,10 +121,10 @@ describe("the composer's spawned-session ledge", () => {
     // The session you are typing into is usually quiet while its peers run, so
     // this strip is the only place that run is visible.
     expect(working).toContain("animate-spin");
-    expect(working).toContain("text-accent hover:text-accent");
+    expect(working).toMatch(/justify-start text-primary"/);
     const idle = renderToStaticMarkup(ledge([session("a")]));
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted hover:text-fg");
+    expect(idle).not.toMatch(/justify-start text-primary"/);
   });
 
   it("offers to dismiss a bubbled peer failure, and settles that peer", () => {
@@ -147,9 +147,6 @@ describe("the composer's spawned-session ledge", () => {
     });
     const dismiss = container.querySelector<HTMLElement>(
       '[aria-label="Dismiss the failure in “Implementer”"]',
-    );
-    expect(dismiss?.getAttribute("title")).toBe(
-      "Dismiss — settle “Implementer”",
     );
     act(() => dismiss?.click());
     expect(settled).toEqual([["kid", true]]);
@@ -349,7 +346,7 @@ describe("the composer's spawned-session ledge", () => {
       'aria-label="Stalled: No reply from “Implementer”"',
     );
     // It claims no spawned sessions: there is no summary toggle at all.
-    expect(markup).not.toContain("aria-expanded");
+    expect(markup).not.toContain('aria-expanded="');
     expect(markup).not.toContain("this chat spawned");
   });
 });

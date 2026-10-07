@@ -16,7 +16,16 @@ import {
   useRoutePrimaryAction,
   useRouteSecondaryActions,
 } from "./shell/RoutePrimaryAction.tsx";
-import { Popover } from "./Popover.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 /**
  * @component PageHeader
@@ -29,9 +38,9 @@ import { Popover } from "./Popover.tsx";
 export type PageHeaderIconTone = "accent" | "workshop" | "developer";
 
 const ICON_TONE_CLASS: Record<PageHeaderIconTone, string> = {
-  accent: "bg-accent-soft text-accent",
-  workshop: "bg-amber-400/10 text-amber-500",
-  developer: "bg-emerald-400/10 text-emerald-500",
+  accent: "bg-accent text-primary",
+  workshop: "bg-warning-soft text-warning",
+  developer: "bg-success-soft text-success",
 };
 
 /**
@@ -52,15 +61,14 @@ export interface PageHeaderBack {
  */
 export function PageHeaderBackButton({ label, onClick }: PageHeaderBack) {
   return (
-    <button
-      type="button"
+    <IconButton
+      label={`Back to ${label}`}
+      size="icon-lg"
       onClick={onClick}
-      title={`Back to ${label}`}
-      aria-label={`Back to ${label}`}
-      className="-ml-1 flex size-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="-ml-1"
     >
-      <ArrowLeft size={18} />
-    </button>
+      <ArrowLeft />
+    </IconButton>
   );
 }
 
@@ -129,7 +137,7 @@ export function PageHeader({
       : "pt-3";
   const chromeClass = transparent
     ? "pointer-events-none border-b border-transparent bg-transparent sm:bg-transparent sm:backdrop-blur-none"
-    : "border-b border-line bg-surface sm:bg-surface/80 sm:backdrop-blur";
+    : "border-b border-border bg-background sm:bg-background/80 sm:backdrop-blur";
   const iconBoxClass = `flex size-8 shrink-0 items-center justify-center rounded-lg ${ICON_TONE_CLASS[iconTone]}`;
   return (
     <header
@@ -140,22 +148,21 @@ export function PageHeader({
       {leading ??
         (icon && !back ? (
           onIconClick ? (
-            <button
-              type="button"
+            <IconButton
+              label={iconLabel ?? ""}
+              size="icon"
               onClick={onIconClick}
-              title={iconLabel}
-              aria-label={iconLabel}
-              className={`${iconBoxClass} transition-transform active:scale-95`}
+              className={ICON_TONE_CLASS[iconTone]}
             >
               {icon}
-            </button>
+            </IconButton>
           ) : (
             <div className={iconBoxClass}>{icon}</div>
           )
         ) : null)}
       <div className="min-w-0 flex-1">
         {typeof title === "string" ? (
-          <h2 className="truncate text-body font-semibold tracking-tight text-fg">
+          <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
             {title}
           </h2>
         ) : (
@@ -165,7 +172,7 @@ export function PageHeader({
             it is dropped rather than squeezed. */}
         {subtitle != null && !compact ? (
           typeof subtitle === "string" ? (
-            <p className="truncate text-caption text-muted">{subtitle}</p>
+            <p className="truncate text-sm text-muted-foreground">{subtitle}</p>
           ) : (
             subtitle
           )
@@ -177,9 +184,6 @@ export function PageHeader({
     </header>
   );
 }
-
-const HEADER_ACTION_CLASS =
-  "relative flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-30";
 
 /**
  * What this page's OBJECT offers, in the wide header: Add comment where the
@@ -212,87 +216,70 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
   return (
     <div className="hidden shrink-0 items-center gap-1 md:flex">
       {showComment ? (
+        // The title sits on a wrapper: a disabled button takes no pointer
+        // events, and its tooltip is the one place the gesture is named.
         <span title={canComment ? "Add comment" : "Select text to comment"}>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon"
             data-comment-actuation
             onPointerDown={(event) => event.preventDefault()}
             onClick={actuation?.onComment}
             disabled={!canComment}
             aria-label="Add comment"
-            className={HEADER_ACTION_CLASS}
           >
-            <MessageSquareQuote size={16} />
-          </button>
+            <MessageSquareQuote />
+          </Button>
         </span>
       ) : null}
       {submit ? (
-        <button
-          type="button"
+        <IconButton
+          label={`${actuation?.submitLabel ?? "Submit review"} (${pendingCount} pending)`}
+          size="icon"
           data-comment-actuation
           onPointerDown={(event) => event.preventDefault()}
           onClick={submit}
-          title={actuation?.submitLabel ?? "Submit review"}
-          aria-label={`${actuation?.submitLabel ?? "Submit review"} (${pendingCount} pending)`}
-          className={HEADER_ACTION_CLASS}
+          className="relative"
         >
-          <SendHorizontal size={16} />
-          <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-accent px-1 text-micro font-semibold text-accent-fg">
-            {pendingCount}
-          </span>
-        </button>
+          <SendHorizontal />
+          <Badge className="absolute -right-1 -top-1">{pendingCount}</Badge>
+        </IconButton>
       ) : primary ? (
-        <button
-          type="button"
-          onClick={primary.onRun}
-          title={primary.label}
-          aria-label={primary.label}
-          className={HEADER_ACTION_CLASS}
-        >
+        <IconButton label={primary.label} size="icon" onClick={primary.onRun}>
           {primary.icon}
-        </button>
+        </IconButton>
       ) : null}
       {showOverflow && secondary.length > 0 ? (
-        <Popover
-          align="right"
-          placement="bottom"
-          title="Inspector actions"
-          className={HEADER_ACTION_CLASS}
-          button={<MoreHorizontal size={16} />}
-        >
-          {(close) => (
-            <div className="py-0.5 text-body" role="menu">
-              {secondary.map((action) => (
-                <button
-                  key={action.key}
-                  type="button"
-                  role="menuitem"
-                  disabled={action.busy || action.disabled}
-                  title={action.disabledReason}
-                  onClick={() => {
-                    close();
-                    action.onRun();
-                  }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40"
-                >
-                  {action.icon ? (
-                    <span className="flex size-4 shrink-0 items-center justify-center">
-                      {action.icon}
-                    </span>
-                  ) : null}
-                  <span className="min-w-0 flex-1 truncate">
-                    {action.label}
-                  </span>
-                  {action.hint ? (
-                    <span className="shrink-0 text-caption text-faint">
-                      {action.hint}
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          )}
-        </Popover>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Inspector actions"
+                aria-label="Inspector actions"
+              />
+            }
+          >
+            <MoreHorizontal />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-48">
+            {secondary.map((action) => (
+              <DropdownMenuItem
+                key={action.key}
+                disabled={action.busy || action.disabled}
+                title={action.disabledReason}
+                onClick={action.onRun}
+              >
+                {action.icon}
+                <span className="min-w-0 flex-1 truncate">{action.label}</span>
+                {action.hint ? (
+                  <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       ) : null}
     </div>
   );
