@@ -13,6 +13,8 @@
  * chat composer's alone.
  */
 
+import { buttonVariants } from "./button.tsx";
+
 /** Width clamp and gutters of the bottom-edge slot. */
 export const COMPOSER_SHELL_CLASS = "relative mx-auto w-full max-w-3xl px-4";
 
@@ -34,13 +36,14 @@ export const COMPOSER_SHELL_PADDING_CLASS =
  * two pixels are the difference between a card that is gone and one that is not.
  */
 export const COMPOSER_CARD_CLASS =
-  "relative z-10 min-w-0 rounded-[1.65rem] shadow-lg shadow-black/10 backdrop-blur-xl motion-safe:transition-[padding,border-color,border-width,background-color,opacity] motion-safe:duration-200 motion-safe:ease-out focus-within:border-line-strong";
+  "relative z-10 min-w-0 rounded-xl shadow-xs outline-none motion-safe:transition-[padding,border-color,border-width,background-color,box-shadow,opacity] motion-safe:duration-200 motion-safe:ease-out focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50";
 
 /** The card at rest. */
-export const COMPOSER_CARD_SKIN_CLASS = "border border-line bg-panel/70";
+export const COMPOSER_CARD_SKIN_CLASS =
+  "border border-input bg-background dark:bg-input/30 backdrop-blur-xl";
 
 /** The card under a file being dragged onto it. */
-export const COMPOSER_CARD_DRAG_SKIN_CLASS = "border border-primary bg-accent";
+export const COMPOSER_CARD_DRAG_SKIN_CLASS = "border border-ring bg-accent";
 
 /**
  * The card holding no space at all. The field stays MOUNTED behind it: focusing
@@ -75,7 +78,7 @@ export function composerFoldClass(folded: boolean): string {
 
 /** The prompt field: one row that grows with the text, capped. */
 export const COMPOSER_FIELD_CLASS =
-  "max-h-60 min-h-[32px] w-full resize-none bg-transparent px-1 py-1 text-prose text-fg outline-none placeholder:text-faint";
+  "max-h-60 min-h-[32px] w-full resize-none bg-transparent px-1 py-1 text-base text-foreground outline-none placeholder:text-muted-foreground md:text-sm";
 
 /** How tall `COMPOSER_FIELD_CLASS` lets the field grow, for autosizing hosts. */
 export const COMPOSER_FIELD_MAX_HEIGHT = 240;
@@ -105,23 +108,30 @@ export function autosizeComposerField(
 
 /** The row under the field: what acts on the surface, then what acts on the text. */
 export const COMPOSER_ACTION_ROW_CLASS =
-  "mt-3 flex items-center justify-between gap-2";
+  "mt-2 flex items-center justify-between gap-2";
 
 /** One cluster of controls in that row. */
 export const COMPOSER_ACTION_CLUSTER_CLASS = "flex shrink-0 items-center gap-1";
 
 /** A secondary control in the row (attach, refine, dictate, cancel). */
-export const COMPOSER_ICON_ACTION_CLASS =
-  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-30";
+export const COMPOSER_ICON_ACTION_CLASS = buttonVariants({
+  variant: "ghost",
+  size: "icon-sm",
+  className: "text-muted-foreground",
+});
 
 /** The same control where the act it runs destroys something. */
-export const COMPOSER_DANGER_ACTION_CLASS =
-  "flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-danger/10 hover:text-danger disabled:cursor-not-allowed disabled:opacity-30";
+export const COMPOSER_DANGER_ACTION_CLASS = buttonVariants({
+  variant: "ghost",
+  size: "icon-sm",
+  className:
+    "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
+});
 
 /** The row's filled primary button, minus its tone. */
 export const COMPOSER_PRIMARY_ACTION_CLASS =
-  "flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:bg-raised disabled:text-faint";
+  "inline-flex size-7 shrink-0 items-center justify-center rounded-full transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4";
 
 /** Its tone when the primary act is sending what was typed. */
 export const COMPOSER_SEND_TONE_CLASS =
-  "bg-primary text-primary-foreground hover:bg-primary/90";
+  "bg-primary text-primary-foreground hover:bg-primary/80";

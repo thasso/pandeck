@@ -399,7 +399,7 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
 const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
 
 const composerPill =
-  "flex h-8 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg disabled:cursor-not-allowed disabled:opacity-30";
+  "flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
 
 function ContextMeter({ info }: { info: ContextInfo | null }) {
   const usage = info?.context;
@@ -411,7 +411,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
   const tooltipId = "composer-context-tooltip";
 
   return (
-    <div className="group/context relative flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg">
+    <div className="group/context relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
       <div
         role="meter"
         aria-label="Context usage"
@@ -2197,7 +2197,7 @@ export const Composer = memo(function Composer({
           // the DOM so the dock's compose control can focus it INSIDE its own gesture,
           // which is the only way iOS raises the keyboard on the first tap.
           className={`${COMPOSER_CARD_CLASS} ${
-            hidden ? COMPOSER_CARD_COLLAPSED_CLASS : compact ? "p-1.5" : "p-3"
+            hidden ? COMPOSER_CARD_COLLAPSED_CLASS : compact ? "p-1.5" : "p-2.5"
           } ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : hidden ? "" : COMPOSER_CARD_SKIN_CLASS}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
@@ -2442,7 +2442,7 @@ export const Composer = memo(function Composer({
                         aria-label="Session context"
                         aria-expanded={contextOpen}
                         data-open={contextOpen}
-                        className="flex size-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent data-[open=true]:text-primary disabled:cursor-not-allowed disabled:opacity-30"
+                        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
                       >
                         <Plus size={16} />
                       </button>
@@ -2502,7 +2502,7 @@ export const Composer = memo(function Composer({
                       title={runtimeTitle}
                       aria-label={runtimeTitle}
                       aria-expanded={runtimeOpen}
-                      className="flex h-8 min-w-0 items-center gap-1.5 rounded-xl px-2 text-caption font-medium text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-accent data-[open=true]:text-primary"
+                      className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
                       data-open={runtimeOpen}
                     >
                       {model ? (
@@ -2541,7 +2541,7 @@ export const Composer = memo(function Composer({
                       title="Conversation branches"
                       aria-label="Conversation branches"
                       aria-expanded={branchesOpen}
-                      className="relative flex size-8 items-center justify-center rounded-xl text-faint transition-colors hover:bg-raised hover:text-primary data-[open=true]:bg-accent data-[open=true]:text-primary"
+                      className="relative flex size-8 items-center justify-center rounded-lg text-faint transition-colors hover:bg-raised hover:text-primary data-[open=true]:bg-muted data-[open=true]:text-foreground"
                       data-open={branchesOpen && showBranches}
                     >
                       <GitFork size={15} />

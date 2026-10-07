@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { buttonVariants } from "./ui/button.tsx";
 import {
   Bot,
   Check,
@@ -90,6 +91,12 @@ import type {
   PendingChatCommentsController,
 } from "../hooks/usePendingChatComments.ts";
 import { Popover } from "./Popover.tsx";
+
+const MESSAGE_ACTION_CLASS = buttonVariants({
+  variant: "ghost",
+  size: "icon-sm",
+  className: "text-muted-foreground",
+});
 
 const CHAT_COMMENT_HIGHLIGHT = "pending-chat-comment";
 /**
@@ -480,14 +487,14 @@ function MessageActionsBar({
     <div
       className={`mt-1 flex ${align === "right" ? "justify-end" : "justify-start"}`}
     >
-      <div className="flex items-center gap-0.5 rounded-lg text-faint opacity-70 transition-opacity group-hover/message:opacity-100">
+      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
         {canCopy && (
           <button
             type="button"
             onClick={() => void copy()}
             title={copied ? "Copied" : "Copy message text"}
             aria-label={copied ? "Copied" : "Copy message text"}
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-fg"
+            className={MESSAGE_ACTION_CLASS}
           >
             {copied ? <Check size={13} /> : <Copy size={13} />}
           </button>
@@ -498,7 +505,7 @@ function MessageActionsBar({
             onClick={() => onResendPrompt?.(text)}
             title="Put this prompt back in the composer"
             aria-label="Resend prompt"
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-primary"
+            className={MESSAGE_ACTION_CLASS}
           >
             <RotateCcw size={13} />
           </button>
@@ -509,7 +516,7 @@ function MessageActionsBar({
             onClick={() => onForkMessage?.(forkEntryId, forkPosition)}
             title={forkTitle}
             aria-label={forkTitle}
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-primary"
+            className={MESSAGE_ACTION_CLASS}
           >
             <GitFork size={13} />
           </button>
@@ -519,7 +526,7 @@ function MessageActionsBar({
             align={align === "right" ? "right" : "left"}
             placement="top"
             title="More message actions"
-            className="inline-flex size-7 items-center justify-center rounded-lg transition-colors hover:bg-raised hover:text-fg"
+            className={MESSAGE_ACTION_CLASS}
             button={<Ellipsis size={14} />}
           >
             {(close) => (
@@ -688,7 +695,7 @@ const UserMessage = memo(function UserMessage({
       {message.promptDelivery ? (
         <PromptDeliveryNote delivery={message.promptDelivery} />
       ) : null}
-      <div className="min-w-0 max-w-[80%] rounded-2xl rounded-br-md bg-user px-3.5 py-2 text-body text-fg">
+      <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-body text-foreground">
         {body}
       </div>
       {promptQueueState ? (
@@ -1783,7 +1790,7 @@ export function MessageList({
       [
         {
           backgroundColor:
-            "color-mix(in srgb, var(--color-accent) 18%, transparent)",
+            "color-mix(in srgb, var(--color-primary) 18%, transparent)",
         },
         { backgroundColor: "transparent" },
       ],

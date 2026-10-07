@@ -6,6 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
+import { Badge } from "./badge.tsx";
 import { useViewportProximity } from "./useNearViewport.ts";
 import { Spinner } from "./load.tsx";
 import { ChevronDown, CircleDashed, TriangleAlert, Wrench } from "lucide-react";
@@ -168,9 +169,12 @@ export function ToolCallBlock({
         aria-expanded={isOpen}
         aria-controls={bodyId}
         className={cx(
-          "inline-flex w-fit max-w-full items-center gap-1.5 rounded-md py-1 pr-2 text-body transition-colors",
-          "hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-          isError ? "text-danger" : "text-muted-foreground",
+          "flex w-full min-w-0 items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors",
+          "outline-none hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+          isError
+            ? "border-destructive/30 text-destructive"
+            : "text-foreground",
+          isOpen && "rounded-b-none",
         )}
       >
         {status === "running" ? (
@@ -184,22 +188,26 @@ export function ToolCallBlock({
             className="shrink-0 text-faint"
           />
         ) : (
-          <Wrench aria-hidden="true" size={14} className="shrink-0" />
+          <Wrench
+            aria-hidden="true"
+            size={14}
+            className="shrink-0 text-muted-foreground"
+          />
         )}
         <span className="sr-only">{statusLabel[status]} tool call: </span>
-        <span className="shrink-0 font-mono font-medium">{name}</span>
+        <span className="shrink-0 font-medium">{name}</span>
         {summary != null && (
-          <span className="min-w-0 truncate font-mono text-caption text-faint">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
             {summary}
           </span>
         )}
         {lineCount != null && (
-          <span className="shrink-0 text-caption text-faint">
+          <Badge variant="secondary" className="ml-auto shrink-0">
             {lineCount} {lineCount === 1 ? "line" : "lines"}
-          </span>
+          </Badge>
         )}
         {durationSec != null && status !== "running" && (
-          <span className="shrink-0 text-caption text-faint">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {formatDuration(durationSec)}
           </span>
         )}
@@ -207,7 +215,8 @@ export function ToolCallBlock({
           aria-hidden="true"
           size={14}
           className={cx(
-            "shrink-0 transition-transform",
+            "shrink-0 text-muted-foreground transition-transform",
+            lineCount == null && "ml-auto",
             isOpen ? "rotate-0" : "-rotate-90",
           )}
         />
@@ -220,8 +229,8 @@ export function ToolCallBlock({
           id={bodyId}
           aria-busy={!everNear || undefined}
           className={cx(
-            "mt-1 border-l-2 pl-3 text-body",
-            isError ? "border-danger/40" : "border-line",
+            "rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm",
+            isError && "border-destructive/30",
           )}
         >
           {!everNear ? (
