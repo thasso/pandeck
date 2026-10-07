@@ -316,11 +316,11 @@ describe("the registry route", () => {
     expect(markup).toContain('data-background-item="done"');
   });
 
-  it("offers its filters as a keyboard-reachable tablist with a search field", () => {
+  it("offers its filters as a toggle group with a search field", () => {
     const markup = pageMarkup([item({ id: "a" })]);
-    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain('role="group"');
     expect(markup).toContain('aria-label="Filter background work"');
-    expect(markup).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain('type="search"');
     expect(markup).toContain("Search background work");
   });

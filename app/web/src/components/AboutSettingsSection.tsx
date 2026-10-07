@@ -15,6 +15,9 @@ import { dataOf } from "../lib/loadState.ts";
 import { appBuildInfo } from "../lib/appBuild.ts";
 import { nativeShellBuild, nativeShellPlatform } from "../lib/nativeShell.ts";
 import { CopyButton } from "./common/CopyButton.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Item, ItemContent, ItemTitle } from "@/components/ui/item";
+import { Badge } from "@/components/ui/badge";
 
 /** How the shell's row is titled, per platform. */
 const SHELL_LABELS: Record<string, string> = {
@@ -33,16 +36,14 @@ interface Row {
 
 function BuildRow({ label, build, missing }: Row) {
   return (
-    <div className="flex items-baseline justify-between gap-4 py-1.5">
-      <span className="text-sm text-foreground">{label}</span>
-      {build ? (
-        <span className="font-mono text-sm text-muted-foreground">
-          {formatBuildInfo(build)}
-        </span>
-      ) : (
-        <span className="text-sm text-muted-foreground">{missing}</span>
-      )}
-    </div>
+    <Item size="sm">
+      <ItemContent>
+        <ItemTitle>{label}</ItemTitle>
+      </ItemContent>
+      <Badge variant="secondary">
+        {build ? formatBuildInfo(build) : missing}
+      </Badge>
+    </Item>
   );
 }
 
@@ -101,27 +102,30 @@ export function AboutSettingsSection({
         is installed by hand — so these can legitimately differ.
       </p>
 
-      <div className="mt-6 rounded-xl border border-border bg-card p-4">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-foreground">Versions</h3>
+      <Card className="mt-6">
+        <CardHeader className="flex items-center justify-between gap-2">
+          <CardTitle>Versions</CardTitle>
           <CopyButton
             value={diagnostic}
             label="Copy version details"
             copiedLabel="Version details copied"
           />
-        </div>
-        <div className="mt-2 divide-y divide-border">
-          {rows.map((row) => (
-            <BuildRow key={row.label} {...row} />
-          ))}
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Each entry is the released version followed by the commit it was built
-          from. <span className="font-mono">-dev</span> marks a build ahead of
-          its release tag, and <span className="font-mono">-dirty</span> one
-          built from a modified working tree.
-        </p>
-      </div>
+        </CardHeader>
+        <CardContent>
+          <div>
+            {rows.map((row) => (
+              <BuildRow key={row.label} {...row} />
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Each entry is the released version followed by the commit it was
+            built from. <span className="font-mono">-dev</span> marks a build
+            ahead of its release tag, and{" "}
+            <span className="font-mono">-dirty</span> one built from a modified
+            working tree.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
