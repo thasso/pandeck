@@ -79,7 +79,7 @@ describe("public Slack capability tools", () => {
     ]) {
       assert.doesNotMatch(
         JSON.stringify(tool.parameters),
-        /huddle|later|browser|tokenMode/i,
+        /later|browser|tokenMode/i,
       );
     }
   });

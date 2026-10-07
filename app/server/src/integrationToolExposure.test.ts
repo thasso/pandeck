@@ -36,7 +36,6 @@ const ALL_OFF = {
   tempo: false,
   google: false,
   slack: false,
-  slackHuddles: false,
   github: false,
   forgejo: false,
   browserRawMcp: false,
@@ -86,12 +85,7 @@ describe("integration tool exposure", () => {
       allNames.has("slack_search"),
       "Slack can be enabled without restarting a live session",
     );
-    assert.ok(
-      allNames.has("slack_huddle_history"),
-      "Huddles can be enabled without restarting a live session",
-    );
     assert.ok(!active.has("slack_search"));
-    assert.ok(!active.has("slack_huddle_history"));
     assert.ok(active.has("current_time"));
   });
 
@@ -182,12 +176,6 @@ describe("integration tool exposure", () => {
     const google = namesFor({ ...ALL_OFF, google: true });
     assert.ok(google.has("google_calendar_list_events"));
     assert.ok(!google.has("slack_search"));
-
-    const huddlesOnly = namesFor({ ...ALL_OFF, slackHuddles: true });
-    assert.deepEqual(
-      [...huddlesOnly].filter((name) => name.startsWith("slack_")).sort(),
-      ["slack_huddle_history"],
-    );
 
     const github = namesFor({ ...ALL_OFF, github: true });
     assert.deepEqual(

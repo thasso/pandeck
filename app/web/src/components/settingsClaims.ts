@@ -133,10 +133,6 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "slack.enabled",
   "slack.connection",
   "slack.oauthClientConfigured",
-  // slack-huddles
-  "slack.huddlesEnabled",
-  "slack.clientToken",
-  "slack.clientCookieD",
   // jira
   "jira.enabled",
   "jira.atlassianEmail",

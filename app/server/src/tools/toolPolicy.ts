@@ -14,10 +14,7 @@ import { getConfluenceSettings } from "../confluenceSettings.ts";
 import { getJiraSettings } from "../jiraSettings.ts";
 import { getGithubSettings } from "../githubSettings.ts";
 import { isForgejoConfigured } from "../forgejoSettings.ts";
-import {
-  getSlackHuddleCapabilitySettings,
-  getSlackRuntimeSettings,
-} from "../slackSettings.ts";
+import { getSlackRuntimeSettings } from "../slackSettings.ts";
 import { getTempoSettings } from "../tempoSettings.ts";
 import { getBrowserToolSettings } from "../browserSettings.ts";
 import { knowledgeBaseEnabled } from "../knowledgeBaseSettings.ts";
@@ -30,7 +27,6 @@ export interface IntegrationToolGates {
   tempo: boolean;
   google: boolean;
   slack: boolean;
-  slackHuddles: boolean;
   github: boolean;
   /** Self-hosted Forgejo instance (enabled + a base URL configured). */
   forgejo: boolean;
@@ -43,17 +39,12 @@ export interface IntegrationToolGates {
 /** Current values of every integration gate (reads Settings). */
 export function currentIntegrationToolGates(): IntegrationToolGates {
   const slack = getSlackRuntimeSettings();
-  const huddles = getSlackHuddleCapabilitySettings();
   return {
     jira: getJiraSettings().enabled,
     confluence: getConfluenceSettings().enabled,
     tempo: getTempoSettings().enabled,
     google: getGoogleSettings().enabled,
     slack: slack.enabled,
-    slackHuddles:
-      huddles.huddlesEnabled &&
-      huddles.clientTokenConfigured &&
-      huddles.clientCookieConfigured,
     github: getGithubSettings().enabled,
     forgejo: isForgejoConfigured(),
     browserRawMcp: getBrowserToolSettings().rawMcpEnabled,

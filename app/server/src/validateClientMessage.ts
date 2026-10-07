@@ -952,8 +952,6 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   updateSlackSettings: PATCH_OBJECT,
   saveAndTestSlackSettings: PATCH_OBJECT,
   testSlackSettings: NONE,
-  saveAndTestSlackHuddleSettings: PATCH_OBJECT,
-  testSlackHuddleSettings: NONE,
   updateOpenAiCompatibleSettings: PATCH_OBJECT,
   saveAndTestOpenAiCompatibleSettings: PATCH_OBJECT,
   testOpenAiCompatibleSettings: NONE,

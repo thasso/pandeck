@@ -41,11 +41,7 @@ import {
   updateOpenAiCompatibleSettings,
 } from "./openAiCompatibleSettings.ts";
 import { getSettings, updateSettings } from "./settings.ts";
-import {
-  testSlackHuddleSettings,
-  testSlackSettings,
-  updateSlackSettings,
-} from "./slackSettings.ts";
+import { testSlackSettings, updateSlackSettings } from "./slackSettings.ts";
 import { testTempoSettings, updateTempoSettings } from "./tempoSettings.ts";
 import { appSettingsPatchError } from "./validateClientMessage.ts";
 
@@ -115,13 +111,8 @@ export const INTEGRATION_PATCH_FIELDS: {
     disconnect: true,
     userToken: true,
     botToken: true,
-    huddlesEnabled: true,
-    clientToken: true,
-    clientCookieD: true,
     clearUserToken: true,
     clearBotToken: true,
-    clearClientToken: true,
-    clearClientCookie: true,
   },
   openAiCompatible: {
     enabled: true,
@@ -392,7 +383,6 @@ const SECTION_TESTS: Partial<
   tempo: testTempoSettings,
   google: () => testGoogleSettings(),
   slack: () => testSlackSettings(),
-  "slack-huddles": () => testSlackHuddleSettings(),
   "openai-compatible": async (signal) => {
     const status = await testOpenAiCompatibleSettings(signal);
     // Models are stored only by a discovery that succeeded; a failed,

@@ -45,37 +45,12 @@ metadata-only. Authorization headers and private/signed URLs are never included
 in results or errors.
 
 Every result identifies the personal OAuth identity boundary and preserves real
-message permalinks. These tools never read the Huddle credential file or receive
-bot/browser-session credentials. Experimental Huddle attendance and private
-web-client Later APIs are not part of this public read surface.
+message permalinks. These tools receive only personal user credentials, never
+bot credentials. Integration enable changes push MCP `tools/list_changed`, so
+live pi and Claude sessions reconcile their active tool lists without
+restarting.
 
-## Experimental Huddle history
-
-`slack_huddle_history` is a separately gated capability for personal attendance,
-participants, timing, and duration. It uses Slack’s undocumented
-`huddles.history` browser endpoint and may break when Slack changes its web
-client. Enable and refresh it only through **Settings → Slack Huddles** by
-pasting a copied `huddles.history` cURL. The parser rejects other private Slack
-API requests and retains only the browser token and `d` cookie; full cookie
-headers and frontend/build fields are discarded.
-
-Browser material is stored separately in `DATA_DIR/settings/slack-huddles.json`.
-Normal OAuth/bot settings remain in `slack.json`; search, conversation, thread,
-unread, file, Socket Mode, bot chat, and Task intake code never read the Huddle
-credential file. Huddle health has independent save/test/clear/disable controls
-and does not run during normal Slack health checks. Disabling Huddles removes
-only `slack_huddle_history`; integration enable changes push MCP
-`tools/list_changed`, so live pi and Claude sessions reconcile their active tool
-lists without restarting.
-
-The tool defaults to compact bounded results, accepts an optional user-local day
-and a maximum of 100 records, never returns raw Slack objects, and caps
-personal-OAuth metadata enrichment at 40 calls. Browser credentials are used
-only for history; optional personal user OAuth resolves conversations,
-participant names, and bounded thread-room attendance evidence. Missing
-self-attendance or end-time evidence remains explicitly unknown.
-
-Slack Later browser access and `saved.list` are not supported.
+## OAuth and Socket Mode setup
 
 Configure the Slack app with:
 

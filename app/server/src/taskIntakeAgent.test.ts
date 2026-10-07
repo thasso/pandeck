@@ -182,13 +182,6 @@ describe("Task Intake Agent output", () => {
         execute,
       },
       {
-        name: "slack_huddle_history",
-        label: "Browser-backed read",
-        description: "",
-        parameters: { type: "object" },
-        execute,
-      },
-      {
         name: "jira_mutate_issue",
         label: "Write",
         description: "",

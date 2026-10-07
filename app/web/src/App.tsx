@@ -6844,11 +6844,6 @@ function AppContent() {
                     onSaveAndTestSlack={actions.saveAndTestSlackSettings}
                     onTestSlack={actions.testSlackSettings}
                     slackStatus={state.slackStatus}
-                    onSaveAndTestSlackHuddles={
-                      actions.saveAndTestSlackHuddleSettings
-                    }
-                    onTestSlackHuddles={actions.testSlackHuddleSettings}
-                    slackHuddleStatus={state.slackHuddleStatus}
                     onSaveAndTestOpenAiCompatible={
                       actions.saveAndTestOpenAiCompatibleSettings
                     }
