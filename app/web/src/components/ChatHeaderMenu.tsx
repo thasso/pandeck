@@ -40,6 +40,11 @@ interface Props {
     | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
     | undefined;
 }
+/**
+ * The transcript options, each dependent one directly under the option it
+ * refines: `child` rows are indented and stay disabled while their parent is
+ * off, so the menu shows what turns on what.
+ */
 function viewRows(view: NonNullable<Props["view"]>) {
   return [
     {
@@ -54,6 +59,7 @@ function viewRows(view: NonNullable<Props["view"]>) {
       hint: "Expand every thinking block, including ones that arrive later",
       checked: view.expandThinking,
       disabled: !view.showThinking,
+      child: true,
       patch: { expandThinking: !view.expandThinking },
     },
     {
@@ -68,6 +74,7 @@ function viewRows(view: NonNullable<Props["view"]>) {
       hint: "Expand every tool call, including ones that arrive later",
       checked: view.expandTools,
       disabled: !view.showTools,
+      child: true,
       patch: { expandTools: !view.expandTools },
     },
     {
@@ -75,6 +82,8 @@ function viewRows(view: NonNullable<Props["view"]>) {
       label: "Wrap long lines",
       hint: "Wrap long lines in file and shell tool output instead of scrolling them",
       checked: view.wrapToolLines,
+      disabled: !view.showTools,
+      child: true,
       patch: { wrapToolLines: !view.wrapToolLines },
     },
   ];
@@ -98,6 +107,9 @@ export function TranscriptViewRows({
           key={row.label}
           size="sm"
           render={<button type="button" disabled={row.disabled} />}
+          // `Item` has no disabled look of its own, and a dependent option
+          // has to read as off while its parent is.
+          className={`disabled:pointer-events-none disabled:opacity-50 ${row.child ? "pl-8" : ""}`}
           role="menuitemcheckbox"
           aria-checked={row.checked}
           title={row.hint}
@@ -208,6 +220,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
                 disabled={row.disabled ?? false}
                 closeOnClick={false}
                 title={row.hint}
+                className={row.child ? "pl-6" : undefined}
                 onCheckedChange={() => view.onChange(row.patch)}
               >
                 {row.icon}

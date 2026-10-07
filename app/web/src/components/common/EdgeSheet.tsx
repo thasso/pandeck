@@ -37,14 +37,20 @@ export function EdgeSheet({
     <Sheet open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
       <SheetContent
         side={side}
+        // A top sheet opens over a blurred backdrop, so it is a card of its
+        // own — inset from the edges and the header it hangs off, rounded on
+        // every corner — not a drawer glued to the title bar.
         className={
           top
-            ? "gap-0 rounded-b-xl"
+            ? "gap-0 overflow-hidden rounded-xl border data-[side=top]:inset-x-2"
             : `max-h-[85vh] gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
         }
         style={
           top
-            ? { top: offsetTop, maxHeight: `calc(85vh - ${offsetTop}px)` }
+            ? {
+                top: offsetTop + 8,
+                maxHeight: `calc(85vh - ${offsetTop + 8}px)`,
+              }
             : undefined
         }
       >
