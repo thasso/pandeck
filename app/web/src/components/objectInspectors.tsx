@@ -792,65 +792,10 @@ function spawnOwnershipAction(
       ];
 }
 
-/**
- * @component SessionInspector
- * @purpose Right-sidebar inspector for the Session open in the main pane:
- * summary, related objects (workspace, a unified task tree, durable spawn and
- * fork lineage, staged draft context), session actions, and feature content via children
- * (SessionContextSections).
- * @useWhen The main pane shows a session or the new-session landing.
- * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
- */
-export function SessionInspector({
-  sessionId,
-  originTask,
-  relatedTasks,
-  sessionTasks,
-  forkOrigin,
-  credentialProfile,
-  model,
-  thinkingLevel,
-  sessions,
-  projects,
-  worktree,
-  worktreeStatus,
-  stagedRefs = [],
-  openers,
-  onSettle,
-  settled = false,
-  settleBlockedReason,
-  onRename,
-  onArchive,
-  onDelete,
-  onOpenWorktreeChanges,
-  onReviewWork,
-  onSetSpawnOwnership,
-  view,
-  children,
-}: {
+/** What the session's actions need: the session and the handlers its host offers. */
+export interface SessionActionInputs {
   sessionId: string | undefined;
-  originTask?: TaskBackRef | undefined;
-  relatedTasks: TaskSummary[];
-  /** Session-scoped task progress merged into the inspector's single Tasks section. */
-  sessionTasks?: TaskSummary[];
-  forkOrigin?: SessionForkOrigin | undefined;
-  /** Immutable credential profile selected before the first prompt. */
-  credentialProfile?:
-    { name: string; provider: "openai-codex" | "claude" } | undefined;
-  /** The model this session runs on (staged selection while it is still a draft). */
-  model?: { id: string; name?: string; provider: string } | undefined;
-  /** The session's thinking level, alongside the model it applies to. */
-  thinkingLevel?: ThinkingLevel | undefined;
   sessions: SessionListItem[];
-  /** Projects used to render worktree ownership hierarchy. */
-  projects: ProjectRecord[];
-  /** The worktree this session executes in, if any. */
-  worktree?: WorktreeRelationSource | undefined;
-  /** Live git status for the session worktree, when subscribed. */
-  worktreeStatus?: WorktreeGitStatus | undefined;
-  /** Draft-session staged context (task/project/worktree refs before the first send). */
-  stagedRefs?: ObjectRef[];
-  openers: ObjectOpeners;
   /**
    * Settle this session out of the Sessions inbox working set, or bring it
    * back. The panel's lead action: it is what you do with a session you are
@@ -868,10 +813,8 @@ export function SessionInspector({
   onArchive?: (() => void) | undefined;
   onDelete?: (() => void) | undefined;
   /**
-   * Open the session worktree's changes. Passed where the object dock is the
-   * session's action home (mobile); the desktop chat header keeps its own button,
-   * which carries a dirty-worktree indicator worth seeing without opening
-   * anything.
+   * Open the session worktree's changes. Also reachable from the header's
+   * title block, which states the branch and its uncommitted counts.
    */
   onOpenWorktreeChanges?: (() => void) | undefined;
   /**
@@ -888,39 +831,29 @@ export function SessionInspector({
    */
   onSetSpawnOwnership?:
     ((ownership: SettableSpawnOwnership) => void) | undefined;
-  /**
-   * Transcript view toggles, rendered as a **View** section. Passed only where
-   * this inspector is the session's control centre (the mobile object dock);
-   * on desktop they live in the chat header's `⋯` menu.
-   */
-  view?:
-    | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
-    | undefined;
-  children?: ReactNode;
-}) {
-  const groups: ObjectRefGroup[] = [
-    {
-      id: "staged-context",
-      label: "Staged context",
-      icon: <ClipboardList size={13} />,
-      ...(stagedRefs.length > 0 ? { summary: `${stagedRefs.length}` } : {}),
-      refs: stagedRefs,
-    },
-    ...sessionRelationGroups({
-      sessionId,
-      ...(originTask !== undefined ? { originTask } : {}),
-      relatedTasks,
-      ...(sessionTasks !== undefined ? { sessionTasks } : {}),
-      ...(forkOrigin !== undefined ? { forkOrigin } : {}),
-      sessions,
-      projects,
-      ...(worktree !== undefined ? { worktree } : {}),
-      ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
-    }),
-  ];
+}
+
+/**
+ * The session's actions, in the order the ⋮ menu lists them. Built apart from
+ * `SessionInspector` because the session header publishes them on every layout
+ * — on a phone the inspector only mounts while its sheet is open.
+ */
+export function sessionInspectorActions({
+  sessionId,
+  sessions,
+  onSettle,
+  settled = false,
+  settleBlockedReason,
+  onRename,
+  onArchive,
+  onDelete,
+  onOpenWorktreeChanges,
+  onReviewWork,
+  onSetSpawnOwnership,
+}: SessionActionInputs): InspectorAction[] {
   // Every label is the bare verb: the panel already says which session this is,
   // so "Archive session" only repeated its own heading.
-  const actions: InspectorAction[] = [
+  return [
     // Settling is what you do with the session you just finished reading, so it
     // leads; reviewing its work is the next thing you reach for.
     ...(onSettle
@@ -994,6 +927,88 @@ export function SessionInspector({
         ]
       : []),
   ];
+}
+
+/**
+ * @component SessionInspector
+ * @purpose Right-sidebar inspector for the Session open in the main pane:
+ * summary, related objects (workspace, a unified task tree, durable spawn and
+ * fork lineage, staged draft context), and feature content via children
+ * (SessionContextSections).
+ * @useWhen The main pane shows a session or the new-session landing.
+ * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
+ */
+export function SessionInspector({
+  sessionId,
+  originTask,
+  relatedTasks,
+  sessionTasks,
+  forkOrigin,
+  credentialProfile,
+  model,
+  thinkingLevel,
+  sessions,
+  projects,
+  worktree,
+  worktreeStatus,
+  stagedRefs = [],
+  openers,
+  view,
+  children,
+}: {
+  sessionId: string | undefined;
+  originTask?: TaskBackRef | undefined;
+  relatedTasks: TaskSummary[];
+  /** Session-scoped task progress merged into the inspector's single Tasks section. */
+  sessionTasks?: TaskSummary[];
+  forkOrigin?: SessionForkOrigin | undefined;
+  /** Immutable credential profile selected before the first prompt. */
+  credentialProfile?:
+    { name: string; provider: "openai-codex" | "claude" } | undefined;
+  /** The model this session runs on (staged selection while it is still a draft). */
+  model?: { id: string; name?: string; provider: string } | undefined;
+  /** The session's thinking level, alongside the model it applies to. */
+  thinkingLevel?: ThinkingLevel | undefined;
+  sessions: SessionListItem[];
+  /** Projects used to render worktree ownership hierarchy. */
+  projects: ProjectRecord[];
+  /** The worktree this session executes in, if any. */
+  worktree?: WorktreeRelationSource | undefined;
+  /** Live git status for the session worktree, when subscribed. */
+  worktreeStatus?: WorktreeGitStatus | undefined;
+  /** Draft-session staged context (task/project/worktree refs before the first send). */
+  stagedRefs?: ObjectRef[];
+  openers: ObjectOpeners;
+  /**
+   * Transcript view toggles, rendered as a **View** section. Passed only where
+   * this inspector is the session's control centre (the mobile object dock);
+   * on desktop they live in the chat header's `⋯` menu.
+   */
+  view?:
+    | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
+    | undefined;
+  children?: ReactNode;
+}) {
+  const groups: ObjectRefGroup[] = [
+    {
+      id: "staged-context",
+      label: "Staged context",
+      icon: <ClipboardList size={13} />,
+      ...(stagedRefs.length > 0 ? { summary: `${stagedRefs.length}` } : {}),
+      refs: stagedRefs,
+    },
+    ...sessionRelationGroups({
+      sessionId,
+      ...(originTask !== undefined ? { originTask } : {}),
+      relatedTasks,
+      ...(sessionTasks !== undefined ? { sessionTasks } : {}),
+      ...(forkOrigin !== undefined ? { forkOrigin } : {}),
+      sessions,
+      projects,
+      ...(worktree !== undefined ? { worktree } : {}),
+      ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
+    }),
+  ];
   // Who runs this session, on what: the account is fixed at the first prompt,
   // the model and thinking level are what it runs on right now.
   // Only the account NAME: the provider is already implied by the model beside
@@ -1019,7 +1034,11 @@ export function SessionInspector({
   return (
     <Inspector
       relations={toInspectorGroups(groups, openers)}
-      actions={actions}
+      // The session header's ⋮ holds the session's actions on every layout
+      // (`sessionInspectorActions`, published by the header itself), so this
+      // panel neither lists nor publishes any.
+      actions={[]}
+      ownsHeaderActions={false}
       sectionStorageScope={`session:${sessionId ?? "draft"}`}
     >
       {profileFacts.length > 0 ? (

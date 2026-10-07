@@ -252,11 +252,13 @@ import {
   ProjectInspector,
   PullRequestInspector,
   SessionInspector,
+  sessionInspectorActions,
   TaskInspector,
   WorktreeInspector,
   worktreeObjectTreeRefs,
   type ObjectOpeners,
   type ObjectRef,
+  type SessionActionInputs,
 } from "./components/objectInspectors.tsx";
 import type { SendCommentsTarget } from "./components/review/SendCommentsSheet.tsx";
 import {
@@ -282,6 +284,7 @@ import { DocumentZoomSection } from "./components/DocumentZoom.tsx";
 import { documentDockPeek } from "./components/DocumentDockRow.tsx";
 import {
   primarySlotShowsReview,
+  PublishRouteSecondaryActions,
   RoutePrimaryActionProvider,
   type RoutePrimaryAction,
 } from "./components/shell/RoutePrimaryAction.tsx";
@@ -6155,6 +6158,62 @@ function AppContent() {
     route.name === "tasks" && route.id
       ? backlogTasks.find((t) => t.id === route.id)
       : undefined;
+  // The session's actions (`sessionInspectorActions`): published by the
+  // session header into its ⋮ on every layout, since on a phone the inspector
+  // only mounts while its sheet is open.
+  const sessionActionInputs: SessionActionInputs = {
+    sessionId: displayCurrentId,
+    sessions: state.sessions,
+    // Settling is the same command the inbox card sends, guarded by the same
+    // shared reason — the CLUSTER's, since the command shelves the peers this
+    // session coordinates along with it.
+    onSettle: displaySessionListItem
+      ? () =>
+          settleSession(
+            displaySessionListItem.id,
+            displaySessionListItem.settledAt === undefined,
+          )
+      : undefined,
+    settled: displaySessionListItem?.settledAt !== undefined,
+    ...(displaySessionListItem
+      ? (() => {
+          const { blocked } = sessionSettleCascade(
+            displaySessionListItem.id,
+            state.sessions,
+            state.workflowRuns,
+            state.workflowCards,
+          );
+          return blocked ? { settleBlockedReason: blocked } : {};
+        })()
+      : {}),
+    onRename: displaySessionListItem
+      ? () => promptRenameSession(displaySessionListItem.id)
+      : undefined,
+    onArchive: displaySessionListItem
+      ? () => archiveSession(displaySessionListItem.id)
+      : undefined,
+    onDelete: displaySessionListItem
+      ? () => confirmDeleteSession(displaySessionListItem.id)
+      : undefined,
+    onOpenWorktreeChanges: displayWorktreeId
+      ? () => navigate(worktreePath(displayWorktreeId, "changes"))
+      : undefined,
+    // Mirrors the composer's /review guards: something to review, and never
+    // while the agent is streaming (a second agent on a live working tree).
+    onReviewWork:
+      displayHasUserPrompt && !displayStreaming
+        ? () => {
+            const error = startReviewSessionForSession();
+            if (error) showToast(error);
+          }
+        : undefined,
+    // Taking a spawned peer over is explicit: messaging it is a poke and
+    // leaves its coordinator in charge.
+    onSetSpawnOwnership: displaySessionListItem?.spawnedBySessionId
+      ? (ownership: SettableSpawnOwnership) =>
+          actions.setSpawnOwnership(displaySessionListItem.id, ownership)
+      : undefined,
+  };
   const rightPanelContent = calendarRoute ? (
     calendarDetailEl
   ) : route.name === "tasks" && route.id ? (
@@ -6350,76 +6409,6 @@ function AppContent() {
       worktreeStatus={displayWorktreeStatus}
       stagedRefs={stagedContextRefs}
       openers={inspectorOpeners}
-      // Settling from the panel is the same command the inbox card sends,
-      // guarded by the same shared reason — the CLUSTER's, since the command
-      // shelves the peers this session coordinates along with it.
-      onSettle={
-        displaySessionListItem
-          ? () =>
-              settleSession(
-                displaySessionListItem.id,
-                displaySessionListItem.settledAt === undefined,
-              )
-          : undefined
-      }
-      settled={displaySessionListItem?.settledAt !== undefined}
-      {...(displaySessionListItem
-        ? (() => {
-            const { blocked } = sessionSettleCascade(
-              displaySessionListItem.id,
-              state.sessions,
-              state.workflowRuns,
-              state.workflowCards,
-            );
-            return blocked ? { settleBlockedReason: blocked } : {};
-          })()
-        : {})}
-      onRename={
-        displaySessionListItem
-          ? () => promptRenameSession(displaySessionListItem.id)
-          : undefined
-      }
-      onArchive={
-        displaySessionListItem
-          ? () => archiveSession(displaySessionListItem.id)
-          : undefined
-      }
-      onDelete={
-        displaySessionListItem
-          ? () => confirmDeleteSession(displaySessionListItem.id)
-          : undefined
-      }
-      // On mobile the dock is the session's action home, so the chat header's two
-      // controls fold in here: the worktree-diff button as an action and the
-      // transcript toggles as the View section. Desktop keeps its `⋯` menu.
-      onOpenWorktreeChanges={
-        mobileLayout && displayWorktreeId
-          ? () => navigate(worktreePath(displayWorktreeId, "changes"))
-          : undefined
-      }
-      // Mirrors the composer's /review guards: something to review, and never
-      // while the agent is streaming (a second agent on a live working tree).
-      onReviewWork={
-        displayHasUserPrompt && !displayStreaming
-          ? () => {
-              const error = startReviewSessionForSession();
-              if (error) showToast(error);
-            }
-          : undefined
-      }
-      // Taking a spawned peer over is explicit: messaging it is a poke and
-      // leaves its coordinator in charge.
-      onSetSpawnOwnership={
-        displaySessionListItem?.spawnedBySessionId
-          ? (ownership: SettableSpawnOwnership) =>
-              actions.setSpawnOwnership(displaySessionListItem.id, ownership)
-          : undefined
-      }
-      view={
-        mobileLayout && displayHasMessages
-          ? { ...transcriptView, onChange: updateTranscriptView }
-          : undefined
-      }
     >
       <SessionContextSections
         sessionId={displaySession?.sessionId}
@@ -7029,6 +7018,11 @@ function AppContent() {
                           >
                             <MessageSquareQuote />
                           </IconButton>
+                          <PublishRouteSecondaryActions
+                            actions={sessionInspectorActions(
+                              sessionActionInputs,
+                            )}
+                          />
                           <ChatHeaderMenu
                             mobile={mobileLayout}
                             view={

@@ -10,7 +10,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 import type { TaskSummary } from "@assistant/shared";
-import { SessionInspector } from "./objectInspectors.tsx";
+import {
+  SessionInspector,
+  sessionInspectorActions,
+} from "./objectInspectors.tsx";
 
 const openers = {
   onOpenTask: () => {},
@@ -57,35 +60,32 @@ afterEach(() => {
 });
 
 describe("SessionInspector layout", () => {
-  it("leads with Actions, before the object's relations", () => {
-    const html = render({
-      ...base,
-      onSettle: () => {},
-      relatedTasks: [task(1)],
-    });
-    expect(html.indexOf("Actions")).toBeGreaterThanOrEqual(0);
-    expect(html.indexOf("Actions")).toBeLessThan(html.indexOf("Tasks"));
+  it("lists no actions: the session header's menu holds them", () => {
+    const html = render({ ...base, relatedTasks: [task(1)] });
+    expect(html).toContain("Tasks");
+    expect(html).not.toContain("Actions");
   });
 
   it("leads the actions with Settle, then Review, under bare verb labels", () => {
-    const html = render({
-      ...base,
+    const labels = sessionInspectorActions({
+      sessionId: "s1",
+      sessions: [],
       onSettle: () => {},
       onReviewWork: () => {},
       onArchive: () => {},
       onDelete: () => {},
-    });
-    expect(html.indexOf(">Settle")).toBeLessThan(html.indexOf(">Review"));
-    expect(html.indexOf(">Review")).toBeLessThan(html.indexOf(">Archive"));
-    // The panel already says which session this is.
-    expect(html).not.toContain("Archive session");
-    expect(html).not.toContain("Delete session");
+    }).map((action) => action.label);
+    expect(labels).toEqual(["Settle", "Review", "Archive", "Delete"]);
   });
 
   it("offers to bring a settled session back instead of settling it", () => {
-    const html = render({ ...base, onSettle: () => {}, settled: true });
-    expect(html).toContain("Bring back");
-    expect(html).not.toContain(">Settle");
+    const labels = sessionInspectorActions({
+      sessionId: "s1",
+      sessions: [],
+      onSettle: () => {},
+      settled: true,
+    }).map((action) => action.label);
+    expect(labels).toEqual(["Bring back"]);
   });
 
   it("states the account, model and thinking level in one Profile section", () => {
@@ -201,87 +201,75 @@ describe("SessionInspector layout", () => {
     expect(host.textContent).toContain("Show 2 more");
   });
 
+  // The ownership action lives in the session's actions (the header's ⋮).
+  const peer = (
+    id: string,
+    title: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    id,
+    harness: "pi" as const,
+    agentType: "assistant" as const,
+    title,
+    createdAt: 1,
+    updatedAt: 1,
+    messageCount: 1,
+    ...extra,
+  });
+
   it("offers Take over on a coordinator-run peer and Hand back once taken", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const root = createRoot(host);
-    mounted = { host, root };
-    const row = (
-      id: string,
-      title: string,
-      extra: Record<string, unknown> = {},
-    ) => ({
-      id,
-      harness: "pi" as const,
-      agentType: "assistant" as const,
-      title,
-      createdAt: 1,
-      updatedAt: 1,
-      messageCount: 1,
-      ...extra,
-    });
     const asked: string[] = [];
-    const panel = (ownership: "coordinator" | "taken-over") => (
-      <SessionInspector
-        {...base}
-        sessionId="child"
-        sessions={[
-          row("coordinator", "Coordinator"),
-          row("child", "Implementer", {
+    const actionsFor = (ownership: "coordinator" | "taken-over") =>
+      sessionInspectorActions({
+        sessionId: "child",
+        sessions: [
+          peer("coordinator", "Coordinator"),
+          peer("child", "Implementer", {
             spawnedBySessionId: "coordinator",
             spawnOwnership: ownership,
           }),
-        ]}
-        onSetSpawnOwnership={(value) => asked.push(value)}
-      />
-    );
-    const action = (label: string) =>
-      [...host.querySelectorAll("button")].find((button) =>
-        button.textContent?.startsWith(label),
-      );
+        ],
+        onSetSpawnOwnership: (value) => asked.push(value),
+      });
+    const find = (
+      actions: ReturnType<typeof sessionInspectorActions>,
+      label: string,
+    ) => actions.find((action) => action.label.startsWith(label));
 
     // A poke never moves ownership, so taking over is offered explicitly.
-    act(() => root.render(panel("coordinator")));
-    expect(action("Hand back")).toBeUndefined();
-    act(() => action("Take over")!.click());
+    const coordinatorRun = actionsFor("coordinator");
+    expect(find(coordinatorRun, "Hand back")).toBeUndefined();
+    find(coordinatorRun, "Take over")!.onRun();
 
     // Once taken, the action hands it back and names who gets it.
-    act(() => root.render(panel("taken-over")));
-    expect(action("Take over")).toBeUndefined();
-    expect(action("Hand back")!.textContent).toContain("Coordinator");
-    act(() => action("Hand back")!.click());
+    const takenOver = actionsFor("taken-over");
+    expect(find(takenOver, "Take over")).toBeUndefined();
+    expect(find(takenOver, "Hand back")!.label).toContain("Coordinator");
+    find(takenOver, "Hand back")!.onRun();
     expect(asked).toEqual(["taken-over", "coordinator"]);
   });
 
   it("offers no Hand back when the coordinator is gone from the list", () => {
-    const markup = render({
-      ...base,
+    const labels = sessionInspectorActions({
       sessionId: "child",
       sessions: [
-        {
-          id: "child",
-          harness: "pi" as const,
-          agentType: "assistant" as const,
-          title: "Implementer",
-          createdAt: 1,
-          updatedAt: 1,
-          messageCount: 1,
+        peer("child", "Implementer", {
           spawnedBySessionId: "deleted-coordinator",
-          spawnOwnership: "taken-over" as const,
-        },
+          spawnOwnership: "taken-over",
+        }),
       ],
       onSetSpawnOwnership: () => {},
-    });
-    expect(markup).not.toContain("Hand back");
-    expect(markup).not.toContain("Take over");
+    }).map((action) => action.label);
+    expect(labels.join(" ")).not.toContain("Hand back");
+    expect(labels.join(" ")).not.toContain("Take over");
   });
 
   it("offers no ownership action on a session nothing spawned", () => {
-    const markup = render({
-      ...base,
+    const labels = sessionInspectorActions({
+      sessionId: "s1",
+      sessions: [peer("s1", "Alone")],
       onSetSpawnOwnership: () => {},
-    });
-    expect(markup).not.toContain("Take over");
-    expect(markup).not.toContain("Hand back");
+    }).map((action) => action.label);
+    expect(labels).toEqual([]);
   });
 });

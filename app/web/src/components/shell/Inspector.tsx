@@ -445,6 +445,12 @@ interface Props {
   sectionStorageScope?: string;
   /** Object-specific extra content rendered between relations and actions. */
   children?: ReactNode;
+  /**
+   * Whether this panel feeds the page header's actions menu (wide layouts).
+   * False where the page publishes its actions itself on every layout (the
+   * chat session header): the panel then must not overwrite or clear them.
+   */
+  ownsHeaderActions?: boolean;
 }
 
 /**
@@ -468,6 +474,7 @@ export function Inspector({
   actions: allActions,
   sectionStorageScope,
   children,
+  ownsHeaderActions = true,
 }: Props) {
   const groups = relations.filter((group) => group.items.length > 0);
   const {
@@ -510,23 +517,27 @@ export function Inspector({
     : allActions;
   // On wide layouts secondary object actions move to the page header's overflow
   // menu. Comment actuation already has a dedicated visible page-header control,
-  // so it never joins that menu. The dock has no overflow menu, retaining the
-  // full action section on mobile.
+  // so it never joins that menu. The dock has no overflow menu, so on mobile the
+  // panel keeps the full action section.
+  const actionsInHeader = wideChrome && hasSecondaryActionHost;
   useEffect(() => {
-    publishSecondaryActions(
-      wideChrome && hasSecondaryActionHost ? objectActions : [],
-    );
+    if (!ownsHeaderActions) return;
+    publishSecondaryActions(actionsInHeader ? objectActions : []);
   }, [
-    hasSecondaryActionHost,
+    actionsInHeader,
     objectActions,
+    ownsHeaderActions,
     publishSecondaryActions,
-    wideChrome,
   ]);
-  useEffect(() => () => publishSecondaryActions([]), [publishSecondaryActions]);
-  const inspectorActions =
-    wideChrome && hasSecondaryActionHost
-      ? []
-      : [...commentActions, ...objectActions];
+  useEffect(
+    () => () => {
+      if (ownsHeaderActions) publishSecondaryActions([]);
+    },
+    [ownsHeaderActions, publishSecondaryActions],
+  );
+  const inspectorActions = actionsInHeader
+    ? []
+    : [...commentActions, ...objectActions];
   // What the reader came to DO leads the panel on mobile; the object's references and
   // sections read below it. No count in the header: an always-open section of
   // labelled buttons already shows how many there are.

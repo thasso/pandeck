@@ -88,11 +88,15 @@ target, with “Select text to comment” naming the enabling gesture.
 A chat session is the first surface on the unified model, on EVERY layout: its
 header carries exactly two actions — **Add comment** on the transcript
 selection, then **⋮** (`ChatHeaderMenu`: transcript view options and the
-session's secondary actions, a top sheet on a phone). Neither the composer nor
-the dock row offers Comment any more, and the session header has no separate
-worktree button: in a worktree its title block (title, branch, uncommitted
-counts) is the link to the worktree's changes. Documents and worktree changes
-still follow the split above until they move to the same model.
+session's actions, a top sheet on a phone). The session header publishes those
+actions itself (`sessionInspectorActions`), because on a phone the inspector
+only mounts while its sheet is open; the inspector panel therefore lists no
+Actions and no View section on any layout — it holds the session's relations and
+sections. Neither the composer nor the dock row offers Comment any more, and the
+session header has no separate worktree button: in a worktree its title block
+(title, branch, uncommitted counts) is the link to the worktree's changes.
+Documents and worktree changes still follow the split above until they move to
+the same model.
 
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
