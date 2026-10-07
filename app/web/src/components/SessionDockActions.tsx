@@ -13,11 +13,8 @@ import {
 import type { SpeechToTextStatus } from "@assistant/shared";
 import { useDictation } from "../hooks/useDictation.ts";
 import { showToast, TOAST_DWELL_MS } from "../lib/toast.ts";
-import {
-  COMPOSER_PLACEHOLDER,
-  COMPOSER_STOP_TONE_CLASS,
-  COMPOSER_STREAMING_LABEL,
-} from "./Composer.tsx";
+import { COMPOSER_PLACEHOLDER, COMPOSER_STREAMING_LABEL } from "./Composer.tsx";
+import { Button } from "@/components/ui/button";
 import {
   DockAction,
   DockComposerField,
@@ -413,8 +410,8 @@ function ContextSlotAction({ slot }: { slot: SessionDockContextSlot }) {
  * it — Send while a draft can leave, Stop while a turn runs — because a control that
  * changes place when it changes meaning is a control you have to find again mid-turn.
  *
- * Drawn as the composer draws them (accent for send, `COMPOSER_STOP_TONE_CLASS` for
- * stop) rather than as one more ghost glyph: this is the one thing in the row that is
+ * Drawn as the composer draws them (the default button for send, the secondary
+ * one for stop) rather than as one more ghost glyph: this is the one thing in the row that is
  * not navigation, and 36px like everything else beside it.
  */
 function DockPrimaryAction({
@@ -433,8 +430,9 @@ function DockPrimaryAction({
         ? "Comment"
         : "Send message";
   return (
-    <button
-      type="button"
+    <Button
+      variant={action === "stop" ? "secondary" : "default"}
+      size="icon-lg"
       onPointerDown={
         action === "comment" ? (event) => event.preventDefault() : undefined
       }
@@ -449,20 +447,15 @@ function DockPrimaryAction({
             : "Send message"
       }
       aria-label={label}
-      className={`flex size-9 shrink-0 items-center justify-center rounded-xl transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground ${
-        action === "stop"
-          ? COMPOSER_STOP_TONE_CLASS
-          : "bg-primary text-primary-foreground hover:bg-primary/90"
-      }`}
     >
       {action === "stop" ? (
-        <Square size={15} className="fill-current" />
+        <Square className="fill-current" />
       ) : action === "comment" ? (
-        <MessageSquareQuote size={16} />
+        <MessageSquareQuote />
       ) : (
-        <SendHorizontal size={16} />
+        <SendHorizontal />
       )}
-    </button>
+    </Button>
   );
 }
 

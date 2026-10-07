@@ -10,6 +10,7 @@ import {
   type AppStatusState,
 } from "../lib/appStatus.ts";
 import { useMobileLayout } from "./shell/useMobileLayout.ts";
+import { Badge } from "@/components/ui/badge";
 import { Spinner } from "./common/load.tsx";
 
 /**
@@ -105,21 +106,18 @@ export function AppStatus({
 
 function StatusPill({
   status,
-  className = "",
+  className,
 }: {
   status: AppStatusState;
   className?: string;
 }) {
   return (
-    <div
-      role="status"
-      className={`flex items-center gap-1.5 rounded-full border border-border bg-card/95 px-3 py-1.5 text-sm text-muted-foreground shadow-lg shadow-black/10 backdrop-blur ${className}`}
-    >
+    <Badge variant="secondary" role="status" className={className}>
       {/* Queued is a state (the restart is waiting on sessions), so it is the
           static icon; everything else is a wait for an answer, so it is the
           app's spinner. */}
-      {status.busy ? <Spinner size="sm" /> : <RefreshCw size={13} />}
+      {status.busy ? <Spinner size="xs" /> : <RefreshCw />}
       <span className="truncate">{status.label}</span>
-    </div>
+    </Badge>
   );
 }

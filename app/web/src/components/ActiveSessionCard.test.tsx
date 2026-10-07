@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { SessionListItem } from "@assistant/shared";
@@ -241,6 +242,25 @@ describe("ActiveSessionCard clusters", () => {
     expect(html).not.toContain("Dismiss");
   });
 
+  it("never lets the peer that needs the user wrap off the status line", () => {
+    const asks = child({ id: "kid", title: "Reviewer", attention: "question" });
+    const host = document.createElement("div");
+    host.innerHTML = clusterMarkup({
+      children: [asks],
+      counts: { total: 1, working: 0, waiting: 1, failed: 0 },
+      bubbled: asks,
+    });
+    const bubble = host.querySelector('[aria-label="Answer in “Reviewer”"]');
+    const toggle = host.querySelector('[aria-label^="Show the 1"]');
+    // Both on the one status line, but only the toggle is inside the area
+    // whose overflow wraps onto a hidden second line.
+    expect(bubble?.closest(".session-card-status-line")).not.toBeNull();
+    expect(
+      toggle?.closest(".session-card-status-line .flex-wrap"),
+    ).not.toBeNull();
+    expect(bubble?.closest(".session-card-status-line .flex-wrap")).toBeNull();
+  });
+
   it("shows peers at work as motion in the accent, not as a count alone", () => {
     const working = clusterMarkup({
       children: [child({ id: "a", isStreaming: true })],
@@ -250,13 +270,13 @@ describe("ActiveSessionCard clusters", () => {
     // fold is where the run has to be visible.
     expect(working).not.toContain("Working ");
     expect(working).toContain("animate-spin");
-    expect(working).toContain("text-primary hover:text-primary");
+    expect(working).toContain('data-variant="secondary"');
     const idle = clusterMarkup({
       children: [child({ id: "a" })],
       counts: { total: 1, working: 0, waiting: 0, failed: 0 },
     });
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted-foreground hover:text-foreground");
+    expect(idle).not.toContain('data-variant="secondary"');
   });
 
   it("states running turns and background jobs on the line, not only in the tooltip", () => {

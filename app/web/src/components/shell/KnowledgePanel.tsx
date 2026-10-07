@@ -14,6 +14,7 @@ import {
   knowledgeCheckoutRecord,
   knowledgeCommentDocument,
 } from "../../lib/knowledgeCheckout.ts";
+import { IconButton } from "../common/IconButton.tsx";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
 import { RoutePrimaryActionProvider } from "./RoutePrimaryAction.tsx";
 
@@ -97,8 +98,9 @@ export function KnowledgePanel({
           narrow
           embedded
           headerActions={
-            <button
-              type="button"
+            <IconButton
+              label="Open in Knowledge"
+              size="icon"
               onClick={() =>
                 onNavigate(
                   location.path || location.view !== "files"
@@ -110,12 +112,9 @@ export function KnowledgePanel({
                     : knowledgePath(),
                 )
               }
-              title="Open in Knowledge"
-              aria-label="Open in Knowledge"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
-              <SquareArrowOutUpRight size={16} />
-            </button>
+              <SquareArrowOutUpRight />
+            </IconButton>
           }
           view={location.view}
           filePath={location.path}

@@ -52,6 +52,7 @@ import {
   type ShortcutGroup,
 } from "./shortcuts.tsx";
 import { SwipeRow, type SwipeAction } from "./SwipeRow.tsx";
+import { Button } from "@/components/ui/button";
 
 export type { TreeNode } from "./tree-model.ts";
 
@@ -706,8 +707,9 @@ function RowBody<T>({
           />
         ))}
       {hasChildren ? (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           tabIndex={-1}
           aria-label={isExpanded ? "Collapse" : "Expand"}
           onClick={(e) => {
@@ -716,7 +718,6 @@ function RowBody<T>({
           }}
           onPointerDown={(e) => e.stopPropagation()}
           className={cx(
-            "flex shrink-0 justify-center rounded text-muted-foreground hover:bg-muted",
             // Narrow and TALL when stretched: a wide chevron would carve swipe-
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
@@ -728,17 +729,17 @@ function RowBody<T>({
             // pixels off rather than breaking anything. Eyeball it against the
             // status glyph.
             stretch
-              ? "w-7 items-start pt-2 text-muted-foreground hover:text-foreground"
+              ? "h-auto w-7 items-start pt-2"
               : compact
-                ? "size-4 items-center text-muted-foreground hover:text-foreground"
-                : "size-5 items-center",
+                ? "size-4"
+                : "size-5",
           )}
         >
           <ChevronRight
             size={compact ? 12 : 14}
             className={cx("transition-transform", isExpanded && "rotate-90")}
           />
-        </button>
+        </Button>
       ) : (
         <span
           className={cx(
@@ -881,11 +882,11 @@ function SortableRow<T>(
         <>
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 translate-x-[6px] translate-y-[6px] rounded-md border border-border bg-card shadow"
+            className="pointer-events-none absolute inset-0 translate-1.5 rounded-md border border-border bg-card shadow"
           />
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 translate-x-[3px] translate-y-[3px] rounded-md border border-border bg-card shadow"
+            className="pointer-events-none absolute inset-0 translate-0.75 rounded-md border border-border bg-card shadow"
           />
         </>
       )}

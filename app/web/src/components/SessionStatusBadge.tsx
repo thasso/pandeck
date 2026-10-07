@@ -11,18 +11,10 @@ import {
 import type {
   SessionInboxStatus,
   SessionStatusBadge as SessionStatusBadgeModel,
-  SessionStatusTone,
 } from "../lib/sessionInbox.ts";
 import { Spinner } from "./common/load.tsx";
-
-/** Badge colors shared by full session cards and their compact child rows. */
-export const SESSION_BADGE_TONE: Record<SessionStatusTone, string> = {
-  accent: "bg-accent text-primary",
-  warning: "bg-warning-soft text-warning",
-  danger: "bg-destructive/10 text-destructive",
-  success: "bg-success-soft text-success",
-  muted: "bg-border text-muted-foreground",
-};
+import { TONE_BADGE } from "./common/statusBadge.ts";
+import { Badge } from "@/components/ui/badge";
 
 const STATUS_ICON: Partial<Record<SessionInboxStatus, LucideIcon>> = {
   question: CircleHelp,
@@ -79,23 +71,21 @@ export function SessionStatusBadge({
 }) {
   const iconOnly = display !== "responsive";
   return (
-    <span
+    <Badge
+      variant={TONE_BADGE[badge.tone]}
       role="img"
       aria-label={badge.label}
       title={badge.label}
       data-session-status-badge={display}
-      className={`flex shrink-0 items-center justify-center rounded-full font-medium ${
-        display === "slot"
-          ? "size-4"
-          : iconOnly
-            ? "size-5"
-            : "gap-1 px-1.5 py-px"
-      } ${SESSION_BADGE_TONE[badge.tone]}`}
+      // A square chip: the glyph alone, centred in the circle.
+      className={
+        display === "slot" ? "size-4 p-0" : iconOnly ? "size-5 p-0" : undefined
+      }
     >
       <SessionStatusIcon status={status} size={display === "slot" ? 10 : 12} />
       {iconOnly ? null : (
         <span className="session-status-badge-label">{badge.label}</span>
       )}
-    </span>
+    </Badge>
   );
 }

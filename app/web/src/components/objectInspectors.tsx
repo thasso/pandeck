@@ -69,6 +69,15 @@ import {
 // roster can live in this main-bundle module.
 import { worktreeReviewThreads } from "./worktree/worktreeReview.tsx";
 import { ReviewCommentList } from "./review/ReviewCommentList.tsx";
+import { Badge } from "@/components/ui/badge";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
 import { ProjectSettingsFields } from "./ProjectSettingsFields.tsx";
 import { ProjectLocalPathsSection } from "./ProjectLocalPaths.tsx";
 import {
@@ -251,7 +260,7 @@ function taskStatusSummary(
 
 function taskStatusIcon(status: TaskStatus): ReactNode {
   if (status === "done")
-    return <CheckCircle2 size={16} className="text-emerald-500" />;
+    return <CheckCircle2 size={16} className="text-success" />;
   if (status === "doing")
     return <Circle size={16} className="fill-primary text-primary" />;
   return <Circle size={16} className="text-muted-foreground" />;
@@ -1391,32 +1400,29 @@ function WorktreeReviewSection({
       summary={rows.length ? `${open}/${rows.length}` : undefined}
     >
       {reviewSets.length ? (
-        <div className="mb-2 space-y-1.5">
+        <ItemGroup className="mb-2 gap-1.5">
           {reviewSets.map((set) => (
-            <div
-              key={set.id}
-              className="rounded-md border border-border px-2 py-1.5"
-            >
-              <div className="flex items-center gap-1.5 text-sm">
-                <span className="rounded bg-accent px-1 py-0.5 text-xs font-medium text-primary">
-                  {set.authorModel ?? "agent"} ·{" "}
-                  {set.authorSessionId.slice(0, 8)}
-                </span>
-                <span className="font-medium text-foreground">
+            <Item key={set.id} role="listitem" variant="outline" size="xs">
+              <ItemContent>
+                <ItemTitle>
+                  <Badge variant="secondary">
+                    {set.authorModel ?? "agent"} ·{" "}
+                    {set.authorSessionId.slice(0, 8)}
+                  </Badge>
                   {set.verdict ?? "review in progress"}
-                </span>
-                <span className="ml-auto text-xs text-muted-foreground">
+                </ItemTitle>
+                {set.summary ? (
+                  <ItemDescription>{set.summary}</ItemDescription>
+                ) : null}
+              </ItemContent>
+              <ItemActions className="self-start">
+                <span className="text-xs text-muted-foreground">
                   {set.openCount} open · {set.addressedCount} addressed
                 </span>
-              </div>
-              {set.summary ? (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {set.summary}
-                </p>
-              ) : null}
-            </div>
+              </ItemActions>
+            </Item>
           ))}
-        </div>
+        </ItemGroup>
       ) : null}
       <ReviewCommentList
         threads={rows}

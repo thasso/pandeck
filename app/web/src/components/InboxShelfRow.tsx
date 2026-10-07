@@ -7,6 +7,14 @@ import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
 import { identityLabel } from "./SessionRow.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
 
 export type InboxShelfKind = "settled" | "archived";
 
@@ -75,7 +83,9 @@ export function InboxShelfRow({
   const comfortable = density === "comfortable";
 
   return (
-    <div
+    <Item
+      size="xs"
+      variant={active ? "muted" : "default"}
       data-session-row
       data-list-row-id={session.id}
       data-session-row-active={active ? "true" : undefined}
@@ -104,40 +114,39 @@ export function InboxShelfRow({
           onDelete();
         }
       }}
-      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1 rounded-md pl-0.5 pr-1 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        comfortable ? "h-11" : "h-7"
-      } ${active ? "bg-accent/60" : "hover:bg-muted"}`}
+      className={`cursor-pointer select-none flex-nowrap hover:bg-muted ${
+        comfortable ? "min-h-11" : ""
+      }`}
     >
-      <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md bg-muted ${agent.activeColor}`}
-        aria-hidden
-      >
-        <AgentIcon size={12} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-        <SessionTitleText
-          title={title}
-          pending={session.titleGenerationPending}
-        />
-      </span>
-      <SessionDeliveryMark session={session} variant="glyph" />
-      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-        {relativeAge(at, now)}
-      </span>
-      <button
-        type="button"
-        title={restoreLabel}
-        aria-label={restoreLabel}
-        onClick={(e) => {
-          e.stopPropagation();
-          onRestore();
-        }}
-        className={`flex shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-border/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-          comfortable ? "size-9" : "size-5"
-        }`}
-      >
-        <RestoreIcon size={comfortable ? 15 : 12} />
-      </button>
-    </div>
+      <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
+        <AgentIcon />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full">
+          <span className="truncate">
+            <SessionTitleText
+              title={title}
+              pending={session.titleGenerationPending}
+            />
+          </span>
+        </ItemTitle>
+      </ItemContent>
+      <ItemActions className="gap-1">
+        <SessionDeliveryMark session={session} variant="glyph" />
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {relativeAge(at, now)}
+        </span>
+        <IconButton
+          label={restoreLabel}
+          size={comfortable ? "icon-lg" : "icon-xs"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRestore();
+          }}
+        >
+          <RestoreIcon />
+        </IconButton>
+      </ItemActions>
+    </Item>
   );
 }

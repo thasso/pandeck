@@ -558,7 +558,7 @@ export function SwipeRow({
           } ${
             armed
               ? danger
-                ? "bg-destructive font-semibold text-white"
+                ? "bg-destructive font-semibold text-primary-foreground"
                 : "bg-primary font-semibold text-primary-foreground"
               : danger
                 ? "bg-destructive/25 font-medium text-destructive"

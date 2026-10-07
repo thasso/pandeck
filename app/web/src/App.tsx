@@ -352,6 +352,7 @@ import {
 } from "./components/common/load.tsx";
 import { Button } from "@/components/ui/button";
 import { useDialogs } from "./components/common/dialogs.tsx";
+import { IconButton } from "./components/common/IconButton.tsx";
 
 const SIDEBAR_MIN_WIDTH = 220;
 
@@ -6965,24 +6966,23 @@ function AppContent() {
                         mobileLayout ? undefined : (
                           <div className="flex items-center gap-1">
                             {displayWorktreeId && (
-                              <button
-                                type="button"
+                              <IconButton
+                                label="View this session's worktree changes"
+                                size="icon"
                                 onClick={() =>
                                   navigate(
                                     worktreePath(displayWorktreeId, "changes"),
                                   )
                                 }
-                                title="View this session's worktree changes"
-                                aria-label="View this session's worktree changes"
-                                className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                                className="relative"
                               >
                                 {/* Same rule as the dock's row and the inspector's action: the
                       glyph is the worktree this leaves for, not the diff it opens on. */}
-                                <GitBranch size={16} />
+                                <GitBranch />
                                 {displayWorktreeStatus?.dirty && (
                                   <UnreadDot title="Worktree has uncommitted changes" />
                                 )}
-                              </button>
+                              </IconButton>
                             )}
                             <ChatHeaderMenu
                               mobile={mobileLayout}

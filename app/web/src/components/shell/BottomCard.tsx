@@ -17,6 +17,7 @@ import {
 } from "../common/bottomSheet.ts";
 import { clampDockDragOffset, resolveDockDrag } from "./dockDrag.ts";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion.ts";
+import { Button } from "@/components/ui/button";
 
 /** The grabber strip: an `h-1` pill in `py-2`, the card's top edge in BOTH states. */
 const BOTTOM_CARD_GRABBER_PX = 20;
@@ -437,11 +438,11 @@ export function BottomCard({
     /* Full-height positioning box so the card has room to grow into, but
        `pointer-events-none` so the surface behind a resting card stays live. */
     <div
-      className={`pointer-events-none absolute inset-0 flex flex-col justify-end ${BOTTOM_SHEET_GUTTER} ${overlay ? "z-[66]" : "z-40"}`}
+      className={`pointer-events-none absolute inset-0 flex flex-col justify-end ${BOTTOM_SHEET_GUTTER} ${overlay ? "z-66" : "z-40"}`}
     >
       {overlay ? (
         <div
-          className="pointer-events-auto fixed inset-0 bg-black/40"
+          className="pointer-events-auto fixed inset-0 bg-background/50 supports-backdrop-filter:backdrop-blur-xs"
           onClick={expanded ? collapse : undefined}
           // Purely a dimmed dismissal target; the card carries the dialog role.
           aria-hidden="true"
@@ -465,8 +466,8 @@ export function BottomCard({
           onClickCapture={onHeaderClickCapture}
           className="flex shrink-0 touch-none flex-col"
         >
-          <button
-            type="button"
+          <Button
+            variant="ghost"
             // This one IS the drag surface, so it keeps the low threshold while
             // every other control in the header is treated as a press.
             data-card-grabber=""
@@ -481,10 +482,10 @@ export function BottomCard({
                   ? (blockedReason ?? openLabel)
                   : `Drag up or tap to open — ${openLabel}`
             }
-            className="group flex w-full items-center justify-center py-2 disabled:cursor-default"
+            className="h-5 w-full"
           >
-            <span className="h-1 w-10 rounded-full bg-input transition-colors group-hover:bg-muted-foreground" />
-          </button>
+            <span className="h-1 w-10 rounded-full bg-input" />
+          </Button>
           {header}
         </div>
         {bodyMounted ? (

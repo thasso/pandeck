@@ -681,10 +681,10 @@ describe("SessionInbox density", () => {
       "-my-0.5",
     );
     // Folded peers are subordinate one-line rows, not another stack of cards.
-    expect(row("kid").className).toContain("min-h-8");
+    expect(row("kid").dataset.size).toBe("xs");
     expect(row("kid").className).not.toContain("min-h-11");
     // A shelf row and its one action.
-    expect(row("done").className).toContain("h-11");
+    expect(row("done").className).toContain("min-h-11");
     expect(button("Bring back into the working set").className).toContain(
       "size-9",
     );
@@ -700,10 +700,10 @@ describe("SessionInbox density", () => {
       "size-6",
     );
     expect(outerRows("root")).toEqual(["h-5", "min-h-5"]);
-    expect(row("kid").className).toContain("min-h-7");
-    expect(row("done").className).toContain("h-7");
+    expect(row("kid").dataset.size).toBe("xs");
+    expect(row("done").dataset.size).toBe("xs");
     expect(button("Bring back into the working set").className).toContain(
-      "size-5",
+      "size-6",
     );
     expect(view!.container.innerHTML).not.toContain("min-h-11");
   });

@@ -9,6 +9,7 @@ import WorktreeDetailPage from "../worktree/WorktreeDetailPage.tsx";
 import type { CommentActions } from "../diff/comments.tsx";
 import type { CommentWatch } from "../../hooks/useCommentWatch.ts";
 import { CommentActuationProvider } from "../review/CommentActuation.tsx";
+import { IconButton } from "../common/IconButton.tsx";
 import { EmptyBox, PaneLoading } from "../common/load.tsx";
 import type { Prefs } from "../../hooks/usePrefs.ts";
 import {
@@ -147,8 +148,9 @@ export function WorktreePanel({
           narrow
           embedded
           headerActions={
-            <button
-              type="button"
+            <IconButton
+              label="Open in Worktrees"
+              size="icon"
               onClick={() =>
                 onNavigate(
                   worktreePath(worktree.id, location.view, {
@@ -158,12 +160,9 @@ export function WorktreePanel({
                   }),
                 )
               }
-              title="Open in Worktrees"
-              aria-label="Open in Worktrees"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
-              <SquareArrowOutUpRight size={16} />
-            </button>
+              <SquareArrowOutUpRight />
+            </IconButton>
           }
           view={location.view}
           filePath={location.path}
