@@ -194,7 +194,9 @@ const BackgroundWorkLedgeRow = memo(function BackgroundWorkLedgeRow({
             disabled={Boolean(stopBlocked)}
             onClick={() => onStop(item.id)}
           >
-            <Square />
+            {/* Filled, like the composer's own stop: an outlined square reads
+                as a checkbox. */}
+            <Square className="size-2.5 fill-current" />
           </IconButton>
         </ItemActions>
       </Item>
