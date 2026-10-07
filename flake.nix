@@ -77,14 +77,16 @@
                 mkdir $out
                 storePath=$(mktemp -d)
 
-                pnpmVersion=$(pnpm --version)
-                echo "Fetching pnpm store with pnpm $pnpmVersion"
-
+                # Before the first pnpm call: without `pm_on_fail`, a nixpkgs
+                # pnpm other than `packageManager`'s tries to download that one.
                 export CI=true
                 export pnpm_config_pm_on_fail=ignore
                 export pnpm_config_side_effects_cache=false
                 export pnpm_config_update_notifier=false
                 export pnpm_config_trust_lockfile=true
+
+                pnpmVersion=$(pnpm --version)
+                echo "Fetching pnpm store with pnpm $pnpmVersion"
 
                 pnpm config set store-dir $storePath
 
@@ -130,7 +132,7 @@
               dontFixup = true;
               outputHashMode = "recursive";
               outputHashAlgo = "sha256";
-              outputHash = "sha256-9vsNAeb6MnapNwgRAVpWQ7YNXWYrx/1VfBOizEdpzuY=";
+              outputHash = "sha256-iYcinNoHnIukNzj7+9vKRmT5bxjYTkESEdPA7yyXrl8=";
             };
 
             # Appended here, not set as `pnpmInstallFlags`: without structured
@@ -233,7 +235,7 @@
             };
           });
         in
-        pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           inherit personal-assistant;
           default = personal-assistant;
         }
@@ -316,7 +318,7 @@
           # them must not build the app package they name.
           unitText = name: pkgs.writeText name (builtins.unsafeDiscardStringContext
             previewSystem.config.systemd.units.${name}.text);
-        in pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        in pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # The module's default package is this one, so production runs the
           # closure checked here.
           personal-assistant-closure =

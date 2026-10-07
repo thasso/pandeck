@@ -225,8 +225,8 @@ export async function bundle(entrypoint, options = {}) {
     bundle: true,
     entryPoints: [entrypoint],
     // Bun provides these as runtime builtins. Bundling npm's Node-targeted
-    // undici calls worker_threads.markAsUncloneable, which Bun 1.3.13 does not
-    // expose, while npm ws does not drive Bun's server upgrade path correctly.
+    // undici calls worker_threads.markAsUncloneable, which Bun 1.3.13 did not
+    // expose (1.4.2 does), while npm ws does not drive Bun's server upgrade path correctly.
     external: ["bun:*", "undici", "ws"],
     format,
     minify: true,
