@@ -1,6 +1,6 @@
 [package]
 name = "personal-assistant-shell"
-version = "0.52.0"
+version = "0.53.0"
 description = "Native shell for the Pandeck web app"
 license = "Apache-2.0"
 edition = "2021"
