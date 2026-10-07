@@ -80,12 +80,12 @@ export function BackgroundWorkLedge({
         size="sm"
         // Square, and filled under Button's transparent 1px border
         // (`bg-clip-padding`), so the header fills the strip edge to edge.
-        className="w-full justify-start rounded-none bg-clip-border text-sm"
+        className="w-full justify-start rounded-none bg-clip-border text-sm text-muted-foreground"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}
       >
-        <Activity aria-hidden="true" className="text-primary" />
+        <Activity aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-left">
           {summary}
           {age ? <span className="text-muted-foreground"> · {age}</span> : null}

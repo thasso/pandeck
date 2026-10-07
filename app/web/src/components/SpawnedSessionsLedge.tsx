@@ -127,7 +127,7 @@ export function SpawnedSessionsLedge({
         size="sm"
         // Square, and filled under Button's transparent 1px border
         // (`bg-clip-padding`), so the header fills the strip edge to edge.
-        className={`w-full justify-start rounded-none bg-clip-border text-sm ${working ? "text-primary" : ""}`}
+        className="w-full justify-start rounded-none bg-clip-border text-sm text-muted-foreground"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`spawned-sessions-ledge-${sessionId}`}
@@ -140,11 +140,17 @@ export function SpawnedSessionsLedge({
         aria-label={`${open ? "Hide" : "Show"} the sessions this chat spawned — ${summary}`}
       >
         {/* Same treatment as the cluster card's fold: while a peer runs, the
-            spinner REPLACES the peer glyph and the line runs in the accent. The
+            spinner REPLACES the peer glyph, in the accent; the line itself
+            stays muted like every strip on the composer, so only the motion
+            draws the eye. The
             session you are typing into is often quiet while its peers work, so
             this strip is the only place that run is visible, and a static count
             reads as a stalled cluster. */}
-        {working ? <Spinner size="xs" /> : <Users aria-hidden="true" />}
+        {working ? (
+          <Spinner size="xs" className="text-primary" />
+        ) : (
+          <Users aria-hidden="true" />
+        )}
         <span className="min-w-0 flex-1 truncate text-left">{summary}</span>
         <Chevron aria-hidden="true" />
       </Button>
@@ -211,7 +217,7 @@ export function SpawnedSessionsLedge({
               variant="ghost"
               size="sm"
               // Edge to edge like the strip's header (see above).
-              className="w-full justify-start rounded-none bg-clip-border text-sm"
+              className="w-full justify-start rounded-none bg-clip-border text-sm text-muted-foreground"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
             >
