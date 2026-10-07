@@ -30,7 +30,7 @@ interface Props {
 }
 
 const ROW_CLASS =
-  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40";
+  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40";
 
 function GroupLabel({ children }: { children: ReactNode }) {
   return (
@@ -71,7 +71,7 @@ function CheckRow({
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <span
-        className={`flex size-4 shrink-0 items-center justify-center ${checked ? "text-accent" : "text-transparent"}`}
+        className={`flex size-4 shrink-0 items-center justify-center ${checked ? "text-primary" : "text-transparent"}`}
       >
         <Check size={14} />
       </span>
@@ -157,7 +157,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
   if (!view && secondary.length === 0) return null;
 
   const triggerClass =
-    "flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg data-[open=true]:bg-panel data-[open=true]:text-fg";
+    "flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg data-[open=true]:bg-panel data-[open=true]:text-fg";
 
   const content = (close: () => void) => (
     <div className="py-0.5 text-body" role="menu">

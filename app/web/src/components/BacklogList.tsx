@@ -225,7 +225,7 @@ function BacklogListImpl({
       {showAddTask ? (
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 rounded-xl border border-line bg-panel p-2">
-            <Plus size={16} className="ml-1 shrink-0 text-muted" />
+            <Plus size={16} className="ml-1 shrink-0 text-muted-foreground" />
             <input
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
@@ -240,7 +240,7 @@ function BacklogListImpl({
               onClick={addTask}
               disabled={!newTitle.trim() || createPending}
               aria-busy={createPending || undefined}
-              className="shrink-0 rounded-lg bg-accent px-3 py-1.5 text-caption font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {createPending ? <Spinner size="sm" /> : null} Add
             </button>

@@ -122,7 +122,7 @@ export function BackgroundWorkSection({
       defaultOpen
     >
       {activity ? (
-        <p className="mb-2 text-caption text-muted">
+        <p className="mb-2 text-caption text-muted-foreground">
           {backgroundActivityText(activity)}
         </p>
       ) : null}
@@ -162,7 +162,7 @@ export function BackgroundWorkSection({
         <button
           type="button"
           onClick={() => onStopAll(sessionId)}
-          className="mt-2 h-9 w-full rounded-lg border border-line text-caption text-muted transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="mt-2 h-9 w-full rounded-lg border border-line text-caption text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           Stop all background work in this session
         </button>
@@ -187,7 +187,7 @@ export function BackgroundWorkSection({
       <button
         type="button"
         onClick={onOpenRegistry}
-        className="mt-2 text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="mt-2 text-caption text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         Open the background registry
       </button>

@@ -85,7 +85,7 @@ export function BackgroundWorkOutput({
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           {open ? "Hide output" : "Output"}
           {sizeLabel}
@@ -98,7 +98,7 @@ export function BackgroundWorkOutput({
             disabled={load.state === "loading"}
             title="Reload the captured output"
             aria-label="Reload the captured output"
-            className="inline-flex items-center gap-1 text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
+            className="inline-flex items-center gap-1 text-muted-foreground hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
           >
             <RefreshCw size={12} aria-hidden="true" />
             Reload
@@ -111,7 +111,7 @@ export function BackgroundWorkOutput({
           target="_blank"
           rel="noreferrer"
           title="Open the captured output file"
-          className="inline-flex items-center gap-1 text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="inline-flex items-center gap-1 text-muted-foreground hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           <ExternalLink size={12} aria-hidden="true" />
           Open file

@@ -55,7 +55,9 @@ export function ChatActivityStory({
           status={{ label: "Delivered", icon: Check }}
         >
           <Markdown text="Review the collapse behavior and keyboard interaction. Check that peer messages start collapsed and that opening a session does not also expand the message." />
-          <p className="mt-2 text-caption text-muted">Response requested</p>
+          <p className="mt-2 text-caption text-muted-foreground">
+            Response requested
+          </p>
         </ChatActivityRow>
         <ChatActivityRow
           icon={Activity}
@@ -89,7 +91,7 @@ export function ChatActivityStory({
         className="border-t border-line pt-5"
         aria-label="Additional activity states"
       >
-        <h2 className="mb-3 text-caption font-medium text-muted">
+        <h2 className="mb-3 text-caption font-medium text-muted-foreground">
           Other states
         </h2>
         <ChatActivityRow
@@ -117,7 +119,7 @@ export function ChatActivityStory({
           preview="Keyboard navigation passes. No focus traps found."
           status={{ label: "Replied", icon: MessageSquare }}
         >
-          <p className="mb-2 text-caption text-muted">
+          <p className="mb-2 text-caption text-muted-foreground">
             From Sol reviewing keyboard accessibility
           </p>
           <Markdown text="Keyboard navigation passes. No focus traps found. Tab reaches the session link and the disclosure separately. Enter and Space toggle the message." />
@@ -136,7 +138,7 @@ export function ChatActivityStory({
           Preview only. Click a row’s preview or chevron to expand it.
         </p>
         {openedSource ? (
-          <p role="status" className="mt-2 text-caption text-muted">
+          <p role="status" className="mt-2 text-caption text-muted-foreground">
             This link would open {openedSource}’s session.
           </p>
         ) : null}

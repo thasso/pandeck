@@ -62,7 +62,7 @@ export function AgentQuestionToolCard({
 function CardHeader({ title }: { title: string }) {
   return (
     <div className="flex items-center gap-2 text-fg">
-      <MessageCircleQuestion size={15} className="shrink-0 text-accent" />
+      <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
       <span className="min-w-0 truncate font-medium text-caption">{title}</span>
     </div>
   );
@@ -78,7 +78,7 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
         <p className="text-caption text-faint">{answered.intro}</p>
       ) : null}
       {cancelled ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-caption text-muted">
+        <div className="flex items-center gap-1.5 rounded-lg border border-line bg-raised/40 px-3 py-2 text-caption text-muted-foreground">
           <CircleSlash size={13} className="shrink-0 text-faint" />
           You cancelled this question flow.
         </div>
@@ -97,7 +97,7 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
       )}
       {!cancelled && (
         <div className="flex items-center gap-1 text-caption text-faint">
-          <Check size={12} className="text-accent" /> Answered
+          <Check size={12} className="text-primary" /> Answered
         </div>
       )}
     </div>
@@ -197,7 +197,7 @@ function AnswerLine({
   return (
     <div className="mt-1 space-y-1">
       {answer.disposition === "discuss" && (
-        <div className="text-caption font-medium text-accent">
+        <div className="text-caption font-medium text-primary">
           Marked to discuss in chat
         </div>
       )}
@@ -206,7 +206,7 @@ function AnswerLine({
           {labels.map((label, i) => (
             <span
               key={i}
-              className="rounded-md bg-accent-soft px-1.5 py-0.5 text-caption text-accent"
+              className="rounded-md bg-accent px-1.5 py-0.5 text-caption text-primary"
             >
               {label}
             </span>
@@ -214,7 +214,7 @@ function AnswerLine({
         </div>
       )}
       {answer.text ? (
-        <div className="whitespace-pre-wrap text-caption text-muted">
+        <div className="whitespace-pre-wrap text-caption text-muted-foreground">
           {answer.text}
         </div>
       ) : null}
@@ -254,7 +254,7 @@ function FallbackView({ block }: { block: ToolBlock }) {
           return (
             <li
               key={i}
-              className="rounded-xl border border-line bg-surface px-3 py-2 text-caption text-muted"
+              className="rounded-xl border border-line bg-surface px-3 py-2 text-caption text-muted-foreground"
             >
               {typeof qt === "string" ? qt : `Question ${i + 1}`}
             </li>

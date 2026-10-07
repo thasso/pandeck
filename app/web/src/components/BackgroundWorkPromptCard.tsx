@@ -103,7 +103,9 @@ function BackgroundWorkPromptRow({
             <p className="font-medium break-words">{clippedTitle}</p>
           ) : null}
           {(outcome ?? exitDetail) ? (
-            <p className="text-caption text-muted">{outcome ?? exitDetail}</p>
+            <p className="text-caption text-muted-foreground">
+              {outcome ?? exitDetail}
+            </p>
           ) : null}
           {command ? (
             <BackgroundWorkCommand
@@ -127,7 +129,7 @@ function BackgroundWorkPromptRow({
               onClick={() => onOpenBackgroundWork?.(update.taskId)}
               disabled={!onOpenBackgroundWork}
               title={update.taskId}
-              className="text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:no-underline"
+              className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-default disabled:no-underline"
             >
               Open in registry
             </button>

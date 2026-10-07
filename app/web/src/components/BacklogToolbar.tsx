@@ -62,7 +62,7 @@ export function BacklogToolbar({
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-micro" : "text-caption"} text-muted`}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-micro" : "text-caption"} text-muted-foreground`}
     >
       {!hideProjectControls && (
         <BacklogViewSwitcher
@@ -103,11 +103,11 @@ export function BacklogToolbar({
           title={
             byProject ? "Switch to the flat list" : "Group tasks by Project"
           }
-          className={`ml-auto inline-flex items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${byProject ? "border-accent/60 bg-accent-soft text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"}`}
+          className={`ml-auto inline-flex items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${byProject ? "border-primary/60 bg-accent text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"}`}
         >
           <FolderTree
             size={tight ? 11 : 12}
-            className={byProject ? "text-accent" : ""}
+            className={byProject ? "text-primary" : ""}
           />
           {tight ? "Project" : "By Project"}
         </button>
@@ -178,11 +178,11 @@ function BacklogViewSwitcher({
             onClick={() => onChange(id)}
             aria-pressed={active}
             title={meta.title}
-            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? "border-accent/60 bg-accent-soft text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"}`}
+            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? "border-primary/60 bg-accent text-fg" : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"}`}
           >
             <Icon
               size={tight ? 11 : 12}
-              className={active ? "text-accent" : ""}
+              className={active ? "text-primary" : ""}
             />
             {meta.label}
             {/* A DOT, not a count: what matters is whether anything is waiting,
@@ -190,7 +190,7 @@ function BacklogViewSwitcher({
                 numbers nobody acted on. */}
             {id === "inbox" && inboxWaiting ? (
               <span
-                className="size-1.5 shrink-0 rounded-full bg-accent"
+                className="size-1.5 shrink-0 rounded-full bg-primary"
                 aria-label="Tasks waiting"
               />
             ) : null}

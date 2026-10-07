@@ -140,7 +140,7 @@ function InboxRow({
             <TaskIdBadge id={task.id} />
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-micro">
-            <span className="shrink-0 text-muted">{origin}</span>
+            <span className="shrink-0 text-muted-foreground">{origin}</span>
             {showProjectBadge && task.projectId ? (
               <ProjectBadge
                 projectId={task.projectId}
@@ -160,7 +160,7 @@ function InboxRow({
           onClick={() => onDismiss(task)}
           title={`Dismiss "${task.title}" from the Inbox`}
           aria-label={`Dismiss "${task.title}" from the Inbox`}
-          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "size-6" : "size-7"}`}
+          className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border border-line text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "size-6" : "size-7"}`}
         >
           <Check size={13} />
         </button>

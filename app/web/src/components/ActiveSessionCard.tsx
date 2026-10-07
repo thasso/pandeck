@@ -73,7 +73,7 @@ const META_ICON: Partial<Record<SessionCardMetaKind, LucideIcon>> = {
  * density the floor is the 44px a thumb needs; at `tight` it is 36px.
  */
 const GUTTER_BUTTON =
-  "flex flex-1 cursor-pointer items-center justify-center text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex flex-1 cursor-pointer items-center justify-center text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
 const GUTTER_FLOOR: Record<RowDensity, string> = {
   tight: "min-h-9",
   comfortable: "min-h-11",
@@ -81,7 +81,7 @@ const GUTTER_FLOOR: Record<RowDensity, string> = {
 
 /** Settle and the actions flip, inline at the end of the status row. */
 const INLINE_ACTION =
-  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
+  "flex shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-line hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-faint";
 const INLINE_ACTION_SIZE: Record<RowDensity, string> = {
   tight: "size-6 -my-0.5",
   comfortable: "size-8 -my-0.5",
@@ -355,9 +355,9 @@ function ActiveSessionCardImpl({
           onDelete(session.id);
         }
       }}
-      className={`group w-full cursor-pointer select-none overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+      className={`group w-full cursor-pointer select-none overflow-hidden text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 ${
         flipped ? "[perspective:900px]" : ""
-      } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
     >
       {/* One rotator, two faces: the front stays in flow so the card keeps its
           content height, and the actions face is absolutely laid over it at
@@ -477,10 +477,10 @@ function ActiveSessionCardImpl({
                       e.stopPropagation();
                       onToggleCluster?.(session.id);
                     }}
-                    className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                    className={`-mx-0.5 flex shrink-0 items-center gap-1 rounded px-0.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                       clusterWorking
-                        ? "text-accent hover:text-accent"
-                        : "text-muted hover:text-fg"
+                        ? "text-primary hover:text-primary"
+                        : "text-muted-foreground hover:text-fg"
                     }`}
                   >
                     {clusterWorking ? (
@@ -534,7 +534,7 @@ function ActiveSessionCardImpl({
                     aria-label={bubbleLabel}
                     // Capped, so a long peer title truncates inside the badge
                     // instead of wrapping the whole badge off the line.
-                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                       SESSION_BADGE_TONE[bubbleTone ?? "accent"]
                     }`}
                   >
@@ -553,7 +553,7 @@ function ActiveSessionCardImpl({
                       e.stopPropagation();
                       if (bubbled) onSettle(bubbled.session.id);
                     }}
-                    className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md text-faint transition-colors hover:bg-panel hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   >
                     <X size={12} aria-hidden />
                   </button>
@@ -571,7 +571,7 @@ function ActiveSessionCardImpl({
                       e.stopPropagation();
                       if (card.stall) onOpen(stallTarget(card.stall).id);
                     }}
-                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${SESSION_BADGE_TONE.warning}`}
+                    className={`session-status-responsive-badge flex min-w-0 max-w-32 shrink-0 items-center gap-1 rounded-full px-1.5 py-px font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${SESSION_BADGE_TONE.warning}`}
                   >
                     <Hourglass size={10} className="shrink-0" aria-hidden />
                     {stallParts(card.stall).before ? (
@@ -598,7 +598,7 @@ function ActiveSessionCardImpl({
                   <span
                     role="img"
                     aria-label={backgroundText}
-                    className="session-status-responsive-badge flex shrink-0 items-center gap-1 rounded-full border border-line px-1.5 py-px font-medium text-muted"
+                    className="session-status-responsive-badge flex shrink-0 items-center gap-1 rounded-full border border-line px-1.5 py-px font-medium text-muted-foreground"
                     title={backgroundText}
                   >
                     <Activity size={10} aria-hidden="true" />
@@ -808,7 +808,7 @@ function MetaItem({
   return (
     <button
       type="button"
-      className={`${shape} -mx-1 cursor-pointer rounded px-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+      className={`${shape} -mx-1 cursor-pointer rounded px-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
       title={`Open ${item.title ?? item.label}`}
       onClick={(e) => {
         e.stopPropagation();
@@ -845,10 +845,10 @@ function ActionTile({
       }}
       aria-label={accessibleLabel}
       title={accessibleLabel}
-      className={`flex h-14 w-16 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg text-micro font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+      className={`flex h-14 w-16 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg text-micro font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
         danger
           ? "text-danger hover:bg-danger-soft"
-          : "text-muted hover:bg-panel hover:text-fg"
+          : "text-muted-foreground hover:bg-panel hover:text-fg"
       }`}
     >
       {/* Match the mobile dock action exactly: an 18px glyph centred in a

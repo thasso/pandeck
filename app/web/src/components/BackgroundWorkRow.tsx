@@ -20,11 +20,11 @@ import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 
 /** Badge colours, keyed on the projection's semantic tone. */
 const TONE_CLASS: Record<BackgroundWorkTone, string> = {
-  accent: "bg-accent-soft text-accent",
+  accent: "bg-accent text-primary",
   warning: "bg-warning-soft text-warning",
   danger: "bg-danger-soft text-danger",
   success: "bg-success-soft text-success",
-  muted: "bg-panel text-muted",
+  muted: "bg-panel text-muted-foreground",
 };
 
 export interface BackgroundWorkRowProps {
@@ -108,8 +108,8 @@ function BackgroundWorkRowImpl({
       data-list-row-id={item.id}
       data-background-item={item.id}
       data-background-anchored={anchored ? "true" : undefined}
-      className={`rounded-xl border bg-panel p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-        anchored ? "border-accent/50 ring-1 ring-accent/30" : "border-line"
+      className={`rounded-xl border bg-panel p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+        anchored ? "border-primary/50 ring-1 ring-primary/30" : "border-line"
       }`}
     >
       <div className="flex items-start gap-2">
@@ -120,7 +120,7 @@ function BackgroundWorkRowImpl({
           >
             {item.label}
           </p>
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted">
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-caption text-muted-foreground">
             <span
               className={`rounded-full px-2 py-0.5 text-micro font-medium ${TONE_CLASS[badge.tone]}`}
             >
@@ -146,7 +146,7 @@ function BackgroundWorkRowImpl({
             <button
               type="button"
               onClick={() => onOpenOwner(item.ownerSessionId)}
-              className="mt-1 max-w-full truncate text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="mt-1 max-w-full truncate text-caption text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               {ownerTitle || "Open owning session"}
             </button>
@@ -155,7 +155,7 @@ function BackgroundWorkRowImpl({
             <button
               type="button"
               onClick={() => onOpenRegistry(item.id)}
-              className="mt-1 block text-caption text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="mt-1 block text-caption text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               Open in the background registry
             </button>
@@ -173,7 +173,7 @@ function BackgroundWorkRowImpl({
               {facts.map((fact) => (
                 <div key={fact.label} className="contents">
                   <dt className="text-faint">{fact.label}</dt>
-                  <dd className="min-w-0 break-words text-muted">
+                  <dd className="min-w-0 break-words text-muted-foreground">
                     {fact.value}
                   </dd>
                 </div>

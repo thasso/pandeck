@@ -648,11 +648,11 @@ function BacklogRowContent({
           <FolderKanban size={13} className="shrink-0 text-faint" />
         )}
         <span
-          className={`min-w-0 flex-1 truncate text-caption font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted"}`}
+          className={`min-w-0 flex-1 truncate text-caption font-semibold ${data.known || data.projectId === null ? "text-fg" : "text-muted-foreground"}`}
         >
           {data.label}
         </span>
-        <span className="shrink-0 text-caption text-muted">
+        <span className="shrink-0 text-caption text-muted-foreground">
           {data.taskCount}
         </span>
       </div>
@@ -802,7 +802,7 @@ function SessionGutterAction({
         if (session) onOpenSession(session.id);
         else onStartSession(task);
       }}
-      className="flex w-9 shrink-0 items-center justify-center self-stretch rounded text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      className="flex w-9 shrink-0 items-center justify-center self-stretch rounded text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
       title={label}
       aria-label={label}
     >
@@ -826,7 +826,7 @@ function FilteredEmptyState({
           <button
             type="button"
             onClick={onClear}
-            className="rounded-lg border border-line px-2.5 py-1 text-caption font-medium text-muted hover:bg-raised hover:text-fg"
+            className="rounded-lg border border-line px-2.5 py-1 text-caption font-medium text-muted-foreground hover:bg-raised hover:text-fg"
           >
             Clear filters
           </button>

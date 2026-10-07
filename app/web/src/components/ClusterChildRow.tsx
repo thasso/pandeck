@@ -164,9 +164,9 @@ function ClusterChildRowImpl({
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
+      className={`group flex min-w-0 cursor-pointer select-none items-center gap-1.5 py-0.5 pr-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 ${
         density === "comfortable" ? "min-h-8" : "min-h-7"
-      } ${active ? "bg-accent-soft/60" : "hover:bg-raised"}`}
+      } ${active ? "bg-accent/60" : "hover:bg-raised"}`}
     >
       <AgentIcon
         size={12}
@@ -181,7 +181,7 @@ function ClusterChildRowImpl({
         <span aria-hidden className="size-5 shrink-0" />
       )}
       <span
-        className={`min-w-0 flex-1 truncate text-caption text-muted ${status === "unread" ? "font-semibold" : ""}`}
+        className={`min-w-0 flex-1 truncate text-caption text-muted-foreground ${status === "unread" ? "font-semibold" : ""}`}
       >
         <SessionTitleText
           title={title}
@@ -191,7 +191,7 @@ function ClusterChildRowImpl({
       {jobs > 0 ? (
         <span
           title={jobsText}
-          className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted"
+          className="flex shrink-0 items-center gap-0.5 text-micro tabular-nums text-muted-foreground"
         >
           <Activity size={10} aria-hidden />
           {jobs}
@@ -201,7 +201,7 @@ function ClusterChildRowImpl({
         <span
           title={sessionClusterSummary(peers)}
           className={`flex shrink-0 items-center gap-0.5 text-micro tabular-nums ${
-            peers.working > 0 ? "text-accent" : "text-faint"
+            peers.working > 0 ? "text-primary" : "text-faint"
           }`}
         >
           <Users size={10} aria-hidden />

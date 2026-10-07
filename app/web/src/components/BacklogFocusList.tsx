@@ -160,9 +160,9 @@ export function BacklogFocusList({
 const BUCKET_TONE: Record<FocusBucketId, string> = {
   review: "text-amber-500",
   overdue: "text-danger",
-  today: "text-accent",
-  tomorrow: "text-muted",
-  week: "text-muted",
+  today: "text-primary",
+  tomorrow: "text-muted-foreground",
+  week: "text-muted-foreground",
   later: "text-faint",
   unscheduled: "text-faint",
 };
@@ -252,7 +252,7 @@ function FocusRow({
               tone={
                 suggestion.to === "done"
                   ? "border-emerald-500/50 text-emerald-500 hover:bg-emerald-500/10"
-                  : "border-accent/50 text-accent hover:bg-accent/10"
+                  : "border-primary/50 text-primary hover:bg-primary/10"
               }
               onClick={() => onAcceptSuggestion(task)}
               tight={tight}
@@ -260,7 +260,7 @@ function FocusRow({
             <ClaimButton
               icon={<X size={13} />}
               label={`Disagree: dismiss the agent's suggestion on "${task.title}"`}
-              tone="border-line text-faint hover:bg-raised hover:text-muted"
+              tone="border-line text-faint hover:bg-raised hover:text-muted-foreground"
               onClick={() => onDismissSuggestion(task)}
               tight={tight}
             />
@@ -295,7 +295,7 @@ function ClaimButton({
       }}
       title={label}
       aria-label={label}
-      className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${tight ? "size-6" : "size-7"} ${tone}`}
+      className={`flex shrink-0 cursor-pointer items-center justify-center rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tight ? "size-6" : "size-7"} ${tone}`}
     >
       {icon}
     </button>

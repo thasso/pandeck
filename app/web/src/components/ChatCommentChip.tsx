@@ -50,7 +50,7 @@ export function ChatCommentChip({
   if (comments.length === 0) return null;
 
   return (
-    <div className="mb-2 overflow-hidden rounded-xl border border-accent/25 bg-accent-soft">
+    <div className="mb-2 overflow-hidden rounded-xl border border-primary/25 bg-accent">
       <div className="flex min-w-0 items-center">
         <button
           type="button"
@@ -59,11 +59,11 @@ export function ChatCommentChip({
             setConfirmingClear(false);
           }}
           aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-caption font-medium text-accent hover:bg-accent/10"
+          className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-caption font-medium text-primary hover:bg-primary/10"
         >
           <MessageSquareText size={14} className="shrink-0" />
           <span className="min-w-0 flex-1">Comments</span>
-          <span className="shrink-0 rounded-full bg-accent/15 px-1.5 text-micro font-semibold tabular-nums">
+          <span className="shrink-0 rounded-full bg-primary/15 px-1.5 text-micro font-semibold tabular-nums">
             {comments.length}
           </span>
           <ChevronDown
@@ -74,7 +74,7 @@ export function ChatCommentChip({
         {action ? <div className="shrink-0 pr-1">{action}</div> : null}
       </div>
       {expanded ? (
-        <div className="border-t border-accent/20 p-1">
+        <div className="border-t border-primary/20 p-1">
           <ul className="flex flex-col">
             {comments.map((comment) => {
               const editing = comment.id === activeCommentId;
@@ -82,7 +82,7 @@ export function ChatCommentChip({
                 <li
                   key={comment.id}
                   className={`flex min-w-0 items-center gap-1 rounded-lg pl-2 pr-1 ${
-                    editing ? "bg-accent/10" : ""
+                    editing ? "bg-primary/10" : ""
                   }`}
                 >
                   <button
@@ -92,7 +92,7 @@ export function ChatCommentChip({
                     // The whole comment on hover: the row shows one line, and
                     // the rest is worth reading without opening the editor.
                     title={comment.body}
-                    className="min-w-0 flex-1 truncate py-1.5 text-left text-caption text-fg hover:text-accent disabled:cursor-default disabled:hover:text-fg"
+                    className="min-w-0 flex-1 truncate py-1.5 text-left text-caption text-fg hover:text-primary disabled:cursor-default disabled:hover:text-fg"
                   >
                     {labelSources && comment.anchor.kind === "document" ? (
                       <span className="text-faint">
@@ -117,7 +117,7 @@ export function ChatCommentChip({
               );
             })}
           </ul>
-          <div className="flex items-center justify-end gap-1.5 border-t border-accent/20 px-1 pt-1 text-caption">
+          <div className="flex items-center justify-end gap-1.5 border-t border-primary/20 px-1 pt-1 text-caption">
             {confirmingClear ? (
               <>
                 <span className="mr-auto pl-1 text-faint">
@@ -136,7 +136,7 @@ export function ChatCommentChip({
                 <button
                   type="button"
                   onClick={() => setConfirmingClear(false)}
-                  className="rounded-lg px-2 py-1 text-muted hover:bg-raised hover:text-fg"
+                  className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-raised hover:text-fg"
                 >
                   Keep
                 </button>
@@ -145,7 +145,7 @@ export function ChatCommentChip({
               <button
                 type="button"
                 onClick={() => setConfirmingClear(true)}
-                className="rounded-lg px-2 py-1 text-muted hover:bg-raised hover:text-fg"
+                className="rounded-lg px-2 py-1 text-muted-foreground hover:bg-raised hover:text-fg"
               >
                 Remove all
               </button>
@@ -179,8 +179,8 @@ function RowAction({
       aria-label={label}
       aria-pressed={active || undefined}
       className={`flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
-        active ? "text-accent" : "text-faint"
-      } ${danger ? "hover:bg-danger/10 hover:text-danger" : "hover:bg-accent/10 hover:text-fg"}`}
+        active ? "text-primary" : "text-faint"
+      } ${danger ? "hover:bg-danger/10 hover:text-danger" : "hover:bg-primary/10 hover:text-fg"}`}
     >
       {icon}
     </button>

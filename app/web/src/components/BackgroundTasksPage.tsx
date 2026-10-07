@@ -175,10 +175,10 @@ export function BackgroundTasksPage({
               role="tab"
               aria-selected={filter === entry.id}
               onClick={() => setFilter(entry.id)}
-              className={`h-9 rounded-lg px-3 text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+              className={`h-9 rounded-lg px-3 text-caption font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 filter === entry.id
-                  ? "bg-accent-soft text-accent"
-                  : "text-muted hover:bg-panel hover:text-fg"
+                  ? "bg-accent text-primary"
+                  : "text-muted-foreground hover:bg-panel hover:text-fg"
               }`}
             >
               {entry.label}
@@ -202,7 +202,7 @@ export function BackgroundTasksPage({
                 key={ownerSessionId}
                 type="button"
                 onClick={() => onStopAllForOwner(ownerSessionId)}
-                className="h-9 rounded-lg border border-line px-3 text-caption text-muted transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="h-9 rounded-lg border border-line px-3 text-caption text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
                 Stop all in {ownerTitles.get(ownerSessionId) || "this session"}
               </button>
@@ -242,7 +242,7 @@ export function BackgroundTasksPage({
                   onClick={() =>
                     setLimit((value) => value + BACKGROUND_WORK_PAGE_SIZE)
                   }
-                  className="mt-3 h-9 w-full rounded-lg border border-line text-caption text-muted transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  className="mt-3 h-9 w-full rounded-lg border border-line text-caption text-muted-foreground transition-colors hover:border-line-strong hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 >
                   Show {Math.min(view.hidden, BACKGROUND_WORK_PAGE_SIZE)} more
                   of {view.total}
@@ -256,7 +256,7 @@ export function BackgroundTasksPage({
               plainly, because paging further is a request this surface cannot
               make yet. */}
           {truncated ? (
-            <p className="mt-3 text-caption text-muted">
+            <p className="mt-3 text-caption text-muted-foreground">
               Only the most recent background work is loaded; older items are
               not shown.
             </p>

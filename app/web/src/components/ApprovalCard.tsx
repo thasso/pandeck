@@ -116,14 +116,14 @@ function StatusBadge({ approval }: { approval: ApprovalCardData }) {
   if (status === "superseded")
     return (
       <span
-        className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted"
+        className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground"
         title="A newer request from this session replaced it"
       >
         Superseded
       </span>
     );
   return (
-    <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted">
+    <span className="rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground">
       Rejected
     </span>
   );
@@ -149,7 +149,7 @@ function approvalHasWarnings(approval: ApprovalCardData): boolean {
 
 function HeaderIcon({ approval }: { approval: ApprovalCardData }) {
   const cls =
-    "flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent";
+    "flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary";
   if (
     approval.body.kind === "githubPullRequest" ||
     approval.body.kind === "forgejoPullRequest"
@@ -258,7 +258,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
           {body.draft ? " · draft" : ""}
         </div>
         {body.prBody && (
-          <div className="line-clamp-4 whitespace-pre-wrap text-caption text-muted">
+          <div className="line-clamp-4 whitespace-pre-wrap text-caption text-muted-foreground">
             {body.prBody}
           </div>
         )}
@@ -279,7 +279,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
         <div className="text-faint">
           Replace description on #{body.pullNumber} with:
         </div>
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
+        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
           {body.prBody === "" ? "(empty description)" : body.prBody}
         </div>
       </>
@@ -289,7 +289,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     return (
       <>
         {body.reviewSummary && (
-          <div className="whitespace-pre-wrap text-caption text-muted line-clamp-6">
+          <div className="whitespace-pre-wrap text-caption text-muted-foreground line-clamp-6">
             {body.reviewSummary}
           </div>
         )}
@@ -353,7 +353,7 @@ function PullRequestBody({ body }: { body: PullRequestApprovalBody }) {
     );
   }
   return body.commentBody ? (
-    <div className="whitespace-pre-wrap text-caption text-muted line-clamp-6">
+    <div className="whitespace-pre-wrap text-caption text-muted-foreground line-clamp-6">
       {body.commentBody}
     </div>
   ) : null;
@@ -397,7 +397,7 @@ function GithubIssueBody({ body }: { body: GithubIssueApprovalBody }) {
           {body.operation === "edit" && (
             <div className="text-faint">Replace description with:</div>
           )}
-          <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
+          <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
             {text}
           </div>
         </>
@@ -510,14 +510,16 @@ function ReleaseBody({ body }: { body: ForgejoReleaseApprovalBody }) {
           {body.targetSha.slice(0, 8)}
         </span>
         {body.targetRef ? (
-          <span className="text-muted"> ({body.targetRef})</span>
+          <span className="text-muted-foreground"> ({body.targetRef})</span>
         ) : null}
         {body.targetSubject ? (
-          <div className="text-caption text-muted">{body.targetSubject}</div>
+          <div className="text-caption text-muted-foreground">
+            {body.targetSubject}
+          </div>
         ) : null}
       </div>
       {body.notes && (
-        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted">
+        <div className="line-clamp-6 whitespace-pre-wrap text-caption text-muted-foreground">
           {body.notes}
         </div>
       )}
@@ -550,7 +552,7 @@ function ManagedMergeBody({
         </span>{" "}
         <span className="text-faint">(default branch)</span>
       </div>
-      <div className="text-caption text-muted">
+      <div className="text-caption text-muted-foreground">
         {body.repo}#{body.number} · {body.method} ·{" "}
         {body.deleteRemoteBranch
           ? "delete the remote branch"
@@ -692,7 +694,7 @@ function SpawnRow({
           <button
             type="button"
             onClick={() => onEdit({ skip: !skipped })}
-            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro text-muted hover:bg-surface hover:text-fg"
+            className="shrink-0 rounded-md border border-line px-1.5 py-0.5 text-micro text-muted-foreground hover:bg-surface hover:text-fg"
           >
             {skipped ? "Include" : "Skip"}
           </button>
@@ -729,7 +731,7 @@ function SpawnRow({
           />
         </div>
       ) : (
-        <div className="mt-1 text-caption text-muted">
+        <div className="mt-1 text-caption text-muted-foreground">
           {[
             selected?.name ?? item.modelName ?? item.modelId,
             selected?.accountName ?? item.accountName,
@@ -751,7 +753,7 @@ function SpawnRow({
         type="button"
         onClick={() => setShowPrompt((open) => !open)}
         aria-expanded={showPrompt}
-        className="mt-1 text-caption text-accent hover:underline"
+        className="mt-1 text-caption text-primary hover:underline"
       >
         {showPrompt ? "Hide opening message" : "more…"}
       </button>
@@ -765,7 +767,7 @@ function SpawnRow({
         <div className="mt-1">
           <a
             href={sessionPath(item.resultSessionId)}
-            className="text-caption text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
+            className="text-caption text-primary underline decoration-dotted underline-offset-2 hover:decoration-solid"
             onClick={(event) => {
               const id = item.resultSessionId;
               if (
@@ -866,7 +868,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
         <span className="text-faint">Project</span>
         <span className="break-words text-fg">
           {project.name}{" "}
-          <span className="font-mono text-muted">
+          <span className="font-mono text-muted-foreground">
             {project.key} · {project.id}
           </span>
         </span>
@@ -912,7 +914,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
           <span className="min-w-0">
             <span className={mono}>{repository.url}</span>
             {repository.seedReadme ? (
-              <span className="text-muted">
+              <span className="text-muted-foreground">
                 {" "}
                 · empty, a README commit is added
               </span>
@@ -944,7 +946,7 @@ function ProjectCreateBody({ body }: { body: ProjectCreateApprovalBody }) {
         </div>
       ) : null}
       {project.description ? (
-        <div className="line-clamp-6 whitespace-pre-wrap text-muted">
+        <div className="line-clamp-6 whitespace-pre-wrap text-muted-foreground">
           {project.description}
         </div>
       ) : null}
@@ -1005,7 +1007,7 @@ function Body({
         {b.items.map((item, i) => (
           <li key={i} className="text-caption">
             <span className="font-mono text-fg">{item.issueKey}</span>
-            <span className="text-muted">
+            <span className="text-muted-foreground">
               {" "}
               · {item.date} · {item.duration}
             </span>
@@ -1128,7 +1130,7 @@ export function ApprovalCard({
             <StatusBadge approval={approval} />
             {approval.autoApproved && approval.status !== "pending" && (
               <span
-                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted"
+                className="inline-flex items-center gap-1 rounded-full bg-surface px-2 py-0.5 text-micro font-medium text-muted-foreground"
                 title="Ran under an Approve-for-session grant"
               >
                 <CheckCheck size={9} />
@@ -1144,7 +1146,7 @@ export function ApprovalCard({
         </div>
       </div>
 
-      <div className="space-y-2 px-3 py-3 text-caption text-muted">
+      <div className="space-y-2 px-3 py-3 text-caption text-muted-foreground">
         <Body
           approval={approval}
           onDecide={awaitingUser && busy === null ? decide : undefined}
@@ -1178,7 +1180,7 @@ export function ApprovalCard({
               href={approval.resultUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-caption text-accent hover:underline"
+              className="inline-flex items-center gap-1.5 text-caption text-primary hover:underline"
             >
               <ExternalLink size={12} />
               {approval.resultSummary ?? "View result"}
@@ -1203,7 +1205,7 @@ export function ApprovalCard({
       </div>
 
       {ownGrants.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-caption text-muted">
+        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-caption text-muted-foreground">
           <CheckCheck size={12} className="shrink-0" />
           <span className="min-w-0 flex-1 truncate">
             Approved for this session:{" "}
@@ -1216,7 +1218,7 @@ export function ApprovalCard({
                 for (const grant of ownGrants)
                   onRevokeGrant(approval.sessionId, grant.key);
               }}
-              className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted hover:bg-surface hover:text-fg"
+              className="shrink-0 rounded px-1.5 py-0.5 text-caption text-muted-foreground hover:bg-surface hover:text-fg"
             >
               Revoke
             </button>
@@ -1231,7 +1233,7 @@ export function ApprovalCard({
             onClick={() => decide("rejected")}
             disabled={busy !== null}
             aria-busy={busy === "rejected" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted hover:bg-surface hover:text-fg disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-raised px-2.5 py-1 text-caption text-muted-foreground hover:bg-surface hover:text-fg disabled:opacity-50"
           >
             {busy === "rejected" ? (
               <Spinner size="sm" />
@@ -1246,7 +1248,7 @@ export function ApprovalCard({
             disabled={busy !== null}
             aria-busy={busy === "approvedForSession" || undefined}
             title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-raised px-2.5 py-1 text-caption text-accent hover:bg-accent/10 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-raised px-2.5 py-1 text-caption text-primary hover:bg-primary/10 disabled:opacity-50"
           >
             {busy === "approvedForSession" ? (
               <Spinner size="sm" />
@@ -1260,7 +1262,7 @@ export function ApprovalCard({
             onClick={() => decide("approved")}
             disabled={busy !== null}
             aria-busy={busy === "approved" || undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1 text-caption font-medium text-white hover:bg-accent/90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-caption font-medium text-white hover:bg-primary/90 disabled:opacity-50"
           >
             {busy === "approved" ? (
               <Spinner size="sm" />

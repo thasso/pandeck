@@ -113,7 +113,7 @@ function StatusPill({
   return (
     <div
       role="status"
-      className={`flex items-center gap-1.5 rounded-full border border-line bg-panel/95 px-3 py-1.5 text-caption text-muted shadow-lg shadow-black/10 backdrop-blur ${className}`}
+      className={`flex items-center gap-1.5 rounded-full border border-line bg-panel/95 px-3 py-1.5 text-caption text-muted-foreground shadow-lg shadow-black/10 backdrop-blur ${className}`}
     >
       {/* Queued is a state (the restart is waiting on sessions), so it is the
           static icon; everything else is a wait for an answer, so it is the

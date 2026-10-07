@@ -178,7 +178,7 @@ interface Props {
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted">
+    <div className="my-2 rounded-xl border border-line bg-panel px-3 py-2 text-caption text-muted-foreground">
       {label}
     </div>
   );
@@ -195,8 +195,8 @@ function ToolGroupNoticeCard({
 }) {
   const shownTools = tools.slice(0, 6);
   return (
-    <div className="my-2 flex items-start gap-2 rounded-xl border border-accent/25 bg-accent-soft px-3 py-2 text-caption text-muted">
-      <PackageCheck size={15} className="mt-0.5 shrink-0 text-accent" />
+    <div className="my-2 flex items-start gap-2 rounded-xl border border-primary/25 bg-accent px-3 py-2 text-caption text-muted-foreground">
+      <PackageCheck size={15} className="mt-0.5 shrink-0 text-primary" />
       <div className="min-w-0">
         <div className="font-medium text-fg">{title}</div>
         {summary && <div className="mt-0.5">{summary}</div>}
@@ -620,7 +620,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           turn renders as one streaming message or splits into committed rows. */}
       <div className="assistant-message-content flex min-w-0 flex-1 flex-col gap-3 [&>*]:!my-0">
         {originLabel ? (
-          <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/20 bg-accent-soft px-2 py-0.5 text-micro font-medium text-accent">
+          <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/20 bg-accent px-2 py-0.5 text-micro font-medium text-primary">
             <Bot size={11} className="shrink-0" />
             <span className="min-w-0 truncate">{originLabel}</span>
           </div>

@@ -14,7 +14,7 @@ const META: Record<
   doing: {
     label: "In progress",
     Icon: CircleDot,
-    on: "border-accent/60 bg-accent-soft text-fg",
+    on: "border-primary/60 bg-accent text-fg",
   },
   done: {
     label: "Done",
@@ -68,7 +68,7 @@ export function BacklogStatusFilter({
             aria-pressed={active}
             title={`${active ? "Hide" : "Show"} ${meta.label}`}
             aria-label={`${active ? "Hide" : "Show"} ${meta.label}`}
-            className={`inline-flex items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${compact ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? meta.on : "border-line bg-panel text-faint hover:bg-raised hover:text-muted"}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${compact ? "px-1.5 py-0.5 text-micro" : "px-2 py-1 text-caption"} ${active ? meta.on : "border-line bg-panel text-faint hover:bg-raised hover:text-muted-foreground"}`}
           >
             <Icon
               size={compact ? 11 : 12}
@@ -76,7 +76,7 @@ export function BacklogStatusFilter({
                 active && status === "done"
                   ? "text-emerald-500"
                   : active && status === "doing"
-                    ? "text-accent"
+                    ? "text-primary"
                     : ""
               }
             />

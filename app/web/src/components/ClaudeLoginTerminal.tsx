@@ -51,7 +51,7 @@ export function ClaudeLoginTerminal({
       <div className="flex max-h-[95dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-line bg-panel shadow-2xl sm:max-h-[85dvh] sm:rounded-2xl">
         <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
-            <Terminal size={17} className="shrink-0 text-accent" />
+            <Terminal size={17} className="shrink-0 text-primary" />
             <div className="min-w-0">
               <h3 className="truncate text-body font-semibold">
                 Connect {profile.name}
@@ -64,7 +64,7 @@ export function ClaudeLoginTerminal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-muted hover:bg-raised hover:text-fg"
+            className="rounded-lg p-2 text-muted-foreground hover:bg-raised hover:text-fg"
             aria-label="Close Claude login"
           >
             <X size={17} />
@@ -83,7 +83,7 @@ export function ClaudeLoginTerminal({
               href={authorizationUrl}
               target="_blank"
               rel="noreferrer"
-              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-caption font-medium text-accent-fg"
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-caption font-medium text-primary-foreground"
             >
               Open Claude authorization <ExternalLink size={14} />
             </a>
@@ -128,7 +128,7 @@ export function ClaudeLoginTerminal({
               {submitted ? (
                 <p
                   role="status"
-                  className="flex items-center gap-1.5 text-caption text-muted"
+                  className="flex items-center gap-1.5 text-caption text-muted-foreground"
                 >
                   <Spinner size="sm" />
                   Code submitted; waiting for Claude…
@@ -142,7 +142,7 @@ export function ClaudeLoginTerminal({
             </div>
           ) : (
             <div
-              className={`mt-4 rounded-lg border px-3 py-2 text-caption ${status === "cancelled" ? "border-line text-muted" : "border-danger/30 bg-danger/10 text-danger"}`}
+              className={`mt-4 rounded-lg border px-3 py-2 text-caption ${status === "cancelled" ? "border-line text-muted-foreground" : "border-danger/30 bg-danger/10 text-danger"}`}
             >
               {error ??
                 (status === "cancelled"

@@ -36,11 +36,11 @@ function BuildRow({ label, build, missing }: Row) {
     <div className="flex items-baseline justify-between gap-4 py-1.5">
       <span className="text-body text-fg">{label}</span>
       {build ? (
-        <span className="font-mono text-caption text-muted">
+        <span className="font-mono text-caption text-muted-foreground">
           {formatBuildInfo(build)}
         </span>
       ) : (
-        <span className="text-caption text-muted">{missing}</span>
+        <span className="text-caption text-muted-foreground">{missing}</span>
       )}
     </div>
   );
@@ -95,7 +95,7 @@ export function AboutSettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-heading font-semibold">About</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Which build each part of the app is running. They are updated
         independently — the browser reloads itself on a deploy, the desktop app
         is installed by hand — so these can legitimately differ.
@@ -115,7 +115,7 @@ export function AboutSettingsSection({
             <BuildRow key={row.label} {...row} />
           ))}
         </div>
-        <p className="mt-3 text-micro text-muted">
+        <p className="mt-3 text-micro text-muted-foreground">
           Each entry is the released version followed by the commit it was built
           from. <span className="font-mono">-dev</span> marks a build ahead of
           its release tag, and <span className="font-mono">-dirty</span> one

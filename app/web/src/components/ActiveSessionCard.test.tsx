@@ -250,13 +250,13 @@ describe("ActiveSessionCard clusters", () => {
     // fold is where the run has to be visible.
     expect(working).not.toContain("Working ");
     expect(working).toContain("animate-spin");
-    expect(working).toContain("text-accent hover:text-accent");
+    expect(working).toContain("text-primary hover:text-primary");
     const idle = clusterMarkup({
       children: [child({ id: "a" })],
       counts: { total: 1, working: 0, waiting: 0, failed: 0 },
     });
     expect(idle).not.toContain("animate-spin");
-    expect(idle).toContain("text-muted hover:text-fg");
+    expect(idle).toContain("text-muted-foreground hover:text-fg");
   });
 
   it("states running turns and background jobs on the line, not only in the tooltip", () => {

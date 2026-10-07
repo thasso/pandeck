@@ -79,7 +79,7 @@ export function BackgroundProcessesSettingsSection({
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <h2 className="text-body font-semibold">Background processes</h2>
-      <p className="mt-1 text-caption text-muted">
+      <p className="mt-1 text-caption text-muted-foreground">
         Shell commands and monitors an agent session starts and leaves running
         after its turn ends. They are governed by PA, not by your provider
         account, and are always visible and stoppable in the background
@@ -150,7 +150,7 @@ export function BackgroundProcessesSettingsSection({
         }
       />
 
-      <div className="mt-6 rounded-xl border border-line bg-panel p-4 text-caption text-muted">
+      <div className="mt-6 rounded-xl border border-line bg-panel p-4 text-caption text-muted-foreground">
         <p className="font-medium text-fg">What these settings do not change</p>
         <ul className="mt-2 list-disc space-y-1.5 pl-4">
           <li>

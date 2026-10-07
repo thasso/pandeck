@@ -784,7 +784,7 @@ function WorktreePlaceholder({
         icon={<GitBranch size={16} />}
         title="Worktrees"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted-foreground">
         {detail}
       </div>
     </div>
@@ -809,7 +809,7 @@ function PullRequestIndexPlaceholder({
         icon={<GitPullRequest size={16} />}
         title="Pull Requests"
       />
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted">
+      <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-8 text-center text-body text-muted-foreground">
         Pick a pull request to see its checks, its review and what it is joined
         to on this machine.
       </div>
@@ -6975,7 +6975,7 @@ function AppContent() {
                                 }
                                 title="View this session's worktree changes"
                                 aria-label="View this session's worktree changes"
-                                className="relative flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-panel hover:text-fg"
+                                className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-panel hover:text-fg"
                               >
                                 {/* Same rule as the dock's row and the inspector's action: the
                       glyph is the worktree this leaves for, not the diff it opens on. */}

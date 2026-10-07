@@ -44,13 +44,13 @@ export function ChatActivityRow({
       ? "text-danger"
       : statusTone === "warning"
         ? "text-warning"
-        : "text-muted";
+        : "text-muted-foreground";
   const label = [prefix, title].filter(Boolean).join(" ");
   const sourceClass =
-    "min-w-0 truncate rounded-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
+    "min-w-0 truncate rounded-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40";
 
   return (
-    <div className="min-w-0 w-full text-caption text-muted">
+    <div className="min-w-0 w-full text-caption text-muted-foreground">
       <div className="flex min-w-0 items-center gap-1.5">
         <Icon size={13} aria-hidden="true" className="shrink-0 text-faint" />
         {prefix ? <span className="shrink-0">{prefix}</span> : null}
@@ -59,7 +59,7 @@ export function ChatActivityRow({
             <a
               href={href}
               title={title}
-              className={`${sourceClass} block py-2.5 decoration-dotted underline-offset-2 hover:text-accent hover:underline sm:py-2`}
+              className={`${sourceClass} block py-2.5 decoration-dotted underline-offset-2 hover:text-primary hover:underline sm:py-2`}
               onClick={(event) => {
                 if (
                   !onOpenSource ||
@@ -96,7 +96,7 @@ export function ChatActivityRow({
             }
             setExpanded((value) => !value);
           }}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2.5 text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:py-2"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md py-2.5 text-left hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40 sm:py-2"
         >
           <span aria-hidden="true" className="shrink-0 text-faint">
             ·

@@ -119,11 +119,11 @@ export function AgentQuestionForm({
   return (
     <div className="space-y-3 text-caption">
       <div className="flex items-center gap-2 text-fg">
-        <MessageCircleQuestion size={15} className="shrink-0 text-accent" />
+        <MessageCircleQuestion size={15} className="shrink-0 text-primary" />
         <span className="min-w-0 truncate font-medium">{request.title}</span>
       </div>
       {request.intro ? (
-        <p className="rounded-xl border border-line bg-raised/40 px-3 py-2 text-muted">
+        <p className="rounded-xl border border-line bg-raised/40 px-3 py-2 text-muted-foreground">
           {request.intro}
         </p>
       ) : null}
@@ -176,7 +176,7 @@ export function AgentQuestionForm({
             type="button"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             disabled={index === 0}
-            className="rounded-lg border border-line px-2 py-1 text-caption text-muted transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg border border-line px-2 py-1 text-caption text-muted-foreground transition-colors hover:border-line-strong hover:bg-raised hover:text-fg disabled:cursor-not-allowed disabled:opacity-40"
           >
             Back
           </button>
@@ -184,7 +184,7 @@ export function AgentQuestionForm({
             <button
               type="button"
               onClick={submit}
-              className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-opacity hover:opacity-90"
+              className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-opacity hover:opacity-90"
             >
               <Check size={12} /> {discussCount ? "Submit + discuss" : "Submit"}
             </button>
@@ -192,7 +192,7 @@ export function AgentQuestionForm({
             <button
               type="button"
               onClick={goNext}
-              className="rounded-lg bg-accent px-2.5 py-1 text-caption font-medium text-accent-fg transition-opacity hover:opacity-90"
+              className="rounded-lg bg-primary px-2.5 py-1 text-caption font-medium text-primary-foreground transition-opacity hover:opacity-90"
             >
               {index === questions.length - 1 ? "Review" : "Next"}
             </button>
@@ -355,7 +355,7 @@ function QuestionStep({
           )}
         </div>
         {question.prompt ? (
-          <p className="mt-1 whitespace-pre-wrap text-caption text-muted">
+          <p className="mt-1 whitespace-pre-wrap text-caption text-muted-foreground">
             {question.prompt}
           </p>
         ) : null}
@@ -427,14 +427,14 @@ function DiscussAnswerOption({
       }
       className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
         active
-          ? "border-accent/40 bg-accent-soft text-fg"
-          : "border-line bg-surface text-muted hover:border-line-strong hover:bg-raised hover:text-fg"
+          ? "border-primary/40 bg-accent text-fg"
+          : "border-line bg-surface text-muted-foreground hover:border-line-strong hover:bg-raised hover:text-fg"
       }`}
     >
       <span
         className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border ${
           active
-            ? "border-accent bg-accent text-accent-fg"
+            ? "border-primary bg-primary text-primary-foreground"
             : "border-line-strong"
         }`}
         aria-hidden="true"
@@ -443,7 +443,7 @@ function DiscussAnswerOption({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5 text-caption font-medium">
-          <CircleHelp size={12} className="text-accent" /> Discuss in chat
+          <CircleHelp size={12} className="text-primary" /> Discuss in chat
           instead
         </span>
         <span className="mt-0.5 block text-caption text-faint">
@@ -496,14 +496,14 @@ function ChoiceList({
             onClick={() => toggle(choice.id)}
             className={`flex w-full items-start gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
               active
-                ? "border-accent/40 bg-accent-soft text-fg"
-                : "border-line bg-surface text-muted hover:border-line-strong hover:bg-raised hover:text-fg"
+                ? "border-primary/40 bg-accent text-fg"
+                : "border-line bg-surface text-muted-foreground hover:border-line-strong hover:bg-raised hover:text-fg"
             }`}
           >
             <span
               className={`mt-0.5 flex size-4 shrink-0 items-center justify-center border ${
                 multiple ? "rounded" : "rounded-full"
-              } ${active ? "border-accent bg-accent text-accent-fg" : "border-line-strong"}`}
+              } ${active ? "border-primary bg-primary text-primary-foreground" : "border-line-strong"}`}
               aria-hidden="true"
             >
               {active ? <Check size={11} /> : null}
@@ -540,7 +540,7 @@ function QuestionSummary({
         <h3 className="text-body font-semibold text-fg">
           Review before submitting
         </h3>
-        <p className="mt-0.5 text-caption text-muted">
+        <p className="mt-0.5 text-caption text-muted-foreground">
           Answers marked “Discuss in chat” will be returned to the agent as
           follow-up topics, not assumptions.
         </p>
@@ -565,7 +565,7 @@ function QuestionSummary({
                 <button
                   type="button"
                   onClick={() => onEdit(index)}
-                  className="shrink-0 rounded-lg px-2 py-1 text-caption text-accent transition-colors hover:bg-accent-soft"
+                  className="shrink-0 rounded-lg px-2 py-1 text-caption text-primary transition-colors hover:bg-accent"
                 >
                   Edit
                 </button>
@@ -589,7 +589,7 @@ function AnswerPreview({
     return <div className="mt-1 text-caption text-faint">Skipped</div>;
   if (answer.disposition === "discuss") {
     return (
-      <div className="mt-1 whitespace-pre-wrap text-caption text-accent">
+      <div className="mt-1 whitespace-pre-wrap text-caption text-primary">
         Discuss in chat{answer.text?.trim() ? ` · ${answer.text.trim()}` : ""}
       </div>
     );
@@ -599,7 +599,7 @@ function AnswerPreview({
   );
   const pieces = [...choiceLabels, answer.text?.trim()].filter(Boolean);
   return (
-    <div className="mt-1 whitespace-pre-wrap text-caption text-muted">
+    <div className="mt-1 whitespace-pre-wrap text-caption text-muted-foreground">
       {pieces.join(choiceLabels.length && answer.text ? " · " : "") || "—"}
     </div>
   );
@@ -613,7 +613,7 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
       aria-hidden="true"
     >
       <div
-        className="h-full rounded-full bg-accent transition-[width]"
+        className="h-full rounded-full bg-primary transition-[width]"
         style={{ width: `${percent}%` }}
       />
     </div>

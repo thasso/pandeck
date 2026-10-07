@@ -47,7 +47,7 @@ export function BackgroundWorkCommand({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         title={open ? "Collapse the command" : "Show the whole command"}
-        className={`block w-full min-w-0 rounded-md bg-raised/60 px-2 py-1 text-left font-mono text-caption text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+        className={`block w-full min-w-0 rounded-md bg-raised/60 px-2 py-1 text-left font-mono text-caption text-muted-foreground transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
           open ? "whitespace-pre-wrap break-words" : "truncate"
         }`}
       >

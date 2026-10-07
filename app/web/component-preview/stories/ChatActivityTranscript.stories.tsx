@@ -273,7 +273,7 @@ export function ChatActivityTranscript({
         onResendPrompt={noop}
       />
       {destination ? (
-        <p role="status" className="px-4 text-caption text-muted">
+        <p role="status" className="px-4 text-caption text-muted-foreground">
           Preview navigation: {destination}
         </p>
       ) : null}
