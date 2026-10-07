@@ -1997,16 +1997,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   every interactive persona on both harnesses; only the server-owned workflow
   coordinator is excluded). It reads `session.mode` — the staged optimistic
   record before the first send, the server record after, so a live session's
-  badge and control track the server's answer over a stale client pick. Staged,
-  the pick is client state: `App.tsx` keeps it on `pendingStart` (restaging one
-  axis preserves it; switching to an assistant persona drops it) and the first
-  send carries it via `lib/newSessionRuntime.firstPromptRuntimeSelection` →
-  `harnessSend.mode`; live, it goes through `actions.setSessionMode`. While a
-  session is in Plan, the session header title carries the `PlanModeBadge` and
-  the folded runtime button label appends "· Plan". The labelling is a binding
-  epic decision (Task 305): the control and badge say "Plan" and NOTHING more —
-  no "read-only", no "safe", no lock iconography — because v1 Plan keeps the
-  shell and is a convention, not an enforced boundary.
+  control tracks the server's answer over a stale client pick. Staged, the pick
+  is client state: `App.tsx` keeps it on `pendingStart` (restaging one axis
+  preserves it; switching to an assistant persona drops it) and the first send
+  carries it via `lib/newSessionRuntime.firstPromptRuntimeSelection` →
+  `harnessSend.mode`; live, it goes through `actions.setSessionMode`. The
+  control is a switch labelled "Plan" (off is Build); the session header carries
+  no mode badge, and the folded runtime button label appends "· Plan". The
+  labelling is a binding epic decision (Task 305): the control says "Plan" and
+  NOTHING more — no "read-only", no "safe", no lock iconography — because v1
+  Plan keeps the shell and is a convention, not an enforced boundary.
 - The bottom row's runtime strip (mode, agent type, model, thinking) folds into
   the single Runtime sheet trigger by MEASUREMENT, not by a viewport breakpoint
   — `composerRuntimeFit.ts` owns the arithmetic, `Composer` measures the four

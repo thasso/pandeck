@@ -312,11 +312,7 @@ import {
   decodeBoolean,
   useSessionStorageState,
 } from "./hooks/useSessionStorageState.ts";
-import {
-  Composer,
-  PlanModeBadge,
-  type BranchPanelInfo,
-} from "./components/Composer.tsx";
+import { Composer, type BranchPanelInfo } from "./components/Composer.tsx";
 import { SessionWorktreeMissingBanner } from "./components/SessionWorktreeMissingBanner.tsx";
 import type { MarkdownPaObjectReference } from "./components/Markdown.tsx";
 import type {
@@ -6952,19 +6948,7 @@ function AppContent() {
                         sessionIdCopied ? "Copied!" : "Copy session ID"
                       }
                       objectOverflow={false}
-                      // The Plan badge rides the identity row so the mode is visible
-                      // wherever the session is, tracking the server record (the
-                      // optimistic staged session only until adoption).
-                      title={
-                        displaySession?.mode === "plan" ? (
-                          <div className="flex min-w-0 items-center gap-2">
-                            {sessionTitleHeading}
-                            <PlanModeBadge />
-                          </div>
-                        ) : (
-                          sessionTitleHeading
-                        )
-                      }
+                      title={sessionTitleHeading}
                       // Mobile folds both of these into the object dock (ui-shell.md, Small
                       // Screens), leaving this row to identity alone.
                       actions={

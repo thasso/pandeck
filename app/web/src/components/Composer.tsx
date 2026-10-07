@@ -24,9 +24,7 @@ import {
   ClipboardList,
   CornerDownRight,
   Cpu,
-  FileText,
   GitFork,
-  Hammer,
   ListPlus,
   Mic,
   Paperclip,
@@ -98,6 +96,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
+import { Switch } from "./ui/switch.tsx";
 import { Command, CommandItem, CommandList } from "./ui/command.tsx";
 import {
   DropdownMenu,
@@ -590,6 +589,11 @@ function ThinkingSelector({
  * nothing more — no "read-only", no "safe", no lock glyph — because v1 Plan
  * keeps the shell and is a convention, not an enforced boundary.
  */
+/**
+ * Build/Plan as one switch labelled "Plan" — the word and nothing more (Task
+ * 305): Build is the default a session works in and Plan the mode it opts
+ * into, so the switch names the exception and off is Build.
+ */
 export function ModeSelector({
   mode,
   onChange,
@@ -597,44 +601,22 @@ export function ModeSelector({
   mode: SessionMode;
   onChange: (mode: SessionMode) => void;
 }) {
-  const Icon = mode === "build" ? Hammer : FileText;
-  const label = mode === "build" ? "Build" : "Plan";
-
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={<Button variant="outline" size="sm" />}
-        title="Session mode"
-      >
-        <Icon />
-        <span>{label}</span>
-        <ChevronDown />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top">
-        {(["build", "plan"] as const).map((value) => {
-          const OptionIcon = value === "build" ? Hammer : FileText;
-          return (
-            <DropdownMenuItem
-              key={value}
-              aria-current={mode === value ? "true" : undefined}
-              onClick={() => onChange(value)}
-            >
-              <OptionIcon />
-              <span className="flex-1">
-                {value === "build" ? "Build" : "Plan"}
-              </span>
-              {mode === value ? <Check /> : null}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <label
+      className="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground select-none hover:text-foreground"
+      title={`Session mode: ${mode === "plan" ? "Plan" : "Build"}`}
+    >
+      <Switch
+        size="sm"
+        checked={mode === "plan"}
+        onCheckedChange={(checked) => onChange(checked ? "plan" : "build")}
+        aria-label="Plan mode"
+      />
+      <span className={mode === "plan" ? "text-foreground" : undefined}>
+        Plan
+      </span>
+    </label>
   );
-}
-
-/** The one badge shown while a session is in Plan (session header). */
-export function PlanModeBadge() {
-  return <Badge variant="secondary">Plan</Badge>;
 }
 
 function RuntimeSettingsPanel({
