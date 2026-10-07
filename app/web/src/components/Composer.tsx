@@ -437,8 +437,14 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
       >
         <div className="size-full rounded-full bg-card" />
       </TooltipTrigger>
-      <TooltipContent id={tooltipId} side="top" className="w-72">
-        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
+      {/* TooltipContent is a one-line row (`inline-flex items-center`) on an
+          inverted surface: stack this panel, and tint with `text-background`. */}
+      <TooltipContent
+        id={tooltipId}
+        side="top"
+        className="w-72 max-w-none flex-col items-stretch gap-0"
+      >
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold">
           <span>Context</span>
           <span>{formatPercent(percent)}</span>
         </div>
@@ -480,7 +486,7 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
                 label="Turns"
                 value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
               />
-              <div className="pt-1 text-xs text-muted-foreground">
+              <div className="pt-1 text-xs text-background/70">
                 Cached input is cumulative across internal model steps; some
                 providers report reads but not writes.
               </div>
@@ -495,10 +501,8 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
 function ContextRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right text-muted-foreground">
-        {value}
-      </span>
+      <span className="shrink-0 text-background/70">{label}</span>
+      <span className="min-w-0 truncate text-right">{value}</span>
     </div>
   );
 }
