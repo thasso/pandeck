@@ -36,7 +36,15 @@ test("guided setup continues from models to Git, locations and selected integrat
   );
   assert.match(
     prompt,
-    /settings_request_input so the PAT is entered in a private card/,
+    /assistant message immediately BEFORE invoking settings_request_input/,
+  );
+  assert.match(
+    prompt,
+    /actual clickable link returned by github_pat_setup_link/,
+  );
+  assert.match(
+    prompt,
+    /it must be visible in your message WHEN you ask for the token/,
   );
   assert.match(prompt, /projectsRoot and worktrees.root/);
   assert.match(prompt, /multi-select ask_questions card/);

@@ -82,6 +82,15 @@ export type SettingValueSpec =
 
 export type SettingAccess = "value" | "readonly" | "secret" | "oauth";
 
+/** The full-featured GitHub PAT uses classic scopes; the URL contains no token or username. */
+export const GITHUB_CLASSIC_PAT_SCOPES = [
+  "repo",
+  "workflow",
+  "read:packages",
+  "notifications",
+] as const;
+export const GITHUB_CLASSIC_PAT_URL = `https://github.com/settings/tokens/new?description=Pandeck&scopes=${encodeURIComponent(GITHUB_CLASSIC_PAT_SCOPES.join(","))}`;
+
 export interface SettingDescriptor {
   path: string;
   section: SettingsSectionId;
@@ -100,6 +109,8 @@ export interface SettingDescriptor {
   clearWith?: string;
   /** `oauth`: the server route that starts the browser flow. */
   connectPath?: string;
+  /** `secret`: trusted external creation link shown beside the private input card. */
+  setupLink?: { url: string; label: string; hint: string };
   /** Units, or what an empty value means. */
   hint?: string;
 }
@@ -169,6 +180,7 @@ function secret(
   label: string,
   configuredBy: string,
   clearWith: string,
+  setupLink?: SettingDescriptor["setupLink"],
 ): SettingDescriptor {
   return {
     path,
@@ -178,6 +190,7 @@ function secret(
     value: STRING,
     configuredBy,
     clearWith,
+    ...(setupLink ? { setupLink } : {}),
   };
 }
 
@@ -739,6 +752,11 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
     "Personal access token",
     "github.tokenConfigured",
     "clearToken",
+    {
+      url: GITHUB_CLASSIC_PAT_URL,
+      label: "Create a GitHub classic token",
+      hint: "GitHub preselects repo, workflow, read:packages and notifications. Review the scopes and set an expiration before pasting the new token below. Confirm you are signed into the intended GitHub account.",
+    },
   ),
   setting("github.defaultOwner", "github", "Default owner", STRING),
   setting(

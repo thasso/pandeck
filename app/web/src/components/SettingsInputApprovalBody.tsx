@@ -9,6 +9,8 @@
  * @payload `SettingsInputApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "settingsInput"`, in
  *   place of the generic Approve/Reject footer.
+ * @intent A secret's registry setupLink stays visible above the private field
+ *   so the user can create a credential even when the assistant omits its URL.
  */
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -63,6 +65,7 @@ function SecretControls(
 ) {
   const { body, active, busy, onSubmit, onDismiss } = props;
   const [value, setValue] = useState("");
+  const setupLink = settingDescriptor(body.path)?.setupLink;
   const submit = () => {
     const typed = value.trim();
     if (!typed) return;
@@ -71,6 +74,20 @@ function SecretControls(
   };
   return (
     <>
+      {setupLink && (
+        <div className="space-y-1.5 rounded-lg border border-line bg-surface px-3 py-2">
+          <a
+            href={setupLink.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-caption font-medium text-accent hover:underline"
+          >
+            {setupLink.label}
+            <ExternalLink size={13} aria-hidden="true" />
+          </a>
+          <p className="text-caption text-muted">{setupLink.hint}</p>
+        </div>
+      )}
       <form
         className="flex items-center gap-2"
         onSubmit={(event) => {

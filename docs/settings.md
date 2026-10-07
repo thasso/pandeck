@@ -22,7 +22,10 @@ assistant can set too, and secrets stay out of its context
     echoes back in a patch declares the kind it reads as, so a wrong-kind echo
     is refused.
   - `secret`: write-only. A read reports only the `configuredBy` flag. Writing
-    `null` sets the `clearWith` patch flag.
+    `null` sets the `clearWith` patch flag. An optional trusted `setupLink`
+    (URL, label, hint) renders above the private `settings_request_input` card
+    field, so users can create the credential even if the Assistant omits a link
+    in its prose. The link never carries a token.
   - `oauth`: connected through a browser flow. Only `null` (disconnect, via
     `clearWith`) can be written.
 - `value`: the kind and bounds a write must have. The Settings page reads its

@@ -13,8 +13,10 @@ configure Git on the host.
 For the **full** GitHub feature set, create a **personal access token
 (classic)**. Pandeck uses APIs and registries that fine-grained PATs do not
 fully support, notably GitHub Packages and parts of the Checks API. The
-first-run `github_pat_setup_link` tool generates this prefilled link after
-asking for the GitHub login:
+first-run `github_pat_setup_link` tool returns this prefilled link after asking
+for the GitHub login. The pending GitHub token card also shows the same link
+above its private field, even if Larry forgets to include it in his message.
+Both use the shared Settings registry URL so they cannot diverge:
 
 [Create a Pandeck classic PAT](https://github.com/settings/tokens/new?description=Pandeck&scopes=repo%2Cworkflow%2Cread%3Apackages%2Cnotifications)
 

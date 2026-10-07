@@ -1,13 +1,10 @@
+import {
+  GITHUB_CLASSIC_PAT_SCOPES,
+  GITHUB_CLASSIC_PAT_URL,
+} from "@assistant/shared/settingsRegistry";
 import { CWD } from "../../config.ts";
 import { gitReadOnlyOptionalExit, GitCommandError } from "../../gitExec.ts";
 import { defineAgentTool, jsonResult } from "../../mcp/tool.ts";
-
-export const GITHUB_CLASSIC_PAT_SCOPES = [
-  "repo",
-  "workflow",
-  "read:packages",
-  "notifications",
-] as const;
 
 /** Classic PATs support Packages, Checks and repositories across multiple owners.
  * The classic form has no target-name parameter: it uses the account signed into GitHub. */
@@ -20,10 +17,7 @@ export function githubPatCreationUrl(rawUsername: string): string {
     throw new Error(
       "Enter a valid GitHub username before creating a token link.",
     );
-  const url = new URL("https://github.com/settings/tokens/new");
-  url.searchParams.set("description", "Pandeck");
-  url.searchParams.set("scopes", GITHUB_CLASSIC_PAT_SCOPES.join(","));
-  return url.toString();
+  return GITHUB_CLASSIC_PAT_URL;
 }
 
 /** Read-only host Git check for the Personal Assistant's developer setup. */

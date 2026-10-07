@@ -110,6 +110,14 @@ test("a secret is sent only with the decision and leaves the field", () => {
     />,
   );
   expect(container!.textContent).toContain("To read your pull requests.");
+  const link = container!.querySelector<HTMLAnchorElement>(
+    'a[href^="https://github.com/settings/tokens/new"]',
+  );
+  expect(link?.textContent).toContain("Create a GitHub classic token");
+  expect(link?.target).toBe("_blank");
+  expect(new URL(link!.href).searchParams.get("scopes")).toBe(
+    "repo,workflow,read:packages,notifications",
+  );
   // Its own controls replace the generic footer, and nothing grants it.
   expect(buttonLabels()).toEqual(["Dismiss", "Save"]);
 
@@ -155,6 +163,11 @@ test("a connection opens the server's sign-in route", async () => {
     />,
   );
   expect(container!.querySelector("input")).toBeNull();
+  expect(
+    container!.querySelector(
+      'a[href^="https://github.com/settings/tokens/new"]',
+    ),
+  ).toBeNull();
   await act(async () => click("Connect"));
   expect(open).toHaveBeenCalledOnce();
   expect(String(open.mock.calls[0]![0])).toMatch(
@@ -230,6 +243,11 @@ test("a resolved card shows its outcome and no controls", () => {
   );
   expect(container!.textContent).toContain("Personal access token saved.");
   expect(container!.querySelector("input")).toBeNull();
+  expect(
+    container!.querySelector(
+      'a[href^="https://github.com/settings/tokens/new"]',
+    ),
+  ).toBeNull();
   expect(buttonLabels()).toEqual([]);
 });
 

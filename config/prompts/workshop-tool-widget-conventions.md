@@ -178,6 +178,16 @@ Use this pattern for out-of-band proposal lifecycles where the origin session
 must stay idle (not streaming/generating) and the card state changes
 asynchronously.
 
+## Credential-creation links in settings-input cards
+
+When a secret needs an external creation page, define a trusted, static
+`setupLink` (URL, label, hint) on its shared Settings registry descriptor.
+`SettingsInputApprovalBody` renders it above the private field while the card is
+pending, whether or not the assistant remembered to include the link in its
+message. The URL must contain no token or sensitive account data; only the
+card's decision sends the entered secret to the server. Do not overload the
+agent-written card reason with URLs or parse assistant prose to recover one.
+
 ## Draft handoff widgets
 
 - Tools that propose code, UI, workflow, or capability changes for a different

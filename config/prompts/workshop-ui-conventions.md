@@ -798,6 +798,10 @@ Guidelines for briefs:
   buttons, and status/callout components when available.
 - Never display stored secret values in the browser. Use explicit “configured,
   leave blank to keep” style behavior for secret replacement fields.
+- When a secret-entry card needs an external credential-creation page, show a
+  clear, clickable setup action above the private input. Keep the URL and helper
+  text in the setting's shared registry descriptor so the UI and agent tooling
+  cannot drift; the assistant's prose alone is not a reliable place for it.
 
 ## Inline editing
 

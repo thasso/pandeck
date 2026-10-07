@@ -75,13 +75,15 @@ when a provider has multiple accounts), model-picker visibility via
 `models_read` and `settings_update(models.hidden)`, then the host Git check
 (`git_setup_read`) and optional GitHub connection. A GitHub username creates a
 prefilled classic PAT link (`github_pat_setup_link`) with the GitHub scopes in
-[`github.md`](github.md); the PAT is collected only by `settings_request_input`,
-never in chat. Regardless of GitHub choice, Larry shows the actual
-`projectsRoot` and, when Git is installed, `worktrees.root` before offering
-separate changes. A multi-choice `ask_questions` card then lets the user select
-Forgejo, Jira/Confluence, Google, Slack, Tempo or Brave Web Search, including
-none; chosen connections follow their Settings descriptors and secret/OAuth
-cards. Memory opt-in comes afterward. Each reply asks the next concrete question
+[`github.md`](github.md). Larry should show the clickable link in his own
+message when asking for the token; the pending private `settings_request_input`
+card also shows it above the input, independently of Larry's text. The PAT never
+enters chat. Regardless of GitHub choice, Larry shows the actual `projectsRoot`
+and, when Git is installed, `worktrees.root` before offering separate changes. A
+multi-choice `ask_questions` card then lets the user select Forgejo,
+Jira/Confluence, Google, Slack, Tempo or Brave Web Search, including none;
+chosen connections follow their Settings descriptors and secret/OAuth cards.
+Memory opt-in comes afterward. Each reply asks the next concrete question
 instead of only promising more setup. Memory stays off unless explicitly
 enabled. The provider/model can be changed later in Settings → Personal
 Assistant.
