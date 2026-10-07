@@ -4037,7 +4037,9 @@ function AppContent() {
     <h2 className="min-w-0 text-sm font-semibold tracking-tight text-foreground">
       <Button
         variant="ghost"
-        className="-mx-1.5 h-auto max-w-full min-w-0 flex-col items-start gap-0 px-1.5 py-0.5 text-left font-semibold"
+        // A link, not a button: no hover fill, the pointer cursor says it
+        // can be clicked (Button sets no cursor of its own).
+        className="-mx-1.5 h-auto max-w-full min-w-0 cursor-pointer flex-col items-start gap-0 px-1.5 py-0.5 text-left font-semibold hover:bg-transparent dark:hover:bg-transparent"
         title="Open this session's worktree changes"
         onClick={() =>
           displayWorktreeId &&
