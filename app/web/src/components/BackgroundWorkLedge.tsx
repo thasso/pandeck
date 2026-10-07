@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo, useState } from "react";
 import { Activity, ChevronDown, ChevronRight, Square } from "lucide-react";
 import type {
   BackgroundWorkItemSummary,
@@ -7,12 +7,16 @@ import type {
 import {
   backgroundActivityCounts,
   backgroundActivityText,
+  backgroundWorkAgeLabel,
+  backgroundWorkDeadlineLabel,
   backgroundWorkListView,
+  backgroundWorkStopDisabledReason,
 } from "../lib/backgroundWork.ts";
 import { elapsedLabel } from "../lib/relativeTime.ts";
-import { BackgroundWorkRow } from "./BackgroundWorkRow.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
+import { Item, ItemActions } from "@/components/ui/item";
 
 /** How many active rows the ledge lists before pointing at the registry. */
 const BACKGROUND_WORK_LEDGE_LIMIT = 10;
@@ -27,9 +31,6 @@ export interface BackgroundWorkLedgeProps {
   onToggle: () => void;
   stopPending: ReadonlySet<string>;
   onStop: (itemId: string) => void;
-  onStopAll: (ownerSessionId: string) => void;
-  /** Open one item's row on the registry page. */
-  onOpenRegistry: (itemId: string) => void;
 }
 
 /**
@@ -55,8 +56,6 @@ export function BackgroundWorkLedge({
   onToggle,
   stopPending,
   onStop,
-  onStopAll,
-  onOpenRegistry,
 }: BackgroundWorkLedgeProps) {
   const now = useElapsedNow(activity.activeCount > 0);
   const active = useMemo(
@@ -99,45 +98,117 @@ export function BackgroundWorkLedge({
         <Chevron aria-hidden="true" />
       </Button>
       {open ? (
+        // Rows like the spawned-session strip's: one line each, edge to edge,
+        // hairline-separated. The registry page keeps the full card.
         <div
           id={`background-ledge-${sessionId}`}
-          className="flex max-h-72 flex-col gap-2 overflow-y-auto border-t p-2 text-sm text-muted-foreground"
+          className="max-h-72 divide-y overflow-y-auto border-t text-sm text-muted-foreground"
         >
           {active.total > 0 ? (
-            <ul className="flex flex-col gap-2">
+            <ul className="divide-y">
               {active.rows.map((item) => (
-                <BackgroundWorkRow
+                <BackgroundWorkLedgeRow
                   key={item.id}
                   item={item}
                   now={now}
                   stopPending={stopPending.has(item.id)}
                   onStop={onStop}
-                  onOpenRegistry={onOpenRegistry}
                 />
               ))}
             </ul>
-          ) : activity.activeCount > 0 ? (
-            <p>Loading the rows…</p>
           ) : (
-            <p>
-              Nothing is running; this session still holds a retained background
-              host.
+            <p className="px-2.5 py-1.5">
+              {activity.activeCount > 0
+                ? "Loading…"
+                : "Nothing is running; this session holds a retained host."}
             </p>
           )}
           {active.hidden > 0 ? (
-            <p>{active.hidden} more in the registry.</p>
+            <p className="px-2.5 py-1.5">
+              {active.hidden} more on the Background tasks page
+            </p>
           ) : null}
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => onStopAll(sessionId)}
-          >
-            <Square aria-hidden="true" />
-            Stop all background work in this session
-          </Button>
         </div>
       ) : null}
     </div>
   );
 }
+
+/**
+ * One background item in the composer strip: what it is, how long it has run,
+ * how long it has left, and Stop. The command it runs is one tap away under
+ * the title; everything else (host, evidence, facts) is the registry's.
+ */
+const BackgroundWorkLedgeRow = memo(function BackgroundWorkLedgeRow({
+  item,
+  now,
+  stopPending,
+  onStop,
+}: {
+  item: BackgroundWorkItemSummary;
+  now: number;
+  stopPending: boolean;
+  onStop: (itemId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const command = item.command?.trim();
+  const stopBlocked = backgroundWorkStopDisabledReason(item);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <li data-background-item={item.id} className="min-w-0">
+      <Item
+        size="xs"
+        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0"
+      >
+        <Button
+          variant="ghost"
+          size="sm"
+          // Square and filled under the transparent border, like the strip's
+          // header, so its hover meets the strip's edge. Open is not a hover
+          // state: ghost styles `aria-expanded` like one, so reset it.
+          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          disabled={!command}
+          title={
+            command
+              ? open
+                ? "Hide the command"
+                : "Show the command"
+              : undefined
+          }
+        >
+          <Chevron aria-hidden="true" className={command ? "" : "invisible"} />
+          <span className="min-w-0 truncate text-foreground">{item.label}</span>
+        </Button>
+        <ItemActions className="gap-1.5">
+          <span className="text-xs whitespace-nowrap tabular-nums">
+            {backgroundWorkAgeLabel(item, now)} ·{" "}
+            {backgroundWorkDeadlineLabel(item, now)}
+          </span>
+          <IconButton
+            label={`Stop ${item.label}`}
+            title={stopBlocked ?? "Stop"}
+            size="icon-xs"
+            busy={stopPending}
+            disabled={Boolean(stopBlocked)}
+            onClick={() => onStop(item.id)}
+          >
+            <Square />
+          </IconButton>
+        </ItemActions>
+      </Item>
+      {open && command ? (
+        <pre
+          // Plain text under the title: `pl-7` is the toggle's own padding
+          // plus its chevron and gap, so the command starts where the title
+          // does; `pr-2.5` matches the row's other edge.
+          className="max-h-40 overflow-auto pt-0.5 pr-2.5 pb-2 pl-7 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-muted-foreground"
+        >
+          {command}
+          {item.commandTruncated ? "\n…" : ""}
+        </pre>
+      ) : null}
+    </li>
+  );
+});

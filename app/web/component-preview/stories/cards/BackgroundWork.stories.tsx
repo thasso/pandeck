@@ -66,8 +66,6 @@ function ComposerLedges({ open }: { open: boolean }) {
         onToggle={noop}
         stopPending={noStops}
         onStop={noop}
-        onStopAll={noop}
-        onOpenRegistry={noop}
       />
     </>
   );

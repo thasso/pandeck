@@ -530,8 +530,6 @@ describe("the composer's background ledge", () => {
         onToggle={() => {}}
         stopPending={new Set<string>()}
         onStop={() => {}}
-        onStopAll={() => {}}
-        onOpenRegistry={() => {}}
       />,
     );
   }

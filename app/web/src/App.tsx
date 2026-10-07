@@ -4855,8 +4855,6 @@ function AppContent() {
           onToggle={toggleBackgroundLedge}
           stopPending={backgroundStopPending}
           onStop={actions.stopBackgroundWork}
-          onStopAll={actions.stopAllBackgroundWork}
-          onOpenRegistry={openBackgroundWork}
         />
       ) : undefined,
     [
@@ -4867,8 +4865,6 @@ function AppContent() {
       toggleBackgroundLedge,
       backgroundStopPending,
       actions.stopBackgroundWork,
-      actions.stopAllBackgroundWork,
-      openBackgroundWork,
     ],
   );
   // The composer's spawned-session ledge: the peers THIS session started, shaped
