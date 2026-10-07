@@ -5,6 +5,7 @@ import type {
   SessionBackgroundActivity,
 } from "@assistant/shared";
 import {
+  backgroundActivityCounts,
   backgroundActivityText,
   backgroundWorkListView,
 } from "../lib/backgroundWork.ts";
@@ -67,7 +68,10 @@ export function BackgroundWorkLedge({
       }),
     [items, sessionId],
   );
+  // The line shows counts (`1 job · 2 services`); the sentence they abbreviate
+  // is the button's name and tooltip.
   const summary = backgroundActivityText(activity) ?? "Background work";
+  const counts = backgroundActivityCounts(activity) ?? "Background work";
   const age =
     activity.activeCount > 0 && activity.oldestStartedAt > 0
       ? elapsedLabel(now - activity.oldestStartedAt)
@@ -84,10 +88,12 @@ export function BackgroundWorkLedge({
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`background-ledge-${sessionId}`}
+        aria-label={`${summary}${age ? `, oldest started ${age} ago` : ""}`}
+        title={summary}
       >
         <Activity aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-left">
-          {summary}
+          {counts}
           {age ? <span className="text-muted-foreground"> · {age}</span> : null}
         </span>
         <Chevron aria-hidden="true" />

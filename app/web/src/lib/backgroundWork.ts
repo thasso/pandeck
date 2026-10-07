@@ -441,6 +441,32 @@ export function backgroundActivityText(
 }
 
 /**
+ * The same facts as {@link backgroundActivityText} as counts for a line that
+ * must fit a phone: `2 services`, `1 job · 2 services`, `1 job · 1 starting`.
+ * Jobs are the active items the owner waits on, services the ones it declared
+ * it does not (`SessionBackgroundActivity.serviceCount`); a zero count is left
+ * out. The sentence stays the accessible name and tooltip.
+ */
+export function backgroundActivityCounts(
+  activity: SessionBackgroundActivity | undefined,
+): string | undefined {
+  if (!activity) return undefined;
+  if (activity.activeCount <= 0)
+    return activity.retainedHost ? "Retained host" : undefined;
+  const services = activity.serviceCount ?? 0;
+  const jobs = Math.max(0, activity.activeCount - services);
+  const parts: string[] = [];
+  if (jobs > 0) parts.push(`${jobs} job${jobs === 1 ? "" : "s"}`);
+  if (services > 0)
+    parts.push(`${services} service${services === 1 ? "" : "s"}`);
+  if (activity.startingCount > 0)
+    parts.push(`${activity.startingCount} starting`);
+  if (activity.stoppingCount > 0)
+    parts.push(`${activity.stoppingCount} stopping`);
+  return parts.join(" · ");
+}
+
+/**
  * The chip's content key. Same contract (and the same silent failure) as
  * `sessionInbox.ts`: a memoized card that reads a field this key omits stops
  * updating, and the session list is rebroadcast several times a second.
