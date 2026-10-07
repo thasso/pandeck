@@ -2181,10 +2181,12 @@ export const Composer = memo(function Composer({
           // Opaque: InputGroup's own fill is transparent (dark: `bg-input/30`),
           // which lets the transcript scrolling underneath show through. No
           // focus border or ring either: the composer is the page's one text
-          // field and its caret already says where focus is. Its corners are
+          // field and its caret already says where focus is. Disabled stays
+          // opaque too (InputGroup fades the whole box to 50% and tints it):
+          // the field's own disabled style dims the text. Its corners are
           // deliberately rounder than the theme radius and do not follow it:
           // the composer is the one object on the page meant to read as such.
-          className={`relative z-10 h-auto flex-col items-stretch rounded-[1.25rem] bg-background dark:bg-card has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
+          className={`relative z-10 h-auto flex-col items-stretch rounded-[1.25rem] bg-background dark:bg-card has-[[data-slot=input-group-control]:focus-visible]:border-input has-[[data-slot=input-group-control]:focus-visible]:ring-0 has-[[data-slot=input-group-control]:disabled]:bg-background has-[[data-slot=input-group-control]:disabled]:opacity-100 dark:has-[[data-slot=input-group-control]:disabled]:bg-card ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
             barless mobile composer, which collapses to nothing and lets the object
