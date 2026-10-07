@@ -2675,7 +2675,19 @@ export const Composer = memo(function Composer({
         {(runtimeLine || contextInfo?.context) && !hidden && !commentMode ? (
           <ComposerLedge joined edge="bottom">
             {/* `@container`: the context sizes join only where they fit. */}
-            <div className="@container flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground">
+            <div className="@container relative flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground">
+              {/* The strip doubles as the context gauge: a faint fill from the
+                  left as wide as the window is full, behind the text (the
+                  ledge is its stacking context), warning-tinted from 80%. */}
+              {contextInfo?.context?.percent != null ? (
+                <div
+                  aria-hidden
+                  className={`absolute inset-y-0 left-0 -z-10 transition-[width] duration-500 ease-out ${contextInfo.context.percent >= 80 ? "bg-warning/20" : "bg-primary/10"}`}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, contextInfo.context.percent))}%`,
+                  }}
+                />
+              ) : null}
               {runtimeLine ? (
                 <>
                   {model ? (
