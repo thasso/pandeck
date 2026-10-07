@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   FilePlus2,
@@ -12,21 +11,25 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { CommitDisplay, CommitFileChange } from "@assistant/shared";
-
-function tone(commit: CommitDisplay): string {
-  if (commit.status === "committed") return "border-success/30 bg-success-soft";
-  if (commit.status === "dry-run") return "border-primary/30 bg-accent";
-  if (commit.status === "blocked" || commit.status === "failed")
-    return "border-destructive/30 bg-destructive/10";
-  return "border-border bg-card";
-}
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { ErrorNote } from "./common/load.tsx";
+import { NoticeList } from "./tools/NoticeList.tsx";
 
 function statusIcon(commit: CommitDisplay) {
   if (commit.status === "committed")
-    return <CheckCircle2 size={16} className="text-success" />;
+    return <CheckCircle2 className="size-4 text-success" />;
   if (commit.status === "dry-run")
-    return <GitCommitHorizontal size={16} className="text-primary" />;
-  return <XCircle size={16} className="text-destructive" />;
+    return <GitCommitHorizontal className="size-4 text-primary" />;
+  return <XCircle className="size-4 text-destructive" />;
 }
 
 function statusLabel(commit: CommitDisplay): string {
@@ -39,10 +42,10 @@ function statusLabel(commit: CommitDisplay): string {
 
 function fileIcon(file: CommitFileChange) {
   if (file.status === "added" || file.status === "untracked")
-    return <FilePlus2 size={13} className="text-success" />;
+    return <FilePlus2 className="size-3.5 text-success" />;
   if (file.status === "deleted")
-    return <Trash2 size={13} className="text-destructive" />;
-  return <FileText size={13} className="text-muted-foreground" />;
+    return <Trash2 className="size-3.5 text-destructive" />;
+  return <FileText className="size-3.5 text-muted-foreground" />;
 }
 
 export function CommitCard({
@@ -55,67 +58,51 @@ export function CommitCard({
   const [filesOpen, setFilesOpen] = useState(commit.files.length <= 8);
   const shownFiles = filesOpen ? commit.files : commit.files.slice(0, 6);
   return (
-    <div className={`my-1.5 overflow-hidden rounded-xl border ${tone(commit)}`}>
-      <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
-        <div className="mt-0.5">{statusIcon(commit)}</div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="text-sm font-semibold text-foreground">
-              {statusLabel(commit)}
-            </div>
-            {commit.repoRoot && (
-              <div className="font-mono text-sm text-muted-foreground">
-                {commit.repoRoot}
-              </div>
-            )}
-          </div>
-          <div className="mt-1 flex flex-wrap gap-3 text-sm text-muted-foreground">
-            <span>
-              {commit.totals.files} file{commit.totals.files === 1 ? "" : "s"}
+    <Card size="sm" className="my-1.5">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-x-2">
+          {statusIcon(commit)}
+          {statusLabel(commit)}
+          {commit.repoRoot && (
+            <span className="font-mono text-sm font-normal text-muted-foreground">
+              {commit.repoRoot}
             </span>
-            <span className="inline-flex items-center gap-1 text-success">
-              <Plus size={11} />
-              {commit.totals.additions}
-            </span>
-            <span className="inline-flex items-center gap-1 text-destructive">
-              <Minus size={11} />
-              {commit.totals.deletions}
-            </span>
-            {commit.dryRun && (
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
-                no changes committed
-              </span>
-            )}
-            {commit.forced && (
-              <span className="rounded-full bg-warning-soft px-2 py-0.5 text-foreground">
-                forced
-              </span>
-            )}
-            {commit.stagedOnly && (
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-primary">
-                staged only
-              </span>
-            )}
-          </div>
-        </div>
+          )}
+        </CardTitle>
+        <CardDescription className="flex flex-wrap items-center gap-2">
+          <span>
+            {commit.totals.files} file{commit.totals.files === 1 ? "" : "s"}
+          </span>
+          <span className="inline-flex items-center gap-1 text-success">
+            <Plus className="size-3" />
+            {commit.totals.additions}
+          </span>
+          <span className="inline-flex items-center gap-1 text-destructive">
+            <Minus className="size-3" />
+            {commit.totals.deletions}
+          </span>
+          {commit.dryRun && (
+            <Badge variant="secondary">no changes committed</Badge>
+          )}
+          {commit.forced && <Badge variant="warning">forced</Badge>}
+          {commit.stagedOnly && <Badge variant="secondary">staged only</Badge>}
+        </CardDescription>
         {commit.canAcceptDryRun && commit.entryId && onAccept && (
-          <button
-            type="button"
-            onClick={() => onAccept(commit.entryId!)}
-            className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary/90"
-          >
-            Commit this
-          </button>
+          <CardAction>
+            <Button size="sm" onClick={() => onAccept(commit.entryId!)}>
+              Commit this
+            </Button>
+          </CardAction>
         )}
-      </div>
+      </CardHeader>
 
-      <div className="space-y-3 px-3 py-3">
+      <CardContent className="flex flex-col gap-3">
         {commit.commitMessage && (
           <div>
-            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">
               Commit message
-            </div>
-            <pre className="whitespace-pre-wrap rounded-lg bg-muted p-2 font-mono text-sm text-foreground">
+            </p>
+            <pre className="rounded-lg bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
               {commit.commitMessage}
             </pre>
           </div>
@@ -123,114 +110,78 @@ export function CommitCard({
 
         {(commit.addressedTasks?.length ?? 0) > 0 && (
           <div>
-            <div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <p className="mb-1 text-xs font-medium text-muted-foreground">
               Session Task context
-            </div>
-            <div className="space-y-1 rounded-lg border border-border bg-card/50 p-2">
+            </p>
+            <ul className="flex flex-col gap-1 text-sm">
               {commit.addressedTasks!.map((task) => (
-                <div
-                  key={task.id}
-                  className="flex items-center gap-2 text-sm text-muted-foreground"
-                >
-                  <span
-                    className={`size-1.5 rounded-full ${task.status === "done" ? "bg-success" : "bg-primary"}`}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-foreground">
-                    {task.title}
-                  </span>
-                  <span className="text-muted-foreground">{task.status}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {commit.files.length > 0 && (
-          <div>
-            <button
-              type="button"
-              onClick={() => setFilesOpen((open) => !open)}
-              className="mb-1 flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground hover:text-muted-foreground"
-            >
-              <ChevronDown
-                size={12}
-                className={`transition-transform ${filesOpen ? "" : "-rotate-90"}`}
-              />
-              Files
-            </button>
-            <div className="overflow-hidden rounded-lg border border-border bg-card/50">
-              {shownFiles.map((file) => (
-                <div
-                  key={file.path}
-                  className="flex items-center gap-2 border-b border-border/50 px-2 py-1.5 last:border-b-0"
-                >
-                  {fileIcon(file)}
-                  <span className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">
-                    {file.path}
-                  </span>
-                  {file.sessionTouched && (
-                    <span className="rounded bg-primary/15 px-1.5 py-0.5 text-xs text-primary">
-                      session
-                    </span>
-                  )}
-                  <span className="text-sm text-success">
-                    +{file.additions ?? 0}
-                  </span>
-                  <span className="text-sm text-destructive">
-                    -{file.deletions ?? 0}
-                  </span>
-                </div>
-              ))}
-              {!filesOpen && commit.files.length > shownFiles.length && (
-                <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                  + {commit.files.length - shownFiles.length} more files
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {commit.blockers.length > 0 && (
-          <div className="rounded-lg border border-destructive/35 bg-destructive/10 px-2.5 py-2 text-sm text-foreground">
-            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
-              <XCircle size={13} className="text-destructive" />
-              Blockers
-            </div>
-            <ul className="list-disc space-y-1 pl-5 marker:text-destructive">
-              {commit.blockers.map((b, i) => (
-                <li key={i}>
-                  {b.file && (
-                    <span className="font-mono text-destructive">
-                      {b.file}:{" "}
-                    </span>
-                  )}
-                  {b.reason}
+                <li key={task.id} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">{task.title}</span>
+                  <Badge
+                    variant={task.status === "done" ? "success" : "secondary"}
+                  >
+                    {task.status}
+                  </Badge>
                 </li>
               ))}
             </ul>
           </div>
         )}
 
-        {commit.warnings.length > 0 && (
-          <div className="rounded-lg border border-warning/35 bg-warning-soft px-2.5 py-2 text-sm text-foreground">
-            <div className="mb-1 flex items-center gap-1.5 font-medium text-foreground">
-              <AlertTriangle size={13} className="text-warning" />
-              Warnings
-            </div>
-            <ul className="list-disc space-y-1 pl-5 marker:text-warning">
-              {commit.warnings.map((w, i) => (
-                <li key={i}>{w}</li>
+        {commit.files.length > 0 && (
+          <div>
+            <Button
+              variant="ghost"
+              size="xs"
+              className="-ml-2"
+              aria-expanded={filesOpen}
+              onClick={() => setFilesOpen((open) => !open)}
+            >
+              <ChevronDown className={filesOpen ? "" : "-rotate-90"} />
+              Files
+            </Button>
+            <ul className="mt-1 divide-y rounded-lg border">
+              {shownFiles.map((file) => (
+                <li
+                  key={file.path}
+                  className="flex items-center gap-2 px-2 py-1.5 text-sm"
+                >
+                  {fileIcon(file)}
+                  <span className="min-w-0 flex-1 truncate font-mono">
+                    {file.path}
+                  </span>
+                  {file.sessionTouched && (
+                    <Badge variant="secondary">session</Badge>
+                  )}
+                  <span className="text-success">+{file.additions ?? 0}</span>
+                  <span className="text-destructive">
+                    -{file.deletions ?? 0}
+                  </span>
+                </li>
               ))}
+              {!filesOpen && commit.files.length > shownFiles.length && (
+                <li className="px-2 py-1.5 text-sm text-muted-foreground">
+                  + {commit.files.length - shownFiles.length} more files
+                </li>
+              )}
             </ul>
           </div>
         )}
 
-        {commit.error && (
-          <div className="rounded-lg border border-destructive/35 bg-destructive/10 px-2.5 py-2 text-sm text-foreground">
-            {commit.error}
-          </div>
-        )}
-      </div>
-    </div>
+        <NoticeList
+          variant="destructive"
+          title="Blockers"
+          items={commit.blockers.map((b) => (
+            <>
+              {b.file && <span className="font-mono">{b.file}: </span>}
+              {b.reason}
+            </>
+          ))}
+        />
+        <NoticeList title="Warnings" items={commit.warnings} />
+
+        {commit.error && <ErrorNote message={commit.error} />}
+      </CardContent>
+    </Card>
   );
 }

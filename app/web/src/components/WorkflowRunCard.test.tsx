@@ -638,7 +638,7 @@ it("says when the card shortened the review instead of hiding it", () => {
   expect(document.body.textContent).toContain("Shortened for this card");
 });
 
-it("uses a slider to raise by N even at the start-form maximum", () => {
+it("uses a slider to raise by N even at the start-form maximum", async () => {
   const answers: [string, string, unknown][] = [];
   const gate = (maxReviewPasses: number): CardProjection => ({
     ...card,
@@ -654,7 +654,7 @@ it("uses a slider to raise by N even at the start-form maximum", () => {
     },
   });
   const render = (projection: CardProjection) =>
-    act(() => {
+    act(async () => {
       root!.render(
         <DialogProvider>
           <WorkflowRunCard
@@ -678,7 +678,7 @@ it("uses a slider to raise by N even at the start-form maximum", () => {
 
   // Below the start-form bound: the raise is offered and names the next
   // number.
-  render(gate(2));
+  await render(gate(2));
   const text = () => document.body.textContent ?? "";
   expect(text()).toMatch(/reached its review-pass ceiling/);
   expect(text()).toMatch(/would ship work no review pass has accepted/);
@@ -702,19 +702,24 @@ it("uses a slider to raise by N even at the start-form maximum", () => {
   // guards the start form against a typo, while this gate is the user's
   // explicit decision to let the run continue.
   answers.length = 0;
-  render(gate(5));
-  const slider = container!.querySelector<HTMLInputElement>(
-    'input[aria-label="Additional review passes"]',
+  await render(gate(5));
+  const slider = container!.querySelector<HTMLElement>(
+    'input[type="range"][aria-label="Additional review passes"]',
   );
   expect(slider, "the raise amount uses a slider").not.toBeNull();
-  act(() => {
-    Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value",
-    )!.set!.call(slider, "4");
-    slider!.dispatchEvent(new Event("input", { bubbles: true }));
-    slider!.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  expect(slider!.getAttribute("aria-valuenow")).toBe("2");
+  for (let step = 0; step < 2; step++) {
+    await act(async () => {
+      slider!.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+  }
+  expect(slider!.getAttribute("aria-valuenow")).toBe("4");
   expect(raise()?.textContent).toBe("Allow 4 more");
   act(() => {
     raise()!.dispatchEvent(new MouseEvent("click", { bubbles: true }));

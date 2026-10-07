@@ -11,6 +11,17 @@ import {
   Zap,
 } from "lucide-react";
 import type { PromptQueueState, QueuedPrompt } from "@assistant/shared";
+import { IconButton } from "./common/IconButton.tsx";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Textarea } from "@/components/ui/textarea";
 
 export interface PromptQueueLedgeProps {
   queue: PromptQueueState;
@@ -25,11 +36,6 @@ export interface PromptQueueLedgeProps {
   onClear: () => void;
   onResume: () => void;
 }
-
-const ROW_ACTION_CLASS =
-  "flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-30";
-const HEADER_ACTION_CLASS =
-  "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
  * @component PromptQueueLedge
@@ -89,17 +95,9 @@ export function PromptQueueLedge({
     <div data-prompt-queue-ledge className="@container min-w-0">
       <div className="flex h-8 min-w-0 items-center gap-2 px-3 text-sm">
         {queue.paused ? (
-          <Pause
-            size={13}
-            className="shrink-0 text-warning"
-            aria-hidden="true"
-          />
+          <Pause aria-hidden="true" className="size-3.5 text-warning" />
         ) : (
-          <ListOrdered
-            size={13}
-            className="shrink-0 text-primary"
-            aria-hidden="true"
-          />
+          <ListOrdered aria-hidden="true" className="size-3.5 text-primary" />
         )}
         <span
           className={`min-w-0 flex-1 truncate ${queue.paused ? "text-warning" : "text-muted-foreground"}`}
@@ -108,65 +106,46 @@ export function PromptQueueLedge({
             ? `Queue paused · ${count} ${count === 1 ? "message" : "messages"}`
             : `${count} queued`}
           {queue.paused ? null : (
-            <span className="hidden text-muted-foreground @md:inline">
+            <span className="hidden @md:inline">
               {` · sent ${running ? "after this response" : "next"}`}
             </span>
           )}
         </span>
-        <button
-          type="button"
-          onClick={onClear}
-          className={`${HEADER_ACTION_CLASS} text-muted-foreground hover:text-foreground`}
-        >
+        <Button variant="ghost" size="xs" onClick={onClear}>
           Clear
-        </button>
+        </Button>
         {queue.paused ? (
-          <button
-            type="button"
-            onClick={onResume}
-            className={`${HEADER_ACTION_CLASS} text-primary`}
-          >
-            <Play size={11} className="fill-current" aria-hidden="true" />
+          <Button variant="secondary" size="xs" onClick={onResume}>
+            <Play aria-hidden="true" />
             Send next
-          </button>
+          </Button>
         ) : null}
       </div>
-      <ol className="max-h-[30vh] overflow-y-auto border-t border-border px-1.5 py-1">
+      <ol className="flex max-h-60 flex-col gap-1 overflow-y-auto border-t p-1.5">
         {queue.items.map((item, index) => (
-          <li
-            key={item.id}
-            className="rounded-lg px-1.5 py-1 hover:bg-muted/60"
-          >
+          <li key={item.id}>
             {editing?.id === item.id ? (
               <div className="flex items-start gap-2">
-                <textarea
+                <Textarea
                   ref={editRef}
                   value={editing.text}
                   onChange={(e) =>
                     setEditing({ id: item.id, text: e.target.value })
                   }
                   onKeyDown={onEditKeyDown}
-                  rows={Math.min(
-                    5,
-                    Math.max(1, editing.text.split("\n").length),
-                  )}
                   aria-label="Edit queued message"
-                  className="min-w-0 flex-1 resize-none rounded-md border border-input bg-background px-2 py-1 text-sm text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  className="min-h-0 min-w-0 flex-1 resize-none"
                 />
-                <button
-                  type="button"
-                  onClick={saveEdit}
-                  className={`${HEADER_ACTION_CLASS} text-primary`}
-                >
+                <Button size="xs" onClick={saveEdit}>
                   Save
-                </button>
-                <button
-                  type="button"
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => setEditing(null)}
-                  className={`${HEADER_ACTION_CLASS} text-muted-foreground`}
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             ) : (
               <QueuedRow
@@ -208,87 +187,63 @@ function QueuedRow({
 }) {
   const attachmentCount = item.attachments?.length ?? 0;
   return (
-    <div className="min-w-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-md border border-border bg-background px-1 text-xs font-semibold text-muted-foreground">
-          {index + 1}
-        </span>
-        <span
-          className={`min-w-0 flex-1 truncate text-sm text-foreground ${item.command ? "font-mono" : ""}`}
-          title={item.text}
-        >
-          {item.text}
-        </span>
-        {attachmentCount > 0 ? (
-          <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
-            <Paperclip size={11} aria-hidden="true" />
-            {attachmentCount}
+    <Item size="xs" className="flex-wrap">
+      <ItemMedia>
+        <Badge variant="outline">{index + 1}</Badge>
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full font-normal" title={item.text}>
+          <span className={item.command ? "truncate font-mono" : "truncate"}>
+            {item.text}
           </span>
+        </ItemTitle>
+        {item.error ? (
+          <p className="text-sm text-destructive">{item.error}</p>
         ) : null}
-        {/* A send under way is past changing: the server refuses an edit or
-          removal, so the row says what is happening instead of offering them. */}
-        {item.sending ? (
-          <span className="shrink-0 text-sm text-muted-foreground">
-            Sending…
-          </span>
-        ) : (
-          // Its own line on a narrow ledge, beside the text on a wide one.
-          <div className="flex basis-full justify-end @md:basis-auto">
-            <button
-              type="button"
-              onClick={onSendNow}
-              title={item.command ? "Send it next" : sendNowLabel}
-              aria-label={item.command ? "Send it next" : sendNowLabel}
-              className={ROW_ACTION_CLASS}
-            >
-              <Zap size={13} />
-            </button>
-            {!item.command ? (
-              <button
-                type="button"
-                onClick={onEdit}
-                title="Edit"
-                aria-label="Edit queued message"
-                className={ROW_ACTION_CLASS}
-              >
-                <Pencil size={13} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => onMove(index - 1)}
-              disabled={index === 0}
-              title="Move up"
-              aria-label="Move up"
-              className={ROW_ACTION_CLASS}
-            >
-              <ArrowUp size={13} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onMove(index + 1)}
-              disabled={last}
-              title="Move down"
-              aria-label="Move down"
-              className={ROW_ACTION_CLASS}
-            >
-              <ArrowDown size={13} />
-            </button>
-            <button
-              type="button"
-              onClick={onRemove}
-              title="Remove"
-              aria-label="Remove queued message"
-              className={ROW_ACTION_CLASS}
-            >
-              <X size={13} />
-            </button>
-          </div>
-        )}
-      </div>
-      {item.error ? (
-        <p className="mt-0.5 pl-7 text-sm text-destructive">{item.error}</p>
+      </ItemContent>
+      {attachmentCount > 0 ? (
+        <span className="flex items-center gap-0.5 text-xs text-muted-foreground">
+          <Paperclip aria-hidden="true" className="size-3" />
+          {attachmentCount}
+        </span>
       ) : null}
-    </div>
+      {/* A send under way is past changing: the server refuses an edit or
+          removal, so the row says what is happening instead of offering them. */}
+      {item.sending ? (
+        <span className="text-sm text-muted-foreground">Sending…</span>
+      ) : (
+        // Its own line on a narrow ledge, beside the text on a wide one.
+        <ItemActions className="basis-full justify-end gap-0 @md:basis-auto">
+          <IconButton
+            label={item.command ? "Send it next" : sendNowLabel}
+            onClick={onSendNow}
+          >
+            <Zap />
+          </IconButton>
+          {!item.command ? (
+            <IconButton label="Edit queued message" onClick={onEdit}>
+              <Pencil />
+            </IconButton>
+          ) : null}
+          <IconButton
+            label="Move up"
+            onClick={() => onMove(index - 1)}
+            disabled={index === 0}
+          >
+            <ArrowUp />
+          </IconButton>
+          <IconButton
+            label="Move down"
+            onClick={() => onMove(index + 1)}
+            disabled={last}
+          >
+            <ArrowDown />
+          </IconButton>
+          <IconButton label="Remove queued message" onClick={onRemove}>
+            <X />
+          </IconButton>
+        </ItemActions>
+      )}
+    </Item>
   );
 }

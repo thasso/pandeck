@@ -11,7 +11,6 @@
  *   place of the generic Approve/Reject footer.
  */
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 import { ExternalLink, LogIn, Save, XCircle } from "lucide-react";
 import type {
   CredentialProfileSummary,
@@ -26,6 +25,8 @@ import {
 } from "../lib/credentialProfiles.ts";
 import { ClaudeLoginTerminal } from "./ClaudeLoginTerminal.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 type Busy = "submit" | "dismiss" | null;
 
@@ -40,16 +41,16 @@ interface ControlProps {
 
 function DismissButton({ active, busy, onDismiss }: ControlProps) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
+      size="sm"
       onClick={onDismiss}
       disabled={!active}
-      aria-busy={busy === "dismiss" || undefined}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-50"
+      busy={busy === "dismiss"}
     >
-      {busy === "dismiss" ? <Spinner size="sm" /> : <XCircle size={12} />}
+      {busy === "dismiss" ? null : <XCircle />}
       Dismiss
-    </button>
+    </Button>
   );
 }
 
@@ -78,7 +79,7 @@ function SecretControls(
           submit();
         }}
       >
-        <input
+        <Input
           type="password"
           aria-label={body.label}
           autoComplete="off"
@@ -91,13 +92,12 @@ function SecretControls(
               ? "Paste a new value to replace it"
               : "Paste the value"
           }
-          className="min-w-0 flex-1 rounded-lg border border-border bg-muted px-2.5 py-1 text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-50"
         />
       </form>
-      <div className="text-sm text-muted-foreground">
+      <p className="text-muted-foreground">
         The value goes straight to the server. The assistant never sees it, and
         this card does not keep it.
-      </div>
+      </p>
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton
           {...props}
@@ -106,16 +106,15 @@ function SecretControls(
             onDismiss();
           }}
         />
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={submit}
           disabled={!active || !value.trim()}
-          aria-busy={busy === "submit" || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+          busy={busy === "submit"}
         >
-          {busy === "submit" ? <Spinner size="sm" /> : <Save size={12} />}
+          {busy === "submit" ? null : <Save />}
           Save
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -148,24 +147,23 @@ function ConnectControls(props: ControlProps) {
   };
   return (
     <>
-      <div className="text-sm text-muted-foreground">
+      <p className="text-muted-foreground">
         {connecting
           ? "Approve access in your browser. This card updates once the account is connected."
           : "Opens sign-in in your browser. This card updates once the account is connected."}
-      </div>
+      </p>
       {error && <ErrorNote message={error} />}
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton {...props} />
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={() => void connect()}
-          disabled={!active || !connectPath || opening}
-          aria-busy={opening || undefined}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
+          disabled={!active || !connectPath}
+          busy={opening}
         >
-          {opening ? <Spinner size="sm" /> : <ExternalLink size={12} />}
+          {opening ? null : <ExternalLink />}
           {connecting ? "Open again" : "Connect"}
-        </button>
+        </Button>
       </div>
     </>
   );
@@ -240,7 +238,7 @@ function SignInControls(props: ControlProps) {
   return (
     <>
       {verification && code && account?.enabled ? (
-        <div className="space-y-1 text-sm text-foreground">
+        <div className="flex flex-col gap-1 text-foreground">
           <div>
             Open{" "}
             <a
@@ -253,12 +251,10 @@ function SignInControls(props: ControlProps) {
             </a>{" "}
             and enter this code:
           </div>
-          <div className="font-mono text-sm font-semibold tracking-wider">
-            {code}
-          </div>
+          <div className="font-mono font-semibold tracking-wider">{code}</div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-muted-foreground">
           {account === undefined && <Spinner size="sm" />}
           {status}
         </div>
@@ -271,28 +267,23 @@ function SignInControls(props: ControlProps) {
       {actionError && <ErrorNote message={actionError} />}
       <div className="flex items-center justify-end gap-2 pt-1">
         <DismissButton {...props} />
-        <button
-          type="button"
+        <Button
+          size="sm"
           onClick={signIn}
           disabled={!active || !account?.enabled}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1 text-sm font-medium text-white hover:bg-primary/90 disabled:opacity-50"
         >
-          <LogIn size={12} />
+          <LogIn />
           {account?.status === "connecting" ? "Sign in again" : "Sign in"}
-        </button>
+        </Button>
       </div>
-      {/* A transcript row clips what overflows it: the terminal is a viewport
-          modal, so it renders at the document root. */}
-      {terminalOpen &&
-        account &&
-        createPortal(
-          <ClaudeLoginTerminal
-            profile={account}
-            onFinished={() => setTerminalOpen(false)}
-            onClose={() => setTerminalOpen(false)}
-          />,
-          document.body,
-        )}
+      {/* The terminal is a ui/dialog, which portals itself out of the row. */}
+      {terminalOpen && account && (
+        <ClaudeLoginTerminal
+          profile={account}
+          onFinished={() => setTerminalOpen(false)}
+          onClose={() => setTerminalOpen(false)}
+        />
+      )}
     </>
   );
 }
@@ -313,10 +304,8 @@ export function SettingsInputApprovalBody({
   const waiting = active || busy !== null;
   const controls = { body, active, busy, onDismiss };
   return (
-    <div className="space-y-2">
-      {body.reason && (
-        <div className="text-sm text-foreground">{body.reason}</div>
-      )}
+    <div className="flex flex-col gap-2">
+      {body.reason && <p className="text-foreground">{body.reason}</p>}
       {waiting &&
         (body.mode === "secret" ? (
           <SecretControls {...controls} onSubmit={onSubmit} />

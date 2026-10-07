@@ -8,28 +8,26 @@
  * @payload `JiraIssueApprovalBody` (`ApprovalCard.body`).
  * @useWhen Rendered by `ApprovalCard` for `body.kind === "jiraIssue"`.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import {
-  CheckCircle2,
-  ExternalLink,
-  Maximize2,
-  X,
-  XCircle,
-} from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { CheckCircle2, ExternalLink, Maximize2, XCircle } from "lucide-react";
 import type {
   ApprovalDecision,
   JiraIssueApprovalBody as JiraIssueApprovalBodyData,
   JiraIssueMutationItemDisplay,
 } from "@assistant/shared";
 import { Markdown } from "./Markdown.tsx";
-import { DialogAction, DialogCancelButton } from "./common/dialogs.tsx";
-import { wrapTabWithin } from "./common/focusTrap.ts";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 type JiraItem = JiraIssueMutationItemDisplay;
-
-/** The dialog's own controls plus whatever the rendered Markdown makes reachable. */
-const DIALOG_FOCUSABLE = 'button, a[href], [tabindex="0"]';
 
 /** Decision buttons offered while the card is pending; absent once it is not. */
 export type JiraDecide = ((decision: ApprovalDecision) => void) | undefined;
@@ -42,9 +40,9 @@ export function JiraIssueApprovalBody({
   onDecide: JiraDecide;
 }) {
   return (
-    <ul className="space-y-2">
+    <ul className="flex flex-col gap-2">
       {body.items.map((item, i) => (
-        <li key={item.clientId || i} className="text-sm">
+        <li key={item.clientId || i}>
           {item.operation === "create" ? (
             <CreateItem item={item} onDecide={onDecide} />
           ) : item.operation === "comment" ? (
@@ -70,39 +68,60 @@ function outcomeLabel(item: JiraItem): string {
 }
 
 function Outcome({ item }: { item: JiraItem }) {
-  if (!item.error && !item.resultIssueUrl && !item.warning) return null;
   return (
-    <div className="space-y-0.5">
-      {item.error ? (
-        <div className="text-sm text-destructive">{item.error}</div>
-      ) : item.resultIssueUrl ? (
+    <MutationOutcome
+      error={item.error}
+      warning={item.warning}
+      url={item.resultIssueUrl}
+      done={Boolean(item.resultIssueUrl)}
+      label={outcomeLabel(item)}
+    />
+  );
+}
+
+/** One proposed write's result: its error, or what it did (linked), plus any warning. */
+export function MutationOutcome({
+  error,
+  warning,
+  url,
+  done,
+  label,
+}: {
+  error?: string | null | undefined;
+  warning?: string | null | undefined;
+  url?: string | null | undefined;
+  done: boolean;
+  label: string;
+}) {
+  if (!error && !done && !warning) return null;
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      {error ? (
+        <p className="text-destructive">{error}</p>
+      ) : url ? (
         <a
-          href={item.resultIssueUrl}
+          href={url}
           target="_blank"
           rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 text-sm text-green-600 hover:underline dark:text-green-400"
+          className="inline-flex items-center gap-1 text-success hover:underline"
         >
-          <ExternalLink size={11} />
-          {outcomeLabel(item)}
+          <ExternalLink className="size-3" />
+          {label}
         </a>
+      ) : done ? (
+        <p className="text-success">{label}</p>
       ) : null}
-      {item.warning ? (
-        <div className="text-sm text-yellow-600 dark:text-yellow-400">
-          {item.warning}
-        </div>
-      ) : null}
+      {warning ? <p className="text-warning">{warning}</p> : null}
     </div>
   );
 }
 
-/** `Project · Type` in the accent chip every create wears, in card and modal. */
+/** `Project · Type` in the chip every create wears, in card and modal. */
 function IssueKind({ item }: { item: JiraItem }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 font-mono text-xs text-primary">
-      {item.createProjectKey}
-      <span className="text-primary/60">·</span>
-      <span className="font-sans">{item.createIssueType}</span>
-    </span>
+    <Badge variant="secondary" className="font-mono">
+      {item.createProjectKey} · {item.createIssueType}
+    </Badge>
   );
 }
 
@@ -208,14 +227,10 @@ function ReadFullButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted px-2 py-1 text-sm text-muted-foreground hover:bg-background hover:text-foreground"
-    >
-      <Maximize2 size={12} />
+    <Button variant="outline" size="sm" onClick={onClick}>
+      <Maximize2 />
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -229,7 +244,7 @@ function CreateItem({
   const [open, setOpen] = useState(false);
   const fields = createFields(item);
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col items-start gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <IssueKind item={item} />
         <span className="min-w-0 flex-1 font-medium text-foreground">
@@ -245,38 +260,33 @@ function CreateItem({
       <LinkRows item={item} />
       <ReadFullButton label="Read full ticket" onClick={() => setOpen(true)} />
       <Outcome item={item} />
-      {open ? (
-        <JiraProposalDialog
-          title={`New ${item.createIssueType ?? "issue"} in ${item.createProjectKey ?? "Jira"}`}
-          onClose={() => setOpen(false)}
-          onDecide={onDecide}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <IssueKind item={item} />
-          </div>
-          <h1 className="mt-2 text-xl font-semibold text-foreground">
-            {item.createSummary}
-          </h1>
-          <FieldRows
-            rows={fields}
-            className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2"
-          />
-          <DialogSection title="Description">
-            {item.createDescription ? (
-              <Markdown text={item.createDescription} />
-            ) : (
-              <div className="text-sm text-muted-foreground">
-                No description.
-              </div>
-            )}
+      <JiraProposalDialog
+        open={open}
+        title={`New ${item.createIssueType ?? "issue"} in ${item.createProjectKey ?? "Jira"}`}
+        onOpenChange={setOpen}
+        onDecide={onDecide}
+      >
+        <IssueKind item={item} />
+        <h1 className="mt-2 text-xl font-semibold text-foreground">
+          {item.createSummary}
+        </h1>
+        <FieldRows
+          rows={fields}
+          className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2"
+        />
+        <DialogSection title="Description">
+          {item.createDescription ? (
+            <Markdown text={item.createDescription} />
+          ) : (
+            <div className="text-sm text-muted-foreground">No description.</div>
+          )}
+        </DialogSection>
+        {item.linkChanges?.length ? (
+          <DialogSection title="Links">
+            <LinkRows item={item} />
           </DialogSection>
-          {item.linkChanges?.length ? (
-            <DialogSection title="Links">
-              <LinkRows item={item} />
-            </DialogSection>
-          ) : null}
-        </JiraProposalDialog>
-      ) : null}
+        ) : null}
+      </JiraProposalDialog>
     </div>
   );
 }
@@ -290,7 +300,7 @@ function CommentItem({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col items-start gap-2">
       <div>
         <span className="text-muted-foreground">comment on </span>
         <IssueKeyLink item={item} />
@@ -298,21 +308,20 @@ function CommentItem({
       {item.commentBody ? <ClippedMarkdown text={item.commentBody} /> : null}
       <ReadFullButton label="Read full comment" onClick={() => setOpen(true)} />
       <Outcome item={item} />
-      {open ? (
-        <JiraProposalDialog
-          title={`Comment on ${item.issueKey}`}
-          onClose={() => setOpen(false)}
-          onDecide={onDecide}
-        >
-          <div className="text-sm text-muted-foreground">
-            <IssueKeyLink item={item} />
-            {item.issueSummary ? ` · ${item.issueSummary}` : ""}
-          </div>
-          <DialogSection title="Comment">
-            {item.commentBody ? <Markdown text={item.commentBody} /> : null}
-          </DialogSection>
-        </JiraProposalDialog>
-      ) : null}
+      <JiraProposalDialog
+        open={open}
+        title={`Comment on ${item.issueKey}`}
+        onOpenChange={setOpen}
+        onDecide={onDecide}
+      >
+        <div className="text-sm text-muted-foreground">
+          <IssueKeyLink item={item} />
+          {item.issueSummary ? ` · ${item.issueSummary}` : ""}
+        </div>
+        <DialogSection title="Comment">
+          {item.commentBody ? <Markdown text={item.commentBody} /> : null}
+        </DialogSection>
+      </JiraProposalDialog>
     </div>
   );
 }
@@ -424,10 +433,7 @@ function RankItem({ item }: { item: JiraItem }) {
               {step.resultOk === false ? (
                 <span className="text-destructive"> — {step.error}</span>
               ) : step.resultOk ? (
-                <span className="text-green-600 dark:text-green-400">
-                  {" "}
-                  — applied
-                </span>
+                <span className="text-success"> — applied</span>
               ) : executed ? (
                 <span className="text-muted-foreground"> — not attempted</span>
               ) : null}
@@ -466,95 +472,59 @@ function DialogSection({
 }
 
 /**
- * The full proposal at reading size. A modal-band surface (ui-shell.md, 70)
- * rather than the document viewer: the ticket is not a file anywhere yet, it
- * exists only on this card until Jira accepts it. Holds focus like
- * `ImageLightbox` — Tab wraps inside it — and reads Escape itself so the
- * shortcut cannot also reach whatever raised it; the decision buttons are the card's, so approving from
- * here is the same act as approving on the card.
+ * The full proposal at reading size. A dialog rather than the document viewer:
+ * the ticket is not a file anywhere yet, it exists only on this card until
+ * Jira accepts it. The decision buttons are the card's, so approving from here
+ * is the same act as approving on the card.
  */
 function JiraProposalDialog({
   title,
-  onClose,
+  open,
+  onOpenChange,
   onDecide,
   children,
 }: {
   title: string;
-  onClose: () => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onDecide: JiraDecide;
   children: React.ReactNode;
 }) {
-  const surfaceRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    surfaceRef.current?.focus({ preventScroll: true });
-    return () => previous?.focus?.();
-  }, []);
   const decide = (decision: ApprovalDecision) => {
     onDecide?.(decision);
-    onClose();
+    onOpenChange(false);
   };
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        ref={surfaceRef}
-        tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
         aria-label={title}
-        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
-        onClick={(event) => event.stopPropagation()}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onClose();
-            return;
-          }
-          wrapTabWithin(event, surfaceRef.current, DIALOG_FOCUSABLE);
-        }}
+        className="flex max-h-11/12 flex-col sm:max-w-3xl"
       >
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-            {title}
-          </div>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="rounded-lg p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+        <DialogHeader>
+          <DialogTitle className="truncate pr-8">{title}</DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {children}
         </div>
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <DialogFooter>
           {onDecide ? (
             <>
-              <DialogCancelButton onClick={() => decide("rejected")}>
-                <span className="inline-flex items-center gap-1.5">
-                  <XCircle size={12} />
-                  Reject
-                </span>
-              </DialogCancelButton>
-              <DialogAction
-                icon={<CheckCircle2 size={12} />}
-                onClick={() => decide("approved")}
-              >
+              <Button variant="outline" onClick={() => decide("rejected")}>
+                <XCircle />
+                Reject
+              </Button>
+              <Button onClick={() => decide("approved")}>
+                <CheckCircle2 />
                 Approve
-              </DialogAction>
+              </Button>
             </>
           ) : (
-            <DialogCancelButton onClick={onClose}>Close</DialogCancelButton>
+            <DialogClose render={<Button variant="outline" />}>
+              Close
+            </DialogClose>
           )}
-        </div>
-      </div>
-    </div>,
-    document.body,
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

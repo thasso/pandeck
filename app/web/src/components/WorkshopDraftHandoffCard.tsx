@@ -1,5 +1,15 @@
 import { ExternalLink, FileText, Hammer } from "lucide-react";
 import type { AgentType, DisplayBlock } from "@assistant/shared";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -43,38 +53,32 @@ export function WorkshopDraftHandoffToolCard({
   if (!payload || payload.renderKind !== "workshopDraftHandoff") return null;
   const canOpen = Boolean(onCreateDraftSession);
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-      <div className="flex items-start gap-3 border-b border-border px-3 py-2.5">
-        <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
-          <Hammer size={15} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="truncate text-sm font-semibold text-foreground">
-              {payload.title}
-            </div>
-            <span className="rounded-full border border-border bg-muted px-1.5 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
-              {payload.category}
-            </span>
-          </div>
-          <div className="mt-0.5 text-sm text-muted-foreground">
-            Workshop proposal saved. Opening a draft will not submit anything.
-          </div>
-        </div>
-      </div>
-      <div className="space-y-2 px-3 py-2.5">
-        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-muted px-2 py-1.5 text-sm text-muted-foreground">
-          <FileText size={13} className="shrink-0 text-muted-foreground" />
+    <Card size="sm" className="my-2">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <Hammer className="size-4 text-primary" />
+          <span className="truncate">{payload.title}</span>
+          <Badge variant="outline">{payload.category}</Badge>
+        </CardTitle>
+        <CardDescription>
+          Workshop proposal saved. Opening a draft will not submit anything.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-muted-foreground">
+        <p className="flex min-w-0 items-center gap-2">
+          <FileText className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-mono">
             {payload.proposalPath}
           </span>
-        </div>
-        <div className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-muted-foreground">
+        </p>
+        <p>
           You can change the Workshop model and thinking level, edit the
           prefilled prompt, and then submit manually.
-        </div>
-        <button
-          type="button"
+        </p>
+      </CardContent>
+      <CardFooter>
+        <Button
+          size="sm"
           disabled={!canOpen}
           onClick={() =>
             onCreateDraftSession?.(
@@ -83,18 +87,17 @@ export function WorkshopDraftHandoffToolCard({
               "Workshop draft created — review model/thinking and edit before sending.",
             )
           }
-          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           title={
             canOpen
               ? "Create a Workshop session with this prompt as an editable draft"
               : "Workshop handoff is unavailable"
           }
         >
-          <ExternalLink size={13} />
+          <ExternalLink />
           Open Workshop draft
-        </button>
-      </div>
-    </div>
+        </Button>
+      </CardFooter>
+    </Card>
   );
 }
 
