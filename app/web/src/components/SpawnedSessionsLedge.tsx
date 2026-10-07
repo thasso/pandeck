@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   ChevronDown,
@@ -326,13 +326,17 @@ const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
           title={open ? "Hide details" : "Show details"}
         >
           <Chevron aria-hidden="true" />
+          {/* A quiet row keeps the badge's 20px slot so every title starts at
+              the same x, and the details below line up with both. */}
           {badge ? (
             <SessionStatusBadge
               badge={badge}
               status={status}
               display="icon-only"
             />
-          ) : null}
+          ) : (
+            <span aria-hidden className="size-5 shrink-0" />
+          )}
           <span
             className={`min-w-0 truncate text-foreground ${status === "unread" ? "font-semibold" : ""}`}
           >
@@ -362,34 +366,51 @@ const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
           className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-2 text-xs text-muted-foreground"
           style={{ paddingLeft: `calc(${0.75 * depth}rem + 1.75rem)` }}
         >
-          <span className="flex min-w-0 items-center gap-1.5">
-            <AgentIcon className="size-3 shrink-0" aria-hidden />
-            <span>{agent.label}</span>
-          </span>
+          <DetailLine icon={<AgentIcon className="size-3" aria-hidden />}>
+            {agent.label}
+          </DetailLine>
           {runtime ? (
-            <span className="flex min-w-0 items-center gap-1.5">
-              {model ? (
-                <ProviderIcon
-                  provider={model.provider}
-                  size={12}
-                  className="shrink-0"
-                />
-              ) : null}
-              <span className="min-w-0 truncate">{runtime}</span>
-            </span>
+            <DetailLine
+              icon={
+                model ? (
+                  <ProviderIcon provider={model.provider} size={12} />
+                ) : null
+              }
+            >
+              {runtime}
+            </DetailLine>
           ) : null}
           {details.branch ? (
-            <span className="flex min-w-0 items-center gap-1.5">
-              <GitBranch className="size-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate font-mono">
-                {details.branch}
-              </span>
-            </span>
+            <DetailLine icon={<GitBranch className="size-3" aria-hidden />}>
+              <span className="font-mono">{details.branch}</span>
+            </DetailLine>
           ) : session.worktreeId ? null : (
-            <span>No worktree</span>
+            <DetailLine icon={null}>No worktree</DetailLine>
           )}
         </div>
       ) : null}
     </li>
   );
 });
+
+/**
+ * One line of a spawned-session row's details. The icon sits centred in a
+ * 20px column with the row's 4px gap — the status badge's slot above it — so
+ * icons line up under the status glyph and text under the title.
+ */
+function DetailLine({
+  icon,
+  children,
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        {icon}
+      </span>
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  );
+}
