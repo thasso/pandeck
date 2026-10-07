@@ -58,6 +58,14 @@ export function FloatingComposerDock({
           aria-hidden
           className="pointer-events-none! absolute inset-x-0 bottom-0 -z-10 h-12 bg-linear-to-t from-background via-background/80 to-transparent"
         />
+        {/* The fade continues solid below the dock for exactly the height the
+            phone keyboard lifted it by, so the strip between the dock and the
+            keyboard is covered too and the fade shows no edge. Zero tall
+            whenever no keyboard is open — always, on desktop. */}
+        <div
+          aria-hidden
+          className="pointer-events-none! absolute inset-x-0 top-full -z-10 h-[var(--app-keyboard-inset-bottom,0px)] bg-background"
+        />
         {dock}
       </div>
     </div>

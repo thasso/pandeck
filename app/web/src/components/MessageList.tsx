@@ -1994,12 +1994,13 @@ export function MessageList({
           </div>
         )}
         {/* Room for the composer floating over the transcript's foot
-            (`FloatingComposerDock`), so the last row scrolls clear of it. Inside
-            the content so the scroll controller's ResizeObserver sees it grow
-            with the dock and keeps a pinned reader at the bottom. */}
+            (`FloatingComposerDock`), so the last row scrolls clear of it — and,
+            on a phone, of the keyboard the dock is lifted above too. Inside the
+            content so the scroll controller's ResizeObserver sees it grow with
+            the dock and keeps a pinned reader at the bottom. */}
         <div
           aria-hidden
-          className="mt-0! h-[var(--chat-dock-height,0px)] shrink-0"
+          className="mt-0! h-[calc(var(--chat-dock-height,0px)+var(--app-keyboard-inset-bottom,0px))] shrink-0"
         />
       </div>
     </div>
