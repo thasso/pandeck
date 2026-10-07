@@ -980,7 +980,7 @@ function ChangedFileCodeLink({
     <a
       href={workspaceFilePathHref(path)}
       title={`Open workspace file ${path}`}
-      className="rounded-[5px] border border-border bg-muted px-[0.34em] py-[0.08em] font-mono"
+      className="rounded border border-border bg-muted px-1 py-0.5 font-mono"
       onClick={(event) => {
         if (
           !onOpenChangedFile ||

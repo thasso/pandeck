@@ -7,6 +7,12 @@ import {
   type ReactNode,
 } from "react";
 import { Badge } from "../ui/badge.tsx";
+import { Button } from "../ui/button.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../ui/collapsible.tsx";
 import { useViewportProximity } from "./useNearViewport.ts";
 import { Spinner } from "./load.tsx";
 import { ChevronDown, CircleDashed, TriangleAlert, Wrench } from "lucide-react";
@@ -158,24 +164,22 @@ export function ToolCallBlock({
   }
 
   return (
-    <div
+    <Collapsible
       ref={rootRef}
+      open={isOpen}
+      onOpenChange={toggle}
       className={cx("flex w-full flex-col", className)}
       {...props}
     >
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={isOpen}
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant={isError ? "destructive" : "outline"}
+            size="sm"
+            className="w-full min-w-0 justify-start"
+          />
+        }
         aria-controls={bodyId}
-        className={cx(
-          "flex w-full min-w-0 items-center gap-2 rounded-lg border bg-card px-3 py-1.5 text-sm transition-colors",
-          "outline-none hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-          isError
-            ? "border-destructive/30 text-destructive"
-            : "text-foreground",
-          isOpen && "rounded-b-none",
-        )}
       >
         {status === "running" ? (
           <Spinner size="sm" variant="ring" />
@@ -220,12 +224,12 @@ export function ToolCallBlock({
             isOpen ? "rotate-0" : "-rotate-90",
           )}
         />
-      </button>
-      {isOpen && children != null && (
+      </CollapsibleTrigger>
+      {children != null && (
         // The body element stays mounted across the viewport gate, so it is the
         // one that carries `aria-busy` and clears it in place when the body
         // lands (R6); the placeholder inside only holds the height.
-        <div
+        <CollapsibleContent
           id={bodyId}
           aria-busy={!everNear || undefined}
           className={cx(
@@ -233,15 +237,15 @@ export function ToolCallBlock({
             isError && "border-destructive/30",
           )}
         >
-          {!everNear ? (
+          {!isOpen || !everNear ? (
             <div className="min-h-8" />
           ) : typeof children === "function" ? (
             children()
           ) : (
             children
           )}
-        </div>
+        </CollapsibleContent>
       )}
-    </div>
+    </Collapsible>
   );
 }

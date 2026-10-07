@@ -1,6 +1,7 @@
 import { useMemo, useState, type HTMLAttributes, type ReactNode } from "react";
 
 import { partialRangeNotice } from "../../lib/documentRange.ts";
+import { Button } from "../ui/button.tsx";
 
 export interface CollapsibleOutputProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
@@ -59,10 +60,6 @@ export interface CollapsibleOutputProps extends Omit<
 function cx(...classes: Array<string | false | undefined>): string {
   return classes.filter(Boolean).join(" ");
 }
-
-const controlClasses =
-  "rounded px-1 py-0.5 text-sm font-medium text-muted-foreground transition-colors " +
-  "hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 interface LineRange {
   /** 1-based, inclusive. */
@@ -189,9 +186,9 @@ export function CollapsibleOutput({
           {collapsible && (
             <>
               {hiddenBefore > 0 && (
-                <button
-                  type="button"
-                  className={controlClasses}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() =>
                     setShown({
                       key: baseKey,
@@ -200,12 +197,12 @@ export function CollapsibleOutput({
                   }
                 >
                   Show {Math.min(chunkLines, hiddenBefore)} earlier lines
-                </button>
+                </Button>
               )}
               {hiddenAfter > 0 && (
-                <button
-                  type="button"
-                  className={controlClasses}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() =>
                     setShown({
                       key: baseKey,
@@ -214,27 +211,27 @@ export function CollapsibleOutput({
                   }
                 >
                   Show {Math.min(chunkLines, hiddenAfter)} more lines
-                </button>
+                </Button>
               )}
               {hiddenBefore + hiddenAfter > chunkLines && (
-                <button
-                  type="button"
-                  className={controlClasses}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() =>
                     setShown({ key: baseKey, range: { from: 1, to: total } })
                   }
                 >
                   Show all
-                </button>
+                </Button>
               )}
               {atEnd && (
-                <button
-                  type="button"
-                  className={controlClasses}
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setShown({ key: baseKey, range: base })}
                 >
                   Show less
-                </button>
+                </Button>
               )}
               <span className="text-sm text-muted-foreground">
                 {windowed || from > 1

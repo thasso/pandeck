@@ -504,8 +504,10 @@ describe("MessageList chat comments", () => {
           )!
           .click(),
       );
-      const namedAction = [...document.body.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("Comment on this message"),
+      const namedAction = [
+        ...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ].find((button) =>
+        button.textContent?.includes("Comment on this message"),
       )!;
       act(() => namedAction.click());
       submitEditor();
@@ -596,8 +598,10 @@ describe("MessageList chat comments", () => {
           )!
           .click(),
       );
-      const named = [...document.body.querySelectorAll("button")].find(
-        (button) => button.textContent?.includes("Comment on this message"),
+      const named = [
+        ...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+      ].find((button) =>
+        button.textContent?.includes("Comment on this message"),
       )!;
       act(() => named.click());
       expect(container.textContent).toContain("Comment on “A previous prompt”");

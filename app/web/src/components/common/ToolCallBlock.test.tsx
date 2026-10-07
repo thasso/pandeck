@@ -34,7 +34,7 @@ test("the body waits for the viewport gate instead of building eagerly", () => {
   // The flag rides the BODY element (the one the header's `aria-controls`
   // names), which is still mounted when the children land, so it clears in
   // place rather than disappearing with a placeholder (R6).
-  expect(html).toMatch(/<div id="[^"]+" aria-busy="true"/);
+  expect(html).toMatch(/<div[^>]+id="[^"]+"[^>]+aria-busy="true"/);
 });
 
 /**

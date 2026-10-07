@@ -4,6 +4,7 @@ import type { DictationPhase } from "../hooks/useDictation.ts";
 import type { PeakRing } from "../lib/waveform.ts";
 import { WaveformStrip } from "./common/WaveformStrip.tsx";
 import { LIVE_PULSE, Spinner } from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 
 /**
  * The dictation surface, shared by every row that can host it: the chat
@@ -109,17 +110,14 @@ export function DictationDiscardButton({
   dense?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onCancel}
+    <IconButton
+      label="Discard recording"
       title="Discard recording"
-      aria-label="Discard recording"
-      className={`flex shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive ${
-        dense ? "size-7" : "size-8"
-      }`}
+      size={dense ? "icon-xs" : "icon-sm"}
+      onClick={onCancel}
     >
-      <X size={dense ? 14 : 15} />
-    </button>
+      <X />
+    </IconButton>
   );
 }
 
@@ -151,8 +149,16 @@ export function DictationToggleButton({
   // activation (which produces a click with no pointer press) still works.
   const actuatedByPointer = useRef(false);
   return (
-    <button
-      type="button"
+    <IconButton
+      label={
+        phase === "recording"
+          ? "Stop recording and transcribe"
+          : "Start dictation"
+      }
+      variant={phase === "recording" ? "destructive" : "ghost"}
+      size={
+        busy && !steady ? "icon-lg" : idleSize === "md" ? "icon" : "icon-sm"
+      }
       // STOP acts on the press, not on the click it eventually produces. This is
       // the one control aimed at mid-sentence, one-handed, and a touch click
       // arrives only after the browser has finished deciding the gesture was not
@@ -187,14 +193,6 @@ export function DictationToggleButton({
         dictation.disabledReason ??
         (phase === "recording" ? "Stop and transcribe" : "Dictate")
       }
-      aria-label={
-        phase === "recording"
-          ? "Stop recording and transcribe"
-          : "Start dictation"
-      }
-      className={`flex shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-        busy && !steady ? "size-10" : idleSize === "md" ? "size-9" : "size-8"
-      } ${phase === "recording" ? "bg-destructive text-primary-foreground hover:bg-destructive/90" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
     >
       {/* Arming is NOT a spinner: a spinner says "waiting for an answer", and
           there is no request here — the microphone and the socket are opening.
@@ -212,7 +210,7 @@ export function DictationToggleButton({
           className={phase === "starting" ? LIVE_PULSE : undefined}
         />
       )}
-    </button>
+    </IconButton>
   );
 }
 
