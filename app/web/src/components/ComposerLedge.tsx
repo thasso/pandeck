@@ -33,8 +33,11 @@ export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
   return (
     <div
       data-composer-ledge
-      // Clips the strips' edge-to-edge headers to the rounded top.
-      className={`relative z-1 mx-9 divide-y overflow-hidden rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
+      // Clips the strips' edge-to-edge headers to the rounded top. The inset
+      // IS the composer's corner radius (20px, `rounded-[1.25rem]`): the strip
+      // starts exactly where the curve ends. Less and the tucked-in bottom
+      // shows through the curve; change the two together.
+      className={`relative z-1 mx-5 divide-y overflow-hidden rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
     >
       {children}
     </div>
