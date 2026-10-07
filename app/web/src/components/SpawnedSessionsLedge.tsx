@@ -23,6 +23,7 @@ import {
   type SpawnedSessionsView,
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
+import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
@@ -301,6 +302,10 @@ const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   ]
     .filter(Boolean)
     .join(" · ");
+  const agent =
+    AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
+    AGENT_TYPE_DISPLAY.assistant;
+  const AgentIcon = agent.Icon;
   const depth = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
@@ -357,6 +362,10 @@ const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
           className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-2 text-xs text-muted-foreground"
           style={{ paddingLeft: `calc(${0.75 * depth}rem + 1.75rem)` }}
         >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <AgentIcon className="size-3 shrink-0" aria-hidden />
+            <span>{agent.label}</span>
+          </span>
           {runtime ? (
             <span className="flex min-w-0 items-center gap-1.5">
               {model ? (
