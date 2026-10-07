@@ -82,6 +82,7 @@ import {
   ownsScreenEdgeGestures,
 } from "./lib/nativeShell.ts";
 import { pathFromOpenTarget } from "./lib/openTarget.ts";
+import { FloatingComposerDock } from "./components/FloatingComposerDock.tsx";
 import { PerfHud } from "./components/PerfHud.tsx";
 import { recordRender, usePerfRenderCount } from "./lib/perfStats.ts";
 import {
@@ -5749,79 +5750,77 @@ function AppContent() {
 
     if (displayHasMessages || transcriptOnlyHasOlderMessages) {
       return (
-        <>
-          {/* Commit DURATION of the transcript subtree, for the dev HUD: the
-              render counts say how often it redraws, this says what one redraw
-              costs (a no-op outside profiling builds). */}
-          <Profiler id="Transcript" onRender={recordTranscriptRender}>
-            <Suspense fallback={<TranscriptChunkFallback />}>
-              <MessageList
-                sessionId={displayCurrentId}
-                messages={displayMessagesWithPeerPromptOverrides}
-                timeline={state.timeline}
-                chatComments={chatComments}
-                commentDraft={chatCommentDraft}
-                onCommentDraftChange={setChatCommentDraft}
-                onCommentSelectionChange={onChatCommentSelectionChange}
-                sessionStreaming={displayStreaming}
-                promptQueueStates={state.promptQueueStates}
-                appearance={state.settings.appearance}
-                sessionCanSteer={Boolean(displaySession?.canSteer)}
-                sessions={state.sessions}
-                changedFiles={workspaceChangedFiles}
-                paObjectReferences={paObjectReferences}
-                onOpenPaObject={openPaObject}
-                view={transcriptView}
-                onAcceptCommitDryRun={actions.acceptCommitDryRun}
-                onCreateDraftSession={actions.createDraftSession}
-                models={messageModels}
-                defaultModel={displaySession?.model}
-                defaultThinkingLevel={displaySession?.thinkingLevel}
-                onForkMessage={forkMessage}
-                onResendPrompt={resendPrompt}
-                onOpenSession={openSession}
-                onOpenChangedFile={openWorkspaceFile}
-                onOpenTask={openTaskById}
-                onOpenBackgroundWork={openBackgroundWork}
-                onOpenWorktree={openWorktree}
-                onRetryWorktreeProvision={onRetryWorktreeProvision}
-                onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
-                onResolveApproval={actions.resolveApproval}
-                approvalGrants={approvalGrants}
-                onRevokeApprovalGrant={actions.revokeApprovalGrant}
-                accountModels={settingsAccountModels}
-                onChoosePullRequestTask={actions.choosePullRequestTask}
-                onPullRequestCardAction={runPullRequestCardAction}
-                pendingQuestion={displaySession?.pendingQuestion}
-                answeredQuestions={displaySession?.answeredQuestions}
-                onRespondToQuestion={respondToQuestion}
-                onLoadTimelineBlock={actions.loadTimelineBlock}
-                onLiveBodyDemand={actions.setLiveBodyDemand}
-                turnStatsSeed={transcriptTurnStatsSeed}
-                hasOlderMessages={hasOlderTimelineEntries}
-                loadingOlderMessages={state.timelineRangePending !== null}
-                onLoadOlderMessages={actions.loadOlderTimeline}
-                focusEntry={transcriptFocusEntry}
-                onFocusEntryApplied={retireMessageFocus}
-                forkBoundary={transcriptForkBoundary}
-                pinToBottomToken={transcriptPinToken}
-                onRegisterViewHold={registerTranscriptViewHold}
-                loadingPreview={usePreview}
-                onPreviewInteraction={markPreviewInteracted}
-              />
-            </Suspense>
-          </Profiler>
-          {bootstrapNarrationEl}
-          <div
-            className="relative z-10 shrink-0 bg-transparent transition-transform duration-150 ease-out"
-            style={{
-              transform:
-                "translateY(calc(-1 * var(--app-keyboard-inset-bottom, 0px)))",
-            }}
-          >
-            {composerEl}
-          </div>
-        </>
+        <FloatingComposerDock
+          transcript={
+            // Commit DURATION of the transcript subtree, for the dev HUD: the
+            // render counts say how often it redraws, this says what one redraw
+            // costs (a no-op outside profiling builds).
+            <Profiler id="Transcript" onRender={recordTranscriptRender}>
+              <Suspense fallback={<TranscriptChunkFallback />}>
+                <MessageList
+                  sessionId={displayCurrentId}
+                  messages={displayMessagesWithPeerPromptOverrides}
+                  timeline={state.timeline}
+                  chatComments={chatComments}
+                  commentDraft={chatCommentDraft}
+                  onCommentDraftChange={setChatCommentDraft}
+                  onCommentSelectionChange={onChatCommentSelectionChange}
+                  sessionStreaming={displayStreaming}
+                  promptQueueStates={state.promptQueueStates}
+                  appearance={state.settings.appearance}
+                  sessionCanSteer={Boolean(displaySession?.canSteer)}
+                  sessions={state.sessions}
+                  changedFiles={workspaceChangedFiles}
+                  paObjectReferences={paObjectReferences}
+                  onOpenPaObject={openPaObject}
+                  view={transcriptView}
+                  onAcceptCommitDryRun={actions.acceptCommitDryRun}
+                  onCreateDraftSession={actions.createDraftSession}
+                  models={messageModels}
+                  defaultModel={displaySession?.model}
+                  defaultThinkingLevel={displaySession?.thinkingLevel}
+                  onForkMessage={forkMessage}
+                  onResendPrompt={resendPrompt}
+                  onOpenSession={openSession}
+                  onOpenChangedFile={openWorkspaceFile}
+                  onOpenTask={openTaskById}
+                  onOpenBackgroundWork={openBackgroundWork}
+                  onOpenWorktree={openWorktree}
+                  onRetryWorktreeProvision={onRetryWorktreeProvision}
+                  onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
+                  onResolveApproval={actions.resolveApproval}
+                  approvalGrants={approvalGrants}
+                  onRevokeApprovalGrant={actions.revokeApprovalGrant}
+                  accountModels={settingsAccountModels}
+                  onChoosePullRequestTask={actions.choosePullRequestTask}
+                  onPullRequestCardAction={runPullRequestCardAction}
+                  pendingQuestion={displaySession?.pendingQuestion}
+                  answeredQuestions={displaySession?.answeredQuestions}
+                  onRespondToQuestion={respondToQuestion}
+                  onLoadTimelineBlock={actions.loadTimelineBlock}
+                  onLiveBodyDemand={actions.setLiveBodyDemand}
+                  turnStatsSeed={transcriptTurnStatsSeed}
+                  hasOlderMessages={hasOlderTimelineEntries}
+                  loadingOlderMessages={state.timelineRangePending !== null}
+                  onLoadOlderMessages={actions.loadOlderTimeline}
+                  focusEntry={transcriptFocusEntry}
+                  onFocusEntryApplied={retireMessageFocus}
+                  forkBoundary={transcriptForkBoundary}
+                  pinToBottomToken={transcriptPinToken}
+                  onRegisterViewHold={registerTranscriptViewHold}
+                  loadingPreview={usePreview}
+                  onPreviewInteraction={markPreviewInteracted}
+                />
+              </Suspense>
+            </Profiler>
+          }
+          dock={
+            <>
+              {bootstrapNarrationEl}
+              {composerEl}
+            </>
+          }
+        />
       );
     }
 
