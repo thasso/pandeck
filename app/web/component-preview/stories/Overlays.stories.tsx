@@ -1,7 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { Popover } from "../../src/components/Popover.tsx";
 import { ToastViewport } from "../../src/components/ToastViewport.tsx";
 import { Button } from "../../src/components/ui/button.tsx";
 import {
@@ -15,7 +14,12 @@ import {
   DropdownMenuTrigger,
 } from "../../src/components/ui/dropdown-menu.tsx";
 import { EdgeSheet } from "../../src/components/common/EdgeSheet.tsx";
-import { GhostIconButton } from "../../src/components/common/GhostIconButton.tsx";
+import { IconButton } from "../../src/components/common/IconButton.tsx";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../../src/components/ui/popover.tsx";
 import { showToast } from "../../src/lib/toast.ts";
 
 /** Every app overlay, now on shadcn: dialogs, menus, popovers, sheets, toasts. */
@@ -86,25 +90,15 @@ export function Overlays() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Popover
-          button={<span className="px-2">Legacy Popover API</span>}
-          className="h-8 rounded-lg border px-2 text-sm"
-        >
-          {(close) => (
-            <button
-              type="button"
-              className="w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
-              onClick={close}
-            >
-              Close me
-            </button>
-          )}
+        <Popover>
+          <PopoverTrigger render={<Button variant="outline" />}>
+            Popover
+          </PopoverTrigger>
+          <PopoverContent>Anchored panel content</PopoverContent>
         </Popover>
-        <GhostIconButton
-          icon={<Pencil size={13} />}
-          label="Edit title"
-          onClick={() => {}}
-        />
+        <IconButton label="Edit title" onClick={() => {}}>
+          <Pencil />
+        </IconButton>
       </div>
       {confirmOpen ? (
         <ConfirmDialog
