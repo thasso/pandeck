@@ -70,7 +70,7 @@ export function CreateWorktreeDialog({
           placeholder={
             proposal === null ? "Proposing a name…" : "worktree-name"
           }
-          className="w-full flex-1 rounded-lg border border-line bg-surface px-3 py-2 font-mono text-body text-fg outline-none focus:border-accent"
+          className="w-full flex-1 rounded-lg border border-line bg-surface px-3 py-2 font-mono text-body text-fg outline-none focus:border-primary"
         />
         {/* Deliberately NOT a busy control, unlike `DialogAction` below: the
             spinner reports the naming AGENT's outstanding proposal, and this
@@ -87,7 +87,7 @@ export function CreateWorktreeDialog({
             edited.current = false;
             onPropose();
           }}
-          className="rounded-lg border border-line p-2 text-muted hover:bg-raised hover:text-fg"
+          className="rounded-lg border border-line p-2 text-muted-foreground hover:bg-raised hover:text-fg"
         >
           <span className="flex size-3.5 items-center justify-center">
             {proposal === null ? (
@@ -157,7 +157,7 @@ export function CommitWorktreeDialog({
             onCommit(message.trim());
         }}
         placeholder="Commit message"
-        className="mt-3 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-accent"
+        className="mt-3 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -208,7 +208,7 @@ export function AutoCommitResultDialog({
       {result.blockers.length ? (
         <div className="mt-3">
           <p className="text-caption font-semibold text-danger">Blockers</p>
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted">
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">
             {result.blockers.map((blocker, index) => (
               <li key={`${blocker.kind}:${index}`}>
                 {blocker.file ? `${blocker.file}: ` : ""}
@@ -221,7 +221,7 @@ export function AutoCommitResultDialog({
       {result.warnings.length ? (
         <div className="mt-3">
           <p className="text-caption font-semibold text-amber-400">Warnings</p>
-          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted">
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-caption text-muted-foreground">
             {result.warnings.map((warning, index) => (
               <li key={index}>{warning}</li>
             ))}
@@ -312,14 +312,14 @@ export function CreatePullRequestDialog({
         value={title}
         onChange={(event) => setTitle(event.target.value)}
         placeholder="Title"
-        className="mt-3 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-accent"
+        className="mt-3 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
       />
       <textarea
         rows={4}
         value={body}
         onChange={(event) => setBody(event.target.value)}
         placeholder="Description (optional)"
-        className="mt-2 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-accent"
+        className="mt-2 w-full resize-none rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg outline-none focus:border-primary"
       />
       {error ? <ErrorNote message={error} className="mt-2" /> : null}
       <div className="mt-3 flex justify-end gap-2">
@@ -421,7 +421,7 @@ export function MergePullRequestDialog({
         {offered.map((id) => (
           <label
             key={id}
-            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-accent bg-accent-soft text-fg" : "border-line text-muted hover:bg-raised"}`}
+            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${selected === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
           >
             <input
               type="radio"
@@ -547,7 +547,7 @@ export function MergeWorktreeDialog({
               (id) => (
                 <label
                   key={id}
-                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${strategy === id ? "border-accent bg-accent-soft text-fg" : "border-line text-muted hover:bg-raised"}`}
+                  className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-caption ${strategy === id ? "border-primary bg-accent text-fg" : "border-line text-muted-foreground hover:bg-raised"}`}
                 >
                   <input
                     type="radio"
@@ -579,14 +579,16 @@ export function MergeWorktreeDialog({
             role="status"
             className="flex items-center gap-2 text-caption text-fg"
           >
-            {busy ? <Spinner size="sm" className="text-accent" /> : null}
+            {busy ? <Spinner size="sm" className="text-primary" /> : null}
             {PHASE_LABELS[phase]}
           </p>
           {merge?.message ? (
-            <p className="mt-1 text-caption text-muted">{merge.message}</p>
+            <p className="mt-1 text-caption text-muted-foreground">
+              {merge.message}
+            </p>
           ) : null}
           {merge?.conflictPaths?.length ? (
-            <ul className="mt-2 max-h-24 overflow-y-auto rounded-lg border border-line p-2 font-mono text-caption text-muted">
+            <ul className="mt-2 max-h-24 overflow-y-auto rounded-lg border border-line p-2 font-mono text-caption text-muted-foreground">
               {merge.conflictPaths.map((path) => (
                 <li key={path}>{path}</li>
               ))}
@@ -597,7 +599,7 @@ export function MergeWorktreeDialog({
             <button
               type="button"
               onClick={() => onOpenSession(merge.agentSessionId!)}
-              className="mt-2 text-caption text-accent hover:underline"
+              className="mt-2 text-caption text-primary hover:underline"
             >
               Open the merge agent's session →
             </button>

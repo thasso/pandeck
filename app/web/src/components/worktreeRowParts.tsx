@@ -72,7 +72,7 @@ export function AxesSummary({
           className="mr-2 last:mr-0"
           title={`This branch is ${axisDivergence(axes.base.ahead, axes.base.behind, axes.base.label)}${staleNote}`}
         >
-          <span className="text-muted">{axes.base.label}</span>{" "}
+          <span className="text-muted-foreground">{axes.base.label}</span>{" "}
           {axes.base.ahead > 0 ? (
             <span className="text-emerald-400">↑{axes.base.ahead}</span>
           ) : null}
@@ -91,7 +91,9 @@ export function AxesSummary({
             className="mr-2 last:mr-0"
             title={`${baseLabel} is ${axisDivergence(axes.baseUpstream.ahead, axes.baseUpstream.behind, axes.baseUpstream.label)}${staleNote}`}
           >
-            <span className="text-muted">{axes.baseUpstream.label}</span>{" "}
+            <span className="text-muted-foreground">
+              {axes.baseUpstream.label}
+            </span>{" "}
             {axes.baseUpstream.ahead > 0 ? (
               <span className="text-emerald-400">
                 ↑{axes.baseUpstream.ahead}
@@ -116,7 +118,9 @@ export function AxesSummary({
               className="mr-2 last:mr-0"
               title={`This branch has ${pushPullDivergence(axes.upstream.ahead, axes.upstream.behind)} against ${axes.upstream.label}${staleNote}`}
             >
-              <span className="text-muted">{axes.upstream.label}</span>{" "}
+              <span className="text-muted-foreground">
+                {axes.upstream.label}
+              </span>{" "}
               {axes.upstream.ahead > 0 ? (
                 <span className="text-emerald-400">↑{axes.upstream.ahead}</span>
               ) : null}

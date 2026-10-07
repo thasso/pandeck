@@ -289,7 +289,7 @@ function NavigatorVisibilityToggle({
       title={label}
       aria-label={label}
       onClick={() => onChange(!collapsed)}
-      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-fg"
+      className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-raised hover:text-fg"
     >
       {collapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
     </button>
@@ -393,7 +393,7 @@ function WorktreeRailLayout({
     }
     return (
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
-        <div className="flex items-center gap-2 border-b border-line bg-surface/40 py-1.5 pl-1 pr-3 text-caption text-muted">
+        <div className="flex items-center gap-2 border-b border-line bg-surface/40 py-1.5 pl-1 pr-3 text-caption text-muted-foreground">
           {onBack ? (
             <button
               type="button"
@@ -451,7 +451,7 @@ function WorktreeRailLayout({
       ) : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
         {railCollapsed && collapsedSummary ? (
-          <div className="flex items-center gap-2 border-b border-line bg-surface/40 px-3 py-2 text-caption text-muted">
+          <div className="flex items-center gap-2 border-b border-line bg-surface/40 px-3 py-2 text-caption text-muted-foreground">
             {collapsedSummary}
           </div>
         ) : null}
@@ -711,7 +711,7 @@ function ChangesView({
               title="Jump to file"
               aria-label="Jump to file"
               onClick={() => setJumpSheetOpen(true)}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted hover:text-fg"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-fg"
             >
               <FolderTree size={14} />
             </button>
@@ -720,7 +720,7 @@ function ChangesView({
               align="right"
               placement="bottom"
               title="Jump to file"
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
               button={<FolderTree size={14} />}
             >
               {(close) => (
@@ -878,7 +878,7 @@ function ChangesView({
         >
           {fileDiff ? (
             fileDiff.binary ? (
-              <div className="p-6 text-body text-muted">
+              <div className="p-6 text-body text-muted-foreground">
                 Binary files cannot be diffed.
               </div>
             ) : (
@@ -920,7 +920,7 @@ function ChangesView({
             <PaneLoading label="Loading diff…" />
           ) : fileDiffError !== undefined ? (
             isUnchangedPathError(fileDiffError) ? (
-              <div className="p-6 text-body text-muted">
+              <div className="p-6 text-body text-muted-foreground">
                 This file is no longer changed in this scope.
               </div>
             ) : (
@@ -931,7 +931,7 @@ function ChangesView({
               />
             )
           ) : (
-            <div className="p-6 text-body text-muted">
+            <div className="p-6 text-body text-muted-foreground">
               No changed file selected.
             </div>
           )}
@@ -1333,7 +1333,7 @@ function FilesView({
             aria-label={label}
             aria-pressed={pivot === id}
             onClick={() => onPivotChange(id)}
-            className={`flex items-center justify-center rounded-md ${narrow ? "size-8" : "px-2 py-1 text-caption"} ${pivot === id ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}
+            className={`flex items-center justify-center rounded-md ${narrow ? "size-8" : "px-2 py-1 text-caption"} ${pivot === id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
           >
             {narrow ? icon : label}
           </button>
@@ -1352,7 +1352,7 @@ function FilesView({
             aria-label={ignoredVisibilityLabel}
             aria-pressed={includeIgnored}
             onClick={() => setIncludeIgnored((current) => !current)}
-            className={`flex size-7 shrink-0 items-center justify-center rounded-md hover:text-fg ${includeIgnored ? "bg-raised text-fg" : "text-muted hover:bg-raised"}`}
+            className={`flex size-7 shrink-0 items-center justify-center rounded-md hover:text-fg ${includeIgnored ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised"}`}
           >
             <Eye size={14} />
           </button>
@@ -1456,7 +1456,7 @@ function FilesView({
           <>
             {!narrow ? (
               <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-                <span className="min-w-0 flex-1 truncate font-mono text-caption text-muted">
+                <span className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground">
                   {filePath}
                 </span>
                 {shownRefresh !== null ? (
@@ -1548,7 +1548,7 @@ function FilesView({
                     onRetry={pivotFetch.reload}
                   />
                 ) : (
-                  <div className="p-6 text-body text-muted">
+                  <div className="p-6 text-body text-muted-foreground">
                     No changes to this file in that range.
                   </div>
                 )
@@ -1560,7 +1560,9 @@ function FilesView({
                 />
               ) : file ? (
                 file.binary ? (
-                  <div className="p-6 text-body text-muted">Binary file.</div>
+                  <div className="p-6 text-body text-muted-foreground">
+                    Binary file.
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-3 p-3">
                     {fileError !== undefined ? (
@@ -1613,7 +1615,7 @@ function FilesView({
             ) : null}
           </>
         ) : (
-          <div className="p-6 text-body text-muted">
+          <div className="p-6 text-body text-muted-foreground">
             Select a file to view it.
           </div>
         )}
@@ -1823,7 +1825,7 @@ export default function WorktreeDetailPage({
           ),
         )
       }
-      className={`shrink-0 rounded-lg px-2.5 py-1 text-caption ${view === tab.id ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}
+      className={`shrink-0 rounded-lg px-2.5 py-1 text-caption ${view === tab.id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
     >
       {tab.label}
     </button>
@@ -1833,7 +1835,7 @@ export default function WorktreeDetailPage({
       align="right"
       placement="bottom"
       title="Diff view options"
-      className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
+      className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-raised hover:text-fg data-[open=true]:bg-raised data-[open=true]:text-fg"
       button={<SlidersHorizontal size={14} />}
     >
       {() => (
@@ -1860,7 +1862,7 @@ export default function WorktreeDetailPage({
                       onUpdatePrefs({ worktreeReviewMode: option.id })
                     }
                     aria-pressed={reviewLayout === option.id}
-                    className={`flex flex-1 items-center justify-center rounded-md px-2 py-1 text-caption ${reviewLayout === option.id ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}
+                    className={`flex flex-1 items-center justify-center rounded-md px-2 py-1 text-caption ${reviewLayout === option.id ? "bg-raised font-medium text-fg" : "text-muted-foreground hover:text-fg"}`}
                   >
                     {option.label}
                   </button>

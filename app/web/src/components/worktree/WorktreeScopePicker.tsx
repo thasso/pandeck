@@ -172,12 +172,12 @@ function ScopePanel({
           pick();
           onClose();
         }}
-        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption ${active === id ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-caption ${active === id ? "bg-raised text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
       >
         <Icon size={13} className="shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {active === id ? (
-          <Check size={13} className="shrink-0 text-accent" />
+          <Check size={13} className="shrink-0 text-primary" />
         ) : null}
       </button>
     );
@@ -276,7 +276,7 @@ function CommitListPanel({
             setRangeStart(null);
           }}
           aria-pressed={rangeMode}
-          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${rangeMode ? "border-accent/40 bg-accent-soft text-accent" : "border-line text-muted hover:bg-raised hover:text-fg"}`}
+          className={`shrink-0 rounded-md border px-1.5 py-0.5 text-micro ${rangeMode ? "border-primary/40 bg-accent text-primary" : "border-line text-muted-foreground hover:bg-raised hover:text-fg"}`}
         >
           Range
         </button>
@@ -293,7 +293,9 @@ function CommitListPanel({
             />
           )
         ) : entries.length === 0 ? (
-          <div className="p-4 text-caption text-muted">No commits.</div>
+          <div className="p-4 text-caption text-muted-foreground">
+            No commits.
+          </div>
         ) : (
           <div className="flex flex-col gap-px p-1">
             {/* R2: the commits stay pickable while a failed refresh says so. */}
@@ -309,7 +311,7 @@ function CommitListPanel({
                 key={entry.oid}
                 type="button"
                 onClick={(event) => pick(entry, event.shiftKey)}
-                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left ${rangeStart === entry.oid ? "bg-accent-soft text-fg" : "text-muted hover:bg-raised hover:text-fg"} ${entry.onBase ? "opacity-50" : ""}`}
+                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left ${rangeStart === entry.oid ? "bg-accent text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"} ${entry.onBase ? "opacity-50" : ""}`}
               >
                 <GitCommitHorizontal
                   size={13}

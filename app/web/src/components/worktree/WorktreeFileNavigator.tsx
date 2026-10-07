@@ -504,7 +504,7 @@ function NavigatorRow({
   const isDir = data.kind === "dir";
   return (
     <span
-      className={`flex min-w-0 items-center gap-2 text-caption ${state.selected ? "text-fg" : "text-muted"}`}
+      className={`flex min-w-0 items-center gap-2 text-caption ${state.selected ? "text-fg" : "text-muted-foreground"}`}
       title={data.path}
     >
       {isDir ? (
@@ -559,7 +559,7 @@ function NavigatorListRow({
       onClick={onSelect}
       title={data.path || "/"}
       aria-current={selected ? "true" : undefined}
-      className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${selected ? "bg-accent-soft/70 text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+      className={`flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left ${selected ? "bg-accent/70 text-fg" : "text-muted-foreground hover:bg-raised hover:text-fg"}`}
     >
       {isDir ? (
         <Folder size={13} className="shrink-0 text-faint" />
@@ -768,7 +768,7 @@ export function WorktreeFileNavigator({
             onClick={() =>
               onListDirectoryPathChange(parentPath(listDirectoryPath))
             }
-            className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-line/70 px-2 py-2 text-left text-muted hover:bg-raised hover:text-fg"
+            className="mb-1 flex w-full min-w-0 items-center gap-2 rounded-lg border-b border-line/70 px-2 py-2 text-left text-muted-foreground hover:bg-raised hover:text-fg"
           >
             <ChevronLeft size={14} className="shrink-0 text-faint" />
             <span className="min-w-0 flex-1 truncate font-mono text-caption">
