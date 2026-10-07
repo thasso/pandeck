@@ -8,7 +8,16 @@ import {
   useRef,
   useState,
 } from "react";
-import { buttonVariants } from "./ui/button.tsx";
+import { Button } from "./ui/button.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Item } from "./ui/item.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
 import {
   Bot,
   Check,
@@ -90,13 +99,6 @@ import type {
   NewPendingChatComment,
   PendingChatCommentsController,
 } from "../hooks/usePendingChatComments.ts";
-import { Popover } from "./Popover.tsx";
-
-const MESSAGE_ACTION_CLASS = buttonVariants({
-  variant: "ghost",
-  size: "icon-sm",
-  className: "text-muted-foreground",
-});
 
 const CHAT_COMMENT_HIGHLIGHT = "pending-chat-comment";
 /**
@@ -114,7 +116,7 @@ function chatCommentHighlightStyle(anchor: string): string {
   }
   ::highlight(${CHAT_COMMENT_HIGHLIGHT}) {
     color: inherit;
-    background-color: color-mix(in oklab, #f5c518 34%, transparent);
+    background-color: color-mix(in oklab, var(--warning) 34%, transparent);
   }
 `;
 }
@@ -309,45 +311,43 @@ function AttachmentChip({
         </span>
       </>
     );
-    const cls =
-      "mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-primary/30 bg-accent px-2.5 py-1.5 text-sm text-primary";
     return taskId && onOpenTask ? (
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="sm"
         onClick={() => onOpenTask(taskId)}
-        className={`${cls} hover:bg-primary/15`}
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
         title="Open task details"
       >
         {inner}
-      </button>
+      </Button>
     ) : (
-      <div className={cls}>{inner}</div>
+      <Badge
+        variant="secondary"
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
+      >
+        {inner}
+      </Badge>
     );
   }
-  if (attachment.role === "project-context") {
+  if (
+    attachment.role === "project-context" ||
+    attachment.role === "file-context"
+  ) {
+    const project = attachment.role === "project-context";
     return (
-      <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground"
-        title="Project context was attached to this first prompt."
+      <Badge
+        variant="secondary"
+        className="mt-2 max-w-full min-w-0 overflow-hidden"
+        title={
+          project
+            ? "Project context was attached to this first prompt."
+            : "This session was started from this file."
+        }
       >
-        <FolderKanban size={13} className="shrink-0 text-primary" />
-        <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
-          {attachment.name}
-        </span>
-      </div>
-    );
-  }
-  if (attachment.role === "file-context") {
-    return (
-      <div
-        className="mt-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-muted/60 px-2.5 py-1.5 text-sm text-muted-foreground"
-        title="This session was started from this file."
-      >
-        <FileText size={13} className="shrink-0 text-primary" />
-        <span className="min-w-0 flex-1 overflow-hidden truncate font-medium">
-          {attachment.name}
-        </span>
-      </div>
+        {project ? <FolderKanban /> : <FileText />}
+        <span className="min-w-0 truncate">{attachment.name}</span>
+      </Badge>
     );
   }
   const isImage =
@@ -359,7 +359,11 @@ function AttachmentChip({
       ? withToken(`${serverHttpOrigin()}${attachment.url}`)
       : undefined;
   return (
-    <div className="mt-2 overflow-hidden rounded-xl border border-border bg-muted/60">
+    <Item
+      variant="muted"
+      size="sm"
+      className="mt-2 flex-col items-stretch overflow-hidden"
+    >
       {isImage && imageSrc ? (
         <img
           src={imageSrc}
@@ -367,7 +371,7 @@ function AttachmentChip({
           className="max-h-72 max-w-full object-contain"
         />
       ) : null}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm text-muted-foreground">
+      <div className="flex items-center gap-2">
         {attachment.mimeType.startsWith("image/") ? (
           <ImageIcon size={14} className="text-primary" />
         ) : (
@@ -380,7 +384,7 @@ function AttachmentChip({
           {formatBytes(attachment.size)}
         </span>
       </div>
-    </div>
+    </Item>
   );
 }
 
@@ -489,60 +493,55 @@ function MessageActionsBar({
     >
       <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
         {canCopy && (
-          <button
-            type="button"
+          <IconButton
+            label={copied ? "Copied" : "Copy message text"}
             onClick={() => void copy()}
-            title={copied ? "Copied" : "Copy message text"}
-            aria-label={copied ? "Copied" : "Copy message text"}
-            className={MESSAGE_ACTION_CLASS}
           >
-            {copied ? <Check size={13} /> : <Copy size={13} />}
-          </button>
+            {copied ? <Check /> : <Copy />}
+          </IconButton>
         )}
         {canResend && text && (
-          <button
-            type="button"
-            onClick={() => onResendPrompt?.(text)}
+          <IconButton
+            label="Resend prompt"
             title="Put this prompt back in the composer"
-            aria-label="Resend prompt"
-            className={MESSAGE_ACTION_CLASS}
+            onClick={() => onResendPrompt?.(text)}
           >
-            <RotateCcw size={13} />
-          </button>
+            <RotateCcw />
+          </IconButton>
         )}
         {canFork && forkEntryId && (
-          <button
-            type="button"
+          <IconButton
+            label={forkTitle}
             onClick={() => onForkMessage?.(forkEntryId, forkPosition)}
-            title={forkTitle}
-            aria-label={forkTitle}
-            className={MESSAGE_ACTION_CLASS}
           >
-            <GitFork size={13} />
-          </button>
+            <GitFork />
+          </IconButton>
         )}
         {canComment ? (
-          <Popover
-            align={align === "right" ? "right" : "left"}
-            placement="top"
-            title="More message actions"
-            className={MESSAGE_ACTION_CLASS}
-            button={<Ellipsis size={14} />}
-          >
-            {(close) => (
-              <button
-                type="button"
-                onClick={() => {
-                  close();
-                  onCommentMessage?.(message.id);
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground hover:bg-muted"
-              >
-                <MessageSquarePlus size={14} className="text-primary" />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="More message actions"
+                  title="More message actions"
+                />
+              }
+            >
+              <Ellipsis />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              side="top"
+              align={align === "right" ? "end" : "start"}
+              className="w-56"
+            >
+              <DropdownMenuItem onClick={() => onCommentMessage?.(message.id)}>
+                <MessageSquarePlus />
                 Comment on this message
-              </button>
-            )}
-          </Popover>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : null}
       </div>
     </div>
@@ -745,15 +744,16 @@ const ForkBoundaryMarker = memo(function ForkBoundaryMarker({
   return (
     <div data-fork-boundary className="flex items-center gap-2">
       <hr className="flex-1 border-border/60" />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={onOpen}
         title="Open the message this session was forked from"
-        className="flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        className="min-w-0"
       >
         <GitFork size={12} className="shrink-0" />
         <span className="truncate">Forked from {parentTitle}</span>
-      </button>
+      </Button>
       <hr className="flex-1 border-border/60" />
     </div>
   );
@@ -1865,30 +1865,26 @@ export function MessageList({
       >
         {hiddenRowCount > 0 ? (
           <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={showEarlierRows}
-              className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-            >
+            <Button variant="outline" size="sm" onClick={showEarlierRows}>
               Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
               {hiddenRowCount === 1 ? "message" : "messages"}
               {hiddenRowCount > WINDOW_STEP_ROWS
                 ? ` (${hiddenRowCount} older)`
                 : ""}
-            </button>
+            </Button>
           </div>
         ) : hasOlderMessages ? (
           <div className="flex justify-center">
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={loadOlderMessages}
-              disabled={loadingOlderMessages}
-              className="rounded-full border border-border bg-background px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
+              busy={loadingOlderMessages}
             >
               {loadingOlderMessages
                 ? "Loading earlier messages…"
                 : "Load earlier messages"}
-            </button>
+            </Button>
           </div>
         ) : null}
         {visibleRows.map(({ message: m, key }) => {

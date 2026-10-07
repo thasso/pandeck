@@ -1,5 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ChevronUp, Minus, X } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import { IconButton } from "./common/IconButton.tsx";
 
 interface ChatDockPanelProps {
   open: boolean;
@@ -66,53 +68,48 @@ export function ChatDockPanel({
   if (!open) return null;
 
   return (
-    <div
+    <Card
       ref={panelRef}
       tabIndex={-1}
-      className="chat-dock-panel absolute inset-x-0 bottom-full z-0 -mb-px overflow-hidden rounded-t-[1.25rem] border border-b-0 border-border bg-card outline-none"
+      className="chat-dock-panel absolute inset-x-0 bottom-full z-0 -mb-px gap-0 overflow-hidden"
     >
-      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+      <CardHeader className="flex items-center gap-2">
         {icon ? (
           <div className="flex size-5 items-center justify-center rounded-md bg-accent text-primary">
             {icon}
           </div>
         ) : null}
-        <div className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
-          {title}
-        </div>
+        <CardTitle className="min-w-0 flex-1 truncate">{title}</CardTitle>
         {actions ? (
           <div className="ml-auto flex shrink-0 items-center gap-1">
             {actions}
           </div>
         ) : null}
         {minimizable ? (
-          <button
-            type="button"
+          <IconButton
+            label={minimized ? `Restore ${title}` : "Minimize panel"}
+            size="icon-xs"
             onClick={() => setMinimized((value) => !value)}
-            title={minimized ? `Restore ${title}` : "Minimize panel"}
-            aria-label={minimized ? `Restore ${title}` : "Minimize panel"}
-            className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            {minimized ? <ChevronUp size={14} /> : <Minus size={14} />}
-          </button>
+            {minimized ? <ChevronUp /> : <Minus />}
+          </IconButton>
         ) : null}
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close panel"
-          aria-label="Close panel"
-          className="flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X size={14} />
-        </button>
-      </div>
+        <IconButton label="Close panel" size="icon-xs" onClick={onClose}>
+          <X />
+        </IconButton>
+      </CardHeader>
       <div
         className={`grid motion-safe:transition-[grid-template-rows,opacity] motion-safe:duration-150 motion-safe:ease-out ${minimized ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"}`}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="max-h-[45vh] overflow-y-auto p-2">{children}</div>
+          <CardContent
+            className="overflow-y-auto"
+            style={{ maxHeight: "45vh" }}
+          >
+            {children}
+          </CardContent>
         </div>
       </div>
-    </div>
+    </Card>
   );
 }

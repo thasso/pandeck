@@ -8,6 +8,10 @@ import type { UsageIndicator } from "@assistant/shared/usage";
 import { ProviderIcon } from "./ProviderIcon.tsx";
 import { UsageCycleMeters } from "./UsageCycleMeters.tsx";
 import { THINKING_LABELS } from "./ModelThinkingSelect.tsx";
+import { Item } from "../ui/item.tsx";
+import { Slider } from "../ui/slider.tsx";
+import { Toggle } from "../ui/toggle.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
 
 /**
  * The runtime quick-pick controls — "who runs this, on which model, thinking
@@ -81,25 +85,16 @@ export function ProviderAccountRow({
         const selected = account.id === selectedId;
         const providerLabel = PROVIDER_LABEL[account.provider];
         return (
-          <button
+          <Item
             key={account.id}
-            type="button"
+            render={<button type="button" disabled={disabled} />}
+            variant={selected ? "muted" : "outline"}
             role="option"
             aria-selected={selected}
             data-quick-selected={selected || undefined}
-            disabled={disabled}
             title={`Use ${account.name} (${providerLabel})`}
             onClick={() => onSelect(account.id)}
-            // Wider than the other cards, and a FIXED width rather than a
-            // min/max range: the usage rows put a label, a meter, a number
-            // and a countdown on one line, so a card sized to its account
-            // name would leave neighbouring meters different lengths and
-            // nothing on the strip would line up.
-            className={`flex w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-60 ${
-              selected
-                ? "border-primary/40 bg-accent"
-                : "border-border bg-card hover:border-input hover:bg-muted"
-            }`}
+            className="w-52 shrink-0 snap-start flex-col items-start gap-1"
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
               <ProviderIcon
@@ -122,7 +117,7 @@ export function ProviderAccountRow({
               indicator={usageByProfileId.get(account.id)}
               now={now}
             />
-          </button>
+          </Item>
         );
       })}
     </QuickRow>
@@ -148,30 +143,43 @@ export function ModelQuickRow<M extends ModelOption>({
       label={label}
       scrollKey={`${selected?.provider ?? ""}:${selected?.id ?? ""}:${models.length}`}
     >
-      {models.map((model) => {
-        const isSelected =
-          model.provider === selected?.provider && model.id === selected?.id;
-        return (
-          <QuickPill
-            key={`${model.provider}:${model.id}`}
-            selected={isSelected}
-            title={`Use ${model.name}`}
-            disabled={disabled}
-            onClick={() => onSelect(model)}
-          >
-            <ProviderIcon
-              provider={model.provider}
-              size={13}
-              className={
-                isSelected
-                  ? "shrink-0 text-primary"
-                  : "shrink-0 text-muted-foreground"
-              }
-            />
-            <span className="min-w-0 truncate">{model.name}</span>
-          </QuickPill>
-        );
-      })}
+      <ToggleGroup
+        value={selected ? [`${selected.provider}:${selected.id}`] : []}
+        onValueChange={(values) => {
+          const next = models.find(
+            (m) => `${m.provider}:${m.id}` === values[0],
+          );
+          if (next) onSelect(next);
+        }}
+        variant="outline"
+        disabled={disabled}
+      >
+        {models.map((model) => {
+          const isSelected =
+            model.provider === selected?.provider && model.id === selected?.id;
+          return (
+            <ToggleGroupItem
+              key={`${model.provider}:${model.id}`}
+              value={`${model.provider}:${model.id}`}
+              role="option"
+              aria-selected={isSelected}
+              data-quick-selected={isSelected || undefined}
+              title={`Use ${model.name}`}
+            >
+              <ProviderIcon
+                provider={model.provider}
+                size={13}
+                className={
+                  isSelected
+                    ? "shrink-0 text-primary"
+                    : "shrink-0 text-muted-foreground"
+                }
+              />
+              <span className="min-w-0 truncate">{model.name}</span>
+            </ToggleGroupItem>
+          );
+        })}
+      </ToggleGroup>
     </QuickRow>
   );
 }
@@ -219,13 +227,8 @@ export function ThinkingSlider({
 }
 
 /**
- * A bounded whole-number slider: a native range input (drag, tap and keyboard
- * for free) on top of a custom track with one visual stop per step. The
- * stops/fill sit inside a half-thumb inset so they line up with the thumb's
- * travel, which is bounded by the thumb width at both track ends.
- *
- * `valueText` is what a screen reader reads instead of the bare index — the
- * number alone is meaningless when the scale is positions in a list.
+ * A shadcn slider bounded to whole-number choices. The thumb announces the
+ * choice's `valueText`, not the index that only the host understands.
  */
 export function DiscreteSlider({
   min,
@@ -246,43 +249,21 @@ export function DiscreteSlider({
   title?: string;
   disabled?: boolean;
 }) {
-  const steps = Math.max(0, max - min) + 1;
-  const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
-
   return (
-    <div className="relative h-10">
-      {/* Track, fill, and stops are inset by half the 20px thumb so they align with its travel. */}
-      <div className="absolute inset-x-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-border" />
-      <div
-        className="absolute left-2.5 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-primary"
-        style={{ width: `calc((100% - 1.25rem) * ${percent / 100})` }}
-      />
-      <div className="absolute inset-x-1.5 top-1/2 flex -translate-y-1/2 justify-between">
-        {Array.from({ length: steps }, (_, step) => (
-          <span
-            key={min + step}
-            aria-hidden
-            className={`size-2 rounded-full ${min + step <= value ? "bg-primary" : "bg-input"}`}
-          />
-        ))}
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => {
-          const next = Number(e.target.value);
-          if (Number.isFinite(next) && next !== value) onChange(next);
-        }}
-        aria-label={ariaLabel}
-        aria-valuetext={valueText}
-        title={title ?? `${ariaLabel}: ${valueText}`}
-        className="absolute inset-0 w-full cursor-pointer appearance-none bg-transparent disabled:cursor-not-allowed disabled:opacity-60 [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-none [&::-moz-range-thumb]:bg-primary [&::-moz-range-track]:bg-transparent [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary"
-      />
-    </div>
+    <Slider
+      min={min}
+      max={max}
+      step={1}
+      value={[value]}
+      disabled={disabled}
+      onValueChange={(values) => {
+        const next = Array.isArray(values) ? values[0] : values;
+        if (next !== undefined && next !== value) onChange(next);
+      }}
+      thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
+      title={title ?? `${ariaLabel}: ${valueText}`}
+      className="flex h-10 items-center"
+    />
   );
 }
 
@@ -411,21 +392,18 @@ export function QuickPill({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
+    <Toggle
+      pressed={selected}
+      variant="outline"
       role="option"
       aria-selected={selected}
       data-quick-selected={selected || undefined}
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`flex h-9 max-w-[13rem] shrink-0 snap-start items-center gap-1.5 rounded-xl border px-3 text-sm font-medium transition-colors disabled:opacity-60 ${
-        selected
-          ? "border-primary/40 bg-accent text-primary"
-          : "border-border bg-card text-foreground hover:border-input hover:bg-muted"
-      }`}
+      className="max-w-52 shrink-0 snap-start"
     >
       {children}
-    </button>
+    </Toggle>
   );
 }

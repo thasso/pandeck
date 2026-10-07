@@ -21,7 +21,10 @@ import {
 import type { UsageIndicator } from "@assistant/shared/usage";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { orderCredentialProfilesByProvider } from "../lib/credentialProfiles.ts";
-import { DASHED_EDGE, EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import { EmptyBox, ErrorNote, Skeleton } from "./common/load.tsx";
+import { Button } from "./ui/button.tsx";
+import { Item } from "./ui/item.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
   ModelQuickRow,
   ProviderAccountRow,
@@ -112,18 +115,15 @@ function WorktreeCard({
   const label = worktree.isMain ? "main checkout" : worktree.branch;
   const WorktreeIcon = worktree.isMain ? House : GitBranch;
   return (
-    <button
-      type="button"
+    <Item
+      render={<button type="button" />}
+      variant={selected ? "muted" : "outline"}
       role="option"
       aria-selected={selected}
       data-quick-selected={selected || undefined}
       title={selected ? `Remove worktree ${label}` : `Start in ${label}`}
       onClick={onSelect}
-      className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-colors ${
-        selected
-          ? "border-primary/40 bg-accent"
-          : "border-border bg-card hover:border-input hover:bg-muted"
-      }`}
+      className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
     >
       <span className="flex w-full min-w-0 items-center gap-1.5">
         <WorktreeIcon
@@ -150,7 +150,7 @@ function WorktreeCard({
           {projectName}
         </span>
       </span>
-    </button>
+    </Item>
   );
 }
 
@@ -299,60 +299,74 @@ export function NewSessionQuickStart({
   // they share a row when both are offered and each falls back to a row of its
   // own when it is alone.
   const agentPills =
-    agentTypes.length > 1
-      ? agentTypes.map((type) => {
+    agentTypes.length > 1 ? (
+      <ToggleGroup
+        variant="outline"
+        value={[selectedAgentType]}
+        onValueChange={(values) => {
+          const next = values[0] as AgentType | undefined;
+          if (next) onSelectAgentType(next);
+        }}
+      >
+        {agentTypes.map((type) => {
           const display = AGENT_TYPE_DISPLAY[type];
           const selected = type === selectedAgentType;
           return (
-            <QuickPill
+            <ToggleGroupItem
               key={type}
-              selected={selected}
+              value={type}
+              role="option"
+              aria-selected={selected}
               title={display.desc}
-              onClick={() => onSelectAgentType(type)}
             >
               <display.Icon
                 size={14}
                 className={selected ? display.activeColor : display.pillColor}
               />
               <span className="min-w-0 truncate">{display.label}</span>
-            </QuickPill>
+            </ToggleGroupItem>
           );
-        })
-      : null;
+        })}
+      </ToggleGroup>
+    ) : null;
   const pickMode = onSelectMode;
   const modePills =
-    mode && pickMode
-      ? MODE_OPTIONS.map((option) => {
+    mode && pickMode ? (
+      <ToggleGroup
+        variant="outline"
+        value={[mode]}
+        onValueChange={(values) => {
+          const next = values[0] as SessionMode | undefined;
+          if (next) pickMode(next);
+        }}
+      >
+        {MODE_OPTIONS.map((option) => {
           const selected = option.value === mode;
           return (
-            <QuickPill
+            <ToggleGroupItem
               key={option.value}
-              selected={selected}
+              value={option.value}
+              role="option"
+              aria-selected={selected}
               title={option.title}
-              onClick={() => pickMode(option.value)}
             >
               <option.Icon
                 size={14}
                 className={selected ? "text-primary" : "text-muted-foreground"}
               />
               <span className="min-w-0 truncate">{option.label}</span>
-            </QuickPill>
+            </ToggleGroupItem>
           );
-        })
-      : null;
+        })}
+      </ToggleGroup>
+    ) : null;
 
   return (
     <div className="new-session-quick-start mt-6 flex w-full max-w-2xl flex-col gap-4">
       {!projectsLoaded ? (
         <QuickRow label="Project" busy>
           {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              aria-hidden
-              className="h-9 w-28 shrink-0 snap-start rounded-xl border border-border bg-card"
-            >
-              <Skeleton className="m-2.5 h-4" />
-            </div>
+            <Skeleton key={i} className="h-8 w-28 shrink-0 snap-start" />
           ))}
         </QuickRow>
       ) : activeProjects.length > 1 ? (
@@ -386,16 +400,15 @@ export function NewSessionQuickStart({
       {!worktreesLoaded ? (
         <QuickRow label="Start in a worktree" busy>
           {[0, 1, 2].map((i) => (
-            <div
+            <Item
               key={i}
+              variant="outline"
               aria-hidden
-              className="flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border border-border bg-card px-3 py-2.5"
+              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
             >
-              {/* The card's two real lines, to the pixel: a card that changes
-                  height when the answer lands takes the whole row with it. */}
-              <Skeleton className="h-[19px] w-24" />
-              <Skeleton className="h-[16px] w-16" />
-            </div>
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-5 w-16" />
+            </Item>
           ))}
         </QuickRow>
       ) : (
@@ -422,8 +435,9 @@ export function NewSessionQuickStart({
             </EmptyBox>
           ) : null}
           {selectedProjectId ? (
-            <button
-              type="button"
+            <Item
+              render={<button type="button" />}
+              variant={newWorktreeStaged ? "muted" : "outline"}
               role="option"
               aria-selected={newWorktreeStaged}
               data-quick-selected={newWorktreeStaged || undefined}
@@ -433,11 +447,7 @@ export function NewSessionQuickStart({
                   : `Create a worktree in ${projectName(selectedProjectId)} when you send`
               }
               onClick={() => onSelectNewWorktree(!newWorktreeStaged)}
-              className={`flex min-w-[9.5rem] max-w-[13rem] shrink-0 snap-start flex-col items-start gap-1 rounded-xl border ${DASHED_EDGE} px-3 py-2.5 text-left transition-colors ${
-                newWorktreeStaged
-                  ? "border-primary/40 bg-accent"
-                  : "border-border bg-card hover:border-input hover:bg-muted"
-              }`}
+              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
             >
               <span className="flex w-full min-w-0 items-center gap-1.5">
                 <Plus
@@ -457,7 +467,7 @@ export function NewSessionQuickStart({
               <span className="min-w-0 truncate text-sm text-muted-foreground">
                 {newWorktreeStaged ? "named on send" : "off the main checkout"}
               </span>
-            </button>
+            </Item>
           ) : null}
           {mainWorktrees.map((worktree) => (
             <WorktreeCard
@@ -495,15 +505,15 @@ export function NewSessionQuickStart({
           ))}
           {activeWorktrees.length > 0 &&
           totalActiveWorktrees > activeWorktrees.length ? (
-            <button
-              type="button"
+            <Button
+              variant="outline"
               onClick={onOpenPicker}
               title="More worktrees to select — open the full picker"
-              className={`flex min-w-[5.5rem] shrink-0 snap-start flex-col items-center justify-center gap-1 rounded-xl border ${DASHED_EDGE} border-border px-3 py-2.5 text-muted-foreground transition-colors hover:border-input hover:bg-muted hover:text-foreground`}
+              className="h-auto min-w-24 shrink-0 snap-start flex-col"
             >
               <Ellipsis size={14} />
-              <span className="text-sm font-medium">More…</span>
-            </button>
+              <span>More…</span>
+            </Button>
           ) : null}
         </QuickRow>
       )}
@@ -552,31 +562,31 @@ export function NewSessionQuickStart({
         >
           <QuickRow label="Provider account" busy>
             {[0, 1, 2].map((index) => (
-              <div
+              <Item
                 key={index}
+                variant="outline"
                 aria-hidden
-                className="h-9 w-28 shrink-0 snap-start rounded-xl border border-border bg-card"
+                className="h-20 w-52 shrink-0 snap-start flex-col items-start gap-1"
               >
-                <Skeleton className="m-2.5 h-4" />
-              </div>
+                <Skeleton className="h-5 w-32" />
+                <Skeleton className="h-3 w-36" />
+                <Skeleton className="h-3 w-36" />
+              </Item>
             ))}
           </QuickRow>
           <QuickRow label="Model" busy>
             {[0, 1, 2].map((index) => (
-              <div
-                key={index}
-                aria-hidden
-                className="h-9 w-32 shrink-0 snap-start rounded-xl border border-border bg-card"
-              >
-                <Skeleton className="m-2.5 h-4" />
-              </div>
+              <Skeleton key={index} className="h-8 w-32 shrink-0 snap-start" />
             ))}
           </QuickRow>
           <div className="w-full">
             <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
               Thinking
             </div>
-            <Skeleton className="mx-4 h-5 rounded-full" />
+            <div className="mx-auto w-full max-w-sm px-4">
+              <Skeleton className="h-10" />
+              <Skeleton className="mx-auto mt-0.5 h-5 w-12" />
+            </div>
           </div>
         </div>
       ) : (

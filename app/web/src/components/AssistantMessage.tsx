@@ -7,7 +7,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AlertTriangle, Bot, PackageCheck, Scissors } from "lucide-react";
+import { Bot, PackageCheck, Scissors } from "lucide-react";
+import { Badge } from "./ui/badge.tsx";
+import { Card, CardContent } from "./ui/card.tsx";
+import { ErrorNote, PaneLoading } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import type {
   AgentQuestionRequest,
@@ -177,11 +180,7 @@ interface Props {
 }
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
-  return (
-    <div className="my-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
-      {label}
-    </div>
-  );
+  return <PaneLoading label={label} />;
 }
 
 function ToolGroupNoticeCard({
@@ -195,30 +194,29 @@ function ToolGroupNoticeCard({
 }) {
   const shownTools = tools.slice(0, 6);
   return (
-    <div className="my-2 flex items-start gap-2 rounded-xl border border-primary/25 bg-accent px-3 py-2 text-sm text-muted-foreground">
-      <PackageCheck size={15} className="mt-0.5 shrink-0 text-primary" />
-      <div className="min-w-0">
-        <div className="font-medium text-foreground">{title}</div>
-        {summary && <div className="mt-0.5">{summary}</div>}
-        {shownTools.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {shownTools.map((tool) => (
-              <span
-                key={tool}
-                className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
-              >
-                {tool}
-              </span>
-            ))}
-            {tools.length > shownTools.length && (
-              <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
-                +{tools.length - shownTools.length} more
-              </span>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <Card className="my-2">
+      <CardContent className="flex min-w-0 items-start gap-2">
+        <PackageCheck size={15} className="mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <div className="font-medium text-foreground">{title}</div>
+          {summary && <div className="mt-0.5">{summary}</div>}
+          {shownTools.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {shownTools.map((tool) => (
+                <Badge key={tool} variant="secondary">
+                  {tool}
+                </Badge>
+              ))}
+              {tools.length > shownTools.length && (
+                <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
+                  +{tools.length - shownTools.length} more
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -620,10 +618,10 @@ export const AssistantMessage = memo(function AssistantMessage({
           turn renders as one streaming message or splits into committed rows. */}
       <div className="assistant-message-content flex min-w-0 flex-1 flex-col gap-3 [&>*]:!my-0">
         {originLabel ? (
-          <div className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/20 bg-accent px-2 py-0.5 text-xs font-medium text-primary">
-            <Bot size={11} className="shrink-0" />
+          <Badge variant="secondary" className="max-w-full">
+            <Bot />
             <span className="min-w-0 truncate">{originLabel}</span>
-          </div>
+          </Badge>
         ) : null}
         {blocks.map((block, i) => {
           // The "before final response" separator: marks where the tool loop
@@ -642,12 +640,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 
         {progress && <ProgressIndicator label={progress} />}
 
-        {message.error && (
-          <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-sm text-destructive">
-            <AlertTriangle size={13} />
-            {message.error}
-          </div>
-        )}
+        {message.error && <ErrorNote message={message.error} />}
 
         {actions}
       </div>

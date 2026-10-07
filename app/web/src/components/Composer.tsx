@@ -86,28 +86,41 @@ import {
   runtimeControlsFit,
   sameComposerRuntimeFit,
 } from "./composerRuntimeFit.ts";
-import { Popover } from "./Popover.tsx";
+import { Button } from "./ui/button.tsx";
+import { Input } from "./ui/input.tsx";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "./ui/input-group.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
+import { Item } from "./ui/item.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Command, CommandItem, CommandList } from "./ui/command.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
 import {
   COMPOSER_ACTION_CLUSTER_CLASS,
   COMPOSER_ACTION_ROW_CLASS,
-  COMPOSER_CARD_CLASS,
   COMPOSER_CARD_COLLAPSED_CLASS,
   COMPOSER_CARD_DRAG_SKIN_CLASS,
-  COMPOSER_CARD_SKIN_CLASS,
-  COMPOSER_DANGER_ACTION_CLASS,
   COMPOSER_FIELD_CLASS,
   COMPOSER_FIELD_MAX_HEIGHT,
-  COMPOSER_ICON_ACTION_CLASS,
   autosizeComposerField,
-  COMPOSER_PRIMARY_ACTION_CLASS,
-  COMPOSER_SEND_TONE_CLASS,
   COMPOSER_SHELL_CLASS,
   COMPOSER_SHELL_PADDING_CLASS,
   composerFoldClass,
 } from "./common/composerShell.ts";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
-import { EmptyBox, Spinner } from "./common/load.tsx";
+import { EmptyBox } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { ChatCommentChip } from "./ChatCommentChip.tsx";
@@ -398,9 +411,6 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
  */
 const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
 
-const composerPill =
-  "flex h-8 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground disabled:cursor-not-allowed disabled:opacity-30";
-
 function ContextMeter({ info }: { info: ContextInfo | null }) {
   const usage = info?.context;
   const percent = usage?.percent ?? null;
@@ -411,25 +421,23 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
   const tooltipId = "composer-context-tooltip";
 
   return (
-    <div className="group/context relative flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-      <div
+    <Tooltip>
+      <TooltipTrigger
+        render={<div />}
         role="meter"
         aria-label="Context usage"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent ?? undefined}
         aria-describedby={tooltipId}
-        className="size-[18px] rounded-full p-[3px]"
+        className="size-5 shrink-0 rounded-full p-1"
         style={{
           background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--input) 0deg)`,
         }}
       >
         <div className="size-full rounded-full bg-card" />
-      </div>
-      <div
-        id={tooltipId}
-        className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 hidden w-72 rounded-xl border border-border bg-card p-3 text-left text-sm text-muted-foreground shadow-2xl shadow-black/30 group-hover/context:block"
-      >
+      </TooltipTrigger>
+      <TooltipContent id={tooltipId} side="top" className="w-72">
         <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
           <span>Context</span>
           <span>{formatPercent(percent)}</span>
@@ -479,8 +487,8 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
             </>
           )}
         </div>
-      </div>
-    </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -519,7 +527,6 @@ function ModelSelector({
       locked={locked}
       isModelDisabled={isModelDisabled}
       placement="top"
-      className={composerPill}
       onChange={(m) => {
         if (onModelChange) {
           onModelChange(m);
@@ -555,7 +562,6 @@ function ThinkingSelector({
       value={level}
       locked={locked}
       placement="top"
-      className={composerPill}
       onChange={(lvl) => {
         if (onLevelChange) onLevelChange(lvl);
         else actions?.setThinkingLevel(lvl);
@@ -582,64 +588,40 @@ export function ModeSelector({
   const label = mode === "build" ? "Build" : "Plan";
 
   return (
-    <Popover
-      title="Session mode"
-      placement="top"
-      className={composerPill}
-      button={
-        <>
-          <Icon size={15} className="shrink-0 text-muted-foreground" />
-          <span>{label}</span>
-          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
-        </>
-      }
-    >
-      {(close) => (
-        <div className="py-0.5">
-          {(["build", "plan"] as const).map((value) => {
-            const active = mode === value;
-            const OptionIcon = value === "build" ? Hammer : FileText;
-            return (
-              <button
-                key={value}
-                type="button"
-                aria-current={active ? "true" : undefined}
-                onClick={() => {
-                  onChange(value);
-                  close();
-                }}
-                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
-              >
-                <OptionIcon
-                  size={14}
-                  className={`shrink-0 ${active ? "text-primary" : "text-muted-foreground"}`}
-                />
-                <span
-                  className={`min-w-0 flex-1 font-medium ${
-                    active ? "text-primary" : "text-foreground"
-                  }`}
-                >
-                  {value === "build" ? "Build" : "Plan"}
-                </span>
-                {active && (
-                  <Check size={13} className="shrink-0 text-primary" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Popover>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="outline" size="sm" />}
+        title="Session mode"
+      >
+        <Icon />
+        <span>{label}</span>
+        <ChevronDown />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top">
+        {(["build", "plan"] as const).map((value) => {
+          const OptionIcon = value === "build" ? Hammer : FileText;
+          return (
+            <DropdownMenuItem
+              key={value}
+              aria-current={mode === value ? "true" : undefined}
+              onClick={() => onChange(value)}
+            >
+              <OptionIcon />
+              <span className="flex-1">
+                {value === "build" ? "Build" : "Plan"}
+              </span>
+              {mode === value ? <Check /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 /** The one badge shown while a session is in Plan (session header). */
 export function PlanModeBadge() {
-  return (
-    <span className="shrink-0 rounded-md bg-accent px-1.5 py-0.5 text-xs font-semibold text-primary">
-      Plan
-    </span>
-  );
+  return <Badge variant="secondary">Plan</Badge>;
 }
 
 function RuntimeSettingsPanel({
@@ -744,15 +726,6 @@ export const COMPOSER_PLACEHOLDER = "Message the assistant…";
 /** Its counterpart while a turn runs and none of those faces can accept text. */
 export const COMPOSER_STREAMING_LABEL = "Streaming response…";
 /**
- * Stop, as the composer draws it: a FILLED box where the send button sits, not a
- * bare glyph — the one control that interrupts a turn has to read as a control.
- * Shared with the mobile dock's field (`SessionDockActions`), which puts stop in the
- * mic's place for the same reason and must not invent a second look for it. Tone
- * only; the geometry is the host row's, since a bar and a 36px field differ there.
- */
-export const COMPOSER_STOP_TONE_CLASS =
-  "bg-muted text-foreground hover:bg-input";
-/**
  * How much of a draft a resting face may carry. It truncates to one line anyway;
  * this keeps a novel-length draft out of the host's state and off the wire between
  * the composer and the dock.
@@ -771,56 +744,34 @@ function AgentTypeSelector({
   const current = AGENT_TYPE_DISPLAY[agentType];
   const label = current.label;
   const Icon = current.Icon;
-  const iconColor = current.pillColor;
-
   return (
-    <Popover
-      title="Agent type"
-      placement="top"
-      className={composerPill}
-      button={
-        <>
-          <Icon size={15} className={iconColor} />
-          <span>{label}</span>
-          <ChevronDown size={13} className="text-muted-foreground" />
-        </>
-      }
-    >
-      {(close) => (
-        <div className="py-0.5">
-          {availableAgentTypes.map((type) => {
-            const active = type === agentType;
-            const display = AGENT_TYPE_DISPLAY[type];
-            const TypeIcon = display.Icon;
-            return (
-              <button
-                key={type}
-                type="button"
-                onClick={() => {
-                  onChange(type);
-                  close();
-                }}
-                className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
-              >
-                <TypeIcon
-                  size={14}
-                  className={`mt-0.5 shrink-0 ${display.activeColor}`}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">{display.label}</div>
-                  <div className="text-sm text-muted-foreground">
-                    {display.desc}
-                  </div>
-                </div>
-                {active && (
-                  <Check size={13} className="mt-0.5 shrink-0 text-primary" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Popover>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={<Button variant="outline" size="sm" />}
+        title="Agent type"
+      >
+        <Icon />
+        <span>{label}</span>
+        <ChevronDown />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" className="w-64">
+        {availableAgentTypes.map((type) => {
+          const display = AGENT_TYPE_DISPLAY[type];
+          return (
+            <DropdownMenuItem key={type} onClick={() => onChange(type)}>
+              <display.Icon />
+              <span className="min-w-0 flex-1">
+                <span className="block">{display.label}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {display.desc}
+                </span>
+              </span>
+              {type === agentType ? <Check /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -2106,13 +2057,14 @@ export const Composer = memo(function Composer({
           aria-live="polite"
         >
           {sendBlockedReason ? (
-            <button
-              type="button"
+            <Button
+              variant="link"
+              size="sm"
               onClick={() => openContext("worktree")}
-              className="min-w-0 truncate text-sm font-medium text-amber-500 hover:underline"
+              className="min-w-0 truncate"
             >
               {sendBlockedReason}
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
@@ -2170,7 +2122,7 @@ export const Composer = memo(function Composer({
           </ChatDockPanel>
         ) : null}
         {ledge ? <ComposerLedge joined={!hidden}>{ledge}</ComposerLedge> : null}
-        <div
+        <InputGroup
           ref={composerRef}
           onPointerDownCapture={(e) => {
             // Pin ONLY while the composer is already expanded, where the pin exists
@@ -2198,9 +2150,7 @@ export const Composer = memo(function Composer({
           // Zero-height rather than unmounted when hidden: the textarea has to stay in
           // the DOM so the dock's compose control can focus it INSIDE its own gesture,
           // which is the only way iOS raises the keyboard on the first tap.
-          className={`${COMPOSER_CARD_CLASS} ${
-            hidden ? COMPOSER_CARD_COLLAPSED_CLASS : compact ? "p-1.5" : "p-2.5"
-          } ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : hidden ? "" : COMPOSER_CARD_SKIN_CLASS}`}
+          className={`relative z-10 h-auto flex-col items-stretch ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
             barless mobile composer, which collapses to nothing and lets the object
@@ -2281,7 +2231,7 @@ export const Composer = memo(function Composer({
                 in the transcript directly above, the user is the one who just
                 picked it, and the placeholder plus the row's own actions already
                 say this field is holding a comment. */}
-              <textarea
+              <InputGroupTextarea
                 ref={ref}
                 rows={1}
                 value={commentMode ? commentBody : text}
@@ -2315,40 +2265,49 @@ export const Composer = memo(function Composer({
               />
 
               {slashMenuOpen && (
-                <div className="absolute bottom-full left-3 right-3 z-40 mb-2 overflow-hidden rounded-xl border border-border bg-card shadow-2xl shadow-black/30">
-                  <div className="border-b border-border px-3 py-1.5 text-sm text-muted-foreground">
+                <Command
+                  shouldFilter={false}
+                  value={slash.items[slashIndex]?.name ?? ""}
+                  onValueChange={(name) => {
+                    const index = slash.items.findIndex(
+                      (cmd) => cmd.name === name,
+                    );
+                    if (index >= 0) setSlashIndex(index);
+                  }}
+                  className="absolute bottom-full left-3 right-3 z-40 mb-2 h-auto w-auto"
+                >
+                  <div className="text-xs text-muted-foreground">
                     ↑↓ to navigate · ↵ to select · esc to dismiss ·{" "}
                     <span className="font-mono">//</span> sends a literal slash
                   </div>
-                  {slash.items.map((cmd, index) => (
-                    <button
-                      key={cmd.name}
-                      type="button"
-                      onMouseEnter={() => setSlashIndex(index)}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        applySlash(cmd);
-                      }}
-                      className={`flex w-full items-start gap-3 border-l-2 px-3 py-2 text-left transition-colors ${
-                        index === slashIndex
-                          ? "border-primary bg-accent text-foreground"
-                          : "border-transparent text-muted-foreground hover:bg-muted/70 hover:text-foreground"
-                      }`}
-                    >
-                      <span className="mt-0.5 font-mono text-sm text-primary">
-                        /{cmd.name}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block text-sm text-foreground">
-                          {cmd.description}
+                  <CommandList>
+                    {slash.items.map((cmd, index) => (
+                      <CommandItem
+                        key={cmd.name}
+                        value={cmd.name}
+                        onSelect={() => applySlash(cmd)}
+                        onMouseEnter={() => setSlashIndex(index)}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          applySlash(cmd);
+                        }}
+                        className="items-start gap-3"
+                      >
+                        <span className="mt-0.5 font-mono text-sm text-primary">
+                          /{cmd.name}
                         </span>
-                        <span className="block truncate font-mono text-sm text-muted-foreground">
-                          {cmd.usage}
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm text-foreground">
+                            {cmd.description}
+                          </span>
+                          <span className="block truncate font-mono text-sm text-muted-foreground">
+                            {cmd.usage}
+                          </span>
                         </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                      </CommandItem>
+                    ))}
+                  </CommandList>
+                </Command>
               )}
 
               {attachments.length > 0 && (
@@ -2356,9 +2315,11 @@ export const Composer = memo(function Composer({
                   {attachments.map((attachment) => {
                     const isImage = attachment.mimeType.startsWith("image/");
                     return (
-                      <div
+                      <Item
                         key={attachment.id}
-                        className="group flex max-w-full min-w-0 items-center gap-2 rounded-xl border border-border bg-muted px-2 py-1.5 text-sm text-muted-foreground"
+                        variant="muted"
+                        size="sm"
+                        className="max-w-full min-w-0 gap-2"
                         title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
                       >
                         {isImage && attachment.previewUrl ? (
@@ -2380,21 +2341,21 @@ export const Composer = memo(function Composer({
                             {formatBytes(attachment.size)}
                           </div>
                         </div>
-                        <button
-                          type="button"
+                        <IconButton
+                          label="Remove attachment"
+                          size="icon-xs"
                           onClick={() => removeAttachment(attachment.id)}
-                          className="ml-1 rounded-md p-0.5 text-muted-foreground hover:bg-border hover:text-foreground"
-                          title="Remove attachment"
                         >
-                          <X size={13} />
-                        </button>
-                      </div>
+                          <X />
+                        </IconButton>
+                      </Item>
                     );
                   })}
                 </div>
               )}
 
-              <div
+              <InputGroupAddon
+                align="block-end"
                 ref={bottomRowRef}
                 // The four `data-composer-fit` marks are the fold's measured boxes
                 // (`composerRuntimeFit.ts`): the row that gives the budget, and the
@@ -2402,7 +2363,7 @@ export const Composer = memo(function Composer({
                 data-composer-fit="row"
                 className={COMPOSER_ACTION_ROW_CLASS}
               >
-                <input
+                <Input
                   ref={fileRef}
                   type="file"
                   multiple
@@ -2425,29 +2386,26 @@ export const Composer = memo(function Composer({
                     className="flex shrink-0 items-center gap-1"
                   >
                     {commentMode ? null : (
-                      <button
-                        type="button"
+                      <IconButton
+                        label="Attach files or images"
+                        title="Attach files or images"
                         onClick={() => fileRef.current?.click()}
                         disabled={disabled}
-                        title="Attach files or images"
-                        className={COMPOSER_ICON_ACTION_CLASS}
                       >
-                        <Paperclip size={16} />
-                      </button>
+                        <Paperclip />
+                      </IconButton>
                     )}
                     {contextBar && !commentMode ? (
-                      <button
-                        type="button"
+                      <IconButton
+                        label="Session context"
                         onClick={() => openContext()}
                         disabled={disabled}
                         title="Attach a Task, worktree, or project to this new session"
-                        aria-label="Session context"
                         aria-expanded={contextOpen}
                         data-open={contextOpen}
-                        className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
                       >
-                        <Plus size={16} />
-                      </button>
+                        <Plus />
+                      </IconButton>
                     ) : null}
                   </div>
                   {!hideRuntimeControls && !runtimeCollapsed && !commentMode ? (
@@ -2488,8 +2446,8 @@ export const Composer = memo(function Composer({
                     </div>
                   ) : null}
                   {!hideRuntimeControls && runtimeCollapsed && !commentMode ? (
-                    <button
-                      type="button"
+                    <InputGroupButton
+                      size="sm"
                       onClick={() => {
                         if (runtimeOpen) {
                           dismissSheetsAndFocus();
@@ -2504,7 +2462,7 @@ export const Composer = memo(function Composer({
                       title={runtimeTitle}
                       aria-label={runtimeTitle}
                       aria-expanded={runtimeOpen}
-                      className="flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[open=true]:bg-muted data-[open=true]:text-foreground"
+                      className="min-w-0"
                       data-open={runtimeOpen}
                     >
                       {model ? (
@@ -2520,7 +2478,7 @@ export const Composer = memo(function Composer({
                         />
                       )}
                       <span className="min-w-0 truncate">{runtimeLabel}</span>
-                    </button>
+                    </InputGroupButton>
                   ) : null}
                 </div>
 
@@ -2530,8 +2488,8 @@ export const Composer = memo(function Composer({
                   className={COMPOSER_ACTION_CLUSTER_CLASS}
                 >
                   {showBranches && !commentMode && (
-                    <button
-                      type="button"
+                    <IconButton
+                      label="Conversation branches"
                       onClick={() => {
                         if (branchesOpen) {
                           dismissSheetsAndFocus();
@@ -2544,23 +2502,22 @@ export const Composer = memo(function Composer({
                         setBranchesOpen(true);
                       }}
                       title="Conversation branches"
-                      aria-label="Conversation branches"
                       aria-expanded={branchesOpen}
-                      className="relative flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-primary data-[open=true]:bg-muted data-[open=true]:text-foreground"
+                      className="relative"
                       data-open={branchesOpen && showBranches}
                     >
                       <GitFork size={15} />
                       {branchCount > 1 && (
-                        <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-primary px-1 text-xs font-semibold text-primary-foreground">
+                        <Badge className="absolute -right-1 -top-1">
                           {branchCount}
-                        </span>
+                        </Badge>
                       )}
-                    </button>
+                    </IconButton>
                   )}
                   {commentMode ? null : <ContextMeter info={contextInfo} />}
                   {commentMode ? null : (
-                    <button
-                      type="button"
+                    <IconButton
+                      label="Add comment"
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={onAddComment}
                       data-comment-actuation
@@ -2568,33 +2525,26 @@ export const Composer = memo(function Composer({
                       title={
                         onAddComment ? "Add comment" : commentDisabledReason
                       }
-                      aria-label="Add comment"
-                      className={COMPOSER_ICON_ACTION_CLASS}
                     >
-                      <MessageSquareQuote size={16} />
-                    </button>
+                      <MessageSquareQuote />
+                    </IconButton>
                   )}
-                  <button
-                    type="button"
+                  <IconButton
+                    label="Refine draft prompt"
+                    busy={isRefining}
                     onClick={() => void refineDraft()}
                     disabled={
                       disabled ||
                       isRefining ||
                       !(commentMode ? commentBody : text).trim()
                     }
-                    aria-busy={isRefining || undefined}
                     title="Refine draft prompt"
-                    className={COMPOSER_ICON_ACTION_CLASS}
                   >
-                    {isRefining ? (
-                      <Spinner size="md" />
-                    ) : (
-                      <WandSparkles size={16} />
-                    )}
-                  </button>
+                    <WandSparkles />
+                  </IconButton>
                   {dictationAvailable && (
-                    <button
-                      type="button"
+                    <IconButton
+                      label="Start dictation"
                       // One gesture: this collapses the composer (dropping the keyboard)
                       // and hands recording to the compact bar, so starting from a
                       // half-typed draft and starting from collapsed are the same flow.
@@ -2607,44 +2557,31 @@ export const Composer = memo(function Composer({
                       // Stopping un-forces the compact bar, so on desktop THIS button
                       // is what the user sees while the server decodes — it carries
                       // the transcribing spinner the bar's toggle shows elsewhere.
-                      aria-busy={speech.phase === "transcribing" || undefined}
+                      busy={speech.phase === "transcribing"}
                       title={dictationDisabledReason ?? "Dictate"}
-                      aria-label="Start dictation"
-                      className={COMPOSER_ICON_ACTION_CLASS}
                     >
-                      {speech.phase === "transcribing" ? (
-                        <Spinner size="md" />
-                      ) : (
-                        <Mic size={16} />
-                      )}
-                    </button>
+                      <Mic />
+                    </IconButton>
                   )}
                   <DictationLiveRegion phase={speech.phase} />
                   {/* Comment mode's own three answers, in the order they escalate:
                     leave it, destroy it, save it. */}
                   {commentMode ? (
-                    <button
-                      type="button"
+                    <IconButton
+                      label={editingComment ? "Cancel edit" : "Cancel comment"}
                       onClick={cancelComment}
-                      title={editingComment ? "Cancel edit" : "Cancel comment"}
-                      aria-label={
-                        editingComment ? "Cancel edit" : "Cancel comment"
-                      }
-                      className={COMPOSER_ICON_ACTION_CLASS}
                     >
-                      <X size={16} />
-                    </button>
+                      <X />
+                    </IconButton>
                   ) : null}
                   {deleteComment ? (
-                    <button
-                      type="button"
+                    <IconButton
+                      label="Delete comment"
+                      variant="destructive"
                       onClick={deleteComment}
-                      title="Delete comment"
-                      aria-label="Delete comment"
-                      className={COMPOSER_DANGER_ACTION_CLASS}
                     >
-                      <Trash2 size={16} />
-                    </button>
+                      <Trash2 />
+                    </IconButton>
                   ) : null}
                   {offerBusyModeSwitch && !commentMode ? (
                     <BusyModeSwitch
@@ -2656,18 +2593,22 @@ export const Composer = memo(function Composer({
                   {/* Typing while a turn runs turns the primary action into
                     Send, so Stop keeps a button of its own until it is sent. */}
                   {streaming && primaryAction === "send" && !commentMode ? (
-                    <button
-                      type="button"
+                    <IconButton
+                      label="Stop response"
+                      variant="secondary"
                       onClick={onAbort}
                       title="Stop"
-                      aria-label="Stop response"
-                      className={`${COMPOSER_PRIMARY_ACTION_CLASS} ${COMPOSER_STOP_TONE_CLASS}`}
                     >
-                      <Square size={14} className="fill-current" />
-                    </button>
+                      <Square className="fill-current" />
+                    </IconButton>
                   ) : null}
-                  <button
-                    type="button"
+                  <InputGroupButton
+                    size="icon-sm"
+                    variant={
+                      primaryAction === "stop" && !commentMode
+                        ? "secondary"
+                        : "default"
+                    }
                     onClick={
                       commentMode
                         ? submitComment
@@ -2708,11 +2649,6 @@ export const Composer = memo(function Composer({
                               : "Steer response"
                             : "Send message"
                     }
-                    className={`${COMPOSER_PRIMARY_ACTION_CLASS} ${
-                      primaryAction === "stop" && !commentMode
-                        ? COMPOSER_STOP_TONE_CLASS
-                        : COMPOSER_SEND_TONE_CLASS
-                    }`}
                   >
                     {commentMode ? (
                       <Check size={16} />
@@ -2725,12 +2661,12 @@ export const Composer = memo(function Composer({
                     ) : (
                       <SendHorizontal size={16} />
                     )}
-                  </button>
+                  </InputGroupButton>
                 </div>
-              </div>
+              </InputGroupAddon>
             </div>
           </div>
-        </div>
+        </InputGroup>
       </div>
       {attachmentError ? (
         <div className="mt-1.5 px-2 text-sm text-destructive">
@@ -2755,30 +2691,30 @@ function BusyModeSwitch({
   showShortcut: boolean;
 }) {
   const option = (value: BusySendMode, label: string, hint: string) => (
-    <button
-      type="button"
+    <ToggleGroupItem
+      value={value}
       role="radio"
       aria-checked={mode === value}
-      onClick={() => onChange(value)}
       title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
-      className={`h-6 rounded-full px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-        mode === value
-          ? "bg-accent text-foreground ring-1 ring-inset ring-primary/40"
-          : "text-muted-foreground hover:text-foreground"
-      }`}
     >
       {label}
-    </button>
+    </ToggleGroupItem>
   );
   return (
-    <div
+    <ToggleGroup
+      variant="outline"
+      size="sm"
+      value={[mode]}
+      onValueChange={(values) => {
+        const next = values[0] as BusySendMode | undefined;
+        if (next) onChange(next);
+      }}
       role="radiogroup"
       aria-label="While the response runs"
-      className="flex shrink-0 items-center rounded-full border border-border bg-background p-0.5"
     >
       {option("steer", "Steer", "Hand it to the running response")}
       {option("queue", "Queue", "Send it after this response")}
-    </div>
+    </ToggleGroup>
   );
 }
 
@@ -2843,18 +2779,19 @@ function CompactComposerBar({
         // tapping the bar must NOT expand the composer.
         <DictationTrace dictation={dictation} />
       ) : (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           onPointerDown={onExpandPointer}
           onClick={onExpand}
           disabled={disabled}
           title={expandHint}
           aria-label={expandHint}
           aria-expanded={false}
-          className="flex h-8 min-w-0 flex-1 items-center rounded-xl px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-w-0 flex-1 justify-start"
         >
           <span className="min-w-0 flex-1 truncate">{label}</span>
-        </button>
+        </Button>
       )}
 
       {phase === "recording" && dictation && (
@@ -2868,27 +2805,20 @@ function CompactComposerBar({
       {/* Send is hidden while the bar is recording — there is nothing to send
           yet, and its slot is what makes room for stop at the thumb edge. */}
       {!busy && (
-        <button
-          type="button"
+        <IconButton
+          label={primaryAction === "stop" ? "Stop response" : "Compose message"}
+          variant={primaryAction === "stop" ? "secondary" : "default"}
           onPointerDown={primaryAction === "stop" ? undefined : onExpandPointer}
           onClick={primaryAction === "stop" ? onAbort : onExpand}
           disabled={disabled && primaryAction !== "stop"}
           title={primaryAction === "stop" ? "Stop" : "Compose message"}
-          aria-label={
-            primaryAction === "stop" ? "Stop response" : "Compose message"
-          }
-          className={`flex size-8 shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground ${
-            primaryAction === "stop"
-              ? COMPOSER_STOP_TONE_CLASS
-              : "bg-primary text-primary-foreground hover:bg-primary/90"
-          }`}
         >
           {primaryAction === "stop" ? (
             <Square size={14} className="fill-current" />
           ) : (
             <SendHorizontal size={16} />
           )}
-        </button>
+        </IconButton>
       )}
     </div>
   );
@@ -2967,13 +2897,15 @@ function BranchItem({
   tone: "parent" | "child";
 }) {
   return (
-    <button
-      type="button"
+    <Item
+      render={<button type="button" />}
+      variant="outline"
+      size="sm"
       onClick={() => {
         onClose();
         item.onOpen();
       }}
-      className="flex w-full items-start gap-2 rounded-xl border border-border bg-muted/40 px-3 py-2 text-left transition-colors hover:border-input hover:bg-muted"
+      className="w-full items-start gap-2"
     >
       <GitFork
         size={13}
@@ -2993,6 +2925,6 @@ function BranchItem({
           </span>
         ) : null}
       </span>
-    </button>
+    </Item>
   );
 }

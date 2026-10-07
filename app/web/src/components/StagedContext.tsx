@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ClipboardList,
@@ -7,7 +7,6 @@ import {
   GitBranch,
   MessageSquareText,
   Plus,
-  Search,
   X,
 } from "lucide-react";
 import type {
@@ -17,6 +16,23 @@ import type {
 } from "@assistant/shared";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 import { Skeleton } from "./common/load.tsx";
+import { IconButton } from "./common/IconButton.tsx";
+import { Badge } from "./ui/badge.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "./ui/collapsible.tsx";
+import {
+  Command,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandSeparator,
+} from "./ui/command.tsx";
 
 /**
  * The composable pre-session context staged for a new chat's first prompt.
@@ -195,14 +211,9 @@ export function StagedContextBar({
           onRemove={projectImplied ? undefined : () => onChangeProject(null)}
         />
       ) : null}
-      <button
-        type="button"
-        onClick={onOpen}
-        title="Edit session context"
-        className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      >
-        <Plus size={13} />
-      </button>
+      <IconButton label="Edit session context" size="icon-xs" onClick={onOpen}>
+        <Plus />
+      </IconButton>
     </div>
   );
 }
@@ -222,24 +233,22 @@ function ContextChip({
   onOpen?: () => void;
   onRemove?: (() => void) | undefined;
 }) {
-  const toneClass =
-    tone === "accent"
-      ? "border-primary/30 bg-accent text-primary"
-      : "border-border bg-muted text-muted-foreground";
   return (
-    <span
-      className={`flex min-w-0 max-w-[14rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-sm font-medium ${toneClass} ${dimmed ? "opacity-70" : ""}`}
+    <Badge
+      variant={tone === "accent" ? "default" : "secondary"}
+      className={`min-w-0 max-w-56 gap-1 ${dimmed ? "opacity-70" : ""}`}
     >
       {onOpen ? (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={onOpen}
-          className="flex min-w-0 items-center gap-1"
+          className="min-w-0 gap-1"
           title={label}
         >
           <span className="shrink-0 opacity-80">{icon}</span>
           <span className="min-w-0 truncate">{label}</span>
-        </button>
+        </Button>
       ) : (
         <span className="flex min-w-0 items-center gap-1" title={label}>
           <span className="shrink-0 opacity-80">{icon}</span>
@@ -247,17 +256,11 @@ function ContextChip({
         </span>
       )}
       {onRemove ? (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="-mr-0.5 flex size-4 shrink-0 items-center justify-center rounded hover:bg-black/10"
-          title="Remove"
-          aria-label={`Remove ${label}`}
-        >
-          <X size={11} />
-        </button>
+        <IconButton label={`Remove ${label}`} size="icon-xs" onClick={onRemove}>
+          <X />
+        </IconButton>
       ) : null}
-    </span>
+    </Badge>
   );
 }
 
@@ -463,12 +466,9 @@ function FieldRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-background">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
+    <Collapsible open={expanded} onOpenChange={onToggle}>
+      <CollapsibleTrigger
+        render={<Button variant="outline" className="w-full justify-start" />}
       >
         <span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {icon}
@@ -485,11 +485,9 @@ function FieldRow({
           size={14}
           className={`shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
         />
-      </button>
-      {expanded ? (
-        <div className="border-t border-border p-1.5">{children}</div>
-      ) : null}
-    </div>
+      </CollapsibleTrigger>
+      <CollapsibleContent>{expanded ? children : null}</CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -532,121 +530,92 @@ function OptionList({
     { label: string; selected: boolean; onSelect: () => void } | undefined;
 }) {
   const [filter, setFilter] = useState("");
-  const q = filter.toLowerCase().trim();
-  const filtered = q
-    ? items.filter(
-        (i) =>
-          i.label.toLowerCase().includes(q) ||
-          (i.hint?.toLowerCase().includes(q) ?? false),
-      )
-    : items;
-  // Search only earns its keep past a screenful; keep the sheet tap-first below that.
-  const showFilter = items.length > 8;
-  // The divider sits right after the pinned group — the leading action counts
-  // as pinned too, so it shows even with no pinned items (-1 when every item is
-  // pinned, which correctly renders no divider at all).
-  const hasPinnedGroup = Boolean(leadingAction) || items.some((i) => i.pinned);
-  const firstUnpinnedIndex = hasPinnedGroup
-    ? filtered.findIndex((i) => !i.pinned)
-    : -1;
-
   return (
-    <div className="flex flex-col gap-1">
-      {showFilter ? (
-        <div className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5">
-          <Search size={13} className="shrink-0 text-muted-foreground" />
-          {/* No autoFocus: the picker is tap-first, and focusing this input would
-              re-open the mobile keyboard the dock sheet just dismissed. */}
-          <input
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter…"
-            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-          />
-        </div>
+    <Command>
+      {/* No autoFocus: searching must not reopen the mobile keyboard. */}
+      {items.length > 8 ? (
+        <CommandInput
+          placeholder="Filter…"
+          value={filter}
+          onValueChange={setFilter}
+        />
       ) : null}
       {leadingAction ? (
-        <button
-          type="button"
-          onClick={leadingAction.onSelect}
+        <Button
+          variant="ghost"
+          size="sm"
           aria-pressed={leadingAction.selected}
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted ${
-            leadingAction.selected ? "text-primary" : "text-foreground"
-          }`}
+          onClick={leadingAction.onSelect}
         >
-          <Plus size={13} className="shrink-0" />
+          <Plus />
           {leadingAction.label}
-        </button>
+        </Button>
       ) : null}
       {onClear ? (
-        <button
-          type="button"
-          onClick={onClear}
-          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
-        >
-          <X size={13} className="shrink-0" />
+        <Button variant="ghost" size="sm" onClick={onClear}>
+          <X />
           {clearLabel}
-        </button>
+        </Button>
       ) : null}
-      <div className="max-h-56 overflow-y-auto">
-        {!loaded ? (
-          <div
-            role="status"
-            aria-label={loadingLabel}
-            className="flex flex-col"
-          >
-            {[0, 1, 2].map((row) => (
-              <div key={row} className="px-2.5 py-2">
-                <Skeleton
-                  className="h-4"
-                  style={{ width: `${[76, 58, 68][row]}%` }}
-                />
-              </div>
-            ))}
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="px-2.5 py-3 text-center text-sm text-muted-foreground">
+      {!loaded ? (
+        <div
+          role="status"
+          aria-label={loadingLabel}
+          className="flex flex-col gap-2"
+        >
+          {[0, 1, 2].map((row) => (
+            <Skeleton
+              key={row}
+              className="h-4"
+              style={{ width: `${[76, 58, 68][row]}%` }}
+            />
+          ))}
+        </div>
+      ) : (
+        <CommandList className="max-h-56">
+          <CommandEmpty>
             {items.length === 0 ? emptyLabel : "No matches."}
-          </div>
-        ) : (
-          filtered.map((item, index) => (
-            <Fragment key={item.id}>
-              {
-                // Unfiltered only: a search narrows the pinned/rest split away.
-                // `items` puts pinned entries first, so the first unpinned one
-                // marks the boundary — covers a leading action with no pinned
-                // items too, and never fires when nothing unpinned follows.
-                !q && index === firstUnpinnedIndex ? (
-                  <hr className="my-1 border-border" />
-                ) : null
-              }
-              <button
-                type="button"
-                onClick={() => onSelect(item.id)}
-                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-muted ${
-                  selectedId === item.id
-                    ? "font-medium text-foreground"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {item.dot ? (
-                  <span
-                    className="size-2 shrink-0 rounded-full"
-                    style={{ backgroundColor: item.dot }}
-                    aria-hidden
-                  />
-                ) : null}
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                {item.hint ? (
-                  <span className="shrink-0 rounded bg-card px-1.5 py-0.5 text-xs font-medium tracking-wide text-muted-foreground">
-                    {item.hint}
-                  </span>
-                ) : null}
-              </button>
-            </Fragment>
-          ))
-        )}
-      </div>
-    </div>
+          </CommandEmpty>
+          {[true, false].map((pinned) => (
+            <CommandGroup key={String(pinned)}>
+              {!pinned &&
+              !filter.trim() &&
+              items.some((item) => !item.pinned) &&
+              (leadingAction || items.some((item) => item.pinned)) ? (
+                <CommandSeparator asChild>
+                  <hr />
+                </CommandSeparator>
+              ) : null}
+              {items
+                .filter((item) => Boolean(item.pinned) === pinned)
+                .map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    value={item.id}
+                    keywords={[item.label, item.hint ?? ""]}
+                    aria-current={selectedId === item.id ? "true" : undefined}
+                    data-checked={selectedId === item.id || undefined}
+                    onSelect={() => onSelect(item.id)}
+                  >
+                    {item.dot ? (
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: item.dot }}
+                        aria-hidden
+                      />
+                    ) : null}
+                    <span className="min-w-0 flex-1 truncate">
+                      {item.label}
+                    </span>
+                    {item.hint ? (
+                      <Badge variant="secondary">{item.hint}</Badge>
+                    ) : null}
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          ))}
+        </CommandList>
+      )}
+    </Command>
   );
 }

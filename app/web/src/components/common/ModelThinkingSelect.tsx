@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState } from "react";
 import { Brain, Check, ChevronDown, Gauge } from "lucide-react";
 import {
   type AccountModelOption,
@@ -8,10 +8,24 @@ import {
   providerLabel,
   supportedThinkingLevelsForModel,
 } from "@assistant/shared";
-import { Popover } from "../Popover.tsx";
+import { Button } from "../ui/button.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "../ui/command.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../ui/dropdown-menu.tsx";
 import { ProviderIcon } from "./ProviderIcon.tsx";
 
-/** Human label for each thinking level. */
 export const THINKING_LABELS: Record<ThinkingLevel, string> = {
   off: "Off",
   minimal: "Minimal",
@@ -21,8 +35,6 @@ export const THINKING_LABELS: Record<ThinkingLevel, string> = {
   xhigh: "Extra high",
   max: "Maximum",
 };
-
-/** Compact label for tight spaces (e.g. the composer trigger on mobile). */
 const THINKING_SHORT_LABELS: Record<ThinkingLevel, string> = {
   off: "Off",
   minimal: "Min",
@@ -32,8 +44,6 @@ const THINKING_SHORT_LABELS: Record<ThinkingLevel, string> = {
   xhigh: "XHi",
   max: "Max",
 };
-
-/** One-line hint about what each level does. */
 const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
   off: "Respond without extended thinking",
   minimal: "A touch of reasoning before answering",
@@ -43,29 +53,24 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
   xhigh: "Very deep reasoning",
   max: "Maximum reasoning depth",
 };
-
 function formatContextTokens(tokens: number): string {
   if (tokens >= 1_000_000) {
     const millions = tokens / 1_000_000;
     return `${Number.isInteger(millions) ? millions : millions.toFixed(1)}M`;
   }
-  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
-  return String(tokens);
+  return tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens);
 }
-
-function cx(...classes: Array<string | false | undefined>): string {
-  return classes.filter(Boolean).join(" ");
+function accountOf(model: ModelOption): AccountModelOption | undefined {
+  return "credentialProfileId" in model
+    ? (model as AccountModelOption)
+    : undefined;
 }
-
-/** One popover group: provider by default, provider ACCOUNT when the options carry one. */
 interface ModelGroup<M extends ModelOption> {
   key: string;
   label: string;
-  /** Provider whose brand icon heads the group. */
   provider: string;
   models: M[];
 }
-
 function groupModels<M extends ModelOption>(models: M[]): ModelGroup<M>[] {
   const groups = new Map<string, ModelGroup<M>>();
   for (const m of models) {
@@ -73,12 +78,11 @@ function groupModels<M extends ModelOption>(models: M[]): ModelGroup<M>[] {
     const key = account
       ? `account:${account.credentialProfileId}`
       : `provider:${m.provider}`;
-    const label = account
-      ? `${account.accountName}${account.accountDisabled ? " · disabled" : ""}`
-      : providerLabel(m.provider, m.providerName);
     const group = groups.get(key) ?? {
       key,
-      label,
+      label: account
+        ? `${account.accountName}${account.accountDisabled ? " · disabled" : ""}`
+        : providerLabel(m.provider, m.providerName),
       provider: m.provider,
       models: [],
     };
@@ -87,72 +91,32 @@ function groupModels<M extends ModelOption>(models: M[]): ModelGroup<M>[] {
   }
   return [...groups.values()];
 }
-
-function accountOf(model: ModelOption): AccountModelOption | undefined {
-  return "credentialProfileId" in model
-    ? (model as AccountModelOption)
-    : undefined;
-}
-
 type ModelRef =
   | { provider: string; id: string; credentialProfileId?: string }
   | ModelOption
   | undefined;
-
-/**
- * Account-aware identity: the same model offered by two accounts is two
- * distinct choices, so the account participates whenever BOTH sides name one.
- */
-function sameModel(
-  a: ModelRef,
-  b: { provider: string; id: string; credentialProfileId?: string },
-): boolean {
-  if (a?.provider !== b.provider || a?.id !== b.id) return false;
+// Accounts participate in identity whenever both sides name one.
+function sameModel(a: ModelRef, b: ModelRef): boolean {
+  if (!a || !b || a.provider !== b.provider || a.id !== b.id) return false;
   const selected =
-    a && "credentialProfileId" in a ? a.credentialProfileId : undefined;
-  return (
-    !selected || !b.credentialProfileId || selected === b.credentialProfileId
-  );
+    "credentialProfileId" in a ? a.credentialProfileId : undefined;
+  const offered =
+    "credentialProfileId" in b ? b.credentialProfileId : undefined;
+  return !selected || !offered || selected === offered;
 }
-
-/** Trigger presentation: a compact composer/toolbar pill, or a settings field. */
 type SelectVariant = "pill" | "field";
-
-// Shared trigger classes. `pill` is a dense ghost control for the composer;
-// `field` looks like a form input for the settings page.
-const PILL_TRIGGER =
-  "inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-muted data-[open=true]:bg-muted disabled:cursor-not-allowed disabled:opacity-50";
-const FIELD_TRIGGER =
-  "flex w-full items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-left text-sm text-foreground transition-colors hover:border-input data-[open=true]:border-primary disabled:cursor-not-allowed disabled:opacity-60";
-
 export interface ModelSelectProps<M extends ModelOption = ModelOption> {
   models: M[];
-  /** Currently selected model (or a bare {provider,id[,credentialProfileId]}). */
   value: ModelRef;
-  /** Called with the chosen model. */
   onChange: (model: M) => void;
-  /** Optionally disable individual models (e.g. locked after a session started). */
   isModelDisabled?: ((model: M) => boolean) | undefined;
-  /** Lock the whole control. */
   locked?: boolean;
-  /** Trigger presentation. Defaults to `"pill"`. */
   variant?: SelectVariant;
-  /** Trigger text when nothing is selected. */
   placeholder?: string;
-  /** Popover placement. Defaults to `"auto"`. */
   placement?: "top" | "bottom" | "auto";
-  /** Trigger button classes. When set, fully replaces the variant default. */
   className?: string;
-  /** Override the trigger title/tooltip. */
   title?: string;
 }
-
-/**
- * A model picker grouped by provider — or by provider ACCOUNT when the options
- * are {@link AccountModelOption}s, so picking a model also picks the account it
- * runs on. Built on the app's portal {@link Popover}; used consistently in the
- * composer (plain models) and the settings page (account/model combinations).
- */
 export function ModelSelect<M extends ModelOption>({
   models,
   value,
@@ -165,160 +129,92 @@ export function ModelSelect<M extends ModelOption>({
   className,
   title,
 }: ModelSelectProps<M>) {
-  const grouped = groupModels(models);
-  // Prefer a full ModelOption when the caller passed one (so a locked session's
-  // model still shows its name even if it's not in the filtered list); otherwise
-  // resolve the {provider,id} ref against the available models.
+  const [open, setOpen] = useState(false);
   const selected =
-    value && "name" in value
-      ? (value as M)
-      : value
-        ? models.find((m) => sameModel(value, m))
-        : undefined;
-  const selectedAccount = selected ? accountOf(selected) : undefined;
-  const triggerClass =
-    className ?? (variant === "pill" ? PILL_TRIGGER : FIELD_TRIGGER);
-
+    value && "name" in value ? value : models.find((m) => sameModel(value, m));
+  const account = selected ? accountOf(selected) : undefined;
   return (
-    <Popover
-      title={
-        title ??
-        (locked ? "Model is locked after this session started" : "Model")
-      }
-      placement={placement}
-      className={triggerClass}
-      disabled={locked}
-      button={
-        <>
-          {selected ? (
-            <ProviderIcon
-              provider={selected.provider}
-              size={15}
-              className="shrink-0 text-muted-foreground"
-            />
-          ) : null}
-          <span
-            className={cx(
-              "min-w-0 flex-1 truncate",
-              variant === "pill" && "max-w-[170px] sm:max-w-[220px]",
-            )}
-          >
-            {selected?.name ?? placeholder}
-            {selectedAccount ? (
-              <span className="text-muted-foreground">
-                {" "}
-                · {selectedAccount.accountName}
-              </span>
-            ) : null}
-          </span>
-          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
-        </>
-      }
-    >
-      {(close) => (
-        <div className="max-h-[45vh] min-w-[240px] overflow-y-auto">
-          {models.length === 0 && (
-            <div className="px-3 py-2 text-sm text-muted-foreground">
-              No models available
-            </div>
-          )}
-          {grouped.map((group) => (
-            <div
-              key={group.key}
-              className="py-1"
-              role="group"
-              aria-label={group.label}
-            >
-              <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <ProviderIcon provider={group.provider} size={12} />
-                {group.label}
-              </div>
-              {group.models.map((m) => {
-                const active = sameModel(value, m);
-                const disabled = Boolean(isModelDisabled?.(m));
-                return (
-                  <button
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            className={
+              className ?? (variant === "field" ? "w-full justify-between" : "")
+            }
+            disabled={locked}
+          />
+        }
+        title={
+          title ??
+          (locked ? "Model is locked after this session started" : "Model")
+        }
+      >
+        {selected ? (
+          <ProviderIcon provider={selected.provider} size={15} />
+        ) : null}
+        <span className="min-w-0 flex-1 truncate">
+          {selected?.name ?? placeholder}
+          {account ? ` · ${account.accountName}` : ""}
+        </span>
+        <ChevronDown />
+      </PopoverTrigger>
+      <PopoverContent
+        side={placement === "auto" ? "bottom" : placement}
+        align="start"
+        initialFocus={false}
+      >
+        <Command>
+          <CommandInput placeholder="Search models…" />
+          <CommandList>
+            <CommandEmpty>No models available</CommandEmpty>
+            {groupModels(models).map((group) => (
+              <CommandGroup key={group.key} heading={group.label}>
+                {group.models.map((m) => (
+                  <CommandItem
                     key={`${accountOf(m)?.credentialProfileId ?? ""}/${m.provider}/${m.id}`}
-                    type="button"
-                    aria-current={active ? "true" : undefined}
-                    onClick={() => {
-                      if (disabled) return;
+                    value={`${group.key}/${m.provider}/${m.id}`}
+                    keywords={[m.name, group.label]}
+                    disabled={Boolean(isModelDisabled?.(m))}
+                    aria-current={sameModel(value, m) ? "true" : undefined}
+                    data-checked={sameModel(value, m) || undefined}
+                    onSelect={() => {
                       onChange(m);
-                      close();
+                      setOpen(false);
                     }}
-                    disabled={disabled}
-                    title={
-                      disabled
-                        ? "This model cannot be selected after this session has started."
-                        : undefined
-                    }
-                    className="flex w-full items-center gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
                   >
+                    <ProviderIcon provider={m.provider} size={15} />
                     <span className="min-w-0 flex-1">
-                      <span
-                        className={cx(
-                          "block truncate text-sm font-medium",
-                          active ? "text-primary" : "text-foreground",
-                        )}
-                      >
-                        {m.name}
-                      </span>
-                      <span className="mt-0.5 flex items-center gap-2 text-sm text-muted-foreground">
-                        <span>
-                          {formatContextTokens(m.contextWindow)} context
-                        </span>
-                        {m.reasoning && (
-                          <span className="inline-flex items-center gap-1">
-                            <Gauge size={11} /> reasoning
-                          </span>
-                        )}
+                      <span className="block truncate">{m.name}</span>
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {formatContextTokens(m.contextWindow)} context{" "}
+                        {m.reasoning ? (
+                          <Gauge size={11} aria-label="reasoning" />
+                        ) : null}
                       </span>
                     </span>
-                    {active && (
-                      <Check size={14} className="shrink-0 text-primary" />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
     </Popover>
   );
 }
-
 export interface ThinkingSelectProps {
-  /** The model that constrains which levels are available. */
   model: ModelOption | undefined;
-  /**
-   * Currently selected level, or `undefined` for NO selection.
-   *
-   * Unset is a real state, not a missing prop: a stored value this build cannot
-   * run must read as "nothing is selected here" rather than borrow the nearest
-   * level, which would show the user an approval they never made.
-   */
   value: ThinkingLevel | undefined;
-  /** Called with the chosen level. */
   onChange: (level: ThinkingLevel) => void;
-  /** Lock the whole control. */
   locked?: boolean;
-  /** Trigger presentation. Defaults to `"pill"`. */
   variant?: SelectVariant;
-  /** Popover placement. Defaults to `"auto"`. */
   placement?: "top" | "bottom" | "auto";
-  /** Trigger button classes. When set, fully replaces the variant default. */
   className?: string;
-  /** Override the trigger title/tooltip. */
   title?: string;
-  /** Trigger label while nothing is selected. */
   placeholder?: string;
 }
-
-/**
- * A thinking-level picker constrained to the levels the current model accepts,
- * with one-line descriptions. Built on the app's portal {@link Popover}.
- */
 export function ThinkingSelect({
   model,
   value,
@@ -330,104 +226,71 @@ export function ThinkingSelect({
   title,
   placeholder = "Not set",
 }: ThinkingSelectProps) {
-  const reasoning = model?.reasoning ?? false;
   const levels = supportedThinkingLevelsForModel(model);
-  // `undefined` stays undefined: clamping it would DISPLAY a level as chosen.
+  // An unset stored selection must never display an approval the user did not make.
   const displayLevel =
     value === undefined
       ? undefined
       : levels.includes(value)
         ? value
         : clampThinkingLevelForModel(model, value);
-  const triggerClass =
-    className ?? (variant === "pill" ? PILL_TRIGGER : FIELD_TRIGGER);
-
   return (
-    <Popover
-      title={
-        title ??
-        (locked
-          ? "Thinking level is locked after this session started"
-          : "Thinking level")
-      }
-      placement={placement}
-      className={triggerClass}
-      disabled={locked}
-      button={
-        <>
-          <Brain size={15} className="shrink-0 text-muted-foreground" />
-          <span className={cx("min-w-0", variant === "field" && "flex-1")}>
-            {/* Compact on small screens, full label otherwise. */}
-            <span className="sm:hidden">
-              {displayLevel ? THINKING_SHORT_LABELS[displayLevel] : placeholder}
-            </span>
-            <span className="hidden truncate sm:inline">
-              {displayLevel ? THINKING_LABELS[displayLevel] : placeholder}
-            </span>
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="outline"
+            size="sm"
+            className={
+              className ?? (variant === "field" ? "w-full justify-between" : "")
+            }
+            disabled={locked}
+          />
+        }
+        title={
+          title ??
+          (locked
+            ? "Thinking level is locked after this session started"
+            : "Thinking level")
+        }
+      >
+        <Brain />
+        <span className="min-w-0 flex-1">
+          <span className="sm:hidden">
+            {displayLevel ? THINKING_SHORT_LABELS[displayLevel] : placeholder}
           </span>
-          <ChevronDown size={13} className="shrink-0 text-muted-foreground" />
-        </>
-      }
-    >
-      {(close) => (
-        <div className="min-w-[220px] py-0.5">
-          {!reasoning && (
-            <div className="px-2.5 py-1 text-sm text-muted-foreground">
-              Current model has no reasoning budget
-            </div>
-          )}
-          {levels.map((lvl) => {
-            const active = displayLevel === lvl;
-            return (
-              <button
-                key={lvl}
-                type="button"
-                aria-current={active ? "true" : undefined}
-                onClick={() => {
-                  onChange(lvl);
-                  close();
-                }}
-                className="flex w-full items-center gap-3 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-muted"
-              >
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={cx(
-                      "block text-sm font-medium",
-                      active ? "text-primary" : "text-foreground",
-                    )}
-                  >
-                    {THINKING_LABELS[lvl]}
-                  </span>
-                  <span className="mt-0.5 block text-sm text-muted-foreground">
-                    {THINKING_DESCRIPTIONS[lvl]}
-                  </span>
-                </span>
-                {active && (
-                  <Check size={14} className="shrink-0 text-primary" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </Popover>
-  );
-}
-
-/** A label wrapper so callers can pair a caption with a select trigger. */
-export function SelectField({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </label>
+          <span className="hidden truncate sm:inline">
+            {displayLevel ? THINKING_LABELS[displayLevel] : placeholder}
+          </span>
+        </span>
+        <ChevronDown />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        side={placement === "auto" ? "bottom" : placement}
+        align="start"
+        className="w-64"
+      >
+        {!model?.reasoning ? (
+          <div className="text-sm text-muted-foreground">
+            Current model has no reasoning budget
+          </div>
+        ) : null}
+        {levels.map((level) => (
+          <DropdownMenuItem
+            key={level}
+            aria-current={displayLevel === level ? "true" : undefined}
+            onClick={() => onChange(level)}
+          >
+            <span className="flex-1">
+              <span className="block">{THINKING_LABELS[level]}</span>
+              <span className="block text-xs text-muted-foreground">
+                {THINKING_DESCRIPTIONS[level]}
+              </span>
+            </span>
+            {displayLevel === level ? <Check /> : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
