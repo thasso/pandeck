@@ -182,7 +182,6 @@ function renderLayer(
   const none = () => undefined;
   return renderToStaticMarkup(
     <WorkflowRunStartLayer
-      mobile={false}
       task={{ id: "42", title: "Add the widget" }}
       models={models}
       roles={{

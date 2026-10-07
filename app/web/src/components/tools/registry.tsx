@@ -45,6 +45,7 @@ import {
 } from "@assistant/shared/toolCards";
 import { resolveShowFilesTarget } from "../../lib/showFilesCard.ts";
 import { normalizedToolName } from "./toolName.ts";
+import { Card, CardContent } from "@/components/ui/card";
 
 export type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -141,9 +142,9 @@ const LazyPushToolCard = lazy(() =>
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return (
-    <div className="my-2 rounded-xl border border-border bg-card px-3 py-2 text-sm text-muted-foreground">
-      {label}
-    </div>
+    <Card size="sm" className="my-2">
+      <CardContent className="text-muted-foreground">{label}</CardContent>
+    </Card>
   );
 }
 

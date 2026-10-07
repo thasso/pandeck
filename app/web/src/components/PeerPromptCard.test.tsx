@@ -33,13 +33,13 @@ function renderCard(
   props: Omit<Parameters<typeof PeerPromptCardView>[0], "card"> = {},
 ) {
   act(() => root.render(<PeerPromptCardView card={card} {...props} />));
-  return container.querySelector<HTMLButtonElement>("button[aria-controls]")!;
+  return container.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
 }
 
 function expandCard() {
   act(() =>
     container
-      .querySelector<HTMLButtonElement>("button[aria-controls]")!
+      .querySelector<HTMLButtonElement>("button[aria-expanded]")!
       .click(),
   );
 }
@@ -272,9 +272,7 @@ describe("PeerPromptCardView", () => {
     expect(html).not.toContain("<details");
     renderCard(retrying);
     expandCard();
-    expect(container.querySelector("p.text-destructive")?.textContent).toBe(
-      "boom",
-    );
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("boom");
     expect(container.querySelector("details")).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ import { activityPreview } from "../lib/activityPreview.ts";
 import { isPeerPromptState } from "../lib/peerPromptCard.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
+import { ErrorNote } from "./common/load.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 const STATE_MARK: Record<
@@ -106,9 +107,7 @@ export function PeerPromptCardView({
       </p>
       <Markdown text={message} onOpenSession={onOpenSession} />
       {typeof card.failureReason === "string" && card.failureReason ? (
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-destructive">
-          {card.failureReason}
-        </p>
+        <ErrorNote className="mt-1" message={card.failureReason} />
       ) : null}
       <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
         {typeof card.taskTitle === "string" && card.taskTitle ? (

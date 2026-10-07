@@ -18,6 +18,7 @@ import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
+import { Button } from "@/components/ui/button";
 
 type BackgroundWorkPromptUpdate =
   BackgroundWorkPromptPresentation["updates"][number];
@@ -123,17 +124,16 @@ function BackgroundWorkPromptRow({
               className="mt-1"
             />
           ) : null}
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-sm">
-            <button
-              type="button"
-              onClick={() => onOpenBackgroundWork?.(update.taskId)}
-              disabled={!onOpenBackgroundWork}
-              title={update.taskId}
-              className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-default disabled:no-underline"
-            >
-              Open in registry
-            </button>
-          </div>
+          <Button
+            variant="link"
+            size="sm"
+            className="px-0"
+            onClick={() => onOpenBackgroundWork?.(update.taskId)}
+            disabled={!onOpenBackgroundWork}
+            title={update.taskId}
+          >
+            Open in registry
+          </Button>
           {actions}
         </div>
       </ChatActivityRow>

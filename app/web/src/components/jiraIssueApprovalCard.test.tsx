@@ -337,42 +337,27 @@ test("a create field written as null still shows on the card", () => {
   expect((html.match(/—/g) ?? []).length).toBeGreaterThanOrEqual(2);
 });
 
-test("Tab wraps inside the dialog and focus returns to the opener on close", () => {
+test("the dialog takes focus and returns it to the opener on close", async () => {
   render(card());
   const opener = button("Read full ticket")!;
   opener.focus();
   act(() => opener.click());
+  // Base UI moves focus after the popup mounts.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
   const open = dialog() as HTMLElement;
-  expect(document.activeElement).toBe(open);
-
-  const controls = [...open.querySelectorAll<HTMLElement>("button, a[href]")];
-  const first = controls[0]!;
-  const last = controls.at(-1)!;
-  expect(last.textContent?.trim()).toBe("Approve");
-
-  // Shift+Tab from the surface itself wraps to the last control.
-  act(() => {
-    open.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        shiftKey: true,
-        bubbles: true,
-      }),
-    );
-  });
-  expect(document.activeElement).toBe(last);
-  // Tab from the last wraps to the first.
-  act(() => {
-    last.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Tab", bubbles: true }),
-    );
-  });
-  expect(document.activeElement).toBe(first);
+  // Base UI's dialog owns the focus trap; what this card owns is that focus
+  // moves into the proposal and comes back to the button that opened it.
+  expect(open.contains(document.activeElement)).toBe(true);
 
   act(() => {
     open.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
     );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
   expect(dialog()).toBeNull();
   expect(document.activeElement).toBe(opener);

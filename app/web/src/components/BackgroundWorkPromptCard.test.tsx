@@ -57,7 +57,9 @@ function renderCard(
     ),
   );
   return [
-    ...container.querySelectorAll<HTMLButtonElement>("button[aria-controls]"),
+    ...container.querySelectorAll<HTMLButtonElement>(
+      "button[data-activity-toggle]",
+    ),
   ];
 }
 

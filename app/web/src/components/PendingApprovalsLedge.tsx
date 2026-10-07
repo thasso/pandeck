@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { ArrowDown, ChevronDown, ShieldAlert } from "lucide-react";
 import type { ApprovalCard } from "@assistant/shared";
+import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
 
 /**
  * How many pending cards the strip names before folding the rest behind
@@ -45,44 +53,49 @@ export function PendingApprovalsLedge({
   return (
     <div
       data-pending-approvals-ledge
-      className="max-h-[40vh] min-w-0 overflow-y-auto"
+      className="flex max-h-72 min-w-0 flex-col overflow-y-auto"
     >
       {shown.map((card) => (
-        <button
+        <Item
           key={card.id}
-          type="button"
-          onClick={() => onRevealApproval(card.id)}
-          aria-label={`Show the approval card “${card.title}”`}
-          title={card.summary ?? card.title}
-          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          size="xs"
+          render={
+            <button
+              type="button"
+              onClick={() => onRevealApproval(card.id)}
+              aria-label={`Show the approval card “${card.title}”`}
+              title={card.summary ?? card.title}
+            />
+          }
         >
-          <ShieldAlert
-            size={13}
-            className="shrink-0 text-warning"
-            aria-hidden="true"
-          />
-          <span className="shrink-0 font-medium text-warning">
-            {/* A settings-input card asks for a value, not a yes. */}
-            {card.body.kind === "settingsInput" ? "Enter" : "Approve"}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-foreground">
-            {card.title}
-          </span>
-          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+          <ItemMedia variant="icon">
+            <ShieldAlert className="text-warning" />
+          </ItemMedia>
+          <ItemContent className="min-w-0">
+            <ItemTitle className="w-full">
+              <span className="text-warning">
+                {/* A settings-input card asks for a value, not a yes. */}
+                {card.body.kind === "settingsInput" ? "Enter" : "Approve"}
+              </span>
+              <span className="truncate font-normal">{card.title}</span>
+            </ItemTitle>
+          </ItemContent>
+          <ItemActions className="text-muted-foreground">
             Show card
-            <ArrowDown size={12} aria-hidden="true" />
-          </span>
-        </button>
+            <ArrowDown className="size-3.5" />
+          </ItemActions>
+        </Item>
       ))}
       {hidden > 0 ? (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start"
           onClick={() => setShowAll(true)}
-          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
-          <ChevronDown size={13} className="shrink-0" aria-hidden="true" />
+          <ChevronDown aria-hidden="true" />
           Show {hidden} more waiting
-        </button>
+        </Button>
       ) : null}
     </div>
   );

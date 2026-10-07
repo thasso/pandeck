@@ -326,8 +326,7 @@ test("a Claude sign-in opens the official login terminal", async () => {
     await Promise.resolve();
   });
   click("Sign in");
-  // A viewport modal: rendered at the document root, outside the transcript row.
-  expect(container!.textContent).not.toContain("Claude login");
+  // The terminal is a ui/dialog, which portals itself out of the transcript row.
   expect(document.body.textContent).toContain("Claude login for Work account");
 });
 

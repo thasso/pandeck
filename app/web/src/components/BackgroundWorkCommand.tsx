@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { BACKGROUND_WORK_COMMAND_MAX_CHARS } from "@assistant/shared";
+import { Button } from "@/components/ui/button";
 
 export interface BackgroundWorkCommandProps {
   /** The bounded command line as the registry row carries it. */
@@ -42,22 +43,19 @@ export function BackgroundWorkCommand({
   const expandable = open || firstLine !== command.trim() || truncated;
   return (
     <div className={className}>
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         title={open ? "Collapse the command" : "Show the whole command"}
-        className={`block w-full min-w-0 rounded-md bg-muted/60 px-2 py-1 text-left font-mono text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-          open ? "whitespace-pre-wrap break-words" : "truncate"
-        }`}
+        className={`h-auto min-h-7 w-full min-w-0 justify-start text-left font-mono ${open ? "whitespace-pre-wrap break-words" : ""}`}
       >
-        {open ? command : firstLine}
-        {!open && expandable ? (
-          <span className="ml-1 text-muted-foreground" aria-hidden="true">
-            …
-          </span>
-        ) : null}
-      </button>
+        <span className={open ? "" : "truncate"}>
+          {open ? command : firstLine}
+        </span>
+        {!open && expandable ? <span aria-hidden="true">…</span> : null}
+      </Button>
       {open && truncated ? (
         <p className="mt-0.5 text-xs text-muted-foreground">
           Cut at {Math.round(BACKGROUND_WORK_COMMAND_MAX_CHARS / 1024)} KB; the
