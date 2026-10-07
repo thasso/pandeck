@@ -181,7 +181,7 @@ export interface TranscriptScrollController {
   /** Bring a specific row into view and keep it there while the layout settles. */
   holdRow: (
     messageId: string,
-    options: { rowsFromEnd: number; center?: boolean },
+    options: { rowsFromEnd: number; center?: boolean; offset?: number },
   ) => void;
 }
 
@@ -1396,10 +1396,13 @@ export function useTranscriptScroll({
   }, [startRestore, syncAfterRender]);
 
   const holdRow = useCallback(
-    (messageId: string, options: { rowsFromEnd: number; center?: boolean }) => {
+    (
+      messageId: string,
+      options: { rowsFromEnd: number; center?: boolean; offset?: number },
+    ) => {
       startRestore({
         messageId,
-        offset: options.center ? "center" : 0,
+        offset: options.center ? "center" : (options.offset ?? 0),
         rowsRequired: options.rowsFromEnd,
         restAtEnd: false,
         applied: false,

@@ -113,6 +113,7 @@ import {
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
+import { PendingCommentsLedge } from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
 import { SpawnedSessionsLedge } from "./components/SpawnedSessionsLedge.tsx";
@@ -969,6 +970,8 @@ function AppContent() {
     sessionId: string;
     entryId: string;
     token: number;
+    /** Land the row near the top instead of centring it (a comment's passage). */
+    align?: "top";
   } | null>(null);
   /** The `#m-` address already acted on, so staying at it does not re-ask. */
   const revealedHashRef = useRef<string | null>(null);
@@ -3723,13 +3726,18 @@ function AppContent() {
   const focusedSessionId = messageFocus?.sessionId;
   const focusedEntryId = messageFocus?.entryId;
   const focusToken = messageFocus?.token;
+  const focusAlign = messageFocus?.align;
   const viewedSessionId = displaySession?.sessionId;
   const transcriptFocusEntry = useMemo(
     () =>
       focusedEntryId && focusToken && focusedSessionId === viewedSessionId
-        ? { entryId: focusedEntryId, token: focusToken }
+        ? {
+            entryId: focusedEntryId,
+            token: focusToken,
+            ...(focusAlign ? { align: focusAlign } : {}),
+          }
         : null,
-    [focusedEntryId, focusToken, focusedSessionId, viewedSessionId],
+    [focusedEntryId, focusToken, focusAlign, focusedSessionId, viewedSessionId],
   );
   // A jump is spent once the transcript lands on it: keeping it would replay the
   // jump the next time this session is opened, over the reader's own position —
@@ -3777,10 +3785,13 @@ function AppContent() {
         return;
       }
       const { sessionId, entryId } = comment.anchor;
+      // Near the top, not centred: the floating composer (and its open
+      // comments strip) covers the lower part of the transcript.
       setMessageFocus((current) => ({
         sessionId,
         entryId,
         token: Math.max(Date.now(), (current?.token ?? 0) + 1),
+        align: "top",
       }));
     },
     [navigate],
@@ -5119,23 +5130,55 @@ function AppContent() {
       sendPromptQueue,
     ],
   );
-  // One shelf, up to four strips on it: what waits on the user on top, then
-  // the peers, background work, and the user's own queue on the edge nearest
-  // the field it was typed in.
+  // The comments riding with the next prompt, as a strip of their own.
+  const pendingComments = chatComments.comments;
+  const pendingCommentsLedge = useMemo(
+    () =>
+      pendingComments.length > 0 ? (
+        <PendingCommentsLedge
+          comments={pendingComments}
+          activeCommentId={chatComments.activeCommentId}
+          onSelect={chatComments.select}
+          onRemove={chatComments.remove}
+          onClear={chatComments.clear}
+          onReveal={revealChatComment}
+        />
+      ) : undefined,
+    [
+      pendingComments,
+      chatComments.activeCommentId,
+      chatComments.select,
+      chatComments.remove,
+      chatComments.clear,
+      revealChatComment,
+    ],
+  );
+  // One shelf, up to five strips on it: what waits on the user on top, then
+  // the peers, background work, and on the edge nearest the field what the
+  // user wrote that is still to go — the queue, then the comments that ride
+  // with the next prompt.
   const composerLedge = useMemo(
     () =>
       pendingApprovalsLedge ||
       spawnedLedge ||
       backgroundLedge ||
-      promptQueueLedge ? (
+      promptQueueLedge ||
+      pendingCommentsLedge ? (
         <>
           {pendingApprovalsLedge}
           {spawnedLedge}
           {backgroundLedge}
           {promptQueueLedge}
+          {pendingCommentsLedge}
         </>
       ) : undefined,
-    [pendingApprovalsLedge, spawnedLedge, backgroundLedge, promptQueueLedge],
+    [
+      pendingApprovalsLedge,
+      spawnedLedge,
+      backgroundLedge,
+      promptQueueLedge,
+      pendingCommentsLedge,
+    ],
   );
 
   const runNavAction = useCallback(
@@ -5730,7 +5773,6 @@ function AppContent() {
           chatComments={chatComments}
           commentDraft={chatCommentDraft}
           onCommentDraftChange={setChatCommentDraft}
-          onRevealComment={revealChatComment}
           draft={
             pendingWorktreeReview?.draft ??
             sessionReviewDraft ??

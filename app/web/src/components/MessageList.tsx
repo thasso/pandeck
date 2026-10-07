@@ -910,7 +910,7 @@ interface Props {
    * the host drops a focus naming another one, since a jump across sessions
    * resolves against the transcript that is about to be shown, not this one.
    */
-  focusEntry?: { entryId: string; token: number } | null;
+  focusEntry?: { entryId: string; token: number; align?: "top" } | null;
   /** Fired once the jump has actually landed on its row, so the host can retire it. */
   onFocusEntryApplied?: (token: number) => void;
   /**
@@ -1778,6 +1778,7 @@ export function MessageList({
   // on every render, and these are the whole of what both effects read.
   const focusToken = focusEntry?.token ?? null;
   const focusEntryId = focusEntry?.entryId ?? null;
+  const focusAlignTop = focusEntry?.align === "top";
   useLayoutEffect(() => {
     if (focusToken === null || focusEntryId === null) return;
     if (focusHandled.current === focusToken) return;
@@ -1788,8 +1789,13 @@ export function MessageList({
     const row = index < 0 ? undefined : rows[index];
     if (!row) return;
     focusHandled.current = focusToken;
-    holdRow(row.message.id, { rowsFromEnd: rows.length - index, center: true });
-  }, [focusToken, focusEntryId, allRows.length, holdRow]);
+    holdRow(
+      row.message.id,
+      focusAlignTop
+        ? { rowsFromEnd: rows.length - index, offset: 16 }
+        : { rowsFromEnd: rows.length - index, center: true },
+    );
+  }, [focusToken, focusEntryId, focusAlignTop, allRows.length, holdRow]);
 
   // The flash follows the row rather than the jump: widening the window is what
   // mounts it, so this re-runs when the window grows. Landing on the row is also

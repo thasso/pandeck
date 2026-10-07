@@ -125,7 +125,6 @@ import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
-import { ChatCommentChip } from "./ChatCommentChip.tsx";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import {
   StagedContextBar,
@@ -296,8 +295,6 @@ interface Props {
   onCommentDraftChange?: (
     draft: Omit<NewPendingChatComment, "body"> | null,
   ) => void;
-  /** Take the reader to the passage a pending comment annotates. */
-  onRevealComment?: (comment: PendingChatComment) => void;
   /**
    * Always use the focus-driven collapse regardless of viewport (the inspector
    * footer composer, which must stay compact on desktop too). The main chat
@@ -927,7 +924,6 @@ export const Composer = memo(function Composer({
   chatComments,
   commentDraft,
   onCommentDraftChange,
-  onRevealComment,
   collapseWhenBlurred = false,
   dictation,
 }: Props) {
@@ -2239,18 +2235,6 @@ export const Composer = memo(function Composer({
                   onChangeTask={contextBar.onChangeTask}
                   onChangeReview={contextBar.onChangeReview}
                   onChangeFile={contextBar.onChangeFile}
-                />
-              ) : null}
-
-              {chatComments && chatComments.comments.length > 0 ? (
-                <ChatCommentChip
-                  comments={chatComments.comments}
-                  activeCommentId={chatComments.activeCommentId}
-                  onSelect={chatComments.select}
-                  onRemove={chatComments.remove}
-                  onClear={chatComments.clear}
-                  onReveal={onRevealComment}
-                  labelSources
                 />
               ) : null}
 

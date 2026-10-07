@@ -158,15 +158,15 @@ const BackgroundWorkLedgeRow = memo(function BackgroundWorkLedgeRow({
     <li data-background-item={item.id} className="min-w-0">
       <Item
         size="xs"
-        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0"
+        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0 hover:bg-muted dark:hover:bg-muted/50"
       >
         <Button
           variant="ghost"
           size="sm"
-          // Square and filled under the transparent border, like the strip's
-          // header, so its hover meets the strip's edge. Open is not a hover
-          // state: ghost styles `aria-expanded` like one, so reset it.
-          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50"
+          // The whole row takes the hover (its `Item`), not just this toggle
+          // beside the actions; ghost styles `aria-expanded` like hover, so
+          // that is reset too.
+          className="h-8 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
           disabled={!command}
