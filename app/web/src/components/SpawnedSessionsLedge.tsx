@@ -276,9 +276,10 @@ export function SpawnedSessionsLedge({
  * One peer in the composer strip, styled like the background-work rows: a
  * chevron and the title (with its state glyph) that unfold the peer's runtime
  * and worktree, how long ago it moved, and Open. Indented by its depth in the
- * spawn tree, so the strip still reads as a tree.
+ * spawn tree, so the strip still reads as a tree. Also the inspector's session
+ * rows (`InspectorSessionsSection`), so a session reads the same in both.
  */
-const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
+export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   card,
   now,
   onOpen,

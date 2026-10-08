@@ -52,6 +52,7 @@ import {
   Inspector,
   InspectorFacts,
   InspectorSection,
+  useInspectorAct,
   type InspectorAction,
   type InspectorFact,
   type InspectorRelationGroup,
@@ -99,6 +100,13 @@ import {
   type JoinSource,
   type PullRequestJoinSources,
 } from "../lib/pullRequestInbox.ts";
+import {
+  classifySessionStatus,
+  tierForStatus,
+  type SessionInboxCard,
+} from "../lib/sessionInbox.ts";
+import { SpawnedSessionLedgeRow } from "./SpawnedSessionsLedge.tsx";
+import { useElapsedNow } from "./useElapsedNow.ts";
 
 /** A resolved reference to another work-graph object. */
 export interface ObjectRef {
@@ -392,6 +400,65 @@ export function taskRelationGroups(
       refs: [...sessionRefs.values()],
     },
   ];
+}
+
+/**
+ * The inspector's Sessions section, drawn with the composer strip's session
+ * rows (`SpawnedSessionLedgeRow`): edge to edge, hairline-divided, each row
+ * unfolding the session's agent, model and worktree, with its age and Open.
+ * Newest activity first. Sessions this browser does not hold yet are left out
+ * rather than drawn as an id.
+ */
+function InspectorSessionsSection({
+  sessionIds,
+  sessions,
+  storageScope,
+  onOpenSession,
+}: {
+  sessionIds: readonly string[];
+  sessions: SessionListItem[];
+  storageScope: string;
+  onOpenSession: (id: string) => void;
+}) {
+  const cards = useMemo(() => {
+    const byId = new Map(sessions.map((session) => [session.id, session]));
+    return sessionIds
+      .map((id) => byId.get(id))
+      .filter((session): session is SessionListItem => Boolean(session))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((session): SessionInboxCard => {
+        const status = classifySessionStatus(session);
+        return { session, status, tier: tierForStatus(status) };
+      });
+  }, [sessionIds, sessions]);
+  const working = cards.some((card) => card.status === "running");
+  const now = useElapsedNow(working);
+  const onAct = useInspectorAct();
+  if (cards.length === 0) return null;
+  return (
+    <InspectorSection
+      id="relations:sessions"
+      storageScope={storageScope}
+      title="Sessions"
+      icon={<MessageSquare size={13} />}
+      summary={String(cards.length)}
+    >
+      {/* Out to the panel's edges, as the strip runs to the shelf's. */}
+      <ul className="-mx-3 divide-y border-y">
+        {cards.map((card) => (
+          <SpawnedSessionLedgeRow
+            key={card.session.id}
+            card={card}
+            now={now}
+            onOpen={(id) => {
+              onOpenSession(id);
+              onAct?.();
+            }}
+          />
+        ))}
+      </ul>
+    </InspectorSection>
+  );
 }
 
 /**
@@ -729,13 +796,20 @@ export function TaskInspector({
           : []),
       ]
     : [];
+  const sessionIds = useMemo(
+    () => (task?.sessionRefs ?? []).map((ref) => ref.sessionId),
+    [task?.sessionRefs],
+  );
   return (
     <Inspector
       loading={!task}
       relations={
         task
           ? toInspectorGroups(
-              taskRelationGroups(task, tasks, sessions),
+              // Sessions are drawn by their own section below.
+              taskRelationGroups(task, tasks, sessions).filter(
+                (group) => group.id !== "sessions",
+              ),
               openers,
             )
           : []
@@ -743,6 +817,14 @@ export function TaskInspector({
       actions={actions}
       sectionStorageScope={`task:${task?.id ?? "loading"}`}
     >
+      {task ? (
+        <InspectorSessionsSection
+          sessionIds={sessionIds}
+          sessions={sessions}
+          storageScope={`task:${task.id}`}
+          onOpenSession={openers.onOpenSession}
+        />
+      ) : null}
       {children}
     </Inspector>
   );

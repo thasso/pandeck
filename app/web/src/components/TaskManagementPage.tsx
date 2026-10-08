@@ -6,13 +6,22 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowLeft, Check, ClipboardList, Pencil } from "lucide-react";
+import {
+  ArrowLeft,
+  CalendarCheck,
+  Check,
+  ClipboardList,
+  Flag,
+  Pencil,
+  Ticket,
+} from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Input } from "./ui/input.tsx";
 import { Textarea } from "./ui/textarea.tsx";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
+  ProjectRecord,
   PullRequestMergeMethod,
   SessionListItem,
   TaskItem,
@@ -52,6 +61,12 @@ import {
 } from "../lib/loadState.ts";
 import { flattenTasks, nextStatus, type Task } from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
+import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
+import { todayIso } from "./calendar/calendarDates.ts";
+import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
+import { TaskProjectMeta } from "./TaskRowBody.tsx";
+import { buildProjectsById } from "../lib/projectDisplay.ts";
+import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
@@ -217,6 +232,10 @@ export function TaskManagementPage({
   // the detail pane has to: an unfound Task with the list still on its way is
   // loading, not "nothing selected" (R1).
   const tasksLoaded = backlogState.taskList !== null;
+  const projectsById = useMemo(
+    () => buildProjectsById(backlogState.projectList?.projects ?? []),
+    [backlogState.projectList],
+  );
 
   // The Backlog is the one list this page browses, so it remembers where the
   // reader was across opening a Task and coming back.
@@ -397,6 +416,8 @@ export function TaskManagementPage({
           {selectedTask && !detailUnavailable ? (
             <TaskDetailPanel
               key={selectedTask.id}
+              projectsById={projectsById}
+              onNavigate={onNavigate}
               back={back}
               mobile={mobile}
               item={selectedTask}
@@ -515,6 +536,8 @@ function useWorkflowRunAnchor(
  * Low-risk title and description edits use the shared shadcn inputs in place.
  */
 function TaskDetailPanel({
+  projectsById,
+  onNavigate,
   back,
   mobile,
   item,
@@ -542,6 +565,8 @@ function TaskDetailPanel({
   paObjectReferences,
   onOpenPaObject,
 }: {
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
   back?: PageHeaderBack | undefined;
   mobile?: boolean;
   item: Task;
@@ -642,6 +667,8 @@ function TaskDetailPanel({
             <TaskTitleBlock
               item={item}
               progress={progress}
+              projectsById={projectsById}
+              onNavigate={onNavigate}
               editor={
                 editing ? (
                   <TaskTextEditor
@@ -800,45 +827,30 @@ function TaskDetailPanel({
 function TaskTitleBlock({
   item,
   progress,
+  projectsById,
+  onNavigate,
   editor,
   onCycle,
   statusMutation,
 }: {
   item: Task;
   progress?: { done: number; total: number } | undefined;
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
   /** The title and description editor, shown in the title's place while open. */
   editor: ReactNode;
   onCycle?: (() => void) | undefined;
   statusMutation?: LoadState<true> | undefined;
 }) {
   const isDone = item.status === "done";
-  const meta = onCycle || progress;
+  const statusError = errorOf(statusMutation ?? idle());
+  const today = todayIso(useUserTimeZone());
+  const planned = scheduledLabel(item, today);
+  const due = dueLabel(item, today);
+  const overdue = Boolean(item.dueDate && item.dueDate < today);
+  const tickets = [...(item.jiraIssueKeys ?? []), ...(item.githubIssues ?? [])];
   return (
-    <div className="mb-6 space-y-2">
-      {meta ? (
-        <div className="flex items-center gap-2">
-          {onCycle ? (
-            <Button
-              variant="outline"
-              busy={isPending(statusMutation ?? idle())}
-              onClick={onCycle}
-              title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-              aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-            >
-              <TaskStatusIcon status={item.status} size={15} />
-              {TASK_STATUS_LABEL[item.status]}
-            </Button>
-          ) : null}
-          {progress ? (
-            <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-sm text-muted-foreground">
-              {progress.done}/{progress.total} subtasks
-            </span>
-          ) : null}
-        </div>
-      ) : null}
-      {errorOf(statusMutation ?? idle()) ? (
-        <ErrorNote message={errorOf(statusMutation ?? idle())!} />
-      ) : null}
+    <div className="@container mb-6 flex flex-col gap-1.5">
       {editor ?? (
         <h1
           className={`text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
@@ -846,6 +858,87 @@ function TaskTitleBlock({
           {item.title}
         </h1>
       )}
+      {/* Under the title, as the chat title bar's subtitle: where the Task
+          stands, where it belongs, and how far its subtree is — plain muted
+          facts, not chips. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+        {onCycle ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            // Pulled out by its own padding so the glyph lines up with the
+            // title's first letter.
+            className="-ml-2 text-sm font-normal text-muted-foreground hover:text-foreground"
+            busy={isPending(statusMutation ?? idle())}
+            onClick={onCycle}
+            title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
+            aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
+          >
+            <TaskStatusIcon status={item.status} size={14} />
+            {TASK_STATUS_LABEL[item.status]}
+          </Button>
+        ) : (
+          // On a phone the dock's action row changes the status; here it is
+          // only read.
+          <span className="inline-flex items-center gap-1.5">
+            <TaskStatusIcon status={item.status} size={14} />
+            {TASK_STATUS_LABEL[item.status]}
+          </span>
+        )}
+        {item.projectId ? (
+          <TaskProjectMeta
+            projectId={item.projectId}
+            projectsById={projectsById}
+            href={projectPath(item.projectId)}
+            onNavigate={onNavigate}
+            iconSize={14}
+            showName
+          />
+        ) : null}
+        {progress ? (
+          <span className="shrink-0">
+            {progress.done}/{progress.total} subtasks
+          </span>
+        ) : null}
+        {/* The planning and tickets the inspector edits, read here too. */}
+        {planned ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5"
+            title={`Planned for ${planned.toLowerCase()}`}
+          >
+            <CalendarCheck size={14} aria-hidden />
+            {planned}
+          </span>
+        ) : null}
+        {due ? (
+          <span
+            className={`inline-flex shrink-0 items-center gap-1.5 ${overdue ? "text-destructive" : ""}`}
+            title={`Due ${due.toLowerCase()}`}
+          >
+            <Flag size={14} aria-hidden />
+            {due}
+          </span>
+        ) : null}
+        {item.priority && item.priority !== "normal" ? (
+          <span
+            className={`shrink-0 ${item.priority === "urgent" ? "text-destructive" : item.priority === "high" ? "text-warning" : ""}`}
+          >
+            {item.priority} priority
+          </span>
+        ) : null}
+        {tickets.length > 0 ? (
+          <span
+            className="inline-flex min-w-0 items-center gap-1.5"
+            title={tickets.join(", ")}
+          >
+            <Ticket size={14} aria-hidden className="shrink-0" />
+            <span className="truncate font-mono text-xs">
+              {tickets.join(" ")}
+            </span>
+          </span>
+        ) : null}
+      </div>
+      {statusError ? <ErrorNote message={statusError} /> : null}
     </div>
   );
 }

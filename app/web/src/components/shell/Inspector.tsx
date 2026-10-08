@@ -47,6 +47,11 @@ const InspectorChromeContext = createContext<{
   onAct?: () => void;
 }>({ header: true, desktopTabs: false });
 
+/** Called after a row acts, so a dock sheet can get out of the way. */
+export function useInspectorAct(): (() => void) | undefined {
+  return useContext(InspectorChromeContext).onAct;
+}
+
 export function InspectorChromeProvider({
   header,
   desktopTabs = false,
