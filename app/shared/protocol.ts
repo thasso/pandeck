@@ -976,6 +976,45 @@ export interface GithubLinkedIssuesResponse {
   issues: GithubLinkedIssue[];
 }
 
+/**
+ * One remote ticket offered by the Task inspector's ticket search: a Jira issue
+ * or a GitHub issue / pull request. `ref` is what the Task stores — a Jira key
+ * (`ABC-123`) in `jiraIssueKeys`, a canonical `owner/repo#123` in
+ * `githubIssues`.
+ */
+export interface TicketSearchResult {
+  source: "jira" | "github";
+  ref: string;
+  title: string;
+  /** Jira's status name, or GitHub's `open` / `closed` / `merged`. */
+  status: string;
+  url: string;
+  isPullRequest?: boolean;
+}
+
+/**
+ * `GET /api/tickets/search?q=&jiraProjects=A,B&repos=owner/repo` — both
+ * sources searched in parallel. A source that is not configured is skipped
+ * silently; one that failed is named in `errors` while the other's results
+ * still arrive.
+ */
+export interface TicketSearchResponse {
+  results: TicketSearchResult[];
+  errors: { source: "jira" | "github"; message: string }[];
+}
+
+/**
+ * The Jira issue key in `value` — a bare key (any case) or a `/browse/KEY`
+ * link — upper-cased, or null.
+ */
+export function parseJiraIssueKey(value: string): string | null {
+  const text = value.trim();
+  const match =
+    /\/browse\/([A-Za-z][A-Za-z0-9_]+-\d+)(?:[/?#].*)?$/.exec(text) ??
+    /^([A-Za-z][A-Za-z0-9_]+-\d+)$/.exec(text);
+  return match ? match[1]!.toUpperCase() : null;
+}
+
 /** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */
 export interface JiraSettingsPatch {
   enabled?: boolean;

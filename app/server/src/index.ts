@@ -11,6 +11,7 @@ import { join, relative } from "node:path";
 import { WebSocketServer } from "ws";
 import type {
   GithubLinkedIssuesResponse,
+  TicketSearchResponse,
   JiraLinkedIssuesResponse,
   PromptRefineRequest,
   PromptRefineResponse,
@@ -82,6 +83,7 @@ import { getJiraCredsIfAvailable } from "./jiraSettings.ts";
 import { jiraIssueUrl, resolveJiraIssueInfos } from "./jiraClient.ts";
 import { resolveGithubLinkedIssues } from "./githubLinkedIssues.ts";
 import { getGithubConfigIfAvailable } from "./githubSettings.ts";
+import { searchTickets } from "./ticketSearch.ts";
 import { slackSocketMode } from "./slackSocketMode.ts";
 import {
   announceSettingsWritten,
@@ -793,6 +795,28 @@ async function handleRequest(
           ? await resolveGithubLinkedIssues(config, refs)
           : [],
     };
+    res.writeHead(200, corsJsonHeaders(req));
+    res.end(JSON.stringify(response));
+    return;
+  }
+
+  if (requestUrl.pathname === "/api/tickets/search") {
+    if (req.method !== "GET") {
+      res.writeHead(405, corsJsonHeaders(req));
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const list = (name: string) =>
+      (requestUrl.searchParams.get(name) ?? "").split(",").filter(Boolean);
+    const response: TicketSearchResponse = await searchTickets(
+      {
+        q: (requestUrl.searchParams.get("q") ?? "").slice(0, 200),
+        jiraProjects: list("jiraProjects"),
+        repos: list("repos"),
+      },
+      getJiraCredsIfAvailable(),
+      getGithubConfigIfAvailable(),
+    );
     res.writeHead(200, corsJsonHeaders(req));
     res.end(JSON.stringify(response));
     return;
