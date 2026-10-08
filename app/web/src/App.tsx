@@ -101,6 +101,7 @@ import {
   type NewPendingChatComment,
 } from "./hooks/usePendingChatComments.ts";
 import {
+  commentDocumentLabel,
   isDocumentComment,
   type PendingChatComment,
 } from "./lib/chatCommentPrompt.ts";
@@ -114,7 +115,10 @@ import {
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
-import { PendingCommentsLedge } from "./components/PendingCommentsLedge.tsx";
+import {
+  PendingCommentsLedge,
+  type CommentLedgeItem,
+} from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
 import { SpawnedSessionsLedge } from "./components/SpawnedSessionsLedge.tsx";
@@ -431,6 +435,12 @@ type PendingWorktreeReview = {
   worktreeId: string;
   commentIds: string[];
   commentCount: number;
+  /**
+   * What the composer's strip shows of each thread, copied when the review is
+   * staged: the worktree's comment list is only held while its page watches
+   * it, so on the new-session route it is usually gone.
+   */
+  comments: { id: string; body: string; source?: string }[];
   draft: { sessionId: string; text: string; token: number };
 };
 
@@ -3485,10 +3495,20 @@ function AppContent() {
         state.worktreeComments[worktreeId] ?? [],
         commentIds,
       );
+      const threads = state.worktreeComments[worktreeId] ?? [];
       setPendingWorktreeReview({
         worktreeId,
         commentIds,
         commentCount: commentIds.length,
+        comments: commentIds.map((id) => {
+          const thread = threads.find((comment) => comment.id === id);
+          const at = thread?.current ?? thread?.anchor;
+          return {
+            id,
+            body: thread?.body ?? "Review comment",
+            ...(at ? { source: `${at.path}:${at.line}` } : {}),
+          };
+        }),
         draft: {
           sessionId: "pending-worktree-review",
           text: reviewSetSelection
@@ -5255,26 +5275,84 @@ function AppContent() {
   );
   // The comments riding with the next prompt, as a strip of their own.
   const pendingComments = chatComments.comments;
+  const pendingCommentItems = useMemo<CommentLedgeItem[]>(
+    () =>
+      pendingComments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        source:
+          comment.anchor.kind === "document"
+            ? commentDocumentLabel(comment.anchor.document)
+            : undefined,
+        quote: comment.quote,
+        wholeDocument: comment.quote === undefined,
+      })),
+    [pendingComments],
+  );
+  const revealPendingComment = useCallback(
+    (id: string) => {
+      const comment = pendingComments.find((item) => item.id === id);
+      if (comment) revealChatComment(comment);
+    },
+    [pendingComments, revealChatComment],
+  );
   const pendingCommentsLedge = useMemo(
     () =>
-      pendingComments.length > 0 ? (
+      pendingCommentItems.length > 0 ? (
         <PendingCommentsLedge
-          comments={pendingComments}
+          items={pendingCommentItems}
           activeCommentId={chatComments.activeCommentId}
           onSelect={chatComments.select}
           onRemove={chatComments.remove}
           onClear={chatComments.clear}
-          onReveal={revealChatComment}
+          onReveal={revealPendingComment}
         />
       ) : undefined,
     [
-      pendingComments,
+      pendingCommentItems,
       chatComments.activeCommentId,
       chatComments.select,
       chatComments.remove,
       chatComments.clear,
-      revealChatComment,
+      revealPendingComment,
     ],
+  );
+  // A worktree review staged for a new session rides the same strip as chat
+  // comments: its threads, by file and line, each removable from the handoff.
+  const stagedReview = isNewChatRoute ? pendingWorktreeReview : null;
+  const reviewCommentItems = useMemo<CommentLedgeItem[]>(
+    () =>
+      stagedReview
+        ? stagedReview.comments.filter((comment) =>
+            stagedReview.commentIds.includes(comment.id),
+          )
+        : [],
+    [stagedReview],
+  );
+  const removeReviewComment = useCallback((id: string) => {
+    setPendingWorktreeReview((review) => {
+      if (!review) return review;
+      const commentIds = review.commentIds.filter((value) => value !== id);
+      return commentIds.length > 0
+        ? { ...review, commentIds, commentCount: commentIds.length }
+        : null;
+    });
+  }, []);
+  const clearReviewComments = useCallback(
+    () => setPendingWorktreeReview(null),
+    [],
+  );
+  const reviewCommentsLedge = useMemo(
+    () =>
+      reviewCommentItems.length > 0 ? (
+        <PendingCommentsLedge
+          items={reviewCommentItems}
+          noun="review comment"
+          onRemove={removeReviewComment}
+          onClear={clearReviewComments}
+        />
+      ) : undefined,
+    [reviewCommentItems, removeReviewComment, clearReviewComments],
   );
   // One shelf, up to five strips on it: what waits on the user on top, then
   // the peers, background work, and on the edge nearest the field what the
@@ -5286,12 +5364,14 @@ function AppContent() {
       spawnedLedge ||
       backgroundLedge ||
       promptQueueLedge ||
+      reviewCommentsLedge ||
       pendingCommentsLedge ? (
         <>
           {pendingApprovalsLedge}
           {spawnedLedge}
           {backgroundLedge}
           {promptQueueLedge}
+          {reviewCommentsLedge}
           {pendingCommentsLedge}
         </>
       ) : undefined,
@@ -5300,6 +5380,7 @@ function AppContent() {
       spawnedLedge,
       backgroundLedge,
       promptQueueLedge,
+      reviewCommentsLedge,
       pendingCommentsLedge,
     ],
   );

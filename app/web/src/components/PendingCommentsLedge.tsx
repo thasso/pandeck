@@ -7,54 +7,67 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import {
-  commentDocumentLabel,
-  type PendingChatComment,
-} from "../lib/chatCommentPrompt.ts";
 import { IconButton } from "./common/IconButton.tsx";
 import { Button } from "@/components/ui/button";
 import { Item, ItemActions } from "@/components/ui/item";
+
+/** One comment as the strip shows it, whatever surface it was written on. */
+export interface CommentLedgeItem {
+  id: string;
+  body: string;
+  /** Where it was written, before its text on the row: a document, `path:line`. */
+  source?: string | undefined;
+  /** The passage it is on, quoted when the row unfolds. */
+  quote?: string | undefined;
+  /** It annotates a whole document rather than a passage. */
+  wholeDocument?: boolean | undefined;
+}
 
 /**
  * @component PendingCommentsLedge
  * @purpose The comments riding with the next prompt, as a strip on the
  * composer's shelf: how many there are, and — opened — one row per comment
  * that unfolds its text, goes to its passage, edits or removes it.
- * @useWhen The chat composer has pending (not yet sent) comments; the host
+ * @useWhen The composer has comments still to be sent: the chat's pending
+ * comments, or a worktree review's threads staged for a new session. The host
  * renders nothing otherwise, so the strip costs no space without them.
  * @avoidWhen Writing a comment — that is the composer's own field (comment
  * mode); this strip lists what has been written.
  * @intent The same object as the session and background-work strips
  * (`ComposerLedge`): a one-line header, edge-to-edge rows, hairline-separated,
- * square fills. It quotes nothing on the row — the passage is highlighted in
- * the transcript, which is where its locate button goes.
+ * square fills. It quotes nothing on the row — the passage is highlighted where
+ * it lives, which is where its locate button goes. A row offers only what its
+ * host can do: a review thread is removed from the handoff, never edited here.
  * @related ComposerLedge, BackgroundWorkLedge, SpawnedSessionsLedge,
  * ChatCommentChip (the document surfaces' form of the same list)
  */
 export function PendingCommentsLedge({
-  comments,
-  activeCommentId,
+  items,
+  noun = "comment",
+  activeCommentId = null,
   onSelect,
   onRemove,
   onClear,
   onReveal,
 }: {
-  comments: readonly PendingChatComment[];
-  activeCommentId: string | null;
+  items: readonly CommentLedgeItem[];
+  /** What the header counts: `3 comments`, `3 review comments`. */
+  noun?: string;
+  activeCommentId?: string | null;
   /** Load a comment into the composer's field to edit it, or put it back. */
-  onSelect: (id: string | null) => void;
+  onSelect?: ((id: string | null) => void) | undefined;
   onRemove: (id: string) => void;
   onClear: () => void;
   /** Scroll to the passage (or open the document) a comment annotates. */
-  onReveal?: ((comment: PendingChatComment) => void) | undefined;
+  onReveal?: ((id: string) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   // Removing EVERY comment is the one act here that cannot be undone a row at
   // a time, so it asks first.
   const [confirmingClear, setConfirmingClear] = useState(false);
-  if (comments.length === 0) return null;
+  if (items.length === 0) return null;
   const Chevron = open ? ChevronDown : ChevronRight;
-  const count = `${comments.length} comment${comments.length === 1 ? "" : "s"}`;
+  const count = `${items.length} ${noun}${items.length === 1 ? "" : "s"}`;
   return (
     <div data-pending-comments-ledge className="min-w-0">
       <Button
@@ -77,11 +90,11 @@ export function PendingCommentsLedge({
       {open ? (
         <div className="max-h-72 divide-y overflow-y-auto border-t text-sm text-muted-foreground">
           <ul className="divide-y">
-            {comments.map((comment) => (
+            {items.map((item) => (
               <PendingCommentRow
-                key={comment.id}
-                comment={comment}
-                editing={comment.id === activeCommentId}
+                key={item.id}
+                item={item}
+                editing={item.id === activeCommentId}
                 onSelect={onSelect}
                 onRemove={onRemove}
                 onReveal={onReveal}
@@ -131,29 +144,25 @@ export function PendingCommentsLedge({
 }
 
 /**
- * One pending comment: its first line (and document, for a document comment)
- * unfolding to the whole text, then locate, edit and remove — in the order of
- * how far they go.
+ * One pending comment: its first line (and where it was written) unfolding to
+ * the whole text, then locate, edit and remove — in the order of how far they
+ * go, each only where the host offers it.
  */
 const PendingCommentRow = memo(function PendingCommentRow({
-  comment,
+  item,
   editing,
   onSelect,
   onRemove,
   onReveal,
 }: {
-  comment: PendingChatComment;
+  item: CommentLedgeItem;
   editing: boolean;
-  onSelect: (id: string | null) => void;
+  onSelect?: ((id: string | null) => void) | undefined;
   onRemove: (id: string) => void;
-  onReveal?: ((comment: PendingChatComment) => void) | undefined;
+  onReveal?: ((id: string) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const Chevron = open ? ChevronDown : ChevronRight;
-  const source =
-    comment.anchor.kind === "document"
-      ? commentDocumentLabel(comment.anchor.document)
-      : undefined;
   return (
     <li className="min-w-0">
       <Item
@@ -168,12 +177,12 @@ const PendingCommentRow = memo(function PendingCommentRow({
           className="h-7 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          title={open ? "Hide the comment" : comment.body}
+          title={open ? "Hide the comment" : item.body}
         >
           <Chevron aria-hidden="true" />
           <span className="min-w-0 truncate">
-            {source ? <span>{source} · </span> : null}
-            <span className="text-foreground">{comment.body}</span>
+            {item.source ? <span>{item.source} · </span> : null}
+            <span className="text-foreground">{item.body}</span>
           </span>
         </Button>
         <ItemActions className="gap-0.5">
@@ -181,23 +190,25 @@ const PendingCommentRow = memo(function PendingCommentRow({
             <IconButton
               label="Show the commented passage"
               size="icon-xs"
-              onClick={() => onReveal(comment)}
+              onClick={() => onReveal(item.id)}
             >
               <LocateFixed />
             </IconButton>
           ) : null}
-          <IconButton
-            label={editing ? "Editing in the composer" : "Edit comment"}
-            size="icon-xs"
-            aria-pressed={editing || undefined}
-            onClick={() => onSelect(editing ? null : comment.id)}
-          >
-            <Pencil />
-          </IconButton>
+          {onSelect ? (
+            <IconButton
+              label={editing ? "Editing in the composer" : "Edit comment"}
+              size="icon-xs"
+              aria-pressed={editing || undefined}
+              onClick={() => onSelect(editing ? null : item.id)}
+            >
+              <Pencil />
+            </IconButton>
+          ) : null}
           <IconButton
             label="Remove comment"
             size="icon-xs"
-            onClick={() => onRemove(comment.id)}
+            onClick={() => onRemove(item.id)}
           >
             <Trash2 />
           </IconButton>
@@ -207,17 +218,17 @@ const PendingCommentRow = memo(function PendingCommentRow({
         // Under the title (`pl-7`: the toggle's padding, chevron and gap):
         // the passage it is on, quoted, then the whole comment.
         <div className="flex flex-col gap-1.5 pt-0.5 pr-2.5 pb-2 pl-7 text-xs">
-          {comment.quote !== undefined ? (
+          {item.quote !== undefined ? (
             <blockquote className="border-l-2 pl-2 wrap-anywhere whitespace-pre-wrap text-muted-foreground italic">
-              {comment.quote}
+              {item.quote}
             </blockquote>
-          ) : (
+          ) : item.wholeDocument ? (
             <span className="text-muted-foreground italic">
               On the whole document
             </span>
-          )}
+          ) : null}
           <p className="wrap-anywhere whitespace-pre-wrap text-foreground">
-            {comment.body}
+            {item.body}
           </p>
         </div>
       ) : null}

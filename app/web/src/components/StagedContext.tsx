@@ -5,7 +5,6 @@ import {
   FileText,
   FolderKanban,
   GitBranch,
-  MessageSquareText,
   Plus,
   X,
 } from "lucide-react";
@@ -117,32 +116,19 @@ function worktreeLabel(
  */
 export function StagedContextBar({
   value,
-  worktrees,
   onOpen,
-  onChangeWorktree,
-  onChangeNewWorktree,
   onChangeTask,
-  onChangeReview,
   onChangeFile,
 }: {
   value: StagedContextValue;
-  worktrees: WorktreeRecord[];
   onOpen: () => void;
-  onChangeWorktree: (worktreeId: string | null) => void;
-  onChangeNewWorktree?: (staged: boolean) => void;
   onChangeTask: (task: { taskId: string; title: string } | null) => void;
-  onChangeReview?: ((review: null) => void) | undefined;
   onChangeFile?: ((file: null) => void) | undefined;
 }) {
-  // No project chip: the new-session landing shows the chosen project, and a
-  // session's title bar names it — a chip here only repeated one of them.
-  const hasAny = Boolean(
-    value.review ||
-    value.file ||
-    value.task ||
-    value.worktreeId ||
-    value.newWorktree,
-  );
+  // Only what nothing else on screen states: the project, worktree and a new
+  // worktree show on the new-session landing and in a session's title bar, and
+  // a staged review's comments ride the composer's comments strip.
+  const hasAny = Boolean(value.file || value.task);
 
   // Nothing staged: the composer toolbar's context button is the entry point, so
   // the bar collapses away entirely rather than showing a duplicate affordance.
@@ -150,14 +136,6 @@ export function StagedContextBar({
 
   return (
     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-      {value.review ? (
-        <ContextChip
-          icon={<MessageSquareText size={12} />}
-          label={`${value.review.commentCount} review comment${value.review.commentCount === 1 ? "" : "s"}`}
-          tone="accent"
-          onRemove={onChangeReview ? () => onChangeReview(null) : undefined}
-        />
-      ) : null}
       {value.file ? (
         <ContextChip
           icon={<FileText size={12} />}
@@ -173,25 +151,6 @@ export function StagedContextBar({
           tone="accent"
           onOpen={onOpen}
           onRemove={() => onChangeTask(null)}
-        />
-      ) : null}
-      {value.worktreeId ? (
-        <ContextChip
-          icon={<GitBranch size={12} />}
-          label={worktreeLabel(worktrees, value.worktreeId) ?? value.worktreeId}
-          onOpen={onOpen}
-          onRemove={() => onChangeWorktree(null)}
-        />
-      ) : null}
-      {value.newWorktree ? (
-        <ContextChip
-          icon={<Plus size={12} />}
-          label="New worktree"
-          tone="accent"
-          onOpen={onOpen}
-          onRemove={
-            onChangeNewWorktree ? () => onChangeNewWorktree(false) : undefined
-          }
         />
       ) : null}
       {/* No "+" of its own: the composer's toolbar "+" opens the same sheet,
