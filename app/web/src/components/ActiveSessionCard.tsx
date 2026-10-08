@@ -346,7 +346,10 @@ function ActiveSessionCardImpl({
       }}
       // Square: the list's rows are divided by hairlines, and a rounded hover
       // or selected fill would pull away from them at the corners.
-      className={`cursor-pointer select-none overflow-hidden rounded-none text-left hover:bg-muted ${
+      // Less above than below: the top row's small text sits centred in its
+      // line box, with air over it, while the bottom row's pills and buttons
+      // fill theirs to the edge — equal padding read as a taller top.
+      className={`cursor-pointer select-none overflow-hidden rounded-none pt-1.5 pb-2.5 text-left hover:bg-muted ${
         flipped ? "[perspective:900px]" : ""
       }`}
     >
@@ -456,11 +459,11 @@ function ActiveSessionCardImpl({
               <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
                 <div
                   ref={signalRowRef}
-                  className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
+                  className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-2.5 gap-y-4 overflow-hidden"
                 >
                   {cluster ? (
                     <Badge
-                      variant={clusterWorking ? "secondary" : "outline"}
+                      variant="ghost"
                       render={<button type="button" />}
                       title={clusterSummary}
                       aria-expanded={clusterExpanded}
@@ -471,9 +474,10 @@ function ActiveSessionCardImpl({
                         e.stopPropagation();
                         onToggleCluster?.(session.id);
                       }}
-                      // Muted like the context row above: the line's neutral
-                      // facts recede, coloured states keep their tone.
-                      className="cursor-pointer text-muted-foreground"
+                      // Plain, muted text like the context row above: a
+                      // neutral fact, not a pill. Only what needs the user
+                      // keeps a badge's chrome.
+                      className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
                     >
                       {clusterWorking ? (
                         <Spinner size="xs" />
@@ -519,14 +523,13 @@ function ActiveSessionCardImpl({
                   {backgroundChip ? (
                     // The count stays when the line compacts, as the cluster's
                     // does: an icon alone said "something", not how much.
-                    <Badge
-                      variant="outline"
+                    <span
                       role="img"
                       aria-label={backgroundText}
                       title={backgroundText}
-                      className="text-muted-foreground"
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap"
                     >
-                      <Activity aria-hidden="true" />
+                      <Activity aria-hidden="true" className="size-3" />
                       <span>
                         {backgroundChip.count}
                         <span className="session-status-badge-label">
@@ -534,7 +537,7 @@ function ActiveSessionCardImpl({
                           {backgroundChip.age ? ` · ${backgroundChip.age}` : ""}
                         </span>
                       </span>
-                    </Badge>
+                    </span>
                   ) : null}
                   {/* What the work has produced: its pull request when there is
                   one, otherwise the worktree's own changes. */}
@@ -770,16 +773,17 @@ function MetaItem({
   onOpen?: (() => void) | undefined;
 }) {
   const Icon = META_ICON[item.kind];
+  const icon = Icon ? (
+    <Icon
+      size={11}
+      className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
+      style={item.color ? { color: item.color } : undefined}
+      aria-hidden
+    />
+  ) : null;
   const body = (
     <>
-      {Icon ? (
-        <Icon
-          size={11}
-          className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
-          style={item.color ? { color: item.color } : undefined}
-          aria-hidden
-        />
-      ) : null}
+      {icon}
       <span
         className={`min-w-0 truncate ${item.missing ? "text-warning" : ""}`}
       >
