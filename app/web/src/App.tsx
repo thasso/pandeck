@@ -14,7 +14,6 @@ import {
   ArrowLeft,
   Check,
   ClipboardList,
-  FileText,
   FolderKanban,
   GitBranch,
   GitPullRequest,
@@ -22,7 +21,6 @@ import {
   MessageSquarePlus,
   MessageSquareQuote,
   SendHorizontal,
-  X,
 } from "lucide-react";
 import {
   accountProviderForModelProvider,
@@ -118,6 +116,10 @@ import {
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
+import {
+  StagedDocumentLedge,
+  StagedTaskLedge,
+} from "./components/StagedContextLedges.tsx";
 import {
   PendingCommentsLedge,
   type CommentLedgeItem,
@@ -5392,60 +5394,38 @@ function AppContent() {
   const stagedDocumentLedge = useMemo(
     () =>
       stagedDocument ? (
-        <div className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 pl-2.5 text-sm text-muted-foreground">
-          <FileText aria-hidden className="size-3.5 shrink-0" />
-          <span className="shrink-0">Starting from</span>
-          <Button
-            variant="link"
-            className="h-auto min-w-0 shrink cursor-pointer p-0 text-sm font-normal text-foreground hover:no-underline"
-            title={`Open ${stagedDocument.title}`}
-            onClick={() => navigate(stagedDocument.href)}
-          >
-            <span className="truncate">{stagedDocument.title}</span>
-          </Button>
-          <IconButton
-            label="Don't start from this document"
-            size="icon-xs"
-            className="ml-auto"
-            onClick={() => setPendingFileContext(null)}
-          >
-            <X />
-          </IconButton>
-        </div>
+        <StagedDocumentLedge
+          document={stagedDocument}
+          onOpen={() => navigate(stagedDocument.href)}
+          onRemove={() => setPendingFileContext(null)}
+        />
       ) : undefined,
     [stagedDocument, navigate],
   );
   // The Task a new session will work on, stated the same way as a document.
   const stagedTask = isNewChatRoute ? pendingTaskAttach : null;
+  const stagedTaskDetail = stagedTask
+    ? state.taskDetails[stagedTask.taskId]
+    : undefined;
+  const requestTaskDetail = actions.requestTaskDetail;
   const stagedTaskLedge = useMemo(
     () =>
       stagedTask ? (
-        <div className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 pl-2.5 text-sm text-muted-foreground">
-          <ClipboardList aria-hidden className="size-3.5 shrink-0" />
-          <span className="shrink-0">Working on</span>
-          <Button
-            variant="link"
-            className="h-auto min-w-0 shrink cursor-pointer p-0 text-sm font-normal text-foreground hover:no-underline"
-            title={`Open Task-${stagedTask.taskId}: ${stagedTask.title}`}
-            onClick={() => navigate(taskPath(stagedTask.taskId))}
-          >
-            {/* The id as the app writes it everywhere (`TaskIdBadge`). */}
-            <span className="shrink-0 font-mono text-muted-foreground tabular-nums">
-              #{stagedTask.taskId}
-            </span>
-            <span className="truncate">{stagedTask.title}</span>
-          </Button>
-          <IconButton
-            label="Don't work on this task"
-            size="icon-xs"
-            className="ml-auto"
-            onClick={() => stageTaskContext(null)}
-          >
-            <X />
-          </IconButton>
-        </div>
+        <StagedTaskLedge
+          task={stagedTask}
+          detail={stagedTaskDetail}
+          onRequestDetail={() => requestTaskDetail(stagedTask.taskId)}
+          onOpen={() => navigate(taskPath(stagedTask.taskId))}
+          onRemove={() => stageTaskContext(null)}
+        />
       ) : undefined,
-    [stagedTask, navigate, stageTaskContext],
+    [
+      stagedTask,
+      stagedTaskDetail,
+      requestTaskDetail,
+      navigate,
+      stageTaskContext,
+    ],
   );
   // One shelf, up to five strips on it: what waits on the user on top, then
   // the peers, background work, and on the edge nearest the field what the
