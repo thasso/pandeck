@@ -8,7 +8,6 @@ import type { UsageIndicator } from "@assistant/shared/usage";
 import { ProviderIcon } from "./ProviderIcon.tsx";
 import { UsageCycleMeters } from "./UsageCycleMeters.tsx";
 import { THINKING_LABELS } from "./ModelThinkingSelect.tsx";
-import { Item } from "../ui/item.tsx";
 import { Slider } from "../ui/slider.tsx";
 import { Toggle } from "../ui/toggle.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
@@ -85,16 +84,13 @@ export function ProviderAccountRow({
         const selected = account.id === selectedId;
         const providerLabel = PROVIDER_LABEL[account.provider];
         return (
-          <Item
+          <QuickPill
             key={account.id}
-            render={<button type="button" disabled={disabled} />}
-            variant={selected ? "muted" : "outline"}
-            role="option"
-            aria-selected={selected}
-            data-quick-selected={selected || undefined}
+            selected={selected}
+            disabled={disabled}
             title={`Use ${account.name} (${providerLabel})`}
             onClick={() => onSelect(account.id)}
-            className="w-52 shrink-0 snap-start flex-col items-start gap-1 text-left"
+            className={`w-52 ${QUICK_CARD}`}
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
               <ProviderIcon
@@ -107,17 +103,13 @@ export function ProviderAccountRow({
                     : "shrink-0 text-muted-foreground"
                 }
               />
-              <span
-                className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
-              >
-                {account.name}
-              </span>
+              <span className="min-w-0 flex-1 truncate">{account.name}</span>
             </span>
             <UsageCycleMeters
               indicator={usageByProfileId.get(account.id)}
               now={now}
             />
-          </Item>
+          </QuickPill>
         );
       })}
     </QuickRow>
@@ -407,17 +399,26 @@ export function QuickRowSplit({
 }
 
 /** One pickable chip inside a {@link QuickRow}. */
+/** A QuickPill laid out as a two-line card (worktrees, provider accounts). */
+export const QUICK_CARD = "h-auto flex-col items-start gap-1 py-2 text-left";
+
 export function QuickPill({
   selected,
   title,
   onClick,
   disabled = false,
+  className = "",
   children,
 }: {
   selected: boolean;
   title: string;
   onClick: () => void;
   disabled?: boolean;
+  /**
+   * Layout only — a two-line card (`QUICK_CARD`) is still this Toggle, so its
+   * border, hover and selected fill are the pills' own.
+   */
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -430,7 +431,7 @@ export function QuickPill({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className="max-w-52 shrink-0 snap-start"
+      className={`max-w-52 shrink-0 snap-start ${className}`}
     >
       {children}
     </Toggle>

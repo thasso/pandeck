@@ -333,10 +333,6 @@ import {
 import { Composer, type BranchPanelInfo } from "./components/Composer.tsx";
 import { SessionWorktreeMissingBanner } from "./components/SessionWorktreeMissingBanner.tsx";
 import type { MarkdownPaObjectReference } from "./components/Markdown.tsx";
-import type {
-  StagedContextData,
-  StagedContextField,
-} from "./components/StagedContext.tsx";
 import {
   NewSessionQuickStart,
   orderProjectsByActivity,
@@ -1138,13 +1134,6 @@ function AppContent() {
     text: string;
     token: number;
   } | null>(null);
-  /** Token-driven request to open the composer's context sheet on a field (the hero's "All…" card). */
-  const [contextSheetRequest, setContextSheetRequest] = useState<{
-    token: number;
-    field?: StagedContextField;
-  } | null>(null);
-  /** The new-session Task field is the only route-local reason to subscribe to Tasks. */
-  const [taskPickerOpen, setTaskPickerOpen] = useState(false);
   const pendingPreviewSaveRef = useRef<SessionPreview | null>(null);
   const previewSaveTimerRef = useRef<number | null>(null);
   const requestedObjectLinkUris = useRef(new Set<string>());
@@ -1332,8 +1321,6 @@ function AppContent() {
         sidebarVisible: sidebarPanelOpen,
         sidebarSection,
         routeName: route.name,
-        taskPickerOpen:
-          (route.name === "new" || route.name === "sessions") && taskPickerOpen,
         // The workflow start sheet meters accounts and offers Project branches.
         workflowStartOpen: workflowStartTaskId !== null,
         projectSelected: route.name === "projects" && Boolean(route.id),
@@ -1383,7 +1370,6 @@ function AppContent() {
       sidebarPanelOpen,
       sidebarSection,
       route,
-      taskPickerOpen,
       workflowStartTaskId,
       inspectorOpen,
       mobileLayout,
@@ -4182,67 +4168,6 @@ function AppContent() {
         {sessionTitleText}
       </h2>
     );
-  const stagedContextBar: StagedContextData | undefined = showContextPicker
-    ? {
-        value: {
-          projectId: pendingProjectContext,
-          worktreeId: pendingWorktreeContext,
-          newWorktree: pendingNewWorktree,
-          task: pendingTaskAttach,
-          review: pendingWorktreeReview
-            ? { commentCount: pendingWorktreeReview.commentCount }
-            : null,
-          file: pendingFileContext,
-        },
-        projects: orderedPickerProjects,
-        worktrees: orderedWorktrees,
-        tasks: backlogTasks,
-        // Subscription answers distinguish a genuinely empty list from a cold
-        // one. Tasks stay cold until this panel reports its Task field open.
-        projectsLoaded,
-        worktreesLoaded: state.worktrees !== null,
-        tasksLoaded: backlogLoaded,
-        onChangeProject: stageProjectContext,
-        onChangeWorktree: stageWorktreeContext,
-        onChangeNewWorktree: stageNewWorktree,
-        onChangeTask: stageTaskContext,
-        onTaskPickerOpenChange: setTaskPickerOpen,
-        onChangeReview: () => setPendingWorktreeReview(null),
-        onChangeFile: () => setPendingFileContext(null),
-        // Reuse the left-panel Backlog list for the Task field: same rows,
-        // status/project filtering, and drag UI. When a project is already
-        // staged we pin it as the fixed filter (the picker already scopes to it);
-        // otherwise the list's own project filter is available.
-        renderTaskPicker: () => (
-          <Suspense
-            fallback={
-              <div className="px-1 py-2 text-sm text-muted-foreground">
-                Loading tasks…
-              </div>
-            }
-          >
-            <BacklogList
-              state={state}
-              actions={actions}
-              prefs={prefs}
-              onUpdatePrefs={update}
-              selectedId={pendingTaskAttach?.taskId ?? null}
-              onOpenTask={(id) => {
-                const task = backlogTasks.find((t) => t.id === id);
-                stageTaskContext(
-                  task ? { taskId: task.id, title: task.title } : null,
-                );
-              }}
-              fixedProjectId={pendingProjectContext ?? undefined}
-              // A picker, with no secondary affordances to hit: 28px is fine for
-              // tapping a full-width row, and the field it sits in has no room
-              // for a second line per Task.
-              density="tight"
-            />
-          </Suspense>
-        ),
-      }
-    : undefined;
   // The agentType applied to whatever harness the new chat picks (the top-left
   // agent picker drives this for ALL harnesses now).
   const agentTypeForPicker: AgentType = displayAgentType;
@@ -5527,13 +5452,6 @@ function AppContent() {
     chatCommentSelection?.onComment();
   }, [chatCommentSelection, mobileLayout, setInspectorOpen]);
 
-  // The dock row's staged-context control on the new-session screen: the same sheet the
-  // composer's own `+` opens, requested from outside (the composer knows not to grab
-  // focus for an external open — nobody was typing).
-  const openContextFromDock = useCallback(() => {
-    if (mobileLayout) setInspectorOpen(false);
-    setContextSheetRequest((current) => ({ token: (current?.token ?? 0) + 1 }));
-  }, [mobileLayout, setInspectorOpen]);
 
   // The expanded composer's mic hands over to the dock's row: it has already
   // remembered its caret and dropped focus, so closing it reveals the row and this
@@ -5772,18 +5690,14 @@ function AppContent() {
               draft={composerDraft}
               onCompose={openComposer}
               onSubmit={submitFromDock}
-              // Beside back: what this conversation is about. A session that has not
-              // been sent yet is about nothing yet, so there the slot carries the same
-              // staged-context picker the composer's `+` opens (exactly while that
-              // sheet exists), and a session that hangs off nothing at all falls back
-              // to the composer's paperclip.
+              // Beside back: what this conversation is about; a session that
+              // hangs off nothing (including one not sent yet) falls back to the
+              // composer's paperclip.
               contextSlot={
-                showContextPicker
-                  ? { kind: "add-context", onRun: openContextFromDock }
-                  : (dockSessionContext ?? {
-                      kind: "attach",
-                      onRun: attachFromDock,
-                    })
+                dockSessionContext ?? {
+                  kind: "attach",
+                  onRun: attachFromDock,
+                }
               }
               dictation={{
                 enabled: state.settings.speechToText.enabled,
@@ -5861,8 +5775,6 @@ function AppContent() {
     submitFromDock,
     actions,
     dockSessionContext,
-    showContextPicker,
-    openContextFromDock,
     attachFromDock,
     state.connected,
     routeSessionPending,
@@ -6066,8 +5978,7 @@ function AppContent() {
           // would open the keyboard over the quick-start rows before anything is picked.
           draftAutoFocus={!mobileLayout}
           branchInfo={branchInfo}
-          contextBar={stagedContextBar}
-          contextOpenRequest={contextSheetRequest}
+          reserveHintSlot={showContextPicker}
           sendBlockedReason={
             newSessionNeedsWorktree
               ? "Developer sessions run in a worktree — pick one to continue."
@@ -6288,12 +6199,6 @@ function AppContent() {
               onSelectWorktree={stageWorktreeContext}
               newWorktreeStaged={pendingNewWorktree}
               onSelectNewWorktree={stageNewWorktree}
-              onOpenPicker={() =>
-                setContextSheetRequest({
-                  token: Date.now(),
-                  field: "worktree",
-                })
-              }
               models={pickerModels}
               selectedModel={displaySession?.model}
               onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}

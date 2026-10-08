@@ -61,7 +61,6 @@ function render(
       onSelectWorktree={() => {}}
       newWorktreeStaged={false}
       onSelectNewWorktree={() => {}}
-      onOpenPicker={() => {}}
       models={overrides.models ?? models}
       selectedModel={(overrides.models ?? models)[0]}
       thinkingLevel="low"

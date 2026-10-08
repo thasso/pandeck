@@ -16,14 +16,12 @@ import { flushSync } from "react-dom";
 import {
   Check,
   ChevronDown,
-  ClipboardList,
   CornerDownRight,
   Cpu,
   GitFork,
   ListPlus,
   Mic,
   Paperclip,
-  Plus,
   SendHorizontal,
   Square,
   Trash2,
@@ -115,11 +113,6 @@ import { EmptyBox } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
-import {
-  StagedContextPanel,
-  type StagedContextData,
-  type StagedContextField,
-} from "./StagedContext.tsx";
 
 interface BranchNavItem {
   id?: string;
@@ -178,21 +171,14 @@ interface Props {
   draftAutoFocus?: boolean;
   branchInfo?: BranchPanelInfo | null;
   /**
-   * Composable pre-session context (Project + Worktree + Task) staged for a new
-   * Session's first prompt. When provided, the composer renders the staged-context
-   * chip bar and its docked picker sheet. Omitted for surfaces that don't stage
-   * new-session context (e.g. the permanent Assistant).
+   * Keep the fixed hint slot above the card, where a send-blocking hint can
+   * appear (the new-session surface), so a hint coming and going never shifts
+   * the layout.
    */
-  contextBar?: StagedContextData | undefined;
+  reserveHintSlot?: boolean | undefined;
   /**
-   * External request to open the staged-context dock sheet on a specific field
-   * (bump the token to re-trigger). Used when selecting the Developer agent
-   * without a staged worktree: the sheet auto-opens on the Worktree picker.
-   */
-  contextOpenRequest?: { token: number; field?: StagedContextField } | null;
-  /**
-   * When set, sending is blocked and this reason renders as a tappable hint
-   * under the composer (tapping opens the worktree picker). Used while a
+   * When set, sending is blocked and this reason renders as a hint above the
+   * composer (the new-session landing's Worktree row is where it is answered). Used while a
    * Developer session is staged without the worktree it requires.
    */
   sendBlockedReason?: string | undefined;
@@ -813,8 +799,7 @@ export const Composer = memo(function Composer({
   onDraftConsumed,
   draftAutoFocus = true,
   branchInfo,
-  contextBar,
-  contextOpenRequest,
+  reserveHintSlot = false,
   sendBlockedReason,
   sendBlocked = false,
   isModelDisabled,
@@ -894,11 +879,8 @@ export const Composer = memo(function Composer({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
   // Which accordion field the context sheet starts expanded on. Set by the
   // opener (manual opens reset it to null); the panel remounts per open.
-  const [contextInitialField, setContextInitialField] =
-    useState<StagedContextField | null>(null);
   // Whether the currently-open sheet was opened from OUTSIDE the composer (the
   // hero quick-start "All…", the Developer auto-open). Closing such a sheet must
   // not refocus the textarea — that would pop the mobile keyboard the user never
@@ -1602,7 +1584,7 @@ export const Composer = memo(function Composer({
   // stays EXPANDED while one is open — with the keyboard down, as on desktop. It
   // used to collapse for the height; collapsing to nothing instead would leave the
   // sheet hanging off the screen's bottom edge over the dock row.
-  const composerSheetOpen = runtimeOpen || branchesOpen || contextOpen;
+  const composerSheetOpen = runtimeOpen || branchesOpen;
   const compact =
     recording ||
     (collapsible &&
@@ -1753,46 +1735,6 @@ export const Composer = memo(function Composer({
     setIsFocused(false);
     setComposerPinnedOpen(false);
   };
-  const openContext = (
-    field: StagedContextField | null = null,
-    opts?: { external?: boolean },
-  ) => {
-    setContextInitialField(field);
-    setSheetOpenedExternally(Boolean(opts?.external));
-    setRuntimeOpen(false);
-    setBranchesOpen(false);
-    blurComposer();
-    setContextOpen(true);
-  };
-  // An external open request (e.g. Developer selected without a worktree)
-  // opens the context sheet on the requested field. Only a token CHANGE while
-  // mounted fires — the ref seeds with the mount-time token so a stale request
-  // can't re-open the sheet when the composer remounts across surfaces.
-  const lastContextRequestToken = useRef(contextOpenRequest?.token);
-  // The request, the bar and the opener are all rebuilt each render; the TOKEN
-  // is the trigger, so the rest is read when it fires. Depending on any of them
-  // would re-open the sheet under a user who had just dismissed it.
-  const contextOpenRef = useRef({
-    contextOpenRequest,
-    contextBar,
-    openContext,
-  });
-  contextOpenRef.current = { contextOpenRequest, contextBar, openContext };
-  const contextRequestToken = contextOpenRequest?.token ?? null;
-  useEffect(() => {
-    const latest = contextOpenRef.current;
-    if (
-      !contextRequestToken ||
-      contextRequestToken === lastContextRequestToken.current
-    )
-      return;
-    lastContextRequestToken.current = contextRequestToken;
-    if (!latest.contextBar) return;
-    latest.openContext(latest.contextOpenRequest?.field ?? null, {
-      external: true,
-    });
-  }, [contextRequestToken]);
-
   // Closing a dock sheet returns to composing: refocus the textarea (sync, so iOS
   // reopens the keyboard within the tap gesture) and re-expand — no extra tap.
   // EXCEPT when the sheet was opened externally (the user wasn't composing):
@@ -1800,7 +1742,6 @@ export const Composer = memo(function Composer({
   const dismissSheetsAndFocus = () => {
     setRuntimeOpen(false);
     setBranchesOpen(false);
-    setContextOpen(false);
     if (sheetOpenedExternally) {
       setSheetOpenedExternally(false);
       return;
@@ -1853,20 +1794,15 @@ export const Composer = memo(function Composer({
       {/* Fixed-height hint slot above the composer card: reserved whenever a
           send-blocking hint CAN appear (staged-context surfaces), so toggling
           the hint never shifts the layout. */}
-      {contextBar || sendBlockedReason ? (
+      {reserveHintSlot || sendBlockedReason ? (
         <div
           className="mb-1 flex h-5 items-center justify-center px-2"
           aria-live="polite"
         >
           {sendBlockedReason ? (
-            <Button
-              variant="link"
-              size="sm"
-              onClick={() => openContext("worktree")}
-              className="min-w-0 truncate"
-            >
+            <span className="min-w-0 truncate text-sm text-muted-foreground">
               {sendBlockedReason}
-            </Button>
+            </span>
           ) : null}
         </div>
       ) : null}
@@ -1909,20 +1845,6 @@ export const Composer = memo(function Composer({
             />
           ) : null}
         </ChatDockPanel>
-        {contextBar ? (
-          <ChatDockPanel
-            open={contextOpen}
-            title="Session context"
-            icon={<ClipboardList size={14} />}
-            minimizable={false}
-            onClose={dismissSheetsAndFocus}
-          >
-            <StagedContextPanel
-              {...contextBar}
-              initialField={contextInitialField}
-            />
-          </ChatDockPanel>
-        ) : null}
         {slashMenuOpen ? (
           // The command menu is a strip of its own on the shelf while a slash
           // is typed, standing in for the resting strips rather than floating
@@ -2159,18 +2081,6 @@ export const Composer = memo(function Composer({
                         <Paperclip />
                       </IconButton>
                     )}
-                    {contextBar && !commentMode ? (
-                      <IconButton
-                        label="Session context"
-                        onClick={() => openContext()}
-                        disabled={disabled}
-                        title="Attach a Task, worktree, or project to this new session"
-                        aria-expanded={contextOpen}
-                        data-open={contextOpen}
-                      >
-                        <Plus />
-                      </IconButton>
-                    ) : null}
                   </div>
                   {!hideRuntimeControls && !commentMode ? (
                     <div
@@ -2202,7 +2112,6 @@ export const Composer = memo(function Composer({
                           return;
                         }
                         setRuntimeOpen(false);
-                        setContextOpen(false);
                         setSheetOpenedExternally(false);
                         blurComposer();
                         setBranchesOpen(true);

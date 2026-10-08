@@ -96,7 +96,6 @@ function render(
       onSelectWorktree={() => {}}
       newWorktreeStaged={opts.newWorktreeStaged ?? false}
       onSelectNewWorktree={() => {}}
-      onOpenPicker={() => {}}
       models={opts.models ?? [model, otherModel]}
       selectedModel={(opts.models ?? [model, otherModel])[0]}
       onSelectModel={() => {}}

@@ -52,7 +52,6 @@ function QuickStartPreview({
         onSelectWorktree={setWorktree}
         newWorktreeStaged={newWorktree}
         onSelectNewWorktree={setNewWorktree}
-        onOpenPicker={noop}
         models={chatModels}
         selectedModel={model}
         onSelectModel={setModel}
