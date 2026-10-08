@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   Bot,
   ChevronRight,
+  Inbox,
   Lightbulb,
   CornerLeftUp,
   CalendarCheck,
@@ -24,6 +25,7 @@ import {
 import { Button } from "./ui/button.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { followRowLink } from "../lib/rowLink.ts";
+import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
 import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Input } from "./ui/input.tsx";
@@ -259,6 +261,8 @@ export function TaskManagementPage({
     () => buildProjectsById(backlogState.projectList?.projects ?? []),
     [backlogState.projectList],
   );
+  // "Today" for planning an Inbox arrival, in the user's own time zone.
+  const timeZone = useUserTimeZone();
 
   // The Backlog is the one list this page browses, so it remembers where the
   // reader was across opening a Task and coming back.
@@ -284,6 +288,21 @@ export function TaskManagementPage({
     actions.saveTask(
       { id: item.id, status: item.status, clearStatusSuggestion: true },
       "status",
+    );
+  };
+
+  // The Inbox's two answers, as its list row gives them: let it into the
+  // Backlog as is, or plan it for today (which triages it too).
+  const dismissFromInbox = (item: Task) => {
+    actions.saveTask(
+      { id: item.id, status: item.status, triaged: true },
+      "edit",
+    );
+  };
+  const planToday = (item: Task) => {
+    actions.saveTask(
+      { id: item.id, status: item.status, scheduledFor: todayIso(timeZone) },
+      "edit",
     );
   };
 
@@ -488,6 +507,8 @@ export function TaskManagementPage({
               onSetStatus={(status) => setTaskStatus(selectedTask, status)}
               onAcceptSuggestion={() => acceptSuggestion(selectedTask)}
               onDismissSuggestion={() => dismissSuggestion(selectedTask)}
+              onDismissFromInbox={() => dismissFromInbox(selectedTask)}
+              onPlanToday={() => planToday(selectedTask)}
               onEdit={(changes) => editTask(selectedTask, changes)}
               onSetProject={(projectId) =>
                 setTaskProject(selectedTask, projectId)
@@ -616,6 +637,8 @@ function TaskDetailPanel({
   onSetStatus,
   onAcceptSuggestion,
   onDismissSuggestion,
+  onDismissFromInbox,
+  onPlanToday,
   onEdit,
   onSetProject,
   statusMutation,
@@ -668,6 +691,8 @@ function TaskDetailPanel({
   onSetStatus: (status: Task["status"]) => void;
   onAcceptSuggestion: () => void;
   onDismissSuggestion: () => void;
+  onDismissFromInbox: () => void;
+  onPlanToday: () => void;
   onEdit: (changes: TaskTextChanges) => void;
   onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
@@ -739,6 +764,8 @@ function TaskDetailPanel({
               onOpenTask={onOpenTask}
               onAcceptSuggestion={onAcceptSuggestion}
               onDismissSuggestion={onDismissSuggestion}
+              onDismissFromInbox={onDismissFromInbox}
+              onPlanToday={onPlanToday}
               onOpenSession={onOpenSession}
               sessions={sessions}
               projectsById={projectsById}
@@ -907,6 +934,8 @@ function TaskTitleBlock({
   onOpenTask,
   onAcceptSuggestion,
   onDismissSuggestion,
+  onDismissFromInbox,
+  onPlanToday,
   onOpenSession,
   sessions,
   projectsById,
@@ -923,6 +952,8 @@ function TaskTitleBlock({
   onOpenTask: (id: string) => void;
   onAcceptSuggestion: () => void;
   onDismissSuggestion: () => void;
+  onDismissFromInbox: () => void;
+  onPlanToday: () => void;
   onOpenSession: (id: string) => void;
   /** The session list, to name the agent session behind a suggestion. */
   sessions: UIState["sessions"];
@@ -939,6 +970,10 @@ function TaskTitleBlock({
   const statusError = errorOf(statusMutation ?? idle());
   const [subtasksOpen, setSubtasksOpen] = useState(false);
   const suggestion = pendingStatusSuggestion(item);
+  const inInbox = belongsInInbox(item);
+  const originSession = item.source?.sessionId
+    ? sessions.find((session) => session.id === item.source?.sessionId)
+    : undefined;
   const suggestionSession = suggestion?.sessionId
     ? sessions.find((session) => session.id === suggestion.sessionId)
     : undefined;
@@ -971,60 +1006,104 @@ function TaskTitleBlock({
         // warning-toned header naming what it is, who said what (the agent
         // leads to its session) with the reason quoted, and the answers in
         // its footer.
-        <Card size="sm" role="status" className="my-1 gap-0 py-0">
-          <CardHeader className="flex h-8 items-center gap-1.5 border-b bg-warning-soft py-0 text-xs font-medium text-warning [.border-b]:pb-0">
-            <Lightbulb className="size-3.5" aria-hidden />
-            Suggestion
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2 py-3">
-            <p className="flex flex-wrap items-center gap-x-1">
-              {suggestionSession ? (
-                // A real link to the session: underlined, and a modifier
-                // click opens it in a tab.
+        <TaskNoticeCard
+          tone="warning"
+          icon={<Lightbulb />}
+          title="Suggestion"
+          actions={
+            <>
+              <Button variant="ghost" size="xs" onClick={onDismissSuggestion}>
+                {suggestion.to === "done" ? "Not done yet" : "Keep it done"}
+              </Button>
+              <Button
+                size="xs"
+                busy={isPending(statusMutation ?? idle())}
+                onClick={onAcceptSuggestion}
+              >
+                {suggestion.to === "done" ? <Check /> : <Undo2 />}
+                {suggestion.to === "done" ? "Mark done" : "Move to To do"}
+              </Button>
+            </>
+          }
+        >
+          <p className="flex flex-wrap items-center gap-x-1">
+            {suggestionSession ? (
+              // A real link to the session: underlined, and a modifier
+              // click opens it in a tab.
+              <a
+                href={sessionPath(suggestionSession.id)}
+                className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-3 hover:text-primary"
+                onClick={(event) =>
+                  followRowLink(event, sessionPath(suggestionSession.id), () =>
+                    onOpenSession(suggestionSession.id),
+                  )
+                }
+              >
+                <Bot className="size-3.5" aria-hidden />
+                {suggestionSession.title.trim() || "An agent session"}
+              </a>
+            ) : (
+              <span>An agent</span>
+            )}
+            <span>
+              {suggestion.to === "done"
+                ? "says this is done."
+                : "handed this back unfinished."}
+            </span>
+          </p>
+          {suggestion.reason ? (
+            <blockquote className="border-l-2 pl-3 text-muted-foreground italic wrap-anywhere">
+              {suggestion.reason}
+            </blockquote>
+          ) : null}
+        </TaskNoticeCard>
+      ) : null}
+      {inInbox ? (
+        // Still in the Inbox: it arrived on its own and nobody has decided
+        // about it yet. Said here as well as in the Inbox list, with the two
+        // answers that list's row gives — plan it, or just let it into the
+        // Backlog.
+        <TaskNoticeCard
+          tone="info"
+          icon={<Inbox />}
+          title="Inbox"
+          actions={
+            <>
+              <Button variant="ghost" size="xs" onClick={onPlanToday}>
+                <CalendarCheck />
+                Plan for today
+              </Button>
+              <Button size="xs" onClick={onDismissFromInbox}>
+                <Check />
+                Move to Backlog
+              </Button>
+            </>
+          }
+        >
+          <p className="flex flex-wrap items-center gap-x-1">
+            <span>{taskOrigin(item)}</span>
+            {originSession ? (
+              <>
+                <span>·</span>
                 <a
-                  href={sessionPath(suggestionSession.id)}
+                  href={sessionPath(originSession.id)}
                   className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-3 hover:text-primary"
                   onClick={(event) =>
-                    followRowLink(
-                      event,
-                      sessionPath(suggestionSession.id),
-                      () => onOpenSession(suggestionSession.id),
+                    followRowLink(event, sessionPath(originSession.id), () =>
+                      onOpenSession(originSession.id),
                     )
                   }
                 >
                   <Bot className="size-3.5" aria-hidden />
-                  {suggestionSession.title.trim() || "An agent session"}
+                  {originSession.title.trim() || "Agent session"}
                 </a>
-              ) : (
-                <span>An agent</span>
-              )}
-              <span>
-                {suggestion.to === "done"
-                  ? "says this is done."
-                  : "handed this back unfinished."}
-              </span>
-            </p>
-            {suggestion.reason ? (
-              <blockquote className="border-l-2 pl-3 text-muted-foreground italic wrap-anywhere">
-                {suggestion.reason}
-              </blockquote>
+              </>
             ) : null}
-          </CardContent>
-          {/* The same 32px as the header band, so the card's two bars match. */}
-          <CardFooter className="h-8 justify-end gap-1 py-0">
-            <Button variant="ghost" size="xs" onClick={onDismissSuggestion}>
-              {suggestion.to === "done" ? "Not done yet" : "Keep it done"}
-            </Button>
-            <Button
-              size="xs"
-              busy={isPending(statusMutation ?? idle())}
-              onClick={onAcceptSuggestion}
-            >
-              {suggestion.to === "done" ? <Check /> : <Undo2 />}
-              {suggestion.to === "done" ? "Mark done" : "Move to To do"}
-            </Button>
-          </CardFooter>
-        </Card>
+          </p>
+          <p className="text-muted-foreground">
+            It arrived on its own and is waiting for a decision.
+          </p>
+        </TaskNoticeCard>
       ) : null}
       {/* Under the title, as the chat title bar's subtitle: where the Task
           stands, where it belongs, and how far its subtree is — plain muted
@@ -1335,5 +1414,41 @@ function TaskTextEditor({
       </div>
       {error ? <ErrorNote message={error} onRetry={commit} /> : null}
     </div>
+  );
+}
+
+/**
+ * A notice about the Task that asks for a decision — an agent's suggestion,
+ * an Inbox arrival: a 32px tinted header naming it, the explanation, and a
+ * 32px footer with the answers.
+ */
+function TaskNoticeCard({
+  tone,
+  icon,
+  title,
+  actions,
+  children,
+}: {
+  tone: "warning" | "info";
+  icon: ReactNode;
+  title: string;
+  actions: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Card size="sm" role="status" className="my-1 gap-0 py-0">
+      <CardHeader
+        className={`flex h-8 items-center gap-1.5 border-b py-0 text-xs font-medium [.border-b]:pb-0 [&_svg]:size-3.5 ${
+          tone === "warning"
+            ? "bg-warning-soft text-warning"
+            : "bg-primary/10 text-primary"
+        }`}
+      >
+        {icon}
+        {title}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 py-3">{children}</CardContent>
+      <CardFooter className="h-8 justify-end gap-1 py-0">{actions}</CardFooter>
+    </Card>
   );
 }
