@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import { Spinner } from "./common/load.tsx";
 import {
   projectPath,
@@ -135,7 +134,6 @@ function deliveryTitle(delivery: TaskRowDelivery): string {
 export function TaskRowBody({
   task,
   meta,
-  whenMetaEmpty = "id-only",
   sessionShownElsewhere = false,
   projectsById,
   selected,
@@ -147,13 +145,6 @@ export function TaskRowBody({
   task: Task;
   /** Line 2's content, or `null` for a single-line row. */
   meta: TaskRowMeta | null;
-  /**
-   * What else line 2 says when the meta states nothing. The id is always there,
-   * so the line never goes blank; a row whose HEIGHT is a thumb target takes the
-   * `fallback` — the facts a Task always has — so the list cannot alternate
-   * between a one- and a two-chip line.
-   */
-  whenMetaEmpty?: "id-only" | "fallback";
   /**
    * The row states the Task's session somewhere ELSE — the tree's gutter action,
    * which both says it exists and leads to it. Line 2 then drops its own Session
@@ -234,7 +225,10 @@ export function TaskRowBody({
         {line2 ? null : <TaskIdBadge id={task.id} onNavigate={onNavigate} />}
       </span>
       {line2 ? (
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
+        // One line that drops what does not fit WHOLE, never half an item: it
+        // wraps, but is one line tall, so a wrapped item goes below the clip
+        // (the session cards' signal row does the same).
+        <span className="mt-0.5 flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs">
           {/* The Project OPENS line 2, then the id, in every two-line view: a
               left-hand column the eye scans down, and the items on a clipping
               line that must never be the ones that clip (the Project's name
@@ -248,18 +242,11 @@ export function TaskRowBody({
             />
           ) : null}
           <TaskIdBadge id={task.id} onNavigate={onNavigate} />
+          {/* Nothing else to say leaves the line to the Project and the id:
+              the status is the glyph beside the title, and how long ago the
+              Task changed is not worth the space. */}
           {!empty ? (
             <TaskMetaItems meta={line2} onNavigate={onNavigate} />
-          ) : whenMetaEmpty === "fallback" ? (
-            /* Nothing else to report. A row whose height is a thumb target says
-               the two facts a Task always has — where it stands, and how long it
-               has stood there — rather than leaving the line to the id alone. */
-            <span
-              className="shrink-0 text-muted-foreground"
-              title={`Updated ${line2.age}`}
-            >
-              {TASK_STATUS_LABEL[task.status]} · {line2.age}
-            </span>
           ) : null}
         </span>
       ) : null}

@@ -734,9 +734,6 @@ function BacklogRowContent({
         <TaskRowBody
           task={task}
           meta={meta}
-          // The height of a two-line row is a thumb target, so it may not
-          // alternate with the metadata a Task happens to have.
-          whenMetaEmpty="fallback"
           // The gutter names the session AND leads to it, so line 2 saying so
           // again would cost the project chip its width on a clipping line.
           sessionShownElsewhere={gutter}

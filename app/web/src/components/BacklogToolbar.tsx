@@ -93,7 +93,7 @@ export function BacklogToolbar({
   // wrapped onto two to four lines in the rail.
   if (bar && !hideProjectControls)
     return (
-      <div className="flex h-10 items-center gap-1 border-b border-border bg-card px-1.5 sm:px-2">
+      <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-1.5 sm:px-2">
         <BacklogViewMenu
           view={view}
           onChange={onViewChange}
