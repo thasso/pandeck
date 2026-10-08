@@ -910,19 +910,14 @@ export function SessionInbox({
       ) : null}
 
       {view.needsYou.length > 0 ? (
+        // No heading: the cards say it themselves (their status icon and a
+        // bright title), and the bar above counts them. The section stays the
+        // block "Needs you" in the bar scrolls to.
         <section
-          aria-labelledby="session-inbox-needs-you"
+          aria-label="Needs you"
           data-inbox-needs-you
-          className="mb-1 flex flex-col"
+          className="flex flex-col"
         >
-          {/* The label without the count: the count is the bar's, where it is
-              stated whether or not this block exists. */}
-          <h2
-            id="session-inbox-needs-you"
-            className="px-2.5 pb-0.5 text-xs font-semibold uppercase tracking-wide text-primary"
-          >
-            Needs you
-          </h2>
           {renderCardList(view.needsYou)}
         </section>
       ) : null}

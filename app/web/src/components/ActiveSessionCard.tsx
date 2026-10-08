@@ -433,7 +433,9 @@ function ActiveSessionCardImpl({
                 )}
               </span>
               <span
-                className={`min-w-0 flex-1 truncate text-sm text-foreground ${status === "unread" ? "font-semibold" : "font-medium"}`}
+                // Bright only where it asks for the user — unread, or needing
+                // them; a card already read recedes to the rows' muted tone.
+                className={`min-w-0 flex-1 truncate text-sm ${status === "unread" ? "font-semibold" : "font-medium"} ${status === "unread" || card.tier === "needs-you" ? "text-foreground" : "text-muted-foreground"}`}
               >
                 <SessionTitleText
                   title={title}

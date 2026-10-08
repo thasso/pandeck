@@ -190,7 +190,9 @@ function ClusterChildRowImpl({
       <ItemContent className="min-w-0">
         <ItemTitle className="w-full">
           <span
-            className={`truncate ${status === "unread" ? "font-semibold" : ""}`}
+            // As the card's title: bright only when unread or needing the
+            // user, muted once read.
+            className={`truncate ${status === "unread" ? "font-semibold" : ""} ${status === "unread" || card.tier === "needs-you" ? "text-foreground" : "text-muted-foreground"}`}
           >
             <SessionTitleText
               title={title}
