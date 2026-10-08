@@ -440,7 +440,12 @@ type PendingWorktreeReview = {
    * staged: the worktree's comment list is only held while its page watches
    * it, so on the new-session route it is usually gone.
    */
-  comments: { id: string; body: string; source?: string }[];
+  comments: {
+    id: string;
+    body: string;
+    source?: string;
+    code?: { before: string; exact: string; after: string };
+  }[];
   draft: { sessionId: string; text: string; token: number };
 };
 
@@ -3503,10 +3508,20 @@ function AppContent() {
         comments: commentIds.map((id) => {
           const thread = threads.find((comment) => comment.id === id);
           const at = thread?.current ?? thread?.anchor;
+          const quote = thread?.anchor?.selectors.quote;
           return {
             id,
             body: thread?.body ?? "Review comment",
             ...(at ? { source: `${at.path}:${at.line}` } : {}),
+            ...(quote?.exact
+              ? {
+                  code: {
+                    before: quote.prefix,
+                    exact: quote.exact,
+                    after: quote.suffix,
+                  },
+                }
+              : {}),
           };
         }),
         draft: {

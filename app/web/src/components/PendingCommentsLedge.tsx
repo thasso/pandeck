@@ -21,7 +21,15 @@ export interface CommentLedgeItem {
   quote?: string | undefined;
   /** It annotates a whole document rather than a passage. */
   wholeDocument?: boolean | undefined;
+  /**
+   * Code it was made on (a review thread on a diff): the commented lines with
+   * a little of what surrounds them, shown as an excerpt when the row unfolds.
+   */
+  code?: { before: string; exact: string; after: string } | undefined;
 }
+
+/** How many lines of context the excerpt keeps on either side. */
+const CODE_CONTEXT_LINES = 2;
 
 /**
  * @component PendingCommentsLedge
@@ -218,7 +226,9 @@ const PendingCommentRow = memo(function PendingCommentRow({
         // Under the title (`pl-7`: the toggle's padding, chevron and gap):
         // the passage it is on, quoted, then the whole comment.
         <div className="flex flex-col gap-1.5 pt-0.5 pr-2.5 pb-2 pl-7 text-xs">
-          {item.quote !== undefined ? (
+          {item.code ? (
+            <CodeExcerpt code={item.code} />
+          ) : item.quote !== undefined ? (
             <blockquote className="border-l-2 pl-2 wrap-anywhere whitespace-pre-wrap text-muted-foreground italic">
               {item.quote}
             </blockquote>
@@ -235,3 +245,41 @@ const PendingCommentRow = memo(function PendingCommentRow({
     </li>
   );
 });
+
+/**
+ * The commented lines as they stood, with a little context dimmed around them:
+ * enough to see what the comment is about without opening the diff.
+ */
+function CodeExcerpt({
+  code,
+}: {
+  code: { before: string; exact: string; after: string };
+}) {
+  // Only whole lines of context: the prefix ends mid-line where the selection
+  // began, so its last partial line belongs to the highlighted text.
+  const before = code.before.split("\n").slice(-CODE_CONTEXT_LINES - 1);
+  const lead = before.pop() ?? "";
+  const after = code.after.split("\n").slice(0, CODE_CONTEXT_LINES + 1);
+  const tail = after.shift() ?? "";
+  return (
+    <pre className="overflow-x-auto rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs leading-relaxed whitespace-pre">
+      {before.length > 0 ? (
+        <span className="text-muted-foreground">
+          {before.join("\n")}
+          {"\n"}
+        </span>
+      ) : null}
+      <span className="text-muted-foreground">{lead}</span>
+      <mark className="rounded-sm bg-primary/15 text-foreground">
+        {code.exact}
+      </mark>
+      <span className="text-muted-foreground">{tail}</span>
+      {after.length > 0 ? (
+        <span className="text-muted-foreground">
+          {"\n"}
+          {after.join("\n")}
+        </span>
+      ) : null}
+    </pre>
+  );
+}
