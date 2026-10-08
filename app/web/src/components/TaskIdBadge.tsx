@@ -11,7 +11,10 @@ export function TaskIdBadge({
   onNavigate?: ((path: string) => void) | undefined;
 }) {
   const title = `Task-${id}`;
-  const className = "shrink-0 font-mono tabular-nums";
+  // Plain muted text, not an outlined pill: the id is a neutral fact on the
+  // row, like the session cards' meta line.
+  const className =
+    "h-auto shrink-0 rounded-none border-0 px-0 py-0 font-mono font-normal text-muted-foreground tabular-nums";
   if (!onNavigate)
     return (
       <Badge variant="outline" className={className} title={title}>
@@ -22,7 +25,7 @@ export function TaskIdBadge({
   return (
     <Badge
       variant="outline"
-      className={`${className} hover:text-foreground`}
+      className={`${className} hover:bg-transparent hover:text-foreground`}
       title={title}
       render={
         <a

@@ -173,6 +173,12 @@ export interface TreeProps<T> {
    * chevron, matching the sidebar session rows. Defaults to `false`. */
   compact?: boolean;
   /**
+   * Edge-to-edge rows for a list that runs to its container's sides: square
+   * fills divided by hairlines, as the sidebar's session list. Defaults to
+   * `false` (rounded rows on an inset).
+   */
+  flush?: boolean;
+  /**
    * How a row's chrome sits against a `renderNode` body of more than one line.
    * `center` (the default) centres the chevron on a single-line row; `stretch`
    * turns it into a full-height gutter beside the whole block, with the GLYPH on
@@ -258,6 +264,7 @@ export function Tree<T>({
   indentWidth = 24,
   showGuides = true,
   compact = false,
+  flush = false,
   rowAlign = "center",
   getRowClassName,
   className,
@@ -549,6 +556,7 @@ export function Tree<T>({
       indentWidth,
       showGuides,
       compact,
+      flush,
       rowAlign,
       hasChildren,
       isExpanded,
@@ -635,6 +643,7 @@ interface RowProps<T> {
   indentWidth: number;
   showGuides: boolean;
   compact: boolean;
+  flush: boolean;
   rowAlign: "center" | "stretch";
   hasChildren: boolean;
   isExpanded: boolean;
@@ -656,6 +665,7 @@ function RowBody<T>({
   indentWidth,
   showGuides,
   compact,
+  flush,
   rowAlign,
   hasChildren,
   isExpanded,
@@ -670,6 +680,7 @@ function RowBody<T>({
   | "indentWidth"
   | "showGuides"
   | "compact"
+  | "flush"
   | "rowAlign"
   | "hasChildren"
   | "isExpanded"
@@ -678,10 +689,13 @@ function RowBody<T>({
   | "onToggle"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
+  // A flush row has no container inset to sit in, so it keeps its own.
+  const inset = flush ? 4 : 0;
   return (
     <div
       className={cx(
-        "relative z-10 flex gap-1 rounded-md text-foreground transition-colors",
+        "relative z-10 flex gap-1 text-foreground transition-colors",
+        flush ? "rounded-none border-b border-border/60" : "rounded-md",
         stretch ? "items-stretch" : "items-center",
         // The indent animates (`index.css`) so a row promoted out of a vanished
         // parent moves to its new depth rather than appearing at it.
@@ -692,10 +706,12 @@ function RowBody<T>({
         elevated
           ? "border border-border bg-card shadow-lg"
           : selected
-            ? "bg-accent/60"
+            ? flush
+              ? "bg-muted"
+              : "bg-accent/60"
             : "hover:bg-muted",
       )}
-      style={{ paddingLeft: depth * indentWidth }}
+      style={{ paddingLeft: inset + depth * indentWidth }}
     >
       {showGuides &&
         Array.from({ length: depth }).map((_, i) => (
@@ -703,7 +719,7 @@ function RowBody<T>({
             key={i}
             aria-hidden="true"
             className="absolute inset-y-0 w-px bg-border"
-            style={{ left: i * indentWidth + indentWidth / 2 }}
+            style={{ left: inset + i * indentWidth + indentWidth / 2 }}
           />
         ))}
       {hasChildren ? (

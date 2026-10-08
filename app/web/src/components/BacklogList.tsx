@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Plus } from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
@@ -69,6 +70,8 @@ function BacklogListImpl({
   density,
   toolbarDensity,
   showAddTask = false,
+  flush = false,
+  headerSlot,
 }: {
   state: BacklogState;
   actions: AssistantActions;
@@ -122,6 +125,17 @@ function BacklogListImpl({
    */
   toolbarDensity?: BacklogDensity;
   showAddTask?: boolean;
+  /**
+   * The list runs to its container's sides (the sidebar): square rows divided
+   * by hairlines, and the notes above it keep their own inset.
+   */
+  flush?: boolean;
+  /**
+   * Where the toolbar goes instead of above the rows: a slot the host keeps
+   * above its scroll container, so the filters stay put and the scrollbar does
+   * not run through them (the sidebar, as its Sessions bar).
+   */
+  headerSlot?: HTMLElement | null;
 }) {
   usePerfRenderCount("BacklogList");
   const c = useBacklog(state, actions, prefs, onUpdatePrefs);
@@ -223,7 +237,11 @@ function BacklogListImpl({
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    // Flush, the rows run edge to edge and everything else (notes, the
+    // skeleton, an empty state) keeps the sidebar's inset.
+    <div
+      className={`flex flex-col gap-2 ${flush ? "[&>:not([role=tree])]:mx-2" : ""}`}
+    >
       {showAddTask ? (
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
@@ -253,22 +271,28 @@ function BacklogListImpl({
         </div>
       ) : null}
 
-      <BacklogToolbar
-        density={toolbarDensity ?? density}
-        view={view}
-        onViewChange={c.setView}
-        viewMode={viewMode}
-        onViewModeChange={c.setViewMode}
-        projectFilter={projectFilter}
-        projectFilterOptions={c.projectFilterOptions}
-        projectsById={c.projectsById}
-        projectsLoaded={c.projectsLoaded}
-        onProjectFilterChange={c.setProjectFilter}
-        statuses={c.statuses}
-        onStatusFilterChange={c.setStatusFilter}
-        inboxWaiting={inboxWaiting}
-        hideProjectControls={Boolean(fixedFilter)}
-      />
+      {(() => {
+        const toolbar = (
+          <BacklogToolbar
+            density={toolbarDensity ?? density}
+            view={view}
+            onViewChange={c.setView}
+            viewMode={viewMode}
+            onViewModeChange={c.setViewMode}
+            projectFilter={projectFilter}
+            projectFilterOptions={c.projectFilterOptions}
+            projectsById={c.projectsById}
+            projectsLoaded={c.projectsLoaded}
+            onProjectFilterChange={c.setProjectFilter}
+            statuses={c.statuses}
+            onStatusFilterChange={c.setStatusFilter}
+            inboxWaiting={inboxWaiting}
+            hideProjectControls={Boolean(fixedFilter)}
+            bar={Boolean(headerSlot)}
+          />
+        );
+        return headerSlot ? createPortal(toolbar, headerSlot) : toolbar;
+      })()}
 
       {/* The list could not be read: a condition on the COLLECTION, so it is
           here whenever the user is, and the retained rows stay readable below
@@ -327,6 +351,7 @@ function BacklogListImpl({
         <BacklogTreePane
           tasks={c.ordered}
           density={density}
+          flush={flush}
           viewMode={viewMode}
           statuses={c.statuses}
           projectFilter={projectFilter}

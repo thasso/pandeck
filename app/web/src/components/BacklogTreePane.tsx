@@ -130,6 +130,7 @@ export function BacklogTreePane({
   onClearFilters,
   onNavigate,
   density,
+  flush = false,
   showProjectBadge,
 }: {
   tasks: Task[];
@@ -194,6 +195,8 @@ export function BacklogTreePane({
   onNavigate?: ((path: string) => void) | undefined;
   /** How much room a row gets, decided by the host (`BacklogDensity`). */
   density: BacklogDensity;
+  /** Edge-to-edge, hairline-divided rows (`Tree`'s `flush`). */
+  flush?: boolean;
 }) {
   const statusActive = statusFilterActive(statuses);
   const tight = density === "tight";
@@ -424,6 +427,7 @@ export function BacklogTreePane({
       items={nodes}
       indentWidth={tight ? TIGHT_INDENT_WIDTH : INDENT_WIDTH}
       compact={tight}
+      flush={flush}
       // Two-line rows give the chevron a full-height hit box beside the BLOCK
       // instead of a 20px square centred on it — the glyph still sits between
       // the lines, but the target is the row (see `rowAlign`).

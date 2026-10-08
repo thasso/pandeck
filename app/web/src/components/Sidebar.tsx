@@ -692,18 +692,24 @@ function SidebarImpl({
       ref={containerRef}
       className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
     >
-      {/* The attention list's counts bar, above the scroll container: it stays
-          put without the scrollbar running through it. */}
-      {section === "sessions" ? (
+      {/* The attention list's counts bar (or the Tasks toolbar), above the
+          scroll container: it stays put without the scrollbar running through
+          it. */}
+      {section === "sessions" || section === "tasks" ? (
         <div ref={setInboxHeaderSlot} className="shrink-0" />
       ) : null}
       <div
         ref={browserScrollRef}
         // The shared inset every browser reads its first row in — except the
-        // attention list, which runs edge to edge: its rows are divided by
-        // hairlines, which a side inset would leave hanging in empty space.
+        // attention list and the Tasks tree, which run edge to edge: their
+        // rows are divided by hairlines, which a side inset would leave
+        // hanging in empty space.
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
-          section === "sessions" ? "" : "px-1 pt-2 sm:px-2"
+          section === "sessions"
+            ? ""
+            : section === "tasks"
+              ? "pt-1"
+              : "px-1 pt-2 sm:px-2"
         }`}
         style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
       >
@@ -737,6 +743,8 @@ function SidebarImpl({
             // WIDTH: on the rail they wrap into four lines at page sizing and
             // two at the rail's own, above rows that are two-line either way.
             toolbarDensity={mobile ? "comfortable" : "tight"}
+            flush
+            headerSlot={inboxHeaderSlot}
           />
         ) : section === "projects" ? (
           <ProjectTreePane

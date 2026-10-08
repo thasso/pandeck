@@ -41,6 +41,7 @@ export function BacklogToolbar({
   onStatusFilterChange,
   inboxWaiting = false,
   hideProjectControls = false,
+  bar = false,
 }: {
   /** How much room the surface gives a row; see `BacklogDensity`. */
   density: BacklogDensity;
@@ -58,13 +59,18 @@ export function BacklogToolbar({
   /** Anything waiting in the Inbox — drives that chip's attention dot. */
   inboxWaiting?: boolean;
   hideProjectControls?: boolean;
+  /**
+   * Drawn as a header bar above the host's scroll container rather than a row
+   * inside it: hairline under, its own inset — as the Sessions bar.
+   */
+  bar?: boolean;
 }) {
   const tight = density === "tight";
   const byProject = viewMode === "project";
 
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-xs" : "text-sm"} text-muted-foreground`}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 ${bar ? "border-b border-border bg-card px-2 py-2 sm:px-3" : "px-1"} ${tight ? "text-xs" : "text-sm"} text-muted-foreground`}
     >
       {!hideProjectControls && (
         <BacklogViewSwitcher

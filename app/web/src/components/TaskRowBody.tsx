@@ -3,13 +3,13 @@ import { Badge } from "./ui/badge.tsx";
 import {
   CalendarCheck,
   Flag,
+  FolderKanban,
   GitBranch,
   GitPullRequest,
   MessageSquare,
   Workflow,
 } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
-import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import { Spinner } from "./common/load.tsx";
@@ -27,6 +27,14 @@ import {
   type TaskRowMeta,
 } from "../lib/taskRowMeta.ts";
 import type { HostingAttention } from "../lib/worktreeHosting.ts";
+import { projectColor, resolveProjectDisplay } from "../lib/projectDisplay.ts";
+
+/**
+ * A neutral fact on line 2, as plain muted text rather than a pill — the
+ * session cards' meta line. Only what needs the user keeps a badge's chrome.
+ */
+const PLAIN_META =
+  "h-auto rounded-none border-0 bg-transparent px-0 py-0 font-normal text-muted-foreground";
 
 /** Priority is shown only when it is NOT the default — a row that says
  *  "normal" spends its second line restating the absence of information. */
@@ -464,6 +472,7 @@ function TaskMetaItems({
       {meta.planned ? (
         <Badge
           variant="secondary"
+          className={PLAIN_META}
           title={`Planned for ${meta.planned.toLowerCase()}`}
         >
           <CalendarCheck aria-hidden="true" />
@@ -473,6 +482,7 @@ function TaskMetaItems({
       {meta.due ? (
         <Badge
           variant={meta.overdue ? "destructive" : "secondary"}
+          className={meta.overdue ? undefined : PLAIN_META}
           title={`Due ${meta.due.toLowerCase()}`}
         >
           <Flag aria-hidden="true" />
@@ -488,36 +498,61 @@ function TaskMetaItems({
                 ? "warning"
                 : "secondary"
           }
+          className={
+            meta.priority === "urgent" || meta.priority === "high"
+              ? undefined
+              : PLAIN_META
+          }
         >
           {meta.priority}
         </Badge>
       ) : null}
-      {/* The chip keeps its own tooltip (the Project's full name), so the link
-          around it carries none and adds no underline: it is a badge, and a
-          dotted line under a coloured pill reads as damage rather than as an
-          affordance. */}
+      {/* The Project as the session cards name it: its icon in its colour and
+          its short name, muted, leading to the Project. */}
       {meta.projectId ? (
-        project && onNavigate ? (
-          <a
-            href={project}
-            draggable={false}
-            className="flex min-w-0 shrink-0"
-            onClick={(event) => followRowLink(event, project, onNavigate)}
-          >
-            <ProjectBadge
-              projectId={meta.projectId}
-              projectsById={projectsById}
-              size="sm"
-            />
-          </a>
-        ) : (
-          <ProjectBadge
-            projectId={meta.projectId}
-            projectsById={projectsById}
-            size="sm"
-          />
-        )
+        <ProjectMeta
+          projectId={meta.projectId}
+          projectsById={projectsById}
+          href={project}
+          onNavigate={onNavigate}
+        />
       ) : null}
     </>
+  );
+}
+
+function ProjectMeta({
+  projectId,
+  projectsById,
+  href,
+  onNavigate,
+}: {
+  projectId: string;
+  projectsById: Map<string, ProjectRecord>;
+  href: string | null;
+  onNavigate?: ((path: string) => void) | undefined;
+}) {
+  const project = projectsById.get(projectId);
+  const { label, shortLabel, known } = resolveProjectDisplay(
+    projectId,
+    projectsById,
+  );
+  return (
+    <MetaLink
+      href={href ?? ""}
+      title={known ? label : `Unknown project: ${projectId}`}
+      className="inline-flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+      onNavigate={href ? onNavigate : undefined}
+    >
+      <FolderKanban
+        size={11}
+        className="shrink-0"
+        style={
+          known ? { color: projectColor(project ?? projectId).dot } : undefined
+        }
+        aria-hidden
+      />
+      <span className="truncate">{shortLabel}</span>
+    </MetaLink>
   );
 }
