@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Archive,
@@ -400,12 +400,19 @@ function ActiveSessionCardImpl({
                   <span aria-hidden>{"\u00a0"}</span>
                 ) : (
                   meta.map((item, index) => (
-                    <MetaItem
-                      key={`${item.kind}:${item.label}`}
-                      item={item}
-                      first={index === 0}
-                      onOpen={openMetaItem(item)}
-                    />
+                    <Fragment key={`${item.kind}:${item.label}`}>
+                      <MetaItem
+                        item={item}
+                        first={index === 0}
+                        onOpen={openMetaItem(item)}
+                      />
+                      {/* The worktree's own changes stand beside it — what it
+                          holds that its base does not — unless a pull request
+                          speaks for them on the status row. */}
+                      {item.kind === "worktree" && !delivery ? (
+                        <WorktreeChanges relations={relations} />
+                      ) : null}
+                    </Fragment>
                   ))
                 )}
               </div>
@@ -543,19 +550,17 @@ function ActiveSessionCardImpl({
                       </span>
                     </span>
                   ) : null}
-                  {/* What the work has produced: its pull request when there is
-                  one, otherwise the worktree's own changes. */}
-                  <span className="flex shrink-0 items-center">
-                    {delivery ? (
+                  {/* What the work has produced, once it is a pull request;
+                  until then the worktree's changes sit beside it above. */}
+                  {delivery ? (
+                    <span className="flex shrink-0 items-center">
                       <SessionDeliveryMark
                         session={session}
                         variant="responsive"
                         showNumber
                       />
-                    ) : (
-                      <WorktreeChanges relations={relations} />
-                    )}
-                  </span>
+                    </span>
+                  ) : null}
                   {/* The badge already names the state; the one sentence it
                   cannot say is an Idle card's queued work. */}
                   {status === "quiet" && detail ? (
