@@ -824,7 +824,9 @@ function MetaItem({
       // No pill padding or fill: an openable item starts where a plain one
       // does, flush with the title and status rows below, and says it opens
       // by its colour on hover.
-      className={`${shape} cursor-pointer px-0 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
+      // One text line tall like the plain items: a 20px badge in the row's
+      // one-line box pushed every item 2px below the age beside them.
+      className={`${shape} h-auto cursor-pointer border-0 px-0 py-0 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
       title={`Open ${item.title ?? item.label}`}
       onClick={(e) => {
         e.stopPropagation();
