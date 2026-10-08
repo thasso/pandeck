@@ -1,6 +1,11 @@
 import { applyPatch } from "@assistant/shared";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { GitBranch, House, MessageSquarePlus } from "lucide-react";
+import {
+  FolderKanban,
+  GitBranch,
+  House,
+  MessageSquarePlus,
+} from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -34,6 +39,12 @@ import {
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
 const WORKTREE_NODE_PREFIX = "worktree:";
+/**
+ * A row's action shows on hover or focus where there is a pointer to hover
+ * with, always on touch — as the session cards' and Task rows' actions do.
+ */
+const ROW_ACTION_REVEAL =
+  "pointer-fine:opacity-0 pointer-fine:group-hover/row:opacity-100 pointer-fine:group-focus-within/row:opacity-100 focus-visible:opacity-100";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
 
@@ -70,6 +81,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSession,
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
+  flush = false,
 }: {
   projects: ProjectRecord[];
   loading: boolean;
@@ -92,6 +104,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSession?: (id: string) => void;
   onStartSessionInWorktree?: (id: string) => void;
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
+  /**
+   * Edge-to-edge, hairline-divided rows (the sidebar), as the Tasks tree: the
+   * notes and placeholders around the tree keep their own inset.
+   */
+  flush?: boolean;
 }) {
   const ordered = projects;
   const lastReorder = useRef<{
@@ -228,7 +245,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       <div
         role="status"
         aria-label="Loading projects"
-        className="flex flex-col gap-1.5 px-1 py-1"
+        className={`flex flex-col gap-1.5 py-1 ${flush ? "px-2" : "px-1"}`}
       >
         {[0, 1, 2, 3].map((row) => (
           <Skeleton
@@ -241,7 +258,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     );
   }
   if (projects.length === 0) {
-    return <EmptyBox>No projects in the registry yet.</EmptyBox>;
+    return (
+      <div className={flush ? "mx-2" : undefined}>
+        <EmptyBox>No projects in the registry yet.</EmptyBox>
+      </div>
+    );
   }
   return (
     <>
@@ -254,7 +275,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
             if (attempted)
               onReorder(attempted.orderedIds, attempted.placements);
           }}
-          className="mb-2"
+          className={flush ? "mx-2 mb-2" : "mb-2"}
         />
       ) : null}
       {relationsLoading ? (
@@ -271,6 +292,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         items={nodes}
         indentWidth={INDENT_WIDTH}
         compact
+        flush={flush}
         showGuides
         aria-label="Projects"
         expandedIds={expandedIds}
@@ -373,29 +395,28 @@ const ProjectRowContent = memo(function ProjectRowContent({
   const color = projectColor(project);
   return (
     <div
-      className="group/row flex min-w-0 items-center gap-1"
+      className="group/row flex min-w-0 items-center gap-1.5"
       title={`${project.key} · ${project.name}`}
     >
-      <span
-        className="flex size-5 shrink-0 items-center justify-center"
+      {/* The Project glyph every surface uses: its folder, in its colour. */}
+      <FolderKanban
+        size={14}
+        className="shrink-0"
+        style={{ color: color.dot }}
         aria-hidden
-      >
+      />
+      <span className="min-w-0 flex-1 truncate text-sm">
         <span
-          className="size-2 rounded-full"
-          style={{ backgroundColor: color.dot }}
-        />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        <span className="font-bold tracking-wide">{project.key}</span>
-        <span className="mx-1 text-muted-foreground">·</span>
-        <span className={selected ? "font-medium" : undefined}>
-          {project.name}
+          className={`text-foreground ${selected ? "font-semibold" : "font-medium"}`}
+        >
+          {project.key}
         </span>
+        <span className="text-muted-foreground"> · {project.name}</span>
       </span>
       {onStartSession ? (
         <IconButton
           size="icon-xs"
-          className="shrink-0"
+          className={`shrink-0 ${ROW_ACTION_REVEAL}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
@@ -429,18 +450,21 @@ function WorktreeRowContentImpl({
   const axes = worktreeAxes(worktree, status, now);
   return (
     <div
-      className="group/row flex min-w-0 items-start gap-2"
+      className="group/row flex min-w-0 items-start gap-1.5"
       title={`${branch}\n${worktree.path}`}
     >
+      {/* A plain glyph, not a tinted tile: the row's text carries it. */}
       <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-background text-primary" : "bg-muted text-muted-foreground"}`}
+        className={`flex h-5 shrink-0 items-center ${selected ? "text-foreground" : "text-muted-foreground"}`}
         aria-hidden
       >
-        {worktree.isMain ? <House size={12} /> : <GitBranch size={12} />}
+        {worktree.isMain ? <House size={14} /> : <GitBranch size={14} />}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
         <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+          <span
+            className={`min-w-0 flex-1 truncate text-sm text-foreground ${selected ? "font-medium" : ""}`}
+          >
             {branch}
           </span>
           <WorktreeLineDelta status={status} />
@@ -451,13 +475,13 @@ function WorktreeRowContentImpl({
       {onStartSession ? (
         <IconButton
           size="icon-xs"
-          className="shrink-0"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             onStartSession(worktree.id);
           }}
           label={`Start session in worktree: ${branch}`}
+          className={`shrink-0 ${ROW_ACTION_REVEAL}`}
         >
           <MessageSquarePlus />
         </IconButton>

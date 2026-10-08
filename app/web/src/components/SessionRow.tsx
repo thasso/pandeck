@@ -60,12 +60,13 @@ function SessionRowContentImpl({
   const rowTitle = session.title.trim() || "Untitled session";
 
   return (
-    <span className="group/session-content flex min-w-0 flex-1 items-center gap-1">
+    <span className="group/session-content flex min-w-0 flex-1 items-center gap-1.5">
+      {/* A plain glyph, not a tinted tile, as every other list now draws one:
+          the agent's kind in the accent (amber for a workspace-aware one),
+          the spinner while it runs. */}
       <span
-        className={`relative flex size-5 shrink-0 items-center justify-center rounded-md ${
-          isWorkspaceAware(identity)
-            ? "bg-warning-soft text-warning"
-            : "bg-accent text-primary"
+        className={`relative flex size-5 shrink-0 items-center justify-center ${
+          isWorkspaceAware(identity) ? "text-warning" : "text-primary"
         }`}
         aria-hidden
       >
@@ -83,7 +84,9 @@ function SessionRowContentImpl({
         ) : null}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate text-sm text-foreground ${showUnread ? "font-semibold" : ""}`}
+        // Bright only when there is something new to read, as the session
+        // cards' titles: a quiet session recedes.
+        className={`min-w-0 flex-1 truncate text-sm ${showUnread ? "font-semibold text-foreground" : "text-muted-foreground"}`}
       >
         <SessionTitleText
           title={rowTitle}
@@ -103,24 +106,30 @@ function SessionRowContentImpl({
           deep in a tree, so the state travels as tone and accessible name, and
           the row itself is what opens the session holding the card. */}
       <SessionDeliveryMark session={session} variant="glyph" />
-      <span
-        className={`shrink-0 text-xs tabular-nums text-muted-foreground ${onArchive ? "group-hover/session-content:hidden group-focus-within/session-content:hidden" : ""}`}
-      >
-        {relativeTime(session.updatedAt)}
-      </span>
-      {onArchive ? (
-        <IconButton
-          label={session.archived ? "Unarchive session" : "Archive session"}
-          size="icon-xs"
-          onClick={(e) => {
-            e.stopPropagation();
-            onArchive(session.id, !session.archived);
-          }}
-          className="hidden shrink-0 group-hover/session-content:flex group-focus-within/session-content:flex"
+      {/* The age and the archive action share ONE slot: the button is laid
+          over the age and they trade places by opacity, so hovering never
+          changes the row's height or pushes the title (it used to swap a
+          16px line for a 24px button and the row wobbled). */}
+      <span className="relative flex h-5 min-w-5 shrink-0 items-center justify-end">
+        <span
+          className={`text-xs tabular-nums text-muted-foreground ${onArchive ? "group-hover/session-content:opacity-0 group-focus-within/session-content:opacity-0" : ""}`}
         >
-          {session.archived ? <ArchiveRestore /> : <Archive />}
-        </IconButton>
-      ) : null}
+          {relativeTime(session.updatedAt)}
+        </span>
+        {onArchive ? (
+          <IconButton
+            label={session.archived ? "Unarchive session" : "Archive session"}
+            size="icon-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              onArchive(session.id, !session.archived);
+            }}
+            className="absolute top-1/2 right-0 size-5 -translate-y-1/2 opacity-0 group-hover/session-content:opacity-100 group-focus-within/session-content:opacity-100 focus-visible:opacity-100"
+          >
+            {session.archived ? <ArchiveRestore /> : <Archive />}
+          </IconButton>
+        ) : null}
+      </span>
     </span>
   );
 }

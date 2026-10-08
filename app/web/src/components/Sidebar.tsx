@@ -701,13 +701,14 @@ function SidebarImpl({
       <div
         ref={browserScrollRef}
         // The shared inset every browser reads its first row in — except the
-        // attention list and the Tasks tree, which run edge to edge: their
+        // attention list and the Tasks and Projects trees, which run edge to
+        // edge: their
         // rows are divided by hairlines, which a side inset would leave
         // hanging in empty space.
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
           section === "sessions"
             ? ""
-            : section === "tasks"
+            : section === "tasks" || section === "projects"
               ? "pt-1"
               : "px-1 pt-2 sm:px-2"
         }`}
@@ -766,6 +767,7 @@ function SidebarImpl({
             onStartSession={onStartSessionForProject}
             onStartSessionInWorktree={onStartSessionInWorktree}
             onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+            flush
           />
         ) : section === "pull-requests" ? (
           <PullRequestBrowser
