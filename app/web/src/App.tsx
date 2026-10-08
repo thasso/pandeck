@@ -4902,8 +4902,11 @@ function AppContent() {
   // present), and memoized so the composer does not re-render for every
   // unrelated App render. Its rows are the registry topic's, which the open
   // flag subscribes (`activeTopics`).
+  // Only running work earns the strip: a retained provider host with nothing
+  // left in it is the runtime's bookkeeping, not the user's.
   const backgroundLedgeActivity =
-    route.name === "session"
+    route.name === "session" &&
+    (displaySessionListItem?.backgroundActivity?.activeCount ?? 0) > 0
       ? displaySessionListItem?.backgroundActivity
       : undefined;
   // The session both composer ledges speak for: the one on screen.

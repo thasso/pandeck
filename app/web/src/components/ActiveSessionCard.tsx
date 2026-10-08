@@ -515,16 +515,21 @@ function ActiveSessionCardImpl({
                     </Badge>
                   ) : null}
                   {backgroundChip ? (
+                    // The count stays when the line compacts, as the cluster's
+                    // does: an icon alone said "something", not how much.
                     <Badge
                       variant="outline"
                       role="img"
                       aria-label={backgroundText}
-                      className="session-status-responsive-badge"
                       title={backgroundText}
                     >
                       <Activity aria-hidden="true" />
-                      <span className="session-status-badge-label">
-                        {backgroundChip}
+                      <span>
+                        {backgroundChip.count}
+                        <span className="session-status-badge-label">
+                          {" running"}
+                          {backgroundChip.age ? ` · ${backgroundChip.age}` : ""}
+                        </span>
                       </span>
                     </Badge>
                   ) : null}

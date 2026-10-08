@@ -7,7 +7,6 @@ import {
   backgroundWorkCommandDetail,
   backgroundWorkDeadlineLabel,
   backgroundWorkEvidenceFacts,
-  backgroundWorkHostLabel,
   backgroundWorkKindLabel,
   backgroundWorkRowKey,
   backgroundWorkStateBadge,
@@ -67,7 +66,7 @@ export interface BackgroundWorkRowProps {
  * @component BackgroundWorkRow
  * @purpose One background-work item, exactly as the server narrowed it: kind and
  * backend, its title and bounded command, age, frozen deadline, state, the
- * retained host epoch when it has one, the durable completion/evidence facts,
+ * durable completion/evidence facts,
  * the captured output on demand, and Stop.
  * @useWhen Rendering the background registry route or the owning session's
  * inspector section.
@@ -93,7 +92,6 @@ function BackgroundWorkRowImpl({
   onOpenRegistry,
 }: BackgroundWorkRowProps) {
   const badge = backgroundWorkStateBadge(item);
-  const host = backgroundWorkHostLabel(item);
   const facts = backgroundWorkEvidenceFacts(item);
   const stopBlocked = backgroundWorkStopDisabledReason(item);
   const command = backgroundWorkCommandDetail(item);
@@ -147,7 +145,6 @@ function BackgroundWorkRowImpl({
               className="w-full"
             />
           ) : null}
-          {host ? <p>{host}</p> : null}
           {onOpenOwner ? (
             <Button
               variant="link"
