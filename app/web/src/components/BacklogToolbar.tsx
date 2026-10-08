@@ -11,8 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
@@ -23,7 +22,10 @@ import {
   type BacklogProjectFilterOption,
 } from "./BacklogFilters.tsx";
 import { PROPERTY_TRIGGER, PropertyLabel } from "./TaskPlanningSection.tsx";
-import { BacklogStatusFilter } from "./BacklogStatusFilter.tsx";
+import {
+  BacklogStatusFilter,
+  BacklogStatusFilterPicker,
+} from "./BacklogStatusFilter.tsx";
 import {
   statusFilterActive,
   type BacklogDensity,
@@ -281,38 +283,38 @@ function BacklogViewMenu({
         <ChevronDown className="text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
-        <DropdownMenuRadioGroup
-          value={view}
-          onValueChange={(value) => onChange(value as BacklogView)}
-        >
-          {(Object.keys(VIEW_META) as BacklogView[]).map((id) => {
-            const item = VIEW_META[id];
-            const ItemIcon = item.Icon;
-            return (
-              <DropdownMenuRadioItem
-                key={id}
-                value={id}
-                className="items-start"
-              >
-                <ItemIcon className="mt-0.5" />
-                <span className="flex min-w-0 flex-col">
-                  <span className="flex items-center gap-1.5">
-                    {item.label}
-                    {id === "inbox" && inboxWaiting ? (
-                      <span
-                        className="size-1.5 rounded-full bg-primary"
-                        aria-label="Tasks waiting"
-                      />
-                    ) : null}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {item.title}
-                  </span>
+        {/* Plain items, not radio items: the trigger already names the view,
+            so no check mark beside it, and a pick closes the menu. */}
+        {(Object.keys(VIEW_META) as BacklogView[]).map((id) => {
+          const item = VIEW_META[id];
+          const ItemIcon = item.Icon;
+          return (
+            <DropdownMenuItem
+              key={id}
+              aria-current={id === view || undefined}
+              className="items-start"
+              onClick={() => onChange(id)}
+            >
+              <ItemIcon className="mt-0.5" />
+              <span className="flex min-w-0 flex-col">
+                <span
+                  className={`flex items-center gap-1.5 ${id === view ? "font-medium" : ""}`}
+                >
+                  {item.label}
+                  {id === "inbox" && inboxWaiting ? (
+                    <span
+                      className="size-1.5 rounded-full bg-primary"
+                      aria-label="Tasks waiting"
+                    />
+                  ) : null}
                 </span>
-              </DropdownMenuRadioItem>
-            );
-          })}
-        </DropdownMenuRadioGroup>
+                <span className="text-xs text-muted-foreground">
+                  {item.title}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -385,13 +387,12 @@ function BacklogFilterPopover({
           {view !== "inbox" ? (
             <>
               <PropertyLabel>Status</PropertyLabel>
-              <div className="px-1">
-                <BacklogStatusFilter
-                  statuses={statuses}
-                  onChange={onStatusFilterChange}
-                  options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
-                />
-              </div>
+              <BacklogStatusFilterPicker
+                statuses={statuses}
+                onChange={onStatusFilterChange}
+                options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
+                className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+              />
             </>
           ) : null}
           {view === "backlog" ? (
