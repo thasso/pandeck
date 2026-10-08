@@ -768,7 +768,11 @@ export function SessionInbox({
           {/* The separator belongs to the WHOLE fold, not its header. When
               roles open, it travels below their rows instead of cutting the
               run away from the sessions it contains. */}
-          <div className="border-b border-border/60">
+          <div
+            // An open fold ends with a little air, so its last row reads as
+            // part of it rather than as the start of the next item.
+            className={`border-b border-border/60 ${childRows(item).length > 0 ? "pb-2" : ""}`}
+          >
             <WorkflowRunInboxCard
               item={item}
               now={now}
@@ -805,7 +809,17 @@ export function SessionInbox({
             {/* The separator wraps the card AND its disclosed peers. It stays
                 at the bottom of the cluster as rows open and close, making the
                 expansion part of the card rather than loose rows beneath it. */}
-            <div className="border-b border-border/60">
+            <div
+              // An open fold ends with a little air, so its last row reads as
+              // part of it rather than as the start of the next card.
+              className={`border-b border-border/60 ${
+                rows.length > 0 ||
+                (expandedClusters.has(id) &&
+                  (card.cluster?.settledCount ?? 0) > 0)
+                  ? "pb-2"
+                  : ""
+              }`}
+            >
               {/* The swipe wraps the CARD, inside both exit stages: a card
                   leaving by keyboard is animated by the stages above, and one
                   leaving by thumb is animated by `SwipeRow` — whose height
