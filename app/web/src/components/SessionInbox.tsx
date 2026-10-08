@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { Archive, Check, ChevronRight } from "lucide-react";
 import { isShelvedSession } from "@assistant/shared";
 import type {
@@ -109,6 +110,12 @@ const REORDER_MS = 220;
 const NO_RELATIONS: SessionCardRelations = {};
 
 interface Props {
+  /**
+   * Where the counts bar goes: the host's slot ABOVE its scroll container, so
+   * the bar stays put without being a sticky row the scrollbar runs through.
+   * Absent, the bar is the list's first row.
+   */
+  headerSlot?: HTMLElement | null;
   sessions: SessionListItem[];
   archivedSessionCount: number;
   archivedSessionsLoaded: boolean;
@@ -179,6 +186,7 @@ interface Props {
  * @related ActiveSessionCard, InboxShelfRow, sessionInbox (lib), Sidebar
  */
 export function SessionInbox({
+  headerSlot,
   sessions,
   archivedSessionCount,
   archivedSessionsLoaded,
@@ -877,18 +885,23 @@ export function SessionInbox({
     view.active.length === 0;
 
   return (
-    <div ref={containerRef} className="flex flex-col">
+    <div ref={containerRef} className={`flex flex-col ${headerSlot ? "pt-1" : ""}`}>
       {/* Background work runs outside any turn and often outside the session you
           are looking at, so the browser states the global count where every
           session list is read, and links to the registry. Derived from the
           session summaries alone — this surface holds no registry subscription. */}
-      <SessionInboxBar
-        needsYou={view.needsYou.length}
-        working={workingCount}
-        background={backgroundActive}
-        onNeedsYou={focusNeedsYou}
-        onOpenBackgroundTasks={onOpenBackgroundTasks}
-      />
+      {(() => {
+        const bar = (
+          <SessionInboxBar
+            needsYou={view.needsYou.length}
+            working={workingCount}
+            background={backgroundActive}
+            onNeedsYou={focusNeedsYou}
+            onOpenBackgroundTasks={onOpenBackgroundTasks}
+          />
+        );
+        return headerSlot ? createPortal(bar, headerSlot) : bar;
+      })()}
 
       {coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>

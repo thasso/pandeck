@@ -49,21 +49,14 @@ export function SessionInboxBar({
 }: Props) {
   const { activeCount, ownerCount } = background;
   return (
-    // Sticky rather than a row of the list: the sidebar has ONE scroll
-    // container for every browser, and a header that scrolls away is a header
-    // the list can still push around. The sidebar gives this list no side
-    // inset, so it spans the panel; the TOP edge is the sidebar's to give, and
-    // it does
-    // (`Sidebar.tsx`) — a sticky box cannot take it, because Chromium clamps
-    // `top-0` to the scroll container's CONTENT box, which is below its
-    // padding, and a negative margin does not move it (measured: the box
-    // stayed at 44 with `margin-top: -8px` in effect). That padding would then
-    // be a strip above a pinned bar for rows to scroll through, and at rest a
-    // band the chips are not centred in — the whole complaint this bar exists
-    // to answer. The height is a constant rather than padding around content
-    // for the same reason the counts never unmount, and it is the compact
-    // `PageHeader`'s `h-11` so its border lines up with the chat title bar's.
-    <div className="sticky top-0 z-10 mb-1 flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:px-3">
+    // Above the list's scroll container, not a row in it (`Sidebar.tsx` gives
+    // it a slot there): a header that scrolls away is a header the list can
+    // still push around, and a sticky one inside the scroller has the
+    // scrollbar running through it. The height is a constant rather than
+    // padding around content for the same reason the counts never unmount,
+    // and it is the compact `PageHeader`'s `h-11` so its border lines up with
+    // the chat title bar's.
+    <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:px-3">
       <Chip
         label={
           needsYou === 0

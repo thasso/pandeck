@@ -496,6 +496,10 @@ function SidebarImpl({
   // at the offset the last one was left at, and on a phone the whole sidebar is
   // unmounted the moment an object screen opens.
   const browserScrollRef = useListScroll({ listKey: `sidebar:${section}` });
+  // Where the attention list portals its counts bar (`SessionInbox`).
+  const [inboxHeaderSlot, setInboxHeaderSlot] = useState<HTMLElement | null>(
+    null,
+  );
 
   // Fetch Backlog Tasks, Projects, or Worktrees the first time the matching
   // section is shown. The Projects browser also embeds worktrees, so it needs
@@ -688,16 +692,15 @@ function SidebarImpl({
       ref={containerRef}
       className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
     >
-      {/* The shared inset every browser reads its first row in — except at the
-          TOP for a browser that draws a header bar there. That bar owns the
-          panel's top edge: it is sticky, and a sticky box cannot claim an edge
-          this container has padded away (Chromium clamps `top-0` to the content
-          box, and a negative margin on the bar does not move it). The padding
-          would then be an 8px strip above a pinned bar for rows to scroll
-          through, and a band the bar's own contents sit low in. */}
+      {/* The attention list's counts bar, above the scroll container: it stays
+          put without the scrollbar running through it. */}
+      {section === "sessions" ? (
+        <div ref={setInboxHeaderSlot} className="shrink-0" />
+      ) : null}
       <div
         ref={browserScrollRef}
-        // The attention list runs edge to edge: its rows are divided by
+        // The shared inset every browser reads its first row in — except the
+        // attention list, which runs edge to edge: its rows are divided by
         // hairlines, which a side inset would leave hanging in empty space.
         className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
           section === "sessions" ? "" : "px-1 pt-2 sm:px-2"
@@ -781,6 +784,7 @@ function SidebarImpl({
           <CalendarBrowser onOpenView={onOpenCalendarView} />
         ) : (
           <SessionInbox
+            headerSlot={inboxHeaderSlot}
             sessions={sessions}
             archivedSessionCount={archivedSessionCount}
             archivedSessionsLoaded={archivedSessionsLoaded}
