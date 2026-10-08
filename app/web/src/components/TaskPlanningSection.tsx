@@ -17,7 +17,7 @@ import {
   SelectItem,
   SelectTrigger,
 } from "./ui/select.tsx";
-import { Input } from "./ui/input.tsx";
+import { Calendar } from "./ui/calendar.tsx";
 import { Button } from "./ui/button.tsx";
 import { focusDateLabel } from "../lib/backlogFocus.ts";
 import { addDays, todayIso } from "./calendar/calendarDates.ts";
@@ -212,16 +212,7 @@ function DateProperty({
           <span className="text-muted-foreground">Not set</span>
         )}
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
-        {/* `max-w-full`: WebKit may size a date control from its native
-            chrome past the width it was given (Task-349). */}
-        <Input
-          type="date"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          aria-label={label}
-          className="w-full max-w-full"
-        />
+      <PopoverContent align="start" className="w-auto">
         <div className="flex flex-wrap items-center gap-1">
           {quickPicks ? (
             <>
@@ -254,8 +245,29 @@ function DateProperty({
             </Button>
           ) : null}
         </div>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        {/* The theme's own month grid (shadcn Calendar), not the browser's
+            date control: its font, icon and popup could not be themed. */}
+        <Calendar
+          mode="single"
+          aria-label={label}
+          selected={value ? fromIso(value) : undefined}
+          defaultMonth={fromIso(value || today)}
+          today={fromIso(today)}
+          onSelect={(date) => pick(date ? toIso(date) : "")}
+        />
+        <p className="max-w-56 text-xs text-muted-foreground">{hint}</p>
       </PopoverContent>
     </Popover>
   );
+}
+
+/** `YYYY-MM-DD` as a local calendar day (never UTC midnight). */
+function fromIso(iso: string): Date {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Date(year ?? 1970, (month ?? 1) - 1, day ?? 1);
+}
+
+function toIso(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
