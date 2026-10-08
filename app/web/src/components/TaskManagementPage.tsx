@@ -60,12 +60,21 @@ import {
   isPending,
   type LoadState,
 } from "../lib/loadState.ts";
-import { flattenTasks, nextStatus, type Task } from "../lib/backlogTree.ts";
+import { flattenTasks, type Task } from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
 import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
 import { todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+
+/** The statuses in the order a Task moves through them. */
+const TASK_STATUSES: Task["status"][] = ["todo", "doing", "done"];
 import { buildProjectsById } from "../lib/projectDisplay.ts";
 import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
@@ -248,14 +257,9 @@ export function TaskManagementPage({
     actions.saveTask({ id: item.id, status: item.status, projectId }, "edit");
   };
 
-  const cycleStatus = (item: Task) => {
-    actions.saveTask(
-      {
-        id: item.id,
-        status: nextStatus(item.status),
-      },
-      "status",
-    );
+  const setTaskStatus = (item: Task, status: Task["status"]) => {
+    if (status === item.status) return;
+    actions.saveTask({ id: item.id, status }, "status");
   };
 
   // Title and description are edited together, so they save together: one
@@ -442,7 +446,7 @@ export function TaskManagementPage({
               onRebaseAndReviewRun={actions.rebaseAndReviewWorkflowRun}
               onMergeRun={actions.mergeWorkflowRun}
               onCleanUpRun={actions.cleanUpWorkflowRun}
-              onCycle={() => cycleStatus(selectedTask)}
+              onSetStatus={(status) => setTaskStatus(selectedTask, status)}
               onEdit={(changes) => editTask(selectedTask, changes)}
               onSetProject={(projectId) =>
                 setTaskProject(selectedTask, projectId)
@@ -565,7 +569,7 @@ function TaskDetailPanel({
   onRebaseAndReviewRun,
   onMergeRun,
   onCleanUpRun,
-  onCycle,
+  onSetStatus,
   onEdit,
   onSetProject,
   statusMutation,
@@ -610,7 +614,7 @@ function TaskDetailPanel({
     options: { mergeMethod: PullRequestMergeMethod; deleteBranch: boolean },
   ) => void;
   onCleanUpRun: (id: string) => void;
-  onCycle: () => void;
+  onSetStatus: (status: Task["status"]) => void;
   onEdit: (changes: TaskTextChanges) => void;
   onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
@@ -695,7 +699,7 @@ function TaskDetailPanel({
               // The status control lives HERE on a wide layout and in the object
               // dock's action row on a phone — the dock is the object's action home
               // there, so this block shows the state and does not offer to change it.
-              onCycle={mobile ? undefined : onCycle}
+              onSetStatus={mobile ? undefined : onSetStatus}
             />
 
             {!runsLoaded ? (
@@ -829,7 +833,7 @@ function TaskDetailPanel({
  * target instead of a hover-only pencil — which on a touch device was an invisible
  * button you had to know about.
  *
- * `onCycle` present means this block owns the status control (wide layouts, which
+ * `onSetStatus` present means this block owns the status control (wide layouts, which
  * have no dock row). Absent, the status is not shown here AT ALL: the dock's action
  * row shows the state in the glyph you press to change it, and a chip above the
  * title would be the third place to read the same word. A done Task still reads as
@@ -842,7 +846,7 @@ function TaskTitleBlock({
   onNavigate,
   onSetProject,
   editor,
-  onCycle,
+  onSetStatus,
   statusMutation,
 }: {
   item: Task;
@@ -853,7 +857,7 @@ function TaskTitleBlock({
   onSetProject: (projectId: string | null) => void;
   /** The title and description editor, shown in the title's place while open. */
   editor: ReactNode;
-  onCycle?: (() => void) | undefined;
+  onSetStatus?: ((status: Task["status"]) => void) | undefined;
   statusMutation?: LoadState<true> | undefined;
 }) {
   const isDone = item.status === "done";
@@ -885,21 +889,41 @@ function TaskTitleBlock({
           stands, where it belongs, and how far its subtree is — plain muted
           facts, not chips. */}
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-        {onCycle ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            // Pulled out by its own padding so the glyph lines up with the
-            // title's first letter.
-            className="-ml-2 text-sm font-normal text-muted-foreground hover:text-foreground"
-            busy={isPending(statusMutation ?? idle())}
-            onClick={onCycle}
-            title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-            aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-          >
-            <TaskStatusIcon status={item.status} size={14} />
-            {TASK_STATUS_LABEL[item.status]}
-          </Button>
+        {onSetStatus ? (
+          // A menu of the three statuses rather than a click that cycles:
+          // which one comes next is not something to have to remember.
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  // Pulled out by its own padding so the glyph lines up with
+                  // the title's first letter.
+                  className="-ml-2 text-sm font-normal text-muted-foreground hover:text-foreground"
+                  busy={isPending(statusMutation ?? idle())}
+                  aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Change status`}
+                />
+              }
+            >
+              <TaskStatusIcon status={item.status} size={14} />
+              {TASK_STATUS_LABEL[item.status]}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-40">
+              {TASK_STATUSES.map((status) => (
+                <DropdownMenuItem
+                  key={status}
+                  aria-current={status === item.status || undefined}
+                  onClick={() => onSetStatus(status)}
+                >
+                  <TaskStatusIcon status={status} size={14} />
+                  <span className={status === item.status ? "font-medium" : ""}>
+                    {TASK_STATUS_LABEL[status]}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : (
           // On a phone the dock's action row changes the status; here it is
           // only read.
