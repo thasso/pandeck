@@ -845,7 +845,7 @@ export function SessionInbox({
                   size="sm"
                   aria-expanded={settledHistory.includes(id)}
                   onClick={() => toggleSettledHistory(id)}
-                  className="w-full justify-start"
+                  className="w-full justify-start rounded-none bg-clip-border"
                 >
                   <ChevronRight
                     data-icon="inline-start"
@@ -877,7 +877,7 @@ export function SessionInbox({
     view.active.length === 0;
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-px">
+    <div ref={containerRef} className="flex flex-col">
       {/* Background work runs outside any turn and often outside the session you
           are looking at, so the browser states the global count where every
           session list is read, and links to the registry. Derived from the
@@ -900,7 +900,7 @@ export function SessionInbox({
         <section
           aria-labelledby="session-inbox-needs-you"
           data-inbox-needs-you
-          className="mb-1 flex flex-col gap-px"
+          className="mb-1 flex flex-col"
         >
           {/* The label without the count: the count is the bar's, where it is
               stated whether or not this block exists. */}
@@ -921,7 +921,7 @@ export function SessionInbox({
           render={<section aria-labelledby="session-inbox-settled" />}
           open={settledExpanded}
           onOpenChange={() => setSettledOpen((value) => !value)}
-          className="mt-1 flex flex-col gap-px"
+          className="mt-1 flex flex-col"
         >
           <ShelfTrigger
             id="session-inbox-settled"
@@ -933,7 +933,7 @@ export function SessionInbox({
                 how much more there is once it is open. */}
             Settled
           </ShelfTrigger>
-          <CollapsibleContent className="flex flex-col gap-px">
+          <CollapsibleContent className="flex flex-col">
             {view.settled.map((session) => (
               <InboxShelfRow
                 key={session.id}
@@ -974,7 +974,7 @@ export function SessionInbox({
           render={<section aria-labelledby="session-inbox-archived" />}
           open={showArchived}
           onOpenChange={setShowArchived}
-          className="mt-1 flex flex-col gap-px"
+          className="mt-1 flex flex-col"
         >
           <ShelfTrigger
             id="session-inbox-archived"
@@ -985,7 +985,7 @@ export function SessionInbox({
           </ShelfTrigger>
           <CollapsibleContent>
             {archivedSessionsLoaded ? (
-              <div className="flex flex-col gap-px">
+              <div className="flex flex-col">
                 {archivedSessions.map((session) => (
                   <InboxShelfRow
                     key={session.id}

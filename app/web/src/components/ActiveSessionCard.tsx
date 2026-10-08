@@ -342,7 +342,9 @@ function ActiveSessionCardImpl({
           onDelete(session.id);
         }
       }}
-      className={`cursor-pointer select-none overflow-hidden text-left hover:bg-muted ${
+      // Square: the list's rows are divided by hairlines, and a rounded hover
+      // or selected fill would pull away from them at the corners.
+      className={`cursor-pointer select-none overflow-hidden rounded-none text-left hover:bg-muted ${
         flipped ? "[perspective:900px]" : ""
       }`}
     >

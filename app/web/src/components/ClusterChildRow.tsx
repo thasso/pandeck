@@ -175,7 +175,7 @@ function ClusterChildRowImpl({
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      className="cursor-pointer select-none flex-nowrap text-left hover:bg-muted"
+      className="cursor-pointer select-none flex-nowrap rounded-none text-left hover:bg-muted"
     >
       <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
         <AgentIcon />
