@@ -2362,7 +2362,9 @@ export const Composer = memo(function Composer({
         {(runtimeLine || contextInfo?.context) && !hidden ? (
           <ComposerLedge joined edge="bottom">
             {/* `@container`: the context sizes join only where they fit. */}
-            <div className="@container relative flex h-7 min-w-0 items-center justify-center gap-1.5 px-2.5 text-sm text-muted-foreground">
+            {/* Shorter and smaller than the strips on the shelf above: a
+                footnote to the card, not a row to act on. */}
+            <div className="@container relative flex h-5 min-w-0 items-center justify-center gap-1 px-2.5 text-xs text-muted-foreground">
               {/* The strip doubles as the context gauge: a faint fill from the
                   left as wide as the window is full, behind the text (the
                   ledge is its stacking context), warning-tinted from 80%. */}
@@ -2380,7 +2382,7 @@ export const Composer = memo(function Composer({
                   {model ? (
                     <ProviderIcon
                       provider={model.provider}
-                      size={14}
+                      size={12}
                       className="shrink-0"
                     />
                   ) : null}
