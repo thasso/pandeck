@@ -453,7 +453,7 @@ function ActiveSessionCardImpl({
                   dismiss, a stalled tree — never wraps: it sits after them,
                   takes its width first and only truncates its own label. The
                   row's controls sit outside both and never do. */}
-              <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5">
+              <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
                 <div
                   ref={signalRowRef}
                   className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
@@ -471,7 +471,9 @@ function ActiveSessionCardImpl({
                         e.stopPropagation();
                         onToggleCluster?.(session.id);
                       }}
-                      className="cursor-pointer"
+                      // Muted like the context row above: the line's neutral
+                      // facts recede, coloured states keep their tone.
+                      className="cursor-pointer text-muted-foreground"
                     >
                       {clusterWorking ? (
                         <Spinner size="xs" />
@@ -522,6 +524,7 @@ function ActiveSessionCardImpl({
                       role="img"
                       aria-label={backgroundText}
                       title={backgroundText}
+                      className="text-muted-foreground"
                     >
                       <Activity aria-hidden="true" />
                       <span>
