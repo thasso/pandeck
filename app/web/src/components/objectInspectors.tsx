@@ -450,8 +450,10 @@ function InspectorSessionsSection({
             key={card.session.id}
             card={card}
             now={now}
-            // Under the section's icon rather than at the panel's edge.
-            inset={0.75}
+            // The chevron on the Details labels' line: the panel's 0.75rem and
+            // the property list's 0.25rem, less the toggle's own 1px border and
+            // 0.625rem padding.
+            inset={0.3125}
             onOpen={(id) => {
               onOpenSession(id);
               onAct?.();
