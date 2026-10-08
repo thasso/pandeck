@@ -24,6 +24,7 @@ import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
+import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
 import { EmptyBox, PaneLoading } from "./common/load.tsx";
@@ -101,7 +102,7 @@ function sessionTitle(session: SessionListItem): string {
  * durations written as literal classes on the wrapper (Tailwind only sees class
  * names it can read in the source, so those cannot be interpolated from here).
  */
-const SETTLE_EXIT_MS = 350;
+const SETTLE_EXIT_MS = EXIT_STAGE_MS;
 
 /** How long a card takes to travel to its new place when the order changes. */
 const REORDER_MS = 220;
@@ -899,7 +900,10 @@ export function SessionInbox({
     view.active.length === 0;
 
   return (
-    <div ref={containerRef} className={`flex flex-col ${headerSlot ? "pt-1" : ""}`}>
+    <div
+      ref={containerRef}
+      className={`flex flex-col ${headerSlot ? "pt-1" : ""}`}
+    >
       {/* Background work runs outside any turn and often outside the session you
           are looking at, so the browser states the global count where every
           session list is read, and links to the registry. Derived from the
@@ -1066,46 +1070,6 @@ function ShelfTrigger({
       />
       {children}
     </CollapsibleTrigger>
-  );
-}
-
-/**
- * The two nested stages a row leaves through, so the row leaves BEFORE the list
- * closes behind it: the inner box slides out to the left, then the grid row
- * collapses from 1fr to 0fr and everything below travels up. A row that is not
- * leaving carries no transition at all, so an ordinary list update (a new
- * session, a rename) still lands instantly.
- *
- * `data-session-leaving` is what keeps a row that has left out of keyboard
- * traversal while it is still mounted.
- */
-function ExitStage({
-  leaving,
-  children,
-}: {
-  leaving: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      data-session-leaving={leaving ? "true" : undefined}
-      inert={leaving}
-      className={`grid ${
-        leaving
-          ? "grid-rows-[0fr] motion-safe:transition-all motion-safe:delay-200 motion-safe:duration-150 motion-safe:ease-out"
-          : "grid-rows-[1fr]"
-      }`}
-    >
-      <div
-        className={`min-h-0 overflow-hidden ${
-          leaving
-            ? "-translate-x-full opacity-0 motion-safe:transition motion-safe:duration-200 motion-safe:ease-in"
-            : ""
-        }`}
-      >
-        {children}
-      </div>
-    </div>
   );
 }
 
