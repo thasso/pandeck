@@ -697,8 +697,10 @@ function SidebarImpl({
           through, and a band the bar's own contents sit low in. */}
       <div
         ref={browserScrollRef}
-        className={`min-h-0 flex-1 overflow-y-auto px-1 pb-2 sm:px-2 ${
-          section === "sessions" ? "" : "pt-2"
+        // The attention list runs edge to edge: its rows are divided by
+        // hairlines, which a side inset would leave hanging in empty space.
+        className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
+          section === "sessions" ? "" : "px-1 pt-2 sm:px-2"
         }`}
         style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
       >

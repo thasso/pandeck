@@ -51,8 +51,9 @@ export function SessionInboxBar({
   return (
     // Sticky rather than a row of the list: the sidebar has ONE scroll
     // container for every browser, and a header that scrolls away is a header
-    // the list can still push around. `-mx` bleeds it to the panel's side
-    // edges; the TOP edge is the sidebar's to give, and it does
+    // the list can still push around. The sidebar gives this list no side
+    // inset, so it spans the panel; the TOP edge is the sidebar's to give, and
+    // it does
     // (`Sidebar.tsx`) — a sticky box cannot take it, because Chromium clamps
     // `top-0` to the scroll container's CONTENT box, which is below its
     // padding, and a negative margin does not move it (measured: the box
@@ -62,7 +63,7 @@ export function SessionInboxBar({
     // to answer. The height is a constant rather than padding around content
     // for the same reason the counts never unmount, and it is the compact
     // `PageHeader`'s `h-11` so its border lines up with the chat title bar's.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
+    <div className="sticky top-0 z-10 mb-1 flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:px-3">
       <Chip
         label={
           needsYou === 0

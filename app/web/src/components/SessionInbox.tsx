@@ -906,7 +906,7 @@ export function SessionInbox({
               stated whether or not this block exists. */}
           <h2
             id="session-inbox-needs-you"
-            className="px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide text-primary"
+            className="px-2.5 pb-0.5 text-xs font-semibold uppercase tracking-wide text-primary"
           >
             Needs you
           </h2>
