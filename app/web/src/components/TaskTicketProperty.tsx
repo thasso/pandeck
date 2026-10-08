@@ -264,7 +264,9 @@ interface TicketDetails {
 }
 
 /** The linked ticket's title, status and link, looked up when it changes. */
-function useTicketDetails(ticket: TaskTicket | null): TicketDetails | null {
+export function useTicketDetails(
+  ticket: TaskTicket | null,
+): TicketDetails | null {
   const [details, setDetails] = useState<TicketDetails | null>(null);
   // The ticket's identity as strings: the object is rebuilt per render.
   const source = ticket?.source;

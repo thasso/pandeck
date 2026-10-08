@@ -81,6 +81,8 @@ import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
 import { todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
+import { useTicketDetails, type TaskTicket } from "./TaskTicketProperty.tsx";
+import { githubIssueUrl } from "./TaskContextSections.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -990,7 +992,18 @@ function TaskTitleBlock({
   const planned = scheduledLabel(item, today);
   const due = dueLabel(item, today);
   const overdue = Boolean(item.dueDate && item.dueDate < today);
+  // The Task's ticket (the inspector's Ticket row picks one; a Task an agent
+  // gave several shows its first and counts the rest), linked to where it lives.
   const tickets = [...(item.jiraIssueKeys ?? []), ...(item.githubIssues ?? [])];
+  const ticket: TaskTicket | null = item.jiraIssueKeys?.[0]
+    ? { source: "jira", ref: item.jiraIssueKeys[0] }
+    : item.githubIssues?.[0]
+      ? { source: "github", ref: item.githubIssues[0] }
+      : null;
+  const ticketDetails = useTicketDetails(ticket);
+  const ticketUrl =
+    ticketDetails?.url ??
+    (ticket?.source === "github" ? githubIssueUrl(ticket.ref) : undefined);
   return (
     <div className="mb-6 flex flex-col gap-1.5">
       {editor ?? (
@@ -1230,15 +1243,34 @@ function TaskTitleBlock({
             {item.priority} priority
           </span>
         ) : null}
-        {tickets.length > 0 ? (
-          <span
-            className="inline-flex min-w-0 items-center gap-1.5"
-            title={tickets.join(", ")}
-          >
+        {ticket ? (
+          <span className="inline-flex min-w-0 items-center gap-1.5">
             <Ticket size={14} aria-hidden className="shrink-0" />
-            <span className="truncate font-mono text-xs">
-              {tickets.join(" ")}
-            </span>
+            {ticketUrl ? (
+              <a
+                href={ticketUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={
+                  ticketDetails?.title
+                    ? `${ticket.ref} — ${ticketDetails.title}`
+                    : `Open ${ticket.ref}`
+                }
+                className="truncate font-mono text-xs text-foreground underline underline-offset-3 hover:text-primary"
+              >
+                {ticket.ref}
+              </a>
+            ) : (
+              <span className="truncate font-mono text-xs">{ticket.ref}</span>
+            )}
+            {tickets.length > 1 ? (
+              <span
+                className="shrink-0 text-xs"
+                title={tickets.slice(1).join(", ")}
+              >
+                +{tickets.length - 1}
+              </span>
+            ) : null}
           </span>
         ) : null}
       </div>
