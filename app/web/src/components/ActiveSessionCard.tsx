@@ -413,7 +413,9 @@ function ActiveSessionCardImpl({
                 {age.label}
               </span>
             </div>
-            <div className="flex min-w-0 items-center gap-1.5">
+            {/* A little air above and below: the title is the card's line, and
+                the two small rows around it read as its context. */}
+            <div className="flex min-w-0 items-center gap-1.5 py-1">
               {/* One leading slot: an Idle session shows what it IS, any
                   other state shows what it needs. Fixed width, so every
                   title starts at the same x. */}
