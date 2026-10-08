@@ -1129,6 +1129,25 @@ function compareSessionCards(a: SessionInboxCard, b: SessionInboxCard): number {
   return compareSessionActivity(a, b);
 }
 
+/**
+ * The order a LIST shows sessions in: what needs the user first, then newest
+ * created first, ties by id. Nothing about a session's activity moves it —
+ * starting a run, finishing one, being read — so a list holds still while it
+ * is being read, and its state shows on the row instead. (`compareSessionCards`
+ * stays the urgency order for choosing which peer speaks for a cluster.)
+ */
+function compareSessionsForList(
+  a: SessionInboxCard,
+  b: SessionInboxCard,
+): number {
+  const needsYou =
+    Number(b.tier === "needs-you") - Number(a.tier === "needs-you");
+  if (needsYou !== 0) return needsYou;
+  const created = b.session.createdAt - a.session.createdAt;
+  if (created !== 0) return created;
+  return a.session.id < b.session.id ? -1 : a.session.id > b.session.id ? 1 : 0;
+}
+
 /** Latest activity first, ties broken by id so the order is stable. */
 function compareSessionActivity(
   a: SessionInboxCard,
@@ -1736,7 +1755,7 @@ export function spawnedSessionsView(options: {
           ...(nested ? { peers: nested } : {}),
         };
       })
-      .sort(compareSessionActivity);
+      .sort(compareSessionsForList);
     // History after what is live, among the same siblings.
     return [
       ...kids.filter((card) => live.has(card.session.id)),
@@ -1910,29 +1929,24 @@ function workflowRunItem(
 }
 
 /**
- * Ordering across BOTH kinds of item, on the same rule the cards alone used:
- * tier first, then latest meaningful activity, then a stable id tie-break. A
- * run is ordered by when it last moved, never by its phase — a formal run is
- * not more urgent than a question just for being formal.
+ * Ordering across BOTH kinds of item, within one group (the view has already
+ * split what needs the user from the rest): newest created first, then a
+ * stable id tie-break. Deliberately NOT by tier or activity — a card that
+ * jumped whenever it started, finished or was read made the list move under
+ * the reader; its state is on the card instead.
  */
 function compareInboxItems(a: SessionInboxItem, b: SessionInboxItem): number {
-  const tier = TIER_RANK[itemTier(a)] - TIER_RANK[itemTier(b)];
-  if (tier !== 0) return tier;
-  const activity = itemActivityAt(b) - itemActivityAt(a);
-  if (activity !== 0) return activity;
+  const created = itemCreatedAt(b) - itemCreatedAt(a);
+  if (created !== 0) return created;
   const left = inboxItemId(a);
   const right = inboxItemId(b);
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function itemTier(item: SessionInboxItem): SessionInboxTier {
-  return item.kind === "run" ? item.tier : item.card.tier;
-}
-
-function itemActivityAt(item: SessionInboxItem): number {
+function itemCreatedAt(item: SessionInboxItem): number {
   return item.kind === "run"
-    ? item.run.updatedAt
-    : activityAt(item.card.session);
+    ? item.run.createdAt
+    : item.card.session.createdAt;
 }
 
 /** One candidate session while the spawn forest is being folded. */
@@ -2192,7 +2206,7 @@ function clusterTree(
         ...(nested ? { peers: nested } : {}),
       });
     }
-    kids.sort(compareSessionCards);
+    kids.sort(compareSessionsForList);
     if (!withSettled) return kids;
     // History after what is live, among the same siblings.
     const settled: SessionInboxCard[] = [];
@@ -2202,7 +2216,7 @@ function clusterTree(
       seen.add(childId);
       settled.push({ ...child.card, depth });
     }
-    return [...kids, ...settled.sort(compareSessionCards)];
+    return [...kids, ...settled.sort(compareSessionsForList)];
   };
   return depthFirst(rootId, childrenOf);
 }
