@@ -176,7 +176,12 @@ export function ToolCallBlock({
           <Button
             variant={isError ? "destructive" : "outline"}
             size="sm"
-            className="w-full min-w-0 justify-start"
+            // Open, the body continues its border: a square bottom meets the
+            // body's side borders with no notch at the corners.
+            className={cx(
+              "w-full min-w-0 justify-start",
+              isOpen && children != null && "rounded-b-none",
+            )}
           />
         }
         aria-controls={bodyId}
@@ -233,7 +238,11 @@ export function ToolCallBlock({
           id={bodyId}
           aria-busy={!everNear || undefined}
           className={cx(
-            "rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm",
+            "overflow-hidden rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm",
+            // An output's line count and reveal (`CollapsibleOutput`) are a bar
+            // across the box rather than loose text under it; the last one
+            // closes the box, so the body drops its bottom padding for it.
+            "[&_[data-output-footer]]:-mx-3 [&_[data-output-footer]]:mt-2 [&_[data-output-footer]]:min-h-7 [&_[data-output-footer]]:border-t [&_[data-output-footer]]:bg-muted/50 [&_[data-output-footer]]:pr-0.5 [&_[data-output-footer]]:pl-3 has-[[data-output-footer]]:pb-0",
             isError && "border-destructive/30",
           )}
         >

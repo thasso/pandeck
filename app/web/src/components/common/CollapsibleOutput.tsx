@@ -182,72 +182,76 @@ export function CollapsibleOutput({
         )}
       </div>
       {(collapsible || focusNotice || footerActions) && (
-        <div className="flex flex-wrap items-center gap-2">
-          {collapsible && (
-            <>
-              {hiddenBefore > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    setShown({
-                      key: baseKey,
-                      range: { from: Math.max(1, from - chunkLines), to },
-                    })
-                  }
-                >
-                  Show {Math.min(chunkLines, hiddenBefore)} earlier lines
-                </Button>
-              )}
-              {hiddenAfter > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    setShown({
-                      key: baseKey,
-                      range: { from, to: Math.min(total, to + chunkLines) },
-                    })
-                  }
-                >
-                  Show {Math.min(chunkLines, hiddenAfter)} more lines
-                </Button>
-              )}
-              {hiddenBefore + hiddenAfter > chunkLines && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    setShown({ key: baseKey, range: { from: 1, to: total } })
-                  }
-                >
-                  Show all
-                </Button>
-              )}
-              {atEnd && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShown({ key: baseKey, range: base })}
-                >
-                  Show less
-                </Button>
-              )}
-              <span className="text-sm text-muted-foreground">
-                {windowed || from > 1
-                  ? `lines ${from + lineNumberOffset}–${to + lineNumberOffset} of ${total + lineNumberOffset}`
-                  : `${visibleCount} of ${total} lines`}
-              </span>
-            </>
-          )}
-          {focusNotice ? (
-            <span className="text-sm text-muted-foreground">{focusNotice}</span>
+        // A bar of its own under the output: what is shown on the left, the
+        // reveal and any host actions on the right. A tool call's body draws
+        // it edge to edge along its bottom (`ToolCallBlock`).
+        <div
+          data-output-footer=""
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+        >
+          {collapsible ? (
+            <span>
+              {windowed || from > 1
+                ? `Lines ${from + lineNumberOffset}–${to + lineNumberOffset} of ${total + lineNumberOffset}`
+                : `${visibleCount} of ${total} lines`}
+            </span>
           ) : null}
-          {footerActions ? (
-            <div className="ml-auto flex items-center gap-1">
-              {footerActions}
-            </div>
-          ) : null}
+          {focusNotice ? <span>{focusNotice}</span> : null}
+          <div className="ml-auto flex flex-wrap items-center gap-0.5">
+            {collapsible && (
+              <>
+                {hiddenBefore > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() =>
+                      setShown({
+                        key: baseKey,
+                        range: { from: Math.max(1, from - chunkLines), to },
+                      })
+                    }
+                  >
+                    Show {Math.min(chunkLines, hiddenBefore)} earlier
+                  </Button>
+                )}
+                {hiddenAfter > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() =>
+                      setShown({
+                        key: baseKey,
+                        range: { from, to: Math.min(total, to + chunkLines) },
+                      })
+                    }
+                  >
+                    Show {Math.min(chunkLines, hiddenAfter)} more
+                  </Button>
+                )}
+                {hiddenBefore + hiddenAfter > chunkLines && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() =>
+                      setShown({ key: baseKey, range: { from: 1, to: total } })
+                    }
+                  >
+                    Show all
+                  </Button>
+                )}
+                {atEnd && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setShown({ key: baseKey, range: base })}
+                  >
+                    Show less
+                  </Button>
+                )}
+              </>
+            )}
+            {footerActions}
+          </div>
         </div>
       )}
     </div>
