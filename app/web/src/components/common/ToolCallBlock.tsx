@@ -237,8 +237,12 @@ export function ToolCallBlock({
         <CollapsibleContent
           id={bodyId}
           aria-busy={!everNear || undefined}
+          // The body is the only surface: code shells drop their own frame
+          // inside it (`index.css`), and plain output reads in the same colour
+          // as highlighted output rather than muted beside it.
+          data-tool-body=""
           className={cx(
-            "overflow-hidden rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm",
+            "overflow-hidden rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm [&_pre]:text-foreground",
             // An output's line count and reveal (`CollapsibleOutput`) are a bar
             // across the box rather than loose text under it; the last one
             // closes the box, so the body drops its bottom padding for it.

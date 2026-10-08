@@ -852,9 +852,13 @@ body {
 .tool-code-row {
   display: block;
 }
+/* The same gutter as a numbered `.shiki` excerpt (`.cb-numbered`), so a diff's
+   and a read's line numbers stand in one column. */
 .tool-code-num {
   display: inline-block;
-  margin-right: 0.75rem;
+  min-width: 2rem;
+  text-align: right;
+  margin-right: 1rem;
   color: var(--muted-foreground);
 }
 .tool-code-sign {
@@ -880,6 +884,16 @@ body {
    colour, so WHAT changed reads at a glance (the @pierre/diffs `word-alt`
    behaviour the worktree surfaces use). Adjacent marks are merged upstream, so
    these are spans rather than per-token boxes. */
+/* Inside an expanded tool call the body (`ToolCallBlock`) is the one surface:
+   a code shell drops its own frame there, so a bash run, a diff, a file excerpt
+   and a JSON tree all sit at the body's inset in the same type, instead of
+   some drawing a second box inside it. After the `.dark` rules, which it must
+   outrank. */
+[data-tool-body] :is(.shiki, .tool-code) {
+  background-color: transparent;
+  border-radius: 0;
+  padding: 0;
+}
 .tool-code .tool-diff-add .tool-diff-word {
   background-color: color-mix(in oklab, var(--success) 30%, transparent);
   border-radius: 3px;
