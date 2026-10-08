@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  ArrowUpRight,
   CalendarCheck,
   Check,
   ClipboardList,
@@ -64,7 +65,7 @@ import { BacklogList } from "./BacklogList.tsx";
 import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
 import { todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
-import { TaskProjectMeta } from "./TaskRowBody.tsx";
+import { ProjectSelector } from "./ProjectSelector.tsx";
 import { buildProjectsById } from "../lib/projectDisplay.ts";
 import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
@@ -242,6 +243,10 @@ export function TaskManagementPage({
   const listScrollRef = useListScroll({
     listKey: detailOnly ? null : "page:tasks",
   });
+
+  const setTaskProject = (item: Task, projectId: string | null) => {
+    actions.saveTask({ id: item.id, status: item.status, projectId }, "edit");
+  };
 
   const cycleStatus = (item: Task) => {
     actions.saveTask(
@@ -439,6 +444,9 @@ export function TaskManagementPage({
               onCleanUpRun={actions.cleanUpWorkflowRun}
               onCycle={() => cycleStatus(selectedTask)}
               onEdit={(changes) => editTask(selectedTask, changes)}
+              onSetProject={(projectId) =>
+                setTaskProject(selectedTask, projectId)
+              }
               statusMutation={
                 taskMutations[taskMutationKey(selectedTask.id, "status")]
               }
@@ -559,6 +567,7 @@ function TaskDetailPanel({
   onCleanUpRun,
   onCycle,
   onEdit,
+  onSetProject,
   statusMutation,
   editMutation,
   onRetryDetail,
@@ -603,6 +612,7 @@ function TaskDetailPanel({
   onCleanUpRun: (id: string) => void;
   onCycle: () => void;
   onEdit: (changes: TaskTextChanges) => void;
+  onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
   editMutation?: LoadState<true> | undefined;
   onRetryDetail: () => void;
@@ -669,6 +679,7 @@ function TaskDetailPanel({
               progress={progress}
               projectsById={projectsById}
               onNavigate={onNavigate}
+              onSetProject={onSetProject}
               editor={
                 editing ? (
                   <TaskTextEditor
@@ -829,6 +840,7 @@ function TaskTitleBlock({
   progress,
   projectsById,
   onNavigate,
+  onSetProject,
   editor,
   onCycle,
   statusMutation,
@@ -837,6 +849,8 @@ function TaskTitleBlock({
   progress?: { done: number; total: number } | undefined;
   projectsById: Map<string, ProjectRecord>;
   onNavigate?: ((path: string) => void) | undefined;
+  /** Assign, change or clear the Task's Project from the facts line. */
+  onSetProject: (projectId: string | null) => void;
   /** The title and description editor, shown in the title's place while open. */
   editor: ReactNode;
   onCycle?: (() => void) | undefined;
@@ -844,13 +858,22 @@ function TaskTitleBlock({
 }) {
   const isDone = item.status === "done";
   const statusError = errorOf(statusMutation ?? idle());
+  // The picker offers the active Projects; an archived one still names itself
+  // when it is the current value (`ProjectSelector`).
+  const activeProjects = useMemo(
+    () =>
+      [...projectsById.values()].filter(
+        (project) => project.status !== "archived",
+      ),
+    [projectsById],
+  );
   const today = todayIso(useUserTimeZone());
   const planned = scheduledLabel(item, today);
   const due = dueLabel(item, today);
   const overdue = Boolean(item.dueDate && item.dueDate < today);
   const tickets = [...(item.jiraIssueKeys ?? []), ...(item.githubIssues ?? [])];
   return (
-    <div className="@container mb-6 flex flex-col gap-1.5">
+    <div className="mb-6 flex flex-col gap-1.5">
       {editor ?? (
         <h1
           className={`text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
@@ -885,16 +908,29 @@ function TaskTitleBlock({
             {TASK_STATUS_LABEL[item.status]}
           </span>
         )}
-        {item.projectId ? (
-          <TaskProjectMeta
-            projectId={item.projectId}
+        {/* Always present, a picker either way: a Task with no Project says
+            so, and setting one is a click away rather than in the inspector. */}
+        <span className="inline-flex min-w-0 items-center gap-0.5">
+          <ProjectSelector
+            currentId={item.projectId ?? null}
+            projects={activeProjects}
             projectsById={projectsById}
-            href={projectPath(item.projectId)}
-            onNavigate={onNavigate}
-            iconSize={14}
-            showName
+            onChange={(projectId) => onSetProject(projectId || null)}
+            label={null}
+            emptyLabel="No project"
+            className="-ml-2 h-auto min-w-0 py-0.5 text-sm font-normal text-muted-foreground hover:text-foreground"
           />
-        ) : null}
+          {item.projectId && onNavigate ? (
+            <IconButton
+              label="Open project"
+              size="icon-xs"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => onNavigate(projectPath(item.projectId!))}
+            >
+              <ArrowUpRight />
+            </IconButton>
+          ) : null}
+        </span>
         {progress ? (
           <span className="shrink-0">
             {progress.done}/{progress.total} subtasks

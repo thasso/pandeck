@@ -39,6 +39,7 @@ export function ProjectSelector({
   placement = "auto",
   defaultOpen = false,
   className,
+  grow = false,
 }: {
   currentId: string | null | undefined;
   projects: ProjectRecord[];
@@ -52,6 +53,8 @@ export function ProjectSelector({
   placement?: "top" | "bottom" | "auto";
   defaultOpen?: boolean;
   className?: string;
+  /** Fill the row it sits in (a property list's value column). */
+  grow?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const selectedId = currentId?.trim() || null;
@@ -64,7 +67,7 @@ export function ProjectSelector({
     triggerTitle ?? (selectedId ? "Change project" : "Assign project");
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div className={`flex min-w-0 items-center gap-2 ${grow ? "flex-1" : ""}`}>
       {label ? (
         <span className="text-sm font-medium text-muted-foreground">
           {label}

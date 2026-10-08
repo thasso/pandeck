@@ -116,6 +116,7 @@ export function TaskContextSections({
                 }
                 label={null}
                 emptyLabel="None"
+                grow
                 className={`${PROPERTY_TRIGGER} min-w-0 flex-1 justify-start`}
               />
               {task.projectId && onOpenProject ? (

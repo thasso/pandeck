@@ -523,20 +523,11 @@ export function TaskProjectMeta({
   projectsById,
   href,
   onNavigate,
-  iconSize = 11,
-  showName = false,
 }: {
   projectId: string;
   projectsById: Map<string, ProjectRecord>;
   href: string | null;
   onNavigate?: ((path: string) => void) | undefined;
-  /** The glyph's size: 11 on a row's meta line, larger beside larger text. */
-  iconSize?: number;
-  /**
-   * Follow the key with the Project's full name where the host's container
-   * (`@container`) has room for it — a page, not a row.
-   */
-  showName?: boolean;
 }) {
   const project = projectsById.get(projectId);
   const { label, shortLabel, known } = resolveProjectDisplay(
@@ -547,23 +538,18 @@ export function TaskProjectMeta({
     <MetaLink
       href={href ?? ""}
       title={known ? label : `Unknown project: ${projectId}`}
-      className={`inline-flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground ${showName ? "max-w-full" : "max-w-1/2"}`}
+      className="inline-flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
       onNavigate={href ? onNavigate : undefined}
     >
       <FolderKanban
-        size={iconSize}
+        size={11}
         className="shrink-0"
         style={
           known ? { color: projectColor(project ?? projectId).dot } : undefined
         }
         aria-hidden
       />
-      <span className="truncate">
-        {shortLabel}
-        {showName && known && label !== shortLabel ? (
-          <span className="hidden @[24rem]:inline"> · {label}</span>
-        ) : null}
-      </span>
+      <span className="truncate">{shortLabel}</span>
     </MetaLink>
   );
 }
