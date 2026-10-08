@@ -4,7 +4,6 @@ import {
   CircleCheck,
   CircleDot,
   ExternalLink,
-  FolderKanban,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -38,6 +37,8 @@ import { Button } from "./ui/button.tsx";
 import { Item } from "./ui/item.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
   TaskPlanningSection,
   type TaskPlanningPatch,
 } from "./TaskPlanningSection.tsx";
@@ -94,37 +95,38 @@ export function TaskContextSections({
     <div className="space-y-4">
       {/* Planning leads: it is what the Backlog's Focus view reads, and the
           fields most often changed on a Task that already exists. */}
-      <TaskPlanningSection task={task} onPatch={onPatch} />
-
-      <InspectorSection
-        id="project"
-        storageScope={`task:${task.id}`}
-        title="Project"
-        icon={<FolderKanban size={13} />}
-        summary={
-          task.projectId
-            ? (projectsById.get(task.projectId)?.key ?? task.projectId)
-            : undefined
+      <TaskPlanningSection
+        task={task}
+        onPatch={onPatch}
+        leading={
+          <>
+            <PropertyLabel>Project</PropertyLabel>
+            <div className="flex min-w-0 items-center gap-0.5">
+              <ProjectSelector
+                currentId={task.projectId ?? null}
+                projects={projects}
+                projectsById={projectsById}
+                onChange={(projectId) =>
+                  onPatch({ projectId: projectId || null })
+                }
+                label={null}
+                emptyLabel="None"
+                className={`${PROPERTY_TRIGGER} min-w-0 flex-1 justify-start`}
+              />
+              {task.projectId && onOpenProject ? (
+                <IconButton
+                  label="Open project"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => onOpenProject(task.projectId!)}
+                >
+                  <ArrowUpRight />
+                </IconButton>
+              ) : null}
+            </div>
+          </>
         }
-      >
-        <div className="flex items-center gap-1 px-1">
-          <ProjectSelector
-            currentId={task.projectId ?? null}
-            projects={projects}
-            projectsById={projectsById}
-            onChange={(projectId) => onPatch({ projectId: projectId || null })}
-            label={null}
-          />
-          {task.projectId && onOpenProject ? (
-            <IconButton
-              label="Open project"
-              onClick={() => onOpenProject(task.projectId!)}
-            >
-              <ArrowUpRight />
-            </IconButton>
-          ) : null}
-        </div>
-      </InspectorSection>
+      />
 
       <JiraTicketsSection
         taskId={task.id}

@@ -49,38 +49,28 @@ const PRIORITIES: TaskPriority[] = ["low", "normal", "high", "urgent"];
 export function TaskPlanningSection({
   task,
   onPatch,
+  leading,
 }: {
   task: TaskSummary;
   onPatch: (patch: TaskPlanningPatch) => void;
+  /** Property rows (label, value) drawn above priority — the Project. */
+  leading?: ReactNode;
 }) {
   const today = todayIso(useUserTimeZone());
   const priority = task.priority ?? "normal";
-  // The section's collapsed summary states the plan, then the deadline, then a
-  // non-default priority — the same order of importance the Focus row uses, so
-  // the two surfaces cannot describe one Task differently.
-  const summary =
-    [
-      task.scheduledFor ? focusDateLabel(task.scheduledFor, today) : null,
-      task.dueDate
-        ? `due ${focusDateLabel(task.dueDate, today).toLowerCase()}`
-        : null,
-      priority !== "normal" ? priority : null,
-    ]
-      .filter(Boolean)
-      .join(" · ") || undefined;
 
   return (
     <InspectorSection
       id="planning"
       storageScope={`task:${task.id}`}
-      title="Planning"
+      title="Details"
       icon={<CalendarClock size={13} />}
-      summary={summary}
     >
       {/* A property list: one line per field, the label on the left and the
           value on the right as its own quiet control — a picker opens from
           it rather than every option standing on the panel. */}
       <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-y-0.5 px-1">
+        {leading}
         <PropertyLabel>Priority</PropertyLabel>
         <Select
           value={priority}
@@ -132,10 +122,10 @@ export function TaskPlanningSection({
 
 /** A value control in the property list: borderless, filled on hover, the
  *  width of its column so every value starts at the same x. */
-const PROPERTY_TRIGGER =
+export const PROPERTY_TRIGGER =
   "h-7 w-full justify-between border-transparent bg-transparent px-2 font-normal shadow-none hover:bg-muted dark:bg-transparent dark:hover:bg-muted/50";
 
-function PropertyLabel({ children }: { children: ReactNode }) {
+export function PropertyLabel({ children }: { children: ReactNode }) {
   return <span className="text-sm text-muted-foreground">{children}</span>;
 }
 
