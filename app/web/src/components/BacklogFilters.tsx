@@ -1,4 +1,5 @@
-import { FolderKanban, X } from "lucide-react";
+import { useState } from "react";
+import { Check, FolderKanban, FolderX, Layers, X } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { IconButton } from "./common/IconButton.tsx";
 import {
@@ -7,7 +8,22 @@ import {
   SelectItem,
   SelectTrigger,
 } from "./ui/select.tsx";
-import { resolveProjectDisplay } from "../lib/projectDisplay.ts";
+import {
+  projectColor,
+  projectDisplayKey,
+  resolveProjectDisplay,
+} from "../lib/projectDisplay.ts";
+import { Button } from "./ui/button.tsx";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "./ui/command.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
+import { ProjectValue } from "./ProjectSelector.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import {
   ALL_PROJECT_FILTER,
@@ -155,5 +171,136 @@ export function BacklogProjectFilterControl({
         </IconButton>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The Project filter as the inspector's Project property: a quiet trigger
+ * naming the filter (the Project's coloured icon, key and name), and a
+ * searchable list — All projects, every Project, Unassigned — in a popover.
+ * The sidebar's filter panel uses it so both Project pickers look and work
+ * the same.
+ */
+export function BacklogProjectFilterPicker({
+  filter,
+  options,
+  projectsById,
+  onChange,
+  disabled = false,
+  className,
+}: {
+  filter: BacklogProjectFilter;
+  options: BacklogProjectFilterOption[];
+  projectsById: Map<string, ProjectRecord>;
+  onChange: (filter: BacklogProjectFilter) => void;
+  disabled?: boolean;
+  className?: string | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  const pick = (next: BacklogProjectFilter) => {
+    onChange(next);
+    setOpen(false);
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled}
+            aria-label="Filter by Project"
+            className={className}
+          />
+        }
+      >
+        {filter.kind === "project" ? (
+          <ProjectValue
+            projectId={filter.projectId}
+            projectsById={projectsById}
+          />
+        ) : (
+          <>
+            <FolderKanban className="text-muted-foreground" />
+            <span
+              className={filter.kind === "all" ? "text-muted-foreground" : ""}
+            >
+              {filter.kind === "all" ? "All projects" : "Unassigned"}
+            </span>
+          </>
+        )}
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <Command>
+          <CommandInput placeholder="Filter projects…" />
+          <CommandList>
+            <CommandEmpty>No matches.</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="All projects"
+                onSelect={() => pick(ALL_PROJECT_FILTER)}
+              >
+                <Layers aria-hidden="true" />
+                <span className="flex-1">All projects</span>
+                {filter.kind === "all" ? <Check aria-label="Current" /> : null}
+              </CommandItem>
+            </CommandGroup>
+            <CommandGroup>
+              {options.map((option) => {
+                if (option.kind === "unassigned")
+                  return (
+                    <CommandItem
+                      key="unassigned"
+                      value="Unassigned"
+                      onSelect={() => pick({ kind: "unassigned" })}
+                    >
+                      <FolderX aria-hidden="true" />
+                      <span className="flex-1">Unassigned</span>
+                      {filter.kind === "unassigned" ? (
+                        <Check aria-label="Current" />
+                      ) : null}
+                    </CommandItem>
+                  );
+                const project = projectsById.get(option.projectId);
+                const key = project ? projectDisplayKey(project) : "";
+                return (
+                  <CommandItem
+                    key={option.projectId}
+                    value={`${option.label} ${option.projectId} ${key}`}
+                    onSelect={() =>
+                      pick({ kind: "project", projectId: option.projectId })
+                    }
+                  >
+                    <FolderKanban
+                      style={
+                        option.known
+                          ? {
+                              color: projectColor(project ?? option.projectId)
+                                .dot,
+                            }
+                          : undefined
+                      }
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {option.label}
+                    </span>
+                    {key ? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {key}
+                      </span>
+                    ) : null}
+                    {filter.kind === "project" &&
+                    filter.projectId === option.projectId ? (
+                      <Check aria-label="Current" />
+                    ) : null}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }

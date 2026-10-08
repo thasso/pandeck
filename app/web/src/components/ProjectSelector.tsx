@@ -174,7 +174,7 @@ export function ProjectSelector({
  * The assigned Project as the task page names it: its icon in its colour, the
  * key, and the full name after it, muted, shortening first.
  */
-function ProjectValue({
+export function ProjectValue({
   projectId,
   projectsById,
 }: {
