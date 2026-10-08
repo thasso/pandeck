@@ -284,10 +284,17 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   now,
   onOpen,
   describeSession,
+  inset = 0,
 }: {
   card: SessionInboxCard;
   now: number;
   onOpen: (sessionId: string) => void;
+  /**
+   * Extra left inset in rem, on top of the tree depth: a host whose section
+   * header sits in from the edge (the inspector) lines the rows up under it
+   * while the hairlines still run edge to edge.
+   */
+  inset?: number;
   describeSession?:
     ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
 }) {
@@ -317,7 +324,7 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
       <Item
         size="xs"
         className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0 hover:bg-muted dark:hover:bg-muted/50"
-        style={{ paddingLeft: `${0.75 * depth}rem` }}
+        style={{ paddingLeft: `${inset + 0.75 * depth}rem` }}
       >
         <Button
           variant="ghost"
@@ -368,7 +375,7 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
         // Aligned under the title, like a background row's command.
         <div
           className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-2 text-xs text-muted-foreground"
-          style={{ paddingLeft: `calc(${0.75 * depth}rem + 1.75rem)` }}
+          style={{ paddingLeft: `calc(${inset + 0.75 * depth}rem + 1.75rem)` }}
         >
           <DetailLine icon={<AgentIcon className="size-3" aria-hidden />}>
             {agent.label}

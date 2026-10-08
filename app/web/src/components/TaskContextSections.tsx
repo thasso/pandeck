@@ -92,7 +92,10 @@ export function TaskContextSections({
     onPatch({ externalLinks: [...links, link] });
 
   return (
-    <div className="space-y-4">
+    // A fragment, not a wrapper: the inspector spaces its sections and a
+    // section draws its own top divider unless it is the panel's FIRST child —
+    // inside a wrapper, Details believed it was, and lost both.
+    <>
       {/* Planning leads: it is what the Backlog's Focus view reads, and the
           fields most often changed on a Task that already exists. */}
       <TaskPlanningSection
@@ -147,7 +150,7 @@ export function TaskContextSections({
         onAdd={addLink}
         onRemove={removeLink}
       />
-    </div>
+    </>
   );
 }
 

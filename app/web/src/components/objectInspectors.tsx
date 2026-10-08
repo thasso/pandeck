@@ -444,12 +444,14 @@ function InspectorSessionsSection({
       summary={String(cards.length)}
     >
       {/* Out to the panel's edges, as the strip runs to the shelf's. */}
-      <ul className="-mx-3 divide-y border-y">
+      <ul className="-mx-3 divide-y">
         {cards.map((card) => (
           <SpawnedSessionLedgeRow
             key={card.session.id}
             card={card}
             now={now}
+            // Under the section's icon rather than at the panel's edge.
+            inset={0.75}
             onOpen={(id) => {
               onOpenSession(id);
               onAct?.();
