@@ -86,8 +86,6 @@ function render(
       agentTypes={opts.agentTypes ?? ["assistant"]}
       selectedAgentType={opts.agentType ?? "assistant"}
       onSelectAgentType={() => {}}
-      mode={opts.mode}
-      onSelectMode={() => {}}
       worktrees={worktrees}
       worktreesLoaded={opts.loaded ?? true}
       projects={opts.projects ?? [project]}
@@ -170,7 +168,7 @@ describe("NewSessionQuickStart", () => {
       reasoning: false,
     };
     const html = render([], { models: [single] });
-    expect(html).toContain("Start in a worktree");
+    expect(html).toContain("Worktree");
     expect(html).toContain("No worktrees");
     // Tasks are not staged from this screen at all.
     expect(html).not.toContain(">Task<");
@@ -202,7 +200,7 @@ describe("NewSessionQuickStart", () => {
     // The runtime block (Agent/Model/Thinking) sits below the context rows,
     // separated by a ruler.
     expect(html).toContain("<hr");
-    expect(html.indexOf("Start in a worktree")).toBeLessThan(
+    expect(html.indexOf("Worktree")).toBeLessThan(
       html.indexOf("<hr"),
     );
     expect(html.indexOf("<hr")).toBeLessThan(html.indexOf(">Agent<"));
@@ -373,14 +371,14 @@ describe("NewSessionQuickStart", () => {
       projects: [project, otherProject],
       selectedProjectId: "proj",
     });
-    const cardSection = scoped.slice(scoped.indexOf("Start in a worktree"));
+    const cardSection = scoped.slice(scoped.indexOf("Worktree"));
     expect(cardSection).toContain("feature/thing");
     expect(cardSection).toContain("Demo Project");
   });
 
   it("reserves the worktree row with skeleton cards until the list is loaded", () => {
     const html = render([], { loaded: false });
-    expect(html).toContain("Start in a worktree");
+    expect(html).toContain("Worktree");
     expect(html).toContain("animate-pulse");
     expect(html).not.toContain("More…");
   });

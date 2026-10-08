@@ -94,7 +94,7 @@ export function ProviderAccountRow({
             data-quick-selected={selected || undefined}
             title={`Use ${account.name} (${providerLabel})`}
             onClick={() => onSelect(account.id)}
-            className="w-52 shrink-0 snap-start flex-col items-start gap-1"
+            className="w-52 shrink-0 snap-start flex-col items-start gap-1 text-left"
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
               <ProviderIcon
@@ -321,7 +321,7 @@ export function QuickRow({
 
   return (
     <div className="w-full">
-      <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="mb-1.5 px-4 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       {/* The gutter lives INSIDE the scroller (padding + matching scroll-padding
@@ -365,7 +365,7 @@ export function QuickRowSplit({
     <div className="flex w-full flex-wrap justify-center gap-x-7 gap-y-3 px-4 pb-1.5">
       {groups.map((group) => (
         <div key={group.label} className="flex flex-col">
-          <div className="mb-1.5 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="mb-1.5 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {group.label}
           </div>
           <div role="listbox" aria-label={group.label} className="flex gap-2">

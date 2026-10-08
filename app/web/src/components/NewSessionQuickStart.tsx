@@ -1,7 +1,5 @@
 import {
-  FileText,
   GitBranch,
-  Hammer,
   House,
   Plus,
   Ellipsis,
@@ -12,7 +10,6 @@ import {
   type ProjectRecord,
   type AgentType,
   type SessionListItem,
-  type SessionMode,
   type TaskSummary,
   type ThinkingLevel,
   type WorktreeRecord,
@@ -30,30 +27,9 @@ import {
   ProviderAccountRow,
   QuickPill,
   QuickRow,
-  QuickRowSplit,
   ThinkingSlider,
 } from "./common/RuntimePicker.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
-
-/**
- * The Build/Plan pills, in that order. The labelling follows the composer's
- * `ModeSelector` to the word (a binding epic decision, Task 305): "Plan" and
- * nothing more — no "read-only", no "safe", no lock glyph.
- */
-const MODE_OPTIONS = [
-  {
-    value: "build" as SessionMode,
-    label: "Build",
-    title: "Start in Build",
-    Icon: Hammer,
-  },
-  {
-    value: "plan" as SessionMode,
-    label: "Plan",
-    title: "Start in Plan",
-    Icon: FileText,
-  },
-];
 
 /**
  * Order projects for selection surfaces by their newest linked session or Task
@@ -98,7 +74,7 @@ export function orderWorktreesByActivity(
   return [...worktrees].sort((a, b) => lastActivity(b) - lastActivity(a));
 }
 
-/** One worktree card in the "Start in a worktree" row. */
+/** One worktree card in the "Worktree" row. */
 function WorktreeCard({
   worktree,
   selected,
@@ -123,7 +99,7 @@ function WorktreeCard({
       data-quick-selected={selected || undefined}
       title={selected ? `Remove worktree ${label}` : `Start in ${label}`}
       onClick={onSelect}
-      className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
+      className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1 text-left"
     >
       <span className="flex w-full min-w-0 items-center gap-1.5">
         <WorktreeIcon
@@ -181,8 +157,6 @@ export function NewSessionQuickStart({
   agentTypes,
   selectedAgentType,
   onSelectAgentType,
-  mode,
-  onSelectMode,
   worktrees,
   worktreesLoaded,
   projects,
@@ -218,14 +192,6 @@ export function NewSessionQuickStart({
   agentTypes: AgentType[];
   selectedAgentType: AgentType;
   onSelectAgentType: (agentType: AgentType) => void;
-  /**
-   * Build/Plan for the staged session, or undefined where the persona has no
-   * mode axis. It shares the agent row: mode is a one-session choice the landing
-   * page has to STATE, and stating it in the composer's pill strip alone is how
-   * an inherited Plan used to go unnoticed.
-   */
-  mode?: SessionMode | undefined;
-  onSelectMode?: ((mode: SessionMode) => void) | undefined;
   /** Active worktrees in display order (App pre-sorts by recent activity). */
   worktrees: WorktreeRecord[];
   /**
@@ -295,9 +261,6 @@ export function NewSessionQuickStart({
   const orderedCredentialProfiles =
     orderCredentialProfilesByProvider(credentialProfiles);
 
-  // Agent and mode are pills of the same size and both at most a few wide, so
-  // they share a row when both are offered and each falls back to a row of its
-  // own when it is alone.
   const agentPills =
     agentTypes.length > 1 ? (
       <ToggleGroup
@@ -329,38 +292,6 @@ export function NewSessionQuickStart({
         })}
       </ToggleGroup>
     ) : null;
-  const pickMode = onSelectMode;
-  const modePills =
-    mode && pickMode ? (
-      <ToggleGroup
-        variant="outline"
-        value={[mode]}
-        onValueChange={(values) => {
-          const next = values[0] as SessionMode | undefined;
-          if (next) pickMode(next);
-        }}
-      >
-        {MODE_OPTIONS.map((option) => {
-          const selected = option.value === mode;
-          return (
-            <ToggleGroupItem
-              key={option.value}
-              value={option.value}
-              role="option"
-              aria-selected={selected}
-              title={option.title}
-            >
-              <option.Icon
-                size={14}
-                className={selected ? "text-primary" : "text-muted-foreground"}
-              />
-              <span className="min-w-0 truncate">{option.label}</span>
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
-    ) : null;
-
   return (
     <div className="new-session-quick-start mt-6 flex w-full max-w-2xl flex-col gap-4">
       {!projectsLoaded ? (
@@ -398,13 +329,13 @@ export function NewSessionQuickStart({
       ) : null}
 
       {!worktreesLoaded ? (
-        <QuickRow label="Start in a worktree" busy>
+        <QuickRow label="Worktree" busy>
           {[0, 1, 2].map((i) => (
             <Item
               key={i}
               variant="outline"
               aria-hidden
-              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
+              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1 text-left"
             >
               <Skeleton className="h-5 w-24" />
               <Skeleton className="h-5 w-16" />
@@ -413,7 +344,7 @@ export function NewSessionQuickStart({
         </QuickRow>
       ) : (
         <QuickRow
-          label="Start in a worktree"
+          label="Worktree"
           scrollKey={`${selectedWorktreeId ?? ""}:${newWorktreeStaged}:${activeWorktrees.length}`}
         >
           {activeWorktrees.length === 0 ? (
@@ -447,7 +378,7 @@ export function NewSessionQuickStart({
                   : `Create a worktree in ${projectName(selectedProjectId)} when you send`
               }
               onClick={() => onSelectNewWorktree(!newWorktreeStaged)}
-              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1"
+              className="min-w-40 max-w-52 shrink-0 snap-start flex-col items-start gap-1 text-left"
             >
               <span className="flex w-full min-w-0 items-center gap-1.5">
                 <Plus
@@ -522,23 +453,14 @@ export function NewSessionQuickStart({
           separated from the project/worktree staging above. */}
       <hr className="mx-4 border-border" />
 
-      {agentPills && modePills ? (
-        <QuickRowSplit
-          groups={[
-            { label: "Agent", children: agentPills },
-            { label: "Mode", children: modePills },
-          ]}
-        />
-      ) : agentPills ? (
+      {/* Build/Plan is the composer's Plan switch, not a row here. */}
+      {agentPills ? (
         <QuickRow
           label="Agent"
           scrollKey={`${selectedAgentType}:${agentTypes.length}`}
         >
           {agentPills}
         </QuickRow>
-      ) : modePills ? (
-        // Two pills; nothing to scroll into view.
-        <QuickRow label="Mode">{modePills}</QuickRow>
       ) : null}
 
       {credentialProfilesError ? (
@@ -580,7 +502,7 @@ export function NewSessionQuickStart({
             ))}
           </QuickRow>
           <div className="w-full">
-            <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="mb-1.5 px-4 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Thinking
             </div>
             <div className="mx-auto w-full max-w-sm px-4">
@@ -614,7 +536,7 @@ export function NewSessionQuickStart({
 
           {thinkingLevels.length > 1 ? (
             <div className="w-full">
-              <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="mb-1.5 px-4 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Thinking
               </div>
               <ThinkingSlider

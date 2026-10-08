@@ -6076,14 +6076,6 @@ function AppContent() {
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
               onSelectAgentType={switchStagedAgentType}
-              // The hero states Build/Plan next to the persona that has the
-              // axis; the composer's pill stays the in-conversation control.
-              mode={
-                hasModeAxis({ agentType: agentTypeForPicker })
-                  ? (displaySession?.mode ?? "build")
-                  : undefined
-              }
-              onSelectMode={(next) => runtimeActions.setSessionMode(next)}
               worktrees={orderedWorktrees}
               worktreesLoaded={state.worktrees !== null}
               projects={orderedPickerProjects}
