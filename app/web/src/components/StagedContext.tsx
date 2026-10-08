@@ -211,9 +211,8 @@ export function StagedContextBar({
           onRemove={projectImplied ? undefined : () => onChangeProject(null)}
         />
       ) : null}
-      <IconButton label="Edit session context" size="icon-xs" onClick={onOpen}>
-        <Plus />
-      </IconButton>
+      {/* No "+" of its own: the composer's toolbar "+" opens the same sheet,
+          and every chip opens it too. */}
     </div>
   );
 }
