@@ -1,9 +1,4 @@
-import {
-  GitBranch,
-  House,
-  Plus,
-  Ellipsis,
-} from "lucide-react";
+import { GitBranch, House, Plus, Ellipsis } from "lucide-react";
 import {
   supportedThinkingLevelsForModel,
   type ModelOption,
@@ -30,6 +25,7 @@ import {
   ThinkingSlider,
 } from "./common/RuntimePicker.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 
 /**
  * Order projects for selection surfaces by their newest linked session or Task
@@ -507,7 +503,6 @@ export function NewSessionQuickStart({
             </div>
             <div className="mx-auto w-full max-w-sm px-4">
               <Skeleton className="h-10" />
-              <Skeleton className="mx-auto mt-0.5 h-5 w-12" />
             </div>
           </div>
         </div>
@@ -536,13 +531,18 @@ export function NewSessionQuickStart({
 
           {thinkingLevels.length > 1 ? (
             <div className="w-full">
+              {/* The level is part of the label, not a line under the slider. */}
               <div className="mb-1.5 px-4 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Thinking
+                Thinking ·{" "}
+                <span className="text-foreground">
+                  {THINKING_LABELS[thinkingLevel]}
+                </span>
               </div>
               <ThinkingSlider
                 levels={thinkingLevels}
                 value={thinkingLevel}
                 onChange={onSelectThinking}
+                showValue={false}
               />
             </div>
           ) : null}

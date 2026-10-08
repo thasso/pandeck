@@ -186,18 +186,22 @@ export function ModelQuickRow<M extends ModelOption>({
 
 /**
  * Discrete horizontal slider over the model's supported thinking levels, with
- * the selected level's label centered below.
+ * a tick per level and the selected level's label centered below (unless the
+ * host states it in its own label).
  */
 export function ThinkingSlider({
   levels,
   value,
   onChange,
   disabled = false,
+  showValue = true,
 }: {
   levels: readonly ThinkingLevel[];
   value: ThinkingLevel;
   onChange: (level: ThinkingLevel) => void;
   disabled?: boolean;
+  /** Off where the host states the level itself (the row's label). */
+  showValue?: boolean;
 }) {
   const index = Math.max(0, levels.indexOf(value));
 
@@ -216,12 +220,14 @@ export function ThinkingSlider({
         title={`Thinking: ${THINKING_LABELS[value]}`}
         disabled={disabled}
       />
-      <div
-        className="mt-0.5 text-center text-sm font-medium text-foreground"
-        aria-hidden
-      >
-        {THINKING_LABELS[value]}
-      </div>
+      {showValue ? (
+        <div
+          className="mt-0.5 text-center text-sm font-medium text-foreground"
+          aria-hidden
+        >
+          {THINKING_LABELS[value]}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -249,21 +255,42 @@ export function DiscreteSlider({
   title?: string;
   disabled?: boolean;
 }) {
+  const steps = max - min;
   return (
-    <Slider
-      min={min}
-      max={max}
-      step={1}
-      value={[value]}
-      disabled={disabled}
-      onValueChange={(values) => {
-        const next = Array.isArray(values) ? values[0] : values;
-        if (next !== undefined && next !== value) onChange(next);
-      }}
-      thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
-      title={title ?? `${ariaLabel}: ${valueText}`}
-      className="flex h-10 items-center"
-    />
+    <div className="relative">
+      <Slider
+        min={min}
+        max={max}
+        step={1}
+        value={[value]}
+        disabled={disabled}
+        onValueChange={(values) => {
+          const next = Array.isArray(values) ? values[0] : values;
+          if (next !== undefined && next !== value) onChange(next);
+        }}
+        thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
+        title={title ?? `${ariaLabel}: ${valueText}`}
+        className="flex h-10 items-center"
+      />
+      {/* A tick under every choice, so the stops read before the thumb is
+          moved. The slider keeps its 12px thumb inside the track
+          (`thumbAlignment="edge"`), so the stops run from 6px to 6px short of
+          either end. */}
+      {steps > 0 ? (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-1/2"
+        >
+          {Array.from({ length: steps + 1 }, (_, index) => (
+            <span
+              key={index}
+              className={`absolute top-2 h-1.5 w-px -translate-x-1/2 ${index === value - min ? "bg-foreground" : "bg-muted-foreground/50"}`}
+              style={{ left: `calc(6px + (100% - 12px) * ${index / steps})` }}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
