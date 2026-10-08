@@ -73,7 +73,11 @@ function CommandInput({
         <CommandPrimitive.Input
           data-slot="command-input"
           className={cn(
-            "w-full text-sm outline-hidden disabled:cursor-not-allowed disabled:opacity-50",
+            // `md:text-sm!`: the app's unlayered rule sets every form control
+            // to `--text-base`, which outranks a layered `text-sm` and made
+            // the filter larger than the list it filters. Phones keep the
+            // 16px floor that stops iOS zooming in on focus.
+            "w-full outline-hidden disabled:cursor-not-allowed disabled:opacity-50 md:text-sm!",
             className,
           )}
           {...props}
