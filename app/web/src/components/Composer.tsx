@@ -72,11 +72,6 @@ import {
   type DictationControlsData,
 } from "./DictationControls.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
-import {
-  type ComposerRuntimeFit,
-  runtimeControlsFit,
-  sameComposerRuntimeFit,
-} from "./composerRuntimeFit.ts";
 import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
 import {
@@ -399,15 +394,6 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
 }
 
 /**
- * Tailwind's `sm`, the one media query the runtime pills draw differently on:
- * `common/ModelThinkingSelect` widens the model cap (`max-w-[170px] sm:max-w-[220px]`)
- * and swaps the short thinking label for the full one. So the same content has
- * two natural widths, and the fold has to treat the mode as part of what it
- * measured — see `runtimeSignature`.
- */
-const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
-
-/**
  * How full the session's context window is, as text in the runtime strip under
  * the card. It grows with the strip (container queries) so it never crowds out
  * the model and effort: `42%` on a phone, `42% context` from 24rem, plus
@@ -503,73 +489,6 @@ function ContextRow({ label, value }: { label: string; value: string }) {
       <span className="shrink-0 text-background/70">{label}</span>
       <span className="min-w-0 truncate text-right">{value}</span>
     </div>
-  );
-}
-
-function ModelSelector({
-  model,
-  models,
-  actions,
-  onModelChange,
-  isModelDisabled,
-  locked = false,
-  currentThinkingLevel,
-}: {
-  model: ModelOption | undefined;
-  models: ModelOption[];
-  actions?: AssistantActions;
-  onModelChange?: (model: ModelOption) => void;
-  isModelDisabled?: ((model: ModelOption) => boolean) | undefined;
-  locked?: boolean;
-  currentThinkingLevel?: ThinkingLevel;
-}) {
-  return (
-    <ModelSelect
-      models={models}
-      value={model}
-      locked={locked}
-      isModelDisabled={isModelDisabled}
-      placement="top"
-      onChange={(m) => {
-        if (onModelChange) {
-          onModelChange(m);
-          return;
-        }
-        actions?.setModel(m.provider, m.id);
-        if (actions && currentThinkingLevel) {
-          const clamped = clampThinkingLevelForModel(m, currentThinkingLevel);
-          if (clamped !== currentThinkingLevel)
-            actions.setThinkingLevel(clamped);
-        }
-      }}
-    />
-  );
-}
-
-function ThinkingSelector({
-  model,
-  level,
-  actions,
-  onLevelChange,
-  locked = false,
-}: {
-  model: ModelOption | undefined;
-  level: ThinkingLevel;
-  actions?: AssistantActions;
-  onLevelChange?: (level: ThinkingLevel) => void;
-  locked?: boolean;
-}) {
-  return (
-    <ThinkingSelect
-      model={model}
-      value={level}
-      locked={locked}
-      placement="top"
-      onChange={(lvl) => {
-        if (onLevelChange) onLevelChange(lvl);
-        else actions?.setThinkingLevel(lvl);
-      }}
-    />
   );
 }
 
@@ -987,18 +906,8 @@ export const Composer = memo(function Composer({
   // had open. Composer-chrome opens reset this to false.
   const [sheetOpenedExternally, setSheetOpenedExternally] = useState(false);
   const touchComposerMode = useTouchComposerMode();
-  // Which presentation the runtime pills are drawing (`RUNTIME_LABEL_MEDIA`).
-  // Rendered without a DOM (`StagedContext.test.tsx` renders to markup), assume
-  // the wide one; nothing is measured there anyway.
-  const [wideRuntimeLabels, setWideRuntimeLabels] = useState(() =>
-    typeof window === "undefined"
-      ? true
-      : (window.matchMedia?.(RUNTIME_LABEL_MEDIA).matches ?? true),
-  );
   const [isFocused, setIsFocused] = useState(false);
   const [composerPinnedOpen, setComposerPinnedOpen] = useState(false);
-  // Last measurement of the bottom row; `null` until it has been laid out once.
-  const [runtimeFit, setRuntimeFit] = useState<ComposerRuntimeFit | null>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1006,9 +915,6 @@ export const Composer = memo(function Composer({
   const bottomLeadRef = useRef<HTMLDivElement>(null);
   const bottomTrailRef = useRef<HTMLDivElement>(null);
   const runtimeStripRef = useRef<HTMLDivElement>(null);
-  const measureRuntimeFitRef = useRef<() => void>(() => {});
-  /** Root `data-text-scale` when the strip was last measured; `null` before that. */
-  const textScaleRef = useRef<string | null>(null);
   const attachmentsRef = useRef<AttachmentDraft[]>([]);
   /** Caret at the moment dictation started; the collapse clears the live selection. */
   const caretBeforeDictationRef = useRef<number | null>(null);
@@ -1080,18 +986,6 @@ export const Composer = memo(function Composer({
     if (disabled) return;
     ref.current?.focus({ preventScroll: true });
   }, [disabled, focusToken]);
-
-  // Track the pills' presentation mode rather than infer it from a width: the
-  // fold remembers a measured strip width, and crossing this query changes that
-  // width while the strip may be folded away with nothing left to re-measure.
-  useEffect(() => {
-    const media = window.matchMedia?.(RUNTIME_LABEL_MEDIA);
-    if (!media) return;
-    const update = () => setWideRuntimeLabels(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
 
   // A staged draft (fork, review handoff) wins over the browser-local text —
   // including the storage reload above, which runs first ONLY because it is
@@ -1654,15 +1548,16 @@ export const Composer = memo(function Composer({
         ? { agentType: session?.agentType }
         : {}),
     });
-  // Once a session has started its model and thinking level are fixed, so
-  // their pickers would only spend the action row's width on a value that
-  // cannot change. They give way to one quiet line under the card that states
-  // the runtime instead: account, model, effort.
-  const runtimeLocked = modelLocked && thinkingLocked && !hideRuntimeControls;
+  // The composer picks no runtime: a new session chooses agent, account,
+  // model and effort on its landing (`NewSessionQuickStart`), a started one
+  // has them fixed. Either way one quiet line under the card states it:
+  // account, model, effort — the same composer before and after the first
+  // message.
+  const runtimeShown = !hideRuntimeControls;
   // Model and effort are what the reader checks; the account is what gives
   // way, so the strip truncates only the account (`runtimeAccount`).
-  const runtimeAccount = runtimeLocked ? accountName : undefined;
-  const runtimeModel = runtimeLocked
+  const runtimeAccount = runtimeShown ? accountName : undefined;
+  const runtimeModel = runtimeShown
     ? [
         model ? (model.name ?? model.id) : undefined,
         model?.reasoning ? THINKING_LABELS[thinkingLevel] : undefined,
@@ -1686,99 +1581,6 @@ export const Composer = memo(function Composer({
       attachments.length > 0 ||
       Boolean(chatComments?.comments.length));
   const primaryAction = streaming && (!canSend || !canSubmit) ? "stop" : "send";
-  const planSuffix = modeAxis && sessionMode === "plan" ? " · Plan" : "";
-  const runtimeLabel = `${model?.name ?? "Model"} · ${thinkingLevel}${planSuffix}`;
-  const runtimeTitle = `Runtime settings: ${model?.name ?? "Select model"} · thinking ${thinkingLevel}${planSuffix}`;
-  const showAgentTypeSelector = Boolean(
-    selectedAgentType && availableAgentTypes && onAgentTypeChange,
-  );
-  // Everything that changes how WIDE the inline runtime strip draws — its
-  // content AND its presentation (`wideRuntimeLabels`, the one media query the
-  // pills change at). A measured width belongs to its signature alone: once any
-  // of it changes the strip is rendered again — pre-paint, so it is never
-  // seen — and re-measured before it is allowed to fold. Anything width-bearing
-  // left out of here would be remembered at the wrong size while folded, with
-  // no strip left in the DOM to correct it.
-  const runtimeSignature = [
-    modeAxis ? sessionMode : "",
-    showAgentTypeSelector ? selectedAgentType : "",
-    model ? `${model.provider}:${model.name}` : "",
-    thinkingLevel,
-    modelLocked ? "model-locked" : "",
-    thinkingLocked ? "thinking-locked" : "",
-    wideRuntimeLabels ? "wide-labels" : "short-labels",
-  ].join("|");
-  // The runtime pickers fold into the single Runtime sheet trigger as soon as the
-  // row cannot hold them. That is the phone's presentation, reached by MEASURING
-  // rather than by a viewport breakpoint, so a squeezed desktop composer (sidebar
-  // and inspector both open, a long model name) gets it too. `composerRuntimeFit.ts`
-  // owns the arithmetic; every input to it is independent of the fold, so the
-  // decision cannot oscillate.
-  const runtimeCollapsed =
-    !hideRuntimeControls &&
-    runtimeFit !== null &&
-    runtimeFit.signature === runtimeSignature &&
-    !runtimeControlsFit(runtimeFit);
-
-  const measureRuntimeFit = () => {
-    if (hideRuntimeControls) return;
-    const row = bottomRowRef.current;
-    const lead = bottomLeadRef.current;
-    const trail = bottomTrailRef.current;
-    if (!row || !lead || !trail) return;
-    const rowWidth = row.clientWidth;
-    // A composer that is hidden (mobile) or not laid out yet measures 0. That
-    // means "unknown", not "nothing fits": keep the standing decision.
-    if (rowWidth <= 0) return;
-    // Type size changes the strip's width without changing its signature, and
-    // arrives as a root attribute rather than a prop. Drop the stale measurement
-    // and let the next pass take a fresh one at the new size.
-    const textScale = document.documentElement.dataset.textScale ?? "100";
-    if (textScaleRef.current !== textScale) {
-      const known = textScaleRef.current !== null;
-      textScaleRef.current = textScale;
-      if (known) {
-        setRuntimeFit(null);
-        return;
-      }
-    }
-    // Read the DOM out here, never inside the updater: React may call that
-    // during a later render pass, and a layout read belongs to this commit.
-    const leadWidth = lead.offsetWidth;
-    const trailWidth = trail.offsetWidth;
-    const stripWidth = runtimeStripRef.current?.offsetWidth ?? null;
-    setRuntimeFit((prev) => {
-      // While the strip is folded away there is nothing to measure, so its width
-      // is the one remembered for this same signature.
-      const next: ComposerRuntimeFit = {
-        signature: runtimeSignature,
-        rowWidth,
-        leadWidth,
-        trailWidth,
-        controlsWidth:
-          stripWidth ??
-          (prev?.signature === runtimeSignature ? prev.controlsWidth : 0),
-      };
-      return prev && sameComposerRuntimeFit(prev, next) ? prev : next;
-    });
-  };
-
-  // Re-measure after every render (labels, the branches button and the staged
-  // attachments all move the fold point) and on every resize of the row itself —
-  // the panel drag, the inspector opening, rotation. Only the row is observed:
-  // its width comes from the layout above it, never from what this decides.
-  useLayoutEffect(() => {
-    measureRuntimeFitRef.current = measureRuntimeFit;
-    measureRuntimeFit();
-  });
-  useLayoutEffect(() => {
-    const row = bottomRowRef.current;
-    if (!row || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measureRuntimeFitRef.current());
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
-
   // Focus-driven collapse. It applies only where a permanently-expanded composer
   // is costly — on mobile (virtual keyboard) and in the inspector footer
   // (`collapseWhenBlurred`); the desktop chat composer stays expanded. When
@@ -2381,7 +2183,7 @@ export const Composer = memo(function Composer({
                       </IconButton>
                     ) : null}
                   </div>
-                  {!hideRuntimeControls && !runtimeCollapsed && !commentMode ? (
+                  {!hideRuntimeControls && !commentMode ? (
                     <div
                       ref={runtimeStripRef}
                       data-composer-fit="runtime"
@@ -2393,69 +2195,7 @@ export const Composer = memo(function Composer({
                           onChange={(mode) => actions.setSessionMode(mode)}
                         />
                       ) : null}
-                      {selectedAgentType &&
-                      availableAgentTypes &&
-                      onAgentTypeChange ? (
-                        <AgentTypeSelector
-                          agentType={selectedAgentType}
-                          availableAgentTypes={availableAgentTypes}
-                          onChange={onAgentTypeChange}
-                        />
-                      ) : null}
-                      {runtimeLocked ? null : (
-                        <>
-                          <ModelSelector
-                            model={model}
-                            models={models}
-                            actions={actions}
-                            isModelDisabled={isModelDisabled}
-                            locked={modelLocked}
-                            currentThinkingLevel={thinkingLevel}
-                          />
-                          <ThinkingSelector
-                            model={model}
-                            level={thinkingLevel}
-                            actions={actions}
-                            locked={thinkingLocked}
-                          />
-                        </>
-                      )}
                     </div>
-                  ) : null}
-                  {!hideRuntimeControls && runtimeCollapsed && !commentMode ? (
-                    <InputGroupButton
-                      size="sm"
-                      onClick={() => {
-                        if (runtimeOpen) {
-                          dismissSheetsAndFocus();
-                          return;
-                        }
-                        setBranchesOpen(false);
-                        setContextOpen(false);
-                        setSheetOpenedExternally(false);
-                        blurComposer();
-                        setRuntimeOpen(true);
-                      }}
-                      title={runtimeTitle}
-                      aria-label={runtimeTitle}
-                      aria-expanded={runtimeOpen}
-                      className="min-w-0"
-                      data-open={runtimeOpen}
-                    >
-                      {model ? (
-                        <ProviderIcon
-                          provider={model.provider}
-                          size={15}
-                          className="shrink-0 text-muted-foreground"
-                        />
-                      ) : (
-                        <Cpu
-                          size={15}
-                          className="shrink-0 text-muted-foreground"
-                        />
-                      )}
-                      <span className="min-w-0 truncate">{runtimeLabel}</span>
-                    </InputGroupButton>
                   ) : null}
                 </div>
 
