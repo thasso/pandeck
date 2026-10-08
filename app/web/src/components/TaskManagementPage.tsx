@@ -1091,13 +1091,14 @@ function TaskTitleBlock({
             onChange={(projectId) => onSetProject(projectId || null)}
             label={null}
             emptyLabel="No project"
-            className="-ml-2 h-auto min-w-0 py-0.5 text-sm font-normal text-muted-foreground hover:text-foreground"
+            // `pr-1`: the open-project arrow follows the name closely.
+            className="-ml-2 h-auto min-w-0 py-0.5 pr-1 text-sm font-normal text-muted-foreground hover:text-foreground"
           />
           {item.projectId && onNavigate ? (
             <IconButton
               label="Open project"
               size="icon-xs"
-              className="text-muted-foreground hover:text-foreground"
+              className="size-5 text-muted-foreground hover:text-foreground"
               onClick={() => onNavigate(projectPath(item.projectId!))}
             >
               <ArrowUpRight />
