@@ -188,6 +188,11 @@ export interface TreeProps<T> {
    * body's business.
    */
   rowAlign?: "center" | "stretch";
+  /**
+   * Per-row override of `rowAlign`, for a tree mixing shapes: the Backlog's
+   * single-line Project headers centre their chevron among two-line Task rows.
+   */
+  getRowAlign?: ((node: TreeNode<T>) => "center" | "stretch") | undefined;
   /** Extra classes on a row, by node + state. */
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
   /** Extra classes on the tree container. */
@@ -266,6 +271,7 @@ export function Tree<T>({
   compact = false,
   flush = false,
   rowAlign = "center",
+  getRowAlign,
   getRowClassName,
   className,
   "aria-label": ariaLabel,
@@ -557,7 +563,7 @@ export function Tree<T>({
       showGuides,
       compact,
       flush,
-      rowAlign,
+      rowAlign: getRowAlign?.(toNode(node)) ?? rowAlign,
       hasChildren,
       isExpanded,
       isFocused: (focusedId ?? flattened[0]?.id) === node.id,

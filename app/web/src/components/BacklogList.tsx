@@ -304,14 +304,6 @@ function BacklogListImpl({
         />
       ) : null}
       {reorderError ? <ErrorNote message={reorderError} /> : null}
-      {density === "comfortable" &&
-      view === "backlog" &&
-      c.viewMode === "project" ? (
-        <p className="px-1 text-sm text-muted-foreground">
-          Drag a Task onto another Project to reassign it, or within a Project
-          to reorder. Collapse a Project to fold it away.
-        </p>
-      ) : null}
 
       {!c.loaded ? (
         // The Task subscription has not answered yet. Every view below draws an

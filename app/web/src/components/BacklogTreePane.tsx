@@ -432,6 +432,10 @@ export function BacklogTreePane({
       // instead of a 20px square centred on it — the glyph still sits between
       // the lines, but the target is the row (see `rowAlign`).
       rowAlign={tight ? "center" : "stretch"}
+      // A Project header is one line, so its chevron centres on it.
+      getRowAlign={(node) =>
+        tight || node.data.kind === "project" ? "center" : "stretch"
+      }
       showGuides
       aria-label="Backlog"
       expandedIds={expandedIds}
@@ -644,15 +648,15 @@ function BacklogRowContent({
       <div
         className={`flex min-w-0 items-center gap-2 ${tight ? "" : "py-0.5"}`}
       >
-        {data.dot ? (
-          <span
-            className="size-2 shrink-0 rounded-full"
-            style={{ backgroundColor: data.dot }}
-            aria-hidden
-          />
-        ) : (
-          <FolderKanban size={13} className="shrink-0 text-muted-foreground" />
-        )}
+        {/* The Project glyph every other surface uses — its folder in its
+            colour — rather than a colour dot; muted for Unassigned and for a
+            Project the registry no longer knows. */}
+        <FolderKanban
+          size={14}
+          className={`shrink-0 ${data.dot ? "" : "text-muted-foreground"}`}
+          style={data.dot ? { color: data.dot } : undefined}
+          aria-hidden
+        />
         <span
           className={`min-w-0 flex-1 truncate text-sm font-semibold ${data.known || data.projectId === null ? "text-foreground" : "text-muted-foreground"}`}
         >
