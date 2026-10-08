@@ -6,21 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowLeft,
-  Check,
-  ChevronRight,
-  ClipboardList,
-  Pencil,
-} from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "./ui/collapsible.tsx";
+import { ArrowLeft, Check, ClipboardList, Pencil } from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import { EditableText } from "./common/EditableText.tsx";
+import { Input } from "./ui/input.tsx";
+import { Textarea } from "./ui/textarea.tsx";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   PullRequestMergeMethod,
@@ -244,19 +234,29 @@ export function TaskManagementPage({
     );
   };
 
-  const renameTask = (item: Task, title: string) => {
-    actions.saveTask({ id: item.id, title, status: item.status }, "rename");
-  };
-
-  const saveDescription = (item: Task, description: string) => {
-    actions.saveTask(
-      {
-        id: item.id,
-        status: item.status,
-        description,
-      },
-      "description",
-    );
+  // Title and description are edited together, so they save together: one
+  // request carrying only the fields that changed (an unchanged title is
+  // omitted, never echoed back).
+  const editTask = (item: Task, changes: TaskTextChanges) => {
+    const description =
+      changes.description !== undefined
+        ? { description: changes.description }
+        : {};
+    if (changes.title !== undefined)
+      actions.saveTask(
+        {
+          id: item.id,
+          title: changes.title,
+          status: item.status,
+          ...description,
+        },
+        "edit",
+      );
+    else
+      actions.saveTask(
+        { id: item.id, status: item.status, ...description },
+        "edit",
+      );
   };
 
   // Progress rollups for every task (order-independent) so the detail panel can
@@ -417,18 +417,12 @@ export function TaskManagementPage({
               onMergeRun={actions.mergeWorkflowRun}
               onCleanUpRun={actions.cleanUpWorkflowRun}
               onCycle={() => cycleStatus(selectedTask)}
-              onRename={(title) => renameTask(selectedTask, title)}
-              onSaveDescription={(description) =>
-                saveDescription(selectedTask, description)
-              }
+              onEdit={(changes) => editTask(selectedTask, changes)}
               statusMutation={
                 taskMutations[taskMutationKey(selectedTask.id, "status")]
               }
-              renameMutation={
-                taskMutations[taskMutationKey(selectedTask.id, "rename")]
-              }
-              descriptionMutation={
-                taskMutations[taskMutationKey(selectedTask.id, "description")]
+              editMutation={
+                taskMutations[taskMutationKey(selectedTask.id, "edit")]
               }
               onRetryDetail={() => actions.requestTaskDetail(selectedTask.id)}
               paObjectReferences={paObjectReferences}
@@ -541,11 +535,9 @@ function TaskDetailPanel({
   onMergeRun,
   onCleanUpRun,
   onCycle,
-  onRename,
-  onSaveDescription,
+  onEdit,
   statusMutation,
-  renameMutation,
-  descriptionMutation,
+  editMutation,
   onRetryDetail,
   paObjectReferences,
   onOpenPaObject,
@@ -585,11 +577,9 @@ function TaskDetailPanel({
   ) => void;
   onCleanUpRun: (id: string) => void;
   onCycle: () => void;
-  onRename: (title: string) => void;
-  onSaveDescription: (description: string) => void;
+  onEdit: (changes: TaskTextChanges) => void;
   statusMutation?: LoadState<true> | undefined;
-  renameMutation?: LoadState<true> | undefined;
-  descriptionMutation?: LoadState<true> | undefined;
+  editMutation?: LoadState<true> | undefined;
   onRetryDetail: () => void;
   paObjectReferences: MarkdownPaObjectReference[];
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
@@ -607,7 +597,7 @@ function TaskDetailPanel({
   const detailError = errorOf(detailState);
 
   // The prose is not clickable; the section action owns edit mode.
-  const [editingDescription, setEditingDescription] = useState(false);
+  const [editing, setEditing] = useState(false);
   // Brief confirmation on the header glyph after it copies the task id.
   const [idCopied, setIdCopied] = useState(false);
   useWorkflowRunAnchor(runs, runsLoaded);
@@ -652,8 +642,17 @@ function TaskDetailPanel({
             <TaskTitleBlock
               item={item}
               progress={progress}
-              onRename={onRename}
-              renameMutation={renameMutation}
+              editor={
+                editing ? (
+                  <TaskTextEditor
+                    title={item.title}
+                    description={descriptionText}
+                    onSave={onEdit}
+                    submitState={editMutation}
+                    onClose={() => setEditing(false)}
+                  />
+                ) : null
+              }
               statusMutation={statusMutation}
               // The status control lives HERE on a wide layout and in the object
               // dock's action row on a phone — the dock is the object's action home
@@ -704,41 +703,14 @@ function TaskDetailPanel({
               </div>
             ) : null}
 
-            <TaskCollapsibleSection
-              title="Description"
-              storageKey={`wf.collapse.${item.id}.description`}
-              trailing={
-                <div className="flex items-center gap-2">
-                  {detailRefreshing ? (
-                    <RefreshIndicator label="Refreshing description" />
-                  ) : null}
-                  {descriptionLoaded ? (
-                    <IconButton
-                      label="Edit description"
-                      onClick={() => setEditingDescription(true)}
-                      busy={isPending(descriptionMutation ?? idle())}
-                    >
-                      <Pencil />
-                    </IconButton>
-                  ) : null}
-                </div>
-              }
-            >
-              {detailError ? (
-                <ErrorNote message={detailError} onRetry={onRetryDetail} />
-              ) : null}
-              <EditableText
-                value={descriptionText}
-                onSubmit={onSaveDescription}
-                submitState={descriptionMutation}
-                editing={editingDescription}
-                onEditingChange={setEditingDescription}
-                multiline
-                allowEmpty
-                label="Task description"
-                placeholder="Add a description…"
-                className="min-h-32 resize-y"
-              >
+            {/* The description IS the page's body, under the title: no heading
+                and no fold. While editing it is part of the editor above. Under
+                it, a small action row: Edit (title and description together). */}
+            {editing ? null : (
+              <section aria-label="Description" className="mb-4">
+                {detailError ? (
+                  <ErrorNote message={detailError} onRetry={onRetryDetail} />
+                ) : null}
                 <div className="min-h-16 w-full py-1">
                   {descriptionText.trim() ? (
                     <Markdown
@@ -779,12 +751,30 @@ function TaskDetailPanel({
                     )
                   ) : (
                     <span className="text-sm text-muted-foreground">
-                      No description yet. Use the edit button to add one.
+                      No description yet.
                     </span>
                   )}
                 </div>
-              </EditableText>
-            </TaskCollapsibleSection>
+                <div className="mt-4 flex items-center justify-end gap-2 border-t pt-2">
+                  {detailRefreshing ? (
+                    <RefreshIndicator label="Refreshing description" />
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    // The body must be loaded to edit it: saving a draft made
+                    // from the preview would cut the description short.
+                    disabled={!descriptionLoaded}
+                    busy={isPending(editMutation ?? idle())}
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil />
+                    Edit
+                  </Button>
+                </div>
+              </section>
+            )}
           </div>
         </div>
       </div>
@@ -810,21 +800,19 @@ function TaskDetailPanel({
 function TaskTitleBlock({
   item,
   progress,
-  onRename,
+  editor,
   onCycle,
-  renameMutation,
   statusMutation,
 }: {
   item: Task;
   progress?: { done: number; total: number } | undefined;
-  onRename: (title: string) => void;
+  /** The title and description editor, shown in the title's place while open. */
+  editor: ReactNode;
   onCycle?: (() => void) | undefined;
-  renameMutation?: LoadState<true> | undefined;
   statusMutation?: LoadState<true> | undefined;
 }) {
   const isDone = item.status === "done";
   const meta = onCycle || progress;
-  const [editing, setEditing] = useState(false);
   return (
     <div className="mb-6 space-y-2">
       {meta ? (
@@ -851,82 +839,132 @@ function TaskTitleBlock({
       {errorOf(statusMutation ?? idle()) ? (
         <ErrorNote message={errorOf(statusMutation ?? idle())!} />
       ) : null}
-      <EditableText
-        value={item.title}
-        onSubmit={onRename}
-        submitState={renameMutation}
-        editing={editing}
-        onEditingChange={setEditing}
-        label="Task title"
-      >
-        <div className="flex items-start gap-2">
-          <h1
-            className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
-          >
-            {item.title}
-          </h1>
-          <IconButton
-            label="Rename task"
-            className="mt-1"
-            onClick={() => setEditing(true)}
-          >
-            <Pencil />
-          </IconButton>
-        </div>
-      </EditableText>
+      {editor ?? (
+        <h1
+          className={`text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
+        >
+          {item.title}
+        </h1>
+      )}
     </div>
   );
 }
 
-function TaskCollapsibleSection({
+/** What an edit changed: only the fields that differ are present. */
+type TaskTextChanges = { title?: string; description?: string };
+
+/**
+ * Title and description in one editor, saved together. Cmd/Ctrl+Enter saves
+ * from either field, Escape cancels; it stays open while the save runs and
+ * closes once it succeeds, keeping the draft (with a retry) when it is refused.
+ */
+function TaskTextEditor({
   title,
-  storageKey,
-  defaultOpen = true,
-  trailing,
-  children,
+  description,
+  onSave,
+  submitState,
+  onClose,
 }: {
   title: string;
-  storageKey: string;
-  defaultOpen?: boolean;
-  trailing?: ReactNode;
-  children: ReactNode;
+  description: string;
+  onSave: (changes: TaskTextChanges) => void;
+  submitState: LoadState<true> | undefined;
+  onClose: () => void;
 }) {
-  const [open, setOpen] = useState(() => {
-    try {
-      const value = localStorage.getItem(storageKey);
-      return value === null ? defaultOpen : value === "1";
-    } catch {
-      return defaultOpen;
+  const [draftTitle, setDraftTitle] = useState(title);
+  const [draftDescription, setDraftDescription] = useState(description);
+  // What this session opened on: the live values may already be optimistic.
+  const [baseline] = useState({ title, description });
+  const [submitted, setSubmitted] = useState(false);
+  const awaitingRef = useRef(false);
+  const sawPendingRef = useRef(false);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const state = submitState ?? idle<true>();
+  const pending = isPending(state);
+  const error = submitted && !pending ? errorOf(state) : undefined;
+
+  const cancel = () => {
+    if (!pending) onClose();
+  };
+  const commit = () => {
+    if (pending) return;
+    const nextTitle = draftTitle.trim();
+    const nextDescription = draftDescription.trimEnd();
+    if (!nextTitle) return;
+    const changes: TaskTextChanges = {};
+    if (submitted || nextTitle !== baseline.title) changes.title = nextTitle;
+    if (submitted || nextDescription !== baseline.description)
+      changes.description = nextDescription;
+    if (changes.title === undefined && changes.description === undefined) {
+      onClose();
+      return;
     }
-  });
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    try {
-      localStorage.setItem(storageKey, next ? "1" : "0");
-    } catch {
-      /* ignore */
+    onSave(changes);
+    awaitingRef.current = true;
+    sawPendingRef.current = false;
+    setSubmitted(true);
+  };
+
+  useEffect(() => {
+    if (!awaitingRef.current) return;
+    if (pending) {
+      sawPendingRef.current = true;
+      return;
+    }
+    if (!sawPendingRef.current) return;
+    awaitingRef.current = false;
+    sawPendingRef.current = false;
+    if (!errorOf(state)) onClose();
+  }, [pending, state, onClose]);
+
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      commit();
     }
   };
+
   return (
-    <section className="mb-4">
-      <Collapsible open={open} onOpenChange={changeOpen}>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <CollapsibleTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="min-w-0 justify-start uppercase tracking-wide text-muted-foreground"
-              />
-            }
-          >
-            <ChevronRight className={`shrink-0 ${open ? "rotate-90" : ""}`} />
-            <span className="truncate">{title}</span>
-          </CollapsibleTrigger>
-          {trailing ? <div className="shrink-0">{trailing}</div> : null}
-        </div>
-        <CollapsibleContent>{children}</CollapsibleContent>
-      </Collapsible>
-    </section>
+    <div className="flex flex-col gap-2" onKeyDown={onKeyDown}>
+      <Input
+        autoFocus
+        value={draftTitle}
+        aria-label="Task title"
+        placeholder="Title"
+        readOnly={pending}
+        onChange={(event) => setDraftTitle(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter in the title moves on to the description rather than saving
+          // half an edit.
+          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
+            event.preventDefault();
+            descriptionRef.current?.focus();
+          }
+        }}
+        className="h-auto py-1.5 text-lg font-semibold md:text-lg"
+      />
+      <Textarea
+        ref={descriptionRef}
+        value={draftDescription}
+        aria-label="Task description"
+        placeholder="Add a description…"
+        readOnly={pending}
+        onChange={(event) => setDraftDescription(event.target.value)}
+        className="min-h-48 resize-y"
+      />
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="outline" disabled={pending} onClick={cancel}>
+          Cancel
+        </Button>
+        <Button busy={pending} disabled={!draftTitle.trim()} onClick={commit}>
+          Save
+        </Button>
+      </div>
+      {error ? <ErrorNote message={error} onRetry={commit} /> : null}
+    </div>
   );
 }

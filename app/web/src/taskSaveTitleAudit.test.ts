@@ -47,8 +47,9 @@ const SCAN_EXTENSIONS = new Set([".ts", ".tsx"]);
 const SANCTIONED: readonly string[] = [
   // BacklogList.addTask: the composer's new-Task title, required on a create.
   "src/components/BacklogList.tsx: title",
-  // TaskManagementPage.renameTask: the title the user just edited.
-  "src/components/TaskManagementPage.tsx: title",
+  // TaskManagementPage.editTask: the title the user just edited, sent only
+  // when it changed.
+  "src/components/TaskManagementPage.tsx: changes.title",
 ];
 
 function shouldScan(path: string): boolean {
