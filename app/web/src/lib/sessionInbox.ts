@@ -1288,6 +1288,11 @@ export function sessionCardKey(card: SessionInboxCard, now: number): string {
     session.titleGenerationPending ? "1" : "",
     session.harness ?? "",
     session.agentType ?? "",
+    // The context row names the runtime when no object is linked.
+    session.model
+      ? `${session.model.provider}:${session.model.id}:${session.model.name ?? ""}`
+      : "",
+    session.thinkingLevel ?? "",
     session.archived ? "1" : "",
     session.worktreeId ?? "",
     session.worktreeMissing ? "1" : "",
@@ -1944,9 +1949,7 @@ function compareInboxItems(a: SessionInboxItem, b: SessionInboxItem): number {
 }
 
 function itemCreatedAt(item: SessionInboxItem): number {
-  return item.kind === "run"
-    ? item.run.createdAt
-    : item.card.session.createdAt;
+  return item.kind === "run" ? item.run.createdAt : item.card.session.createdAt;
 }
 
 /** One candidate session while the spawn forest is being folded. */

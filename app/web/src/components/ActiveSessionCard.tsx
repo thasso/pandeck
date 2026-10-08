@@ -58,6 +58,8 @@ import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
+import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +77,10 @@ const INLINE_ACTION_SIZE = {
   tight: "icon-xs",
   comfortable: "icon",
 } as const satisfies Record<RowDensity, string>;
+
+/** Hidden at rest under a fine pointer, shown on the card's hover or focus. */
+const CARD_ACTION_REVEAL =
+  "pointer-fine:opacity-0 pointer-fine:group-hover/item:opacity-100 pointer-fine:group-focus-within/item:opacity-100 focus-visible:opacity-100";
 
 /**
  * What the session's worktree holds that its base does not: uncommitted lines
@@ -258,6 +264,27 @@ function ActiveSessionCardImpl({
     AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
+  // Who the session is, for a context row with no linked object to name:
+  // always true, so the row never holds the age alone.
+  const identity = [
+    agent.label,
+    session.model ? (session.model.name ?? session.model.id) : undefined,
+    session.thinkingLevel && session.thinkingLevel !== "off"
+      ? THINKING_LABELS[session.thinkingLevel]
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // The status line's fallback: with no signal to show, it says the state in
+  // words (the title's glyph says it as an icon), so the row is not just the
+  // row's buttons.
+  const hasSignals = Boolean(
+    cluster || backgroundChip || delivery || (status === "quiet" && detail),
+  );
+  const stateWords =
+    status === "quiet"
+      ? "Idle"
+      : (badge?.label ?? sessionStatusText(session, status, now));
 
   const endTurn = () => {
     window.clearTimeout(turnTimer.current);
@@ -395,9 +422,19 @@ function ActiveSessionCardImpl({
                 className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
               >
                 {meta.length === 0 ? (
-                  // Keep the first row's line box when this session has no linked
-                  // objects. Stable means three rows even in the empty case.
-                  <span aria-hidden>{"\u00a0"}</span>
+                  // No linked object: the row names who the session is, so
+                  // the card keeps three filled rows.
+                  <span className="flex min-w-0 items-center gap-1">
+                    {session.model ? (
+                      <ProviderIcon
+                        provider={session.model.provider}
+                        size={11}
+                      />
+                    ) : (
+                      <AgentIcon size={11} className="shrink-0" aria-hidden />
+                    )}
+                    <span className="min-w-0 truncate">{identity}</span>
+                  </span>
                 ) : (
                   meta.map((item, index) => (
                     <Fragment key={`${item.kind}:${item.label}`}>
@@ -568,6 +605,11 @@ function ActiveSessionCardImpl({
                       {detail}
                     </span>
                   ) : null}
+                  {hasSignals ? null : (
+                    <span className="min-w-0 flex-1 basis-0 truncate">
+                      {stateWords}
+                    </span>
+                  )}
                 </div>
                 <div className="flex min-w-0 items-center gap-x-1.5">
                   {bubbled ? (
@@ -647,7 +689,10 @@ function ActiveSessionCardImpl({
               <IconButton
                 label="Session actions"
                 size={INLINE_ACTION_SIZE[density]}
-                className="-my-0.5"
+                // With a mouse the row's buttons wait for a hover or focus
+                // (or the open card), so resting cards stay calm; a phone,
+                // with no hover, keeps them.
+                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
                 aria-expanded={showActions}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -659,7 +704,7 @@ function ActiveSessionCardImpl({
               <IconButton
                 label={settleLabel}
                 size={INLINE_ACTION_SIZE[density]}
-                className="-my-0.5"
+                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
                 disabled={Boolean(card.settleBlocked)}
                 onClick={(e) => {
                   e.stopPropagation();
