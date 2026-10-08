@@ -270,24 +270,26 @@ export function DiscreteSlider({
         }}
         thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
         title={title ?? `${ariaLabel}: ${valueText}`}
-        className="flex h-10 items-center"
+        // The control fills the whole 40px band, so a tap anywhere on it — not
+        // only on the 4px track — picks the nearest choice; no drag needed.
+        className="flex h-10 items-center *:h-full"
       />
-      {/* A tick under every choice, so the stops read before the thumb is
-          moved. The slider keeps its 12px thumb inside the track
-          (`thumbAlignment="edge"`), so the stops run from 6px to 6px short of
-          either end. */}
+      {/* A hollow stop on the track for every choice, drawn over it (after
+          the slider) and click-through, so a tap still reaches the slider.
+          The chosen one is under the thumb and left out. The slider keeps its
+          12px thumb inside the track (`thumbAlignment="edge"`), so the stops
+          run from 6px to 6px short of either end. */}
       {steps > 0 ? (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-1/2"
-        >
-          {Array.from({ length: steps + 1 }, (_, index) => (
-            <span
-              key={index}
-              className={`absolute top-2 h-1.5 w-px -translate-x-1/2 ${index === value - min ? "bg-foreground" : "bg-muted-foreground/50"}`}
-              style={{ left: `calc(6px + (100% - 12px) * ${index / steps})` }}
-            />
-          ))}
+        <div aria-hidden className="pointer-events-none absolute inset-0">
+          {Array.from({ length: steps + 1 }, (_, index) =>
+            min + index === value ? null : (
+              <span
+                key={index}
+                className={`absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-background ${min + index < value ? "border-primary" : "border-muted-foreground/60"}`}
+                style={{ left: `calc(6px + (100% - 12px) * ${index / steps})` }}
+              />
+            ),
+          )}
         </div>
       ) : null}
     </div>
