@@ -149,7 +149,7 @@ export function BacklogFocusList({
               <FocusRow
                 key={task.id}
                 task={task}
-                meta={buildTaskRowMeta(task, metaContext)}
+                meta={focusRowMeta(buildTaskRowMeta(task, metaContext))}
                 projectsById={projectsById}
                 selected={task.id === selectedId}
                 onOpen={onOpen}
@@ -316,4 +316,21 @@ function ClaimButton({
       {icon}
     </IconButton>
   );
+}
+
+/**
+ * What a Focus row's second line keeps of the shared meta. Focus is for
+ * picking what to work on, so it drops the plumbing: the "Session" item, and
+ * the bare worktree glyph with its dirty dot, which said "there is code" in a
+ * way nobody could read. What stays is what bears on the choice — planning,
+ * priority, a run in progress ("Working", still leading to its session), a
+ * pull request's state, and the Project.
+ */
+function focusRowMeta(meta: TaskRowMeta): TaskRowMeta {
+  return {
+    ...meta,
+    session: meta.working ? meta.session : null,
+    worktreeId: null,
+    dirty: false,
+  };
 }
