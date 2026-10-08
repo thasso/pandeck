@@ -738,14 +738,15 @@ function RowBody<T>({
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
             // The TARGET is the full height; the glyph is pinned to the first
-            // line. `pt-2` is the sum of the two paddings above the body's own
-            // first line — this row's content wrapper (`py-1`, below) and the
-            // control the body starts with (`BacklogTreePane`'s status button
-            // adds `pt-1`) — so a change to either leaves the chevron a few
-            // pixels off rather than breaking anything. Eyeball it against the
-            // status glyph.
+            // line, its centre on the status glyph's: `pt-3` is this button's
+            // own border away from that centre — the content wrapper's `py-1`
+            // (below), and `BacklogTreePane`'s 28px status button with its
+            // `pt-1` — so a change to either leaves the chevron a few pixels
+            // off rather than breaking anything. Eyeball it against the
+            // status glyph. `w-5`: the 14px glyph and no more, so the row
+            // spends its width on the title.
             stretch
-              ? "h-auto w-7 items-start pt-2"
+              ? "h-auto w-5 items-start pt-3"
               : compact
                 ? "size-4"
                 : "size-5",
@@ -760,7 +761,7 @@ function RowBody<T>({
         <span
           className={cx(
             "shrink-0",
-            stretch ? "w-7" : compact ? "w-4" : "size-5",
+            stretch ? "w-5" : compact ? "w-4" : "size-5",
           )}
         />
       )}
