@@ -116,7 +116,6 @@ import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import {
-  StagedContextBar,
   StagedContextPanel,
   type StagedContextData,
   type StagedContextField,
@@ -2061,14 +2060,9 @@ export const Composer = memo(function Composer({
             <div
               className={`min-h-0 min-w-0 ${compact ? "overflow-hidden" : "overflow-visible"}`}
             >
-              {contextBar ? (
-                <StagedContextBar
-                  value={contextBar.value}
-                  onOpen={() => openContext()}
-                  onChangeTask={contextBar.onChangeTask}
-                  onChangeFile={contextBar.onChangeFile}
-                />
-              ) : null}
+              {/* No context chips: the new-session landing and the title bar
+                  state the project, worktree and Task, and the shelf strips the
+                  document and a staged review. */}
 
               {/* Nothing states the passage here. It is selected and highlighted
                 in the transcript directly above, the user is the one who just

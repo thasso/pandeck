@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { WorktreeRecord } from "@assistant/shared";
 import {
-  StagedContextBar,
   StagedContextPanel,
   type StagedContextData,
 } from "./StagedContext.tsx";
@@ -34,52 +33,6 @@ function panelData(
     ...overrides,
   };
 }
-
-describe("StagedContextBar", () => {
-  it("renders a removable structured review bundle beside its worktree", () => {
-    const html = renderToStaticMarkup(
-      <StagedContextBar
-        value={{
-          projectId: "proj",
-          worktreeId: "wt1",
-          task: null,
-          review: { commentCount: 3 },
-        }}
-        worktrees={[worktree]}
-        onOpen={() => {}}
-        onChangeWorktree={() => {}}
-        onChangeTask={() => {}}
-        onChangeReview={() => {}}
-      />,
-    );
-    expect(html).toContain("3 review comments");
-    expect(html).toContain("feature/thing");
-    expect(html).toContain("Remove 3 review comments");
-  });
-
-  it("renders a staged + New worktree as its own removable chip", () => {
-    const html = renderToStaticMarkup(
-      <StagedContextBar
-        value={{
-          projectId: "proj",
-          worktreeId: null,
-          newWorktree: true,
-          task: null,
-        }}
-        worktrees={[worktree]}
-        onOpen={() => {}}
-        onChangeWorktree={() => {}}
-        onChangeNewWorktree={() => {}}
-        onChangeTask={() => {}}
-      />,
-    );
-    expect(html).toContain("New worktree");
-    expect(html).toContain("Remove New worktree");
-    // The project is not "implied" by a worktree that does not exist yet, so it
-    // stays removable — and removing it cancels the new worktree (App.tsx).
-    expect(html).toContain("Remove proj");
-  });
-});
 
 describe("StagedContextPanel", () => {
   it("starts on the Project field when nothing is staged", () => {

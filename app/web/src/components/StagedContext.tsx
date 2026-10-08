@@ -2,7 +2,6 @@ import { type ReactNode, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ClipboardList,
-  FileText,
   FolderKanban,
   GitBranch,
   Plus,
@@ -15,7 +14,6 @@ import type {
 } from "@assistant/shared";
 import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
 import { Skeleton } from "./common/load.tsx";
-import { IconButton } from "./common/IconButton.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -107,102 +105,6 @@ function worktreeLabel(
   const worktree = worktrees.find((w) => w.id === id);
   if (!worktree) return id;
   return worktree.isMain ? "main checkout" : worktree.branch;
-}
-
-/**
- * Compact removable chip row shown in the composer. Tapping any chip (or the
- * add button) opens the docked context sheet; the X removes just that context.
- * When nothing is staged it collapses to a single "Add context" affordance.
- */
-export function StagedContextBar({
-  value,
-  onOpen,
-  onChangeTask,
-  onChangeFile,
-}: {
-  value: StagedContextValue;
-  onOpen: () => void;
-  onChangeTask: (task: { taskId: string; title: string } | null) => void;
-  onChangeFile?: ((file: null) => void) | undefined;
-}) {
-  // Only what nothing else on screen states: the project, worktree and a new
-  // worktree show on the new-session landing and in a session's title bar, and
-  // a staged review's comments ride the composer's comments strip.
-  const hasAny = Boolean(value.file || value.task);
-
-  // Nothing staged: the composer toolbar's context button is the entry point, so
-  // the bar collapses away entirely rather than showing a duplicate affordance.
-  if (!hasAny) return null;
-
-  return (
-    <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-      {value.file ? (
-        <ContextChip
-          icon={<FileText size={12} />}
-          label={value.file.title}
-          tone="accent"
-          onRemove={onChangeFile ? () => onChangeFile(null) : undefined}
-        />
-      ) : null}
-      {value.task ? (
-        <ContextChip
-          icon={<ClipboardList size={12} />}
-          label={value.task.title}
-          tone="accent"
-          onOpen={onOpen}
-          onRemove={() => onChangeTask(null)}
-        />
-      ) : null}
-      {/* No "+" of its own: the composer's toolbar "+" opens the same sheet,
-          and every chip opens it too. */}
-    </div>
-  );
-}
-
-function ContextChip({
-  icon,
-  label,
-  tone = "muted",
-  dimmed = false,
-  onOpen,
-  onRemove,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  tone?: "muted" | "accent";
-  dimmed?: boolean;
-  onOpen?: () => void;
-  onRemove?: (() => void) | undefined;
-}) {
-  return (
-    <Badge
-      variant={tone === "accent" ? "default" : "secondary"}
-      className={`min-w-0 max-w-56 gap-1 ${dimmed ? "opacity-70" : ""}`}
-    >
-      {onOpen ? (
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={onOpen}
-          className="min-w-0 gap-1"
-          title={label}
-        >
-          <span className="shrink-0 opacity-80">{icon}</span>
-          <span className="min-w-0 truncate">{label}</span>
-        </Button>
-      ) : (
-        <span className="flex min-w-0 items-center gap-1" title={label}>
-          <span className="shrink-0 opacity-80">{icon}</span>
-          <span className="min-w-0 truncate">{label}</span>
-        </span>
-      )}
-      {onRemove ? (
-        <IconButton label={`Remove ${label}`} size="icon-xs" onClick={onRemove}>
-          <X />
-        </IconButton>
-      ) : null}
-    </Badge>
-  );
 }
 
 /** One accordion field of the staged-context picker, addressable from outside. */

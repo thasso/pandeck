@@ -13,6 +13,8 @@ import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   Check,
+  ClipboardList,
+  FileText,
   FolderKanban,
   GitBranch,
   GitPullRequest,
@@ -20,6 +22,7 @@ import {
   MessageSquarePlus,
   MessageSquareQuote,
   SendHorizontal,
+  X,
 } from "lucide-react";
 import {
   accountProviderForModelProvider,
@@ -4091,13 +4094,16 @@ function AppContent() {
   const displayProject = displayProjectId
     ? projectsById.get(displayProjectId)
     : undefined;
+  // The Task it works on: the one it was started from, else the first it links.
+  const displayTask =
+    displaySession?.originTask ?? displaySession?.relatedGlobalTasks?.[0];
   // The title is a heading; the line under it says where the work lives —
   // its project and its worktree (branch and uncommitted changes) — and each
   // of those is a link of its own.
   const titleLink =
     "h-auto min-w-0 cursor-pointer gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
   const sessionTitleHeading =
-    displayProject || displayWorktreeBranch ? (
+    displayProject || displayWorktreeBranch || displayTask ? (
       <div className="flex min-w-0 flex-col">
         <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
           {sessionTitleText}
@@ -4124,6 +4130,17 @@ function AppContent() {
               <span className="min-w-0 truncate @[22rem]:hidden">
                 {projectDisplayKey(displayProject)}
               </span>
+            </Button>
+          ) : null}
+          {displayTask ? (
+            <Button
+              variant="link"
+              className={`${titleLink} max-w-1/3 shrink-0`}
+              title={`Open task: ${displayTask.title}`}
+              onClick={() => navigate(taskPath(displayTask.id))}
+            >
+              <ClipboardList aria-hidden className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">{displayTask.title}</span>
             </Button>
           ) : null}
           {displayWorktreeBranch && displayWorktreeId ? (
@@ -5369,6 +5386,67 @@ function AppContent() {
       ) : undefined,
     [reviewCommentItems, removeReviewComment, clearReviewComments],
   );
+  // A session started from a document says so on the shelf until it is sent:
+  // the composer carries no context chips.
+  const stagedDocument = isNewChatRoute ? pendingFileContext : null;
+  const stagedDocumentLedge = useMemo(
+    () =>
+      stagedDocument ? (
+        <div className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 pl-2.5 text-sm text-muted-foreground">
+          <FileText aria-hidden className="size-3.5 shrink-0" />
+          <span className="shrink-0">Starting from</span>
+          <Button
+            variant="link"
+            className="h-auto min-w-0 shrink cursor-pointer p-0 text-sm font-normal text-foreground hover:no-underline"
+            title={`Open ${stagedDocument.title}`}
+            onClick={() => navigate(stagedDocument.href)}
+          >
+            <span className="truncate">{stagedDocument.title}</span>
+          </Button>
+          <IconButton
+            label="Don't start from this document"
+            size="icon-xs"
+            className="ml-auto"
+            onClick={() => setPendingFileContext(null)}
+          >
+            <X />
+          </IconButton>
+        </div>
+      ) : undefined,
+    [stagedDocument, navigate],
+  );
+  // The Task a new session will work on, stated the same way as a document.
+  const stagedTask = isNewChatRoute ? pendingTaskAttach : null;
+  const stagedTaskLedge = useMemo(
+    () =>
+      stagedTask ? (
+        <div className="flex h-7 min-w-0 items-center gap-1.5 pr-1.5 pl-2.5 text-sm text-muted-foreground">
+          <ClipboardList aria-hidden className="size-3.5 shrink-0" />
+          <span className="shrink-0">Working on</span>
+          <Button
+            variant="link"
+            className="h-auto min-w-0 shrink cursor-pointer p-0 text-sm font-normal text-foreground hover:no-underline"
+            title={`Open Task-${stagedTask.taskId}: ${stagedTask.title}`}
+            onClick={() => navigate(taskPath(stagedTask.taskId))}
+          >
+            {/* The id as the app writes it everywhere (`TaskIdBadge`). */}
+            <span className="shrink-0 font-mono text-muted-foreground tabular-nums">
+              #{stagedTask.taskId}
+            </span>
+            <span className="truncate">{stagedTask.title}</span>
+          </Button>
+          <IconButton
+            label="Don't work on this task"
+            size="icon-xs"
+            className="ml-auto"
+            onClick={() => stageTaskContext(null)}
+          >
+            <X />
+          </IconButton>
+        </div>
+      ) : undefined,
+    [stagedTask, navigate, stageTaskContext],
+  );
   // One shelf, up to five strips on it: what waits on the user on top, then
   // the peers, background work, and on the edge nearest the field what the
   // user wrote that is still to go — the queue, then the comments that ride
@@ -5379,6 +5457,8 @@ function AppContent() {
       spawnedLedge ||
       backgroundLedge ||
       promptQueueLedge ||
+      stagedTaskLedge ||
+      stagedDocumentLedge ||
       reviewCommentsLedge ||
       pendingCommentsLedge ? (
         <>
@@ -5386,6 +5466,8 @@ function AppContent() {
           {spawnedLedge}
           {backgroundLedge}
           {promptQueueLedge}
+          {stagedTaskLedge}
+          {stagedDocumentLedge}
           {reviewCommentsLedge}
           {pendingCommentsLedge}
         </>
@@ -5395,6 +5477,8 @@ function AppContent() {
       spawnedLedge,
       backgroundLedge,
       promptQueueLedge,
+      stagedTaskLedge,
+      stagedDocumentLedge,
       reviewCommentsLedge,
       pendingCommentsLedge,
     ],
