@@ -1,14 +1,13 @@
 import { useMemo } from "react";
 import { Check } from "lucide-react";
-import { Button } from "./ui/button.tsx";
-import { Item, ItemContent, ItemTitle } from "./ui/item.tsx";
+import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import type { ProjectRecord } from "@assistant/shared";
 import {
   TaskStatusIcon as StatusIcon,
   TASK_STATUS_LABEL,
 } from "./TaskStatusIcon.tsx";
-import { ProjectBadge } from "./ProjectBadge.tsx";
+import { TaskProjectMeta } from "./TaskRowBody.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import {
@@ -17,6 +16,8 @@ import {
   type Task,
 } from "../lib/backlogTree.ts";
 import { buildInboxList, taskOrigin } from "../lib/backlogInbox.ts";
+import { taskPath } from "../hooks/useSessionRouting.ts";
+import { followRowLink } from "../lib/rowLink.ts";
 import type { BacklogDensity } from "../lib/backlogTreeModel.ts";
 
 /**
@@ -43,6 +44,7 @@ export function BacklogInboxList({
   onCycle,
   onDismiss,
   density,
+  flush = false,
 }: {
   tasks: Task[];
   projectsById: Map<string, ProjectRecord>;
@@ -54,6 +56,8 @@ export function BacklogInboxList({
   onDismiss: (task: Task) => void;
   /** How much room a row gets, decided by the host (`BacklogDensity`). */
   density: BacklogDensity;
+  /** Edge-to-edge, hairline-divided rows (the sidebar); see `BacklogList`. */
+  flush?: boolean;
 }) {
   const tight = density === "tight";
   const items = useMemo(() => buildInboxList(tasks), [tasks]);
@@ -68,7 +72,7 @@ export function BacklogInboxList({
   }
 
   return (
-    <ul className="flex flex-col">
+    <ul data-flush-list={flush || undefined} className="flex flex-col">
       {items.map((task) => (
         <InboxRow
           key={task.id}
@@ -80,6 +84,7 @@ export function BacklogInboxList({
           onCycle={onCycle}
           onDismiss={onDismiss}
           tight={tight}
+          flush={flush}
         />
       ))}
     </ul>
@@ -95,6 +100,7 @@ function InboxRow({
   onCycle,
   onDismiss,
   tight,
+  flush,
 }: {
   task: Task;
   projectsById: Map<string, ProjectRecord>;
@@ -104,6 +110,7 @@ function InboxRow({
   onCycle: (task: Task) => void;
   onDismiss: (task: Task) => void;
   tight: boolean;
+  flush: boolean;
 }) {
   const origin = taskOrigin(task);
   // The preview is what the row is FOR — deciding about a Task you did not
@@ -112,12 +119,29 @@ function InboxRow({
   const preview = task.descriptionPreview?.trim();
 
   return (
-    <li data-list-row-id={task.id}>
-      <Item variant={selected ? "muted" : "outline"} size={tight ? "xs" : "sm"}>
+    <li
+      data-list-row-id={task.id}
+      className={flush ? "border-b border-border/60" : undefined}
+    >
+      {/* The Focus row's shape: the row is the click surface, the TITLE the
+          link to the Task; the status glyph and the one action (dismiss) sit
+          on the title line. */}
+      <Item
+        size={tight ? "xs" : "sm"}
+        variant={selected ? "muted" : flush ? "default" : "outline"}
+        onClick={() => onOpen(task.id)}
+        className={`min-w-0 cursor-pointer flex-nowrap items-start gap-1.5 text-left ${tight ? "py-1" : "py-1.5"} ${
+          flush ? "rounded-none border-0 pr-2 pl-1 hover:bg-muted" : "px-1"
+        }`}
+      >
         <IconButton
           label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
           size={tight ? "icon-xs" : "icon-sm"}
-          onClick={() => onCycle(task)}
+          className="shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onCycle(task);
+          }}
         >
           <StatusIcon
             status={task.status}
@@ -125,35 +149,43 @@ function InboxRow({
             claimed={Boolean(pendingStatusSuggestion(task))}
           />
         </IconButton>
-        <ItemContent>
-          <ItemTitle>
-            <Button
-              variant="ghost"
-              className="h-auto min-w-0 max-w-full justify-start px-1 py-0 text-left"
-              onClick={() => onOpen(task.id)}
-            >
-              <span className="truncate">{task.title}</span>
-            </Button>
-            <TaskIdBadge id={task.id} />
-          </ItemTitle>
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-            {origin}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <a
+            href={taskPath(task.id)}
+            draggable={false}
+            className={`min-w-0 truncate text-sm ${selected ? "font-medium" : ""} text-foreground`}
+            onClick={(event) => {
+              event.stopPropagation();
+              followRowLink(event, taskPath(task.id), () => onOpen(task.id));
+            }}
+          >
+            {task.title}
+          </a>
+          {/* Where it came from — what you decide with — after the id, as
+              every Task row's second line. */}
+          <span className="flex min-w-0 items-center gap-1.5 overflow-hidden text-xs whitespace-nowrap text-muted-foreground">
             {showProjectBadge && task.projectId ? (
-              <ProjectBadge
+              <TaskProjectMeta
                 projectId={task.projectId}
                 projectsById={projectsById}
-                size="sm"
+                href={null}
               />
             ) : null}
+            <TaskIdBadge id={task.id} />
+            <span className="shrink-0">{origin}</span>
           </span>
           {preview ? (
             <p className="truncate text-xs text-muted-foreground">{preview}</p>
           ) : null}
-        </ItemContent>
+        </div>
         <IconButton
           label={`Dismiss "${task.title}" from the Inbox`}
           size={tight ? "icon-xs" : "icon-sm"}
-          onClick={() => onDismiss(task)}
+          className="shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDismiss(task);
+          }}
         >
           <Check />
         </IconButton>

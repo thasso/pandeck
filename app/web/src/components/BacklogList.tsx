@@ -240,7 +240,7 @@ function BacklogListImpl({
     // Flush, the rows run edge to edge and everything else (notes, the
     // skeleton, an empty state) keeps the sidebar's inset.
     <div
-      className={`flex flex-col gap-2 ${flush ? "[&>:not([role=tree])]:mx-2" : ""}`}
+      className={`flex flex-col gap-2 ${flush ? "[&>:not([role=tree],[data-flush-list])]:mx-2" : ""}`}
     >
       {showAddTask ? (
         <div className="flex flex-col gap-2">
@@ -328,6 +328,7 @@ function BacklogListImpl({
           onCycle={c.cycleStatus}
           onDismiss={c.dismissFromInbox}
           density={density}
+          flush={flush}
         />
       ) : view === "focus" ? (
         <BacklogFocusList
@@ -346,6 +347,7 @@ function BacklogListImpl({
           onDismissSuggestion={c.dismissSuggestion}
           onNavigate={onNavigate}
           density={density}
+          flush={flush}
         />
       ) : (
         <BacklogTreePane

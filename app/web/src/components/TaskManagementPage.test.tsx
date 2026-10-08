@@ -95,7 +95,6 @@ function page(options: PageOptions) {
           ? ready(options.taskDetails[options.selectedId]!)
           : undefined
       }
-      commentsState={ready([])}
       workflowRuns={[]}
       workflowCards={{}}
       sessions={[]}

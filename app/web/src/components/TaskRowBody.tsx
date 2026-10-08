@@ -198,7 +198,10 @@ export function TaskRowBody({
     meta && sessionShownElsewhere && !meta.working
       ? { ...meta, session: null }
       : meta;
-  const empty = !line2 || taskRowMetaEmpty(line2);
+  // The Project leads line 2 on its own, so it does not count as something
+  // else to say: a Task with only a Project still gets the fallback.
+  const empty = !line2 || taskRowMetaEmpty({ ...line2, projectId: null });
+  const project = line2?.projectId ? projectPath(line2.projectId) : null;
   const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-muted-foreground line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-foreground" : "text-foreground"}`;
   return (
     <>
@@ -232,16 +235,21 @@ export function TaskRowBody({
       </span>
       {line2 ? (
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
-          {/* The id OPENS line 2, in every two-line view: a left-hand column the
-              eye scans down, and the one item on a clipping line that must never
-              be the thing that clips. */}
-          <TaskIdBadge id={task.id} onNavigate={onNavigate} />
-          {!empty ? (
-            <TaskMetaItems
-              meta={line2}
+          {/* The Project OPENS line 2, then the id, in every two-line view: a
+              left-hand column the eye scans down, and the items on a clipping
+              line that must never be the ones that clip (the Project's name
+              shortens before it goes). */}
+          {line2.projectId ? (
+            <TaskProjectMeta
+              projectId={line2.projectId}
               projectsById={projectsById}
+              href={project}
               onNavigate={onNavigate}
             />
+          ) : null}
+          <TaskIdBadge id={task.id} onNavigate={onNavigate} />
+          {!empty ? (
+            <TaskMetaItems meta={line2} onNavigate={onNavigate} />
           ) : whenMetaEmpty === "fallback" ? (
             /* Nothing else to report. A row whose height is a thumb target says
                the two facts a Task always has — where it stands, and how long it
@@ -311,16 +319,14 @@ function MetaLink({
 }
 
 /**
- * The chips, in the order they survive a narrow row: what is true THIS SECOND
- * first, then what was decided about the Task, then where it belongs.
+ * The chips after the Project and the id, in the order they survive a narrow
+ * row: what is true THIS SECOND first, then what was decided about the Task.
  */
 function TaskMetaItems({
   meta,
-  projectsById,
   onNavigate,
 }: {
   meta: TaskRowMeta;
-  projectsById: Map<string, ProjectRecord>;
   onNavigate?: ((path: string) => void) | undefined;
 }) {
   // The routes the chips lead to, resolved once. `working` is OBSERVED on a
@@ -331,7 +337,6 @@ function TaskMetaItems({
   const worktreeChanges = meta.worktreeId
     ? worktreePath(meta.worktreeId, "changes")
     : null;
-  const project = meta.projectId ? projectPath(meta.projectId) : null;
   return (
     <>
       {/* WHAT the agent suggested, since the two kinds ask different questions
@@ -507,21 +512,13 @@ function TaskMetaItems({
           {meta.priority}
         </Badge>
       ) : null}
-      {/* The Project as the session cards name it: its icon in its colour and
-          its short name, muted, leading to the Project. */}
-      {meta.projectId ? (
-        <ProjectMeta
-          projectId={meta.projectId}
-          projectsById={projectsById}
-          href={project}
-          onNavigate={onNavigate}
-        />
-      ) : null}
     </>
   );
 }
 
-function ProjectMeta({
+/** A Task's Project on a row's meta line: its icon in its colour and its short
+ *  name, muted, leading to the Project when there is somewhere to go. */
+export function TaskProjectMeta({
   projectId,
   projectsById,
   href,
@@ -541,7 +538,7 @@ function ProjectMeta({
     <MetaLink
       href={href ?? ""}
       title={known ? label : `Unknown project: ${projectId}`}
-      className="inline-flex min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+      className="inline-flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
       onNavigate={href ? onNavigate : undefined}
     >
       <FolderKanban

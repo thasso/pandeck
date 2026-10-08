@@ -25,7 +25,6 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   PullRequestMergeMethod,
   SessionListItem,
-  TaskComment,
   TaskItem,
   WorkflowCeilingRaise,
   WorkflowRunSummary,
@@ -43,7 +42,6 @@ import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
 import { copyWithToast } from "../lib/clipboard.ts";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
-import { TaskComments, taskCommentCount } from "./TaskComments.tsx";
 import {
   ResizableSeparator,
   useResizeDrag,
@@ -75,7 +73,6 @@ import {
 import type { WorkflowIndicators } from "../lib/workflowIndicator.ts";
 
 const IDLE_DETAIL = idle<TaskItem | null>();
-const IDLE_COMMENTS = idle<TaskComment[]>();
 
 // Master/detail split sizing. The master (list) width is resizable and persisted;
 // the detail keeps at least DETAIL_MIN_WIDTH so it stays usable. The split shows
@@ -109,7 +106,6 @@ export function TaskManagementPage({
   backlogState,
   connected,
   detailState = IDLE_DETAIL,
-  commentsState = IDLE_COMMENTS,
   failure,
   onDismissFailure,
   workflowRuns,
@@ -135,7 +131,6 @@ export function TaskManagementPage({
   backlogState: BacklogState;
   connected: boolean;
   detailState?: LoadState<TaskItem | null> | undefined;
-  commentsState?: LoadState<TaskComment[]> | undefined;
   /**
    * The failure the OPEN Task is carrying (`docs/messaging.md`) — a write about
    * the Task itself that no control here tracks, archiving it being the usual
@@ -316,20 +311,6 @@ export function TaskManagementPage({
     )
       actions.requestTaskDetail(selectedId);
   }, [actions, connected, detailState, selectedId, selectedTask]);
-  const commentTargetId =
-    selectedTask && !detailUnavailable ? selectedId : null;
-  // Subscription lifetime follows the visible Task, not the socket. A transient
-  // disconnect must keep the last-known trace and descriptor on screen.
-  useEffect(() => {
-    if (!commentTargetId) return;
-    return () => actions.unwatchTaskComments(commentTargetId);
-  }, [actions, commentTargetId]);
-  // Connection changes only revalidate the still-open surface; they never
-  // trigger its teardown cleanup.
-  useEffect(() => {
-    if (!commentTargetId || !connected) return;
-    actions.listTaskComments(commentTargetId);
-  }, [actions, commentTargetId, connected]);
 
   return (
     <div
@@ -440,7 +421,6 @@ export function TaskManagementPage({
               onSaveDescription={(description) =>
                 saveDescription(selectedTask, description)
               }
-              commentsState={commentsState}
               statusMutation={
                 taskMutations[taskMutationKey(selectedTask.id, "status")]
               }
@@ -450,14 +430,7 @@ export function TaskManagementPage({
               descriptionMutation={
                 taskMutations[taskMutationKey(selectedTask.id, "description")]
               }
-              commentMutation={
-                taskMutations[taskMutationKey(selectedTask.id, "comment")]
-              }
               onRetryDetail={() => actions.requestTaskDetail(selectedTask.id)}
-              onRetryComments={() => actions.listTaskComments(selectedTask.id)}
-              onAddComment={(body) =>
-                actions.addTaskComment({ taskId: selectedTask.id, body })
-              }
               paObjectReferences={paObjectReferences}
               onOpenPaObject={onOpenPaObject}
             />
@@ -570,14 +543,10 @@ function TaskDetailPanel({
   onCycle,
   onRename,
   onSaveDescription,
-  commentsState,
   statusMutation,
   renameMutation,
   descriptionMutation,
-  commentMutation,
   onRetryDetail,
-  onRetryComments,
-  onAddComment,
   paObjectReferences,
   onOpenPaObject,
 }: {
@@ -618,14 +587,10 @@ function TaskDetailPanel({
   onCycle: () => void;
   onRename: (title: string) => void;
   onSaveDescription: (description: string) => void;
-  commentsState: LoadState<TaskComment[]>;
   statusMutation?: LoadState<true> | undefined;
   renameMutation?: LoadState<true> | undefined;
   descriptionMutation?: LoadState<true> | undefined;
-  commentMutation?: LoadState<true> | undefined;
   onRetryDetail: () => void;
-  onRetryComments: () => void;
-  onAddComment: (body: string) => void;
   paObjectReferences: MarkdownPaObjectReference[];
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
 }) {
@@ -819,25 +784,6 @@ function TaskDetailPanel({
                   )}
                 </div>
               </EditableText>
-            </TaskCollapsibleSection>
-
-            <TaskCollapsibleSection
-              title="Activity"
-              storageKey={`wf.collapse.${item.id}.activity`}
-              trailing={
-                taskCommentCount(dataOf(commentsState)) ? (
-                  <span className="text-sm text-muted-foreground">
-                    {taskCommentCount(dataOf(commentsState))}
-                  </span>
-                ) : undefined
-              }
-            >
-              <TaskComments
-                state={commentsState}
-                mutation={commentMutation}
-                onRetry={onRetryComments}
-                onAddComment={onAddComment}
-              />
             </TaskCollapsibleSection>
           </div>
         </div>

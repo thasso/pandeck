@@ -5452,7 +5452,6 @@ function AppContent() {
     chatCommentSelection?.onComment();
   }, [chatCommentSelection, mobileLayout, setInspectorOpen]);
 
-
   // The expanded composer's mic hands over to the dock's row: it has already
   // remembered its caret and dropped focus, so closing it reveals the row and this
   // token starts the recording there. One recorder, one recording UI, either way in.
@@ -6869,11 +6868,6 @@ function AppContent() {
                     onDismissFailure={() =>
                       selectedTaskId &&
                       actions.dismissObjectFailure("task", selectedTaskId)
-                    }
-                    commentsState={
-                      selectedTaskId
-                        ? state.taskComments[selectedTaskId]
-                        : undefined
                     }
                     workflowRuns={selectedTaskWorkflowRuns}
                     workflowCards={selectedTaskWorkflowCards}

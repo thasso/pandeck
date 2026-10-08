@@ -60,6 +60,7 @@ export function BacklogFocusList({
   onDismissSuggestion,
   onNavigate,
   density,
+  flush = false,
 }: {
   tasks: Task[];
   /** Today as YYYY-MM-DD; passed in so one clock drives the whole surface. */
@@ -86,6 +87,8 @@ export function BacklogFocusList({
   onNavigate?: ((path: string) => void) | undefined;
   /** How much room a row gets, decided by the host (`BacklogDensity`). */
   density: BacklogDensity;
+  /** Edge-to-edge, hairline-divided rows (the sidebar); see `BacklogList`. */
+  flush?: boolean;
 }) {
   const tight = density === "tight";
   const buckets = useMemo(
@@ -123,11 +126,21 @@ export function BacklogFocusList({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div
+      data-flush-list={flush || undefined}
+      className={`flex flex-col ${flush ? "" : "gap-3"}`}
+    >
       {buckets.map((bucket) => (
         <section key={bucket.id} aria-label={bucket.label}>
           <h3
-            className={`px-1 pb-1 font-medium uppercase tracking-wide ${tight ? "text-xs" : "text-sm"} ${BUCKET_TONE[bucket.id]}`}
+            // Flush, a heading is a strip over its rows, as the composer
+            // shelf's labels: small caps on the sidebar's own inset, the
+            // hairline under it starting the list's.
+            className={`font-medium uppercase tracking-wide ${
+              flush
+                ? "border-b border-border/60 px-2 pt-3 pb-1 text-xs"
+                : `px-1 pb-1 ${tight ? "text-xs" : "text-sm"}`
+            } ${BUCKET_TONE[bucket.id]}`}
           >
             {bucket.label}
           </h3>
@@ -145,6 +158,7 @@ export function BacklogFocusList({
                 onDismissSuggestion={onDismissSuggestion}
                 onNavigate={onNavigate}
                 tight={tight}
+                flush={flush}
               />
             ))}
           </ul>
@@ -180,6 +194,7 @@ function FocusRow({
   onDismissSuggestion,
   onNavigate,
   tight,
+  flush,
 }: {
   task: Task;
   meta: TaskRowMeta;
@@ -191,11 +206,15 @@ function FocusRow({
   onDismissSuggestion: (task: Task) => void;
   onNavigate?: ((path: string) => void) | undefined;
   tight: boolean;
+  flush: boolean;
 }) {
   const suggestion = meta.suggestion;
 
   return (
-    <li data-list-row-id={task.id}>
+    <li
+      data-list-row-id={task.id}
+      className={flush ? "border-b border-border/60" : undefined}
+    >
       {/* The row is a plain CLICK SURFACE and the TITLE is the button — an
           anchor to the Task (`TaskRowBody`'s `onOpenTask`). It is deliberately
           not the session shelf's `role="button"` row: that role makes every
@@ -208,7 +227,7 @@ function FocusRow({
         size={tight ? "xs" : "sm"}
         variant={selected ? "muted" : "default"}
         onClick={() => onOpen(task.id)}
-        className={`group/row min-w-0 cursor-pointer items-start gap-1.5 px-1 text-left ${tight ? "py-1" : "py-1.5"}`}
+        className={`group/row min-w-0 cursor-pointer items-start gap-1.5 text-left ${tight ? "py-1" : "py-1.5"} ${flush ? "rounded-none border-0 pr-2 pl-1 hover:bg-muted" : "px-1"}`}
       >
         <IconButton
           label={`Status: ${TASK_STATUS_LABEL[task.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(task.status)].toLowerCase()}`}
