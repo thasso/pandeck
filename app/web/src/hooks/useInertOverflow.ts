@@ -11,7 +11,18 @@ import { useLayoutEffect, useRef, type RefObject } from "react";
  * again, including when only a child's own size changed. The card's own
  * accessible name still states what those items said.
  */
-export function useInertOverflow<T extends HTMLElement>(): RefObject<T | null> {
+export function useInertOverflow<T extends HTMLElement>(
+  options: {
+    /**
+     * Before anything is dropped, try the row's compact form: the row carries
+     * `data-signals-compact` (its badges drop their labels, `index.css`)
+     * exactly while the full form would wrap an item away. Without it a badge
+     * vanished at widths where its icon alone still fitted.
+     */
+    compact?: boolean;
+  } = {},
+): RefObject<T | null> {
+  const { compact = false } = options;
   const ref = useRef<T | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
   // Every commit: a child that appeared, vanished or changed width may wrap.
@@ -21,10 +32,10 @@ export function useInertOverflow<T extends HTMLElement>(): RefObject<T | null> {
   // memoized card does not re-render for it.
   useLayoutEffect(() => {
     const row = ref.current;
-    markOverflow(row);
+    fit(row, compact);
     if (!row || typeof ResizeObserver === "undefined") return;
     const observer = (observerRef.current ??= new ResizeObserver(() =>
-      markOverflow(ref.current),
+      fit(ref.current, compact),
     ));
     observer.disconnect();
     observer.observe(row);
@@ -34,13 +45,31 @@ export function useInertOverflow<T extends HTMLElement>(): RefObject<T | null> {
   return ref;
 }
 
-function markOverflow(row: HTMLElement | null) {
+function fit(row: HTMLElement | null, compact: boolean) {
   // No layout yet (detached, display:none, or a DOM without layout): leave
   // every child reachable rather than guess.
   if (!row || row.clientHeight === 0) return;
-  const bottom = row.getBoundingClientRect().top + row.clientHeight;
-  for (const child of Array.from(row.children)) {
-    if (!(child instanceof HTMLElement)) continue;
-    child.inert = child.getBoundingClientRect().top >= bottom - 1;
+  if (compact) {
+    // Measured in the full form every time, so a row that has grown back
+    // wide enough gets its labels back. Both writes land before paint, and
+    // the badges do not animate their size (`index.css`), so what is measured
+    // is the form itself, never a frame of a transition between the two.
+    row.removeAttribute("data-signals-compact");
+    const compactNow = wrapped(row).some(Boolean);
+    if (compactNow) row.setAttribute("data-signals-compact", "");
   }
+  const marks = wrapped(row);
+  Array.from(row.children).forEach((child, index) => {
+    if (child instanceof HTMLElement) child.inert = marks[index] ?? false;
+  });
+}
+
+/** Per child: whether it landed below the row's one visible line. */
+function wrapped(row: HTMLElement): boolean[] {
+  const bottom = row.getBoundingClientRect().top + row.clientHeight;
+  return Array.from(row.children).map(
+    (child) =>
+      child instanceof HTMLElement &&
+      child.getBoundingClientRect().top >= bottom - 1,
+  );
 }

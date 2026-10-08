@@ -248,7 +248,9 @@ function ActiveSessionCardImpl({
   // the card's label says the same.
   const changesText = delivery ? undefined : worktreeChangesText(relations);
   const metaRowRef = useInertOverflow<HTMLDivElement>();
-  const signalRowRef = useInertOverflow<HTMLDivElement>();
+  const signalRowRef = useInertOverflow<HTMLDivElement>({
+    compact: true,
+  });
   const settleLabel = card.settleBlocked
     ? `Cannot settle: ${card.settleBlocked}`
     : "Settle — move out of the working set";
