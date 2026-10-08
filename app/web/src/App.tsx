@@ -4038,14 +4038,14 @@ function AppContent() {
    * either; its own Retry (the narration's) is what re-runs the handoff.
    */
   const firstSendRetryPending = firstSendFailed && stagedSend?.input != null;
-  // The new-session screen needs no header on a phone: it said "New Session" over
-  // a screen that is visibly a new session, its subtitle described a session that
-  // does not exist yet (down to a Copy session ID for a draft), and back moved to
-  // the dock's row. Once the first prompt is sent that stops being true — the
-  // screen is a session being created, and the row carries the identity the
-  // transcript never states plus the bootstrap's progress.
-  const chatHeaderHidden =
-    mobileLayout && route.name === "new" && !sessionShell.bootstrapping;
+  // The new-session screen needs no header on any layout: it said "New Session"
+  // over a screen that is visibly a new session, offered nothing to comment on,
+  // and its subtitle described a session that does not exist yet (down to a
+  // Copy session ID for a draft); on a phone back is in the dock's row. Once the
+  // first prompt is sent that stops being true — the screen is a session being
+  // created, and the row carries the identity the transcript never states plus
+  // the bootstrap's progress.
+  const chatHeaderHidden = route.name === "new" && !sessionShell.bootstrapping;
   const displaySessionTitle =
     route.name === "permanentAssistant"
       ? state.settings.permanentAssistant.name || "Personal Assistant"

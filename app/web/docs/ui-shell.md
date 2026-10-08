@@ -824,15 +824,16 @@ staging** mode: staged references are visible and removable. The first send
 commits the initial context envelope; later attachments are recorded as
 turn-level context events, not merged into the initial envelope.
 
-The draft header says **New Session** only until that first send. From
-acceptance until the dedicated naming agent settles, every surface uses the
-stable **Unlabeled Session** placeholder; it never derives an interim title from
-the prompt or a provider default. While generation is actually running, the
-title uses the shared reduced-motion-safe working-text treatment. A successful
-answer replaces it directly with the final title. A failed naming run settles on
-an informative deterministic first-prompt fallback only AFTER the working state
-ends, so it does not reintroduce an interim-title flicker; disabled naming skips
-the working treatment and uses that fallback as soon as the session row lands.
+The draft has no header on any layout — it is visibly a new session, and the
+header would only say so — until that first send. From acceptance until the
+dedicated naming agent settles, every surface uses the stable **Unlabeled
+Session** placeholder; it never derives an interim title from the prompt or a
+provider default. While generation is actually running, the title uses the
+shared reduced-motion-safe working-text treatment. A successful answer replaces
+it directly with the final title. A failed naming run settles on an informative
+deterministic first-prompt fallback only AFTER the working state ends, so it
+does not reintroduce an interim-title flicker; disabled naming skips the working
+treatment and uses that fallback as soon as the session row lands.
 
 ## Small Screens
 
