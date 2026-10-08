@@ -9,7 +9,9 @@ import {
 import {
   ArrowLeft,
   ArrowUpRight,
+  Bot,
   ChevronRight,
+  Lightbulb,
   CornerLeftUp,
   CalendarCheck,
   Check,
@@ -17,8 +19,12 @@ import {
   Flag,
   Pencil,
   Ticket,
+  Undo2,
 } from "lucide-react";
 import { Button } from "./ui/button.tsx";
+import { sessionPath } from "../lib/sessionRoutes.ts";
+import { followRowLink } from "../lib/rowLink.ts";
+import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Input } from "./ui/input.tsx";
 import { Textarea } from "./ui/textarea.tsx";
@@ -62,7 +68,12 @@ import {
   isPending,
   type LoadState,
 } from "../lib/loadState.ts";
-import { flattenTasks, type Task } from "../lib/backlogTree.ts";
+import {
+  acceptStatusSuggestionSave,
+  flattenTasks,
+  pendingStatusSuggestion,
+  type Task,
+} from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
 import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
 import { todayIso } from "./calendar/calendarDates.ts";
@@ -257,6 +268,23 @@ export function TaskManagementPage({
 
   const setTaskProject = (item: Task, projectId: string | null) => {
     actions.saveTask({ id: item.id, status: item.status, projectId }, "edit");
+  };
+
+  // An agent's status suggestion, answered here as in the Focus view: accept
+  // is an ordinary save that also clears the claim, dismiss clears only it.
+  const acceptSuggestion = (item: Task) => {
+    const to = item.statusSuggestion?.to;
+    if (to)
+      actions.saveTask(
+        acceptStatusSuggestionSave({ id: item.id, to }),
+        "status",
+      );
+  };
+  const dismissSuggestion = (item: Task) => {
+    actions.saveTask(
+      { id: item.id, status: item.status, clearStatusSuggestion: true },
+      "status",
+    );
   };
 
   const setTaskStatus = (item: Task, status: Task["status"]) => {
@@ -458,6 +486,8 @@ export function TaskManagementPage({
               onMergeRun={actions.mergeWorkflowRun}
               onCleanUpRun={actions.cleanUpWorkflowRun}
               onSetStatus={(status) => setTaskStatus(selectedTask, status)}
+              onAcceptSuggestion={() => acceptSuggestion(selectedTask)}
+              onDismissSuggestion={() => dismissSuggestion(selectedTask)}
               onEdit={(changes) => editTask(selectedTask, changes)}
               onSetProject={(projectId) =>
                 setTaskProject(selectedTask, projectId)
@@ -584,6 +614,8 @@ function TaskDetailPanel({
   onMergeRun,
   onCleanUpRun,
   onSetStatus,
+  onAcceptSuggestion,
+  onDismissSuggestion,
   onEdit,
   onSetProject,
   statusMutation,
@@ -634,6 +666,8 @@ function TaskDetailPanel({
   ) => void;
   onCleanUpRun: (id: string) => void;
   onSetStatus: (status: Task["status"]) => void;
+  onAcceptSuggestion: () => void;
+  onDismissSuggestion: () => void;
   onEdit: (changes: TaskTextChanges) => void;
   onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
@@ -703,6 +737,10 @@ function TaskDetailPanel({
               parentTask={parentTask}
               subtasks={subtasks}
               onOpenTask={onOpenTask}
+              onAcceptSuggestion={onAcceptSuggestion}
+              onDismissSuggestion={onDismissSuggestion}
+              onOpenSession={onOpenSession}
+              sessions={sessions}
               projectsById={projectsById}
               onNavigate={onNavigate}
               onSetProject={onSetProject}
@@ -867,6 +905,10 @@ function TaskTitleBlock({
   parentTask,
   subtasks,
   onOpenTask,
+  onAcceptSuggestion,
+  onDismissSuggestion,
+  onOpenSession,
+  sessions,
   projectsById,
   onNavigate,
   onSetProject,
@@ -879,6 +921,11 @@ function TaskTitleBlock({
   parentTask?: Task | undefined;
   subtasks: Task[];
   onOpenTask: (id: string) => void;
+  onAcceptSuggestion: () => void;
+  onDismissSuggestion: () => void;
+  onOpenSession: (id: string) => void;
+  /** The session list, to name the agent session behind a suggestion. */
+  sessions: UIState["sessions"];
   projectsById: Map<string, ProjectRecord>;
   onNavigate?: ((path: string) => void) | undefined;
   /** Assign, change or clear the Task's Project from the facts line. */
@@ -891,6 +938,10 @@ function TaskTitleBlock({
   const isDone = item.status === "done";
   const statusError = errorOf(statusMutation ?? idle());
   const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const suggestion = pendingStatusSuggestion(item);
+  const suggestionSession = suggestion?.sessionId
+    ? sessions.find((session) => session.id === suggestion.sessionId)
+    : undefined;
   // The picker offers the active Projects; an archived one still names itself
   // when it is the current value (`ProjectSelector`).
   const activeProjects = useMemo(
@@ -914,6 +965,67 @@ function TaskTitleBlock({
           {item.title}
         </h1>
       )}
+      {suggestion ? (
+        // An agent's claim about this Task's status, answered on the Task
+        // itself as well as in the Focus view's review bucket: a card with a
+        // warning-toned header naming what it is, who said what (the agent
+        // leads to its session) with the reason quoted, and the answers in
+        // its footer.
+        <Card size="sm" role="status" className="my-1 gap-0 py-0">
+          <CardHeader className="flex h-8 items-center gap-1.5 border-b bg-warning-soft py-0 text-xs font-medium text-warning [.border-b]:pb-0">
+            <Lightbulb className="size-3.5" aria-hidden />
+            Suggestion
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 py-3">
+            <p className="flex flex-wrap items-center gap-x-1">
+              {suggestionSession ? (
+                // A real link to the session: underlined, and a modifier
+                // click opens it in a tab.
+                <a
+                  href={sessionPath(suggestionSession.id)}
+                  className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-3 hover:text-primary"
+                  onClick={(event) =>
+                    followRowLink(
+                      event,
+                      sessionPath(suggestionSession.id),
+                      () => onOpenSession(suggestionSession.id),
+                    )
+                  }
+                >
+                  <Bot className="size-3.5" aria-hidden />
+                  {suggestionSession.title.trim() || "An agent session"}
+                </a>
+              ) : (
+                <span>An agent</span>
+              )}
+              <span>
+                {suggestion.to === "done"
+                  ? "says this is done."
+                  : "handed this back unfinished."}
+              </span>
+            </p>
+            {suggestion.reason ? (
+              <blockquote className="border-l-2 pl-3 text-muted-foreground italic wrap-anywhere">
+                {suggestion.reason}
+              </blockquote>
+            ) : null}
+          </CardContent>
+          {/* The same 32px as the header band, so the card's two bars match. */}
+          <CardFooter className="h-8 justify-end gap-1 py-0">
+            <Button variant="ghost" size="xs" onClick={onDismissSuggestion}>
+              {suggestion.to === "done" ? "Not done yet" : "Keep it done"}
+            </Button>
+            <Button
+              size="xs"
+              busy={isPending(statusMutation ?? idle())}
+              onClick={onAcceptSuggestion}
+            >
+              {suggestion.to === "done" ? <Check /> : <Undo2 />}
+              {suggestion.to === "done" ? "Mark done" : "Move to To do"}
+            </Button>
+          </CardFooter>
+        </Card>
+      ) : null}
       {/* Under the title, as the chat title bar's subtitle: where the Task
           stands, where it belongs, and how far its subtree is — plain muted
           facts, not chips. */}
@@ -935,7 +1047,11 @@ function TaskTitleBlock({
                 />
               }
             >
-              <TaskStatusIcon status={item.status} size={14} />
+              <TaskStatusIcon
+                status={item.status}
+                size={14}
+                claimed={Boolean(suggestion)}
+              />
               {TASK_STATUS_LABEL[item.status]}
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-40">
@@ -957,7 +1073,11 @@ function TaskTitleBlock({
           // On a phone the dock's action row changes the status; here it is
           // only read.
           <span className="inline-flex items-center gap-1.5">
-            <TaskStatusIcon status={item.status} size={14} />
+            <TaskStatusIcon
+              status={item.status}
+              size={14}
+              claimed={Boolean(suggestion)}
+            />
             {TASK_STATUS_LABEL[item.status]}
           </span>
         )}
