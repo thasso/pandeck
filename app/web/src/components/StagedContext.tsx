@@ -117,10 +117,8 @@ function worktreeLabel(
  */
 export function StagedContextBar({
   value,
-  projects,
   worktrees,
   onOpen,
-  onChangeProject,
   onChangeWorktree,
   onChangeNewWorktree,
   onChangeTask,
@@ -128,29 +126,23 @@ export function StagedContextBar({
   onChangeFile,
 }: {
   value: StagedContextValue;
-  projects: ProjectRecord[];
   worktrees: WorktreeRecord[];
   onOpen: () => void;
-  onChangeProject: (projectId: string | null) => void;
   onChangeWorktree: (worktreeId: string | null) => void;
   onChangeNewWorktree?: (staged: boolean) => void;
   onChangeTask: (task: { taskId: string; title: string } | null) => void;
   onChangeReview?: ((review: null) => void) | undefined;
   onChangeFile?: ((file: null) => void) | undefined;
 }) {
+  // No project chip: the new-session landing shows the chosen project, and a
+  // session's title bar names it — a chip here only repeated one of them.
   const hasAny = Boolean(
     value.review ||
     value.file ||
     value.task ||
     value.worktreeId ||
-    value.newWorktree ||
-    value.projectId,
+    value.newWorktree,
   );
-  // The project is "implied" when a worktree or task already carries it, so we
-  // render it as a non-removable derived chip instead of a duplicate control.
-  // A staged NEW worktree is the reverse — it is created IN the project — so the
-  // project stays removable, and removing it cancels the new worktree with it.
-  const projectImplied = Boolean(value.worktreeId || value.task);
 
   // Nothing staged: the composer toolbar's context button is the entry point, so
   // the bar collapses away entirely rather than showing a duplicate affordance.
@@ -200,15 +192,6 @@ export function StagedContextBar({
           onRemove={
             onChangeNewWorktree ? () => onChangeNewWorktree(false) : undefined
           }
-        />
-      ) : null}
-      {value.projectId ? (
-        <ContextChip
-          icon={<FolderKanban size={12} />}
-          label={projectLabel(projects, value.projectId) ?? value.projectId}
-          dimmed={projectImplied}
-          onOpen={onOpen}
-          onRemove={projectImplied ? undefined : () => onChangeProject(null)}
         />
       ) : null}
       {/* No "+" of its own: the composer's toolbar "+" opens the same sheet,

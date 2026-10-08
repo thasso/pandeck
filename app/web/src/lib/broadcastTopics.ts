@@ -101,6 +101,8 @@ export function topicsForSurface({
     workflowStartOpen
   )
     topics.add("worktrees");
+  // A session's title bar names its project (and links to it).
+  if (routeName === "session") topics.add("projects");
   if (routeName === "new") {
     topics.add("projects");
     topics.add("worktrees");

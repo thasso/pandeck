@@ -2064,10 +2064,8 @@ export const Composer = memo(function Composer({
               {contextBar ? (
                 <StagedContextBar
                   value={contextBar.value}
-                  projects={contextBar.projects}
                   worktrees={contextBar.worktrees}
                   onOpen={() => openContext()}
-                  onChangeProject={contextBar.onChangeProject}
                   onChangeWorktree={contextBar.onChangeWorktree}
                   onChangeTask={contextBar.onChangeTask}
                   onChangeReview={contextBar.onChangeReview}

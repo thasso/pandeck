@@ -45,10 +45,8 @@ describe("StagedContextBar", () => {
           task: null,
           review: { commentCount: 3 },
         }}
-        projects={[]}
         worktrees={[worktree]}
         onOpen={() => {}}
-        onChangeProject={() => {}}
         onChangeWorktree={() => {}}
         onChangeTask={() => {}}
         onChangeReview={() => {}}
@@ -68,10 +66,8 @@ describe("StagedContextBar", () => {
           newWorktree: true,
           task: null,
         }}
-        projects={[]}
         worktrees={[worktree]}
         onOpen={() => {}}
-        onChangeProject={() => {}}
         onChangeWorktree={() => {}}
         onChangeNewWorktree={() => {}}
         onChangeTask={() => {}}

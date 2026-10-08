@@ -13,6 +13,7 @@ import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   Check,
+  FolderKanban,
   GitBranch,
   GitPullRequest,
   MessageSquare,
@@ -274,7 +275,11 @@ import {
 import type { CommentActions } from "./components/diff/comments.tsx";
 import { WorktreeReviewSubmitSheet } from "./components/worktree/worktreeReview.tsx";
 import { TaskContextSections } from "./components/TaskContextSections.tsx";
-import { buildProjectsById } from "./lib/projectDisplay.ts";
+import {
+  buildProjectsById,
+  projectColor,
+  projectDisplayKey,
+} from "./lib/projectDisplay.ts";
 import { AppShell } from "./components/shell/AppShell.tsx";
 import {
   DocumentNavigationMarker,
@@ -4041,51 +4046,88 @@ function AppContent() {
       pending={displaySessionTitleGenerationPending}
     />
   );
-  const sessionTitleHeading = displayWorktreeBranch ? (
-    // In a worktree the whole title block is the way there (to its changes,
-    // which is what the subtitle's counts are about) — the header keeps no
-    // separate worktree button.
-    <h2 className="min-w-0 text-sm font-semibold tracking-tight text-foreground">
-      <Button
-        variant="ghost"
-        // A link, not a button: no hover fill, the pointer cursor says it
-        // can be clicked (Button sets no cursor of its own).
-        className="-mx-1.5 h-auto max-w-full min-w-0 cursor-pointer flex-col items-start gap-0 px-1.5 py-0.5 text-left font-semibold hover:bg-transparent dark:hover:bg-transparent"
-        title="Open this session's worktree changes"
-        onClick={() =>
-          displayWorktreeId &&
-          navigate(worktreePath(displayWorktreeId, "changes"))
-        }
-      >
-        <span className="w-full truncate">{sessionTitleText}</span>
-        <span className="flex w-full min-w-0 items-center gap-1 text-xs font-normal text-muted-foreground">
-          <GitBranch className="size-3 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate font-mono">
-            {displayWorktreeBranch}
-          </span>
-          {displayWorktreeStatus &&
-          (displayWorktreeStatus.additions > 0 ||
-            displayWorktreeStatus.deletions > 0) ? (
-            <span
-              className="shrink-0 tabular-nums"
-              title="Uncommitted line changes in the worktree"
+  // The project the session works for: its own, else its worktree's.
+  const displayProjectId =
+    displaySessionListItem?.projectId ??
+    (displayWorktreeId
+      ? state.worktrees?.find((worktree) => worktree.id === displayWorktreeId)
+          ?.projectId
+      : undefined);
+  const displayProject = displayProjectId
+    ? projectsById.get(displayProjectId)
+    : undefined;
+  // The title is a heading; the line under it says where the work lives —
+  // its project and its worktree (branch and uncommitted changes) — and each
+  // of those is a link of its own.
+  const titleLink =
+    "h-auto min-w-0 cursor-pointer gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
+  const sessionTitleHeading =
+    displayProject || displayWorktreeBranch ? (
+      <div className="flex min-w-0 flex-col">
+        <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+          {sessionTitleText}
+        </h2>
+        {/* Responsive by its own width (`@container`): the project gives way
+            to its key first, then the branch shortens with an ellipsis — the
+            line never runs into the header's buttons. */}
+        <div className="@container flex min-w-0 items-center gap-2">
+          {displayProject ? (
+            <Button
+              variant="link"
+              className={`${titleLink} max-w-1/2 shrink-0`}
+              title={`Open project ${displayProject.name}`}
+              onClick={() => navigate(projectPath(displayProject.id))}
             >
-              <span className="text-success">
-                +{displayWorktreeStatus.additions}
-              </span>{" "}
-              <span className="text-destructive">
-                −{displayWorktreeStatus.deletions}
+              <FolderKanban
+                aria-hidden
+                className="size-3 shrink-0"
+                style={{ color: projectColor(displayProject).dot }}
+              />
+              <span className="hidden min-w-0 truncate @[22rem]:inline">
+                {displayProject.name}
               </span>
-            </span>
+              <span className="min-w-0 truncate @[22rem]:hidden">
+                {projectDisplayKey(displayProject)}
+              </span>
+            </Button>
           ) : null}
-        </span>
-      </Button>
-    </h2>
-  ) : (
-    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-      {sessionTitleText}
-    </h2>
-  );
+          {displayWorktreeBranch && displayWorktreeId ? (
+            <Button
+              variant="link"
+              className={`${titleLink} shrink`}
+              title="Open this session's worktree changes"
+              onClick={() =>
+                navigate(worktreePath(displayWorktreeId, "changes"))
+              }
+            >
+              <GitBranch className="size-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate font-mono">
+                {displayWorktreeBranch}
+              </span>
+              {displayWorktreeStatus &&
+              (displayWorktreeStatus.additions > 0 ||
+                displayWorktreeStatus.deletions > 0) ? (
+                <span
+                  className="shrink-0 tabular-nums"
+                  title="Uncommitted line changes in the worktree"
+                >
+                  <span className="text-success">
+                    +{displayWorktreeStatus.additions}
+                  </span>{" "}
+                  <span className="text-destructive">
+                    −{displayWorktreeStatus.deletions}
+                  </span>
+                </span>
+              ) : null}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    ) : (
+      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+        {sessionTitleText}
+      </h2>
+    );
   const stagedContextBar: StagedContextData | undefined = showContextPicker
     ? {
         value: {
