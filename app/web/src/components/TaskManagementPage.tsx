@@ -9,6 +9,8 @@ import {
 import {
   ArrowLeft,
   ArrowUpRight,
+  ChevronRight,
+  CornerLeftUp,
   CalendarCheck,
   Check,
   ClipboardList,
@@ -432,6 +434,15 @@ export function TaskManagementPage({
               item={selectedTask}
               detailState={detailState}
               progress={progressById.get(selectedTask.id)}
+              parentTask={
+                selectedTask.parentId
+                  ? items.find((task) => task.id === selectedTask.parentId)
+                  : undefined
+              }
+              subtasks={items.filter(
+                (task) => task.parentId === selectedTask.id,
+              )}
+              onOpenTask={onSelect}
               runs={selectedRuns}
               runsLoaded={workflowRuns !== null}
               workflowCards={workflowCards}
@@ -555,6 +566,9 @@ function TaskDetailPanel({
   item,
   detailState,
   progress,
+  parentTask,
+  subtasks,
+  onOpenTask,
   runs,
   runsLoaded,
   workflowCards,
@@ -590,6 +604,11 @@ function TaskDetailPanel({
    */
   detailState: LoadState<TaskItem | null>;
   progress?: { done: number; total: number } | undefined;
+  /** The Task this one is a subtask of, when the Backlog holds it. */
+  parentTask?: Task | undefined;
+  /** Its direct subtasks, in Backlog order. */
+  subtasks: Task[];
+  onOpenTask: (id: string) => void;
   runs: WorkflowRunSummary[];
   runsLoaded: boolean;
   workflowCards: UIState["workflowCards"];
@@ -681,6 +700,9 @@ function TaskDetailPanel({
             <TaskTitleBlock
               item={item}
               progress={progress}
+              parentTask={parentTask}
+              subtasks={subtasks}
+              onOpenTask={onOpenTask}
               projectsById={projectsById}
               onNavigate={onNavigate}
               onSetProject={onSetProject}
@@ -842,6 +864,9 @@ function TaskDetailPanel({
 function TaskTitleBlock({
   item,
   progress,
+  parentTask,
+  subtasks,
+  onOpenTask,
   projectsById,
   onNavigate,
   onSetProject,
@@ -851,6 +876,9 @@ function TaskTitleBlock({
 }: {
   item: Task;
   progress?: { done: number; total: number } | undefined;
+  parentTask?: Task | undefined;
+  subtasks: Task[];
+  onOpenTask: (id: string) => void;
   projectsById: Map<string, ProjectRecord>;
   onNavigate?: ((path: string) => void) | undefined;
   /** Assign, change or clear the Task's Project from the facts line. */
@@ -862,6 +890,7 @@ function TaskTitleBlock({
 }) {
   const isDone = item.status === "done";
   const statusError = errorOf(statusMutation ?? idle());
+  const [subtasksOpen, setSubtasksOpen] = useState(false);
   // The picker offers the active Projects; an archived one still names itself
   // when it is the current value (`ProjectSelector`).
   const activeProjects = useMemo(
@@ -955,10 +984,25 @@ function TaskTitleBlock({
             </IconButton>
           ) : null}
         </span>
-        {progress ? (
-          <span className="shrink-0">
-            {progress.done}/{progress.total} subtasks
-          </span>
+        {subtasks.length ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-sm font-normal text-muted-foreground hover:text-foreground"
+            aria-expanded={subtasksOpen}
+            title={
+              progress
+                ? `${progress.done} of ${progress.total} done, nested subtasks included`
+                : undefined
+            }
+            onClick={() => setSubtasksOpen((value) => !value)}
+          >
+            <ChevronRight
+              className={`transition-transform ${subtasksOpen ? "rotate-90" : ""}`}
+            />
+            {subtasks.filter((task) => task.status === "done").length}/
+            {subtasks.length} subtasks
+          </Button>
         ) : null}
         {/* The planning and tickets the inspector edits, read here too. */}
         {planned ? (
@@ -999,6 +1043,57 @@ function TaskTitleBlock({
         ) : null}
       </div>
       {statusError ? <ErrorNote message={statusError} /> : null}
+      {/* Where it sits in the Backlog: the Task it belongs to, and — unfolded
+          from the facts line — the ones that belong to it. */}
+      {parentTask ? (
+        // Wraps rather than overflowing: a parent's title can be as long as
+        // this Task's own. The glyphs sit on the first line.
+        <div className="flex min-w-0 items-start gap-1.5 text-sm text-muted-foreground">
+          {/* Each glyph in a box one text line tall, so it centres on the
+              first line however far the title wraps. */}
+          <span className="flex h-5 shrink-0 items-center">
+            <CornerLeftUp className="size-3.5" aria-hidden />
+          </span>
+          <span className="shrink-0 leading-5">Part of</span>
+          <Button
+            variant="link"
+            size="xs"
+            className="h-auto min-w-0 shrink items-start px-0 py-0 text-left text-sm font-normal whitespace-normal text-foreground"
+            onClick={() => onOpenTask(parentTask.id)}
+          >
+            <span className="flex h-5 shrink-0 items-center">
+              <TaskStatusIcon status={parentTask.status} size={14} />
+            </span>
+            <span className="min-w-0 leading-5 wrap-anywhere">
+              {parentTask.title}
+            </span>
+          </Button>
+        </div>
+      ) : null}
+      {subtasksOpen && subtasks.length ? (
+        <ul className="ml-1 flex flex-col border-l pl-2">
+          {subtasks.map((task) => (
+            <li key={task.id}>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 font-normal"
+                onClick={() => onOpenTask(task.id)}
+              >
+                <TaskStatusIcon status={task.status} size={14} />
+                <span
+                  className={`min-w-0 flex-1 truncate text-left ${task.status === "done" ? "text-muted-foreground line-through" : ""}`}
+                >
+                  {task.title}
+                </span>
+                <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                  #{task.id}
+                </span>
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
