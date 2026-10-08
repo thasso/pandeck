@@ -246,8 +246,8 @@ function BacklogViewSwitcher({
 
 /**
  * The view as a quiet dropdown: its icon and name on the bar, the three views
- * in the menu. Inbox's waiting dot rides on the trigger too, so work arriving
- * is visible from the other two views.
+ * in the menu, where Inbox carries its waiting dot. The trigger carries none:
+ * beside another view's name it read as a stray selection marker.
  */
 function BacklogViewMenu({
   view,
@@ -274,12 +274,7 @@ function BacklogViewMenu({
       >
         <Icon className="text-muted-foreground" />
         <span className="truncate">{meta.label}</span>
-        {inboxWaiting && view !== "inbox" ? (
-          <span
-            className="size-1.5 shrink-0 rounded-full bg-primary"
-            aria-label="Tasks waiting in the Inbox"
-          />
-        ) : null}
+
         <ChevronDown className="text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
