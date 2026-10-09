@@ -35,8 +35,9 @@ export function DisclosureRow({
   age: string;
   ageTitle?: string | undefined;
   /** The Open button's accessible name ("Open <title>"). */
-  openLabel: string;
-  onOpen: () => void;
+  openLabel?: string | undefined;
+  /** Opens the object; absent for a row with nothing to open (a grant). */
+  onOpen?: (() => void) | undefined;
   /** Extra left inset in rem: lines the rows up under an indented header. */
   inset?: number;
   /** Tree depth, indenting 0.75rem per level. */
@@ -79,14 +80,16 @@ export function DisclosureRow({
           >
             {age}
           </span>
-          <IconButton
-            label={openLabel}
-            title="Open"
-            size="icon-xs"
-            onClick={onOpen}
-          >
-            <ArrowUpRight />
-          </IconButton>
+          {onOpen ? (
+            <IconButton
+              label={openLabel ?? "Open"}
+              title="Open"
+              size="icon-xs"
+              onClick={onOpen}
+            >
+              <ArrowUpRight />
+            </IconButton>
+          ) : null}
         </ItemActions>
       </Item>
       {open ? (

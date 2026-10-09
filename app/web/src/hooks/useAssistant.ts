@@ -6333,6 +6333,8 @@ export interface AssistantActions {
   ) => void;
   /** Withdraw one of a session's "Approve for session" grants. */
   revokeApprovalGrant: (sessionId: string, key: string) => void;
+  /** Grant one operation for the rest of a session, from the inspector. */
+  grantApprovalForSession: (sessionId: string, key: string) => void;
   /** Answer a `choosing-task` pull-request card's Task-disambiguation prompt. */
   choosePullRequestTask: (cardId: string, taskId: string | null) => void;
   /**
@@ -8586,6 +8588,8 @@ export function useAssistant({
         }),
       revokeApprovalGrant: (sessionId, key) =>
         send({ type: "revokeApprovalGrant", sessionId, key }),
+      grantApprovalForSession: (sessionId, key) =>
+        send({ type: "grantApprovalForSession", sessionId, key }),
       choosePullRequestTask: (cardId, taskId) =>
         send({ type: "resolvePullRequestCardTask", cardId, taskId }),
       runPullRequestCardAction: (cardId, action, options) => {

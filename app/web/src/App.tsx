@@ -6636,6 +6636,7 @@ function AppContent() {
         onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
         approvalGrants={approvalGrants}
         onRevokeApprovalGrant={actions.revokeApprovalGrant}
+        onGrantApproval={actions.grantApprovalForSession}
       />
       <BackgroundWorkSection
         sessionId={displaySessionListItem?.id}

@@ -280,6 +280,7 @@ import {
   approvalsForSession,
   resolveApproval,
   revokeApprovalGrant,
+  grantApprovalForSession,
 } from "./pendingApprovals.ts";
 import { approvalAnchorFor } from "./approvalAnchor.ts";
 import { cardsForSession, pullRequestCardById } from "./pullRequestCards.ts";
@@ -1118,6 +1119,9 @@ export class Connection implements Viewer {
           msg.edits,
           msg.forSession === true,
         );
+      case "grantApprovalForSession":
+        grantApprovalForSession(msg.sessionId, msg.key);
+        return;
       case "revokeApprovalGrant":
         revokeApprovalGrant(msg.sessionId, msg.key);
         return;

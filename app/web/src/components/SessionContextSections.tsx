@@ -6,12 +6,16 @@ import {
   Film,
   Image as ImageIcon,
   MonitorPlay,
+  Lock,
+  Shield,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { approvalGrantLabel } from "@assistant/shared";
+import { approvalGrantLabel, GRANTABLE_OPERATIONS } from "@assistant/shared";
+import { useDialogs } from "./common/dialogs.tsx";
 import type {
   ApprovalGrant,
   BrowserRuntimeInfo,
@@ -93,6 +97,8 @@ interface SessionContextSectionsProps {
   /** Operations the user approved for the rest of this session. */
   approvalGrants?: readonly ApprovalGrant[] | undefined;
   onRevokeApprovalGrant?: (sessionId: string, key: string) => void;
+  /** Grant one operation for the rest of this session, before a card asks. */
+  onGrantApproval?: (sessionId: string, key: string) => void;
 }
 
 export function SessionContextSections({
@@ -107,6 +113,7 @@ export function SessionContextSections({
   onCancelPostReloadContinuation,
   approvalGrants = [],
   onRevokeApprovalGrant,
+  onGrantApproval,
 }: SessionContextSectionsProps) {
   // A fragment, not a box: these sections are siblings of the panel's other
   // sections, which is what gives them the shared separator and spacing.
@@ -132,13 +139,14 @@ export function SessionContextSections({
         <ToolsSection sessionId={sessionId} exposure={toolExposure} />
       )}
 
-      {approvalGrants.length > 0 && (
+      {approvalGrants.length > 0 || onGrantApproval ? (
         <ApprovalGrantsSection
           sessionId={sessionId}
           grants={approvalGrants}
           onRevoke={onRevokeApprovalGrant}
+          onGrant={onGrantApproval}
         />
-      )}
+      ) : null}
 
       <BrowserRuntimesSection
         sessionId={sessionId}
@@ -473,48 +481,142 @@ function ToolsSection({
   );
 }
 
-/** Operations that run without a click for the rest of this session. */
+/**
+ * Every operation an approval card can ask for, in ONE list of the panel's
+ * rows: the ones this session allows without a click first (with when), then
+ * the ones that still ask, then those only ever approved on their own card.
+ * A row opens to what the operation covers and its status, with Revoke or
+ * Allow… under that; allowing ahead of a card asks for confirmation.
+ */
 function ApprovalGrantsSection({
   sessionId,
   grants,
   onRevoke,
+  onGrant,
 }: {
   sessionId: string;
   grants: readonly ApprovalGrant[];
   onRevoke?: ((sessionId: string, key: string) => void) | undefined;
+  onGrant?: ((sessionId: string, key: string) => void) | undefined;
 }) {
+  const dialogs = useDialogs();
+  const byKey = new Map(grants.map((grant) => [grant.key, grant]));
+  const listed = new Set(
+    GRANTABLE_OPERATIONS.map((operation) => operation.key),
+  );
+  // A grant the list does not name (one tag, from its card) still shows.
+  const rows = [
+    ...grants
+      .filter((grant) => !listed.has(grant.key))
+      .map((grant) => ({
+        key: grant.key,
+        label: approvalGrantLabel(grant.key),
+        covers: "Exactly what its card approved.",
+        cardOnly: true,
+      })),
+    ...GRANTABLE_OPERATIONS,
+  ].sort(
+    (a, b) =>
+      Number(byKey.has(b.key)) - Number(byKey.has(a.key)) ||
+      Number(a.cardOnly) - Number(b.cardOnly),
+  );
+  const allow = async (key: string) => {
+    if (!onGrant) return;
+    const confirmed = await dialogs.confirm({
+      title: `Allow “${approvalGrantLabel(key)}” without asking?`,
+      body: "For the rest of this session, cards for this operation run without waiting for your click. You can revoke it here at any time.",
+      confirmLabel: "Allow for this session",
+    });
+    if (confirmed) onGrant(sessionId, key);
+  };
   return (
     <InspectorSection
       id="approval-grants"
       storageScope={`session:${sessionId}`}
-      title="Approved for session"
+      title="Approvals"
       icon={<ShieldCheck size={13} />}
-      summary={`${grants.length} operation${grants.length === 1 ? "" : "s"}`}
-      defaultOpen
+      summary={grants.length ? `${grants.length} allowed` : "All ask first"}
+      defaultOpen={grants.length > 0}
     >
-      <ul className="space-y-1">
-        {grants.map((grant) => (
-          <li
-            key={grant.key}
-            className="flex items-center gap-2 text-sm text-foreground"
-          >
-            <span className="min-w-0 flex-1 truncate">
-              {approvalGrantLabel(grant.key)}
-            </span>
-            <span className="shrink-0 text-xs text-muted-foreground">
-              {relativeTime(grant.grantedAt)}
-            </span>
-            {onRevoke && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => onRevoke(sessionId, grant.key)}
-              >
-                Revoke
-              </Button>
-            )}
-          </li>
-        ))}
+      <ul className="-mx-3 divide-y" aria-label="Approvals for this session">
+        {rows.map((operation) => {
+          const grant = byKey.get(operation.key);
+          return (
+            <DisclosureRow
+              key={operation.key}
+              rowId={operation.key}
+              inset={0.3125}
+              head={
+                <>
+                  <span
+                    className={`flex size-4 shrink-0 items-center justify-center ${grant ? "text-success" : "text-muted-foreground"}`}
+                  >
+                    {grant ? (
+                      <ShieldCheck size={13} aria-label="Allowed" />
+                    ) : operation.cardOnly ? (
+                      <Lock size={12} aria-label="Card only" />
+                    ) : (
+                      <Shield size={13} aria-label="Asks first" />
+                    )}
+                  </span>
+                  <span
+                    className={`min-w-0 flex-1 truncate text-left text-sm ${grant ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {operation.label}
+                  </span>
+                </>
+              }
+              age={grant ? relativeTime(grant.grantedAt) : ""}
+              {...(grant
+                ? { ageTitle: new Date(grant.grantedAt).toLocaleString() }
+                : {})}
+            >
+              <PropertyList size="sm" align="start">
+                <PropertyLabel>Status</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {grant
+                    ? `Allowed since ${new Date(grant.grantedAt).toLocaleString()}`
+                    : operation.cardOnly
+                      ? "Approved on its card, every time"
+                      : "Asks first"}
+                </PropertyText>
+                <PropertyLabel>Covers</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {operation.covers}
+                </PropertyText>
+                <PropertyLabel>Key</PropertyLabel>
+                <PropertyText className="truncate font-mono text-foreground">
+                  {operation.key}
+                </PropertyText>
+              </PropertyList>
+              {grant && onRevoke ? (
+                <div className="mt-1.5 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => onRevoke(sessionId, operation.key)}
+                  >
+                    <ShieldOff />
+                    Revoke — ask again next time
+                  </Button>
+                </div>
+              ) : !grant && !operation.cardOnly && onGrant ? (
+                <div className="mt-1.5 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={() => void allow(operation.key)}
+                  >
+                    <ShieldCheck />
+                    Allow for this session…
+                  </Button>
+                </div>
+              ) : null}
+            </DisclosureRow>
+          );
+        })}
       </ul>
     </InspectorSection>
   );

@@ -6730,6 +6730,12 @@ export type ClientMessage =
   /** Withdraw one session approval grant; later cards wait for a click again. */
   | { type: "revokeApprovalGrant"; sessionId: string; key: string }
   /**
+   * Grant one operation for the rest of a session from the inspector, before
+   * any card asked — only keys `grantableAheadOfTime` allows. Covers cards
+   * proposed from now on.
+   */
+  | { type: "grantApprovalForSession"; sessionId: string; key: string }
+  /**
    * Answer a `choosing-task` pull-request card's Task-disambiguation prompt.
    * `taskId: null` means "none of these" (an agent-written title, no linked Task).
    */

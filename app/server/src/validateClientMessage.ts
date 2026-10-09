@@ -1035,6 +1035,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   resolveApproval: validateResolveApproval,
   revokeApprovalGrant: (msg) =>
     checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
+  grantApprovalForSession: (msg) =>
+    checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
   resolvePullRequestCardTask: (msg) => {
     if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
       return "cardId is required and must be a string";
