@@ -4,7 +4,7 @@ import {
   ClipboardList,
   MessageSquare,
   MessageSquareQuote,
-  MoreHorizontal,
+  EllipsisVertical,
   SendHorizontal,
   Terminal,
   Wrench,
@@ -261,7 +261,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
               />
             }
           >
-            <MoreHorizontal />
+            <EllipsisVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-48">
             {secondary.map((action) => (
