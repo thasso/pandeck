@@ -133,7 +133,7 @@ import {
   withPullRequestCardBlocks,
 } from "../pullRequestCards.ts";
 import { sessionProjectContextInfo } from "../sessionProjectContext.ts";
-import { peerPromptThreadsFor } from "../peerPrompt.ts";
+import { peerPromptPeersFor, peerPromptThreadsFor } from "../peerPrompt.ts";
 import { promptQueueField } from "../promptQueue.ts";
 import {
   closeToolGroupSession,
@@ -1629,6 +1629,7 @@ export class PiLiveSession implements LiveSession {
           }
         : {}),
       peerPrompts: peerPromptThreadsFor(this.session.sessionId),
+      peerPromptPeers: peerPromptPeersFor(this.session.sessionId),
       ...promptQueueField(this.session.sessionId),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),

@@ -35,6 +35,8 @@ import {
   type ProjectStatus,
   type PullRequestInventoryItem,
   type SessionForkOrigin,
+  type PeerPromptPeerSummary,
+  type PeerPromptState,
   type SessionListItem,
   type SettableSpawnOwnership,
   type TaskBackRef,
@@ -119,6 +121,7 @@ import {
 import { WorktreeLineDelta, WorktreeList } from "./worktreeRowParts.tsx";
 import { TaskLinkList, type TaskLinkItem } from "./TaskLinkList.tsx";
 import { projectColor } from "../lib/projectDisplay.ts";
+import { relativeTime } from "../lib/sessionRows.ts";
 import { useElapsedNow } from "./useElapsedNow.ts";
 
 /** A resolved reference to another work-graph object. */
@@ -1185,6 +1188,7 @@ export function SessionInspector({
   projects,
   worktree,
   worktreeStatus,
+  peerPromptPeers,
   stagedRefs = [],
   openers,
   view,
@@ -1210,6 +1214,11 @@ export function SessionInspector({
   worktree?: WorktreeRelationSource | undefined;
   /** Live git status for the session worktree, when subscribed. */
   worktreeStatus?: WorktreeGitStatus | undefined;
+  /**
+   * The peer prompts this session sent and received, summed up per peer over
+   * the whole history: facts on that peer's session row (`peerPromptFacts`).
+   */
+  peerPromptPeers?: PeerPromptPeerSummary[] | undefined;
   /** Draft-session staged context (task/project/worktree refs before the first send). */
   stagedRefs?: ObjectRef[];
   openers: ObjectOpeners;
@@ -1223,7 +1232,7 @@ export function SessionInspector({
     | undefined;
   children?: ReactNode;
 }) {
-  const groups: ObjectRefGroup[] = [
+  const relationGroups: ObjectRefGroup[] = [
     {
       id: "staged-context",
       label: "Staged context",
@@ -1243,6 +1252,7 @@ export function SessionInspector({
       ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
     }),
   ];
+  const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
   return (
     <Inspector
       relations={[
@@ -1295,6 +1305,96 @@ export function SessionInspector({
       ) : null}
     </Inspector>
   );
+}
+
+const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
+  queued: "Queued",
+  delivered: "Delivered",
+  acknowledged: "Acknowledged",
+  completed: "Completed",
+  awaiting_response: "Awaiting response",
+  replied: "Replied",
+  retrying: "Retrying",
+  interrupted: "Interrupted",
+  cancelled: "Cancelled",
+  expired: "Expired",
+  failed: "Failed",
+};
+
+/**
+ * One peer's summary as its session row's details: how many each way, where
+ * the latest one stands, and the latest failure's reason (in red). The
+ * messages themselves are cards in the transcripts.
+ */
+function peerPromptFacts(peer: PeerPromptPeerSummary): ObjectRefFact[] {
+  return [
+    {
+      label: "Prompts",
+      value: [
+        peer.sent ? `${peer.sent} sent` : undefined,
+        peer.received ? `${peer.received} received` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    },
+    {
+      label: "Last",
+      value: `${PEER_PROMPT_STATE_LABEL[peer.lastState]} · ${relativeTime(peer.lastAt)}`,
+    },
+    ...(peer.lastFailureReason
+      ? [
+          {
+            label: "Failed",
+            value: peer.lastFailureReason,
+            tone: "danger" as const,
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
+ * The peer-prompt summary on every session row it concerns, and a "Peers"
+ * group for the sessions it talked to that no other group lists (neither its
+ * coordinator nor one it spawned), most recent first.
+ */
+function withPeerPrompts(
+  groups: ObjectRefGroup[],
+  peers: PeerPromptPeerSummary[] | undefined,
+  sessions: SessionListItem[],
+): ObjectRefGroup[] {
+  if (!peers?.length) return groups;
+  const byPeer = new Map(peers.map((peer) => [peer.peerSessionId, peer]));
+  const listed = new Set<string>();
+  const withFacts = groups.map((group) => ({
+    ...group,
+    refs: group.refs.map((ref) => {
+      if (ref.kind !== "session") return ref;
+      listed.add(ref.id);
+      const peer = byPeer.get(ref.id);
+      return peer
+        ? { ...ref, facts: [...(ref.facts ?? []), ...peerPromptFacts(peer)] }
+        : ref;
+    }),
+  }));
+  const others = peers.filter((peer) => !listed.has(peer.peerSessionId));
+  return [
+    ...withFacts,
+    {
+      id: "peers",
+      label: "Peers",
+      icon: <MessageSquare size={13} />,
+      ...(others.length ? { summary: `${others.length}` } : {}),
+      refs: others.map((peer) => ({
+        ...sessionObjectRef(
+          peer.peerSessionId,
+          sessions.find((session) => session.id === peer.peerSessionId),
+          peer.title,
+        ),
+        facts: peerPromptFacts(peer),
+      })),
+    },
+  ];
 }
 
 /**

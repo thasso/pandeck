@@ -17,6 +17,7 @@ import type {
   PeerPromptState,
   PeerPromptThread,
   PeerPromptThreadMessage,
+  PeerPromptPeerSummary,
   PeerPromptThreadsProjection,
 } from "@assistant/shared";
 import { peerPromptExcerpt } from "@assistant/shared";
@@ -61,7 +62,7 @@ const PRUNE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 /** Bounds on the durable per-session history projection. */
 const HISTORY_MAX_MESSAGES = 50;
 /** Hard ceiling for an explicit history-expansion request. */
-export const HISTORY_EXPANSION_MAX_MESSAGES = 200;
+const HISTORY_EXPANSION_MAX_MESSAGES = 200;
 /** Bounded exponential backoff for retryable_failed rows. */
 const RETRY_BASE_BACKOFF_MS = 5_000;
 const RETRY_MAX_BACKOFF_MS = 5 * 60_000;
@@ -1260,6 +1261,31 @@ async function broadcastBatchCardUpdates(batchIds: string[]): Promise<void> {
 /** Distinct opaque key for a batch's ONE shared recipient card, never shared with the head row's own per-message key. */
 function batchCardKey(headId: string): string {
   return opaqueKey(`batch:${headId}`);
+}
+
+/* ---------------------------- per-peer summary ---------------------------- */
+
+/**
+ * The peer prompts involving a session, summed up per other session over the
+ * whole history — the inspector's per-peer facts. Its size follows the number
+ * of peers, never of messages.
+ */
+export function peerPromptPeersFor(sessionId: string): PeerPromptPeerSummary[] {
+  return peerPromptStore.summarizeByParticipant(sessionId).map((peer) => {
+    const direction: "sent" | "received" =
+      peer.last.senderSessionId === sessionId ? "sent" : "received";
+    return {
+      peerSessionId: peer.peerSessionId,
+      title: otherPartyTitle(peer.last, direction),
+      sent: peer.sent,
+      received: peer.received,
+      lastState: cardState(peer.last.status),
+      lastAt: peer.last.createdAt,
+      ...(peer.lastFailure?.failureReason
+        ? { lastFailureReason: peer.lastFailure.failureReason }
+        : {}),
+    };
+  });
 }
 
 /* --------------------------- history projection -------------------------- */

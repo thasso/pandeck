@@ -2758,6 +2758,23 @@ export interface PeerPromptCard {
   state: PeerPromptState;
 }
 
+/**
+ * The peer prompts between one session and one other session, summed up: how
+ * many each way, where the latest stands, and the latest failure's reason.
+ */
+export interface PeerPromptPeerSummary {
+  /** The other session. */
+  peerSessionId: string;
+  /** Its title (or the sender label it used), for when the list lacks it. */
+  title: string;
+  sent: number;
+  received: number;
+  lastState: PeerPromptState;
+  lastAt: number;
+  /** The most recent failure's reason, if any message failed. */
+  lastFailureReason?: string;
+}
+
 /** One sanitized message inside a durable peer-prompt thread projection. */
 export interface PeerPromptThreadMessage {
   /**
@@ -4231,8 +4248,17 @@ export interface SessionState {
   pendingPostReloadContinuation?: PendingPostReloadContinuation;
   /** Running Playwright MCP/browser instances known to the server. */
   browserRuntimes?: BrowserRuntimeInfo[];
-  /** Bounded, sanitized peer-prompt history involving this session. */
+  /**
+   * Bounded, sanitized peer-prompt history involving this session: what seeds
+   * the transcript's peer-prompt cards with their current state.
+   */
   peerPrompts?: PeerPromptThreadsProjection;
+  /**
+   * The peer prompts involving this session, summed up per other session —
+   * over ALL of them, not the bounded window above. The inspector's per-peer
+   * facts.
+   */
+  peerPromptPeers?: PeerPromptPeerSummary[];
   /** The worktree this session executes in (via its `in_worktree` link), if any. */
   worktreeId?: string;
   /**
@@ -6915,8 +6941,6 @@ export type ClientMessage =
     }
   /** Actionable memory processor configuration status (Task 100). */
   | { type: "memoryStatus"; requestId: string }
-  /** Expand the current session's bounded Peer prompts history beyond its default snapshot size. */
-  | { type: "requestPeerPromptHistory"; limit?: number }
   /** Where a message the reader asked to jump to lives; see {@link TimelineAnchorTarget}. */
   | {
       type: "resolveTimelineAnchor";
@@ -7867,12 +7891,6 @@ export type ServerMessage =
       messageKey: string;
       state: PeerPromptState;
       failureReason?: string;
-    }
-  /** Response to `requestPeerPromptHistory`: an expanded (still bounded) projection replacing the default one for display. */
-  | {
-      type: "peerPromptHistoryExpanded";
-      sessionId: string;
-      projection: PeerPromptThreadsProjection;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

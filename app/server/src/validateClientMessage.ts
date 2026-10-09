@@ -934,7 +934,6 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { limit: NUMBER },
   ),
   memoryStatus: fields({ requestId: STRING }),
-  requestPeerPromptHistory: fields({}, { limit: NUMBER }),
   resolveTimelineAnchor: validateTimelineAnchorTarget,
   updateSettings: validateUpdateSettings,
   updateJiraSettings: PATCH_OBJECT,

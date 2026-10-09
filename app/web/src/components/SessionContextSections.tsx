@@ -5,7 +5,6 @@ import {
   FileText,
   Film,
   Image as ImageIcon,
-  MessageSquare,
   MonitorPlay,
   ShieldCheck,
   Sparkles,
@@ -16,9 +15,6 @@ import { approvalGrantLabel } from "@assistant/shared";
 import type {
   ApprovalGrant,
   BrowserRuntimeInfo,
-  PeerPromptState,
-  PeerPromptThreadMessage,
-  PeerPromptThreadsProjection,
   PendingPostReloadContinuation,
   SessionArtifact,
   SessionSkillInvocation,
@@ -26,11 +22,17 @@ import type {
   SkillLibraryList,
 } from "@assistant/shared";
 import { relativeTime } from "../lib/sessionRows.ts";
-import { sessionPath } from "../lib/sessionRoutes.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { formatFileSize } from "../lib/servedFiles.ts";
 import { parseDocumentTarget } from "@assistant/shared/documentTargets";
 import { ArtifactOverlay } from "./ArtifactOverlay.tsx";
+import { DisclosureRow } from "./common/DisclosureRow.tsx";
+import { relativeAge } from "../lib/relativeTime.ts";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "./common/load.tsx";
 import {
@@ -64,7 +66,7 @@ import {
 /**
  * @component SessionContextSections
  * @purpose The session inspector's feature content: queued post-reload
- * continuation, durable peer-prompt history, library skills (loaded /
+ * continuation, library skills (loaded /
  * available / not mounted),
  * deferred-tool exposure (the "Tools" section: loaded/available/unavailable
  * per catalog group + load trail, including the browser tool groups), the
@@ -87,13 +89,6 @@ interface SessionContextSectionsProps {
   artifacts?: SessionArtifact[];
   pendingPostReloadContinuation?: PendingPostReloadContinuation | undefined;
   browserRuntimes?: BrowserRuntimeInfo[];
-  peerPrompts?: PeerPromptThreadsProjection | undefined;
-  onExpandPeerPromptHistory?: (limit?: number) => void;
-  onOpenSession?: (id: string) => void;
-  /** Jump to the other party's copy of one peer-prompt message. */
-  onRevealPeerPromptMessage?: (messageKey: string) => void;
-  /** The message whose jump is still being resolved, if any. */
-  peerPromptRevealPendingKey?: string;
   onCancelPostReloadContinuation?: () => void;
   /** Operations the user approved for the rest of this session. */
   approvalGrants?: readonly ApprovalGrant[] | undefined;
@@ -109,11 +104,6 @@ export function SessionContextSections({
   artifacts = [],
   pendingPostReloadContinuation,
   browserRuntimes = [],
-  peerPrompts,
-  onExpandPeerPromptHistory,
-  onOpenSession,
-  onRevealPeerPromptMessage,
-  peerPromptRevealPendingKey,
   onCancelPostReloadContinuation,
   approvalGrants = [],
   onRevokeApprovalGrant,
@@ -126,19 +116,6 @@ export function SessionContextSections({
         <PostReloadContinuationCard
           continuation={pendingPostReloadContinuation}
           onCancel={onCancelPostReloadContinuation}
-        />
-      )}
-
-      {peerPrompts && peerPrompts.threads.length > 0 && (
-        <PeerPromptsSection
-          sessionId={sessionId}
-          projection={peerPrompts}
-          onExpand={onExpandPeerPromptHistory}
-          onOpenSession={onOpenSession}
-          onRevealMessage={onRevealPeerPromptMessage}
-          {...(peerPromptRevealPendingKey
-            ? { revealPendingKey: peerPromptRevealPendingKey }
-            : {})}
         />
       )}
 
@@ -172,182 +149,6 @@ export function SessionContextSections({
         <ArtifactsSection sessionId={sessionId} artifacts={artifacts} />
       )}
     </>
-  );
-}
-
-const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
-  queued: "Queued",
-  delivered: "Delivered",
-  acknowledged: "Acknowledged",
-  completed: "Completed",
-  awaiting_response: "Awaiting response",
-  replied: "Replied",
-  retrying: "Retrying",
-  interrupted: "Interrupted",
-  cancelled: "Cancelled",
-  expired: "Expired",
-  failed: "Failed",
-};
-
-/**
- * One message, as a chat bubble: the reader's own side on the right, the peer's
- * on the left, so nothing has to say "sent" or "received". The whole bubble is
- * the link to the OTHER party's copy of that message, which is the only place
- * the full text is worth reading — a real `<a href>` at the peer session, so the
- * ordinary browser gestures still work, with the precise jump on a plain click.
- */
-function PeerPromptBubble({
-  message,
-  peerSessionId,
-  busy,
-  onReveal,
-}: {
-  message: PeerPromptThreadMessage;
-  peerSessionId: string;
-  busy: boolean;
-  onReveal?: ((messageKey: string) => void) | undefined;
-}) {
-  const sent = message.direction === "sent";
-  return (
-    <div className={`flex ${sent ? "justify-end" : "justify-start"}`}>
-      <a
-        href={sessionPath(peerSessionId)}
-        aria-busy={busy || undefined}
-        className={`block min-w-0 max-w-5/6 rounded-xl px-2 py-1 transition-colors ${
-          sent
-            ? "bg-accent hover:bg-primary/15"
-            : "border border-border bg-card/60 hover:bg-background"
-        } ${busy ? "opacity-60" : ""}`}
-        onClick={(event) => {
-          if (
-            !onReveal ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          )
-            return;
-          event.preventDefault();
-          onReveal(message.id);
-        }}
-      >
-        {/* Already an excerpt when it arrives (`peerPromptExcerpt`): the full
-            message is never on the wire, and truncating again here would only
-            add a second ellipsis. */}
-        <p className="line-clamp-2 break-words text-sm text-foreground">
-          {message.message}
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {PEER_PROMPT_STATE_LABEL[message.state]} ·{" "}
-          {relativeTime(message.createdAt)}
-        </p>
-        {message.failureReason ? (
-          // The only detail kept: a failed message whose reason lived nowhere
-          // else in the UI would show a state word and no way to understand it.
-          <p className="mt-0.5 line-clamp-2 break-words text-xs text-destructive">
-            {message.failureReason}
-          </p>
-        ) : null}
-      </a>
-    </div>
-  );
-}
-
-/**
- * Durable peer-prompt history, read as conversations rather than as records:
- * one flat thread per peer, its name linking to that session and each bubble to
- * the message itself over there. Collapsed by default — it is reference
- * material about work that already happened, not something to scan every visit.
- */
-export function PeerPromptsSection({
-  sessionId,
-  projection,
-  onExpand,
-  onOpenSession,
-  onRevealMessage,
-  revealPendingKey,
-}: {
-  sessionId: string;
-  projection: PeerPromptThreadsProjection;
-  onExpand?: ((limit?: number) => void) | undefined;
-  onOpenSession?: ((id: string) => void) | undefined;
-  onRevealMessage?: ((messageKey: string) => void) | undefined;
-  revealPendingKey?: string;
-}) {
-  const messageCount = projection.threads.reduce(
-    (n, t) => n + t.messages.length,
-    0,
-  );
-  return (
-    <InspectorSection
-      id="peer-prompts"
-      storageScope={`session:${sessionId}`}
-      title="Peer prompts"
-      icon={<MessageSquare size={13} />}
-      defaultOpen={false}
-      summary={`${projection.threads.length} thread${projection.threads.length === 1 ? "" : "s"} · ${messageCount} message${messageCount === 1 ? "" : "s"}`}
-    >
-      <div className="space-y-3">
-        {projection.threads.map((thread) => (
-          <div
-            key={thread.conversationId}
-            className="space-y-1 border-t border-border pt-2.5 first:border-t-0 first:pt-0"
-          >
-            <div className="flex items-baseline gap-2">
-              <a
-                href={sessionPath(thread.peerSessionId)}
-                title={thread.otherPartyTitle}
-                className="min-w-0 truncate text-sm font-medium text-foreground underline decoration-dotted underline-offset-2 hover:decoration-solid"
-                onClick={(event) => {
-                  if (
-                    !onOpenSession ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey
-                  )
-                    return;
-                  event.preventDefault();
-                  onOpenSession(thread.peerSessionId);
-                }}
-              >
-                {thread.otherPartyTitle}
-              </a>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {relativeTime(
-                  thread.messages[thread.messages.length - 1]?.createdAt ?? 0,
-                )}
-              </span>
-            </div>
-            {thread.messages.map((message) => (
-              <PeerPromptBubble
-                key={message.id}
-                message={message}
-                peerSessionId={thread.peerSessionId}
-                busy={revealPendingKey === message.id}
-                onReveal={onRevealMessage}
-              />
-            ))}
-          </div>
-        ))}
-        {projection.truncated ? (
-          onExpand ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onExpand()}
-              className="w-full"
-            >
-              Load more history
-            </Button>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Older peer prompts are not shown.
-            </p>
-          )
-        ) : null}
-      </div>
-    </InspectorSection>
   );
 }
 
@@ -804,51 +605,93 @@ function ArtifactsSection({
       summary={`${artifacts.length}`}
       defaultOpen={false}
     >
-      <ul className="flex flex-col" aria-label="Session artifacts">
+      {/* The panel's session rows (`DisclosureRow`): edge to edge, one line
+          each — the artifact's thumbnail or kind glyph and its label, its age,
+          and Open (↗) for the full-screen viewer; the line unfolds a larger
+          preview and the file's facts. */}
+      <ul className="-mx-3 divide-y" aria-label="Session artifacts">
         {newestFirst.map((artifact) => {
           const target = parseDocumentTarget(artifact.url);
           const path =
             target?.kind === "sessionArtifact" ? target.path : undefined;
           const KindIcon = ARTIFACT_KIND_ICON[artifact.kind];
+          const image = artifact.mimeType.startsWith("image/");
+          const open = () => {
+            if (path)
+              setOpened({
+                sessionId: artifact.sessionId,
+                path,
+                label: artifact.label,
+              });
+          };
           return (
-            <li key={artifact.id}>
-              <Button
-                variant="ghost"
-                className="h-auto w-full justify-start gap-2.5 px-1 py-1.5 text-left font-normal"
-                title={`${artifact.label} — ${artifact.name}`}
-                disabled={!path}
-                onClick={() =>
-                  path &&
-                  setOpened({
-                    sessionId: artifact.sessionId,
-                    path,
-                    label: artifact.label,
-                  })
-                }
-              >
-                <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
-                  {artifact.mimeType.startsWith("image/") ? (
-                    <img
-                      src={artifactHttpUrl(artifact.url)}
-                      alt=""
-                      loading="lazy"
-                      className="size-full object-cover"
-                    />
-                  ) : (
-                    <KindIcon size={16} aria-hidden />
-                  )}
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-sm text-foreground">
+            <DisclosureRow
+              key={artifact.id}
+              rowId={artifact.id}
+              // The Details labels' line, as the session rows above.
+              inset={0.3125}
+              head={
+                <>
+                  <span className="flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-sm">
+                    {image ? (
+                      <img
+                        src={artifactHttpUrl(artifact.url)}
+                        alt=""
+                        loading="lazy"
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <KindIcon size={13} aria-hidden />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                     {artifact.label}
                   </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {artifact.name} · {relativeTime(artifact.createdAt)} ·{" "}
-                    {formatFileSize(artifact.size)}
-                  </span>
-                </span>
-              </Button>
-            </li>
+                </>
+              }
+              age={relativeAge(artifact.createdAt, Date.now())}
+              ageTitle={new Date(artifact.createdAt).toLocaleString()}
+              openLabel={`Open ${artifact.label}`}
+              onOpen={open}
+            >
+              {image ? (
+                <Button
+                  variant="ghost"
+                  className="mb-2 h-auto w-full justify-start p-0"
+                  title="Open full screen"
+                  onClick={open}
+                >
+                  <img
+                    src={artifactHttpUrl(artifact.url)}
+                    alt={artifact.label}
+                    loading="lazy"
+                    className="max-h-40 max-w-full rounded-md border object-contain"
+                  />
+                </Button>
+              ) : null}
+              <PropertyList size="sm">
+                <PropertyLabel>File</PropertyLabel>
+                <PropertyText className="truncate font-mono text-foreground">
+                  {artifact.name}
+                </PropertyText>
+                <PropertyLabel>Type</PropertyLabel>
+                <PropertyText className="truncate text-foreground">
+                  {artifact.mimeType}
+                </PropertyText>
+                <PropertyLabel>Size</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {formatFileSize(artifact.size)}
+                </PropertyText>
+                {artifact.sourceTool ? (
+                  <>
+                    <PropertyLabel>Captured by</PropertyLabel>
+                    <PropertyText className="truncate font-mono text-foreground">
+                      {artifact.sourceTool}
+                    </PropertyText>
+                  </>
+                ) : null}
+              </PropertyList>
+            </DisclosureRow>
           );
         })}
       </ul>

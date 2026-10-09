@@ -171,7 +171,11 @@ import {
   withPullRequestCardBlocks,
 } from "../pullRequestCards.ts";
 import { sessionRunStartedAt } from "../sessionActivity.ts";
-import { drainRecipient, peerPromptThreadsFor } from "../peerPrompt.ts";
+import {
+  drainRecipient,
+  peerPromptPeersFor,
+  peerPromptThreadsFor,
+} from "../peerPrompt.ts";
 import { promptQueueField } from "../promptQueue.ts";
 import { backgroundWorkStore } from "../db/backgroundWorkStore.ts";
 import { captureTaskOutputArtifact } from "../outputPolicy.ts";
@@ -1021,6 +1025,7 @@ export class ClaudeSdkSession implements LiveSession {
         ? { browserRuntimes: this.browserRuntimesFor(this.id) }
         : {}),
       peerPrompts: peerPromptThreadsFor(this.id),
+      peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),

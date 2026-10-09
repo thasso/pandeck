@@ -60,7 +60,6 @@ import type {
   GoogleSettingsPatch,
   ModelOption,
   MessageTarget,
-  PeerPromptThreadsProjection,
   ProjectListRequest,
   ProjectListResponse,
   ProjectRecord,
@@ -681,8 +680,6 @@ export interface UIState {
    * rendered card in place instead of freezing its creation-time snapshot).
    */
   peerPromptCardOverrides: PeerPromptCardOverrides;
-  /** Explicitly requested expanded Peer prompts history for the current session, if any. */
-  peerPromptHistoryExpanded: PeerPromptThreadsProjection | null;
   /**
    * The viewed session's "Approve for session" grants, keyed by the session
    * they belong to so a list for the session just left never shows here.
@@ -873,7 +870,6 @@ const emptyInitial: UIState = {
   approvals: [],
   pullRequestCards: [],
   peerPromptCardOverrides: {},
-  peerPromptHistoryExpanded: null,
   approvalGrants: null,
   runState: "idle",
   streaming: false,
@@ -5099,7 +5095,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           peerPromptCardOverrides: seedPeerPromptCardOverridesFromHistory(
             msg.state.peerPrompts,
           ),
-          peerPromptHistoryExpanded: null,
         },
         {
           timeline: snap.timeline,
@@ -5160,7 +5155,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           turnStatsSeed: EMPTY_TURN_STATS_SEED,
           timelineRangePending: null,
           peerPromptCardOverrides: {},
-          peerPromptHistoryExpanded: null,
           error: null,
         },
         {
@@ -5945,20 +5939,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           },
         },
       };
-    case "peerPromptHistoryExpanded":
-      if (msg.sessionId !== state.session?.sessionId) return state;
-      // The expanded projection can carry states for messages older than the
-      // default bounded snapshot; merge it into the overlay too (not just the
-      // separate Peer prompts section list), so explicitly loading more
-      // history also reconciles any stale, already-rendered transcript cards.
-      return {
-        ...state,
-        peerPromptHistoryExpanded: msg.projection,
-        peerPromptCardOverrides: {
-          ...state.peerPromptCardOverrides,
-          ...seedPeerPromptCardOverridesFromHistory(msg.projection),
-        },
-      };
     case "timelineAnchor": {
       // Only the jump still being waited on: an answer to a superseded request
       // would send the reader somewhere they already navigated away from.
@@ -6295,8 +6275,6 @@ export interface AssistantActions {
     placements?: { id: string; parentId?: string | null }[],
   ) => void;
   cancelPostReloadContinuation: () => void;
-  /** Explicit expansion of the current session's bounded Peer prompts history. */
-  requestPeerPromptHistory: (limit?: number) => void;
   /**
    * Jump to the OTHER party's copy of one peer-prompt message, addressed by the
    * key its card carries here. Answered as a {@link MessageReveal}: where the
@@ -8591,8 +8569,6 @@ export function useAssistant({
       },
       cancelPostReloadContinuation: () =>
         send({ type: "cancelPostReloadContinuation" }),
-      requestPeerPromptHistory: (limit) =>
-        send({ type: "requestPeerPromptHistory", ...(limit ? { limit } : {}) }),
       clearChatError: (sessionId?: string) =>
         dispatch({
           kind: "clearChatError",

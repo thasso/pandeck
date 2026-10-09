@@ -4368,16 +4368,6 @@ function AppContent() {
   const pendingPostReloadContinuation =
     displaySession?.pendingPostReloadContinuation;
   const browserRuntimes = displaySession?.browserRuntimes ?? [];
-  // An explicit history-expansion request replaces the default bounded snapshot
-  // for display; the reducer resets this to null whenever the session changes.
-  const peerPrompts =
-    state.peerPromptHistoryExpanded ?? displaySession?.peerPrompts;
-  // Which bubble is waiting on its jump: resolving where a message lives is a
-  // round trip, so the control that asked says it is working.
-  const peerPromptRevealPendingKey =
-    state.revealRequest?.target.kind === "peerPrompt"
-      ? state.revealRequest.target.messageKey
-      : undefined;
 
   // The inspector resolves related objects from the Backlog and Project lists;
   // make sure both are loaded when an object detail route is open.
@@ -6605,6 +6595,7 @@ function AppContent() {
         );
       })()}
       worktreeStatus={displayWorktreeStatus}
+      peerPromptPeers={displaySession?.peerPromptPeers}
       stagedRefs={stagedContextRefs}
       openers={inspectorOpeners}
     >
@@ -6617,11 +6608,6 @@ function AppContent() {
         artifacts={sessionArtifacts}
         pendingPostReloadContinuation={pendingPostReloadContinuation}
         browserRuntimes={browserRuntimes}
-        peerPrompts={peerPrompts}
-        onExpandPeerPromptHistory={actions.requestPeerPromptHistory}
-        onOpenSession={openSession}
-        onRevealPeerPromptMessage={actions.revealPeerPromptMessage}
-        {...(peerPromptRevealPendingKey ? { peerPromptRevealPendingKey } : {})}
         onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
         approvalGrants={approvalGrants}
         onRevokeApprovalGrant={actions.revokeApprovalGrant}

@@ -50,7 +50,7 @@ export function SessionTitleRow({
         )}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate text-sm ${status === "unread" ? "font-semibold" : "font-medium"} ${bright ? "text-foreground" : "text-muted-foreground"}`}
+        className={`min-w-0 flex-1 truncate text-left text-sm ${status === "unread" ? "font-semibold" : "font-medium"} ${bright ? "text-foreground" : "text-muted-foreground"}`}
       >
         <SessionTitleText
           title={title}

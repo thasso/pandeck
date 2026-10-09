@@ -3,11 +3,9 @@ import {
   Fragment,
   memo,
   useContext,
-  useState,
   type ReactNode,
 } from "react";
 import {
-  ArrowUpRight,
   ChevronDown,
   ChevronRight,
   GitBranch,
@@ -34,11 +32,11 @@ import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
-import { Item, ItemActions } from "@/components/ui/item";
 import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "./common/IconButton.tsx";
+import { DisclosureRow } from "./common/DisclosureRow.tsx";
 import { useInspectorAct } from "./shell/Inspector.tsx";
 import {
   PropertyLabel,
@@ -336,7 +334,6 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
    */
   facts?: readonly SessionRowFact[] | undefined;
 }) {
-  const [open, setOpen] = useState(false);
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
   const source = useContext(SessionRowDetailsContext);
@@ -360,130 +357,97 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
   const depth = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
-  const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <li data-list-row-id={session.id} className="min-w-0">
-      <Item
-        size="xs"
-        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-0 hover:bg-muted dark:hover:bg-muted/50"
-        style={{ paddingLeft: `${inset + 0.75 * depth}rem` }}
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          // The whole row takes the hover (its `Item`), not just this toggle
-          // beside the actions; open is not a hover state.
-          className="h-7 min-w-0 flex-1 justify-start rounded-none bg-clip-border text-sm font-normal text-muted-foreground hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-muted-foreground dark:hover:bg-transparent"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          title={open ? "Hide details" : "Show details"}
-        >
-          <Chevron aria-hidden="true" />
-          {/* The attention cards' title line, so a session reads the same
-              in the strip, the inspector and the Projects tree. */}
-          <SessionTitleRow session={session} status={status} />
-        </Button>
-        <ItemActions className="gap-1.5">
-          <span className="text-xs whitespace-nowrap tabular-nums">
-            {relativeAge(session.updatedAt, now)}
-          </span>
-          <IconButton
-            label={`Open ${title}`}
-            title="Open session"
-            size="icon-xs"
-            onClick={() => onOpen(session.id)}
-          >
-            <ArrowUpRight />
-          </IconButton>
-        </ItemActions>
-      </Item>
-      {open ? (
-        // Aligned under the title, like a background row's command: the
-        // property list at its detail density.
-        <div
-          className="pt-0.5 pr-2.5 pb-2"
-          style={{ paddingLeft: `calc(${inset + 0.75 * depth}rem + 1.5rem)` }}
-        >
-          <PropertyList size="sm">
-            {facts?.map((fact) => (
-              <Fragment key={fact.label}>
-                <PropertyLabel>{fact.label}</PropertyLabel>
-                <PropertyText className="truncate text-foreground">
-                  {fact.onOpen ? (
-                    <DetailLink
-                      onClick={() => {
-                        fact.onOpen?.();
-                        onAct?.();
-                      }}
-                    >
-                      {fact.value}
-                    </DetailLink>
-                  ) : (
-                    fact.value
-                  )}
-                </PropertyText>
-              </Fragment>
-            ))}
-            <PropertyLabel>Agent</PropertyLabel>
-            <DetailValue icon={<AgentIcon className="size-3" aria-hidden />}>
-              {agent.label}
-            </DetailValue>
-            {runtime ? (
-              <>
-                <PropertyLabel>Model</PropertyLabel>
-                <DetailValue
-                  icon={
-                    model ? (
-                      <ProviderIcon provider={model.provider} size={12} />
-                    ) : null
-                  }
+    <DisclosureRow
+      rowId={session.id}
+      inset={inset}
+      depth={depth}
+      // The attention cards' title line, so a session reads the same in the
+      // strip, the inspector and the Projects tree.
+      head={<SessionTitleRow session={session} status={status} />}
+      age={relativeAge(session.updatedAt, now)}
+      openLabel={`Open ${title}`}
+      onOpen={() => onOpen(session.id)}
+    >
+      <PropertyList size="sm">
+        {facts?.map((fact) => (
+          <Fragment key={fact.label}>
+            <PropertyLabel>{fact.label}</PropertyLabel>
+            <PropertyText
+              className={`truncate ${fact.tone === "danger" ? "text-destructive" : "text-foreground"}`}
+              title={fact.value}
+            >
+              {fact.onOpen ? (
+                <DetailLink
+                  onClick={() => {
+                    fact.onOpen?.();
+                    onAct?.();
+                  }}
                 >
-                  {runtime}
-                </DetailValue>
-              </>
-            ) : null}
-            {/* Always said: where it runs, that it ran in one that is gone,
-                or that it has none. Unresolved yet (the list still loading)
-                is the only silence. */}
-            {details.branch || details.worktreeGone || !worktreeId ? (
-              <>
-                <PropertyLabel>Worktree</PropertyLabel>
-                {details.branch && worktreeId ? (
-                  <DetailValue
-                    icon={<GitBranch className="size-3" aria-hidden />}
+                  {fact.value}
+                </DetailLink>
+              ) : (
+                fact.value
+              )}
+            </PropertyText>
+          </Fragment>
+        ))}
+        <PropertyLabel>Agent</PropertyLabel>
+        <DetailValue icon={<AgentIcon className="size-3" aria-hidden />}>
+          {agent.label}
+        </DetailValue>
+        {runtime ? (
+          <>
+            <PropertyLabel>Model</PropertyLabel>
+            <DetailValue
+              icon={
+                model ? (
+                  <ProviderIcon provider={model.provider} size={12} />
+                ) : null
+              }
+            >
+              {runtime}
+            </DetailValue>
+          </>
+        ) : null}
+        {/* Always said: where it runs, that it ran in one that is gone,
+            or that it has none. Unresolved yet (the list still loading)
+            is the only silence. */}
+        {details.branch || details.worktreeGone || !worktreeId ? (
+          <>
+            <PropertyLabel>Worktree</PropertyLabel>
+            {details.branch && worktreeId ? (
+              <DetailValue icon={<GitBranch className="size-3" aria-hidden />}>
+                {source?.onOpenWorktree ? (
+                  <DetailLink
+                    className="font-mono"
+                    onClick={() => {
+                      source.onOpenWorktree?.(worktreeId);
+                      onAct?.();
+                    }}
                   >
-                    {source?.onOpenWorktree ? (
-                      <DetailLink
-                        className="font-mono"
-                        onClick={() => {
-                          source.onOpenWorktree?.(worktreeId);
-                          onAct?.();
-                        }}
-                      >
-                        {details.branch}
-                      </DetailLink>
-                    ) : (
-                      <span className="font-mono">{details.branch}</span>
-                    )}
-                  </DetailValue>
-                ) : details.worktreeGone ? (
-                  <PropertyText
-                    className="text-muted-foreground"
-                    title={worktreeId}
-                  >
-                    Removed
-                  </PropertyText>
+                    {details.branch}
+                  </DetailLink>
                 ) : (
-                  <PropertyText className="text-muted-foreground">
-                    None
-                  </PropertyText>
+                  <span className="font-mono">{details.branch}</span>
                 )}
-              </>
-            ) : null}
-          </PropertyList>
-        </div>
-      ) : null}
-    </li>
+              </DetailValue>
+            ) : details.worktreeGone ? (
+              <PropertyText
+                className="text-muted-foreground"
+                title={worktreeId}
+              >
+                Removed
+              </PropertyText>
+            ) : (
+              <PropertyText className="text-muted-foreground">
+                None
+              </PropertyText>
+            )}
+          </>
+        ) : null}
+      </PropertyList>
+    </DisclosureRow>
   );
 });
 
@@ -493,6 +457,8 @@ export interface SessionRowFact {
   value: string;
   /** The value names an object: it becomes a link that opens it. */
   onOpen?: (() => void) | undefined;
+  /** `danger` for a failure the reader should not miss. */
+  tone?: "danger" | undefined;
 }
 
 /** A detail value that opens the object it names: a real, underlined link. */

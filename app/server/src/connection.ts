@@ -55,12 +55,7 @@ import {
   type PromptAttachment,
 } from "@assistant/shared";
 import { TIMELINE_RANGE_MAX_LIMIT } from "@assistant/shared/runtime";
-import {
-  drainRecipient,
-  HISTORY_EXPANSION_MAX_MESSAGES,
-  peerPromptAnchorFor,
-  peerPromptThreadsFor,
-} from "./peerPrompt.ts";
+import { drainRecipient, peerPromptAnchorFor } from "./peerPrompt.ts";
 import {
   availableAgents,
   isAgentAvailable,
@@ -956,19 +951,6 @@ export class Connection implements Viewer {
           archivedSessionsLoaded: false,
         });
         return;
-      case "requestPeerPromptHistory": {
-        const sessionId = this.viewing?.sessionId;
-        if (!sessionId) return;
-        this.send({
-          type: "peerPromptHistoryExpanded",
-          sessionId,
-          projection: peerPromptThreadsFor(
-            sessionId,
-            msg.limit ?? HISTORY_EXPANSION_MAX_MESSAGES,
-          ),
-        });
-        return;
-      }
       case "resolveTimelineAnchor":
         return this.onResolveTimelineAnchor(msg.requestId, msg.target);
       case "requestSettings":

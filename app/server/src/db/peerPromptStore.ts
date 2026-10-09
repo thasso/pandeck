@@ -1218,6 +1218,74 @@ function listByParticipant(sessionId: string, limit = 50): PeerPromptRecord[] {
   ).map(map);
 }
 
+/** One other session's peer prompts with a participant, counted. */
+export interface PeerPromptPeerCounts {
+  peerSessionId: string;
+  sent: number;
+  received: number;
+  /** The newest message between the two. */
+  last: PeerPromptRecord;
+  /** The newest message between the two that failed, if any. */
+  lastFailure?: PeerPromptRecord;
+}
+
+/**
+ * Every session a participant exchanged peer prompts with, counted — over the
+ * whole table, not a recent window: one grouped scan, then the newest (and
+ * newest failed) message per peer. Most recent peer first.
+ */
+function summarizeByParticipant(sessionId: string): PeerPromptPeerCounts[] {
+  const db = getDb();
+  const groups = db
+    .prepare(
+      `SELECT CASE WHEN sender_session_id = ? THEN recipient_session_id ELSE sender_session_id END AS peer,
+              SUM(sender_session_id = ?) AS sent,
+              SUM(recipient_session_id = ?) AS received,
+              MAX(queue_seq) AS last_seq,
+              MAX(CASE WHEN failure_reason IS NOT NULL THEN queue_seq END) AS failure_seq
+         FROM peer_prompts
+        WHERE sender_session_id = ? OR recipient_session_id = ?
+        GROUP BY peer
+        ORDER BY last_seq DESC`,
+    )
+    .all(sessionId, sessionId, sessionId, sessionId, sessionId) as Array<{
+    peer: string;
+    sent: number;
+    received: number;
+    last_seq: number;
+    failure_seq: number | null;
+  }>;
+  const bySeq = db.prepare(
+    `SELECT * FROM peer_prompts
+      WHERE queue_seq = ?
+        AND ((sender_session_id = ? AND recipient_session_id = ?)
+          OR (sender_session_id = ? AND recipient_session_id = ?))
+      LIMIT 1`,
+  );
+  const at = (peer: string, seq: number): PeerPromptRecord | undefined => {
+    const row = bySeq.get(seq, sessionId, peer, peer, sessionId) as unknown as
+      Row | undefined;
+    return row ? map(row) : undefined;
+  };
+  return groups.flatMap((group) => {
+    const last = at(group.peer, group.last_seq);
+    if (!last) return [];
+    const lastFailure =
+      group.failure_seq === null
+        ? undefined
+        : at(group.peer, group.failure_seq);
+    return [
+      {
+        peerSessionId: group.peer,
+        sent: group.sent,
+        received: group.received,
+        last,
+        ...(lastFailure ? { lastFailure } : {}),
+      },
+    ];
+  });
+}
+
 /**
  * EVERY member of one delivered batch for this recipient, regardless of any
  * bounded/paginated window — used to compute a batch's aggregate card state
@@ -1550,6 +1618,7 @@ export const peerPromptStore = {
   listByConversation,
   listByChain,
   listByParticipant,
+  summarizeByParticipant,
   listByBatchHead,
   unrepliedRequestsBetween,
   // recovery / retention
