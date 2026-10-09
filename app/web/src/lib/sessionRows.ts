@@ -1,5 +1,6 @@
 import type { SessionListItem } from "@assistant/shared";
 import { sessionDeliveryKey } from "./sessionDelivery.ts";
+import { classifySessionStatus } from "./sessionInbox.ts";
 
 /** Compact relative timestamp sized for single-line rows ("now", "5m", "3h", "Jun 3"). */
 export function relativeTime(ts: number): string {
@@ -44,6 +45,9 @@ export function sessionRowKey(session: SessionListItem): string {
     // The blocking badge is WORDED by the attention kind, so the kind is part
     // of what the row renders — not just the fact that something blocks.
     session.attention ?? "",
+    // The title line's status badge (`SessionTitleRow`): failed and
+    // interrupted are states the fields above do not spell.
+    classifySessionStatus(session),
     session.unread ? "1" : "",
     session.archived ? "1" : "",
     progress

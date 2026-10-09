@@ -33,8 +33,7 @@ import { relativeAge } from "../lib/relativeTime.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
-import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { Item, ItemActions } from "@/components/ui/item";
 import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
@@ -340,7 +339,6 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   const [open, setOpen] = useState(false);
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
-  const badge = sessionStatusBadge(session, status, now);
   const source = useContext(SessionRowDetailsContext);
   const onAct = useInspectorAct();
   const details =
@@ -381,25 +379,9 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
           title={open ? "Hide details" : "Show details"}
         >
           <Chevron aria-hidden="true" />
-          {/* A quiet row keeps the badge's 20px slot so every title starts at
-              the same x, and the details below line up with both. */}
-          {badge ? (
-            <SessionStatusBadge
-              badge={badge}
-              status={status}
-              display="icon-only"
-            />
-          ) : (
-            <span aria-hidden className="size-5 shrink-0" />
-          )}
-          <span
-            className={`min-w-0 truncate text-foreground ${status === "unread" ? "font-semibold" : ""}`}
-          >
-            <SessionTitleText
-              title={title}
-              pending={session.titleGenerationPending}
-            />
-          </span>
+          {/* The attention cards' title line, so a session reads the same
+              in the strip, the inspector and the Projects tree. */}
+          <SessionTitleRow session={session} status={status} />
         </Button>
         <ItemActions className="gap-1.5">
           <span className="text-xs whitespace-nowrap tabular-nums">
@@ -420,7 +402,7 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
         // property list at its detail density.
         <div
           className="pt-0.5 pr-2.5 pb-2"
-          style={{ paddingLeft: `calc(${inset + 0.75 * depth}rem + 1.75rem)` }}
+          style={{ paddingLeft: `calc(${inset + 0.75 * depth}rem + 1.5rem)` }}
         >
           <PropertyList size="sm">
             {facts?.map((fact) => (

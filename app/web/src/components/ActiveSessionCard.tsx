@@ -49,11 +49,8 @@ import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
-import {
-  SessionStatusBadge,
-  SessionStatusIcon,
-} from "./SessionStatusBadge.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
+import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 import { IconButton } from "./common/IconButton.tsx";
@@ -460,34 +457,7 @@ function ActiveSessionCardImpl({
             {/* A little air above and below: the title is the card's line, and
                 the two small rows around it read as its context. */}
             <div className="flex min-w-0 items-center gap-1.5 py-1">
-              {/* One leading slot: an Idle session shows what it IS, any
-                  other state shows what it needs. Fixed width, so every
-                  title starts at the same x. */}
-              <span className="flex size-4 shrink-0 items-center justify-center">
-                {status === "quiet" || !badge ? (
-                  <AgentIcon
-                    size={13}
-                    className={`shrink-0 ${agent.activeColor}`}
-                    aria-hidden
-                  />
-                ) : (
-                  <SessionStatusBadge
-                    badge={badge}
-                    status={status}
-                    display="slot"
-                  />
-                )}
-              </span>
-              <span
-                // Bright only where it asks for the user — unread, or needing
-                // them; a card already read recedes to the rows' muted tone.
-                className={`min-w-0 flex-1 truncate text-sm ${status === "unread" ? "font-semibold" : "font-medium"} ${status === "unread" || card.tier === "needs-you" ? "text-foreground" : "text-muted-foreground"}`}
-              >
-                <SessionTitleText
-                  title={title}
-                  pending={session.titleGenerationPending}
-                />
-              </span>
+              <SessionTitleRow session={session} status={status} />
             </div>
 
             {/* Badges lead and time closes the row at the right edge; time

@@ -1,20 +1,14 @@
 import { memo } from "react";
-import {
-  Archive,
-  ArchiveRestore,
-  CircleHelp,
-  MessageSquare,
-  Terminal,
-  Wrench,
-} from "lucide-react";
+import { Archive, ArchiveRestore } from "lucide-react";
 import type { SessionListItem } from "@assistant/shared";
-import { isWorkspaceAware } from "../lib/sessionCapabilities.ts";
 import { relativeTime, sameSessionRowProps } from "../lib/sessionRows.ts";
+import {
+  classifySessionStatus,
+  type SessionInboxStatus,
+} from "../lib/sessionInbox.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import { Spinner } from "./common/load.tsx";
-import { UnreadDot } from "./UnreadDot.tsx";
 
 /**
  * @component SessionRowContent
@@ -45,63 +39,21 @@ function SessionRowContentImpl({
   unread,
   onArchive,
 }: SessionRowContentProps) {
-  const identity = { harness: session.harness, agentType: session.agentType };
-  const running = Boolean(session.isStreaming);
-  const awaitingInput = Boolean(session.awaitingInput);
-  // ONE glyph for every human-blocking state, but the wording says which
-  // decision it is: "your answer" is wrong in front of a `/pr` Task chooser.
-  const awaitingWhat =
-    session.attention === "approval"
-      ? "your approval"
-      : session.attention === "task-choice"
-        ? "you to pick a Task"
-        : "your answer";
-  const showUnread = Boolean(unread ?? session.unread);
-  const rowTitle = session.title.trim() || "Untitled session";
+  // The attention cards' state, with the host's word on unread: the open
+  // session reads as read even before the server says so.
+  const classified = classifySessionStatus(session);
+  const status: SessionInboxStatus =
+    unread === false && classified === "unread"
+      ? "quiet"
+      : unread === true && classified === "quiet"
+        ? "unread"
+        : classified;
 
   return (
     <span className="group/session-content flex min-w-0 flex-1 items-center gap-1.5">
-      {/* A plain glyph, not a tinted tile, as every other list now draws one:
-          the agent's kind in the accent (amber for a workspace-aware one),
-          the spinner while it runs. */}
-      <span
-        className={`relative flex size-5 shrink-0 items-center justify-center ${
-          isWorkspaceAware(identity) ? "text-warning" : "text-primary"
-        }`}
-        aria-hidden
-      >
-        {running ? (
-          <Spinner size="sm" />
-        ) : identity.agentType === "workshop" ? (
-          <Wrench size={12} />
-        ) : identity.agentType === "developer" ? (
-          <Terminal size={12} />
-        ) : (
-          <MessageSquare size={12} />
-        )}
-        {showUnread ? (
-          <UnreadDot title="Unread response" placement="avatar" />
-        ) : null}
-      </span>
-      <span
-        // Bright only when there is something new to read, as the session
-        // cards' titles: a quiet session recedes.
-        className={`min-w-0 flex-1 truncate text-sm ${showUnread ? "font-semibold text-foreground" : "text-muted-foreground"}`}
-      >
-        <SessionTitleText
-          title={rowTitle}
-          pending={session.titleGenerationPending}
-        />
-      </span>
-      {awaitingInput ? (
-        <span
-          className="flex size-4 shrink-0 items-center justify-center rounded bg-primary/15 text-primary"
-          title={`This session is waiting for ${awaitingWhat}`}
-          aria-label={`Waiting for ${awaitingWhat}`}
-        >
-          <CircleHelp size={11} />
-        </span>
-      ) : null}
+      {/* The attention cards' title line: the agent's glyph when idle, the
+          coloured status badge when it is doing or needs anything. */}
+      <SessionTitleRow session={session} status={status} />
       {/* The pull request the session opened. A GLYPH here: the row is one line
           deep in a tree, so the state travels as tone and accessible name, and
           the row itself is what opens the session holding the card. */}
