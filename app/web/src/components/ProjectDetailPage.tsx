@@ -4,6 +4,7 @@ import {
   Check,
   CircleDot,
   CornerLeftUp,
+  Download,
   FolderKanban,
   GitBranch,
   GitFork,
@@ -24,7 +25,8 @@ import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import { PROPERTY_TRIGGER, PropertyLabel } from "./TaskPlanningSection.tsx";
 import { TitleDescriptionEditor } from "./common/TitleDescriptionEditor.tsx";
-import { IconButton } from "./common/IconButton.tsx";
+import { ActionRow } from "./common/ActionRow.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { EditableText } from "./common/EditableText.tsx";
 import { Button } from "./ui/button.tsx";
 import { useDialogs } from "./common/dialogs.tsx";
@@ -528,7 +530,7 @@ function ProjectDetail({
               </span>
             )}
           </div>
-          <div className="mt-4 flex items-center justify-end gap-2 border-t pt-2">
+          <ActionRow>
             <Button
               variant="ghost"
               size="xs"
@@ -539,7 +541,7 @@ function ProjectDetail({
               <Pencil />
               Edit
             </Button>
-          </div>
+          </ActionRow>
         </section>
       )}
 
@@ -555,19 +557,6 @@ function ProjectDetail({
             storageScope={`project-page:${project.id}`}
             title="Worktrees"
             icon={<GitBranch />}
-            summary={worktrees?.length ? `${worktrees.length}` : undefined}
-            actions={
-              onCreateWorktree ? (
-                <IconButton
-                  label="New worktree"
-                  size="icon-xs"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={() => onCreateWorktree(project.id)}
-                >
-                  <Plus />
-                </IconButton>
-              ) : undefined
-            }
           >
             {worktrees === null ? (
               <div
@@ -592,6 +581,19 @@ function ProjectDetail({
                 />
               </div>
             )}
+            {onCreateWorktree ? (
+              <ActionRow>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-muted-foreground"
+                  onClick={() => onCreateWorktree(project.id)}
+                >
+                  <Plus />
+                  New worktree
+                </Button>
+              </ActionRow>
+            ) : null}
           </InspectorSection>
         ) : null}
 
@@ -654,6 +656,9 @@ function ProjectWorktreeRows({
       flush
       showGuides={false}
       aria-label="Worktrees"
+      // The last row drops its hairline: the action row under the list draws
+      // the one that closes it.
+      className="[&>li:last-child_.border-b]:border-b-0"
       selectedIds={NO_SELECTION}
       onSelectionChange={(ids) => {
         if (ids.length === 1) onOpen?.(ids[0]!);
@@ -760,40 +765,26 @@ function RepositorySection({
       storageScope={`project-page:${project.id}`}
       title="Repository"
       icon={<GitFork />}
-      actions={
-        hasCheckout ? (
-          <IconButton
-            variant="ghost"
-            size="icon-xs"
-            // Why it cannot be pressed is its TOOLTIP, so a disabled button
-            // still takes the pointer (`aria-disabled`, not `disabled`).
-            className="text-muted-foreground hover:text-destructive aria-disabled:opacity-50 aria-disabled:hover:text-muted-foreground"
-            busy={provisioning === "remove"}
-            disabled={blocked}
-            focusableWhenDisabled
-            label={
-              dependencyPending
-                ? "Checking worktrees before clone removal"
-                : blocked
-                  ? `${spawnedWorktrees} worktree${spawnedWorktrees === 1 ? " still uses" : "s still use"} this clone. Remove ${spawnedWorktrees === 1 ? "it" : "them"} first to remove the clone itself.`
-                  : "Remove the clone"
-            }
-            onClick={removeClone}
-          >
-            <Trash2 />
-          </IconButton>
-        ) : undefined
-      }
     >
-      <div className="flex flex-col gap-2">
+      {/* No gap of its own: the notes keep theirs (`mb-2`), so the action row
+          sits as far under the rows as the description's does under it. */}
+      <div className="flex flex-col">
         {worktreeError ? (
-          <ErrorNote message={worktreeError} onRetry={onLoadWorktrees} />
+          <ErrorNote
+            message={worktreeError}
+            onRetry={onLoadWorktrees}
+            className="mb-2"
+          />
         ) : null}
         {dependencyPending && !worktreeError ? (
-          <RefreshIndicator label="Checking dependent worktrees…" />
+          <RefreshIndicator
+            label="Checking dependent worktrees…"
+            className="mb-2"
+          />
         ) : null}
         {provisionError ? (
           <ErrorNote
+            className="mb-2"
             message={provisionError.message}
             retryLabel={
               provisionError.action === "clone" ? "Retry clone" : "Retry remove"
@@ -805,8 +796,42 @@ function RepositorySection({
           <>
             <div className={REPO_PROPERTY_LIST}>
               <RepoRow label="Checkout" value={checkoutPath} />
-              <RepoRow label="Origin" value={url} muted />
+              <RepoRow
+                label="Origin"
+                value={url}
+                href={repoDisplay(url)?.href}
+                muted
+              />
             </div>
+            <ActionRow>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      // Why it cannot be pressed is its TOOLTIP, so a disabled
+                      // button still takes the pointer (`aria-disabled`).
+                      className="text-muted-foreground hover:text-destructive aria-disabled:opacity-50 aria-disabled:hover:text-muted-foreground"
+                      busy={provisioning === "remove"}
+                      disabled={blocked}
+                      focusableWhenDisabled
+                      onClick={removeClone}
+                    />
+                  }
+                >
+                  <Trash2 />
+                  Remove clone
+                </TooltipTrigger>
+                <TooltipContent>
+                  {dependencyPending
+                    ? "Checking worktrees before clone removal"
+                    : blocked
+                      ? `${spawnedWorktrees} worktree${spawnedWorktrees === 1 ? " still uses" : "s still use"} this clone. Remove ${spawnedWorktrees === 1 ? "it" : "them"} first to remove the clone itself.`
+                      : "Delete the checkout folder from disk"}
+                </TooltipContent>
+              </Tooltip>
+            </ActionRow>
           </>
         ) : (
           <>
@@ -830,9 +855,11 @@ function RepositorySection({
                 />
               </div>
             </EditableText>
-            <div className="flex justify-end">
+            <ActionRow>
               <Button
-                size="sm"
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
                 disabled={!url || busy}
                 busy={provisioning === "clone"}
                 onClick={onClone}
@@ -842,9 +869,10 @@ function RepositorySection({
                     : "Set a repository URL first"
                 }
               >
+                <Download />
                 {provisioning === "clone" ? "Cloning…" : "Clone"}
               </Button>
-            </div>
+            </ActionRow>
           </>
         )}
       </div>
@@ -861,12 +889,15 @@ function RepoRow({
   label,
   value,
   placeholder,
+  href,
   muted = false,
   onClick,
 }: {
   label: string;
   value?: string | undefined;
   placeholder?: string;
+  /** Where the value lives on the web: the value becomes a link to it. */
+  href?: string | undefined;
   muted?: boolean;
   onClick?: () => void;
 }) {
@@ -890,7 +921,20 @@ function RepoRow({
           <span className={valueClass}>{value || placeholder}</span>
         </Button>
       ) : (
-        <span className={`py-1 ${valueClass}`}>{value}</span>
+        <span className={`py-1 ${valueClass}`}>
+          {value && href ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="text-foreground underline underline-offset-3 hover:text-primary"
+            >
+              {value}
+            </a>
+          ) : (
+            value
+          )}
+        </span>
       )}
     </>
   );

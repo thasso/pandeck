@@ -28,6 +28,7 @@ import { followRowLink } from "../lib/rowLink.ts";
 import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
 import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
 import { IconButton } from "./common/IconButton.tsx";
+import { ActionRow } from "./common/ActionRow.tsx";
 import {
   TitleDescriptionEditor,
   type TitleDescriptionChanges,
@@ -890,7 +891,7 @@ function TaskDetailPanel({
                     </span>
                   )}
                 </div>
-                <div className="mt-4 flex items-center justify-end gap-2 border-t pt-2">
+                <ActionRow>
                   {detailRefreshing ? (
                     <RefreshIndicator label="Refreshing description" />
                   ) : null}
@@ -907,7 +908,7 @@ function TaskDetailPanel({
                     <Pencil />
                     Edit
                   </Button>
-                </div>
+                </ActionRow>
               </section>
             )}
           </div>
