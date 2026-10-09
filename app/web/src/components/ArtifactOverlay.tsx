@@ -1,8 +1,7 @@
-import { lazy, Suspense } from "react";
-import { X } from "lucide-react";
+import { lazy, Suspense, useMemo } from "react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { IconButton } from "./common/IconButton.tsx";
 import { PaneLoading } from "./common/load.tsx";
+import { DocumentOverlayContext } from "./DocumentNavigationShell.tsx";
 
 // The viewer pulls in the document renderers (Markdown, sandboxed HTML, PDF),
 // so it loads with the first opening, not with the panel that lists artifacts.
@@ -32,6 +31,7 @@ export function ArtifactOverlay({
   label: string;
   onClose: () => void;
 }) {
+  const overlay = useMemo(() => ({ onClose }), [onClose]);
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent
@@ -45,16 +45,16 @@ export function ArtifactOverlay({
           onClose();
         }}
       >
-        <div className="flex min-h-11 items-center gap-2 border-b px-3">
-          <DialogTitle className="min-w-0 flex-1 truncate">{label}</DialogTitle>
-          <IconButton label="Close" size="icon" onClick={onClose}>
-            <X />
-          </IconButton>
-        </div>
+        {/* The viewer's own header is the overlay's: its title, its source
+            actions and zoom, and a Close that closes this (no Back/Forward —
+            `DocumentOverlayContext`). */}
+        <DialogTitle className="sr-only">{label}</DialogTitle>
         <div className="min-h-0 flex-1">
-          <Suspense fallback={<PaneLoading label="Opening artifact…" />}>
-            <SessionArtifactViewer sessionId={sessionId} path={path} />
-          </Suspense>
+          <DocumentOverlayContext.Provider value={overlay}>
+            <Suspense fallback={<PaneLoading label="Opening artifact…" />}>
+              <SessionArtifactViewer sessionId={sessionId} path={path} />
+            </Suspense>
+          </DocumentOverlayContext.Provider>
         </div>
       </DialogContent>
     </Dialog>

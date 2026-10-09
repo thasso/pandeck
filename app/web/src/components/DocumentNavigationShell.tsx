@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -280,12 +282,24 @@ export function useDocumentScrollRestoration(
   }, [id]);
 }
 
+/**
+ * Set by a host that shows a document OVER the app (`ArtifactOverlay`) rather
+ * than as a page in its history: the viewer then has no Back/Forward, its
+ * Close closes the overlay, and it stays out of the history entry's scroll
+ * and the page's navigation registration (the phone's dock row) — those
+ * belong to the page underneath.
+ */
+export const DocumentOverlayContext = createContext<{
+  onClose: () => void;
+} | null>(null);
+
 function usePublishDocumentNavigation(
   target: DocumentTarget,
   title: string,
   sourceActions: readonly DocumentSourceAction[] = NO_SOURCE_ACTIONS,
   priority = 1,
   zoomMode: DocumentZoomMode | null = "text",
+  publish = true,
 ): DocumentNavigationRegistration {
   const owner = useRef(Symbol("document-navigation")).current;
   const navVersion = useSyncExternalStore(
@@ -318,9 +332,10 @@ function usePublishDocumentNavigation(
     [close, id, navVersion, sourceActions, target, title, zoom],
   );
   useLayoutEffect(() => {
+    if (!publish) return;
     publishDocumentNavigation(owner, registration, priority);
     return () => publishDocumentNavigation(owner, null, priority);
-  }, [owner, priority, registration]);
+  }, [owner, priority, publish, registration]);
   return registration;
 }
 
@@ -384,16 +399,23 @@ export function DocumentNavigationShell({
   zoomMode?: DocumentZoomMode | null;
   children: ReactNode;
 }) {
-  const mobile = useMobileLayout();
+  const overlay = useContext(DocumentOverlayContext);
+  // Over the app there is no dock row to carry the actions on a phone, so the
+  // header keeps them at every width.
+  const mobile = useMobileLayout() && !overlay;
   const registration = usePublishDocumentNavigation(
     target,
     title,
     sourceActions,
     1,
     zoomMode,
+    !overlay,
   );
-  const close = registration.close;
-  useDocumentScrollRestoration(registration.id, Boolean(target.anchor));
+  const close = overlay?.onClose ?? registration.close;
+  useDocumentScrollRestoration(
+    overlay ? null : registration.id,
+    Boolean(target.anchor),
+  );
   useDocumentZoomBehavior(registration.id, registration.zoom);
 
   return (
@@ -411,22 +433,27 @@ export function DocumentNavigationShell({
           objectOverflow={false}
           actions={
             mobile ? undefined : (
-              // Back and Forward lead as one pair.
+              // Back and Forward lead as one pair — on a page; over the app
+              // there is no history of documents to step through.
               <div className="flex items-center gap-1">
-                <IconButton
-                  label="Back"
-                  onClick={() => void goBack()}
-                  disabled={!registration.canBack}
-                >
-                  <ArrowLeft />
-                </IconButton>
-                <IconButton
-                  label="Forward"
-                  onClick={goForward}
-                  disabled={!registration.canForward}
-                >
-                  <ArrowRight />
-                </IconButton>
+                {overlay ? null : (
+                  <>
+                    <IconButton
+                      label="Back"
+                      onClick={() => void goBack()}
+                      disabled={!registration.canBack}
+                    >
+                      <ArrowLeft />
+                    </IconButton>
+                    <IconButton
+                      label="Forward"
+                      onClick={goForward}
+                      disabled={!registration.canForward}
+                    >
+                      <ArrowRight />
+                    </IconButton>
+                  </>
+                )}
                 {actions}
                 {sourceActions.map((action) => (
                   <IconButton
@@ -454,7 +481,10 @@ export function DocumentNavigationShell({
           // comment controls, as it is the last control in the phone's dock row.
           close={
             mobile ? undefined : (
-              <IconButton label="Close document" onClick={close}>
+              <IconButton
+                label={overlay ? "Close" : "Close document"}
+                onClick={close}
+              >
                 <X />
               </IconButton>
             )
