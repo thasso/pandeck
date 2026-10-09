@@ -30,11 +30,10 @@ import { Button } from "./ui/button.tsx";
 import { Item } from "./ui/item.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
 import {
-  PROPERTY_TRIGGER,
-  PropertyLabel,
   TaskPlanningSection,
   type TaskPlanningPatch,
 } from "./TaskPlanningSection.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
 
 /** A partial task save issued from the inspector's context sections. */
 export interface TaskContextPatch extends TaskPlanningPatch {

@@ -27,7 +27,7 @@ import {
   CommandSeparator,
 } from "./ui/command.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import { PROPERTY_TRIGGER } from "./TaskPlanningSection.tsx";
+import { PROPERTY_TRIGGER } from "./common/PropertyList.tsx";
 
 /** The one ticket a Task is about: a Jira key or a GitHub `owner/repo#123`. */
 export interface TaskTicket {

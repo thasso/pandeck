@@ -21,7 +21,11 @@ import {
   BacklogProjectFilterPicker,
   type BacklogProjectFilterOption,
 } from "./BacklogFilters.tsx";
-import { PROPERTY_TRIGGER, PropertyLabel } from "./TaskPlanningSection.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+} from "./common/PropertyList.tsx";
 import {
   BacklogStatusFilter,
   BacklogStatusFilterPicker,
@@ -369,7 +373,7 @@ function BacklogFilterPopover({
       </PopoverTrigger>
       <PopoverContent align="end" className="w-72">
         {/* The inspector's property list: muted labels, quiet values. */}
-        <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-y-1">
+        <PropertyList>
           <PropertyLabel>Project</PropertyLabel>
           <BacklogProjectFilterPicker
             filter={projectFilter}
@@ -410,7 +414,7 @@ function BacklogFilterPopover({
               </Button>
             </>
           ) : null}
-        </div>
+        </PropertyList>
       </PopoverContent>
     </Popover>
   );

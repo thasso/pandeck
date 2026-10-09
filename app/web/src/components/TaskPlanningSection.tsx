@@ -19,6 +19,11 @@ import {
 } from "./ui/select.tsx";
 import { Calendar } from "./ui/calendar.tsx";
 import { Button } from "./ui/button.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+} from "./common/PropertyList.tsx";
 import { focusDateLabel } from "../lib/backlogFocus.ts";
 import { addDays, todayIso } from "./calendar/calendarDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
@@ -69,7 +74,7 @@ export function TaskPlanningSection({
       {/* A property list: one line per field, the label on the left and the
           value on the right as its own quiet control — a picker opens from
           it rather than every option standing on the panel. */}
-      <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-y-0.5 px-1">
+      <PropertyList>
         {leading}
         <PropertyLabel>Priority</PropertyLabel>
         <Select
@@ -115,18 +120,9 @@ export function TaskPlanningSection({
           overdueTone
           onChange={(value) => onPatch({ dueDate: value || null })}
         />
-      </div>
+      </PropertyList>
     </InspectorSection>
   );
-}
-
-/** A value control in the property list: borderless, filled on hover, the
- *  width of its column so every value starts at the same x. */
-export const PROPERTY_TRIGGER =
-  "h-7 w-full justify-between border-transparent bg-transparent px-2 font-normal shadow-none hover:bg-muted dark:bg-transparent dark:hover:bg-muted/50";
-
-export function PropertyLabel({ children }: { children: ReactNode }) {
-  return <span className="text-sm text-muted-foreground">{children}</span>;
 }
 
 const PRIORITY_DISPLAY: Record<

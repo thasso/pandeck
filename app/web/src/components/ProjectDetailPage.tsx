@@ -23,7 +23,12 @@ import { Tree } from "./common/Tree.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { PROPERTY_TRIGGER, PropertyLabel } from "./TaskPlanningSection.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { TitleDescriptionEditor } from "./common/TitleDescriptionEditor.tsx";
 import { ActionRow } from "./common/ActionRow.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
@@ -794,7 +799,7 @@ function RepositorySection({
         ) : null}
         {hasCheckout ? (
           <>
-            <div className={REPO_PROPERTY_LIST}>
+            <PropertyList align="start">
               <RepoRow label="Checkout" value={checkoutPath} />
               <RepoRow
                 label="Origin"
@@ -802,7 +807,7 @@ function RepositorySection({
                 href={repoDisplay(url)?.href}
                 muted
               />
-            </div>
+            </PropertyList>
             <ActionRow>
               <Tooltip>
                 <TooltipTrigger
@@ -846,14 +851,14 @@ function RepositorySection({
               placeholder="git@host:owner/repo.git"
               className="font-mono"
             >
-              <div className={REPO_PROPERTY_LIST}>
+              <PropertyList align="start">
                 <RepoRow
                   label="Clone from"
                   value={url}
                   placeholder="Set a repository URL"
                   onClick={() => setEditingUrl(true)}
                 />
-              </div>
+              </PropertyList>
             </EditableText>
             <ActionRow>
               <Button
@@ -880,10 +885,6 @@ function RepositorySection({
   );
 }
 
-/** The Repository rows as a property list: labels in one column, values in the next. */
-const REPO_PROPERTY_LIST =
-  "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-0.5";
-
 /** One read-only (or click-to-edit) repository row: label and mono value. */
 function RepoRow({
   label,
@@ -904,24 +905,24 @@ function RepoRow({
   // A path or remote WRAPS rather than truncates: a truncated
   // `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
   // read or copy out on a phone.
-  const valueClass = `min-w-0 select-all break-all font-mono text-xs leading-5 ${value ? (muted ? "text-muted-foreground" : "text-foreground") : "text-muted-foreground"}`;
+  const valueClass = `select-all break-all font-mono text-xs ${value ? (muted ? "text-muted-foreground" : "text-foreground") : "text-muted-foreground"}`;
   return (
     <>
-      <span className="py-1 leading-5">
-        <PropertyLabel>{label}</PropertyLabel>
-      </span>
+      <PropertyLabel>{label}</PropertyLabel>
       {onClick ? (
         <Button
           variant="ghost"
           size="sm"
-          className={`${PROPERTY_TRIGGER} -ml-2 h-auto min-h-7 justify-start py-1 text-left whitespace-normal`}
+          className={`${PROPERTY_TRIGGER} h-auto min-h-7 justify-start py-1 text-left leading-5 whitespace-normal`}
           onClick={onClick}
           title={`Edit ${label.toLowerCase()}`}
         >
-          <span className={valueClass}>{value || placeholder}</span>
+          <span className={`min-w-0 ${valueClass}`}>
+            {value || placeholder}
+          </span>
         </Button>
       ) : (
-        <span className={`py-1 ${valueClass}`}>
+        <PropertyText className={valueClass}>
           {value && href ? (
             <a
               href={href}
@@ -934,7 +935,7 @@ function RepoRow({
           ) : (
             value
           )}
-        </span>
+        </PropertyText>
       )}
     </>
   );
