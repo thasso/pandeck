@@ -54,7 +54,11 @@ const op = (
  * its card; settings input is never grantable at all.
  */
 export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
-  op("github:create", "GitHub: open pull requests", "Open new pull requests."),
+  op(
+    "github:create",
+    "GitHub: open pull requests",
+    "Open pull requests on any repository and branch. A managed worktree opens its own without asking.",
+  ),
   op(
     "github:edit",
     "GitHub: edit pull requests",
@@ -63,7 +67,7 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
     "github:ready",
     "GitHub: mark pull requests ready",
-    "Take a draft pull request out of draft.",
+    "Take any draft pull request out of draft. A managed worktree readies its own without asking.",
   ),
   op(
     "github:review",
@@ -99,7 +103,7 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
     "forgejo:create",
     "Forgejo: open pull requests",
-    "Open new pull requests.",
+    "Open pull requests on any repository and branch. A managed worktree opens its own without asking.",
   ),
   op(
     "forgejo:edit",
@@ -109,7 +113,7 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
     "forgejo:ready",
     "Forgejo: mark pull requests ready",
-    "Take a draft pull request out of draft.",
+    "Take any draft pull request out of draft. A managed worktree readies its own without asking.",
   ),
   op(
     "forgejo:review",
@@ -157,7 +161,7 @@ export const GRANTABLE_OPERATIONS: readonly GrantableOperation[] = [
   op(
     "managedPullRequestMerge",
     "Merge into the default branch",
-    "Merge an agent's own pull request into the repository's default branch.",
+    "Merge a managed worktree's pull request into the repository's default branch. Merging into any other branch never asks.",
     true,
   ),
   op(

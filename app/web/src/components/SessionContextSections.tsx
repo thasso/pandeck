@@ -618,6 +618,11 @@ function ApprovalGrantsSection({
           );
         })}
       </ul>
+      {/* What the list cannot show: the steps that never raise a card. */}
+      <p className="mt-2 px-1 text-xs text-muted-foreground">
+        Never asks: a managed worktree&rsquo;s own commit, push, pull request
+        and merge into a non-default branch.
+      </p>
     </InspectorSection>
   );
 }
