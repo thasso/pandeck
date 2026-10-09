@@ -70,6 +70,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
   flush = false,
+  rootProjectId,
 }: {
   projects: ProjectRecord[];
   loading: boolean;
@@ -81,22 +82,30 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   worktrees?: WorktreeRecord[] | null;
   worktreeStatuses?: Record<string, WorktreeGitStatus>;
   selectedWorktreeId?: string | null | undefined;
-  onReorder: (
+  /** Absent under `rootProjectId`, which has no project rows to move or open. */
+  onReorder?: (
     orderedIds: string[],
     placements: { id: string; parentId?: string | null }[],
   ) => void;
-  onOpenProject: (id: string) => void;
-  onOpenSession?: (id: string) => void;
-  onArchiveSession?: (id: string, archived: boolean) => void;
-  onOpenWorktree?: (id: string) => void;
+  onOpenProject?: (id: string) => void;
+  onOpenSession?: ((id: string) => void) | undefined;
+  onArchiveSession?: ((id: string, archived: boolean) => void) | undefined;
+  onOpenWorktree?: ((id: string) => void) | undefined;
   onStartSession?: (id: string) => void;
-  onStartSessionInWorktree?: (id: string) => void;
+  onStartSessionInWorktree?: ((id: string) => void) | undefined;
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
   /**
    * Edge-to-edge, hairline-divided rows (the sidebar), as the Tasks tree: the
    * notes and placeholders around the tree keep their own inset.
    */
   flush?: boolean;
+  /**
+   * Show only what is UNDER this project — its worktrees with their sessions,
+   * and its sessions outside any worktree — as the top level, without the
+   * project row and without drag: the Project page's tree, the same rows,
+   * paging and remembered expansion as the sidebar's.
+   */
+  rootProjectId?: string | undefined;
 }) {
   const ordered = projects;
   const lastReorder = useRef<{
@@ -151,6 +160,17 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     sessionLimits,
   ]);
 
+  // One project's contents (not its subprojects), or the whole registry.
+  const shownNodes = useMemo(
+    () =>
+      rootProjectId
+        ? (findNode(nodes, rootProjectId)?.children ?? []).filter(
+            (node) => node.data.kind !== "project",
+          )
+        : nodes,
+    [nodes, rootProjectId],
+  );
+
   const expandableProjects = useMemo(
     () => collectExpandableProjectIds(nodes),
     [nodes],
@@ -175,8 +195,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   );
 
   const visibleWorktreeIds = useMemo(
-    () => collectVisibleWorktreeIds(nodes, new Set(expandedIds)),
-    [nodes, expandedIds],
+    () => collectVisibleWorktreeIds(shownNodes, new Set(expandedIds)),
+    [shownNodes, expandedIds],
   );
   useEffect(() => {
     onVisibleWorktreeIdsChange?.(visibleWorktreeIds);
@@ -202,8 +222,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         .filter((id) => expanded.has(id))
         .map(worktreeIdFromNodeId),
     );
-    setCollapsedProjects(nextCollapsed);
-    persistCollapsedIds(nextCollapsed);
+    // Under one project the project rows are not in the tree, so its answer
+    // says nothing about them: leave the sidebar's collapsed set alone.
+    if (!rootProjectId) {
+      setCollapsedProjects(nextCollapsed);
+      persistCollapsedIds(nextCollapsed);
+    }
     setExpandedWorktreeIds(nextWorktrees);
     persistExpandedWorktreeIds(nextWorktrees);
   };
@@ -213,7 +237,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     if (samePlacements(placements, projectPlacementsFromNodes(nodes))) return;
     const orderedIds = placements.map((placement) => placement.id);
     lastReorder.current = { orderedIds, placements };
-    onReorder(orderedIds, placements);
+    onReorder?.(orderedIds, placements);
   };
 
   const dataForId = useMemo(() => {
@@ -261,7 +285,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
           onRetry={() => {
             const attempted = lastReorder.current;
             if (attempted)
-              onReorder(attempted.orderedIds, attempted.placements);
+              onReorder?.(attempted.orderedIds, attempted.placements);
           }}
           className={flush ? "mx-2 mb-2" : "mb-2"}
         />
@@ -277,12 +301,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         </div>
       ) : null}
       <Tree
-        items={nodes}
+        items={shownNodes}
         indentWidth={INDENT_WIDTH}
         compact
         flush={flush}
         showGuides
-        aria-label="Projects"
+        aria-label={rootProjectId ? "Worktrees and sessions" : "Projects"}
         expandedIds={expandedIds}
         onExpandedChange={onExpandedChange}
         selectedIds={selectedIds}
@@ -293,9 +317,15 @@ export const ProjectTreePane = memo(function ProjectTreePane({
             onOpenWorktree?.(worktreeIdFromNodeId(id));
           else if (id.startsWith(SESSION_NODE_PREFIX))
             onOpenSession?.(sessionIdFromNodeId(id));
-          else if (!id.startsWith(MORE_NODE_PREFIX)) onOpenProject(id);
+          else if (!id.startsWith(MORE_NODE_PREFIX)) onOpenProject?.(id);
         }}
-        onMove={(result) => handleMove(result.items)}
+        // Projects are reordered in the registry tree, never under one.
+        {...(rootProjectId
+          ? {}
+          : {
+              onMove: (result: { items: ProjectBrowserNode[] }) =>
+                handleMove(result.items),
+            })}
         canDrag={(node) => !reorderBusy && node.data.kind === "project"}
         canDrop={({ parentId }) =>
           !parentId || dataForId.get(parentId)?.kind === "project"
@@ -529,6 +559,18 @@ function withRelatedChildren(
       children: children.length ? children : undefined,
     });
   });
+}
+
+function findNode(
+  nodes: ProjectBrowserNode[],
+  id: string,
+): ProjectBrowserNode | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findNode(node.children ?? [], id);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function groupByProject(

@@ -15,10 +15,11 @@ import {
 import type {
   ProjectRecord,
   ProjectSummary,
+  SessionListItem,
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import { WorktreeList } from "./worktreeRowParts.tsx";
+import { ProjectTreePane } from "./ProjectTreePane.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
@@ -86,6 +87,10 @@ function ProjectDetailPageView({
   paObjectReferences = [],
   onOpenPaObject,
   onOpenProject,
+  sessions = NO_SESSIONS,
+  currentSessionId,
+  onOpenSession,
+  onArchiveSession,
 }: {
   /** Mobile screen back control (ui-shell.md, Small Screens). */
   back?: PageHeaderBack | undefined;
@@ -126,6 +131,11 @@ function ProjectDetailPageView({
   onOpenPaObject?: (link: MarkdownPaObjectReference) => void;
   /** Open another Project (the parent named under the title). */
   onOpenProject?: (id: string) => void;
+  /** The session list, for the sessions under each worktree. */
+  sessions?: SessionListItem[];
+  currentSessionId?: string | undefined;
+  onOpenSession?: (id: string) => void;
+  onArchiveSession?: (id: string, archived: boolean) => void;
 }) {
   useEffect(() => {
     onOpenProjection?.(selectedId);
@@ -255,6 +265,10 @@ function ProjectDetailPageView({
                     : undefined
                 }
                 onOpenProject={onOpenProject}
+                sessions={sessions}
+                currentSessionId={currentSessionId}
+                onOpenSession={onOpenSession}
+                onArchiveSession={onArchiveSession}
                 onSave={(patch) => onSave(selected.id, patch)}
                 onClone={() => onCloneRepo(selected.id)}
                 onRemoveClone={() => onRemoveClone(selected.id)}
@@ -349,10 +363,16 @@ export const ProjectDetailPage = memo(
   sameProjectDetailPageProps,
 );
 
+const NO_SESSIONS: SessionListItem[] = [];
+
 function ProjectDetail({
   project,
   parent,
   onOpenProject,
+  sessions,
+  currentSessionId,
+  onOpenSession,
+  onArchiveSession,
   onSave,
   onClone,
   onRemoveClone,
@@ -371,6 +391,10 @@ function ProjectDetail({
   project: ProjectRecord;
   parent?: ProjectSummary | undefined;
   onOpenProject?: ((id: string) => void) | undefined;
+  sessions: SessionListItem[];
+  currentSessionId?: string | undefined;
+  onOpenSession?: ((id: string) => void) | undefined;
+  onArchiveSession?: ((id: string, archived: boolean) => void) | undefined;
   onSave: (patch: Partial<ProjectRecord>) => void;
   onClone: () => void;
   onRemoveClone: () => void;
@@ -576,12 +600,24 @@ function ProjectDetail({
                 No worktrees yet. Spawn one to let an agent work in isolation.
               </p>
             ) : (
-              <div className="flex flex-col">
-                <WorktreeList
+              // The sidebar's Projects tree, under this project only: each
+              // worktree unfolds its sessions, then the sessions outside any
+              // worktree. The last row drops its hairline: the action row
+              // under the tree draws the one that closes it.
+              <div className="[&_[role=tree]>li:last-child_.border-b]:border-b-0">
+                <ProjectTreePane
+                  rootProjectId={project.id}
+                  projects={[project]}
+                  loading={false}
+                  sessions={sessions}
+                  currentSessionId={currentSessionId}
                   worktrees={worktrees}
-                  statuses={worktreeStatuses}
-                  onOpen={onOpenWorktree}
-                  onStartSession={onStartSessionInWorktree}
+                  worktreeStatuses={worktreeStatuses}
+                  onOpenSession={onOpenSession}
+                  onArchiveSession={onArchiveSession}
+                  onOpenWorktree={onOpenWorktree}
+                  onStartSessionInWorktree={onStartSessionInWorktree}
+                  flush
                 />
               </div>
             )}

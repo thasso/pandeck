@@ -6907,6 +6907,10 @@ function AppContent() {
                     onCreateWorktree={createWorktreeForProject}
                     onStartSessionInWorktree={startSessionInWorktree}
                     onOpenProject={openProject}
+                    sessions={state.sessions}
+                    currentSessionId={displayCurrentId}
+                    onOpenSession={openSession}
+                    onArchiveSession={archiveSession}
                     paObjectReferences={paObjectReferences}
                     onOpenPaObject={openProjectPaObject}
                   />
