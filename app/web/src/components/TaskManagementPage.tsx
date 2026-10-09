@@ -28,8 +28,10 @@ import { followRowLink } from "../lib/rowLink.ts";
 import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
 import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import { Input } from "./ui/input.tsx";
-import { Textarea } from "./ui/textarea.tsx";
+import {
+  TitleDescriptionEditor,
+  type TitleDescriptionChanges,
+} from "./common/TitleDescriptionEditor.tsx";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   ProjectRecord,
@@ -316,7 +318,7 @@ export function TaskManagementPage({
   // Title and description are edited together, so they save together: one
   // request carrying only the fields that changed (an unchanged title is
   // omitted, never echoed back).
-  const editTask = (item: Task, changes: TaskTextChanges) => {
+  const editTask = (item: Task, changes: TitleDescriptionChanges) => {
     const description =
       changes.description !== undefined
         ? { description: changes.description }
@@ -695,7 +697,7 @@ function TaskDetailPanel({
   onDismissSuggestion: () => void;
   onDismissFromInbox: () => void;
   onPlanToday: () => void;
-  onEdit: (changes: TaskTextChanges) => void;
+  onEdit: (changes: TitleDescriptionChanges) => void;
   onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
   editMutation?: LoadState<true> | undefined;
@@ -775,9 +777,11 @@ function TaskDetailPanel({
               onSetProject={onSetProject}
               editor={
                 editing ? (
-                  <TaskTextEditor
+                  <TitleDescriptionEditor
                     title={item.title}
                     description={descriptionText}
+                    titleLabel="Task title"
+                    descriptionLabel="Task description"
                     onSave={onEdit}
                     submitState={editMutation}
                     onClose={() => setEditing(false)}
@@ -1326,125 +1330,6 @@ function TaskTitleBlock({
           ))}
         </ul>
       ) : null}
-    </div>
-  );
-}
-
-/** What an edit changed: only the fields that differ are present. */
-type TaskTextChanges = { title?: string; description?: string };
-
-/**
- * Title and description in one editor, saved together. Cmd/Ctrl+Enter saves
- * from either field, Escape cancels; it stays open while the save runs and
- * closes once it succeeds, keeping the draft (with a retry) when it is refused.
- */
-function TaskTextEditor({
-  title,
-  description,
-  onSave,
-  submitState,
-  onClose,
-}: {
-  title: string;
-  description: string;
-  onSave: (changes: TaskTextChanges) => void;
-  submitState: LoadState<true> | undefined;
-  onClose: () => void;
-}) {
-  const [draftTitle, setDraftTitle] = useState(title);
-  const [draftDescription, setDraftDescription] = useState(description);
-  // What this session opened on: the live values may already be optimistic.
-  const [baseline] = useState({ title, description });
-  const [submitted, setSubmitted] = useState(false);
-  const awaitingRef = useRef(false);
-  const sawPendingRef = useRef(false);
-  const descriptionRef = useRef<HTMLTextAreaElement>(null);
-  const state = submitState ?? idle<true>();
-  const pending = isPending(state);
-  const error = submitted && !pending ? errorOf(state) : undefined;
-
-  const cancel = () => {
-    if (!pending) onClose();
-  };
-  const commit = () => {
-    if (pending) return;
-    const nextTitle = draftTitle.trim();
-    const nextDescription = draftDescription.trimEnd();
-    if (!nextTitle) return;
-    const changes: TaskTextChanges = {};
-    if (submitted || nextTitle !== baseline.title) changes.title = nextTitle;
-    if (submitted || nextDescription !== baseline.description)
-      changes.description = nextDescription;
-    if (changes.title === undefined && changes.description === undefined) {
-      onClose();
-      return;
-    }
-    onSave(changes);
-    awaitingRef.current = true;
-    sawPendingRef.current = false;
-    setSubmitted(true);
-  };
-
-  useEffect(() => {
-    if (!awaitingRef.current) return;
-    if (pending) {
-      sawPendingRef.current = true;
-      return;
-    }
-    if (!sawPendingRef.current) return;
-    awaitingRef.current = false;
-    sawPendingRef.current = false;
-    if (!errorOf(state)) onClose();
-  }, [pending, state, onClose]);
-
-  const onKeyDown = (event: ReactKeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancel();
-    } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      commit();
-    }
-  };
-
-  return (
-    <div className="flex flex-col gap-2" onKeyDown={onKeyDown}>
-      <Input
-        autoFocus
-        value={draftTitle}
-        aria-label="Task title"
-        placeholder="Title"
-        readOnly={pending}
-        onChange={(event) => setDraftTitle(event.target.value)}
-        onKeyDown={(event) => {
-          // Enter in the title moves on to the description rather than saving
-          // half an edit.
-          if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
-            event.preventDefault();
-            descriptionRef.current?.focus();
-          }
-        }}
-        className="h-auto py-1.5 text-lg font-semibold md:text-lg"
-      />
-      <Textarea
-        ref={descriptionRef}
-        value={draftDescription}
-        aria-label="Task description"
-        placeholder="Add a description…"
-        readOnly={pending}
-        onChange={(event) => setDraftDescription(event.target.value)}
-        className="min-h-48 resize-y"
-      />
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" disabled={pending} onClick={cancel}>
-          Cancel
-        </Button>
-        <Button busy={pending} disabled={!draftTitle.trim()} onClick={commit}>
-          Save
-        </Button>
-      </div>
-      {error ? <ErrorNote message={error} onRetry={commit} /> : null}
     </div>
   );
 }

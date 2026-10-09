@@ -1,15 +1,18 @@
 import { memo, useEffect, useState, type ReactNode } from "react";
 import {
+  Archive,
   Check,
+  CircleDot,
+  CornerLeftUp,
   FolderKanban,
   GitBranch,
+  GitFork,
   House,
-  Link2,
+  ListTodo,
   MessageSquarePlus,
   Pencil,
   Plus,
   Trash2,
-  ChevronRight,
 } from "lucide-react";
 import type {
   ProjectRecord,
@@ -24,11 +27,9 @@ import {
 } from "./worktreeRowParts.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "./ui/collapsible.tsx";
+import { InspectorSection } from "./shell/Inspector.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./TaskPlanningSection.tsx";
+import { TitleDescriptionEditor } from "./common/TitleDescriptionEditor.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { EditableText } from "./common/EditableText.tsx";
 import { Button } from "./ui/button.tsx";
@@ -47,6 +48,8 @@ import {
   type LoadState,
 } from "../lib/loadState.ts";
 import { copyWithToast } from "../lib/clipboard.ts";
+import { projectColor } from "../lib/projectDisplay.ts";
+import { projectSaveOperation } from "../hooks/useAssistant.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { worktreeAxes } from "../lib/worktreeAxes.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
@@ -84,6 +87,7 @@ function ProjectDetailPageView({
   onStartSessionInWorktree,
   paObjectReferences = [],
   onOpenPaObject,
+  onOpenProject,
   renderTasks,
 }: {
   /** Mobile screen back control (ui-shell.md, Small Screens). */
@@ -123,6 +127,8 @@ function ProjectDetailPageView({
   onStartSessionInWorktree?: (id: string) => void;
   paObjectReferences?: MarkdownPaObjectReference[];
   onOpenPaObject?: (link: MarkdownPaObjectReference) => void;
+  /** Open another Project (the parent named under the title). */
+  onOpenProject?: (id: string) => void;
   /**
    * The project's Task list. A render prop because the list is `BacklogList`,
    * which needs App's socket state/actions and is lazily loaded; the page just
@@ -157,7 +163,6 @@ function ProjectDetailPageView({
     ? (projects.find((project) => project.id === selectedId) ?? null)
     : null;
   const selectedDocument = detailState ? dataOf(detailState) : undefined;
-  const [editingName, setEditingName] = useState(false);
   const [keyCopied, setKeyCopied] = useState(false);
   const copyKey = selected?.key
     ? () => {
@@ -174,15 +179,10 @@ function ProjectDetailPageView({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      {/* One row of IDENTITY, at every width: the glyph (which copies the key —
-          the thing you type into a prompt or a branch name) and `KEY - Name`.
-          The key prefix is what makes this row worth its height; the name alone
-          is already the sidebar row you tapped to get here. Renaming is the
-          row's one action, since the name lives nowhere else on the page; every
-          other project action (archive, restore, delete, start a session) and
-          the key/color settings belong to the object panel, at both widths.
-          "archived" appears here only when it is true — a state you need to see
-          even with the panel closed, never a control. */}
+      {/* One row of IDENTITY, as on the Task page: the glyph (in the
+          project's colour; it copies the key — the thing you type into a prompt
+          or a branch name) and the key. The name moved into the page body,
+          where it wraps in full and is edited with the description. */}
       <PageHeader
         back={back}
         density={selected ? "compact" : "default"}
@@ -190,7 +190,12 @@ function ProjectDetailPageView({
           keyCopied ? (
             <Check size={16} strokeWidth={2.5} />
           ) : (
-            <FolderKanban size={16} />
+            <FolderKanban
+              size={16}
+              style={
+                selected ? { color: projectColor(selected).dot } : undefined
+              }
+            />
           )
         }
         onIconClick={copyKey}
@@ -203,29 +208,9 @@ function ProjectDetailPageView({
         }
         title={
           selected ? (
-            <EditableText
-              key={selected.id}
-              value={selected.name}
-              submitState={mutationStates[`${selected.id}:name`]}
-              onSubmit={(name) => onSave(selected.id, { name })}
-              editing={editingName}
-              onEditingChange={setEditingName}
-              label="Project name"
-            >
-              <h2 className="truncate text-sm">
-                {selected.key ? (
-                  <>
-                    <span className="select-all font-mono text-muted-foreground">
-                      {selected.key}
-                    </span>
-                    <span className="text-muted-foreground"> - </span>
-                  </>
-                ) : null}
-                <span className="font-semibold text-foreground">
-                  {selected.name}
-                </span>
-              </h2>
-            </EditableText>
+            <span className="select-all truncate font-mono text-sm text-muted-foreground">
+              {selected.key || selected.name}
+            </span>
           ) : (
             "Projects"
           )
@@ -237,29 +222,9 @@ function ProjectDetailPageView({
               ? `${projects.length} registered`
               : "Loading registry…"
         }
-        actions={
-          selected ? (
-            <div className="flex items-center gap-1">
-              {selected.status === "archived" ? (
-                <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-sm text-muted-foreground">
-                  archived
-                </span>
-              ) : null}
-              <IconButton
-                label="Rename Project"
-                onClick={() => setEditingName(true)}
-              >
-                <Pencil />
-              </IconButton>
-            </div>
-          ) : null
-        }
       />
 
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6"
-      >
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
         {loaded && listError ? (
           <ErrorNote message={listError} onRetry={onLoad} />
         ) : null}
@@ -291,6 +256,14 @@ function ProjectDetailPageView({
               <ProjectDetail
                 key={selected.id}
                 project={selectedDocument}
+                parent={
+                  selectedDocument.parentId
+                    ? projects.find(
+                        (project) => project.id === selectedDocument.parentId,
+                      )
+                    : undefined
+                }
+                onOpenProject={onOpenProject}
                 onSave={(patch) => onSave(selected.id, patch)}
                 onClone={() => onCloneRepo(selected.id)}
                 onRemoveClone={() => onRemoveClone(selected.id)}
@@ -367,9 +340,17 @@ export function sameProjectDetailPageProps(
   }
   if (previous.projects === next.projects) return true;
   if (!previous.selectedId) return false;
+  const before = previous.projects.find(
+    (project) => project.id === previous.selectedId,
+  );
+  const after = next.projects.find((project) => project.id === next.selectedId);
+  if (before !== after) return false;
+  // The parent is named under the title, so a rename of it redraws too.
+  const parentId = after?.parentId;
   return (
-    previous.projects.find((project) => project.id === previous.selectedId) ===
-    next.projects.find((project) => project.id === next.selectedId)
+    !parentId ||
+    previous.projects.find((project) => project.id === parentId) ===
+      next.projects.find((project) => project.id === parentId)
   );
 }
 
@@ -380,6 +361,8 @@ export const ProjectDetailPage = memo(
 
 function ProjectDetail({
   project,
+  parent,
+  onOpenProject,
   onSave,
   onClone,
   onRemoveClone,
@@ -397,6 +380,8 @@ function ProjectDetail({
   mutationStates,
 }: {
   project: ProjectRecord;
+  parent?: ProjectSummary | undefined;
+  onOpenProject?: ((id: string) => void) | undefined;
   onSave: (patch: Partial<ProjectRecord>) => void;
   onClone: () => void;
   onRemoveClone: () => void;
@@ -414,7 +399,16 @@ function ProjectDetail({
   mutationStates: Record<string, LoadState<true>>;
 }) {
   const description = project.description ?? "";
-  const [editingDescription, setEditingDescription] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // The editor saves name and description as one patch, whose mutation key
+  // depends on which of them changed: remember it to follow that save.
+  const [editOperation, setEditOperation] = useState<string | null>(null);
+  const editState = editOperation
+    ? mutationStates[`${project.id}:${editOperation}`]
+    : undefined;
+  const archived = project.status === "archived";
+  const repo = repoDisplay(project.repoUrl);
+  const spawnedCount = worktrees?.filter((worktree) => !worktree.isMain).length;
   const cloneState = mutationStates[`${project.id}:clone`];
   const removeState = mutationStates[`${project.id}:remove`];
   const provisioning =
@@ -437,31 +431,108 @@ function ProjectDetail({
     (worktree) => worktree.isMain,
   )?.mainRepoRoot;
   return (
-    <div className="mx-auto w-full max-w-3xl px-1 py-2">
-      <ProjectCollapsibleSection
-        title="Description"
-        storageKey={`project.collapse.${project.id}.description`}
-        trailing={
-          <IconButton
-            label="Edit description"
-            onClick={() => setEditingDescription(true)}
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-6 flex flex-col gap-1.5">
+        {editing ? (
+          <TitleDescriptionEditor
+            title={project.name}
+            description={description}
+            titleLabel="Project name"
+            descriptionLabel="Project description"
+            titlePlaceholder="Name"
+            submitState={editState}
+            onSave={(changes) => {
+              const patch: Partial<ProjectRecord> = {
+                ...(changes.title !== undefined ? { name: changes.title } : {}),
+                ...(changes.description !== undefined
+                  ? { description: changes.description.trim() }
+                  : {}),
+              };
+              setEditOperation(projectSaveOperation(patch));
+              onSave(patch);
+            }}
+            onClose={() => setEditing(false)}
+          />
+        ) : (
+          <h1
+            className={`text-lg font-semibold wrap-anywhere ${archived ? "text-muted-foreground" : "text-foreground"}`}
           >
-            <Pencil />
-          </IconButton>
-        }
-      >
-        <EditableText
-          value={description}
-          submitState={mutationStates[`${project.id}:description`]}
-          onSubmit={(next) => onSave({ description: next.trim() })}
-          editing={editingDescription}
-          onEditingChange={setEditingDescription}
-          multiline
-          allowEmpty
-          label="Project description"
-          placeholder="Add a description…"
-          className="min-h-32 resize-y"
-        >
+            {project.name}
+          </h1>
+        )}
+        {/* Under the name, as on the Task page: where the project stands and
+            what it is checked out from — plain muted facts, not chips. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+          <span className="inline-flex shrink-0 items-center gap-1.5">
+            {archived ? (
+              <Archive size={14} aria-hidden />
+            ) : (
+              <CircleDot size={14} aria-hidden className="text-primary" />
+            )}
+            {archived ? "Archived" : "Active"}
+          </span>
+          {repo ? (
+            <span
+              className="inline-flex min-w-0 items-center gap-1.5"
+              title={project.repoUrl}
+            >
+              <GitFork size={14} aria-hidden className="shrink-0" />
+              {repo.href ? (
+                <a
+                  href={repo.href}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="truncate font-mono text-xs text-foreground underline underline-offset-3 hover:text-primary"
+                >
+                  {repo.label}
+                </a>
+              ) : (
+                <span className="truncate font-mono text-xs">{repo.label}</span>
+              )}
+            </span>
+          ) : null}
+          {showWorktrees && spawnedCount !== undefined ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5">
+              <GitBranch size={14} aria-hidden />
+              {spawnedCount} worktree{spawnedCount === 1 ? "" : "s"}
+            </span>
+          ) : null}
+        </div>
+        {parent ? (
+          <div className="flex min-w-0 items-start gap-1.5 text-sm text-muted-foreground">
+            <span className="flex h-5 shrink-0 items-center">
+              <CornerLeftUp className="size-3.5" aria-hidden />
+            </span>
+            <span className="shrink-0 leading-5">Part of</span>
+            <Button
+              variant="link"
+              size="xs"
+              className="h-auto min-w-0 shrink items-start px-0 py-0 text-left text-sm font-normal whitespace-normal text-foreground"
+              disabled={!onOpenProject}
+              onClick={() => onOpenProject?.(parent.id)}
+            >
+              <span className="flex h-5 shrink-0 items-center">
+                <FolderKanban
+                  className="size-3.5"
+                  style={{ color: projectColor(parent).dot }}
+                  aria-hidden
+                />
+              </span>
+              <span className="min-w-0 leading-5 wrap-anywhere">
+                <span className="font-mono text-xs">{parent.key}</span>
+                <span className="text-muted-foreground"> · {parent.name}</span>
+              </span>
+            </Button>
+          </div>
+        ) : null}
+      </div>
+
+      {/* The description IS the page's body, under the name: no heading and
+          no fold. While editing it is part of the editor above. Under it, the
+          same small action row as the Task page: Edit (name and description
+          together). */}
+      {editing ? null : (
+        <section aria-label="Description" className="mb-8">
           <div className="min-h-16 w-full py-1">
             {description.trim() ? (
               <Markdown
@@ -471,91 +542,119 @@ function ProjectDetail({
               />
             ) : (
               <span className="text-sm text-muted-foreground">
-                No description yet. Use the edit button to add one.
+                No description yet.
               </span>
             )}
           </div>
-        </EditableText>
-      </ProjectCollapsibleSection>
+          <div className="mt-4 flex items-center justify-end gap-2 border-t pt-2">
+            <Button
+              variant="ghost"
+              size="xs"
+              className="text-muted-foreground"
+              busy={editState ? isPending(editState) : false}
+              onClick={() => setEditing(true)}
+            >
+              <Pencil />
+              Edit
+            </Button>
+          </div>
+        </section>
+      )}
 
       {/* The project's Tasks and Worktrees are its CONTENT, so they live here
           rather than in the object panel — the panel used to list both beside a
           page that already showed the worktrees. Order follows use: what is to
           do, where the work happens, then the repository state you rarely
-          touch. */}
-      {renderTasks ? (
-        <ProjectCollapsibleSection
-          title="Tasks"
-          storageKey={`project.collapse.${project.id}.tasks`}
-        >
-          {renderTasks(project.id)}
-        </ProjectCollapsibleSection>
-      ) : null}
+          touch. Headed as the inspector's sections are. */}
+      <div className="flex flex-col gap-3">
+        {renderTasks ? (
+          <InspectorSection
+            id="tasks"
+            storageScope={`project-page:${project.id}`}
+            title="Tasks"
+            icon={<ListTodo />}
+          >
+            {renderTasks(project.id)}
+          </InspectorSection>
+        ) : null}
 
-      {showWorktrees ? (
-        <ProjectCollapsibleSection
-          title="Worktrees"
-          storageKey={`project.collapse.${project.id}.worktrees`}
-          trailing={
-            onCreateWorktree ? (
-              <IconButton
-                label="New worktree"
-                onClick={() => onCreateWorktree(project.id)}
-              >
-                <Plus />
-              </IconButton>
-            ) : undefined
-          }
-        >
-          <div className="flex flex-col gap-px px-1 pb-1">
+        {showWorktrees ? (
+          <InspectorSection
+            id="worktrees"
+            storageScope={`project-page:${project.id}`}
+            title="Worktrees"
+            icon={<GitBranch />}
+            summary={worktrees?.length ? `${worktrees.length}` : undefined}
+            actions={
+              onCreateWorktree ? (
+                <IconButton
+                  label="New worktree"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => onCreateWorktree(project.id)}
+                >
+                  <Plus />
+                </IconButton>
+              ) : undefined
+            }
+          >
             {worktrees === null ? (
               <div
                 role="status"
                 aria-label="Loading Project worktrees"
-                className="flex flex-col gap-2 px-2 py-2"
+                className="flex flex-col gap-2 py-2"
               >
                 <Skeleton className="h-7 w-full" />
                 <Skeleton className="h-7 w-4/5" />
               </div>
             ) : worktrees.length === 0 ? (
-              <p className="px-2 py-2 text-sm text-muted-foreground">
+              <p className="py-1 text-sm text-muted-foreground">
                 No worktrees yet. Spawn one to let an agent work in isolation.
               </p>
             ) : (
-              <ProjectWorktreeRows
-                worktrees={worktrees}
-                statuses={worktreeStatuses}
-                onOpen={onOpenWorktree}
-                onStartSession={onStartSessionInWorktree}
-              />
+              <div className="flex flex-col">
+                <ProjectWorktreeRows
+                  worktrees={worktrees}
+                  statuses={worktreeStatuses}
+                  onOpen={onOpenWorktree}
+                  onStartSession={onStartSessionInWorktree}
+                />
+              </div>
             )}
-          </div>
-        </ProjectCollapsibleSection>
-      ) : null}
+          </InspectorSection>
+        ) : null}
 
-      <RepositorySection
-        project={project}
-        checkoutPath={mainCheckoutPath}
-        hasCheckout={showWorktrees}
-        spawnedWorktrees={
-          worktreesReady
-            ? (worktrees?.filter((worktree) => !worktree.isMain).length ?? 0)
-            : null
-        }
-        worktreeError={worktreeError}
-        onLoadWorktrees={onLoadWorktrees}
-        provisioning={provisioning}
-        provisionError={provisionError}
-        mutationState={mutationStates[`${project.id}:field:repoUrl`]}
-        // "" clears: the server drops an empty `repoUrl`, while an omitted one
-        // would be a no-op patch under a different mutation key.
-        onSaveUrl={(repoUrl) => onSave({ repoUrl })}
-        onClone={onClone}
-        onRemoveClone={onRemoveClone}
-      />
+        <RepositorySection
+          project={project}
+          checkoutPath={mainCheckoutPath}
+          hasCheckout={showWorktrees}
+          spawnedWorktrees={
+            worktreesReady
+              ? (worktrees?.filter((worktree) => !worktree.isMain).length ?? 0)
+              : null
+          }
+          worktreeError={worktreeError}
+          onLoadWorktrees={onLoadWorktrees}
+          provisioning={provisioning}
+          provisionError={provisionError}
+          mutationState={mutationStates[`${project.id}:field:repoUrl`]}
+          // "" clears: the server drops an empty `repoUrl`, while an omitted one
+          // would be a no-op patch under a different mutation key.
+          onSaveUrl={(repoUrl) => onSave({ repoUrl })}
+          onClone={onClone}
+          onRemoveClone={onRemoveClone}
+        />
+      </div>
     </div>
   );
 }
+
+/**
+ * A row's action shows on hover or focus where there is a pointer to hover
+ * with, always on touch — as the sidebar's rows do.
+ */
+const ROW_ACTION_REVEAL =
+  "pointer-fine:opacity-0 pointer-fine:group-hover/row:opacity-100 pointer-fine:group-focus-within/row:opacity-100 focus-visible:opacity-100";
 
 function ProjectWorktreeRows({
   worktrees,
@@ -604,32 +703,38 @@ function ProjectWorktreeRowImpl({
   const BranchIcon = worktree.isMain ? House : GitBranch;
 
   return (
+    // Flush and hairline-divided like the sidebar's rows: a plain glyph, the
+    // branch over its axes, and the one action revealed on hover.
     <div
       data-project-worktree-row={worktree.id}
-      className="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-muted"
+      className="group/row flex items-center gap-1 border-b last:border-b-0"
     >
-      <BranchIcon size={13} className="mt-0.5 shrink-0 text-muted-foreground" />
       <Button
         variant="ghost"
-        className="h-auto min-w-0 flex-1 flex-col items-start justify-start gap-0.5 text-left"
+        className="h-auto min-w-0 flex-1 items-start justify-start gap-2 rounded-none px-1 py-1.5 text-left font-normal"
         onClick={() => onOpen?.(worktree.id)}
         title={worktree.path}
       >
-        <span
-          data-worktree-primary
-          className="flex min-w-0 max-w-full items-center gap-2"
-        >
-          <span className="truncate text-sm font-medium text-foreground">
-            {branch}
-          </span>
-          <WorktreeLineDelta status={status} />
-          <WorktreeMergedBadge status={status} />
+        <span className="flex h-5 shrink-0 items-center">
+          <BranchIcon className="size-3.5 text-muted-foreground" />
         </span>
-        <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            data-worktree-primary
+            className="flex min-w-0 max-w-full items-center gap-2"
+          >
+            <span className="truncate text-sm text-foreground">{branch}</span>
+            <WorktreeLineDelta status={status} />
+            <WorktreeMergedBadge status={status} />
+          </span>
+          <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
+        </span>
       </Button>
       {onStartSession ? (
         <IconButton
           label="Start session in this worktree"
+          size="icon-xs"
+          className={`text-muted-foreground hover:text-foreground ${ROW_ACTION_REVEAL}`}
           onClick={() => onStartSession(worktree.id)}
         >
           <MessageSquarePlus />
@@ -737,13 +842,17 @@ function RepositorySection({
   // itself reports through `provisionError`.
   const removeClone = () => void confirmRemoveClone();
   return (
-    <ProjectCollapsibleSection
+    <InspectorSection
+      id="repository"
+      storageScope={`project-page:${project.id}`}
       title="Repository"
-      storageKey={`project.collapse.${project.id}.repository`}
-      trailing={
+      icon={<GitFork />}
+      actions={
         hasCheckout ? (
           <IconButton
-            variant="destructive"
+            variant="ghost"
+            size="icon-xs"
+            className="text-muted-foreground hover:text-destructive"
             busy={provisioning === "remove"}
             disabled={blocked}
             label={
@@ -760,7 +869,7 @@ function RepositorySection({
         ) : undefined
       }
     >
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         {worktreeError ? (
           <ErrorNote message={worktreeError} onRetry={onLoadWorktrees} />
         ) : null}
@@ -778,17 +887,10 @@ function RepositorySection({
         ) : null}
         {hasCheckout ? (
           <>
-            <RepoRow
-              label="Checkout"
-              icon={<GitBranch size={13} />}
-              value={checkoutPath}
-            />
-            <RepoRow
-              label="Origin"
-              icon={<Link2 size={13} />}
-              value={url}
-              muted
-            />
+            <div className={REPO_PROPERTY_LIST}>
+              <RepoRow label="Checkout" value={checkoutPath} />
+              <RepoRow label="Origin" value={url} muted />
+            </div>
             {blocked ? (
               <p className="text-sm text-muted-foreground">
                 {spawnedWorktrees} worktree{spawnedWorktrees === 1 ? "" : "s"}{" "}
@@ -811,16 +913,18 @@ function RepositorySection({
               placeholder="git@host:owner/repo.git"
               className="font-mono"
             >
-              <RepoRow
-                label="Clone from"
-                icon={<Link2 size={13} />}
-                value={url}
-                placeholder="Set a repository URL"
-                onClick={() => setEditingUrl(true)}
-              />
+              <div className={REPO_PROPERTY_LIST}>
+                <RepoRow
+                  label="Clone from"
+                  value={url}
+                  placeholder="Set a repository URL"
+                  onClick={() => setEditingUrl(true)}
+                />
+              </div>
             </EditableText>
-            <div className="pt-1">
+            <div className="flex justify-end">
               <Button
+                size="sm"
                 disabled={!url || busy}
                 busy={provisioning === "clone"}
                 onClick={onClone}
@@ -836,54 +940,82 @@ function RepositorySection({
           </>
         )}
       </div>
-    </ProjectCollapsibleSection>
+    </InspectorSection>
   );
 }
 
-/** One read-only (or click-to-edit) repository row: label, glyph, mono value. */
+/** The Repository rows as a property list: labels in one column, values in the next. */
+const REPO_PROPERTY_LIST =
+  "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-0.5";
+
+/** One read-only (or click-to-edit) repository row: label and mono value. */
 function RepoRow({
   label,
-  icon,
   value,
   placeholder,
   muted = false,
   onClick,
 }: {
   label: string;
-  icon: ReactNode;
   value?: string | undefined;
   placeholder?: string;
   muted?: boolean;
   onClick?: () => void;
 }) {
-  const body = (
+  // A path or remote WRAPS rather than truncates: a truncated
+  // `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
+  // read or copy out on a phone.
+  const valueClass = `min-w-0 select-all break-all font-mono text-xs leading-5 ${value ? (muted ? "text-muted-foreground" : "text-foreground") : "text-muted-foreground"}`;
+  return (
     <>
-      <span className="w-18 shrink-0 text-sm text-muted-foreground">
-        {label}
+      <span className="py-1 leading-5">
+        <PropertyLabel>{label}</PropertyLabel>
       </span>
-      <span className="mt-0.5 shrink-0 text-muted-foreground">{icon}</span>
-      {/* A path or remote WRAPS rather than truncates: a truncated
-          `ssh://git@host:2222/owner/re…` says nothing, and this is the value you
-          read or copy out on a phone. */}
-      <span
-        className={`min-w-0 flex-1 select-all break-all font-mono text-sm ${value ? (muted ? "text-muted-foreground" : "text-foreground") : "text-muted-foreground"}`}
-      >
-        {value || placeholder}
-      </span>
+      {onClick ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`${PROPERTY_TRIGGER} -ml-2 h-auto min-h-7 justify-start py-1 text-left whitespace-normal`}
+          onClick={onClick}
+          title={`Edit ${label.toLowerCase()}`}
+        >
+          <span className={valueClass}>{value || placeholder}</span>
+        </Button>
+      ) : (
+        <span className={`py-1 ${valueClass}`}>{value}</span>
+      )}
     </>
   );
-  if (!onClick)
-    return <div className="flex min-h-7 items-start gap-2 py-0.5">{body}</div>;
-  return (
-    <Button
-      variant="ghost"
-      className="h-auto w-full justify-start py-0.5 text-left"
-      onClick={onClick}
-      title={`Edit ${label.toLowerCase()}`}
-    >
-      {body}
-    </Button>
-  );
+}
+
+/**
+ * The repository as the facts line names it: `owner/repo`, linked to its web
+ * page when the remote's host serves one at the usual address (an SSH remote
+ * on a custom port may not, so that one stays plain text).
+ */
+function repoDisplay(
+  repoUrl: string | undefined,
+): { label: string; href?: string } | null {
+  const url = repoUrl?.trim();
+  if (!url) return null;
+  const scp = /^[\w.-]+@([\w.-]+):(?!\d+\/)(.+?)(?:\.git)?\/?$/.exec(url);
+  if (scp) return { label: scp[2]!, href: `https://${scp[1]}/${scp[2]}` };
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname
+      .replace(/^\/+|\/+$/g, "")
+      .replace(/\.git$/, "");
+    if (!path) return { label: url };
+    const web =
+      parsed.protocol === "https:" ||
+      parsed.protocol === "http:" ||
+      (parsed.protocol === "ssh:" && !parsed.port);
+    return web
+      ? { label: path, href: `https://${parsed.hostname}/${path}` }
+      : { label: path };
+  } catch {
+    return { label: url };
+  }
 }
 
 function hasRepoLocalPath(project: ProjectRecord): boolean {
@@ -936,58 +1068,5 @@ function EmptyProjectsMessage({
         <div className="mt-1">{body}</div>
       </EmptyBox>
     </div>
-  );
-}
-
-function ProjectCollapsibleSection({
-  title,
-  storageKey,
-  defaultOpen = true,
-  trailing,
-  children,
-}: {
-  title: string;
-  storageKey: string;
-  defaultOpen?: boolean;
-  trailing?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(() => {
-    try {
-      const value = localStorage.getItem(storageKey);
-      return value === null ? defaultOpen : value === "1";
-    } catch {
-      return defaultOpen;
-    }
-  });
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    try {
-      localStorage.setItem(storageKey, next ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  };
-  return (
-    <section className="mb-4">
-      <Collapsible open={open} onOpenChange={changeOpen}>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <CollapsibleTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="min-w-0 justify-start uppercase tracking-wide text-muted-foreground"
-              />
-            }
-          >
-            <ChevronRight className={`shrink-0 ${open ? "rotate-90" : ""}`} />
-            <span className="truncate">{title}</span>
-          </CollapsibleTrigger>
-          {trailing ? <div className="shrink-0">{trailing}</div> : null}
-        </div>
-        <CollapsibleContent>{children}</CollapsibleContent>
-      </Collapsible>
-    </section>
   );
 }

@@ -6931,6 +6931,7 @@ function AppContent() {
                     // The project's Tasks are a section of its page, not of the object
                     // panel: the panel is for what the page cannot show.
                     renderTasks={renderProjectTasks}
+                    onOpenProject={openProject}
                     paObjectReferences={paObjectReferences}
                     onOpenPaObject={openProjectPaObject}
                   />
