@@ -546,7 +546,9 @@ function ProjectDetail({
       {/* The project's Worktrees are its CONTENT, so they live here rather
           than in the object panel. Its Tasks are the sidebar's Backlog filtered
           to it, not a section here. Headed as the inspector's sections are. */}
-      <div className="flex flex-col gap-3">
+      {/* Spaced like the description's action row is from the first section
+          (its `mb-8`), with no hairline of their own between them. */}
+      <div className="flex flex-col gap-8 [&>section]:border-t-0 [&>section]:pt-0">
         {showWorktrees ? (
           <InspectorSection
             id="worktrees"
@@ -763,14 +765,17 @@ function RepositorySection({
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-destructive"
+            // Why it cannot be pressed is its TOOLTIP, so a disabled button
+            // still takes the pointer (`aria-disabled`, not `disabled`).
+            className="text-muted-foreground hover:text-destructive aria-disabled:opacity-50 aria-disabled:hover:text-muted-foreground"
             busy={provisioning === "remove"}
             disabled={blocked}
+            focusableWhenDisabled
             label={
               dependencyPending
                 ? "Checking worktrees before clone removal"
                 : blocked
-                  ? "Remove worktrees before removing the clone"
+                  ? `${spawnedWorktrees} worktree${spawnedWorktrees === 1 ? " still uses" : "s still use"} this clone. Remove ${spawnedWorktrees === 1 ? "it" : "them"} first to remove the clone itself.`
                   : "Remove the clone"
             }
             onClick={removeClone}
@@ -802,14 +807,6 @@ function RepositorySection({
               <RepoRow label="Checkout" value={checkoutPath} />
               <RepoRow label="Origin" value={url} muted />
             </div>
-            {blocked ? (
-              <p className="text-sm text-muted-foreground">
-                {spawnedWorktrees} worktree{spawnedWorktrees === 1 ? "" : "s"}{" "}
-                still use{spawnedWorktrees === 1 ? "s" : ""} this clone. Remove{" "}
-                {spawnedWorktrees === 1 ? "it" : "them"} first to remove the
-                clone itself.
-              </p>
-            ) : null}
           </>
         ) : (
           <>
