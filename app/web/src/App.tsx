@@ -126,7 +126,10 @@ import {
 } from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
-import { SpawnedSessionsLedge } from "./components/SpawnedSessionsLedge.tsx";
+import {
+  SessionRowDetailsContext,
+  SpawnedSessionsLedge,
+} from "./components/SpawnedSessionsLedge.tsx";
 import {
   sessionSettleCascade,
   spawnedSessionsKey,
@@ -4999,6 +5002,14 @@ function AppContent() {
             state.worktrees?.find((worktree) => worktree.id === worktreeId)
               ?.branch)
           : undefined,
+        // Only once the list has answered: a session whose worktree is not in
+        // it ran in one that has since been removed.
+        worktreeGone: Boolean(
+          worktreeId &&
+          state.worktrees &&
+          !state.worktreeStatuses[worktreeId] &&
+          !state.worktrees.some((worktree) => worktree.id === worktreeId),
+        ),
       };
     },
     [credentialProfiles, state.worktreeStatuses, state.worktrees],
@@ -5793,6 +5804,17 @@ function AppContent() {
     [mobileLayout, navigate, setInspectorOpen],
   );
 
+  // Session rows in the object panel resolve their account and worktree the
+  // way the composer strip's do, and open the worktree as the panel opens
+  // anything (`SessionRowDetailsContext`).
+  const sessionRowDetails = useMemo(
+    () => ({
+      describe: describeSpawnedSession,
+      onOpenWorktree: (id: string) => navigateFromInspector(worktreePath(id)),
+    }),
+    [describeSpawnedSession, navigateFromInspector],
+  );
+
   // Every hook the Project page needs is derived HERE, above the loading
   // shell's early return: a hook below it does not run on the hydrating
   // render, and the connected render that follows then trips React #310 and
@@ -6394,7 +6416,7 @@ function AppContent() {
   ) : route.name === "tasks" && route.id ? (
     <TaskInspector
       task={inspectedTask}
-      tasks={backlogTasks}
+
       sessions={state.sessions}
       openers={inspectorOpeners}
       onStartSession={startSessionForTask}
@@ -6525,6 +6547,7 @@ function AppContent() {
         state={pullRequestDetail}
         projects={projects}
         joins={pullRequestJoins}
+        worktreeStatuses={state.worktreeStatuses}
         openers={inspectorOpeners}
         onStartSession={startSessionInWorktree}
         onReview={startPullRequestReviewDraft}
@@ -6665,7 +6688,11 @@ function AppContent() {
   const desktopRightPanelContent = (
     <InspectorChromeProvider header={false} desktopTabs>
       <RightPanelTabs
-        inspector={rightPanelContent}
+        inspector={
+          <SessionRowDetailsContext.Provider value={sessionRowDetails}>
+            {rightPanelContent}
+          </SessionRowDetailsContext.Provider>
+        }
         knowledge={
           knowledgeEnabled ? (
             <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
@@ -6782,7 +6809,11 @@ function AppContent() {
                     {documentRoute && documentNavigation?.zoom ? (
                       <DocumentZoomSection zoom={documentNavigation.zoom} />
                     ) : null}
-                    {rightPanelContent}
+                    <SessionRowDetailsContext.Provider
+                      value={sessionRowDetails}
+                    >
+                      {rightPanelContent}
+                    </SessionRowDetailsContext.Provider>
                   </>
                 ) : (
                   desktopRightPanelContent

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
@@ -16,27 +16,43 @@ import { errorOf, isPending, type LoadState } from "../../lib/loadState.ts";
  *   same wherever a list appears. Children alternate `PropertyLabel` and value.
  *   `align="start"` is for values that WRAP (a path, a remote): each label sits
  *   on its value's first line instead of floating at its middle.
+ *   `size="sm"` is the read-only detail density — 12px text on 20px lines, a
+ *   narrower label column, no inset — for facts unfolded under a row (a
+ *   session's agent, model, worktree). Its labels and values follow the list's
+ *   size on their own.
  */
 export function PropertyList({
   align = "center",
+  size = "default",
+  className = "",
   children,
 }: {
   align?: "center" | "start";
+  size?: PropertyListSize;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div
-      className={`grid grid-cols-[5.5rem_minmax(0,1fr)] gap-y-0.5 px-1 ${align === "start" ? "items-start" : "items-center"}`}
-    >
-      {children}
-    </div>
+    <PropertyListSizeContext.Provider value={size}>
+      <div
+        className={`grid ${size === "sm" ? "grid-cols-[4.5rem_minmax(0,1fr)] text-xs" : "grid-cols-[5.5rem_minmax(0,1fr)] gap-y-0.5 px-1"} ${align === "start" ? "items-start" : "items-center"} ${className}`}
+      >
+        {children}
+      </div>
+    </PropertyListSizeContext.Provider>
   );
 }
 
-/** A field's name in a `PropertyList`: one 28px line, the value's height. */
+type PropertyListSize = "default" | "sm";
+const PropertyListSizeContext = createContext<PropertyListSize>("default");
+
+/** A field's name in a `PropertyList`: one line, the value's height. */
 export function PropertyLabel({ children }: { children: ReactNode }) {
+  const size = useContext(PropertyListSizeContext);
   return (
-    <span className="flex min-h-7 items-center text-sm text-muted-foreground">
+    <span
+      className={`flex items-center text-muted-foreground ${size === "sm" ? "min-h-5 text-xs" : "min-h-7 text-sm"}`}
+    >
       {children}
     </span>
   );
@@ -48,13 +64,22 @@ export function PropertyLabel({ children }: { children: ReactNode }) {
  */
 export function PropertyText({
   className = "",
+  title,
+  dir,
   children,
 }: {
   className?: string;
+  title?: string | undefined;
+  dir?: "rtl" | undefined;
   children: ReactNode;
 }) {
+  const size = useContext(PropertyListSizeContext);
   return (
-    <span className={`min-w-0 px-2 py-1 text-sm leading-5 ${className}`}>
+    <span
+      className={`min-w-0 leading-5 ${size === "sm" ? "text-xs" : "px-2 py-1 text-sm"} ${className}`}
+      title={title}
+      dir={dir}
+    >
       {children}
     </span>
   );

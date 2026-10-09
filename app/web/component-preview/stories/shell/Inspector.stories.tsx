@@ -60,7 +60,6 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
       ) : object === "task" ? (
         <TaskInspector
           task={task}
-          tasks={fixture.tasks}
           sessions={fixture.sessions}
           openers={openers}
           onStartSession={noop}

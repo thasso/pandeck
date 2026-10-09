@@ -29,6 +29,7 @@ import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
 import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { ActionRow } from "./common/ActionRow.tsx";
+import { TaskLinkList } from "./TaskLinkList.tsx";
 import {
   TitleDescriptionEditor,
   type TitleDescriptionChanges,
@@ -1308,28 +1309,9 @@ function TaskTitleBlock({
         </div>
       ) : null}
       {subtasksOpen && subtasks.length ? (
-        <ul className="ml-1 flex flex-col border-l pl-2">
-          {subtasks.map((task) => (
-            <li key={task.id}>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 font-normal"
-                onClick={() => onOpenTask(task.id)}
-              >
-                <TaskStatusIcon status={task.status} size={14} />
-                <span
-                  className={`min-w-0 flex-1 truncate text-left ${task.status === "done" ? "text-muted-foreground line-through" : ""}`}
-                >
-                  {task.title}
-                </span>
-                <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                  #{task.id}
-                </span>
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <div className="ml-1 border-l pl-2">
+          <TaskLinkList items={subtasks} onOpen={onOpenTask} />
+        </div>
       ) : null}
     </div>
   );

@@ -1,4 +1,11 @@
-import { memo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  Fragment,
+  memo,
+  useContext,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ArrowUpRight,
   ChevronDown,
@@ -33,6 +40,12 @@ import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "./common/IconButton.tsx";
+import { useInspectorAct } from "./shell/Inspector.tsx";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 
 /** What the host can resolve about a peer beyond its list row. */
 export interface SpawnedSessionDetails {
@@ -40,7 +53,26 @@ export interface SpawnedSessionDetails {
   account?: string | undefined;
   /** Its worktree's branch, when it has one and the host knows it. */
   branch?: string | undefined;
+  /**
+   * It names a worktree the host's (loaded) list no longer has: removed or
+   * retired — said, rather than leaving the row silent about where it ran.
+   */
+  worktreeGone?: boolean | undefined;
 }
+
+/**
+ * What a session row's details can resolve and open beyond the row itself,
+ * provided once by the app for every row under it (the inspectors), so no
+ * host has to thread it through its own props. A row's `describeSession` prop
+ * wins over it.
+ */
+export interface SessionRowDetailsSource {
+  describe: (session: SessionListItem) => SpawnedSessionDetails;
+  onOpenWorktree?: ((worktreeId: string) => void) | undefined;
+}
+
+export const SessionRowDetailsContext =
+  createContext<SessionRowDetailsSource | null>(null);
 
 export interface SpawnedSessionsLedgeProps {
   sessionId: string;
@@ -277,13 +309,14 @@ export function SpawnedSessionsLedge({
  * chevron and the title (with its state glyph) that unfold the peer's runtime
  * and worktree, how long ago it moved, and Open. Indented by its depth in the
  * spawn tree, so the strip still reads as a tree. Also the inspector's session
- * rows (`InspectorSessionsSection`), so a session reads the same in both.
+ * rows (`InspectorSessionRows`), so a session reads the same in both.
  */
 export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   card,
   now,
   onOpen,
   describeSession,
+  facts,
   inset = 0,
 }: {
   card: SessionInboxCard;
@@ -297,12 +330,23 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
   inset?: number;
   describeSession?:
     ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
+  /**
+   * What the HOST knows about this session that the row does not — how it is
+   * tied to the inspected object ("Started here", "Via task …"). Listed first
+   * in the details.
+   */
+  facts?: readonly SessionRowFact[] | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
   const badge = sessionStatusBadge(session, status, now);
-  const details = describeSession?.(session) ?? {};
+  const source = useContext(SessionRowDetailsContext);
+  const onAct = useInspectorAct();
+  const details =
+    (describeSession ?? source?.describe)?.(session) ??
+    ({} as SpawnedSessionDetails);
+  const worktreeId = session.worktreeId;
   const model = session.model;
   const runtime = [
     details.account,
@@ -372,44 +416,127 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
         </ItemActions>
       </Item>
       {open ? (
-        // Aligned under the title, like a background row's command.
+        // Aligned under the title, like a background row's command: the
+        // property list at its detail density.
         <div
-          className="flex flex-col gap-0.5 pt-0.5 pr-2.5 pb-2 text-xs text-muted-foreground"
+          className="pt-0.5 pr-2.5 pb-2"
           style={{ paddingLeft: `calc(${inset + 0.75 * depth}rem + 1.75rem)` }}
         >
-          <DetailLine icon={<AgentIcon className="size-3" aria-hidden />}>
-            {agent.label}
-          </DetailLine>
-          {runtime ? (
-            <DetailLine
-              icon={
-                model ? (
-                  <ProviderIcon provider={model.provider} size={12} />
-                ) : null
-              }
-            >
-              {runtime}
-            </DetailLine>
-          ) : null}
-          {details.branch ? (
-            <DetailLine icon={<GitBranch className="size-3" aria-hidden />}>
-              <span className="font-mono">{details.branch}</span>
-            </DetailLine>
-          ) : session.worktreeId ? null : (
-            <DetailLine icon={null}>No worktree</DetailLine>
-          )}
+          <PropertyList size="sm">
+            {facts?.map((fact) => (
+              <Fragment key={fact.label}>
+                <PropertyLabel>{fact.label}</PropertyLabel>
+                <PropertyText className="truncate text-foreground">
+                  {fact.onOpen ? (
+                    <DetailLink
+                      onClick={() => {
+                        fact.onOpen?.();
+                        onAct?.();
+                      }}
+                    >
+                      {fact.value}
+                    </DetailLink>
+                  ) : (
+                    fact.value
+                  )}
+                </PropertyText>
+              </Fragment>
+            ))}
+            <PropertyLabel>Agent</PropertyLabel>
+            <DetailValue icon={<AgentIcon className="size-3" aria-hidden />}>
+              {agent.label}
+            </DetailValue>
+            {runtime ? (
+              <>
+                <PropertyLabel>Model</PropertyLabel>
+                <DetailValue
+                  icon={
+                    model ? (
+                      <ProviderIcon provider={model.provider} size={12} />
+                    ) : null
+                  }
+                >
+                  {runtime}
+                </DetailValue>
+              </>
+            ) : null}
+            {/* Always said: where it runs, that it ran in one that is gone,
+                or that it has none. Unresolved yet (the list still loading)
+                is the only silence. */}
+            {details.branch || details.worktreeGone || !worktreeId ? (
+              <>
+                <PropertyLabel>Worktree</PropertyLabel>
+                {details.branch && worktreeId ? (
+                  <DetailValue
+                    icon={<GitBranch className="size-3" aria-hidden />}
+                  >
+                    {source?.onOpenWorktree ? (
+                      <DetailLink
+                        className="font-mono"
+                        onClick={() => {
+                          source.onOpenWorktree?.(worktreeId);
+                          onAct?.();
+                        }}
+                      >
+                        {details.branch}
+                      </DetailLink>
+                    ) : (
+                      <span className="font-mono">{details.branch}</span>
+                    )}
+                  </DetailValue>
+                ) : details.worktreeGone ? (
+                  <PropertyText
+                    className="text-muted-foreground"
+                    title={worktreeId}
+                  >
+                    Removed
+                  </PropertyText>
+                ) : (
+                  <PropertyText className="text-muted-foreground">
+                    None
+                  </PropertyText>
+                )}
+              </>
+            ) : null}
+          </PropertyList>
         </div>
       ) : null}
     </li>
   );
 });
 
-/**
- * One line of a spawned-session row's details. The icon sits centred in a
- * 20px column with the row's 4px gap — the status badge's slot above it — so
- * icons line up under the status glyph and text under the title.
- */
-function DetailLine({
+/** One fact a host adds to a session row's details. */
+export interface SessionRowFact {
+  label: string;
+  value: string;
+  /** The value names an object: it becomes a link that opens it. */
+  onOpen?: (() => void) | undefined;
+}
+
+/** A detail value that opens the object it names: a real, underlined link. */
+function DetailLink({
+  className = "",
+  onClick,
+  children,
+}: {
+  className?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant="link"
+      size="xs"
+      onClick={onClick}
+      className={`h-auto max-w-full justify-start truncate p-0 text-xs font-normal text-foreground underline underline-offset-3 hover:text-primary ${className}`}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** A detail value with its glyph, in the details' small property list. */
+function DetailValue({
   icon,
   children,
 }: {
@@ -417,11 +544,13 @@ function DetailLine({
   children: ReactNode;
 }) {
   return (
-    <span className="flex min-w-0 items-center gap-1">
-      <span className="flex size-5 shrink-0 items-center justify-center">
-        {icon}
-      </span>
+    <PropertyText className="flex items-center gap-1 text-foreground">
+      {icon ? (
+        <span className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+          {icon}
+        </span>
+      ) : null}
       <span className="min-w-0 truncate">{children}</span>
-    </span>
+    </PropertyText>
   );
 }

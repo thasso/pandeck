@@ -1,4 +1,9 @@
 import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "../common/PropertyList.tsx";
+import {
   createContext,
   Fragment,
   useContext,
@@ -88,6 +93,8 @@ interface InspectorRelation {
   key: string;
   icon?: ReactNode;
   title: string;
+  /** The title as the object reads elsewhere (a project's key and muted name). */
+  titleContent?: ReactNode;
   /** Relation qualifier, e.g. "Parent task", "Started from this task". */
   subtitle?: string;
   /** Optional source-style change counters, rendered with the normal +/- colors. */
@@ -116,6 +123,12 @@ export interface InspectorRelationGroup {
    */
   maxVisibleItems?: number;
   items: InspectorRelation[];
+  /**
+   * The group's body when its objects have a row of their own elsewhere in the
+   * app (sessions draw the composer strip's rows), so the panel does not grow
+   * a second rendering of them. `items` still decides whether the group shows.
+   */
+  content?: ReactNode;
 }
 
 /** One object-aware action, e.g. "Start session", "Archive". */
@@ -208,17 +221,19 @@ export interface InspectorFact {
  *   card; a section is a heading and its rows.
  */
 export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
+  // The property list every editable field uses too, so read-only facts and
+  // editable ones share one label column wherever they appear.
   return (
-    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 px-1">
+    <PropertyList>
       {facts.map((fact) => (
         <Fragment key={fact.label}>
-          <dt className="text-sm text-muted-foreground">{fact.label}</dt>
-          <dd
+          <PropertyLabel>{fact.label}</PropertyLabel>
+          <PropertyText
             // Left-trimming is the block's DIRECTION (that is what moves the
             // ellipsis to the start), with the value itself back in ltr so the
             // path still reads forwards.
-            {...(fact.truncate === "start" ? { dir: "rtl" as const } : {})}
-            className={`min-w-0 truncate text-sm ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted-foreground" : "text-foreground"}`}
+            dir={fact.truncate === "start" ? "rtl" : undefined}
+            className={`truncate ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-xs text-muted-foreground" : "text-foreground"}`}
             title={fact.title}
           >
             {fact.truncate === "start" ? (
@@ -226,10 +241,10 @@ export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
             ) : (
               fact.value
             )}
-          </dd>
+          </PropertyText>
         </Fragment>
       ))}
-    </dl>
+    </PropertyList>
   );
 }
 
@@ -410,7 +425,7 @@ function RelationRow({
         {item.icon ? <ItemMedia variant="icon">{item.icon}</ItemMedia> : null}
         <ItemContent className="min-w-0">
           <ItemTitle className="w-full">
-            <span className="truncate">{item.title}</span>
+            <span className="truncate">{item.titleContent ?? item.title}</span>
           </ItemTitle>
           {item.subtitle || item.counters ? (
             <ItemDescription className="truncate">
@@ -647,14 +662,16 @@ export function Inspector({
               collapsible={group.collapsible ?? true}
               defaultOpen={group.defaultOpen ?? true}
             >
-              <RelationRows
-                key={sectionStorageScope ?? "unscoped"}
-                // Remount per inspected object: the section itself is keyed by
-                // the group id, which is the SAME across objects, so without
-                // this an expanded group stays expanded for the next session.
-                items={group.items}
-                maxVisible={group.maxVisibleItems}
-              />
+              {group.content ?? (
+                <RelationRows
+                  key={sectionStorageScope ?? "unscoped"}
+                  // Remount per inspected object: the section itself is keyed by
+                  // the group id, which is the SAME across objects, so without
+                  // this an expanded group stays expanded for the next session.
+                  items={group.items}
+                  maxVisible={group.maxVisibleItems}
+                />
+              )}
             </InspectorSection>
           ))}
 

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import {
   Archive,
   Check,
@@ -18,8 +18,7 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import { WorktreeRow, compareWorktrees } from "./worktreeRowParts.tsx";
-import { Tree } from "./common/Tree.tsx";
+import { WorktreeList } from "./worktreeRowParts.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
@@ -578,7 +577,7 @@ function ProjectDetail({
               </p>
             ) : (
               <div className="flex flex-col">
-                <ProjectWorktreeRows
+                <WorktreeList
                   worktrees={worktrees}
                   statuses={worktreeStatuses}
                   onOpen={onOpenWorktree}
@@ -625,72 +624,6 @@ function ProjectDetail({
       </div>
     </div>
   );
-}
-
-/**
- * The project's worktrees on the same `Tree` and with the same `WorktreeRow` as
- * the sidebar's Projects browser — compact, flush, in its order — so the two
- * lists are one component, not two that look alike. A flat list: no selection
- * (a click opens the worktree), no drag.
- */
-function ProjectWorktreeRows({
-  worktrees,
-  statuses,
-  onOpen,
-  onStartSession,
-}: {
-  worktrees: WorktreeRecord[];
-  statuses: Record<string, WorktreeGitStatus>;
-  onOpen?: ((id: string) => void) | undefined;
-  onStartSession?: ((id: string) => void) | undefined;
-}) {
-  // One coarse wall clock serves every row; `WorktreeRow`'s memo folds it down
-  // to the rendered stale/fresh bit, so minute ticks do not redraw siblings.
-  const now = useCoarseNow(60_000);
-  const items = useMemo(
-    () =>
-      [...worktrees]
-        .sort(compareWorktrees)
-        .map((worktree) => ({ id: worktree.id, data: worktree })),
-    [worktrees],
-  );
-  return (
-    <Tree
-      items={items}
-      compact
-      flush
-      showGuides={false}
-      aria-label="Worktrees"
-      // The last row drops its hairline: the action row under the list draws
-      // the one that closes it.
-      className="[&>li:last-child_.border-b]:border-b-0"
-      selectedIds={NO_SELECTION}
-      onSelectionChange={(ids) => {
-        if (ids.length === 1) onOpen?.(ids[0]!);
-      }}
-      renderNode={(node) => (
-        <WorktreeRow
-          worktree={node.data}
-          status={statuses[node.id]}
-          now={now}
-          selected={false}
-          onStartSession={onStartSession}
-        />
-      )}
-    />
-  );
-}
-
-const NO_SELECTION: string[] = [];
-
-function useCoarseNow(intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(id);
-  }, [intervalMs]);
-  return now;
 }
 
 /**
