@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Clipboard,
-  ExternalLink,
+  Activity,
+  Download,
+  FileText,
+  Film,
   Image as ImageIcon,
   MessageSquare,
   MonitorPlay,
   ShieldCheck,
   Sparkles,
   Wrench,
+  type LucideIcon,
 } from "lucide-react";
 import { approvalGrantLabel } from "@assistant/shared";
 import type {
@@ -22,16 +25,14 @@ import type {
   SessionToolExposure,
   SkillLibraryList,
 } from "@assistant/shared";
-import { copyWithToast } from "../lib/clipboard.ts";
 import { relativeTime } from "../lib/sessionRows.ts";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
-import { showToast } from "../lib/toast.ts";
+import { formatFileSize } from "../lib/servedFiles.ts";
+import { parseDocumentTarget } from "@assistant/shared/documentTargets";
+import { ArtifactOverlay } from "./ArtifactOverlay.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { ImageLightbox } from "./common/ImageLightbox.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "./common/load.tsx";
-import { IconButton } from "./common/IconButton.tsx";
-import { LinkButton } from "./common/LinkButton.tsx";
 import {
   Accordion,
   AccordionContent,
@@ -47,22 +48,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Item,
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemHeader,
   ItemTitle,
 } from "@/components/ui/item";
-import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   dataOf,
   errorOf,
@@ -782,6 +773,12 @@ function BrowserRuntimesSection({
   );
 }
 
+/**
+ * The session's artifacts as a plain list, newest first: a thumbnail where the
+ * artifact is an image (its kind's glyph otherwise), the label, and the file
+ * name, age and size. A row opens the artifact full screen over the app
+ * (`ArtifactOverlay`), in the same viewer the artifact route uses.
+ */
 function ArtifactsSection({
   sessionId,
   artifacts,
@@ -789,40 +786,15 @@ function ArtifactsSection({
   sessionId: string;
   artifacts: SessionArtifact[];
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(
-    artifacts[0]?.id ?? null,
+  const [opened, setOpened] = useState<{
+    sessionId: string;
+    path: string;
+    label: string;
+  } | null>(null);
+  const newestFirst = useMemo(
+    () => [...artifacts].sort((a, b) => b.createdAt - a.createdAt),
+    [artifacts],
   );
-  const selected = useMemo(
-    () =>
-      artifacts.find((artifact) => artifact.id === selectedId) ?? artifacts[0],
-    [artifacts, selectedId],
-  );
-  const copy = async (text: string) => {
-    await copyWithToast(text, { successMessage: "Copied URL to clipboard" });
-  };
-  const copyImage = async (artifact: SessionArtifact) => {
-    const url = artifactHttpUrl(artifact.url);
-    if (window.isSecureContext && navigator.clipboard?.write) {
-      try {
-        const blob = await fetch(url).then((r) => r.blob());
-        await navigator.clipboard.write([
-          new ClipboardItem({ [blob.type]: blob }),
-        ]);
-        showToast("Copied image to clipboard", { tone: "success" });
-        return;
-      } catch {
-        // Fall back to copying the URL below.
-      }
-    }
-    await copy(url);
-  };
-
-  useEffect(() => {
-    if (selected && artifacts.some((artifact) => artifact.id === selected.id))
-      return;
-    setSelectedId(artifacts[0]?.id ?? null);
-  }, [artifacts, selected]);
-
   return (
     <InspectorSection
       id="artifacts"
@@ -832,175 +804,70 @@ function ArtifactsSection({
       summary={`${artifacts.length}`}
       defaultOpen={false}
     >
-      <div className="grid grid-cols-2 gap-2">
-        {artifacts.slice(0, 12).map((artifact) => {
-          const url = artifactHttpUrl(artifact.url);
-          const active = artifact.id === selected?.id;
+      <ul className="flex flex-col" aria-label="Session artifacts">
+        {newestFirst.map((artifact) => {
+          const target = parseDocumentTarget(artifact.url);
+          const path =
+            target?.kind === "sessionArtifact" ? target.path : undefined;
+          const KindIcon = ARTIFACT_KIND_ICON[artifact.kind];
           return (
-            <Item
-              key={artifact.id}
-              variant={active ? "muted" : "outline"}
-              size="xs"
-              render={<button type="button" />}
-              aria-pressed={active}
-              onClick={() => setSelectedId(artifact.id)}
-              className="flex-col items-stretch text-left"
-            >
-              <ItemHeader className="h-24 justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
-                {artifact.mimeType.startsWith("image/") ? (
-                  <img
-                    src={url}
-                    alt={artifact.label}
-                    className="size-full object-cover"
-                  />
-                ) : (
-                  <ImageIcon />
-                )}
-              </ItemHeader>
-              <ItemContent className="min-w-0">
-                <ItemTitle className="w-full" title={artifact.label}>
-                  <span className="truncate">{artifact.label}</span>
-                </ItemTitle>
-                <ItemDescription className="truncate">
-                  {artifact.name}
-                </ItemDescription>
-              </ItemContent>
-            </Item>
+            <li key={artifact.id}>
+              <Button
+                variant="ghost"
+                className="h-auto w-full justify-start gap-2.5 px-1 py-1.5 text-left font-normal"
+                title={`${artifact.label} — ${artifact.name}`}
+                disabled={!path}
+                onClick={() =>
+                  path &&
+                  setOpened({
+                    sessionId: artifact.sessionId,
+                    path,
+                    label: artifact.label,
+                  })
+                }
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+                  {artifact.mimeType.startsWith("image/") ? (
+                    <img
+                      src={artifactHttpUrl(artifact.url)}
+                      alt=""
+                      loading="lazy"
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <KindIcon size={16} aria-hidden />
+                  )}
+                </span>
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-sm text-foreground">
+                    {artifact.label}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {artifact.name} · {relativeTime(artifact.createdAt)} ·{" "}
+                    {formatFileSize(artifact.size)}
+                  </span>
+                </span>
+              </Button>
+            </li>
           );
         })}
-      </div>
-
-      {selected && (
-        <ArtifactPreview
-          artifact={selected}
-          onCopyUrl={() => void copy(artifactHttpUrl(selected.url))}
-          onCopyImage={() => void copyImage(selected)}
+      </ul>
+      {opened ? (
+        <ArtifactOverlay
+          sessionId={opened.sessionId}
+          path={opened.path}
+          label={opened.label}
+          onClose={() => setOpened(null)}
         />
-      )}
+      ) : null}
     </InspectorSection>
   );
 }
 
-function ArtifactPreview({
-  artifact,
-  onCopyUrl,
-  onCopyImage,
-}: {
-  artifact: SessionArtifact;
-  onCopyUrl: () => void;
-  onCopyImage: () => void;
-}) {
-  const url = artifactHttpUrl(artifact.url);
-  const textLike = isTextLikeArtifact(artifact);
-  const [enlarged, setEnlarged] = useState(false);
-  // Keyed by the artifact's URL: selecting another artifact is a different
-  // object, so its body may never appear under this one's header (R3).
-  const { state, reload } = useFetchState(url, fetchArtifactText, {
-    enabled: textLike,
-  });
-  const text = dataOf(state);
-  const error = errorOf(state);
-
-  return (
-    <Card size="sm" className="mt-3">
-      <CardHeader className="border-b">
-        <CardTitle className="truncate" title={artifact.label}>
-          {artifact.label}
-        </CardTitle>
-        <CardDescription className="truncate" title={artifact.name}>
-          {artifact.name}
-        </CardDescription>
-        <CardAction className="flex gap-1">
-          <IconButton
-            label="Copy artifact URL"
-            size="icon-xs"
-            onClick={onCopyUrl}
-          >
-            <Clipboard />
-          </IconButton>
-          {artifact.mimeType.startsWith("image/") && (
-            <IconButton label="Copy image" size="icon-xs" onClick={onCopyImage}>
-              <ImageIcon />
-            </IconButton>
-          )}
-          <LinkButton
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            label="Open artifact"
-            variant="ghost"
-            size="icon-xs"
-          >
-            <ExternalLink />
-          </LinkButton>
-        </CardAction>
-      </CardHeader>
-      {artifact.mimeType.startsWith("image/") ? (
-        <>
-          <Button
-            variant="ghost"
-            onClick={() => setEnlarged(true)}
-            title="Click to enlarge"
-            aria-label={`Enlarge ${artifact.label}`}
-            className="h-auto w-full cursor-zoom-in"
-          >
-            <img
-              src={url}
-              alt={artifact.label}
-              className="max-h-72 w-full object-contain"
-            />
-          </Button>
-          {enlarged ? (
-            <ImageLightbox
-              src={url}
-              alt={artifact.label}
-              caption={artifact.name}
-              onClose={() => setEnlarged(false)}
-            />
-          ) : null}
-        </>
-      ) : textLike ? (
-        // The three states this preview can be in, said out loud: it used to
-        // render an empty box until the body landed, which reads as an empty
-        // artifact rather than as a fetch.
-        error !== undefined ? (
-          <ErrorNote
-            className="mx-3"
-            message={`Could not load this artifact: ${error}`}
-            onRetry={reload}
-          />
-        ) : text === undefined ? (
-          <PaneLoading className="py-8" label="Loading preview…" />
-        ) : (
-          <CardContent>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">
-              {text}
-            </pre>
-          </CardContent>
-        )
-      ) : (
-        <CardContent className="text-muted-foreground">
-          No inline preview for this artifact type. Open it in a new tab to
-          inspect it.
-        </CardContent>
-      )}
-    </Card>
-  );
-}
-
-async function fetchArtifactText(
-  url: string,
-  signal: AbortSignal,
-): Promise<string> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = await response.text();
-  return body.length > 8000 ? `${body.slice(0, 8000)}\n… truncated …` : body;
-}
-
-function isTextLikeArtifact(artifact: SessionArtifact): boolean {
-  return (
-    /^(text\/|application\/(json|xml|yaml|x-yaml))/i.test(artifact.mimeType) ||
-    /\.(txt|log|json|jsonl|ya?ml|md)$/i.test(artifact.name)
-  );
-}
+const ARTIFACT_KIND_ICON: Record<SessionArtifact["kind"], LucideIcon> = {
+  screenshot: ImageIcon,
+  trace: Activity,
+  video: Film,
+  download: Download,
+  file: FileText,
+};
