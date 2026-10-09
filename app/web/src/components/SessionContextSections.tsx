@@ -59,7 +59,6 @@ import {
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemGroup,
   ItemHeader,
   ItemTitle,
 } from "@/components/ui/item";
@@ -475,41 +474,58 @@ export function ActiveSkillsSection({
         <RefreshIndicator label="Refreshing skills" />
       ) : null}
       {skills.length > 0 ? (
-        <ItemGroup className="gap-1" aria-label="Session skills">
+        // Plain rows, as the panel's other lists: the state is the small
+        // circle in front of the name, not a chip — filled once the body is
+        // loaded, an outline while only its name and description are in
+        // context, dashed when it is not mounted at all. Only a loaded skill
+        // says more on its line (how often, when); the rest is the tooltip.
+        <ul className="flex flex-col" aria-label="Session skills">
           {skills.map((name) => {
             const load = loads.get(name);
-            const state = load
+            const state: SkillState = load
               ? "Loaded"
               : mounted.has(name)
                 ? "Available"
                 : "Not mounted";
-            const detail = load
-              ? `${load.count > 1 ? `×${load.count} · ` : ""}${SKILL_LOAD_VIA[load.last.via]} ${new Date(load.last.at).toLocaleTimeString()}`
-              : undefined;
+            const title = load
+              ? `${SKILL_STATE_TITLE[state]} — ${load.count > 1 ? `${load.count} times, last ` : ""}via ${SKILL_LOAD_VIA[load.last.via]} at ${new Date(load.last.at).toLocaleTimeString()}`
+              : SKILL_STATE_TITLE[state];
             return (
-              <Item
+              <li
                 key={name}
-                variant="outline"
-                size="xs"
-                render={<li />}
                 aria-label={`${name}: ${state}`}
-                className="flex-nowrap"
+                title={title}
+                className="flex min-h-7 min-w-0 items-center gap-2 px-1 text-sm"
               >
-                <ItemContent className="min-w-0">
-                  <ItemTitle className="w-full">
-                    <span className="truncate">{name}</span>
-                  </ItemTitle>
-                </ItemContent>
-                <Badge
-                  variant={SKILL_STATE_BADGE[state]}
-                  title={SKILL_STATE_TITLE[state]}
+                {/* An 8px dot in the 14px glyph column: filled once loaded,
+                    a ring while only available, a faint ring when not
+                    mounted. */}
+                <span
+                  aria-hidden
+                  className="flex size-3.5 shrink-0 items-center justify-center"
                 >
-                  {detail ?? state}
-                </Badge>
-              </Item>
+                  <span
+                    className={`size-2 rounded-full ${SKILL_STATE_DOT[state]}`}
+                  />
+                </span>
+                <span
+                  className={`min-w-0 flex-1 truncate ${state === "Not mounted" ? "text-muted-foreground" : "text-foreground"}`}
+                >
+                  {name}
+                </span>
+                {load ? (
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {load.count > 1 ? `×${load.count} · ` : ""}
+                    {new Date(load.last.at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                ) : null}
+              </li>
             );
           })}
-        </ItemGroup>
+        </ul>
       ) : !libraryPending && !libraryError ? (
         <p className="text-sm text-muted-foreground">
           No library skills were available when this session started.
@@ -525,11 +541,13 @@ const SKILL_STATE_TITLE = {
   "Not mounted": "Not mounted for this session",
 } as const;
 
-const SKILL_STATE_BADGE = {
-  Loaded: "success",
-  Available: "outline",
-  "Not mounted": "secondary",
-} as const;
+type SkillState = keyof typeof SKILL_STATE_TITLE;
+
+const SKILL_STATE_DOT: Record<SkillState, string> = {
+  Loaded: "bg-success",
+  Available: "border border-muted-foreground",
+  "Not mounted": "border border-muted-foreground/40",
+};
 
 const SKILL_LOAD_VIA: Record<SessionSkillInvocation["via"], string> = {
   skill_tool: "Skill tool",
