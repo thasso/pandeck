@@ -25,6 +25,7 @@ export function DisclosureRow({
   onOpen,
   inset = 0,
   depth = 0,
+  action,
   children,
 }: {
   /** The list row's id, for scroll restoration (`data-list-row-id`). */
@@ -40,6 +41,11 @@ export function DisclosureRow({
   inset?: number;
   /** Tree depth, indenting 0.75rem per level. */
   depth?: number;
+  /**
+   * An action addressed to the reader that must stay in view (Stop on running
+   * work), before the age.
+   */
+  action?: ReactNode;
   /** The unfolded details, rendered only while open. */
   children: ReactNode;
 }) {
@@ -66,6 +72,7 @@ export function DisclosureRow({
           {head}
         </Button>
         <ItemActions className="gap-1.5">
+          {action}
           <span
             className="text-xs whitespace-nowrap tabular-nums"
             title={ageTitle}

@@ -4087,7 +4087,7 @@ function AppContent() {
   // its project and its worktree (branch and uncommitted changes) — and each
   // of those is a link of its own.
   const titleLink =
-    "h-auto min-w-0 cursor-pointer gap-1 p-0 text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
+    "h-auto min-w-0 cursor-pointer justify-start gap-1 p-0 text-left text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
   const sessionTitleHeading =
     displayProject || displayWorktreeBranch || displayTask ? (
       <div className="flex min-w-0 flex-col">
@@ -4097,68 +4097,93 @@ function AppContent() {
         {/* Responsive by its own width (`@container`): the project gives way
             to its key first, then the branch shortens with an ellipsis — the
             line never runs into the header's buttons. */}
-        <div className="@container flex min-w-0 items-center gap-2">
-          {displayProject ? (
-            <Button
-              variant="link"
-              className={`${titleLink} max-w-1/2 shrink-0`}
-              title={`Open project ${displayProject.name}`}
-              onClick={() => navigate(projectPath(displayProject.id))}
-            >
-              <FolderKanban
-                aria-hidden
-                className="size-3 shrink-0"
-                style={{ color: projectColor(displayProject).dot }}
-              />
-              <span className="hidden min-w-0 truncate @[22rem]:inline">
-                {displayProject.name}
-              </span>
-              <span className="min-w-0 truncate @[22rem]:hidden">
-                {projectDisplayKey(displayProject)}
-              </span>
-            </Button>
-          ) : null}
-          {displayTask ? (
-            <Button
-              variant="link"
-              className={`${titleLink} max-w-1/3 shrink-0`}
-              title={`Open task: ${displayTask.title}`}
-              onClick={() => navigate(taskPath(displayTask.id))}
-            >
-              <ClipboardList aria-hidden className="size-3 shrink-0" />
-              <span className="min-w-0 truncate">{displayTask.title}</span>
-            </Button>
-          ) : null}
-          {displayWorktreeBranch && displayWorktreeId ? (
-            <Button
-              variant="link"
-              className={`${titleLink} shrink`}
-              title="Open this session's worktree changes"
-              onClick={() =>
-                navigate(worktreePath(displayWorktreeId, "changes"))
-              }
-            >
-              <GitBranch className="size-3 shrink-0" aria-hidden />
-              <span className="min-w-0 truncate font-mono">
-                {displayWorktreeBranch}
-              </span>
-              {displayWorktreeStatus &&
-              (displayWorktreeStatus.additions > 0 ||
-                displayWorktreeStatus.deletions > 0) ? (
-                <span
-                  className="shrink-0 tabular-nums"
-                  title="Uncommitted line changes in the worktree"
-                >
-                  <span className="text-success">
-                    +{displayWorktreeStatus.additions}
-                  </span>{" "}
-                  <span className="text-destructive">
-                    −{displayWorktreeStatus.deletions}
-                  </span>
+        <div className="@container flex min-w-0 items-center justify-start gap-1.5">
+          {[
+            displayProject ? (
+              <Button
+                key="project"
+                variant="link"
+                className={`${titleLink} max-w-1/2 shrink-0`}
+                title={`Open project ${displayProject.name}`}
+                onClick={() => navigate(projectPath(displayProject.id))}
+              >
+                <FolderKanban
+                  aria-hidden
+                  className="size-3 shrink-0"
+                  style={{ color: projectColor(displayProject).dot }}
+                />
+                <span className="hidden min-w-0 truncate @[22rem]:inline">
+                  {displayProject.name}
                 </span>
-              ) : null}
-            </Button>
-          ) : null}
+                <span className="min-w-0 truncate @[22rem]:hidden">
+                  {projectDisplayKey(displayProject)}
+                </span>
+              </Button>
+            ) : null,
+            displayWorktreeBranch && displayWorktreeId ? (
+              <Button
+                key="worktree"
+                variant="link"
+                className={`${titleLink} shrink`}
+                title="Open this session's worktree changes"
+                onClick={() =>
+                  navigate(worktreePath(displayWorktreeId, "changes"))
+                }
+              >
+                <GitBranch className="size-3 shrink-0" aria-hidden />
+                <span className="min-w-0 truncate font-mono">
+                  {displayWorktreeBranch}
+                </span>
+                {displayWorktreeStatus &&
+                (displayWorktreeStatus.additions > 0 ||
+                  displayWorktreeStatus.deletions > 0) ? (
+                  <span
+                    className="shrink-0 tabular-nums"
+                    title="Uncommitted line changes in the worktree"
+                  >
+                    <span className="text-success">
+                      +{displayWorktreeStatus.additions}
+                    </span>{" "}
+                    <span className="text-destructive">
+                      −{displayWorktreeStatus.deletions}
+                    </span>
+                  </span>
+                ) : null}
+              </Button>
+            ) : null,
+            displayTask ? (
+              <Button
+                key="task"
+                variant="link"
+                className={`${titleLink} max-w-1/3 shrink`}
+                title={`Open task: ${displayTask.title}`}
+                onClick={() => navigate(taskPath(displayTask.id))}
+              >
+                <ClipboardList aria-hidden className="size-3 shrink-0" />
+                {/* The id first: it is what a prompt or a commit names. */}
+                <span className="shrink-0 font-mono">
+                  Task-{displayTask.id}
+                </span>
+                <span className="min-w-0 truncate">{displayTask.title}</span>
+              </Button>
+            ) : null,
+          ]
+            .filter(Boolean)
+            // Project, worktree, task — left to right, a quiet dot between.
+            .flatMap((item, index) =>
+              index === 0
+                ? [item]
+                : [
+                    <span
+                      key={`separator-${index}`}
+                      aria-hidden
+                      className="shrink-0 text-xs text-muted-foreground/60"
+                    >
+                      ·
+                    </span>,
+                    item,
+                  ],
+            )}
         </div>
       </div>
     ) : (
@@ -6620,7 +6645,9 @@ function AppContent() {
         stopPending={backgroundStopPending}
         onStop={actions.stopBackgroundWork}
         onStopAll={actions.stopAllBackgroundWork}
-        onOpenRegistry={() => navigateFromInspector(backgroundTasksPath())}
+        onOpenRegistry={(itemId) =>
+          navigateFromInspector(backgroundTasksPath(itemId))
+        }
         protectedTurnWait={
           displaySessionListItem
             ? state.backgroundHostCloseWaiting.includes(
