@@ -571,11 +571,6 @@ const Sidebar = lazy(() =>
     default: module.Sidebar,
   })),
 );
-const BacklogList = lazy(() =>
-  import("./components/BacklogList.tsx").then((module) => ({
-    default: module.BacklogList,
-  })),
-);
 
 if (typeof window !== "undefined") {
   const initialPath = window.location.pathname.replace(/\/$/, "") || "/";
@@ -5863,54 +5858,6 @@ function AppContent() {
     (link: MarkdownPaObjectReference) => navigate(link.href),
     [navigate],
   );
-  const renderProjectTasks = useCallback(
-    (projectId: string) => (
-      <Suspense
-        fallback={
-          <div
-            role="status"
-            aria-label="Loading Project tasks"
-            className="flex flex-col gap-2 px-1 py-2"
-          >
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-16 w-full" />
-          </div>
-        }
-      >
-        <BacklogList
-          state={backlogState}
-          actions={actions}
-          prefs={prefs}
-          onUpdatePrefs={update}
-          selectedId={null}
-          onOpenTask={openTaskById}
-          onOpenSession={openSession}
-          onStartSessionForTask={startSessionForTask}
-          onNavigate={openBacklogRowLink}
-          hosting={worktreeHosting.hosting}
-          dirtyWorktrees={dirtyWorktrees}
-          workflowIndicators={workflowIndicators}
-          fixedProjectId={projectId}
-          density="comfortable"
-          showAddTask
-        />
-      </Suspense>
-    ),
-    [
-      actions,
-      backlogState,
-      dirtyWorktrees,
-      openBacklogRowLink,
-      openSession,
-      openTaskById,
-      prefs,
-      startSessionForTask,
-      update,
-      workflowIndicators,
-      worktreeHosting.hosting,
-    ],
-  );
-
   if (showLoadingShell) {
     return (
       <LoadingShell
@@ -6928,9 +6875,6 @@ function AppContent() {
                     onOpenWorktree={openWorktree}
                     onCreateWorktree={createWorktreeForProject}
                     onStartSessionInWorktree={startSessionInWorktree}
-                    // The project's Tasks are a section of its page, not of the object
-                    // panel: the panel is for what the page cannot show.
-                    renderTasks={renderProjectTasks}
                     onOpenProject={openProject}
                     paObjectReferences={paObjectReferences}
                     onOpenPaObject={openProjectPaObject}

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   Archive,
   Check,
@@ -7,9 +7,6 @@ import {
   FolderKanban,
   GitBranch,
   GitFork,
-  House,
-  ListTodo,
-  MessageSquarePlus,
   Pencil,
   Plus,
   Trash2,
@@ -20,11 +17,8 @@ import type {
   WorktreeGitStatus,
   WorktreeRecord,
 } from "@assistant/shared";
-import {
-  AxesSummary,
-  WorktreeLineDelta,
-  WorktreeMergedBadge,
-} from "./worktreeRowParts.tsx";
+import { WorktreeRow, compareWorktrees } from "./worktreeRowParts.tsx";
+import { Tree } from "./common/Tree.tsx";
 import { PageHeader, type PageHeaderBack } from "./PageHeader.tsx";
 import { Markdown, type MarkdownPaObjectReference } from "./Markdown.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
@@ -51,15 +45,13 @@ import { copyWithToast } from "../lib/clipboard.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { projectSaveOperation } from "../hooks/useAssistant.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
-import { worktreeAxes } from "../lib/worktreeAxes.ts";
-import { usePerfRenderCount } from "../lib/perfStats.ts";
 
 /**
  * @component ProjectDetailPage
  * @purpose Project detail page: Task-detail-style editor for one selected Project's core details, description, local paths, and repo-backed worktrees.
  * @useWhen A Project detail route such as /projects/:id is opened from the sidebar Projects tab.
  * @avoidWhen Browsing the registry list; the sidebar Projects tab owns list navigation/reordering.
- * @intent Detail-only page with PageHeader, foldable sections, structured add/remove controls, minimal empty states, and optimistic websocket saves. Worktree controls appear only once a repo/workspace local path is configured. The managed main checkout (the folder Clone provisions and auto-registers as a local path) is shown read-only in the Repository section and hidden from the editable Local paths list, so that list holds only ADDITIONAL manual mappings.
+ * @intent Detail-only page with PageHeader, the name and description as the body, inspector-style sections, structured add/remove controls, minimal empty states, and optimistic websocket saves. Worktree controls appear only once a repo/workspace local path is configured. The managed main checkout (the folder Clone provisions and auto-registers as a local path) is shown read-only in the Repository section and hidden from the editable Local paths list, so that list holds only ADDITIONAL manual mappings.
  */
 function ProjectDetailPageView({
   back,
@@ -88,7 +80,6 @@ function ProjectDetailPageView({
   paObjectReferences = [],
   onOpenPaObject,
   onOpenProject,
-  renderTasks,
 }: {
   /** Mobile screen back control (ui-shell.md, Small Screens). */
   back?: PageHeaderBack | undefined;
@@ -129,12 +120,6 @@ function ProjectDetailPageView({
   onOpenPaObject?: (link: MarkdownPaObjectReference) => void;
   /** Open another Project (the parent named under the title). */
   onOpenProject?: (id: string) => void;
-  /**
-   * The project's Task list. A render prop because the list is `BacklogList`,
-   * which needs App's socket state/actions and is lazily loaded; the page just
-   * decides where it sits among the project's other content.
-   */
-  renderTasks?: (projectId: string) => ReactNode;
 }) {
   useEffect(() => {
     onOpenProjection?.(selectedId);
@@ -287,7 +272,6 @@ function ProjectDetailPageView({
                 onStartSessionInWorktree={onStartSessionInWorktree}
                 paObjectReferences={paObjectReferences}
                 onOpenPaObject={onOpenPaObject}
-                renderTasks={renderTasks}
                 mutationStates={mutationStates}
               />
             </>
@@ -376,7 +360,6 @@ function ProjectDetail({
   onStartSessionInWorktree,
   paObjectReferences,
   onOpenPaObject,
-  renderTasks,
   mutationStates,
 }: {
   project: ProjectRecord;
@@ -395,7 +378,6 @@ function ProjectDetail({
   onStartSessionInWorktree?: ((id: string) => void) | undefined;
   paObjectReferences: MarkdownPaObjectReference[];
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
-  renderTasks?: ((projectId: string) => ReactNode) | undefined;
   mutationStates: Record<string, LoadState<true>>;
 }) {
   const description = project.description ?? "";
@@ -561,23 +543,10 @@ function ProjectDetail({
         </section>
       )}
 
-      {/* The project's Tasks and Worktrees are its CONTENT, so they live here
-          rather than in the object panel — the panel used to list both beside a
-          page that already showed the worktrees. Order follows use: what is to
-          do, where the work happens, then the repository state you rarely
-          touch. Headed as the inspector's sections are. */}
+      {/* The project's Worktrees are its CONTENT, so they live here rather
+          than in the object panel. Its Tasks are the sidebar's Backlog filtered
+          to it, not a section here. Headed as the inspector's sections are. */}
       <div className="flex flex-col gap-3">
-        {renderTasks ? (
-          <InspectorSection
-            id="tasks"
-            storageScope={`project-page:${project.id}`}
-            title="Tasks"
-            icon={<ListTodo />}
-          >
-            {renderTasks(project.id)}
-          </InspectorSection>
-        ) : null}
-
         {showWorktrees ? (
           <InspectorSection
             id="worktrees"
@@ -650,12 +619,11 @@ function ProjectDetail({
 }
 
 /**
- * A row's action shows on hover or focus where there is a pointer to hover
- * with, always on touch — as the sidebar's rows do.
+ * The project's worktrees on the same `Tree` and with the same `WorktreeRow` as
+ * the sidebar's Projects browser — compact, flush, in its order — so the two
+ * lists are one component, not two that look alike. A flat list: no selection
+ * (a click opens the worktree), no drag.
  */
-const ROW_ACTION_REVEAL =
-  "pointer-fine:opacity-0 pointer-fine:group-hover/row:opacity-100 pointer-fine:group-focus-within/row:opacity-100 focus-visible:opacity-100";
-
 function ProjectWorktreeRows({
   worktrees,
   statuses,
@@ -667,98 +635,41 @@ function ProjectWorktreeRows({
   onOpen?: ((id: string) => void) | undefined;
   onStartSession?: ((id: string) => void) | undefined;
 }) {
-  // One coarse wall clock serves every row. The row comparator folds it down
+  // One coarse wall clock serves every row; `WorktreeRow`'s memo folds it down
   // to the rendered stale/fresh bit, so minute ticks do not redraw siblings.
   const now = useCoarseNow(60_000);
-  return worktrees.map((worktree) => (
-    <ProjectWorktreeRow
-      key={worktree.id}
-      worktree={worktree}
-      status={statuses[worktree.id]}
-      now={now}
-      onOpen={onOpen}
-      onStartSession={onStartSession}
-    />
-  ));
-}
-
-interface ProjectWorktreeRowProps {
-  worktree: WorktreeRecord;
-  status?: WorktreeGitStatus | undefined;
-  now: number;
-  onOpen?: ((id: string) => void) | undefined;
-  onStartSession?: ((id: string) => void) | undefined;
-}
-
-function ProjectWorktreeRowImpl({
-  worktree,
-  status,
-  now,
-  onOpen,
-  onStartSession,
-}: ProjectWorktreeRowProps) {
-  usePerfRenderCount("ProjectWorktreeRow");
-  const branch = status?.branch ?? worktree.branch;
-  const axes = worktreeAxes(worktree, status, now);
-  const BranchIcon = worktree.isMain ? House : GitBranch;
-
+  const items = useMemo(
+    () =>
+      [...worktrees]
+        .sort(compareWorktrees)
+        .map((worktree) => ({ id: worktree.id, data: worktree })),
+    [worktrees],
+  );
   return (
-    // Flush and hairline-divided like the sidebar's rows: a plain glyph, the
-    // branch over its axes, and the one action revealed on hover.
-    <div
-      data-project-worktree-row={worktree.id}
-      className="group/row flex items-center gap-1 border-b last:border-b-0"
-    >
-      <Button
-        variant="ghost"
-        className="h-auto min-w-0 flex-1 items-start justify-start gap-2 rounded-none px-1 py-1.5 text-left font-normal"
-        onClick={() => onOpen?.(worktree.id)}
-        title={worktree.path}
-      >
-        <span className="flex h-5 shrink-0 items-center">
-          <BranchIcon className="size-3.5 text-muted-foreground" />
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span
-            data-worktree-primary
-            className="flex min-w-0 max-w-full items-center gap-2"
-          >
-            <span className="truncate text-sm text-foreground">{branch}</span>
-            <WorktreeLineDelta status={status} />
-            <WorktreeMergedBadge status={status} />
-          </span>
-          <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
-        </span>
-      </Button>
-      {onStartSession ? (
-        <IconButton
-          label="Start session in this worktree"
-          size="icon-xs"
-          className={`text-muted-foreground hover:text-foreground ${ROW_ACTION_REVEAL}`}
-          onClick={() => onStartSession(worktree.id)}
-        >
-          <MessageSquarePlus />
-        </IconButton>
-      ) : null}
-    </div>
+    <Tree
+      items={items}
+      compact
+      flush
+      showGuides={false}
+      aria-label="Worktrees"
+      selectedIds={NO_SELECTION}
+      onSelectionChange={(ids) => {
+        if (ids.length === 1) onOpen?.(ids[0]!);
+      }}
+      renderNode={(node) => (
+        <WorktreeRow
+          worktree={node.data}
+          status={statuses[node.id]}
+          now={now}
+          selected={false}
+          onStartSession={onStartSession}
+        />
+      )}
+    />
   );
 }
 
-/**
- * Status maps are replaced on watcher broadcasts, while the shared wall clock
- * ticks every minute. Props stay id-based and stable; `now` invalidates a row
- * only when the stale/fresh content it renders actually changes.
- */
-const ProjectWorktreeRow = memo(
-  ProjectWorktreeRowImpl,
-  (previous, next) =>
-    previous.worktree === next.worktree &&
-    previous.status === next.status &&
-    previous.onOpen === next.onOpen &&
-    previous.onStartSession === next.onStartSession &&
-    worktreeAxes(previous.worktree, previous.status, previous.now).stale ===
-      worktreeAxes(next.worktree, next.status, next.now).stale,
-);
+const NO_SELECTION: string[] = [];
 
 function useCoarseNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());

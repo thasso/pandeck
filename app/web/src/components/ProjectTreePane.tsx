@@ -1,11 +1,6 @@
 import { applyPatch } from "@assistant/shared";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import {
-  FolderKanban,
-  GitBranch,
-  House,
-  MessageSquarePlus,
-} from "lucide-react";
+import { FolderKanban, MessageSquarePlus } from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -24,14 +19,13 @@ import {
 } from "../lib/backlogTreeModel.ts";
 import { samePlacements, type Task } from "../lib/backlogTree.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
-import { worktreeAxes } from "../lib/worktreeAxes.ts";
 import { SessionRowContent } from "./SessionRow.tsx";
 import {
-  AxesSummary,
   INITIAL_SESSION_LIMIT,
+  ROW_ACTION_REVEAL,
   SESSION_LIMIT_STEP,
-  WorktreeLineDelta,
-  WorktreeMergedBadge,
+  WorktreeRow,
+  compareWorktrees,
   loadExpandedWorktreeIds,
   persistExpandedWorktreeIds,
 } from "./worktreeRowParts.tsx";
@@ -39,12 +33,6 @@ import {
 const INDENT_WIDTH = 12;
 const COLLAPSE_STORAGE_KEY = "assistant.sidebarProjects.collapsed.v1";
 const WORKTREE_NODE_PREFIX = "worktree:";
-/**
- * A row's action shows on hover or focus where there is a pointer to hover
- * with, always on touch — as the session cards' and Task rows' actions do.
- */
-const ROW_ACTION_REVEAL =
-  "pointer-fine:opacity-0 pointer-fine:group-hover/row:opacity-100 pointer-fine:group-focus-within/row:opacity-100 focus-visible:opacity-100";
 const SESSION_NODE_PREFIX = "session:";
 const MORE_NODE_PREFIX = "more-sessions:";
 
@@ -325,7 +313,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "worktree":
               return (
-                <WorktreeRowContent
+                <WorktreeRow
                   worktree={data.worktree}
                   status={data.status}
                   now={now}
@@ -430,76 +418,6 @@ const ProjectRowContent = memo(function ProjectRowContent({
     </div>
   );
 });
-
-interface WorktreeRowContentProps {
-  worktree: WorktreeRecord;
-  status?: WorktreeGitStatus | undefined;
-  now: number;
-  selected: boolean;
-  onStartSession?: ((id: string) => void) | undefined;
-}
-
-function WorktreeRowContentImpl({
-  worktree,
-  status,
-  now,
-  selected,
-  onStartSession,
-}: WorktreeRowContentProps) {
-  const branch = status?.branch ?? worktree.branch;
-  const axes = worktreeAxes(worktree, status, now);
-  return (
-    <div
-      className="group/row flex min-w-0 items-start gap-1.5"
-      title={`${branch}\n${worktree.path}`}
-    >
-      {/* A plain glyph, not a tinted tile: the row's text carries it. */}
-      <span
-        className={`flex h-5 shrink-0 items-center ${selected ? "text-foreground" : "text-muted-foreground"}`}
-        aria-hidden
-      >
-        {worktree.isMain ? <House size={14} /> : <GitBranch size={14} />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
-        <span className="flex min-w-0 items-center gap-1">
-          <span
-            className={`min-w-0 flex-1 truncate text-sm text-foreground ${selected ? "font-medium" : ""}`}
-          >
-            {branch}
-          </span>
-          <WorktreeLineDelta status={status} />
-          <WorktreeMergedBadge status={status} />
-        </span>
-        <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
-      </span>
-      {onStartSession ? (
-        <IconButton
-          size="icon-xs"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStartSession(worktree.id);
-          }}
-          label={`Start session in worktree: ${branch}`}
-          className={`shrink-0 ${ROW_ACTION_REVEAL}`}
-        >
-          <MessageSquarePlus />
-        </IconButton>
-      ) : null}
-    </div>
-  );
-}
-
-const WorktreeRowContent = memo(
-  WorktreeRowContentImpl,
-  (previous, next) =>
-    previous.worktree === next.worktree &&
-    previous.status === next.status &&
-    previous.selected === next.selected &&
-    previous.onStartSession === next.onStartSession &&
-    worktreeAxes(previous.worktree, previous.status, previous.now).stale ===
-      worktreeAxes(next.worktree, next.status, next.now).stale,
-);
 
 function projectNodesFromBacklogNodes(
   nodes: BacklogNode[],
@@ -623,12 +541,7 @@ function groupByProject(
     grouped.set(worktree.projectId, list);
   }
   for (const list of grouped.values()) {
-    list.sort(
-      (a, b) =>
-        Number(Boolean(b.isMain)) - Number(Boolean(a.isMain)) ||
-        b.updatedAt - a.updatedAt ||
-        a.branch.localeCompare(b.branch),
-    );
+    list.sort(compareWorktrees);
   }
   return grouped;
 }
