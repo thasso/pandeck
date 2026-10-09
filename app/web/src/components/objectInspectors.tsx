@@ -15,7 +15,7 @@ import {
   GitBranchPlus,
   GitFork,
   GitMerge,
-  IdCard,
+  House,
   ListChecks,
   MessageSquare,
   MessageSquarePlus,
@@ -54,11 +54,18 @@ import {
   InspectorSection,
   useInspectorAct,
   type InspectorAction,
-  type InspectorFact,
   type InspectorRelationGroup,
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
 import {
   dataOf,
@@ -109,7 +116,7 @@ import {
   SpawnedSessionLedgeRow,
   type SessionRowFact,
 } from "./SpawnedSessionsLedge.tsx";
-import { WorktreeList } from "./worktreeRowParts.tsx";
+import { WorktreeLineDelta, WorktreeList } from "./worktreeRowParts.tsx";
 import { TaskLinkList, type TaskLinkItem } from "./TaskLinkList.tsx";
 import { projectColor } from "../lib/projectDisplay.ts";
 import { useElapsedNow } from "./useElapsedNow.ts";
@@ -640,9 +647,6 @@ export function sessionRelationGroups(args: {
     sessionTasks = [],
     forkOrigin,
     sessions,
-    worktree,
-    projects = [],
-    worktreeStatus,
   } = args;
   const current = sessionId
     ? sessions.find((session) => session.id === sessionId)
@@ -665,26 +669,9 @@ export function sessionRelationGroups(args: {
     : [];
   const tasks = mergeSessionTasks(originTask, relatedTasks, sessionTasks);
   const summaryValue = taskStatusSummary(tasks);
-  const worktreeProject = worktree?.projectId
-    ? projects.find((candidate) => candidate.id === worktree.projectId)
-    : undefined;
   return [
-    // Where it runs, as two groups rather than a Project → worktree tree: a
-    // group of worktrees is drawn with the app's worktree rows.
-    {
-      id: "project",
-      label: "Project",
-      icon: <FolderKanban size={13} />,
-      refs: worktreeProject ? [projectObjectRef(worktreeProject)] : [],
-    },
-    {
-      id: "worktree",
-      label: "Worktree",
-      icon: <GitBranch size={13} />,
-      refs: worktree
-        ? [worktreeObjectRef(worktree, projects, worktreeStatus)]
-        : [],
-    },
+    // Where it runs (project, worktree) is not a relation group: it is the
+    // first rows of the inspector's Details (`SessionDetails`).
     {
       id: "tasks",
       label: "Tasks",
@@ -1256,31 +1243,37 @@ export function SessionInspector({
       ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
     }),
   ];
-  // Who runs this session, on what: the account is fixed at the first prompt,
-  // the model and thinking level are what it runs on right now.
-  // Only the account NAME: the provider is already implied by the model beside
-  // it, and it was the half of the value that pushed the row into truncation.
-  const profileFacts: InspectorFact[] = [
-    ...(credentialProfile
-      ? [{ label: "Account", value: credentialProfile.name }]
-      : []),
-    ...(model ? [{ label: "Model", value: model.name ?? model.id }] : []),
-    ...(thinkingLevel
-      ? [{ label: "Thinking", value: THINKING_LABELS[thinkingLevel] }]
-      : []),
-  ];
-  // The section is collapsed by default, so its summary carries the same three
-  // facts on one line — the panel still answers "who, on what" at a glance.
-  const profileSummary = [
-    credentialProfile?.name,
-    model?.name ?? model?.id,
-    thinkingLevel ? THINKING_LABELS[thinkingLevel] : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   return (
     <Inspector
-      relations={toInspectorGroups(groups, openers, sessions)}
+      relations={[
+        // What the session IS, first: where it runs and on what, as one
+        // property list — the Task inspector's Details shape.
+        {
+          id: "details",
+          label: "Details",
+          icon: <SlidersHorizontal size={13} />,
+          items: [],
+          alwaysShown: true,
+          content: (
+            <SessionDetails
+              project={
+                worktree?.projectId
+                  ? projects.find(
+                      (candidate) => candidate.id === worktree.projectId,
+                    )
+                  : undefined
+              }
+              worktree={worktree}
+              worktreeStatus={worktreeStatus}
+              credentialProfile={credentialProfile}
+              model={model}
+              thinkingLevel={thinkingLevel}
+              openers={openers}
+            />
+          ),
+        },
+        ...toInspectorGroups(groups, openers, sessions),
+      ]}
       // The session header's ⋮ holds the session's actions on every layout
       // (`sessionInspectorActions`, published by the header itself), so this
       // panel neither lists nor publishes any.
@@ -1288,18 +1281,6 @@ export function SessionInspector({
       ownsHeaderActions={false}
       sectionStorageScope={`session:${sessionId ?? "draft"}`}
     >
-      {profileFacts.length > 0 ? (
-        <InspectorSection
-          id="credential-profile"
-          storageScope={`session:${sessionId ?? "draft"}`}
-          title="Profile"
-          icon={<IdCard size={13} />}
-          summary={profileSummary}
-          defaultOpen={false}
-        >
-          <InspectorFacts facts={profileFacts} />
-        </InspectorSection>
-      ) : null}
       {children}
       {view ? (
         <InspectorSection
@@ -1313,6 +1294,103 @@ export function SessionInspector({
         </InspectorSection>
       ) : null}
     </Inspector>
+  );
+}
+
+/**
+ * A session's Details: where it runs (its project and worktree, each opening
+ * its object) and on what (the account fixed at the first prompt, the model
+ * and thinking level it runs on now), as the Task inspector's property list.
+ */
+function SessionDetails({
+  project,
+  worktree,
+  worktreeStatus,
+  credentialProfile,
+  model,
+  thinkingLevel,
+  openers,
+}: {
+  project: ProjectRecord | undefined;
+  worktree: WorktreeRelationSource | undefined;
+  worktreeStatus: WorktreeGitStatus | undefined;
+  credentialProfile: { name: string } | undefined;
+  model: { id: string; name?: string; provider: string } | undefined;
+  thinkingLevel: ThinkingLevel | undefined;
+  openers: ObjectOpeners;
+}) {
+  const onAct = useInspectorAct();
+  const open = (run: () => void) => () => {
+    run();
+    onAct?.();
+  };
+  const branch = worktreeStatus?.branch ?? worktree?.branch;
+  return (
+    <PropertyList>
+      <PropertyLabel>Project</PropertyLabel>
+      {project ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`${PROPERTY_TRIGGER} justify-start`}
+          onClick={open(() => openers.onOpenProject(project.id))}
+        >
+          <FolderKanban
+            style={{ color: projectColor(project).dot }}
+            aria-hidden
+          />
+          <span className="min-w-0 truncate">
+            <span className="font-mono text-xs">{project.key}</span>
+            <span className="text-muted-foreground"> · {project.name}</span>
+          </span>
+        </Button>
+      ) : (
+        <PropertyText className="text-muted-foreground">None</PropertyText>
+      )}
+      <PropertyLabel>Worktree</PropertyLabel>
+      {worktree ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`${PROPERTY_TRIGGER} justify-start`}
+          title={worktree.path}
+          onClick={open(() => openers.onOpenWorktree(worktree.id))}
+        >
+          {worktree.isMain ? (
+            <House className="text-muted-foreground" aria-hidden />
+          ) : (
+            <GitBranch className="text-muted-foreground" aria-hidden />
+          )}
+          <span className="min-w-0 truncate font-mono text-xs">{branch}</span>
+          <WorktreeLineDelta status={worktreeStatus} />
+        </Button>
+      ) : (
+        <PropertyText className="text-muted-foreground">None</PropertyText>
+      )}
+      {credentialProfile ? (
+        <>
+          <PropertyLabel>Account</PropertyLabel>
+          <PropertyText className="truncate">
+            {credentialProfile.name}
+          </PropertyText>
+        </>
+      ) : null}
+      {model ? (
+        <>
+          <PropertyLabel>Model</PropertyLabel>
+          <PropertyText className="flex items-center gap-2">
+            <ProviderIcon provider={model.provider} size={14} />
+            <span className="min-w-0 truncate">{model.name ?? model.id}</span>
+          </PropertyText>
+        </>
+      ) : null}
+      {thinkingLevel ? (
+        <>
+          <PropertyLabel>Thinking</PropertyLabel>
+          <PropertyText>{THINKING_LABELS[thinkingLevel]}</PropertyText>
+        </>
+      ) : null}
+    </PropertyList>
   );
 }
 

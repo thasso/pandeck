@@ -129,6 +129,11 @@ export interface InspectorRelationGroup {
    * a second rendering of them. `items` still decides whether the group shows.
    */
   content?: ReactNode;
+  /**
+   * Shown although it has no relation rows: a group that is ONLY `content` (a
+   * session's Details), placed among the relations rather than after them.
+   */
+  alwaysShown?: boolean;
 }
 
 /** One object-aware action, e.g. "Start session", "Archive". */
@@ -496,7 +501,9 @@ export function Inspector({
   children,
   ownsHeaderActions = true,
 }: Props) {
-  const groups = relations.filter((group) => group.items.length > 0);
+  const groups = relations.filter(
+    (group) => group.items.length > 0 || group.alwaysShown,
+  );
   const {
     header: showHeader,
     desktopTabs,
