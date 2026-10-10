@@ -844,7 +844,7 @@ vocabulary, display projection, and normalized session model types.
   context.
 - `SessionMode` ([Task-329](pa://task/329)) is how much a session may CHANGE, a
   third session axis beside harness/persona and model/thinking: `build` is the
-  ordinary session, `plan` subtracts file-mutating native tools and app tools
+  ordinary session, `plan` refuses file-mutating native tools and app tools
   classified with local/external side effects, except `task_manage` for durable
   Task organization and `session_spawn` for read-only profile inspection; that
   tool still refuses `spawn`/`propose` against persisted Plan mode. Reads,
