@@ -5,6 +5,7 @@ import {
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
 import {
+  DateProperty,
   PropertyLabel,
   PropertyList,
   PropertyText,
@@ -115,12 +116,16 @@ function MarkdownFrontmatterHeader({
               <Fragment key={field.key}>
                 <PropertyLabel>
                   <span className="truncate" title={field.key}>
-                    {field.key}
+                    {field.label}
                   </span>
                 </PropertyLabel>
-                <PropertyText className="break-words" title={field.full}>
-                  {field.value}
-                </PropertyText>
+                {field.date ? (
+                  <DateProperty date={field.date} />
+                ) : (
+                  <PropertyText className="break-words" title={field.full}>
+                    {field.value}
+                  </PropertyText>
+                )}
               </Fragment>
             ))}
           </PropertyList>

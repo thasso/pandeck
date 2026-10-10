@@ -4,6 +4,10 @@ import { Input } from "../ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { ErrorNote } from "./load.tsx";
 import { errorOf, isPending, type LoadState } from "../../lib/loadState.ts";
+import {
+  formatPropertyDate,
+  type PropertyDateValue,
+} from "../../lib/propertyDates.ts";
 
 /**
  * @component PropertyList
@@ -82,6 +86,27 @@ export function PropertyText({
     >
       {children}
     </span>
+  );
+}
+
+/**
+ * A date in a `PropertyList`: the local date (and time, when the value has
+ * one) with how long ago it was beside it, muted; the full timestamp on hover.
+ */
+export function DateProperty({
+  date,
+  now = Date.now(),
+}: {
+  date: PropertyDateValue;
+  /** A shared ticker's value, when the host keeps one. */
+  now?: number;
+}) {
+  const { label, relative, full } = formatPropertyDate(date, now);
+  return (
+    <PropertyText title={full}>
+      <time dateTime={new Date(date.ms).toISOString()}>{label}</time>
+      <span className="text-muted-foreground"> · {relative}</span>
+    </PropertyText>
   );
 }
 

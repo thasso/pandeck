@@ -2,10 +2,19 @@ import {
   parseYamlSubset,
   splitYamlFrontmatter,
 } from "@assistant/shared/frontmatter";
+import {
+  dateFieldLabel,
+  parsePropertyDate,
+  type PropertyDateValue,
+} from "./propertyDates.ts";
 
 /** One frontmatter field shown as a label and a one-line value. */
 interface FrontmatterField {
   key: string;
+  /** The key as a label: as written, or read as words for a date field. */
+  label: string;
+  /** Set when the value is one ISO date: the header formats it as a date. */
+  date?: PropertyDateValue;
   /** The value as shown, clipped to one readable line. */
   value: string;
   /** The whole value when `value` had to be clipped. */
@@ -81,10 +90,23 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
     }
     const shown = displayValue(field);
     if (!shown) continue;
+    const date =
+      typeof field === "string" || typeof field === "number"
+        ? parsePropertyDate(field)
+        : null;
+    if (date) {
+      out.fields.push({ key, label: dateFieldLabel(key), value: shown, date });
+      continue;
+    }
     out.fields.push(
       shown.length > MAX_VALUE_CHARS
-        ? { key, value: `${shown.slice(0, MAX_VALUE_CHARS - 1)}…`, full: shown }
-        : { key, value: shown },
+        ? {
+            key,
+            label: key,
+            value: `${shown.slice(0, MAX_VALUE_CHARS - 1)}…`,
+            full: shown,
+          }
+        : { key, label: key, value: shown },
     );
   }
   return out;
