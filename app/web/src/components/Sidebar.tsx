@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { CalendarDays, FileDiff, FolderOpen } from "lucide-react";
+import { CalendarDays, FileDiff } from "lucide-react";
 import type {
   ProjectRecord,
   PullRequestInventoryItem,
@@ -31,6 +31,10 @@ import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
+import {
+  WorktreeFileTree,
+  useWorktreeFileTree,
+} from "./worktree/WorktreeFileTree.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
 import {
@@ -207,6 +211,12 @@ interface Props {
   knowledgeUncommitted?: number;
   /** Open the Knowledge Base's files or its uncommitted changes. */
   onOpenKnowledge: (view: KnowledgeView) => void;
+  /** The Knowledge Base file open in the route, for highlighting. */
+  knowledgeFilePath?: string | null | undefined;
+  /** The KB checkout status's `updatedAt`: a watcher push re-reads the tree. */
+  knowledgeRefreshToken?: number;
+  /** Open one Knowledge Base file in the main pane. */
+  onOpenKnowledgeFile: (path: string) => void;
   /** Fetch the worktree list (called when a section that joins worktrees is shown). */
   onLoadWorktrees: () => void;
   /** Open a worktree's detail route. */
@@ -300,39 +310,47 @@ function CalendarBrowser({
 type KnowledgeView = "files" | "changes";
 
 /**
- * The Knowledge Base section: the folder is one object, browsed by the page's
- * own file tree, so the section offers its two views — the files, and the
- * edits not yet committed (with their count, live while the section shows).
+ * The Knowledge Base section: the folder's own file tree, so the KB is browsed
+ * right here and a file opens in the main pane. The edits not yet committed
+ * sit above it as one row, only while there are any (or while it is open).
  */
 function KnowledgeBrowser({
   active,
+  filePath,
+  refreshToken,
   uncommitted,
   onOpen,
+  onOpenFile,
 }: {
   active: KnowledgeView | null;
+  filePath: string | undefined;
+  refreshToken: number;
   uncommitted: number;
   onOpen: (view: KnowledgeView) => void;
+  onOpenFile: (path: string) => void;
 }) {
-  const views = [
-    { id: "files" as const, label: "Files", icon: <FolderOpen /> },
-    {
-      id: "changes" as const,
-      label: "Uncommitted changes",
-      icon: <FileDiff />,
-    },
-  ];
+  const tree = useWorktreeFileTree({
+    worktreeId: KNOWLEDGE_WORKTREE_ID,
+    filePath,
+    refreshToken,
+  });
   return (
-    <div className="flex flex-col gap-0.5">
-      {views.map((view) => (
+    <div className="flex flex-col gap-1">
+      {uncommitted > 0 || active === "changes" ? (
         <BrowserRow
-          key={view.id}
-          icon={view.icon}
-          label={view.label}
-          current={active === view.id}
-          count={view.id === "changes" ? uncommitted : 0}
-          onClick={() => onOpen(view.id)}
+          icon={<FileDiff />}
+          label="Uncommitted changes"
+          current={active === "changes"}
+          count={uncommitted}
+          onClick={() => onOpen("changes")}
         />
-      ))}
+      ) : null}
+      <WorktreeFileTree
+        tree={tree}
+        selectedPath={active === "files" ? filePath : undefined}
+        onSelectFile={(entry) => onOpenFile(entry.path)}
+        ariaLabel="Knowledge Base files"
+      />
     </div>
   );
 }
@@ -479,6 +497,9 @@ function SidebarImpl({
   knowledgeView,
   knowledgeUncommitted = 0,
   onOpenKnowledge,
+  knowledgeFilePath,
+  knowledgeRefreshToken = 0,
+  onOpenKnowledgeFile,
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
@@ -787,8 +808,11 @@ function SidebarImpl({
         ) : section === "knowledge" ? (
           <KnowledgeBrowser
             active={knowledgeView ?? null}
+            filePath={knowledgeFilePath ?? undefined}
+            refreshToken={knowledgeRefreshToken}
             uncommitted={knowledgeUncommitted}
             onOpen={onOpenKnowledge}
+            onOpenFile={onOpenKnowledgeFile}
           />
         ) : section === "calendar" ? (
           <CalendarBrowser onOpenView={onOpenCalendarView} />

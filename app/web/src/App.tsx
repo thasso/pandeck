@@ -6292,6 +6292,11 @@ function AppContent() {
           state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
         )}
         onOpenKnowledge={openKnowledge}
+        knowledgeFilePath={route.name === "knowledge" ? route.path : null}
+        knowledgeRefreshToken={
+          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
+        }
+        onOpenKnowledgeFile={openKnowledgeFile}
         onLoadWorktrees={actions.listWorktrees}
         onOpenWorktree={openWorktree}
         onStartSessionInWorktree={startSessionInWorktree}
@@ -7057,6 +7062,8 @@ function AppContent() {
                     title="Knowledge Base"
                     lineComments={false}
                     markdownPreviewFirst
+                    // The sidebar's Knowledge section is the file tree.
+                    hideFileRail
                     documentComments={knowledgeCommentDocument}
                     narrow={mobileLayout}
                     view={route.view ?? "files"}
