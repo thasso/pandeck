@@ -912,6 +912,46 @@ describe("MessageList prompt delivery", () => {
     expect(container.querySelector('[data-message-id="u1"] img')).toBeNull();
     expect(rowText("u1")).toContain("shot.png");
   });
+
+  it("loads an inherited prompt image from its originating session attachment store", () => {
+    act(() =>
+      root.render(
+        <MessageList
+          sessionId="child-session"
+          view={view}
+          messages={[
+            {
+              id: "inherited-prompt",
+              role: "user",
+              inheritedFrom: {
+                sessionId: "parent-session",
+                entryId: "original-prompt",
+              },
+              blocks: [
+                {
+                  kind: "attachment",
+                  attachment: {
+                    id: "1700000000000-inherited",
+                    name: "inherited.png",
+                    mimeType: "image/png",
+                    size: 1024,
+                  },
+                },
+              ],
+            },
+          ]}
+        />,
+      ),
+    );
+
+    const image = container.querySelector<HTMLImageElement>(
+      '[data-message-id="inherited-prompt"] img',
+    );
+    expect(image?.getAttribute("src")).toContain(
+      "/api/session-attachment/parent-session/1700000000000-inherited",
+    );
+    expect(image?.getAttribute("src")).not.toContain("child-session");
+  });
 });
 
 describe("MessageList prompt origins", () => {

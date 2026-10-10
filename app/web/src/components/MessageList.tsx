@@ -680,7 +680,7 @@ const UserMessage = memo(function UserMessage({
         <AttachmentChip
           key={block.attachment.id}
           attachment={block.attachment}
-          sessionId={sessionId}
+          sessionId={message.inheritedFrom?.sessionId ?? sessionId}
           onOpenTask={onOpenTask}
         />
       );
