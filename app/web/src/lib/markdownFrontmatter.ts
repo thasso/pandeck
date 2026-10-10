@@ -79,6 +79,7 @@ function linkList(value: unknown): FrontmatterRef[] | null {
  * always list them the same way whatever order they were written in.
  */
 const LEADING_LABELS = [
+  "Title",
   "Type",
   "Status",
   "Created",

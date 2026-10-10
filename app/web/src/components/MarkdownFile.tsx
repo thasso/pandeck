@@ -8,6 +8,7 @@ import {
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
+import { useStoredOpen } from "../hooks/useStoredOpen.ts";
 import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
 import { FrontmatterValue, isVocabularyField } from "./frontmatterValues.tsx";
 import {
@@ -18,7 +19,7 @@ import {
 } from "./common/PropertyList.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import { Card, CardContent, CardHeader } from "./ui/card.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -92,6 +93,7 @@ function MarkdownFrontmatterHeader({
 }) {
   const { title, tags, fields, hiddenFields, source, parsed, raw } =
     frontmatter;
+  const [open, toggleOpen] = useStoredOpen("markdown-metadata", true);
   if (!parsed) {
     return (
       <Collapsible className={className}>
@@ -117,6 +119,19 @@ function MarkdownFrontmatterHeader({
     );
   }
   const rows: Array<{ label: string; node: ReactNode }> = [
+    ...(title
+      ? [
+          {
+            label: "Title",
+            node: (
+              <>
+                <PropertyLabel>Title</PropertyLabel>
+                <PropertyText className="break-words">{title}</PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
     ...(tags.length > 0
       ? [
           {
@@ -183,52 +198,70 @@ function MarkdownFrontmatterHeader({
     return null;
   return (
     <header aria-label="Document metadata" className={className}>
-      <Card size="sm">
-        {title ? (
+      <Collapsible open={open} onOpenChange={toggleOpen}>
+        <Card size="sm">
+          {/* A generic name, so the card reads the same on every file; the
+            document's own title is one of its rows. Folded or not is
+            remembered across files. */}
           <CardHeader>
-            <CardTitle>{title}</CardTitle>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-mx-2 w-fit justify-start font-medium"
+                />
+              }
+            >
+              <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+              Metadata
+            </CollapsibleTrigger>
           </CardHeader>
-        ) : null}
-        <CardContent>
-          <PropertyList align="start">
-            {rows.map((row) => (
-              <Fragment key={row.label}>{row.node}</Fragment>
-            ))}
-          </PropertyList>
-          {hiddenFields.length > 0 ? (
-            // Bookkeeping a reader rarely needs (the schema, the entry's id):
-            // folded away under the rest, one click from view.
-            <Collapsible className="mt-1">
-              <CollapsibleTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-muted-foreground"
-                  />
-                }
-              >
-                <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
-                {hiddenFields.length} more
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <PropertyList align="start" className="mt-1">
-                  {[...hiddenFields]
-                    .sort((a, b) => compareFrontmatterLabels(a.label, b.label))
-                    .map((field) => (
-                      <FieldRow
-                        key={field.key}
-                        field={field}
-                        paObjectReferences={paObjectReferences}
-                        onOpenPaObject={onOpenPaObject}
+          <CollapsibleContent>
+            <CardContent>
+              <PropertyList align="start">
+                {rows.map((row) => (
+                  <Fragment key={row.label}>{row.node}</Fragment>
+                ))}
+              </PropertyList>
+              {hiddenFields.length > 0 ? (
+                // Bookkeeping a reader rarely needs (the schema, the entry's id):
+                // folded away under the rest, one click from view.
+                <Collapsible className="mt-1">
+                  <CollapsibleTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-muted-foreground"
                       />
-                    ))}
-                </PropertyList>
-              </CollapsibleContent>
-            </Collapsible>
-          ) : null}
-        </CardContent>
-      </Card>
+                    }
+                  >
+                    <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+                    {hiddenFields.length} more
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <PropertyList align="start" className="mt-1">
+                      {[...hiddenFields]
+                        .sort((a, b) =>
+                          compareFrontmatterLabels(a.label, b.label),
+                        )
+                        .map((field) => (
+                          <FieldRow
+                            key={field.key}
+                            field={field}
+                            paObjectReferences={paObjectReferences}
+                            onOpenPaObject={onOpenPaObject}
+                          />
+                        ))}
+                    </PropertyList>
+                  </CollapsibleContent>
+                </Collapsible>
+              ) : null}
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
     </header>
   );
 }

@@ -1,3 +1,4 @@
+import { useStoredOpen } from "../../hooks/useStoredOpen.ts";
 import {
   PropertyLabel,
   PropertyList,
@@ -185,17 +186,6 @@ function sectionIdFromTitle(title: string): string {
   );
 }
 
-function readStoredBoolean(key: string, fallback: boolean): boolean {
-  try {
-    const value = window.localStorage.getItem(key);
-    if (value === "open") return true;
-    if (value === "closed") return false;
-  } catch {
-    // Ignore storage failures and use the default state.
-  }
-  return fallback;
-}
-
 /** One label/value pair of an inspector section's facts. */
 export interface InspectorFact {
   label: string;
@@ -294,30 +284,8 @@ export function InspectorSection({
   const storageKey = storageScope
     ? `inspector-section:${storageScope}:${id}`
     : undefined;
-  const [storedOpen, setStoredOpen] = useState(() =>
-    storageKey ? readStoredBoolean(storageKey, defaultOpen) : defaultOpen,
-  );
+  const [storedOpen, toggleOpen] = useStoredOpen(storageKey, defaultOpen);
   const open = forceOpen || (collapsible && storedOpen);
-
-  useEffect(() => {
-    setStoredOpen(
-      storageKey ? readStoredBoolean(storageKey, defaultOpen) : defaultOpen,
-    );
-  }, [storageKey, defaultOpen]);
-
-  const toggleOpen = () => {
-    setStoredOpen((current) => {
-      const next = !current;
-      if (storageKey) {
-        try {
-          window.localStorage.setItem(storageKey, next ? "open" : "closed");
-        } catch {
-          // Ignore storage failures; collapsing is still useful for this render.
-        }
-      }
-      return next;
-    });
-  };
 
   return (
     <Collapsible
