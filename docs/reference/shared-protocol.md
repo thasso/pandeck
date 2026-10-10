@@ -620,13 +620,13 @@ vocabulary, display projection, and normalized session model types.
   inspector can render a rich pierre diff and a rendered-Markdown diff.
   `KnowledgeHistoryRow.commentThreadId` (from the commit's `KB-Comment` trailer)
   links a content edit back to the review thread it addressed.
-- `comments.ts` owns the cross-surface comment anchor vocabulary:
-  `CommentTarget` (kb / worktree / session / task), the `SelectorBundle` of
-  quote, position and block selectors, the `ResolvedAnchor` a resolver answers
-  with, the shared 32-character `PREFIX_LEN`/`SUFFIX_LEN`, and
-  `normalizeAnchorText` — which is a COMPARISON helper only, since stored
-  selectors keep raw text and every offset is into the raw document. Contract:
-  `docs/comments.md`.
+- `comments.ts` owns the comment anchor vocabulary for server-synced worktree
+  review threads and session transcript comments: `CommentTarget` (worktree /
+  session), the `SelectorBundle` of quote, position and block selectors, the
+  `ResolvedAnchor` a resolver answers with, the shared 32-character
+  `PREFIX_LEN`/`SUFFIX_LEN`, and `normalizeAnchorText` — which is a COMPARISON
+  helper only, since stored selectors keep raw text and every offset is into the
+  raw document. Contract: `docs/comments.md`.
 - `usage.ts` owns the Usage page's provider account usage/rate-limit snapshot
   types (`ClaudeUsageSnapshot`, `OpenAiUsageSnapshot`). Each is a deliberately
   small, stable projection over an unstable upstream: Claude's experimental
@@ -826,11 +826,7 @@ vocabulary, display projection, and normalized session model types.
 - Any protocol change must be reflected in server producers/validators and web
   reducers/renderers. Knowledge entry and document comments never reach the
   wire: they are browser-local until sent as prompt prose (`docs/comments.md`).
-  Task activity-trace comments (`TaskComment`) use validated, request-correlated
-  `listTaskComments`/`addTaskComment` commands, an explicit
-  `unwatchTaskComments` lifecycle, and authoritative `taskComments` full-list
-  broadcasts; direct read answers echo `requestId`, while broadcasts to other
-  viewers do not. `TaskSummary.commentCount` is the list badge. Integration
+  Tasks carry no comments: `CommentTarget` has no `task` kind. Integration
   settings projections must remain minimal and secret-free; Slack's browser
   state carries only the booleans required by its end-user settings surfaces.
 - Viewed-chat run state belongs in runtime snapshots/events; `SessionState` must

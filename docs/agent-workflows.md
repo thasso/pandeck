@@ -73,8 +73,7 @@ A **Workflow Run** is one durable attempt to produce an outcome for a Task. It
 is not any of the existing objects:
 
 - A **Task** is the user's durable commitment. Its status remains the user's
-  decision, and per `tasks.md` the Task never becomes an execution scratchpad:
-  routine workflow transitions do not become Task comments.
+  decision, and per `tasks.md` the Task never becomes an execution scratchpad.
 - A **session** is one agent identity and transcript. A session may perform
   several sequential workflow steps, so session identity and step identity stay
   separate. A session created by a run is named deterministically before its

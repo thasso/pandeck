@@ -2256,29 +2256,6 @@ export function parseGithubIssueRef(
     : null;
 }
 
-/** Who authored a Task comment. `system` is reserved for future lifecycle events. */
-export type TaskCommentAuthorKind = "user" | "agent" | "system";
-
-export interface TaskCommentAuthor {
-  kind: TaskCommentAuthorKind;
-  name: string;
-  /** Originating agent session id, when an agent left the comment. */
-  sessionId?: string;
-}
-
-/**
- * One append-only comment in a Task's chronological activity trace. Users (web)
- * and agents (`task_manage` comments) leave context, decisions, updates, and
- * follow-ups; comments are never edited or deleted individually.
- */
-export interface TaskComment {
-  id: string;
-  taskId: string;
-  author: TaskCommentAuthor;
-  body: string;
-  createdAt: number;
-}
-
 export interface TaskExternalLink {
   url: string;
   /** Whether this URL is a source artifact for the Task or merely related context. */
@@ -2414,8 +2391,6 @@ export interface TaskSummary {
   archivedAt?: number;
   /** Commit hash that included this completed task, when known. */
   commitHash?: string;
-  /** Number of activity-trace comments on this Task, for list badges. */
-  commentCount?: number;
   /** An agent suggests a status for this Task; the user has not answered yet. */
   statusSuggestion?: TaskStatusSuggestion;
   /**
@@ -2482,7 +2457,6 @@ export function taskSummaryOf(item: TaskItem): TaskSummary {
       : {}),
     ...(item.archivedAt !== undefined ? { archivedAt: item.archivedAt } : {}),
     ...(item.commitHash ? { commitHash: item.commitHash } : {}),
-    ...(item.commentCount ? { commentCount: item.commentCount } : {}),
     ...(item.statusSuggestion
       ? { statusSuggestion: item.statusSuggestion }
       : {}),

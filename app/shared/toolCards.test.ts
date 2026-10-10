@@ -157,9 +157,6 @@ describe("toolCardOf", () => {
     expect(card("mcp__pa__task_manage", { ...base, deletedIds: ["1"] })).toBe(
       "taskManage",
     );
-    expect(card("task_manage", { ...base, comments: [{ taskId: "1" }] })).toBe(
-      "taskManage",
-    );
     expect(card("task_read", { ...base, deletedIds: ["1"] })).toBeNull();
   });
 

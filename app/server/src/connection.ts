@@ -317,11 +317,6 @@ import {
 } from "./comments/commentEvents.ts";
 
 /**
- * How many Tasks' activity traces one connection stays subscribed to. Generous
- * for real use (you do not have dozens of Task pages open) and bounded so a
- * long-lived tab cannot accumulate subscriptions indefinitely.
- */
-/**
  * The mutation a connection is currently answering, carried in async context.
  *
  * Correlated commands interleave (the socket does not await `handle`), so this
@@ -378,7 +373,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * fails if one is added without a decision either way.
  *
  * The `[]` cases are the deliberate exclusions:
- *  - reads (`listTasks`, `getTask`, `listTaskComments`) — an inbox that empties
+ *  - reads (`listTasks`, `getTask`) — an inbox that empties
  *    itself when you glance at a row cannot track what you owe an answer to;
  *  - `deleteTask` — the Task is gone, there is nothing to triage;
  *  - `reorderTasks` — a drop renumbers every sibling, so `tasks.ts`
@@ -398,11 +393,8 @@ export function tasksProcessedByUserCommand(msg: ClientMessage): string[] {
       return msg.updates.map((update) => update.id);
     case "archiveTask":
       return [msg.id];
-    case "addComment":
-      return msg.target.kind === "task" ? [msg.target.taskId] : [];
     case "listTasks":
     case "getTask":
-    case "listComments":
     case "deleteTask":
     case "reorderTasks":
       return [];

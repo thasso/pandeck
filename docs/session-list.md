@@ -71,9 +71,9 @@ connection has the archive view open.
   worktree rows once per build instead of once per id, and calls `existsSync`
   once per distinct id.
 - **Count from the columns a count needs.** Per-session Task progress is still
-  cached on `taskIndexVersion`, but that version moves on every Task write and
-  comment. The rebuild after one used to assemble every Task summary just to
-  count statuses. It now reads one join over the same Tasks and edges
+  cached on `taskIndexVersion`, but that version moves on every Task write. The
+  rebuild after one used to assemble every Task summary just to count statuses.
+  It now reads one join over the same Tasks and edges
   (`taskStore.sessionTaskStatuses`).
 - **`onlyIds` bounds the reads, not only the result.** A one-row refresh passes
   the id down to `sessionStore.list({ ids })`. Every row is computed from its

@@ -1,18 +1,12 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { TaskComment, TaskItem } from "@assistant/shared";
+import type { TaskItem } from "@assistant/shared";
 import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import { ALL_PROJECT_FILTER } from "../lib/backlogTreeModel.ts";
-import {
-  failed,
-  loading,
-  ready,
-  refreshing,
-  type LoadState,
-} from "../lib/loadState.ts";
+import { failed, ready, refreshing, type LoadState } from "../lib/loadState.ts";
 import { TaskManagementPage } from "./TaskManagementPage.tsx";
 
 if (!window.matchMedia)
@@ -48,32 +42,20 @@ const item: TaskItem = {
   updatedAt: 2,
 };
 
-const comment: TaskComment = {
-  id: "comment-1",
-  taskId: item.id,
-  author: { kind: "user", name: "Alice" },
-  body: "Keep this activity visible.",
-  createdAt: 3,
-};
-
 const actions = {
   requestTaskDetail: () => {},
-  listTaskComments: () => {},
-  unwatchTaskComments: () => {},
 } as unknown as AssistantActions;
 
 function markup({
   tasks = [item],
   selectedId = item.id,
   detailState = ready<TaskItem | null>(item),
-  commentsState = ready<TaskComment[]>([]),
   workflowRuns = [],
   failure,
 }: {
   tasks?: TaskItem[] | null;
   selectedId?: string | null;
   detailState?: LoadState<TaskItem | null>;
-  commentsState?: LoadState<TaskComment[]>;
   workflowRuns?: [] | null;
   failure?: string;
 } = {}): string {
@@ -92,7 +74,6 @@ function markup({
       backlogState={backlogState}
       connected
       detailState={detailState}
-      commentsState={commentsState}
       failure={failure}
       onDismissFailure={() => {}}
       workflowRuns={workflowRuns}
@@ -133,26 +114,6 @@ describe("Task management load states", () => {
     expect(failedHtml).toContain("Retained body");
     expect(failedHtml).toContain("Could not refresh the Task.");
     expect(failedHtml).toContain("Retry");
-  });
-
-  it("does not claim empty activity before an authoritative answer", () => {
-    const cold = markup({ commentsState: loading() });
-    expect(cold).toContain("Loading Task activity");
-    expect(cold).not.toContain("No activity yet");
-
-    const empty = markup({ commentsState: ready([]) });
-    expect(empty).toContain("No activity yet");
-  });
-
-  it("retains activity while refreshing or failed", () => {
-    expect(markup({ commentsState: refreshing([comment]) })).toContain(
-      "Keep this activity visible.",
-    );
-    const failedHtml = markup({
-      commentsState: failed("Could not refresh activity.", [comment]),
-    });
-    expect(failedHtml).toContain("Keep this activity visible.");
-    expect(failedHtml).toContain("Could not refresh activity.");
   });
 
   // A write about the Task itself that no control here tracks — archiving it is

@@ -24,7 +24,7 @@ type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
  * operations, which `changed` follows in order.
  */
 export type ManageOperationKind =
-  "create" | "update" | "archive" | "unarchive" | "delete" | "comment";
+  "create" | "update" | "archive" | "unarchive" | "delete";
 
 const OPERATION_KINDS = new Set<string>([
   "create",
@@ -32,10 +32,9 @@ const OPERATION_KINDS = new Set<string>([
   "archive",
   "unarchive",
   "delete",
-  "comment",
 ]);
 
-/** `changed[]` gets an entry from these; `delete` reports `deletedIds` and a bare `comment` nothing. */
+/** `changed[]` gets an entry from these; `delete` reports `deletedIds`. */
 const CHANGING_OPERATIONS = new Set<ManageOperationKind>([
   "create",
   "update",
@@ -74,7 +73,6 @@ export function changedOperationKinds(
 export function changeSummary(
   task: ChangedTaskPayload,
   kind: ManageOperationKind | undefined,
-  commented: boolean,
 ): string {
   const parts: string[] = [];
   // A deduped Slack import IS a create operation that changed an existing Task,
@@ -94,7 +92,6 @@ export function changeSummary(
       parts.push(`set ${TASK_STATUS_LABEL[task.status].toLowerCase()}`);
     if (parts.length === 0 && kind === "update") parts.push("updated");
   }
-  if (commented) parts.push("comment added");
   return parts.join(" · ");
 }
 
@@ -124,20 +121,10 @@ export function TaskManageToolCard({
   const [confirmed, setConfirmed] = useState<Record<string, TaskStatus>>({});
   const payload = parseTaskManagePayload(block.output);
   if (!payload) return null;
-  const { changed, deletedIds, commentedIds, warnings } = payload;
-  if (
-    changed.length === 0 &&
-    deletedIds.length === 0 &&
-    commentedIds.length === 0
-  )
-    return null;
+  const { changed, deletedIds, warnings } = payload;
+  if (changed.length === 0 && deletedIds.length === 0) return null;
 
   const kinds = changedOperationKinds(block.args, changed.length);
-  const commented = new Set(commentedIds);
-  const changedIds = new Set(changed.map((task) => task.id));
-  // A bare comment operation changes nothing, so it has no `changed` entry — but
-  // it is still something that happened to a Task the user owns.
-  const commentOnly = commentedIds.filter((id) => !changedIds.has(id));
 
   return (
     <Card size="sm" className="my-2">
@@ -153,11 +140,7 @@ export function TaskManageToolCard({
             <TaskRow
               key={`${task.id}-${index}`}
               task={task}
-              summary={changeSummary(
-                task,
-                kinds?.[index],
-                commented.has(task.id),
-              )}
+              summary={changeSummary(task, kinds?.[index])}
               confirmedTo={confirmed[task.id]}
               onOpenTask={onOpenTask}
               onConfirm={
@@ -172,14 +155,6 @@ export function TaskManageToolCard({
                   : undefined
               }
             />
-          ))}
-          {commentOnly.map((id) => (
-            <li key={`comment-${id}`} className="flex items-center gap-1.5">
-              <TaskChip id={id} label={`Task-${id}`} onOpenTask={onOpenTask} />
-              <span className="text-xs text-muted-foreground">
-                comment added
-              </span>
-            </li>
           ))}
           {deletedIds.map((id) => (
             <li key={`deleted-${id}`} className="text-muted-foreground">

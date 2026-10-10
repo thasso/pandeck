@@ -5,9 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   taskSummaryOf,
   type ClientMessage,
-  type CommentThread,
   type ServerMessage,
-  type TaskComment,
   type TaskItem,
 } from "@assistant/shared";
 import {
@@ -72,35 +70,6 @@ function task(id: string, updatedAt: number): TaskItem {
   };
 }
 
-function comment(taskId: string, body: string): TaskComment {
-  return {
-    id: `${taskId}-${body}`,
-    taskId,
-    author: { kind: "user", name: "User" },
-    body,
-    createdAt: 1,
-  };
-}
-
-function commentThread(taskId: string, body: string): CommentThread {
-  const row = comment(taskId, body);
-  return {
-    id: row.id,
-    target: { kind: "task", taskId },
-    status: "open",
-    root: {
-      id: row.id,
-      author: row.author,
-      body: row.body,
-      createdAt: row.createdAt,
-    },
-    replies: [],
-    handoffSessionIds: [],
-    createdAt: row.createdAt,
-    updatedAt: row.createdAt,
-  };
-}
-
 function readyMessage(): ServerMessage {
   return {
     type: "ready",
@@ -143,8 +112,8 @@ let latestActions: AssistantActions;
 
 /**
  * The Task route's real socket/reducer seam, reduced to its ownership effects:
- * route topics, selected-id cache pin, freshness-aware detail read, and the
- * open/close Activity watch. Rendering the full page would only add static
+ * route topics, selected-id cache pin, and the freshness-aware detail read.
+ * Rendering the full page would only add static
  * chrome and make protocol counts less legible.
  */
 function TaskRouteHarness({ selectedId }: { selectedId: string | null }) {
@@ -180,25 +149,10 @@ function TaskRouteHarness({ selectedId }: { selectedId: string | null }) {
       actions.requestTaskDetail(selectedId);
   }, [actions, detailState, selectedId, state.connected]);
 
-  useEffect(() => {
-    if (!selectedId) return;
-    return () => actions.unwatchTaskComments(selectedId);
-  }, [actions, selectedId]);
-
-  useEffect(() => {
-    if (!selectedId || !state.connected) return;
-    actions.listTaskComments(selectedId);
-  }, [actions, selectedId, state.connected]);
-
   const detail = detailState ? dataOf(detailState) : undefined;
-  const commentsState = selectedId ? state.taskComments[selectedId] : undefined;
-  const comments = commentsState ? dataOf(commentsState) : undefined;
   return (
     <div>
       <span data-testid="selected-detail">{detail?.title ?? "pending"}</span>
-      <span data-testid="selected-comments">
-        {comments?.map((entry) => entry.body).join(",") ?? "pending"}
-      </span>
     </div>
   );
 }
@@ -260,19 +214,8 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(first, "listTasks")).toEqual([]);
     expect(sentOf(first, "listProjects")).toEqual([]);
     expect(sentOf(first, "getTask")).toHaveLength(1);
-    expect(sentOf(first, "listComments")).toHaveLength(1);
     expect(sentOf(first, "subscribe")[0]!.topics).not.toContain("worktrees");
-    const commentsRequest = sentOf(first, "listComments")[0]!;
     await act(async () => {
-      first.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "cached across reconnect")],
-        revisions: [{ id: "a-cached across reconnect", revision: 1 }],
-        ...(commentsRequest.requestId !== undefined
-          ? { requestId: commentsRequest.requestId }
-          : {}),
-      });
       first.receive({
         type: "commentsSnapshot",
         target: {
@@ -288,11 +231,6 @@ describe("Task-route socket load scenario", () => {
       first.close();
     });
     expect(latestState.taskDetails.a?.status).toBe("error");
-    expect(latestState.taskComments.a).toMatchObject({
-      status: "ready",
-      data: [expect.objectContaining({ body: "cached across reconnect" })],
-    });
-    expect(container!.textContent).toContain("cached across reconnect");
 
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
     const second = TaskScenarioSocket.instances[1]!;
@@ -310,11 +248,6 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(second, "listComments")).toEqual([
       expect.objectContaining({
         type: "listComments",
-        target: { kind: "task", taskId: "a" },
-        requestId: expect.any(String),
-      }),
-      expect.objectContaining({
-        type: "listComments",
         target: {
           kind: "worktree",
           worktreeId: "wt-open",
@@ -327,44 +260,6 @@ describe("Task-route socket load scenario", () => {
     ]);
     expect(sentOf(second, "listTasks")).toEqual([]);
     expect(sentOf(second, "listProjects")).toEqual([]);
-  });
-
-  it("does not let an event queued after teardown resurrect the target", async () => {
-    const socket = await renderHarness(<TaskRouteHarness selectedId="a" />);
-    await openReady(socket);
-    const request = sentOf(socket, "listComments")[0]!;
-    await act(async () => {
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "visible")],
-        revisions: [{ id: "a-visible", revision: 1 }],
-        ...(request.requestId !== undefined
-          ? { requestId: request.requestId }
-          : {}),
-      });
-      root!.render(<TaskRouteHarness selectedId={null} />);
-    });
-    expect(latestState.commentTargets["task:a"]).toBeUndefined();
-
-    await act(async () => {
-      socket.receive({
-        type: "commentEvents",
-        target: { kind: "task", taskId: "a" },
-        seq: 2,
-        events: [
-          {
-            kind: "upsert",
-            id: "a-late",
-            revision: 2,
-            item: commentThread("a", "late"),
-          },
-        ],
-      });
-    });
-
-    expect(latestState.commentTargets["task:a"]).toBeUndefined();
-    expect(latestState.taskComments.a).toBeUndefined();
   });
 
   it("uses one digest subscription for a warm canonical Backlog", async () => {
@@ -396,19 +291,13 @@ describe("Task-route socket load scenario", () => {
     expect(sentOf(socket, "listProjects")).toEqual([]);
   });
 
-  it("switches A→B without leaking A, unwatches, and reuses fresh A detail", async () => {
+  it("switches A→B without leaking A and reuses fresh A detail", async () => {
     const socket = await renderHarness(<TaskRouteHarness selectedId="a" />);
     await openReady(socket);
     const detailA = sentOf(socket, "getTask")[0]!;
-    const commentsA = sentOf(socket, "listComments")[0]!;
 
     await act(async () => root!.render(<TaskRouteHarness selectedId="b" />));
-    expect(sentOf(socket, "unwatchComments").at(-1)).toEqual({
-      type: "unwatchComments",
-      target: { kind: "task", taskId: "a" },
-    });
     expect(sentOf(socket, "getTask")).toHaveLength(2);
-    expect(sentOf(socket, "listComments")).toHaveLength(2);
 
     await act(async () => {
       socket.receive({
@@ -417,22 +306,12 @@ describe("Task-route socket load scenario", () => {
         item: TASK_A,
         requestId: detailA.requestId,
       });
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "late A")],
-        revisions: [],
-        ...(commentsA.requestId !== undefined
-          ? { requestId: commentsA.requestId }
-          : {}),
-      });
     });
-    expect(container!.textContent).toContain("pendingpending");
+    expect(container!.textContent).toContain("pending");
     expect(container!.textContent).not.toContain("Task A");
     expect(dataOf(latestState.taskDetails.a!)).toEqual(TASK_A);
 
     const detailB = sentOf(socket, "getTask")[1]!;
-    const commentsB = sentOf(socket, "listComments")[1]!;
     await act(async () => {
       socket.receive({
         type: "taskDetail",
@@ -440,56 +319,25 @@ describe("Task-route socket load scenario", () => {
         item: TASK_B,
         requestId: detailB.requestId,
       });
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "b" },
-        threads: [commentThread("b", "ready B")],
-        revisions: [],
-        ...(commentsB.requestId !== undefined
-          ? { requestId: commentsB.requestId }
-          : {}),
-      });
     });
-    expect(container!.textContent).toContain("Task Bready B");
+    expect(container!.textContent).toContain("Task B");
 
     await act(async () => root!.render(<TaskRouteHarness selectedId="a" />));
-    // A's body answer was safe to cache by id, while its Activity read was
-    // cancelled by unwatch and starts a fresh generation on return.
-    expect(container!.textContent).toContain("Task Apending");
+    // A's body answer was safe to cache by id, so returning reads nothing.
+    expect(container!.textContent).toContain("Task A");
     expect(sentOf(socket, "getTask")).toHaveLength(2);
-    expect(sentOf(socket, "listComments")).toHaveLength(3);
-    const returnedCommentsA = sentOf(socket, "listComments")[2]!;
-    await act(async () => {
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "current A")],
-        revisions: [],
-        ...(returnedCommentsA.requestId !== undefined
-          ? { requestId: returnedCommentsA.requestId }
-          : {}),
-      });
-    });
-    expect(container!.textContent).toContain("Task Acurrent A");
 
     await act(async () => {
       socket.receive(taskListMessage([task("a", 2), TASK_B]));
     });
     expect(sentOf(socket, "getTask")).toHaveLength(3);
     expect(sentOf(socket, "getTask")[2]!.id).toBe("a");
-
-    await act(async () => root!.render(<TaskRouteHarness selectedId={null} />));
-    expect(sentOf(socket, "unwatchComments").at(-1)).toEqual({
-      type: "unwatchComments",
-      target: { kind: "task", taskId: "a" },
-    });
   });
 
-  it("drops superseded same-id detail and comment answers", async () => {
+  it("drops superseded same-id detail answers", async () => {
     const socket = await renderHarness(<TaskRouteHarness selectedId="a" />);
     await openReady(socket);
     const firstDetail = sentOf(socket, "getTask")[0]!;
-    const firstComments = sentOf(socket, "listComments")[0]!;
 
     await act(async () => {
       socket.receive({
@@ -499,23 +347,10 @@ describe("Task-route socket load scenario", () => {
         requestId: firstDetail.requestId,
         error: "first detail failed",
       });
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [],
-        revisions: [],
-        ...(firstComments.requestId !== undefined
-          ? { requestId: firstComments.requestId }
-          : {}),
-        error: "first comments failed",
-      });
       latestActions.requestTaskDetail("a");
-      latestActions.listTaskComments("a");
     });
     const secondDetail = sentOf(socket, "getTask")[1]!;
-    const secondComments = sentOf(socket, "listComments")[1]!;
     expect(secondDetail.requestId).not.toBe(firstDetail.requestId);
-    expect(secondComments.requestId).not.toBe(firstComments.requestId);
 
     await act(async () => {
       socket.receive({
@@ -524,19 +359,9 @@ describe("Task-route socket load scenario", () => {
         item: task("a", 99),
         requestId: firstDetail.requestId,
       });
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "stale")],
-        revisions: [],
-        ...(firstComments.requestId !== undefined
-          ? { requestId: firstComments.requestId }
-          : {}),
-      });
     });
     expect(latestState.taskDetails.a?.status).toBe("loading");
-    expect(latestState.taskComments.a?.status).toBe("loading");
-    expect(container!.textContent).not.toContain("stale");
+    expect(container!.textContent).toContain("pending");
 
     await act(async () => {
       socket.receive({
@@ -545,16 +370,8 @@ describe("Task-route socket load scenario", () => {
         item: TASK_A,
         requestId: secondDetail.requestId,
       });
-      socket.receive({
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "a" },
-        threads: [commentThread("a", "current")],
-        revisions: [],
-        ...(secondComments.requestId !== undefined
-          ? { requestId: secondComments.requestId }
-          : {}),
-      });
     });
-    expect(container!.textContent).toContain("Task Acurrent");
+    expect(dataOf(latestState.taskDetails.a!)).toEqual(TASK_A);
+    expect(container!.textContent).toContain("Task A");
   });
 });

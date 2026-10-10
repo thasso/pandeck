@@ -3,8 +3,6 @@ import { readFileSync } from "node:fs";
 import { afterEach, test, vi } from "vitest";
 import { APP_SETTINGS_PATH } from "./appSettingsFile.ts";
 import { getSettings, updateSettings } from "./settings.ts";
-import { createTask, deleteTask } from "./tasks.ts";
-import { taskCommentStoreAdapter } from "./comments/taskCommentStore.ts";
 import { validateClientMessage } from "./validateClientMessage.ts";
 import {
   hostTimeZone,
@@ -93,33 +91,12 @@ test("the settings projection carries the effective zone, which never persists",
   assert.equal(getSettings().profile.effectiveTimeZone, "Europe/Berlin");
 });
 
-test("a new user Task comment is authored by the display name, else You", async () => {
-  const task = createTask({
-    title: "Comment author",
-    source: { createdBy: "user" },
-  });
-  const target = { kind: "task" as const, taskId: task.id };
-  try {
-    setProfile("  Ada  ", "");
-    assert.equal(userDisplayName(), "Ada");
-    await taskCommentStoreAdapter.add({ target, body: "named" });
-    setProfile("", "");
-    assert.equal(userAuthorName(), "You");
-    await taskCommentStoreAdapter.add({ target, body: "unnamed" });
-
-    // The stored name is kept: renaming later does not rewrite old comments.
-    setProfile("Grace", "");
-    const threads = await taskCommentStoreAdapter.list(target);
-    assert.deepEqual(
-      threads.map((thread) => [thread.root.body, thread.root.author.name]),
-      [
-        ["named", "Ada"],
-        ["unnamed", "You"],
-      ],
-    );
-  } finally {
-    deleteTask(task.id);
-  }
+test("a new user comment is authored by the display name, else You", () => {
+  setProfile("  Ada  ", "");
+  assert.equal(userDisplayName(), "Ada");
+  assert.equal(userAuthorName(), "Ada");
+  setProfile("", "");
+  assert.equal(userAuthorName(), "You");
 });
 
 test("a malformed profile patch is rejected before it can wipe the profile", () => {

@@ -281,15 +281,10 @@ facade.
   `{id → revision, live}` index the broadcast flush diffs. The counter is
   persisted because a restart that handed out numbers a client has already seen
   would emit events every subscribed browser silently discards.
-- `taskCommentStore.ts` owns the `task_comments` rows (migration
-  `0020_task_comments.sql`): a flat, append-only, chronological activity trace
-  per Task (`author_kind` user/agent/system, `author_name`, optional
-  `author_session_id`, `body`, `created_at_ms`). No FK on `task_id` (tasks
-  soft-delete, mirroring `worktree_comments`); rows are hard-removed only on
-  permanent Task deletion (`../tasks.ts` `deleteTask` → `removeForTask`),
-  archive keeps them. `countsByTask` is a single `GROUP BY` pass for list
-  badges, `countForTask` the single-row count a Task's state event carries.
-  Projection/broadcast live in `../taskComments.ts`.
+- No store owns the `task_comments` rows (migration `0020_task_comments.sql`):
+  Task comments were removed, and the table and its rows are kept untouched for
+  the user to decide about. Only `../taskOverhead.ts` (the `measure:tasks`
+  audit) still reads it.
 - `permanentAssistantStore.ts` owns the singleton permanent-session binding and
   durable cross-channel FIFO queue; interrupted `working` items recover to
   `queued` at boot.

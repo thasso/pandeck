@@ -78,8 +78,6 @@ const prefs = {
 
 const actions = {
   requestTaskDetail: () => {},
-  listTaskComments: () => {},
-  unwatchTaskComments: () => {},
   setOpenTaskProjection: () => {},
 } as unknown as AssistantActions;
 
@@ -122,7 +120,6 @@ function render(runs: WorkflowRunSummary[] | null) {
         backlogState={backlogState}
         connected
         detailState={ready<TaskItem | null>(item)}
-        commentsState={ready([])}
         onDismissFailure={() => {}}
         workflowRuns={runs}
         workflowCards={{}}

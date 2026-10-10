@@ -49,35 +49,32 @@ orchestration, MCP/tool integrations, and runtime persistence.
   `MutationScope`, which is why `handle` opens one for EVERY command rather than
   only for correlated ones: most Task commands carry no `requestId`, and a
   handler refuses by sending an `error` instead of throwing, so dispatching
-  outside a scope left nothing to notice the refusal. Threading a user actor
-  through each handler instead is what kept producing one-off holes, such as a
-  comment never triaged at all. `markTaskProcessed` is idempotent and only ever
-  sets the FIRST decision — when a Task was processed is a fact about that
-  decision, not about the most recent touch. One EXPLICIT state choice outranks
-  that implicit rule: a save carrying `triaged: false` is the put-it-back
-  operation, so the table returns nothing for it — processing the Task a line
-  after the handler restored it made the wire's own restore impossible, and
-  neither the domain test nor the mapper test could see that alone. Two commands
-  are deliberately excluded: `deleteTask` (the Task is gone) and `reorderTasks`,
-  which is handled in the domain instead because a drop renumbers every sibling
-  — `reorderTasks(..., byUser)` triages only the Tasks whose PARENT moved, so
-  dragging one Task past a dozen arrivals does not process them. Reads are
-  excluded for the same reason triage is NOT triggered by READING.
-  `taskTriageCoverage.test.ts` guards all of it: it scrapes the dispatcher's own
-  `case` labels and fails when a Task command has neither a triage decision nor
-  a recorded exclusion, drives the comment path against real arrivals, and
-  drives both a REFUSED uncorrelated command and an explicit put-back through a
-  real `Connection`, proving the failure path and the restore path each triage
-  nothing. It is deliberately NOT triggered by READING: an inbox that empties
-  itself when you glance at a row cannot track what you still owe an answer to,
-  and opening a Task from a link or a search would silently process it.
-  `createTask` takes an explicit `triaged` input rather than inferring from
-  `source.createdBy`: the browser's own save path (the one place a Task is
-  TYPED) passes it, and every other creator — agent tools, Slack shortcut intake
-  — is an arrival that queues. Inferring from the creator kept Slack imports,
-  which honestly record the user as creator, out of the Inbox entirely. Agents
-  can read the queue (`task_read`'s `untriaged`) but never write triage: it is
-  the user's act.
+  outside a scope left nothing to notice the refusal. `markTaskProcessed` is
+  idempotent and only ever sets the FIRST decision — when a Task was processed
+  is a fact about that decision, not about the most recent touch. One EXPLICIT
+  state choice outranks that implicit rule: a save carrying `triaged: false` is
+  the put-it-back operation, so the table returns nothing for it — processing
+  the Task a line after the handler restored it made the wire's own restore
+  impossible, and neither the domain test nor the mapper test could see that
+  alone. Two commands are deliberately excluded: `deleteTask` (the Task is gone)
+  and `reorderTasks`, which is handled in the domain instead because a drop
+  renumbers every sibling — `reorderTasks(..., byUser)` triages only the Tasks
+  whose PARENT moved, so dragging one Task past a dozen arrivals does not
+  process them. Reads are excluded for the same reason triage is NOT triggered
+  by READING. `taskTriageCoverage.test.ts` guards all of it: it scrapes the
+  dispatcher's own `case` labels and fails when a Task command has neither a
+  triage decision nor a recorded exclusion. It also drives a REFUSED
+  uncorrelated command and an explicit put-back through a real `Connection`,
+  proving both paths triage nothing. It is deliberately NOT triggered by
+  READING: an inbox that empties itself when you glance at a row cannot track
+  what you still owe an answer to, and opening a Task from a link or a search
+  would silently process it. `createTask` takes an explicit `triaged` input
+  rather than inferring from `source.createdBy`: the browser's own save path
+  (the one place a Task is TYPED) passes it, and every other creator — agent
+  tools, Slack shortcut intake — is an arrival that queues. Inferring from the
+  creator kept Slack imports, which honestly record the user as creator, out of
+  the Inbox entirely. Agents can read the queue (`task_read`'s `untriaged`) but
+  never write triage: it is the user's act.
 
 ## Contract notes and rationale
 

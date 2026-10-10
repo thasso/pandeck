@@ -1390,33 +1390,21 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `objectLinkResolver.ts` owns compact server-side title/route/existence
   resolution for shared `pa://` object links; it must not load full object
   bodies.
-- `taskComments.ts` owns the Task activity trace (Task 116): flat, append-only,
-  chronological comments over `db/taskCommentStore.ts`, projected to the wire
-  `TaskComment` shape. `addTaskComment` (user via `connection.ts`, agent via a
-  `task_manage` operation's `comment`) appends, broadcasts the authoritative
-  `taskComments` list through the `taskEvents.ts` seam, and calls `tasks.ts`
-  `notifyTaskChange()` so `TaskSummary.commentCount` badges refresh; there is no
-  threading, resolve/reopen, editing, or text anchoring. `taskEvents.ts` is the
-  broadcaster seam, installed by the hub. `connection.ts` watches only the
-  currently open Task trace: a correlated `listTaskComments` answer starts it
-  and `unwatchTaskComments` stops it; later broadcasts carry no originating
-  browser request id. `tasks.ts` `listTasks` fills `commentCount` from
-  `taskCommentStore.countsByTask()`, and `deleteTask` hard-removes the trace.
 - `taskContext.ts` builds the hidden `task-context` prompt attachment for a
   Task-attached session (harness-neutral; both `connection.ts` first-send paths
   and the ordinary `prompt` path use it). It takes the post-nudge `TaskItem`
-  `linkTaskStart` returns, reads the parent/grandparent and the trace itself,
-  and renders the header, the Task description, the clipped parent description,
-  the most recent comment and the folded project context
-  (`sessionProjectContext.ts` `buildProjectContext`) inside one ~8 KB budget
-  spent in priority order, replacing any dropped block with a line naming what
-  is missing. The attachment id encodes the Task id (`taskctx-<id>`) so the web
-  chip can link back. `taskNaming.ts` chooses the first linked Jira key as the
-  Task's naming reference and falls back to its internal id. `taskContext.ts`
-  writes that primary key into the header, and `sessionNaming.ts` parses it with
-  `- Title:`/`- Status:`/`## Description`. The no-tool model returns only the
-  descriptive title; server code adds the exact reference to generated and
-  fallback titles. The product rule it implements is in `docs/tasks.md`.
+  `linkTaskStart` returns, reads the parent/grandparent itself, and renders the
+  header, the Task description, the clipped parent description and the folded
+  project context (`sessionProjectContext.ts` `buildProjectContext`) inside one
+  ~8 KB budget spent in priority order, replacing any dropped block with a line
+  naming what is missing. The attachment id encodes the Task id (`taskctx-<id>`)
+  so the web chip can link back. `taskNaming.ts` chooses the first linked Jira
+  key as the Task's naming reference and falls back to its internal id.
+  `taskContext.ts` writes that primary key into the header, and
+  `sessionNaming.ts` parses it with `- Title:`/`- Status:`/`## Description`. The
+  no-tool model returns only the descriptive title; server code adds the exact
+  reference to generated and fallback titles. The product rule it implements is
+  in `docs/tasks.md`.
 - `sessionProjectContext.ts` resolves a session's Project (standalone link
   first, then the originating Task) and renders that Project's registry evidence
   as the `project-context` attachment or the folded block inside a task-context
@@ -2749,14 +2737,6 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   events and once when the tree becomes clean, suppressing repeat-empty pushes;
   it used to reach every connected browser because SOMEONE had a worktree open.
   Only `worktreeList` stays topic-wide — it is list-level and small.
-- Task activity traces are delivered per holder, not broadcast:
-  `Viewer.wantsTaskComments(taskId)` gates `taskEvents.ts`'s
-  `broadcastTaskComments`, and `connection.ts` subscribes a connection when it
-  lists or adds that Task's comments (bounded by `MAX_OPEN_TASK_COMMENT_TRACES`,
-  oldest evicted — a dropped Task simply refetches on reopen). The largest
-  production trace is ~18 KB and used to reach every connected browser on every
-  append. A `Viewer` that does not implement the predicate receives nothing,
-  which is correct: it never asked for a trace.
 - Prefer adding focused modules over expanding already-large switchboards unless
   central coordination is the change.
 

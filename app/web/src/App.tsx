@@ -2478,9 +2478,6 @@ function AppContent() {
   const selectedDescriptionMutation = selectedTaskId
     ? state.taskMutations[taskMutationKey(selectedTaskId, "description")]
     : undefined;
-  const selectedCommentMutation = selectedTaskId
-    ? state.taskMutations[taskMutationKey(selectedTaskId, "comment")]
-    : undefined;
   const selectedTaskMutations = useMemo(() => {
     const projection: UIState["taskMutations"] = {};
     if (!selectedTaskId) return projection;
@@ -2493,16 +2490,12 @@ function AppContent() {
     if (selectedDescriptionMutation)
       projection[taskMutationKey(selectedTaskId, "description")] =
         selectedDescriptionMutation;
-    if (selectedCommentMutation)
-      projection[taskMutationKey(selectedTaskId, "comment")] =
-        selectedCommentMutation;
     return projection;
   }, [
     selectedTaskId,
     selectedStatusMutation,
     selectedRenameMutation,
     selectedDescriptionMutation,
-    selectedCommentMutation,
   ]);
   const selectedTaskWorkflowRuns = useMemo(
     () =>
@@ -6524,11 +6517,6 @@ function AppContent() {
                     onDismissFailure={() =>
                       selectedTaskId &&
                       actions.dismissObjectFailure("task", selectedTaskId)
-                    }
-                    commentsState={
-                      selectedTaskId
-                        ? state.taskComments[selectedTaskId]
-                        : undefined
                     }
                     workflowRuns={selectedTaskWorkflowRuns}
                     workflowCards={selectedTaskWorkflowCards}

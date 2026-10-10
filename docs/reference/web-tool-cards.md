@@ -91,18 +91,18 @@ rich cards or disclosure bodies.
   `task_manage` plus the server's `taskManage` render kind (Task-297).
   `task_read` deliberately carries no render kind and stays a body — a read is
   the agent's business, a write is the user's data changing, so it shows with
-  tools hidden. The card reads `changed[]`, `deletedIds`, `comments[].taskId`
-  and `warnings` out of the result text; the VERBS ("created", "archived") come
-  from the call's own `operations`, which `changed` follows in order, because
-  the payload reports the outcome and not the operation. When the two cannot be
-  lined up (a lazily summarized input, a batch that partly threw) the verb is
-  simply omitted, and an entry the server flagged `deduplicated` reads "already
-  imported" rather than the op's "created". A pending `statusSuggestion` gets a
-  confirm button, using `lib/backlogTree.ts`'s `pendingStatusSuggestion` so a
-  suggestion the status already satisfies stays provenance rather than a
-  question, and `acceptStatusSuggestionSave` so confirming here and confirming
-  in the Backlog's Focus row produce the same state. Confirming is an ordinary
-  user save routed through `ToolRenderContext.onApplyTaskStatusSuggestion` →
+  tools hidden. The card reads `changed[]`, `deletedIds` and `warnings` out of
+  the result text; the VERBS ("created", "archived") come from the call's own
+  `operations`, which `changed` follows in order, because the payload reports
+  the outcome and not the operation. When the two cannot be lined up (a lazily
+  summarized input, a batch that partly threw) the verb is simply omitted, and
+  an entry the server flagged `deduplicated` reads "already imported" rather
+  than the op's "created". A pending `statusSuggestion` gets a confirm button,
+  using `lib/backlogTree.ts`'s `pendingStatusSuggestion` so a suggestion the
+  status already satisfies stays provenance rather than a question, and
+  `acceptStatusSuggestionSave` so confirming here and confirming in the
+  Backlog's Focus row produce the same state. Confirming is an ordinary user
+  save routed through `ToolRenderContext.onApplyTaskStatusSuggestion` →
   `App.tsx`: it resumes NO session, so answering costs no provider call, and it
   carries only the id and the status — never the card's frozen copy of the
   title, which is why `TaskSaveRequest.title` is optional on an update. Only the
