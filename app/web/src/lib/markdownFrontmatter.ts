@@ -32,10 +32,21 @@ export interface MarkdownFrontmatter {
   /** Every other non-empty field, in document order. */
   fields: FrontmatterField[];
   /**
+   * `source: { kind, refs }` — where the document came from, its references
+   * named the way a reader knows them rather than as raw URLs.
+   */
+  source?: FrontmatterSource;
+  /**
    * False when the YAML is outside the subset the shared parser reads (block
    * scalars, anchors, flow maps). The header then shows `raw` instead.
    */
   parsed: boolean;
+}
+
+interface FrontmatterSource {
+  /** `agent`, `slack`, `meeting`… as a label ("Agent"). */
+  kind?: string;
+  refs: Array<{ href: string; label: string }>;
 }
 
 const OPENING_FENCE_RE = /^---\r?\n/;
@@ -81,6 +92,13 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
       out.title = field.trim();
       continue;
     }
+    if (key === "source") {
+      const source = sourceOf(field);
+      if (source) {
+        out.source = source;
+        continue;
+      }
+    }
     if (key === "tags") {
       const tags = tagList(field);
       if (tags) {
@@ -122,6 +140,79 @@ function unwrapNamespace(value: unknown): unknown {
   if (entries.length !== 1) return value;
   const inner = entries[0]![1];
   return isRecord(inner) ? inner : value;
+}
+
+function sourceOf(value: unknown): FrontmatterSource | null {
+  if (typeof value === "string" && value.trim())
+    return { kind: sentenceCase(value.trim()), refs: [] };
+  if (!isRecord(value)) return null;
+  const { kind, refs, ...rest } = value;
+  // Anything beyond kind and refs is not a shape this header knows: leave the
+  // whole field to the generic row rather than drop part of it.
+  if (Object.keys(rest).length > 0) return null;
+  if (kind !== undefined && typeof kind !== "string") return null;
+  const list = refs === undefined ? [] : refs;
+  if (!Array.isArray(list) || !list.every((ref) => typeof ref === "string"))
+    return null;
+  return {
+    ...(typeof kind === "string" && kind.trim()
+      ? { kind: sentenceCase(kind.trim()) }
+      : {}),
+    refs: list
+      .map((ref) => ref.trim())
+      .filter(Boolean)
+      .map((href) => ({ href, label: sourceRefLabel(href) })),
+  };
+}
+
+function sentenceCase(text: string): string {
+  return text[0]!.toUpperCase() + text.slice(1);
+}
+
+/**
+ * A reference named the way a reader knows it: `percival#102` for a GitHub
+ * issue or pull request, "Google Doc", "Slack message"; a `pa://` link keeps
+ * its URI, which the Markdown renderer replaces with the object's title.
+ */
+export function sourceRefLabel(href: string): string {
+  if (href.startsWith("pa://")) return href;
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return href;
+  }
+  const host = url.hostname.replace(/^www\./, "");
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (host === "github.com" && parts.length >= 2) {
+    const [, repo, type, number] = parts;
+    if ((type === "issues" || type === "pull") && number)
+      return `${repo}#${number}`;
+    return parts.slice(0, 2).join("/");
+  }
+  if (host === "docs.google.com") {
+    const kind = {
+      document: "Google Doc",
+      spreadsheets: "Google Sheet",
+      presentation: "Google Slides",
+      forms: "Google Form",
+    }[parts[0] ?? ""];
+    if (kind) return kind;
+  }
+  if (host === "drive.google.com") return "Google Drive file";
+  if (host === "google.com" && parts[0] === "calendar") return "Calendar event";
+  if (host === "calendar.google.com") return "Calendar event";
+  if (host.endsWith(".slack.com") && parts[0] === "archives")
+    return "Slack message";
+  if (host.endsWith(".atlassian.net")) {
+    const issue = parts.indexOf("browse");
+    if (issue >= 0 && parts[issue + 1]) return parts[issue + 1]!;
+    if (parts[0] === "wiki") return "Confluence page";
+  }
+  const path = parts.join("/");
+  return path
+    ? `${host}/${path.length > 32 ? `${path.slice(0, 31)}…` : path}`
+    : host;
 }
 
 function tagList(value: unknown): string[] | null {

@@ -29,6 +29,8 @@ import {
  * @avoidWhen Chat or tool-output Markdown: use `Markdown`. Frontmatter only
  * means something at the top of a file.
  */
+type MarkdownProps = ComponentProps<typeof Markdown>;
+
 export function MarkdownFile({
   text,
   ...markdownProps
@@ -40,7 +42,12 @@ export function MarkdownFile({
   return (
     <>
       {frontmatter ? (
-        <MarkdownFrontmatterHeader frontmatter={frontmatter} className="mb-4" />
+        <MarkdownFrontmatterHeader
+          frontmatter={frontmatter}
+          paObjectReferences={markdownProps.paObjectReferences}
+          onOpenPaObject={markdownProps.onOpenPaObject}
+          className="mb-4"
+        />
       ) : null}
       <Markdown text={body} {...markdownProps} />
     </>
@@ -57,12 +64,17 @@ export function MarkdownFile({
  */
 function MarkdownFrontmatterHeader({
   frontmatter,
+  paObjectReferences,
+  onOpenPaObject,
   className,
 }: {
   frontmatter: MarkdownFrontmatter;
+  /** The body's own link resolution, so a `pa://` source ref reads as its title. */
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
   className?: string;
 }) {
-  const { title, tags, fields, parsed, raw } = frontmatter;
+  const { title, tags, fields, source, parsed, raw } = frontmatter;
   if (!parsed) {
     return (
       <Collapsible className={className}>
@@ -87,7 +99,8 @@ function MarkdownFrontmatterHeader({
       </Collapsible>
     );
   }
-  if (!title && tags.length === 0 && fields.length === 0) return null;
+  if (!title && tags.length === 0 && fields.length === 0 && !source)
+    return null;
   return (
     <header aria-label="Document metadata" className={className}>
       <Card size="sm">
@@ -109,6 +122,31 @@ function MarkdownFrontmatterHeader({
                       </li>
                     ))}
                   </ul>
+                </PropertyText>
+              </>
+            ) : null}
+            {source ? (
+              <>
+                <PropertyLabel>Source</PropertyLabel>
+                <PropertyText className="flex flex-col items-start gap-0.5">
+                  {source.kind ? <span>{source.kind}</span> : null}
+                  {source.refs.length > 0 ? (
+                    // Through the Markdown renderer, so a `pa://` ref resolves
+                    // to the object's title and opens in the app, and a web
+                    // link behaves as every other link does.
+                    <Markdown
+                      density="compact"
+                      text={source.refs
+                        .map((ref) =>
+                          ref.href.startsWith("pa://")
+                            ? ref.href
+                            : `[${ref.label.replace(/[[\]]/g, "\\$&")}](<${ref.href}>)`,
+                        )
+                        .join("\\\n")}
+                      {...(paObjectReferences ? { paObjectReferences } : {})}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  ) : null}
                 </PropertyText>
               </>
             ) : null}
