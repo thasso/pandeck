@@ -348,14 +348,13 @@ export const Markdown = memo(function Markdown({
   );
 
   // Runs after the parse that sets `sawMath`, so the chunk is requested only
-  // once a formula has actually been seen. Kicked on every commit rather than
-  // on `text` alone: a streaming reply grows through many commits and the math
-  // may arrive in any of them. `loadMathKatexPlugin` is idempotent, so the
-  // repeat calls after the first cost nothing.
+  // once a formula has actually been seen. A new text value retries a failed
+  // import, covering streaming replies without retrying on unrelated renders.
+  // `loadMathKatexPlugin` is idempotent while a request is in flight.
   useEffect(() => {
     if (!sawMath.current || mathReady) return;
     return loadMathKatexPlugin(onMathLoaded);
-  });
+  }, [text, mathReady, onMathLoaded]);
 
   // raw → sanitize → detect → KaTeX. The detector is per-component (it writes
   // this component's ref), so unlike `MARKDOWN_COMPONENTS` this array cannot be

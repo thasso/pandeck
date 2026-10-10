@@ -4117,6 +4117,12 @@ export interface SessionState {
   /** Messages waiting for the running turn to end; absent when there are none. */
   promptQueue?: PromptQueueState;
   /**
+   * Messages other sessions sent this one that are not delivered yet, in
+   * delivery order; absent when there are none. They go after the user's own
+   * queue unless the user steers one in or withdraws it.
+   */
+  queuedPeerPrompts?: QueuedPeerPrompt[];
+  /**
    * Why the session is idle, when it's idle for a specific reason the UI should
    * surface (rather than just "done"). Currently only a pending question; modeled
    * as a union so more reasons (e.g. awaiting approval) can be added.
@@ -5474,6 +5480,27 @@ export interface PromptQueueState {
   paused: boolean;
 }
 
+/**
+ * A peer prompt waiting for delivery to the session it was sent to
+ * (`peerPrompt.ts`), shown in that session's composer queue beside the user's
+ * own rows. Sanitized like {@link PeerPromptCard}: no routing ids beyond the
+ * sender's session.
+ */
+export interface QueuedPeerPrompt {
+  /** The opaque key the sender's card carries ({@link PeerPromptCard.messageKey}). */
+  id: string;
+  senderTitle: string;
+  senderSessionId: string;
+  /** An excerpt ({@link peerPromptExcerpt}); the sender's transcript has it all. */
+  message: string;
+  responseRequested: boolean;
+  createdAt: number;
+  /** Its last delivery attempt failed; it is retried after a backoff. */
+  retrying?: true;
+  /** Its delivery is under way (a steer the turn has not read yet): past withdrawing. */
+  sending?: true;
+}
+
 export interface PromptAttachment {
   id: string;
   name: string;
@@ -6577,7 +6604,9 @@ export type PromptQueueCommand = Extract<
       | "moveQueuedPrompt"
       | "clearPromptQueue"
       | "sendQueuedPromptNow"
-      | "resumePromptQueue";
+      | "resumePromptQueue"
+      | "sendQueuedPeerPromptNow"
+      | "withdrawQueuedPeerPrompt";
   }
 >;
 
@@ -6622,6 +6651,14 @@ export type ClientMessage =
   | { type: "sendQueuedPromptNow"; sessionId: string; id: string }
   /** Lift a pause and send the next message if the session is idle. */
   | { type: "resumePromptQueue"; sessionId: string }
+  /**
+   * Deliver one waiting peer prompt ({@link QueuedPeerPrompt.id}) NOW: as a
+   * steer into a running turn that takes one, else as the next turn of an
+   * idle session, ahead of the rest of the queue.
+   */
+  | { type: "sendQueuedPeerPromptNow"; sessionId: string; id: string }
+  /** Withdraw a peer prompt before delivery; its sender's card says cancelled. */
+  | { type: "withdrawQueuedPeerPrompt"; sessionId: string; id: string }
   | { type: "acceptCommitDryRun"; entryId: string }
   /**
    * Approve or reject a pending card. `edits` are the user's per-row changes to
@@ -7265,6 +7302,8 @@ export type ClientMessage =
 export type ServerMessage =
   /** A session's prompt queue changed; `queue` is its complete new state. */
   | { type: "promptQueue"; sessionId: string; queue: PromptQueueState }
+  /** The peer prompts waiting for a session changed; `items` is the complete new list. */
+  | { type: "peerPromptQueue"; sessionId: string; items: QueuedPeerPrompt[] }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>

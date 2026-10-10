@@ -7,10 +7,16 @@ import {
   peerPromptExcerpt,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
+import { promptQueueStore } from "./db/promptQueueStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
+import { BackgroundCompletionDelivery } from "./backgroundWork/completionDelivery.ts";
+import {
+  clearExplicitRecipientAuthority,
+  markExplicitRecipientAuthority,
+} from "./recipientDrainAuthority.ts";
 
 // `vi.mock` factories run hoisted, before normal top-level imports finish
 // initializing, so referencing the real `FakeRuntimeDriver` class here would
@@ -23,87 +29,108 @@ import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 // check), but the engine's OWN three `hub` call sites go through the explicit
 // `setHubForTests` seam below instead of relying on module-mocking a
 // process-wide dynamically-imported singleton for every call site.
-const { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub } =
-  vi.hoisted(() => {
-    const fakeDrivers = new Map<string, unknown>();
-    const deadIds = new Set<string>();
-    /** Session-list rebuilds the engine asked for (who still owes whom). */
-    const listBroadcasts = { count: 0 };
-    const cardUpdates: Array<{
-      sessionId: string;
-      messageKey: string;
-      state: string;
-      failureReason?: string;
-    }> = [];
-    // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
-    // registered via `driverFor()` — self-contained (no external class
-    // reference) to avoid a TDZ inside this hoisted factory.
-    function defaultStandIn(id: string) {
-      return {
-        id,
-        key: id,
+const {
+  fakeDrivers,
+  deadIds,
+  cardUpdates,
+  listBroadcasts,
+  queueBroadcasts,
+  fakeHub,
+} = vi.hoisted(() => {
+  const fakeDrivers = new Map<string, unknown>();
+  const deadIds = new Set<string>();
+  /** Session-list rebuilds the engine asked for (who still owes whom). */
+  const listBroadcasts = { count: 0 };
+  /** The latest waiting-peer list each recipient's viewers were sent. */
+  const queueBroadcasts = new Map<string, Array<Record<string, unknown>>>();
+  const cardUpdates: Array<{
+    sessionId: string;
+    messageKey: string;
+    state: string;
+    failureReason?: string;
+  }> = [];
+  // A trivial ALWAYS-SUCCEEDING adapter/driver for ids no test explicitly
+  // registered via `driverFor()` — self-contained (no external class
+  // reference) to avoid a TDZ inside this hoisted factory.
+  function defaultStandIn(id: string) {
+    return {
+      id,
+      key: id,
+      sessionId: id,
+      harness: "pi",
+      agentType: "assistant",
+      sessionFile: undefined,
+      canSteer: false,
+      isRunning: false,
+      contextInfo: () => ({
         sessionId: id,
-        harness: "pi",
-        agentType: "assistant",
-        sessionFile: undefined,
-        canSteer: false,
-        isRunning: false,
-        contextInfo: () => ({
-          sessionId: id,
-          updatedAt: Date.now(),
-          messageCounts: {
-            user: 0,
-            assistant: 0,
-            toolCalls: 0,
-            toolResults: 0,
-            total: 0,
-          },
-          tokenUsage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-          cost: 0,
-        }),
-        broadcastState: () => {},
-        createRuntimeAdapter: () => ({
-          provider: "fake",
-          capabilities: { fork: "none", compact: false, attachments: false },
-          subscribe: () => () => {},
-          getBinding: () => ({ provider: "fake" }),
-          prompt: async () => ({ stopReason: "end" }),
-          abort: () => {},
-          setModel: () => {},
-          setReasoning: () => {},
-          dispose: () => {},
-        }),
-      };
-    }
-    const fakeHub = {
-      getLiveById: (id: string) => {
-        if (deadIds.has(id)) return undefined;
-        if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
-        return fakeDrivers.get(id);
-      },
-      acquireById: async (id: string) => {
-        if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
-        if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
-        return fakeDrivers.get(id);
-      },
-      broadcastSessions: () => {
-        listBroadcasts.count += 1;
-      },
-      broadcastPeerPromptCardUpdate: (
-        sessionId: string,
-        update: { messageKey: string; state: string; failureReason?: string },
-      ) => {
-        cardUpdates.push({ sessionId, ...update });
-      },
+        updatedAt: Date.now(),
+        messageCounts: {
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          total: 0,
+        },
+        tokenUsage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+        cost: 0,
+      }),
+      broadcastState: () => {},
+      createRuntimeAdapter: () => ({
+        provider: "fake",
+        capabilities: { fork: "none", compact: false, attachments: false },
+        subscribe: () => () => {},
+        getBinding: () => ({ provider: "fake" }),
+        prompt: async () => ({ stopReason: "end" }),
+        abort: () => {},
+        setModel: () => {},
+        setReasoning: () => {},
+        dispose: () => {},
+      }),
     };
-    return { fakeDrivers, deadIds, cardUpdates, listBroadcasts, fakeHub };
-  });
+  }
+  const fakeHub = {
+    getLiveById: (id: string) => {
+      if (deadIds.has(id)) return undefined;
+      if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
+      return fakeDrivers.get(id);
+    },
+    acquireById: async (id: string) => {
+      if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
+      if (!fakeDrivers.has(id)) fakeDrivers.set(id, defaultStandIn(id));
+      return fakeDrivers.get(id);
+    },
+    broadcastSessions: () => {
+      listBroadcasts.count += 1;
+    },
+    broadcastPeerPromptCardUpdate: (
+      sessionId: string,
+      update: { messageKey: string; state: string; failureReason?: string },
+    ) => {
+      cardUpdates.push({ sessionId, ...update });
+    },
+    broadcastPeerPromptQueue: (
+      sessionId: string,
+      items: Array<Record<string, unknown>>,
+    ) => {
+      queueBroadcasts.set(sessionId, items);
+    },
+  };
+  return {
+    fakeDrivers,
+    deadIds,
+    cardUpdates,
+    listBroadcasts,
+    queueBroadcasts,
+    fakeHub,
+  };
+});
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
@@ -117,10 +144,12 @@ const {
   drainAllQueuedOnBoot,
   drainRecipient,
   peerPromptAnchorFor,
+  peerPromptQueueField,
   peerPromptThreadsFor,
   recoverPeerPromptsOnBoot,
   runPeerPromptRetention,
   sendPeerPrompt,
+  sendQueuedPeerPromptNow,
   setHubForTests,
   setPeerPromptAutoDeliverForTests,
   setInterruptionNoticeRetryDelayForTests,
@@ -128,7 +157,9 @@ const {
   stopPeerPromptDelivery,
   sweepExpiredLeases,
   sweepPeerPromptRetries,
+  withdrawQueuedPeerPrompt,
 } = await import("./peerPrompt.ts");
+const promptQueue = await import("./promptQueue.ts");
 const { sessionSendPromptTools } =
   await import("./tools/sessions/sessionSendPromptTool.ts");
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
@@ -136,6 +167,7 @@ const { applySessionContext, resolveSessionContext } =
   await import("./sessionContext.ts");
 const { createTask } = await import("./tasks.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
+const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 
 setHubForTests(fakeHub as any);
 
@@ -176,6 +208,8 @@ function driverFor(id: string): FakeRuntimeDriver {
 }
 
 afterEach(() => {
+  setSessionIdleHook(undefined);
+  promptQueue.setPromptQueueHost(undefined);
   for (const id of created.splice(0)) {
     sessionStore.remove(id);
     fakeDrivers.delete(id);
@@ -186,6 +220,7 @@ afterEach(() => {
     });
   }
   cardUpdates.length = 0;
+  queueBroadcasts.clear();
 });
 
 const ctx = (sessionId: string, title = "Sender") => ({
@@ -1853,6 +1888,44 @@ describe("real delivery through a fake runtime driver", () => {
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
 
+  it("the idle-hook background phase waits for explicit peer authority", async () => {
+    const recipient = seed("Idle authority recipient");
+    let offers = 0;
+    const delivery = new BackgroundCompletionDelivery({
+      drainPeers: drainRecipient,
+      offer: async () => {
+        offers += 1;
+        return "delivered";
+      },
+    });
+    const driver = driverFor(recipient);
+    markExplicitRecipientAuthority(recipient);
+    delivery.enqueueActivity(recipient, {
+      itemId: "background-item",
+      eventId: "background-event",
+      label: "Background task",
+      lineCount: 1,
+      bytes: 1,
+      droppedEventCount: 0,
+      humanLink: "/background-tasks",
+    });
+    setSessionIdleHook((sessionId) => {
+      void delivery.drain(sessionId);
+    });
+
+    try {
+      // A non-steering runtime's idle hook invokes the lower-priority phase.
+      await promptRuntimeSession(driver, "automatic turn", {
+        origin: { kind: "system", source: "test" },
+      });
+      assert.equal(offers, 0);
+    } finally {
+      clearExplicitRecipientAuthority(recipient);
+    }
+    await delivery.drain(recipient);
+    assert.equal(offers, 1);
+  });
+
   it("drains a queued peer prompt once ANY prompt on the recipient session goes idle (non-web trigger)", async () => {
     const sender = seed("HookSender");
     const recipient = seed("HookRecipient");
@@ -2377,6 +2450,691 @@ describe("peer-prompt history payload", () => {
     assert.ok(
       JSON.stringify(peerPromptThreadsFor(sender)).length < 2_000,
       "one long message must not put kilobytes on every broadcast",
+    );
+  });
+});
+
+describe("waiting peer prompts in the composer queue", () => {
+  /**
+   * A recipient that steers: its own turns stay open until `finishTurn`, and a
+   * deferred steer waits for `answerSteer`, as the Claude CLI's next step does.
+   */
+  function steerableRecipient(id: string, options: { deferSteer?: boolean }) {
+    let release: ((result?: Record<string, unknown>) => void) | undefined;
+    let answer: ((result: Record<string, unknown>) => void) | undefined;
+    const steers: string[] = [];
+    const adapterListeners = new Set<
+      (event: { type: string; stopReason?: string }) => void
+    >();
+    const adapter = {
+      provider: "fake",
+      capabilities: {
+        fork: "none",
+        compact: false,
+        attachments: false,
+        steer: true,
+        ...(options.deferSteer ? { steerAcceptance: "deferred" } : {}),
+      },
+      subscribe: (
+        listener: (event: { type: string; stopReason?: string }) => void,
+      ) => {
+        adapterListeners.add(listener);
+        return () => adapterListeners.delete(listener);
+      },
+      getBinding: () => ({ provider: "fake" }),
+      prompt: (
+        text: string,
+        promptOptions: {
+          steer?: boolean;
+          onSteerAccepted?: (delivery: "steer") => void;
+        } = {},
+      ) => {
+        if (promptOptions.steer) {
+          steers.push(text);
+          if (!options.deferSteer)
+            return Promise.resolve({ stopReason: "end" });
+          return new Promise((resolve) => {
+            answer = resolve;
+          });
+        }
+        return new Promise((resolve) => {
+          release = (result = { stopReason: "end" }) => {
+            if (result.stopReason === "aborted")
+              for (const listener of adapterListeners)
+                listener({ type: "runCompleted", stopReason: "aborted" });
+            resolve(result as never);
+          };
+        });
+      },
+      abort: () => {},
+      setModel: () => {},
+      setReasoning: () => {},
+      dispose: () => {},
+    };
+    const driver = {
+      id,
+      key: id,
+      sessionId: id,
+      harness: "claude-sdk",
+      agentType: "assistant",
+      sessionFile: undefined,
+      canSteer: true,
+      get isRunning() {
+        return sessionRuntime.isRunning(id);
+      },
+      contextInfo: () => ({}),
+      broadcastState: () => {},
+      createRuntimeAdapter: () => adapter,
+    };
+    fakeDrivers.set(id, driver);
+    return {
+      driver,
+      steers,
+      startTurn: async () => {
+        void promptRuntimeSession(driver as never, "the running turn");
+        await until(() => release !== undefined, "the running turn");
+      },
+      finishTurn: (result: Record<string, unknown> = { stopReason: "end" }) =>
+        release?.(result),
+      answerSteer: (result: Record<string, unknown>) => answer?.(result),
+      steerAsked: () => answer !== undefined,
+    };
+  }
+
+  async function until(check: () => boolean, label: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`${label} was not reached`);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+  }
+
+  const waiting = (id: string) =>
+    peerPromptQueueField(id).queuedPeerPrompts ?? [];
+
+  it("lists undelivered prompts under their sender card's key, and withdraws one", async () => {
+    const sender = seed("Reviewer");
+    const recipient = seed("Recipient");
+    const first = await sendPeerPrompt({
+      senderSessionId: sender,
+      senderTitle: "Reviewer",
+      targetSessionId: recipient,
+      prompt: "First finding",
+      responseRequested: true,
+    });
+    await sendPeerPrompt({
+      senderSessionId: sender,
+      senderTitle: "Reviewer",
+      targetSessionId: recipient,
+      prompt: "Second finding",
+      responseRequested: false,
+    });
+
+    const items = waiting(recipient);
+    assert.deepEqual(
+      items.map((i) => [i.id, i.message, i.senderTitle, i.senderSessionId]),
+      [
+        [first.card.messageKey, "First finding", "Reviewer", sender],
+        [items[1]!.id, "Second finding", "Reviewer", sender],
+      ],
+    );
+    assert.equal(items[0]!.responseRequested, true);
+    assert.deepEqual(
+      peerPromptQueueField(sender),
+      {},
+      "nothing waits for the sender",
+    );
+
+    withdrawQueuedPeerPrompt(recipient, first.card.messageKey);
+    const withdrawn = peerPromptStore.getById(first.message.id)!;
+    assert.equal(withdrawn.status, "cancelled");
+    assert.match(withdrawn.failureReason ?? "", /Withdrawn/);
+    // The sender's card says it was cancelled.
+    await until(
+      () =>
+        cardUpdates.some(
+          (u) =>
+            u.sessionId === sender &&
+            u.messageKey === first.card.messageKey &&
+            u.state === "cancelled",
+        ),
+      "the sender's card update",
+    );
+    await until(
+      () => queueBroadcasts.get(recipient)?.length === 1,
+      "the recipient's queue to drop the withdrawn row",
+    );
+    assert.equal(queueBroadcasts.get(recipient)![0]!.message, "Second finding");
+  });
+
+  it("refuses to withdraw a prompt already being delivered", async () => {
+    const sender = seed("S");
+    const recipient = seed("R");
+    const { message, card } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "in flight",
+      responseRequested: false,
+    });
+    peerPromptStore.claimOne(message.id, "steer");
+    assert.equal(waiting(recipient)[0]!.sending, true);
+    assert.throws(
+      () => withdrawQueuedPeerPrompt(recipient, card.messageKey),
+      /already being delivered/,
+    );
+    assert.equal(peerPromptStore.getById(message.id)!.status, "dispatching");
+  });
+
+  it("steers a waiting prompt into the running turn, and completes it with that run", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, {});
+    await r.startTurn();
+    const { message, card } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "steer me",
+      responseRequested: false,
+    });
+
+    await sendQueuedPeerPromptNow(recipient, card.messageKey);
+    assert.equal(r.steers.length, 1);
+    assert.match(r.steers[0]!, /steer me/);
+    assert.equal(peerPromptStore.getById(message.id)!.status, "acknowledged");
+    assert.deepEqual(waiting(recipient), [], "it left the queue once read");
+    assert.ok(
+      readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
+        JSON.stringify(`peer:${message.id}`),
+      ),
+      "the recipient's log holds it",
+    );
+
+    r.finishTurn();
+    await until(
+      () => peerPromptStore.getById(message.id)!.status === "completed",
+      "the steered prompt to complete with its run",
+    );
+  });
+
+  it("refuses a second steer when the active run already owns peer reply context", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, {});
+    await r.startTurn();
+    const first = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "first",
+      responseRequested: true,
+    });
+    await sendQueuedPeerPromptNow(recipient, first.card.messageKey);
+    const second = await sendPeerPrompt({
+      senderSessionId: seed("Other"),
+      targetSessionId: recipient,
+      prompt: "second",
+      responseRequested: true,
+    });
+    await assert.rejects(
+      sendQueuedPeerPromptNow(recipient, second.card.messageKey),
+      /already has a peer prompt/,
+    );
+    assert.equal(peerPromptStore.getById(second.message.id)!.status, "queued");
+    r.finishTurn();
+  });
+
+  it("marks an aborted steered run interrupted and wakes its response-requesting sender", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, {});
+    await r.startTurn();
+    const { message, card } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "please answer",
+      responseRequested: true,
+    });
+    await sendQueuedPeerPromptNow(recipient, card.messageKey);
+    r.finishTurn({ stopReason: "aborted" });
+    await until(
+      () => peerPromptStore.getById(message.id)!.status === "interrupted",
+      `the aborted steer to be interrupted (${peerPromptStore.getById(message.id)!.status}; ${peerPromptStore.getById(message.id)!.failureReason ?? "no reason"})`,
+    );
+    await until(
+      () => peerPromptStore.getById(message.id)!.senderNotifiedAt !== undefined,
+      "the sender interruption notice",
+    );
+  });
+
+  it("a deferred steer stays in the queue as sending until the turn reads it", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, { deferSteer: true });
+    await r.startTurn();
+    const { message, card } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "read me later",
+      responseRequested: false,
+    });
+
+    const sent = sendQueuedPeerPromptNow(recipient, card.messageKey);
+    await until(r.steerAsked, "the steer to reach the provider");
+    assert.equal(peerPromptStore.getById(message.id)!.status, "dispatching");
+    assert.deepEqual(
+      waiting(recipient).map((i) => i.sending),
+      [true],
+      "the row says it is being steered",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    sweepExpiredLeases(Date.now() + 10 * 60_000);
+    assert.equal(
+      peerPromptStore.getById(message.id)!.status,
+      "dispatching",
+      "a waiting steer holds no lease the sweep could requeue it on",
+    );
+
+    r.answerSteer({ stopReason: "end", steerDelivery: "steer" });
+    await sent;
+    assert.equal(peerPromptStore.getById(message.id)!.status, "acknowledged");
+    r.finishTurn();
+    await until(
+      () => peerPromptStore.getById(message.id)!.status === "completed",
+      "the steered prompt to complete",
+    );
+  });
+
+  it("a steer withdrawn unread goes back to waiting; one maybe read is interrupted", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, { deferSteer: true });
+    await r.startTurn();
+    const unread = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "dropped unread",
+      responseRequested: false,
+    });
+    const first = sendQueuedPeerPromptNow(recipient, unread.card.messageKey);
+    await until(r.steerAsked, "the first steer");
+    r.answerSteer({ stopReason: "aborted", steerWithdrawn: true });
+    await first;
+    assert.equal(peerPromptStore.getById(unread.message.id)!.status, "queued");
+    assert.equal(waiting(recipient).length, 1);
+
+    const maybe = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "maybe read",
+      responseRequested: true,
+    });
+    const second = sendQueuedPeerPromptNow(recipient, maybe.card.messageKey);
+    await until(() => r.steers.length === 2, "the second steer");
+    r.answerSteer({
+      stopReason: "aborted",
+      steerWithdrawn: true,
+      steerUncertain: true,
+    });
+    await second;
+    const row = peerPromptStore.getById(maybe.message.id)!;
+    assert.equal(row.status, "interrupted", "never put back to be sent twice");
+    assert.match(row.failureReason ?? "", /may already have read it/);
+    r.finishTurn();
+  });
+
+  it("serializes concurrent idle send-now deliveries through the recipient drain lock", async () => {
+    const sender = seed("S");
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    const older = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "older queued",
+      responseRequested: false,
+    });
+    const first = await sendPeerPrompt({
+      senderSessionId: seed("First sender"),
+      targetSessionId: recipient,
+      prompt: "first now",
+      responseRequested: false,
+    });
+    const second = await sendPeerPrompt({
+      senderSessionId: seed("Second sender"),
+      targetSessionId: recipient,
+      prompt: "second now",
+      responseRequested: false,
+    });
+    const firstSend = sendQueuedPeerPromptNow(recipient, first.card.messageKey);
+    await until(() => driver.isRunning, "the first send-now turn");
+    const secondSend = sendQueuedPeerPromptNow(
+      recipient,
+      second.card.messageKey,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(peerPromptStore.getById(second.message.id)!.status, "queued");
+    release();
+    await Promise.all([firstSend, secondSend]);
+    assert.equal(
+      peerPromptStore.getById(first.message.id)!.status,
+      "completed",
+    );
+    assert.equal(
+      peerPromptStore.getById(second.message.id)!.status,
+      "completed",
+    );
+    await until(
+      () => peerPromptStore.getById(older.message.id)!.status === "completed",
+      "the older row to run after explicit sends",
+    );
+    const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    assert.ok(log.indexOf("first now") < log.indexOf("second now"));
+    assert.ok(log.indexOf("second now") < log.indexOf("older queued"));
+  });
+
+  it("a send-now arriving during an automatic delivery runs before the drain claims another batch", async () => {
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    promptQueue.setPromptQueueHost({
+      resolve: async () => driver as never,
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+    setSessionIdleHook((sessionId) => {
+      void promptQueue.drainPromptQueue(sessionId);
+    });
+    // Three senders, so each row is its own FIFO batch.
+    const running = await sendPeerPrompt({
+      senderSessionId: seed("Running sender"),
+      targetSessionId: recipient,
+      prompt: "automatic first",
+      responseRequested: false,
+    });
+    const older = await sendPeerPrompt({
+      senderSessionId: seed("Older sender"),
+      targetSessionId: recipient,
+      prompt: "older still queued",
+      responseRequested: false,
+    });
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "chosen by the user",
+      responseRequested: false,
+    });
+    const drain = drainRecipient(recipient);
+    await until(() => driver.isRunning, "the automatic delivery's turn");
+    assert.equal(
+      peerPromptStore.getById(running.message.id)!.status,
+      "acknowledged",
+    );
+    promptQueueStore.append({
+      id: `queued-${recipient}`,
+      sessionId: recipient,
+      text: "user queue prompt",
+    });
+
+    // The user picks the newest row while the drain is mid-turn.
+    const sendNow = sendQueuedPeerPromptNow(recipient, chosen.card.messageKey);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    // The automatic peer turn's completion invokes the idle hook directly,
+    // without going through drainRecipient's guarded handoff.
+    release();
+    await Promise.all([drain, sendNow]);
+    assert.equal(
+      peerPromptStore.getById(chosen.message.id)!.status,
+      "completed",
+      "the explicit send delivered its row",
+    );
+    const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    assert.ok(
+      log.indexOf("automatic first") < log.indexOf("chosen by the user"),
+    );
+    assert.equal(
+      peerPromptStore.getById(older.message.id)!.status,
+      "queued",
+      "ordinary queue work keeps precedence over the remaining peer FIFO",
+    );
+    await until(
+      () =>
+        readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
+          "user queue prompt",
+        ),
+      "the user queue to resume after send-now",
+    );
+    const finalLog = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    assert.ok(
+      finalLog.indexOf("chosen by the user") <
+        finalLog.indexOf("user queue prompt"),
+    );
+  });
+
+  it("gives send-now priority over the user queue after cold acquisition", async () => {
+    const recipient = seed("Cold recipient");
+    const driver = driverFor(recipient);
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "selected peer prompt",
+      responseRequested: false,
+    });
+    promptQueueStore.append({
+      id: `queued-${recipient}`,
+      sessionId: recipient,
+      text: "user queue prompt",
+    });
+    promptQueue.setPromptQueueHost({
+      resolve: async () => driver as never,
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+
+    const originalGetLive = fakeHub.getLiveById;
+    const originalAcquire = fakeHub.acquireById;
+    let finishAcquire!: () => void;
+    let acquisitionStarted!: () => void;
+    const acquisition = new Promise<void>((resolve) => {
+      finishAcquire = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      acquisitionStarted = resolve;
+    });
+    fakeHub.getLiveById = (id: string) =>
+      id === recipient ? undefined : originalGetLive(id);
+    fakeHub.acquireById = async (id: string) => {
+      if (id === recipient) {
+        acquisitionStarted();
+        await acquisition;
+        return driver;
+      }
+      return originalAcquire(id);
+    };
+    try {
+      const automaticDrain = drainRecipient(recipient);
+      await started;
+      const sendNow = sendQueuedPeerPromptNow(
+        recipient,
+        chosen.card.messageKey,
+      );
+      finishAcquire();
+      await Promise.all([automaticDrain, sendNow]);
+      const logAfterSendNow = readFileSync(
+        canonicalSessionLogPath(recipient),
+        "utf8",
+      );
+      assert.ok(logAfterSendNow.includes("selected peer prompt"));
+      assert.ok(
+        !logAfterSendNow.includes("user queue prompt"),
+        "the user queue must not start concurrently with the selected turn",
+      );
+      await promptQueue.drainPromptQueue(recipient);
+      await until(
+        () =>
+          readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
+            "user queue prompt",
+          ),
+        "the user queue to resume after send-now",
+      );
+      const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+      assert.ok(
+        log.indexOf("selected peer prompt") < log.indexOf("user queue prompt"),
+      );
+    } finally {
+      fakeHub.getLiveById = originalGetLive;
+      fakeHub.acquireById = originalAcquire;
+      promptQueue.setPromptQueueHost(undefined);
+    }
+  });
+
+  it("a background completion waits for the priority drain a send-now's release resumes", async () => {
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    const older = await sendPeerPrompt({
+      senderSessionId: seed("Older sender"),
+      targetSessionId: recipient,
+      prompt: "older peer row",
+      responseRequested: false,
+    });
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "chosen by the user",
+      responseRequested: false,
+    });
+    const delay = () => new Promise((resolve) => setTimeout(resolve, 15));
+    // Resolving the queue's driver takes time, as a cold acquisition does.
+    promptQueue.setPromptQueueHost({
+      resolve: async () => {
+        await delay();
+        return driver as never;
+      },
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+    const logText = () =>
+      readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    const offers: Array<{ result: string; log: string; older: string }> = [];
+    const background = new BackgroundCompletionDelivery({
+      drainPeers: (sessionId) => drainRecipient(sessionId),
+      offer: async () => {
+        const result = driver.isRunning ? "busy" : "delivered";
+        offers.push({
+          result,
+          log: logText(),
+          older: peerPromptStore.getById(older.message.id)!.status,
+        });
+        return result;
+      },
+    });
+    // The idle edge as production runs it: the user's queue, then the
+    // background phase, whose peer drain goes first.
+    setSessionIdleHook((sessionId) => {
+      void promptQueue
+        .drainPromptQueue(sessionId)
+        .then(() => background.drain(sessionId));
+    });
+    const originalGetLive = fakeHub.getLiveById;
+    const originalAcquire = fakeHub.acquireById;
+    try {
+      const sendNow = sendQueuedPeerPromptNow(
+        recipient,
+        chosen.card.messageKey,
+      );
+      await until(() => driver.isRunning, "the send-now turn");
+      promptQueueStore.append({
+        id: `queued-${recipient}`,
+        sessionId: recipient,
+        text: "user queue prompt",
+      });
+      // The completion lands while the send-now holds the recipient: its
+      // peer phase waits on that authority.
+      background.enqueue(recipient, {
+        itemId: "w1",
+        revision: 1,
+        label: "work w1",
+        state: "completed",
+        humanLink: "/background-tasks?task=w1",
+        backend: "claude-query",
+        stopRequested: false,
+        ownerTurnRunning: false,
+      });
+      // The resumed drain finds the recipient cold and acquires it.
+      fakeHub.getLiveById = (id: string) =>
+        id === recipient ? undefined : originalGetLive(id);
+      fakeHub.acquireById = async (id: string) => {
+        if (id !== recipient) return originalAcquire(id);
+        await delay();
+        return driver;
+      };
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(offers.length, 0, "nothing is offered while send-now runs");
+
+      release();
+      // The user's queued turn stays open, as a real one does for a while.
+      const releaseQueued = driver.holdTurns();
+      await sendNow;
+      await until(() => offers.length > 0, "the background offer");
+      assert.ok(
+        offers[0]!.log.includes("user queue prompt"),
+        "the user's queued message took the next turn before the offer",
+      );
+      assert.equal(offers[0]!.result, "busy");
+      assert.equal(offers[0]!.older, "queued");
+      releaseQueued();
+
+      // Eventually every phase runs, in priority order.
+      await until(
+        () => offers.some((o) => o.result === "delivered"),
+        "the background completion to be delivered",
+      );
+      const delivered = offers.find((o) => o.result === "delivered")!;
+      assert.equal(delivered.older, "completed", "the peer FIFO went first");
+      const log = logText();
+      assert.ok(
+        log.indexOf("chosen by the user") < log.indexOf("user queue prompt"),
+      );
+      assert.ok(
+        log.indexOf("user queue prompt") < log.indexOf("older peer row"),
+      );
+    } finally {
+      fakeHub.getLiveById = originalGetLive;
+      fakeHub.acquireById = originalAcquire;
+      background.stop();
+    }
+  });
+
+  it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {
+    const sender = seed("S");
+    const recipient = seed("R");
+    driverFor(recipient).behavior = { mode: "success" };
+    const older = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "older",
+      responseRequested: false,
+    });
+    const other = seed("Other");
+    const chosen = await sendPeerPrompt({
+      senderSessionId: other,
+      targetSessionId: recipient,
+      prompt: "chosen",
+      responseRequested: false,
+    });
+    await sendQueuedPeerPromptNow(recipient, chosen.card.messageKey);
+    await until(
+      () => peerPromptStore.getById(chosen.message.id)!.status === "completed",
+      "the chosen prompt to run",
+    );
+    await until(
+      () => peerPromptStore.getById(older.message.id)!.status === "completed",
+      "the ordinary drain to resume after send-now",
     );
   });
 });

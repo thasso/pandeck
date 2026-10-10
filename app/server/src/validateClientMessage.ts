@@ -865,6 +865,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   clearPromptQueue: fields({ sessionId: STRING }),
   sendQueuedPromptNow: fields({ sessionId: STRING, id: STRING }),
   resumePromptQueue: fields({ sessionId: STRING }),
+  sendQueuedPeerPromptNow: fields({ sessionId: STRING, id: STRING }),
+  withdrawQueuedPeerPrompt: fields({ sessionId: STRING, id: STRING }),
   acceptCommitDryRun: fields({ entryId: STRING }),
   respondToQuestion: fields({ response: OBJECT }),
   abort: NONE,

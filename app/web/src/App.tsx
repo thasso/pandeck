@@ -377,6 +377,11 @@ const NO_WORKTREE_COMMENTS: WorktreeComment[] = [];
 const noopKnowledgeComments = () => {};
 const NO_KNOWLEDGE_COMMENT_ACTIONS = {} as CommentActions;
 const NO_WORKTREE_REVIEW_SETS: WorktreeReviewSet[] = [];
+/** The ledge's queue when only peer prompts wait: nothing of the user's own. */
+const EMPTY_PROMPT_QUEUE: import("@assistant/shared").PromptQueueState = {
+  items: [],
+  paused: false,
+};
 const DEFAULT_WORKTREE_REVIEW_PROMPT =
   "Review the selected comments, apply the appropriate changes, and reply to or resolve each thread.";
 const REVIEW_SET_CLAIMS_PROMPT = `Findings are claims, not orders. Verify each against the code before acting.
@@ -4920,12 +4925,16 @@ function AppContent() {
   const shownPromptQueue = queueSessionId
     ? displaySession?.promptQueue
     : undefined;
+  const shownQueuedPeers = queueSessionId
+    ? displaySession?.queuedPeerPrompts
+    : undefined;
   const sessionCanSteer = Boolean(displaySession?.canSteer);
   const promptQueueLedge = useMemo(
     () =>
-      shownPromptQueue && queueSessionId ? (
+      (shownPromptQueue || shownQueuedPeers) && queueSessionId ? (
         <PromptQueueLedge
-          queue={shownPromptQueue}
+          queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
+          peers={shownQueuedPeers}
           running={displayStreaming}
           canSteer={sessionCanSteer}
           onEdit={(id, text) =>
@@ -4970,10 +4979,27 @@ function AppContent() {
               sessionId: queueSessionId,
             })
           }
+          onSendPeerNow={(id) =>
+            sendPromptQueue({
+              type: "sendQueuedPeerPromptNow",
+              sessionId: queueSessionId,
+              id,
+            })
+          }
+          onWithdrawPeer={(id) =>
+            sendPromptQueue({
+              type: "withdrawQueuedPeerPrompt",
+              sessionId: queueSessionId,
+              id,
+            })
+          }
+          onOpenSession={openSession}
         />
       ) : undefined,
     [
       shownPromptQueue,
+      shownQueuedPeers,
+      openSession,
       queueSessionId,
       displayStreaming,
       sessionCanSteer,

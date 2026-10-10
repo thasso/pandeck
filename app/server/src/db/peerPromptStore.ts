@@ -887,6 +887,42 @@ function cancelPending(
   }
 }
 
+/**
+ * Claim ONE undelivered row out of FIFO order, for a delivery the user asked
+ * for (a steer, or "send it now"). It takes no lease: a steer waits for the
+ * running turn's next step to read it, and the lease sweep would requeue — and
+ * so deliver twice — a row that turn may still take. Boot recovery reconciles
+ * a stranded one like any other `dispatching` row.
+ */
+const claimOne = (id: string, leaseOwner: string, now = Date.now()) =>
+  transition(
+    id,
+    ["queued", "retryable_failed"],
+    "dispatching",
+    {
+      leaseOwner,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+      bumpAttempts: true,
+    },
+    now,
+  );
+
+/** Withdraw one row before dispatch; a `dispatching` one is already being delivered. */
+const cancelOne = (id: string, reason: string, now = Date.now()) =>
+  transition(
+    id,
+    ["queued", "retryable_failed"],
+    "cancelled",
+    {
+      failureReason: reason,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+    },
+    now,
+  );
+
 /** Admitted/acknowledged turn ended: completed, or awaiting_response if a reply is wanted. */
 function markCompleted(
   id: string,
@@ -1020,6 +1056,19 @@ function listPendingForRecipient(
     getDb()
       .prepare(
         "SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status = 'queued' ORDER BY queue_seq",
+      )
+      .all(recipientSessionId) as unknown as Row[]
+  ).map(map);
+}
+
+/** Every row not delivered to the recipient yet, in delivery order: waiting, retrying, or being dispatched. */
+function listUndeliveredForRecipient(
+  recipientSessionId: string,
+): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        "SELECT * FROM peer_prompts WHERE recipient_session_id = ? AND status IN ('queued', 'retryable_failed', 'dispatching') ORDER BY queue_seq",
       )
       .all(recipientSessionId) as unknown as Row[]
   ).map(map);
@@ -1525,6 +1574,7 @@ export const peerPromptStore = {
   transition,
   claimNext,
   claimBatch,
+  claimOne,
   releaseToQueue,
   markAdmitted,
   markAcknowledged,
@@ -1536,6 +1586,7 @@ export const peerPromptStore = {
   markFailed,
   markExpired,
   cancelPending,
+  cancelOne,
   markSenderNotified,
   // reads
   getById,
@@ -1544,6 +1595,7 @@ export const peerPromptStore = {
   interruptedOwingSenderNotice,
   senderIdsOwingNotice,
   listPendingForRecipient,
+  listUndeliveredForRecipient,
   unfinishedTurnCount,
   outstandingResponseRequestCount,
   outstandingRepliesBySender,
