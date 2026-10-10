@@ -218,6 +218,10 @@ import { notifySessionTurnCompleted } from "./webPush.ts";
 import { serverBuildInfo } from "./buildInfo.ts";
 import { sessionArtifactDeliveryHeaders } from "./sessionArtifactHttp.ts";
 import {
+  SESSION_ATTACHMENT_PREFIX,
+  handleSessionAttachmentRequest,
+} from "./sessionAttachmentHttp.ts";
+import {
   DIRECT_FILE_PREFIX,
   handleDirectFileRequest,
 } from "./directFileHttp.ts";
@@ -1246,6 +1250,12 @@ async function handleRequest(
       });
       res.end(`Artifact not found: ${errorText(err)}`);
     }
+    return;
+  }
+
+  // A prompt image the durable log holds by attachment id (sessionAttachmentHttp.ts).
+  if (requestUrl.pathname.startsWith(SESSION_ATTACHMENT_PREFIX)) {
+    await handleSessionAttachmentRequest(res, requestUrl, corsHeaders(req));
     return;
   }
 
