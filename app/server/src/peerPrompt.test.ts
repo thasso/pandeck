@@ -12,6 +12,11 @@ import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
+import { BackgroundCompletionDelivery } from "./backgroundWork/completionDelivery.ts";
+import {
+  clearExplicitRecipientAuthority,
+  markExplicitRecipientAuthority,
+} from "./recipientDrainAuthority.ts";
 
 // `vi.mock` factories run hoisted, before normal top-level imports finish
 // initializing, so referencing the real `FakeRuntimeDriver` class here would
@@ -1882,6 +1887,44 @@ describe("real delivery through a fake runtime driver", () => {
 
 describe("browser-independent drain triggers", () => {
   afterEach(() => setSessionIdleHook(undefined));
+
+  it("the idle-hook background phase waits for explicit peer authority", async () => {
+    const recipient = seed("Idle authority recipient");
+    let offers = 0;
+    const delivery = new BackgroundCompletionDelivery({
+      drainPeers: drainRecipient,
+      offer: async () => {
+        offers += 1;
+        return "delivered";
+      },
+    });
+    const driver = driverFor(recipient);
+    markExplicitRecipientAuthority(recipient);
+    delivery.enqueueActivity(recipient, {
+      itemId: "background-item",
+      eventId: "background-event",
+      label: "Background task",
+      lineCount: 1,
+      bytes: 1,
+      droppedEventCount: 0,
+      humanLink: "/background-tasks",
+    });
+    setSessionIdleHook((sessionId) => {
+      void delivery.drain(sessionId);
+    });
+
+    try {
+      // A non-steering runtime's idle hook invokes the lower-priority phase.
+      await promptRuntimeSession(driver, "automatic turn", {
+        origin: { kind: "system", source: "test" },
+      });
+      assert.equal(offers, 0);
+    } finally {
+      clearExplicitRecipientAuthority(recipient);
+    }
+    await delivery.drain(recipient);
+    assert.equal(offers, 1);
+  });
 
   it("drains a queued peer prompt once ANY prompt on the recipient session goes idle (non-web trigger)", async () => {
     const sender = seed("HookSender");

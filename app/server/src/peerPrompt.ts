@@ -16,6 +16,7 @@ import {
   markExplicitRecipientAuthority,
   markExplicitRecipientWaiter,
   releaseExplicitRecipientWaiter,
+  waitForExplicitRecipientAuthorityRelease,
 } from "./recipientDrainAuthority.ts";
 import { existsSync, readFileSync } from "node:fs";
 import type {
@@ -759,7 +760,8 @@ function cancelInterruptionNoticeRetries(): void {
  */
 export function drainRecipient(recipientId: string): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
-  if (explicitSendWaiting(recipientId)) return Promise.resolve();
+  if (explicitSendWaiting(recipientId))
+    return waitForExplicitRecipientAuthorityRelease(recipientId);
   const existing = drainLocks.get(recipientId);
   if (existing) return existing;
   const run = drainRecipientOnce(recipientId).finally(() => {
