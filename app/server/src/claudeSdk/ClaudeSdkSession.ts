@@ -1304,22 +1304,13 @@ export class ClaudeSdkSession implements LiveSession {
   }
 
   /**
-   * Switch Build/Plan. Accepted at ANY point — mid-conversation is the whole
-   * point — and takes effect on the NEXT turn, which recomputes the query's
-   * tool policy from it. Persisted immediately so the switch survives a restart
-   * even if no turn follows it.
+   * Switch Build/Plan. Accepted at ANY point and in both directions — even on
+   * a process retained for background work — because the query reads the mode
+   * live per tool call instead of fixing it into its tool list. Persisted
+   * immediately so the switch survives a restart even if no turn follows it.
    */
   setMode(mode: SessionMode): void {
     if (this.mode === mode) return;
-    if (
-      mode === "build" &&
-      this.mode === "plan" &&
-      this.retainedEpochKey !== undefined &&
-      this.retainedEpochKey === this.queryEpochKey
-    )
-      throw new Error(
-        "Build mode cannot restore native edit tools until retained background work finishes.",
-      );
     this.mode = mode;
     // The mounted server resolves policy lazily; notify a connected SDK client
     // so its cached tools/list projection drops/restores side-effecting tools.
@@ -1757,7 +1748,7 @@ export class ClaudeSdkSession implements LiveSession {
           abortController,
           modelId: this.modelId,
           thinkingLevel: this.thinkingLevel,
-          mode: this.mode,
+          mode: () => this.mode,
           ...(this.providerSessionId !== undefined
             ? { providerSessionId: this.providerSessionId }
             : {}),
@@ -2050,14 +2041,6 @@ export class ClaudeSdkSession implements LiveSession {
   ): Promise<
     { allowed: true; context?: string } | { allowed: false; reason: string }
   > {
-    if (
-      this.mode === "plan" &&
-      ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(input.toolName)
-    )
-      return {
-        allowed: false,
-        reason: `${input.toolName} is unavailable while this session is in Plan mode.`,
-      };
     const isBackgroundBash =
       input.toolName === "Bash" && input.toolInput.run_in_background === true;
     const isMonitor = input.toolName === "Monitor";

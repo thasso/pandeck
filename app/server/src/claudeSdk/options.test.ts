@@ -11,9 +11,9 @@
  *     canUseTool permission callback denies them (its capability is the bridged
  *     `pa` MCP tools only, mirroring the pi assistant).
  *
- * The session MODE is the second, independent axis: `plan` subtracts the
- * file-mutating natives from whatever the persona got, and `build` (the
- * default) must stay byte-identical to having no mode at all.
+ * The session MODE is the second, independent axis: `plan` refuses the
+ * file-mutating natives per call against the live mode, and never changes the
+ * tool list the process starts with.
  */
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -234,26 +234,64 @@ async function main(): Promise<void> {
     "sessions without an explicit credential-profile env still receive native output caps",
   );
 
-  // Build is the default: naming it explicitly must change NOTHING.
-  const build = buildClaudeSdkQueryOptions({ ...base, mode: "build" });
-  assert.deepEqual(
-    { ...build, abortController: null, canUseTool: null },
-    { ...dflt, abortController: null, canUseTool: null },
-    'mode "build" is byte-identical to the unmoded default',
-  );
-
-  // Plan: the same session minus the file-mutating tools, and nothing else.
-  const plan = buildClaudeSdkQueryOptions({ ...base, mode: "plan" });
-  assert.deepEqual(
-    [...(plan.tools as string[])].sort(),
-    ["Bash", "Glob", "Grep", "Monitor", "Read", "Skill", "ToolSearch"],
-    "plan keeps read/search/shell, Skill and ToolSearch, and drops Write/Edit",
-  );
-  for (const t of ["Write", "Edit", "MultiEdit", "NotebookEdit"]) {
-    assert.ok(
-      (plan.disallowedTools as string[]).includes(t),
-      `plan disallows the mutating native ${t}`,
+  // Plan is a LIVE gate, not a tool list: a retained process outlives a mode
+  // switch, so both modes start the same process ([Task-756](pa://task/756)).
+  let liveMode: "build" | "plan" = "plan";
+  const plan = buildClaudeSdkQueryOptions({
+    ...base,
+    outputPolicySessionId: "options-plan-test",
+    mode: () => liveMode,
+  });
+  const build = buildClaudeSdkQueryOptions({
+    ...base,
+    outputPolicySessionId: "options-plan-test",
+    mode: () => "build",
+  });
+  for (const key of [
+    "tools",
+    "disallowedTools",
+    "systemPrompt",
+    "permissionMode",
+    "allowDangerouslySkipPermissions",
+  ] as const)
+    assert.deepEqual(
+      plan[key],
+      build[key],
+      `plan and build start the same process (${key})`,
     );
+  assert.throws(
+    () => buildClaudeSdkQueryOptions({ ...base, mode: () => "plan" }),
+    /outputPolicySessionId/,
+    "a moded query without the hooks that enforce Plan is refused",
+  );
+  const preToolUse = plan.hooks!.PreToolUse![0]!.hooks[0]!;
+  const gate = (toolName: string) =>
+    preToolUse(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-1",
+        transcript_path: "/tmp/transcript",
+        cwd: "/tmp",
+        tool_name: toolName,
+        tool_input: {},
+        tool_use_id: `${toolName}-1`,
+      },
+      `${toolName}-1`,
+      { signal: new AbortController().signal },
+    ) as Promise<{
+      hookSpecificOutput?: {
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+      };
+    }>;
+  for (const t of ["Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+    const decision = (await gate(t)).hookSpecificOutput;
+    assert.equal(
+      decision?.permissionDecision,
+      "deny",
+      `plan's PreToolUse gate refuses the mutating native ${t}`,
+    );
+    assert.match(decision?.permissionDecisionReason ?? "", /Plan mode/);
     const verdict = await plan.canUseTool!(t, {}, {} as never);
     assert.ok(verdict, `plan canUseTool returns a verdict for ${t}`);
     assert.equal(
@@ -263,13 +301,30 @@ async function main(): Promise<void> {
     );
   }
   for (const t of ["Read", "Bash", "Monitor", "Grep", "Glob"]) {
+    assert.notEqual(
+      (await gate(t)).hookSpecificOutput?.permissionDecision,
+      "deny",
+      `plan's PreToolUse gate lets ${t} run`,
+    );
     const verdict = await plan.canUseTool!(t, {}, {} as never);
     assert.ok(verdict, `plan canUseTool returns a verdict for ${t}`);
     assert.equal(verdict.behavior, "allow", `plan still allows ${t}`);
   }
+  // The same process returns to Build without a restart.
+  liveMode = "build";
+  assert.notEqual(
+    (await gate("Edit")).hookSpecificOutput?.permissionDecision,
+    "deny",
+    "switching the live mode back to Build lets Edit run on the same query",
+  );
+  const backInBuild = await plan.canUseTool!("Edit", {}, {} as never);
+  assert.equal(backInBuild?.behavior, "allow");
+  liveMode = "plan";
+
   const planWithMcp = buildClaudeSdkQueryOptions({
     ...base,
-    mode: "plan",
+    outputPolicySessionId: "options-plan-test",
+    mode: () => "plan",
     mcpServer: {} as never,
   });
   const mcpVerdict = await planWithMcp.canUseTool!(
@@ -318,22 +373,13 @@ async function main(): Promise<void> {
     undefined,
     "plan sets no CLI plan-mode instructions",
   );
-  assert.equal(
-    plan.allowDangerouslySkipPermissions,
-    true,
-    "plan leaves the bypass acknowledgement untouched",
-  );
-  assert.deepEqual(
-    plan.systemPrompt,
-    dflt.systemPrompt,
-    "plan changes the tool policy only — never the persona prompt",
-  );
 
   // An assistant persona has no native tools to subtract in the first place.
   const planAssistant = buildClaudeSdkQueryOptions({
     ...base,
     agentType: "assistant",
-    mode: "plan",
+    outputPolicySessionId: "options-plan-test",
+    mode: () => "plan",
   });
   assert.deepEqual(
     planAssistant.tools,
@@ -346,7 +392,12 @@ async function main(): Promise<void> {
   // discover skills and must not expose a misleading invocation surface.
   for (const agentType of ["workshop", "developer"] as const) {
     for (const mode of ["build", "plan"] as const) {
-      const options = buildClaudeSdkQueryOptions({ ...base, agentType, mode });
+      const options = buildClaudeSdkQueryOptions({
+        ...base,
+        agentType,
+        outputPolicySessionId: "options-plan-test",
+        mode: () => mode,
+      });
       assert.ok(
         (options.tools as string[]).includes("Skill"),
         `${agentType} exposes Skill in ${mode} mode`,
@@ -359,7 +410,12 @@ async function main(): Promise<void> {
     "workflow-coordinator",
   ] as const) {
     for (const mode of ["build", "plan"] as const) {
-      const options = buildClaudeSdkQueryOptions({ ...base, agentType, mode });
+      const options = buildClaudeSdkQueryOptions({
+        ...base,
+        agentType,
+        outputPolicySessionId: "options-plan-test",
+        mode: () => mode,
+      });
       assert.ok(
         !(options.tools as string[]).includes("Skill"),
         `${agentType} does not expose Skill in ${mode} mode`,
@@ -370,7 +426,8 @@ async function main(): Promise<void> {
   const planWithLibrarySkill = buildClaudeSdkQueryOptions({
     ...base,
     agentType: "workshop",
-    mode: "plan",
+    outputPolicySessionId: "options-plan-test",
+    mode: () => "plan",
     frozenSkillNames: ["alpha-skill"],
   });
   assert.ok(

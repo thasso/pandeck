@@ -50,10 +50,15 @@ function isConflictCommand(command: string): boolean {
   return /\bgit\s+(?:rebase|merge|cherry-pick)\b/.test(command);
 }
 
-/** Native output hooks for one Claude query. Maps are query-local by design. */
+/**
+ * Native output hooks for one Claude query. Maps are query-local by design.
+ * `refuseTool` answers a refusal reason for a call the session's live policy
+ * forbids (Plan's mutating natives); it runs before any admission.
+ */
 export function claudeOutputPolicyHooks(
   sessionId: string,
   lifecycle?: ClaudeQueryLifecycleHooks,
+  refuseTool?: (toolName: string) => string | undefined,
 ): NonNullable<ClaudeSdkOptions["hooks"]> {
   const reads = new Map<string, ReadWindowDecision>();
   return {
@@ -63,6 +68,15 @@ export function claudeOutputPolicyHooks(
           async (input, toolUseId) => {
             if (input.hook_event_name !== "PreToolUse")
               return { continue: true };
+            const refusal = refuseTool?.(input.tool_name);
+            if (refusal)
+              return {
+                hookSpecificOutput: {
+                  hookEventName: "PreToolUse" as const,
+                  permissionDecision: "deny" as const,
+                  permissionDecisionReason: refusal,
+                },
+              };
             const resolvedToolUseId = toolUseId ?? input.tool_use_id;
             if (lifecycle) {
               const admission = await lifecycle.preToolUse({

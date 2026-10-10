@@ -52,14 +52,18 @@ export const CLAUDE_SDK_NATIVE_TOOLS = [
 
 /**
  * The native tools that MUTATE the working tree. Plan mode
- * ({@link SessionMode}) subtracts exactly these from whatever native set the
- * persona would otherwise get; everything else — `Read`, `Bash`, the search
- * pair, `ToolSearch` and the whole `mcp__pa__*` namespace — stays untouched, so
- * a planning session still investigates at full strength. That also bounds what
- * Plan promises: `Bash` and the write-capable `mcp__pa__*` tools can still
- * change files, so this is "no native file edits", not a read-only session.
- * They are members of {@link KNOWN_CLAUDE_NATIVE_TOOLS}, so dropping them here
- * also moves them onto `disallowedTools` with no second list to keep in step.
+ * ({@link SessionMode}) refuses exactly these; everything else — `Read`,
+ * `Bash`, the search pair, `ToolSearch` and the whole `mcp__pa__*` namespace —
+ * stays untouched, so a planning session still investigates at full strength.
+ * That also bounds what Plan promises: `Bash` and the write-capable
+ * `mcp__pa__*` tools can still change files, so this is "no native file edits",
+ * not a read-only session.
+ *
+ * They stay on `tools:` in Plan and are refused per call by the `PreToolUse`
+ * gate ({@link planModeNativeRefusal}), never moved onto `disallowedTools`:
+ * the tool list is fixed when the Claude process starts, and a process kept
+ * alive for retained background work must be able to return to Build without
+ * a restart that would kill that work ([Task-756](pa://task/756)).
  */
 const CLAUDE_NATIVE_MUTATING_TOOLS: readonly string[] = [
   "Write",
@@ -67,6 +71,20 @@ const CLAUDE_NATIVE_MUTATING_TOOLS: readonly string[] = [
   "MultiEdit",
   "NotebookEdit",
 ];
+
+/**
+ * Plan's refusal of a mutating native, or undefined when the call may run.
+ * Evaluated per call against the LIVE mode, so a switch reaches a running
+ * process on its next tool call.
+ */
+function planModeNativeRefusal(
+  mode: SessionMode,
+  toolName: string,
+): string | undefined {
+  if (mode !== "plan" || !CLAUDE_NATIVE_MUTATING_TOOLS.includes(toolName))
+    return undefined;
+  return `${toolName} is unavailable while this session is in Plan mode. Deliver the plan as your reply; the user switches back to Build to implement it.`;
+}
 
 /** All native tools we know about, so the rest can be explicitly disallowed. */
 const KNOWN_CLAUDE_NATIVE_TOOLS = [
@@ -92,11 +110,13 @@ export interface BuildClaudeSdkQueryOptionsInput {
   modelId: string;
   thinkingLevel: ThinkingLevel;
   /**
-   * Build (default) or Plan. Recomputed on EVERY turn — a fresh `query()` is
-   * built per prompt — so flipping the session's mode takes effect on the next
-   * turn without any SDK control request.
+   * The session's LIVE Build/Plan mode, read per tool call. It never shapes
+   * `tools:`/`disallowedTools` — a retained process outlives a mode switch —
+   * only the `PreToolUse` gate and `canUseTool`, so a switch applies to the
+   * running process too. Requires `outputPolicySessionId`, whose hooks carry
+   * the gate. Omitted means Build.
    */
-  mode?: SessionMode;
+  mode?: () => SessionMode;
   /** Provider session id from a prior run, to resume. */
   providerSessionId?: string;
   /** Override the native tools exposed; defaults to {@link CLAUDE_SDK_NATIVE_TOOLS}. */
@@ -150,6 +170,7 @@ export interface BuildClaudeSdkQueryOptionsInput {
 function buildCanUseTool(
   allowed: ReadonlySet<string>,
   allowPaMcp: boolean,
+  mode: () => SessionMode,
   planRestrictedAppTools: ReadonlySet<string>,
 ): NonNullable<ClaudeSdkOptions["canUseTool"]> {
   // External-name prefix the SDK gives tools served by our in-process `pa` server.
@@ -158,11 +179,14 @@ function buildCanUseTool(
     const appToolName = toolName.startsWith(mcpPrefix)
       ? toolName.slice(mcpPrefix.length)
       : undefined;
-    if (appToolName && planRestrictedAppTools.has(appToolName))
+    const planned = mode() === "plan";
+    if (planned && appToolName && planRestrictedAppTools.has(appToolName))
       return {
         behavior: "deny",
         message: planModeToolUnavailableMessage(appToolName),
       };
+    const nativeRefusal = planModeNativeRefusal(mode(), toolName);
+    if (nativeRefusal) return { behavior: "deny", message: nativeRefusal };
     if (allowed.has(toolName) || (allowPaMcp && appToolName !== undefined))
       return { behavior: "allow", updatedInput: input };
     return {
@@ -186,26 +210,26 @@ export function buildClaudeSdkQueryOptions(
     agentType === "personal-assistant" ||
     agentType === "workflow-coordinator";
   const defaultNative = isAssistantPersona ? [] : CLAUDE_SDK_NATIVE_TOOLS;
-  // Plan mode is a pure SUBTRACTION applied after the persona (or an explicit
-  // override) has decided the native set — never `permissionMode: "plan"`,
-  // which would stop tool execution generally and impose the CLI's own
-  // ExitPlanMode protocol. Build is byte-identical to having no mode at all.
-  // `disableTools` is reserved for CLI-local no-model operations such as
-  // compaction, where even Skill/ToolSearch must be absent deliberately.
+  // Plan mode never shapes the native set: it is a per-call refusal against
+  // the live mode (see CLAUDE_NATIVE_MUTATING_TOOLS) — and never
+  // `permissionMode: "plan"`, which would stop tool execution generally and
+  // impose the CLI's own ExitPlanMode protocol. `disableTools` is reserved for
+  // CLI-local no-model operations such as compaction, where even
+  // Skill/ToolSearch must be absent deliberately.
   const native = [
     ...(input.disableTools ? [] : (input.nativeTools ?? defaultNative)),
-  ].filter(
-    (name) =>
-      input.mode !== "plan" || !CLAUDE_NATIVE_MUTATING_TOOLS.includes(name),
-  );
+  ];
   const allowed = new Set(native);
+  if (input.mode && !input.outputPolicySessionId)
+    throw new Error(
+      "A Claude query with a session mode needs outputPolicySessionId: its PreToolUse hook enforces Plan.",
+    );
+  const mode = input.mode ?? (() => "build" as const);
   const planRestrictedAppTools = new Set(
-    input.mode === "plan"
-      ? AGENT_TYPES[agentType]
-          .tools()
-          .filter((tool) => !isPlanModeToolAllowed(tool))
-          .map((tool) => tool.name)
-      : [],
+    AGENT_TYPES[agentType]
+      .tools()
+      .filter((tool) => !isPlanModeToolAllowed(tool))
+      .map((tool) => tool.name),
   );
   const disallowedTools = KNOWN_CLAUDE_NATIVE_TOOLS.filter(
     (name) => !allowed.has(name),
@@ -254,6 +278,7 @@ export function buildClaudeSdkQueryOptions(
           hooks: claudeOutputPolicyHooks(
             input.outputPolicySessionId,
             input.lifecycleHooks,
+            (toolName) => planModeNativeRefusal(mode(), toolName),
           ),
         }
       : {}),
@@ -299,6 +324,7 @@ export function buildClaudeSdkQueryOptions(
     canUseTool: buildCanUseTool(
       new Set(toolsAllowlist),
       Boolean(input.mcpServer),
+      mode,
       planRestrictedAppTools,
     ),
     model: claudeSdkModelId(input.modelId),
