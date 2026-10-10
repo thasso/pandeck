@@ -1413,11 +1413,7 @@ function SessionNamingSection({
           onChange={save}
         />
 
-        {models.length === 0 && (
-          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-            No models are available. Log in with terminal pi first.
-          </div>
-        )}
+        {models.length === 0 && <NoModelsNote />}
       </SettingsCard>
     </div>
   );
@@ -1464,11 +1460,7 @@ function CommitAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
           <span className="font-mono">--force</span>.
         </FieldDescription>
 
-        {models.length === 0 && (
-          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-            No models are available. Log in with terminal pi first.
-          </div>
-        )}
+        {models.length === 0 && <NoModelsNote />}
       </SettingsCard>
     </div>
   );
@@ -1503,11 +1495,7 @@ function PrAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
           onChange={save}
         />
 
-        {models.length === 0 && (
-          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-            No models are available. Log in with terminal pi first.
-          </div>
-        )}
+        {models.length === 0 && <NoModelsNote />}
       </SettingsCard>
     </div>
   );
@@ -1796,10 +1784,10 @@ function PdfConversionSection({
         </FieldDescription>
 
         {claudeModels.length === 0 && (
-          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
+          <EmptyBox>
             No Claude SDK models are available. Enable the Claude SDK
             integration to configure the fallback.
-          </div>
+          </EmptyBox>
         )}
       </SettingsCard>
     </div>
@@ -2176,11 +2164,7 @@ function PromptRefinementSection({
           Markdown prompt.
         </FieldDescription>
 
-        {models.length === 0 && (
-          <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-            No models are available. Log in with terminal pi first.
-          </div>
-        )}
+        {models.length === 0 && <NoModelsNote />}
       </SettingsCard>
     </div>
   );
@@ -3508,7 +3492,7 @@ function OpenAiCompatibleSection({
           </NativeSelect>
         </Field>
 
-        <div className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Save and discover calls <span className="font-mono">/models</span>,
           stores the discovered model metadata in app config, and refreshes the
           live model registry. Thinking control is how the server takes a
@@ -3518,7 +3502,7 @@ function OpenAiCompatibleSection({
             chat_template_kwargs.enable_thinking
           </span>
           , as Qwen models on llama.cpp and vLLM expect.
-        </div>
+        </p>
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button onClick={saveAndTest}>Save and discover models</Button>
@@ -3933,5 +3917,12 @@ export function ModelsSection({
         </div>
       )}
     </div>
+  );
+}
+
+/** No model to pick: the account has not been signed in to yet. */
+function NoModelsNote() {
+  return (
+    <EmptyBox>No models are available. Log in with terminal pi first.</EmptyBox>
   );
 }

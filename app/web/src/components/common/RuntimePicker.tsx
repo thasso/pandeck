@@ -364,41 +364,6 @@ export function QuickRow({
   );
 }
 
-/**
- * Two small pickers sharing ONE row, each a labelled `listbox` of its own.
- *
- * For axes that are a couple of chips wide (agent, Build/Plan): a row apiece
- * costs vertical space the landing page does not have, and pushing one of them
- * off the surface entirely — into the composer's pill strip — is how a mode
- * nobody picked goes unnoticed.
- *
- * WRAPS rather than scrolling, unlike {@link QuickRow}: these groups are short
- * enough to fit a row on any desktop, and a phone that cannot fit them gets both
- * in full on two lines instead of a horizontal scroll whose second group starts
- * off-screen — the very invisibility this row exists to fix.
- */
-export function QuickRowSplit({
-  groups,
-}: {
-  groups: readonly { label: string; children: ReactNode }[];
-}) {
-  return (
-    <div className="flex w-full flex-wrap justify-center gap-x-7 gap-y-3 px-4 pb-1.5">
-      {groups.map((group) => (
-        <div key={group.label} className="flex flex-col">
-          <div className="mb-1.5 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {group.label}
-          </div>
-          <div role="listbox" aria-label={group.label} className="flex gap-2">
-            {group.children}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** One pickable chip inside a {@link QuickRow}. */
 /** A QuickPill laid out as a two-line card (worktrees, provider accounts). */
 export const QUICK_CARD = "h-auto flex-col items-start gap-1 py-2 text-left";
 

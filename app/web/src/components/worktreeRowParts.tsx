@@ -35,7 +35,7 @@ export function compareWorktrees(a: WorktreeRecord, b: WorktreeRecord): number {
  * badge pushed right, and the three-axis summary under it. The host owns the
  * row around it — selection, the click, the revealed action.
  */
-export function WorktreeRowSummary({
+function WorktreeRowSummary({
   worktree,
   status,
   now,
@@ -100,7 +100,7 @@ export function WorktreeLineDelta({
 }
 
 /** `merged` remains a badge; unlike ahead/behind it is one semantic state. */
-export function WorktreeMergedBadge({
+function WorktreeMergedBadge({
   status,
 }: {
   status: WorktreeGitStatus | undefined;
@@ -140,7 +140,7 @@ function calmLine(
   return `level with ${worktree.baseBranch || "base"}`;
 }
 
-export function AxesSummary({
+function AxesSummary({
   axes,
   baseLabel,
 }: {

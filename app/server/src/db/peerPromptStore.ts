@@ -1219,7 +1219,7 @@ function listByParticipant(sessionId: string, limit = 50): PeerPromptRecord[] {
 }
 
 /** One other session's peer prompts with a participant, counted. */
-export interface PeerPromptPeerCounts {
+interface PeerPromptPeerCounts {
   peerSessionId: string;
   sent: number;
   received: number;

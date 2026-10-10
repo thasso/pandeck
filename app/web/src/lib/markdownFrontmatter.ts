@@ -251,7 +251,7 @@ function fieldLabel(key: string): string {
  * issue or pull request, "Google Doc", "Slack message"; a `pa://` link keeps
  * its URI, which the Markdown renderer replaces with the object's title.
  */
-export function sourceRefLabel(href: string): string {
+function sourceRefLabel(href: string): string {
   if (href.startsWith("pa://")) return href;
   let url: URL;
   try {

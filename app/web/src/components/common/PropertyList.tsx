@@ -3,6 +3,7 @@ import { Button } from "../ui/button.tsx";
 import { Input } from "../ui/input.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.tsx";
 import { ErrorNote } from "./load.tsx";
+import { useElapsedNow } from "../useElapsedNow.ts";
 import { errorOf, isPending, type LoadState } from "../../lib/loadState.ts";
 import {
   formatPropertyDate,
@@ -93,14 +94,9 @@ export function PropertyText({
  * A date in a `PropertyList`: the local date (and time, when the value has
  * one) with how long ago it was beside it, muted; the full timestamp on hover.
  */
-export function DateProperty({
-  date,
-  now = Date.now(),
-}: {
-  date: PropertyDateValue;
-  /** A shared ticker's value, when the host keeps one. */
-  now?: number;
-}) {
+export function DateProperty({ date }: { date: PropertyDateValue }) {
+  // "3 days ago" drifts slowly: the idle ticker re-labels it once a minute.
+  const now = useElapsedNow(false);
   const { label, relative, full } = formatPropertyDate(date, now);
   return (
     <PropertyText title={full}>

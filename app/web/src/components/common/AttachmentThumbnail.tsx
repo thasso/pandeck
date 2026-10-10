@@ -4,7 +4,7 @@ import { IconButton } from "./IconButton.tsx";
 import { ImageLightbox } from "./ImageLightbox.tsx";
 import { Spinner } from "./load.tsx";
 
-export function formatAttachmentBytes(value: number): string {
+function formatAttachmentBytes(value: number): string {
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   if (value >= 1024) return `${Math.round(value / 1024)} KB`;
   return `${value} B`;

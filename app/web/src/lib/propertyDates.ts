@@ -46,10 +46,7 @@ const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
 ];
 
 /** "3 days ago", "in 2 hours", "yesterday" — or "just now". */
-export function relativeDateLabel(
-  date: PropertyDateValue,
-  now: number,
-): string {
+function relativeDateLabel(date: PropertyDateValue, now: number): string {
   const delta = date.ms - now;
   const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
   if (date.dateOnly) {

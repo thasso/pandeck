@@ -32,6 +32,7 @@ import { parseDocumentTarget } from "@assistant/shared/documentTargets";
 import { ArtifactOverlay } from "./ArtifactOverlay.tsx";
 import { DisclosureRow } from "./common/DisclosureRow.tsx";
 import { relativeAge } from "../lib/relativeTime.ts";
+import { useElapsedNow } from "./useElapsedNow.ts";
 import {
   PropertyLabel,
   PropertyList,
@@ -703,6 +704,8 @@ function ArtifactsSection({
     () => [...artifacts].sort((a, b) => b.createdAt - a.createdAt),
     [artifacts],
   );
+  // The "x ago" labels drift; nothing here is running, so a slow tick.
+  const now = useElapsedNow(false);
   return (
     <InspectorSection
       id="artifacts"
@@ -756,7 +759,7 @@ function ArtifactsSection({
                   </span>
                 </>
               }
-              age={relativeAge(artifact.createdAt, Date.now())}
+              age={relativeAge(artifact.createdAt, now)}
               ageTitle={new Date(artifact.createdAt).toLocaleString()}
               openLabel={`Open ${artifact.label}`}
               onOpen={open}
