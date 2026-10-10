@@ -2784,6 +2784,60 @@ describe("waiting peer prompts in the composer queue", () => {
     assert.ok(log.indexOf("second now") < log.indexOf("older queued"));
   });
 
+  it("a send-now arriving during an automatic delivery runs before the drain claims another batch", async () => {
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    // Three senders, so each row is its own FIFO batch.
+    const running = await sendPeerPrompt({
+      senderSessionId: seed("Running sender"),
+      targetSessionId: recipient,
+      prompt: "automatic first",
+      responseRequested: false,
+    });
+    const older = await sendPeerPrompt({
+      senderSessionId: seed("Older sender"),
+      targetSessionId: recipient,
+      prompt: "older still queued",
+      responseRequested: false,
+    });
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "chosen by the user",
+      responseRequested: false,
+    });
+    const drain = drainRecipient(recipient);
+    await until(() => driver.isRunning, "the automatic delivery's turn");
+    assert.equal(
+      peerPromptStore.getById(running.message.id)!.status,
+      "acknowledged",
+    );
+
+    // The user picks the newest row while the drain is mid-turn.
+    const sendNow = sendQueuedPeerPromptNow(recipient, chosen.card.messageKey);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    release();
+    await Promise.all([drain, sendNow]);
+    assert.equal(
+      peerPromptStore.getById(chosen.message.id)!.status,
+      "completed",
+      "the explicit send delivered its row",
+    );
+    await until(
+      () => peerPromptStore.getById(older.message.id)!.status === "completed",
+      "FIFO draining to resume after the explicit send",
+    );
+    const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    assert.ok(
+      log.indexOf("automatic first") < log.indexOf("chosen by the user"),
+    );
+    assert.ok(
+      log.indexOf("chosen by the user") < log.indexOf("older still queued"),
+      "the drain yielded instead of claiming the older batch first",
+    );
+  });
+
   it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {
     const sender = seed("S");
     const recipient = seed("R");

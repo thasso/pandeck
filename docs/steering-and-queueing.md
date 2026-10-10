@@ -128,7 +128,10 @@ card, which the commands address it by.
   is marked `interrupted`, which tells a sender waiting on a reply. An idle
   session gets it as its next turn, ahead of the user's own queue, because the
   user chose it. A running turn that cannot steer offers no send-now: the row is
-  delivered when the turn ends.
+  delivered when the turn ends. Send-now holds the recipient's delivery
+  authority: one arriving during an automatic delivery waits out that turn and
+  goes before the drain claims its next batch, which resumes from the FIFO head
+  once the send is done.
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 

@@ -612,6 +612,15 @@ const drainLocks = new Map<string, Promise<void>>();
 const explicitDrainWaiters = new Map<string, number>();
 
 /**
+ * Whether a send-now is waiting for this recipient's authority. An automatic
+ * drain neither starts nor claims another batch while one is: the waiter goes
+ * first, and its release resumes FIFO draining.
+ */
+function explicitSendWaiting(recipientId: string): boolean {
+  return (explicitDrainWaiters.get(recipientId) ?? 0) > 0;
+}
+
+/**
  * Run an explicit claim under the same recipient authority as automatic drains.
  * If a drain is in flight, wait for it and re-check: it may have delivered or
  * started the target turn. The reservation is installed synchronously before
@@ -645,7 +654,7 @@ async function withRecipientDrainLock<T>(
     release();
     // Waiting explicit sends retain authority before ordinary FIFO draining.
     // drainRecipient also checks this count for idle hooks racing the handoff.
-    if ((explicitDrainWaiters.get(recipientId) ?? 0) === 0) {
+    if (!explicitSendWaiting(recipientId)) {
       void drainRecipient(recipientId).catch(() => {});
       if (noticeWakesPending.delete(recipientId))
         void drainRecipient(recipientId).catch(() => {});
@@ -754,13 +763,17 @@ function cancelInterruptionNoticeRetries(): void {
  */
 export function drainRecipient(recipientId: string): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
-  if ((explicitDrainWaiters.get(recipientId) ?? 0) > 0)
-    return Promise.resolve();
+  if (explicitSendWaiting(recipientId)) return Promise.resolve();
   const existing = drainLocks.get(recipientId);
   if (existing) return existing;
   const run = drainRecipientOnce(recipientId).finally(() => {
     drainLocks.delete(recipientId);
-    if (noticeWakesPending.delete(recipientId))
+    // A drain that yielded to a send-now leaves a pending wake for that
+    // send's release, which drains again once it is done.
+    if (
+      !explicitSendWaiting(recipientId) &&
+      noticeWakesPending.delete(recipientId)
+    )
       void drainRecipient(recipientId).catch(() => {});
   });
   drainLocks.set(recipientId, run);
@@ -812,8 +825,10 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
 
   const driver = live;
   // Drain FIFO batches until the queue is empty or the target starts running.
+  // Each batch is a whole turn, so a send-now can start waiting during one: it
+  // goes next, and its release drains again from the FIFO head.
   for (;;) {
-    if (driver.isRunning) return;
+    if (driver.isRunning || explicitSendWaiting(recipientId)) return;
     const batch = peerPromptStore.claimBatch(
       recipientId,
       "drainer",
@@ -826,6 +841,7 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   }
   // Incoming work first: a session that is about to be told an old prompt died
   // should already be holding whatever arrived for it since.
+  if (explicitSendWaiting(recipientId)) return;
   await deliverInterruptionNotice(driver, recipientId);
 }
 
