@@ -1,9 +1,11 @@
 import { Fragment, useMemo, type ComponentProps } from "react";
 import {
   splitMarkdownFrontmatter,
+  type FrontmatterRef,
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
+import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
 import {
   DateProperty,
   PropertyLabel,
@@ -39,17 +41,27 @@ export function MarkdownFile({
     () => splitMarkdownFrontmatter(text),
     [text],
   );
+  // A file's text is fetched by its viewer, never seen by the host that
+  // resolves transcript links, so its `pa://` titles come from the app here.
+  const linked = useMentionedPaObjectReferences(text);
+  const paObjectReferences =
+    markdownProps.paObjectReferences ?? linked.references;
+  const onOpenPaObject = markdownProps.onOpenPaObject ?? linked.onOpen;
+  const linkProps = {
+    ...(paObjectReferences ? { paObjectReferences } : {}),
+    ...(onOpenPaObject ? { onOpenPaObject } : {}),
+  };
   return (
     <>
       {frontmatter ? (
         <MarkdownFrontmatterHeader
           frontmatter={frontmatter}
-          paObjectReferences={markdownProps.paObjectReferences}
-          onOpenPaObject={markdownProps.onOpenPaObject}
+          paObjectReferences={paObjectReferences}
+          onOpenPaObject={onOpenPaObject}
           className="mb-4"
         />
       ) : null}
-      <Markdown text={body} {...markdownProps} />
+      <Markdown text={body} {...markdownProps} {...linkProps} />
     </>
   );
 }
@@ -131,19 +143,9 @@ function MarkdownFrontmatterHeader({
                 <PropertyText className="flex flex-col items-start gap-0.5">
                   {source.kind ? <span>{source.kind}</span> : null}
                   {source.refs.length > 0 ? (
-                    // Through the Markdown renderer, so a `pa://` ref resolves
-                    // to the object's title and opens in the app, and a web
-                    // link behaves as every other link does.
-                    <Markdown
-                      density="compact"
-                      text={source.refs
-                        .map((ref) =>
-                          ref.href.startsWith("pa://")
-                            ? ref.href
-                            : `[${ref.label.replace(/[[\]]/g, "\\$&")}](<${ref.href}>)`,
-                        )
-                        .join("\\\n")}
-                      {...(paObjectReferences ? { paObjectReferences } : {})}
+                    <RefLinks
+                      refs={source.refs}
+                      paObjectReferences={paObjectReferences}
                       onOpenPaObject={onOpenPaObject}
                     />
                   ) : null}
@@ -159,6 +161,14 @@ function MarkdownFrontmatterHeader({
                 </PropertyLabel>
                 {field.date ? (
                   <DateProperty date={field.date} />
+                ) : field.links ? (
+                  <PropertyText>
+                    <RefLinks
+                      refs={field.links}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  </PropertyText>
                 ) : (
                   <PropertyText className="break-words" title={field.full}>
                     {field.value}
@@ -170,5 +180,35 @@ function MarkdownFrontmatterHeader({
         </CardContent>
       </Card>
     </header>
+  );
+}
+
+/**
+ * Frontmatter links, one per line, through the Markdown renderer: a `pa://`
+ * link reads as its object's title and opens in the app, a web link shows its
+ * short name (`sourceRefLabel`) and behaves as every other link does.
+ */
+function RefLinks({
+  refs,
+  paObjectReferences,
+  onOpenPaObject,
+}: {
+  refs: readonly FrontmatterRef[];
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
+}) {
+  return (
+    <Markdown
+      density="compact"
+      text={refs
+        .map((ref) =>
+          ref.href.startsWith("pa://")
+            ? ref.href
+            : `[${ref.label.replace(/[[\]]/g, "\\$&")}](<${ref.href}>)`,
+        )
+        .join("\\\n")}
+      {...(paObjectReferences ? { paObjectReferences } : {})}
+      onOpenPaObject={onOpenPaObject}
+    />
   );
 }

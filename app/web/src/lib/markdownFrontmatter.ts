@@ -15,6 +15,8 @@ interface FrontmatterField {
   label: string;
   /** Set when the value is one ISO date: the header formats it as a date. */
   date?: PropertyDateValue;
+  /** Set when every value is a link (`links:`): the header lists them. */
+  links?: FrontmatterRef[];
   /** The value as shown, clipped to one readable line. */
   value: string;
   /** The whole value when `value` had to be clipped. */
@@ -43,10 +45,30 @@ export interface MarkdownFrontmatter {
   parsed: boolean;
 }
 
+/** A link, named the way a reader knows it (`sourceRefLabel`). */
+export interface FrontmatterRef {
+  href: string;
+  label: string;
+}
+
 interface FrontmatterSource {
   /** `agent`, `slack`, `meeting`… as a label ("Agent"). */
   kind?: string;
-  refs: Array<{ href: string; label: string }>;
+  refs: FrontmatterRef[];
+}
+
+const LINK_RE = /^(?:pa|https?):\/\/\S+$/;
+
+/** The value as links when it is one link or a list of only links. */
+function linkList(value: unknown): FrontmatterRef[] | null {
+  const items = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(items) || items.length === 0) return null;
+  const refs: FrontmatterRef[] = [];
+  for (const item of items) {
+    if (typeof item !== "string" || !LINK_RE.test(item.trim())) return null;
+    refs.push({ href: item.trim(), label: sourceRefLabel(item.trim()) });
+  }
+  return refs;
 }
 
 const OPENING_FENCE_RE = /^---\r?\n/;
@@ -114,6 +136,16 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
         : null;
     if (date) {
       out.fields.push({ key, label: dateFieldLabel(key), value: shown, date });
+      continue;
+    }
+    const links = linkList(field);
+    if (links) {
+      out.fields.push({
+        key,
+        label: key === "links" ? "Links" : key,
+        value: shown,
+        links,
+      });
       continue;
     }
     out.fields.push(
