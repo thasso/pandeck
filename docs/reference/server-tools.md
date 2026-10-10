@@ -781,21 +781,19 @@ persona toolsets.
   TEXT output — keep result text byte-stable unless the web renderer changes
   with it.
 - The Task tools implement the product contract in `docs/tasks.md` — what a Task
-  is, who owns status, when an agent may create one, and what a comment is for.
-  Read it before changing their surface; the notes here only describe the code.
-  `taskTools.test.ts` pins the rules that exist on no other surface.
+  is, who owns status, and when an agent may create one. Read it before changing
+  their surface; the notes here only describe the code. `taskTools.test.ts` pins
+  the rules that exist on no other surface.
 - `task_read` resolves durable ids through `id` (never text `query`), can return
   an epic plus ordered descendants through `includeSubtasks`, and bounds
   list/search output to 50 Tasks by default. Task tool text is compact JSON and
   omits internal bookkeeping from ordinary list results.
 - A `task_read` result is bounded by BYTES as well as by item count, because an
-  epic with descendants, full descriptions and a long trace used to overflow the
-  harness tool-output limit outright — which costs more round trips than the
-  one-call read saved. The whole payload fits a 24 KB budget: comments are
-  bounded first (12 KB of it) and the Tasks get what is left, so a long trace
-  cannot starve the read of the Tasks that were asked for. The Task side then
-  degrades in a fixed order and names what it did — clip each description to 2
-  000 chars (`descriptionsTruncated`, per item `descriptionTruncated` and
+  epic with descendants and full descriptions could overflow the harness
+  tool-output limit outright — which costs more round trips than the one-call
+  read saved. The whole payload fits a 24 KB budget. The Task side degrades in a
+  fixed order and names what it did — clip each description to 2 000 chars
+  (`descriptionsTruncated`, per item `descriptionTruncated` and
   `descriptionChars`), drop descriptions so the short previews survive
   (`descriptionsOmitted`), then drop trailing Tasks (`omittedForBudget`, with
   `truncated` and `totalCount`). Losing bodies beats losing Tasks: a caller that

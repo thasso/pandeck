@@ -52,9 +52,13 @@ describe("timeline payload policy", () => {
       version: 1,
       changedCount: 1,
       changed: [
-        { id: "297", title: "Render Task mutations as a card", status: "todo" },
+        {
+          id: "297",
+          title: "Render Task mutations as a card",
+          status: "todo",
+          descriptionEditsApplied: 1,
+        },
       ],
-      comments: [{ taskId: "297", body: "x".repeat(4_000) }],
     });
     const call = {
       entryId: "e1",
@@ -62,7 +66,13 @@ describe("timeline payload policy", () => {
       name: "mcp__pa__task_manage",
       input: {
         operations: [
-          { operation: "update", id: "297", comment: "x".repeat(4_000) },
+          {
+            operation: "update",
+            id: "297",
+            descriptionEdits: [
+              { oldText: "x".repeat(4_000), newText: "y".repeat(4_000) },
+            ],
+          },
         ],
       },
     };

@@ -212,11 +212,11 @@ tasks/projects and browser-side helpers.
   `startWorktreeReviewDraft` resolve the Task/project/persona a review session
   inherits through `lib/sessionHandoff.ts`'s shared derivation rule (origin
   Task, then a single claiming Task, then the worktree's Task — ambiguity
-  attaches nothing), so the Task context injection and the Task trace work in
-  both directions; only the prompt assembly stays separate, because a comment
-  bundle is structured context and the review instruction is one sentence. The
-  two directions already compose in sequence, which is why they must not be
-  combined into one flow. When `/review` runs from the chat composer,
+  attaches nothing), so the Task context injection works in both directions;
+  only the prompt assembly stays separate, because a comment bundle is
+  structured context and the review instruction is one sentence. The two
+  directions already compose in sequence, which is why they must not be combined
+  into one flow. When `/review` runs from the chat composer,
   `runClientSlashCommand` lands that draft in the SAME `Composer` instance the
   command was typed into (the page swaps the transcript above it, not the
   composer itself), and `startStagedSession`'s `flushSync` commits the staging —
