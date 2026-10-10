@@ -111,6 +111,10 @@ futures-util = "0.3"
 rfd = "0.15"
 tokio = { version = "1", features = ["io-util", "macros", "net", "sync", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+# tokio-tungstenite's rustls comes with no crypto backend, and building a client
+# config without one panics in every forwarded connection's task. `ring` is
+# already in the graph through rustls-webpki; `port_forward` installs it.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
   "std",
   "WKUserContentController",

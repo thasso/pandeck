@@ -215,10 +215,10 @@ async function checkWebAndSocket() {
 }
 
 /**
- * An upgrade with the wrong token is closed within 5 s and never opens.
- * Returns the status line it was answered with, for the log: under Bun there
- * is none, since nothing written to a refused upgrade socket reaches the
- * client.
+ * An upgrade with the wrong token is answered 401 within 5 s and never opens.
+ * Bun 1.3.13 delivered nothing written to a refused upgrade socket, so every
+ * refusal reached the client as a bare close (a 502 behind a proxy), and the
+ * desktop shell could not tell a dead grant from a restarting server.
  */
 async function checkRejectedUpgrade() {
   const reply = await new Promise((resolveReply, reject) => {
@@ -258,11 +258,12 @@ async function checkRejectedUpgrade() {
       reject(error);
     });
   });
+  const status = reply.split("\r\n", 1)[0] ?? "";
   assert(
-    !reply.includes(" 101 "),
-    "The packaged server upgraded a WebSocket with the wrong token.",
+    status.startsWith("HTTP/1.1 401 "),
+    `A wrong-token WebSocket upgrade was answered ${JSON.stringify(status || "(nothing)")}, not 401.`,
   );
-  return reply.split("\r\n", 1)[0] || "(connection closed without a status)";
+  return status;
 }
 
 /**

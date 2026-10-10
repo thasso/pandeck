@@ -218,6 +218,16 @@ function binaryBuffer(data: RawData): Buffer {
 }
 
 /**
+ * Why the target refused, as the close reason the shell shows the user. It
+ * stays inside a close frame's 123 bytes.
+ */
+function targetRefusal(port: number, error: NodeJS.ErrnoException): string {
+  return error.code === "ECONNREFUSED"
+    ? `nothing is listening on port ${port} there`
+    : `could not connect to port ${port} there (${error.code ?? "unknown error"})`;
+}
+
+/**
  * Bridge one authenticated WebSocket to the grant's fixed loopback port.
  *
  * Both directions keep one write in flight and read no further until it is
@@ -329,7 +339,12 @@ export function attachPortForwardSocket(
   lease.setTerminate(close);
   if (settled) return;
 
-  connectTimer = setTimeout(close, CONNECT_TIMEOUT_MS);
+  // A target that never connects is closed with a reason, because the shell
+  // shows it to the user: their browser sees only a reset.
+  connectTimer = setTimeout(
+    () => close(1011, `timed out connecting to port ${lease.port} there`),
+    CONNECT_TIMEOUT_MS,
+  );
   connectTimer.unref();
   tcp.once("connect", () => {
     connected = true;
@@ -372,7 +387,10 @@ export function attachPortForwardSocket(
     else if (!queueForTarget(payload))
       close(1008, "Forwarding target is not reading");
   });
-  tcp.once("error", () => close());
+  tcp.once("error", (error: NodeJS.ErrnoException) => {
+    if (connected) close();
+    else close(1011, targetRefusal(lease.port, error));
+  });
   // The target's own end still delivers what it sent before it.
   tcp.once("close", () => {
     targetClosed = true;

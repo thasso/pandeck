@@ -286,6 +286,53 @@ describe("attachPortForwardSocket flow control", () => {
     expect(Buffer.concat(ws.sent).equals(chunk)).toBe(true);
   });
 
+  test("a target that refuses is closed with a reason the shell can show", () => {
+    const refused = fakeBridge(false);
+    refused.target.emit(
+      "error",
+      Object.assign(new Error("connect ECONNREFUSED"), {
+        code: "ECONNREFUSED",
+      }),
+    );
+    expect(refused.ws.closed).toEqual({
+      code: 1011,
+      reason: "nothing is listening on port 9000 there",
+    });
+    expect(refused.release).toHaveBeenCalledOnce();
+
+    const unreachable = fakeBridge(false);
+    unreachable.target.emit(
+      "error",
+      Object.assign(new Error("connect EADDRNOTAVAIL"), {
+        code: "EADDRNOTAVAIL",
+      }),
+    );
+    expect(unreachable.ws.closed?.reason).toBe(
+      "could not connect to port 9000 there (EADDRNOTAVAIL)",
+    );
+
+    // Once connected, a target error aborts: the stream was already carried.
+    const broken = fakeBridge(false);
+    broken.target.emit("connect");
+    broken.target.emit("error", new Error("read ECONNRESET"));
+    expect(broken.ws.closed).toBeUndefined();
+    expect(broken.ws.terminated).toBe(true);
+  });
+
+  test("a target that never connects is closed with a reason", () => {
+    vi.useFakeTimers();
+    try {
+      const { ws } = fakeBridge(false);
+      vi.advanceTimersByTime(10_000);
+      expect(ws.closed).toEqual({
+        code: 1011,
+        reason: "timed out connecting to port 9000 there",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("each side's close first delivers what it already sent", async () => {
     const client = fakeBridge(false);
     client.target.emit("connect");

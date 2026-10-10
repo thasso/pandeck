@@ -25,6 +25,7 @@ const status = (port: number): PortForwardTunnelStatus => ({
   serverOrigin: "https://app.acme.test",
   activeConnections: 0,
   expiresAt: "2030-01-01T00:00:00.000Z",
+  lastFailure: null,
 });
 
 beforeEach(() => {

@@ -12,7 +12,10 @@ vi.mock("node:sqlite", async (importOriginal) => {
   class DatabaseSync extends sqlite.DatabaseSync {
     constructor(...args: ConstructorParameters<typeof sqlite.DatabaseSync>) {
       super(...args);
-      if (this.isOpen) this.exec("PRAGMA synchronous = OFF");
+      // From the option, not `isOpen`: the Bun SQLite adapter refuses members
+      // the server never uses, and this file also runs under Bun
+      // (docs/deployment.md#running-the-server-suite-under-bun).
+      if (args[1]?.open !== false) this.exec("PRAGMA synchronous = OFF");
     }
   }
   return { ...sqlite, DatabaseSync };

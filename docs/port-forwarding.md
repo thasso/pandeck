@@ -35,7 +35,9 @@ queue instead, copied into 64 KiB chunks. Empty frames are dropped, and a
 connection with more than 4 MiB queued is closed with 1008. A text frame closes
 with 1003 and an oversized frame with 1009, before any of their bytes reach the
 target. When one side ends, what it already sent is still delivered to the other
-before the connection closes.
+before the connection closes. A target that refuses the connection, or has not
+accepted it within 10 seconds, closes the WSS with 1011 and a reason naming the
+port (`nothing is listening on port N there`), which the shell shows the user.
 
 ## Native boundary
 
@@ -70,9 +72,26 @@ without the token that left memory with the listener. Process exit lets the OS
 close all remaining listeners and streams.
 
 The shell reports public tunnel state only: port, localhost URL, configured
-server origin, expiry and active connection count. It does not return the grant
-token from list operations. iOS and other desktop builds expose no forwarding
-implementation and continue to use the same shared shell crate.
+server origin, expiry, active connection count and last failure. It does not
+return the grant token from list operations.
+
+## Failed connections
+
+The browser sees a connection the server did not carry only as a reset, so the
+shell says what happened. A connection fails when its WSS handshake does not
+complete (a timeout, an unreachable or untrusted server, or a refused upgrade,
+worded by HTTP status), when the server closes it with any code but 1000 (its
+reason is shown), or when forwarding it panics in the shell. A carried stream
+that later breaks is how many connections end, and is not reported. The
+forward's `lastFailure` holds the most recent failure's message and time until
+the server carries a connection again, meaning it sends the first byte back. A
+failure also raises a native notification, `Port forward failed`, naming
+`localhost:N`, that opens Settings → Port forwarding: once per streak (the first
+failure since the forward last carried a connection, or a different failure),
+and never more than one per 30 seconds per forward, since a browser opens
+connections in bursts. With notifications turned off the failure is still on the
+forward's row. iOS and other desktop builds expose no forwarding implementation
+and continue to use the same shared shell crate.
 
 ## Settings
 
@@ -87,8 +106,9 @@ Open and Stop on one row are independent, each busy on its own. The list shows
 each forward's localhost URL, the configured server it connects to, its active
 connection count and its expiry (`expired` once passed), with Open (the OS
 browser, through the validated command) and Stop (which also revokes the grant).
-While the page is visible the list is re-read from the shell every few seconds
-and on return to the tab; hidden or unmounted, it reads nothing.
+A forward with a `lastFailure` shows it on its row, with how long ago it
+happened. While the page is visible the list is re-read from the shell every few
+seconds and on return to the tab; hidden or unmounted, it reads nothing.
 
 The section is routable on every client, so a shared link lands on a page that
 says it needs the macOS app. It is listed in the settings navigation only in the

@@ -131,27 +131,28 @@ a read of 20,000 five-column rows. A BLOB parameter is bound as a BLOB. Any
 other Node member or option throws a named error rather than reading as
 `undefined`: a missing `isTransaction` made every nested transaction look like
 none. The builder also aliases `child_process` to
-`scripts/bun-shims/node-child-process.mjs`. Bun 1.3.13 starts a synchronous
+`scripts/bun-shims/node-child-process.mjs`. Bun 1.3.13 started a synchronous
 spawn (`spawnSync`, `execFileSync`, `execSync`) that was given no `env` with the
 environment the process started with, not the current `process.env`. Without the
 shim, the host-tool probes and every dependency's synchronous spawn would
-inherit the instance token and the integration secrets that boot deletes. The
-shim passes the live `process.env` for an omitted or `null` `env`, Node's
-documented default, and leaves any env object, `{}` included, as given.
-`Bun.spawnSync` has the same leak and no shim, so it must never be used: server
-code cannot name it (its types are Node's), and the install check fails on any
-bundled `Bun.spawnSync`. `parcelWatcher.ts` loads the copied N-API addon and a
-bundled copy of its upstream option-normalizing wrapper by absolute path. Every
-Claude SDK query option builder and the login terminal use the packaged CLI
-path. For browser work, the builder patches the MCP CLI's two package imports to
-local relative paths before copying it. The server launches that CLI with the
-packaged Bun executable, so browser sessions do not need Node, `npx`, a runtime
-npm download, or a `node_modules` tree. The Photon shim loads its copied module
-and sibling WASM from the runtime asset root. The builder also inlines JSDOM's
-default stylesheet and points its separately bundled sync-XHR worker at that
-root. JSDOM launches that worker with `process.execPath`, which is the packaged
-Bun runtime in this package; Pandeck's current JSDOM use does not issue
-synchronous XHR.
+inherit the instance token and the integration secrets that boot deletes. Bun
+1.4.2 passes the live environment; the shim stays so a runtime that regresses
+cannot leak them again. The shim passes the live `process.env` for an omitted or
+`null` `env`, Node's documented default, and leaves any env object, `{}`
+included, as given. `Bun.spawnSync` had the same leak and has no shim, so it
+must never be used: server code cannot name it (its types are Node's), and the
+install check fails on any bundled `Bun.spawnSync`. `parcelWatcher.ts` loads the
+copied N-API addon and a bundled copy of its upstream option-normalizing wrapper
+by absolute path. Every Claude SDK query option builder and the login terminal
+use the packaged CLI path. For browser work, the builder patches the MCP CLI's
+two package imports to local relative paths before copying it. The server
+launches that CLI with the packaged Bun executable, so browser sessions do not
+need Node, `npx`, a runtime npm download, or a `node_modules` tree. The Photon
+shim loads its copied module and sibling WASM from the runtime asset root. The
+builder also inlines JSDOM's default stylesheet and points its separately
+bundled sync-XHR worker at that root. JSDOM launches that worker with
+`process.execPath`, which is the packaged Bun runtime in this package; Pandeck's
+current JSDOM use does not issue synchronous XHR.
 
 The package's install check boots from an unrelated temporary cwd and data
 directory, applies exactly the migration set named by the packaged lock to a
@@ -217,34 +218,35 @@ packaged browser MCP CLI's version command and an MCP initialize plus
 `tools/list`, covering the patched local imports without a workspace
 `node_modules`. When Chrome or Chromium is available, the check also launches it
 and navigates a page. The Nix sandbox has neither browser, so that last probe
-reports an explicit skip there; the same clean-environment probe with the pinned
-Bun 1.3.13 passes launch and navigation on a host with Chrome. The server itself
-keeps its deterministic bundle beside the executable because Bun's standalone
-compiler randomizes its embedded module-table encryption; the package wrapper
-invokes that module explicitly, while `/proc/<pid>/exe` remains the packaged Bun
-executable. Bun's ordinary bundler also emits scheduler-dependent module order
-and identifier names, even when pinned to one CPU and given a lexically
-recreated source tree. The builder therefore uses pinned esbuild for the server
-module and its two bundled helpers; Bun remains the packaged runtime. The flake
-closure check rejects Node, tsx, `node_modules`, and source derivations, then
-confirms pinned git and OpenSSH remain present. The install check also scans
-every runtime file for the Nix source path and build directory. CI builds the
-package and its closure check on every change (`docs/ci-cd.md`), and a
-deployment of that commit builds the same derivation.
+reports an explicit skip there; the same clean-environment probe passed launch
+and navigation on a host with Chrome under Bun 1.3.13, and has not been rerun on
+1.4.2. The server itself keeps its deterministic bundle beside the executable
+because Bun's standalone compiler randomizes its embedded module-table
+encryption; the package wrapper invokes that module explicitly, while
+`/proc/<pid>/exe` remains the packaged Bun executable. Bun's ordinary bundler
+also emits scheduler-dependent module order and identifier names, even when
+pinned to one CPU and given a lexically recreated source tree. The builder
+therefore uses pinned esbuild for the server module and its two bundled helpers;
+Bun remains the packaged runtime. The flake closure check rejects Node, tsx,
+`node_modules`, and source derivations, then confirms pinned git and OpenSSH
+remain present. The install check also scans every runtime file for the Nix
+source path and build directory. CI builds the package and its closure check on
+every change (`docs/ci-cd.md`), and a deployment of that commit builds the same
+derivation.
 
-The package must not use `bun build --compile` or Bun's ordinary bundler: Bun
-1.3.13's standalone compiler encrypts its embedded module table with a random
-nonce, while ordinary bundles vary in module order and short identifier names.
-Keeping the pinned Bun runtime and esbuild-produced `server.js` separate avoids
-both sources of nondeterminism. CI builds `.#personal-assistant` twice on
-separate runners and compares the NAR hashes, so a return to either path cannot
-silently regress reproducibility.
+The package must not use `bun build --compile` or Bun's ordinary bundler: Bun's
+standalone compiler (1.3.13 when this was measured) encrypts its embedded module
+table with a random nonce, while ordinary bundles vary in module order and short
+identifier names. Keeping the pinned Bun runtime and esbuild-produced
+`server.js` separate avoids both sources of nondeterminism. CI builds
+`.#personal-assistant` twice on separate runners and compares the NAR hashes, so
+a return to either path cannot silently regress reproducibility.
 
 ### Bun runtime differences
 
 These were found by running the whole server test suite under Bun 1.3.13 with
-the adapter aliased in (recipe below). All but the fixed ones are covered by
-production code already or affect only test clients:
+the adapter aliased in (recipe below), and rechecked under 1.4.2. All but the
+fixed ones are covered by production code already or affect only test clients:
 
 - Fixed in the adapter: `isTransaction` was missing, `run().changes` counted
   cascaded and trigger rows (`deleteCancelledRun` checks for exactly 1), an
@@ -253,9 +255,9 @@ production code already or affect only test clients:
   `import()` of a sibling file, which the bundle does not have, so every
   subscription model failed. `piSdk/models.ts` registers the flows statically,
   and the runtime probe covers it (above).
-- Fixed in the child_process shim: synchronous spawns without `env`, or with
-  `env: null`, used the start-up environment. `Bun.spawnSync` does too, and is
-  kept out of the bundle.
+- Fixed in the child_process shim, and in Bun 1.4.2: synchronous spawns without
+  `env`, or with `env: null`, used the start-up environment. `Bun.spawnSync` did
+  too, and is kept out of the bundle.
 - `readdir` returns directory order; Node's is sorted. Every production caller
   whose result order matters sorts it.
 - `os.homedir()` is read once at start-up and does not follow a later `HOME`
@@ -263,15 +265,16 @@ production code already or affect only test clients:
 - `fetch` and `node:http`'s client honour `HTTP(S)_PROXY`/`NO_PROXY` from
   `process.env`, where Node's `fetch` ignores them. The package proxy therefore
   publishes its bundle to child processes only (`docs/package-proxy.md`).
-- `node:http`'s client is built on fetch: it normalizes a request path and
-  cannot send CONNECT. The server side of both, raw request paths and the
-  package proxy's CONNECT tunnel, behaves as under Node.
+- Fixed by Bun 1.4.2: `node:http`'s client normalized a request path and could
+  not send CONNECT. The server side of both, raw request paths and the package
+  proxy's CONNECT tunnel, behaved as under Node.
 - An `EXPLAIN QUERY PLAN` of a write statement stays active after `all()` and
   blocks the next COMMIT. Only query-plan tests prepare EXPLAIN.
-- Nothing written to a `node:http` upgrade socket reaches the client. An upgrade
-  the server refuses (wrong token, origin, port-forward grant) still never
-  opens, but the client sees the connection close instead of the 4xx or 503
-  status line.
+- Fixed by Bun 1.4.2: under 1.3.13 nothing written to a `node:http` upgrade
+  socket reached the client, so an upgrade the server refused (wrong token,
+  origin, port-forward grant) closed without its 4xx or 503 status line, and
+  Caddy in front answered 502. The desktop shell could not tell a dead grant
+  from a restarting server. The install check now requires the 401.
 - Fixed in the server: the bundle keeps `ws` external, so the server uses Bun's
   built-in `ws`, whose server socket has no `pause()`/`resume()`.
   `attachPortForwardSocket` called both, so every port-forward connection failed
@@ -335,24 +338,19 @@ libstdc++, which the package gives it through an rpath instead. Without it, 178
 files fail to import. The run lacks the package's `child_process` shim: an
 `enforce: "pre"` plugin redirecting that builtin to it had no effect.
 
-On 30 Sep 2026 (0.49.0 plus this change), 3908 of 3931 tests passed and one file
-failed at setup. Of the 23 failures, `memoryLog.test.ts` expecting a Node
-runtime name has since been made runtime-neutral, and the two in
-`portForwarding.test.ts` were the port-forward defect, since fixed (above). The
-rest are expected, and a job must compare its failures against exactly this
-list:
+On 7 Oct 2026 (0.53.0, moving from Bun 1.3.13 to 1.4.2), the same tree ran under
+both. 1.4.2 failed nothing that 1.3.13 passed, and passed 15 that 1.3.13 failed:
+the `webStatic.test.ts` encoded and doubled `..` cases, whose `node:http` client
+no longer normalizes the path; every `packageProxy/proxyServer.test.ts` case
+sending CONNECT or an absolute-form request; the `worktrees/worktrees.test.ts`
+submodule setup and `worktreeTracking.test.ts` "discards the tracking checkout
+when a post-add step throws", since `execFileSync` now passes the live
+environment; and `db/subagentStore.test.ts` "separate SQLite connections
+serialize concurrent capacity admission". Run outside a git checkout,
+`prWorkflow.test.ts`, `promptBudgets.test.ts` and `sourceControlBytes.test.ts`
+also fail, under Node too. The rest are expected, and a job must compare its
+failures against exactly this list:
 
-- `webStatic.test.ts`: the three "never reads outside the dist root for …" cases
-  with encoded or doubled `..` segments. The test's `node:http` client
-  normalizes the path before sending it.
-- `packageProxy/proxyServer.test.ts`: nine cases, every one that sends CONNECT
-  or an absolute-form request through the test's `node:http` client, which Bun
-  cannot send.
-- `worktrees/worktrees.test.ts` (the whole file, at its submodule setup) and
-  `worktrees/worktreeTracking.test.ts` "discards the tracking checkout when a
-  post-add step throws": the tests set `GIT_CONFIG_*` in `process.env` and run
-  git through `execFileSync`, which starts children with the environment from
-  start-up. The package's `child_process` shim fixes it; the test run lacks it.
 - `credentialProfiles.test.ts` "the protected Claude default reflects the normal
   user login …" and `tools/core/lsTool.test.ts` "`~` and `~/sub` expand against
   the home directory": both change `HOME`, which `os.homedir()` does not follow.
@@ -361,8 +359,6 @@ list:
 - `piSdk/toolBinaries.test.ts` "stops pi's tool lookup from spawning once
   linked": its child counts spawns by patching `child_process` with
   `syncBuiltinESMExports`, which Bun ignores.
-- `db/subagentStore.test.ts` "separate SQLite connections serialize concurrent
-  capacity admission": its workers start with `--import tsx`.
 - `db/cardStoresQueryPlan.test.ts`, both cases: the `EXPLAIN QUERY PLAN`
   difference above.
 
@@ -389,7 +385,7 @@ log names each new file with `[memory] heap snapshot written to …`, and a
 failure with `[memory] heap snapshot failed: …`. A dev server runs on Node,
 where SIGUSR1 still opens the inspector on 127.0.0.1:9229.
 
-The `[memory]` line names its runtime: `runtime=bun-1.3.13` in production,
+The `[memory]` line names its runtime: `runtime=bun-1.4.2` in production,
 `runtime=node-24.x` on a dev server. `heapUsed` and `heapTotal` are the engine's
 own heap, JavaScriptCore's under Bun and V8's under Node, and are not comparable
 across the two. Compare `rss`, which is also the figure to watch for growth in
