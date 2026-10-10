@@ -82,7 +82,7 @@ export function PushCard({ push }: { push: PushDisplay }) {
             Git output
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <pre className="mt-1 rounded-lg bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
+            <pre className="mt-1 rounded-lg border bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
               {push.output}
             </pre>
           </CollapsibleContent>

@@ -110,7 +110,7 @@ export function CommitCard({
           <p className="mb-1 text-xs font-medium text-muted-foreground">
             Commit message
           </p>
-          <pre className="rounded-lg bg-muted p-2 font-mono text-sm wrap-anywhere whitespace-pre-wrap">
+          <pre className="rounded-lg border bg-muted p-2 font-mono text-sm wrap-anywhere whitespace-pre-wrap">
             {commit.commitMessage}
           </pre>
         </div>
