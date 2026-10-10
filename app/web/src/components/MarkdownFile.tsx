@@ -6,6 +6,7 @@ import {
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
 import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
+import { FrontmatterValue, isVocabularyField } from "./frontmatterValues.tsx";
 import {
   DateProperty,
   PropertyLabel,
@@ -141,7 +142,9 @@ function MarkdownFrontmatterHeader({
               <>
                 <PropertyLabel>Source</PropertyLabel>
                 <PropertyText className="flex flex-col items-start gap-0.5">
-                  {source.kind ? <span>{source.kind}</span> : null}
+                  {source.kind ? (
+                    <FrontmatterValue field="kind" value={source.kind} />
+                  ) : null}
                   {source.refs.length > 0 ? (
                     <RefLinks
                       refs={source.refs}
@@ -161,6 +164,10 @@ function MarkdownFrontmatterHeader({
                 </PropertyLabel>
                 {field.date ? (
                   <DateProperty date={field.date} />
+                ) : isVocabularyField(field.key) && !field.links ? (
+                  <PropertyText>
+                    <FrontmatterValue field={field.key} value={field.value} />
+                  </PropertyText>
                 ) : field.links ? (
                   <PropertyText>
                     <RefLinks

@@ -52,7 +52,7 @@ export interface FrontmatterRef {
 }
 
 interface FrontmatterSource {
-  /** `agent`, `slack`, `meeting`… as a label ("Agent"). */
+  /** `agent`, `slack`, `meeting`… as written; the header names it. */
   kind?: string;
   refs: FrontmatterRef[];
 }
@@ -142,7 +142,7 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
     if (links) {
       out.fields.push({
         key,
-        label: key === "links" ? "Links" : key,
+        label: fieldLabel(key),
         value: shown,
         links,
       });
@@ -152,11 +152,11 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
       shown.length > MAX_VALUE_CHARS
         ? {
             key,
-            label: key,
+            label: fieldLabel(key),
             value: `${shown.slice(0, MAX_VALUE_CHARS - 1)}…`,
             full: shown,
           }
-        : { key, label: key, value: shown },
+        : { key, label: fieldLabel(key), value: shown },
     );
   }
   return out;
@@ -176,7 +176,7 @@ function unwrapNamespace(value: unknown): unknown {
 
 function sourceOf(value: unknown): FrontmatterSource | null {
   if (typeof value === "string" && value.trim())
-    return { kind: sentenceCase(value.trim()), refs: [] };
+    return { kind: value.trim(), refs: [] };
   if (!isRecord(value)) return null;
   const { kind, refs, ...rest } = value;
   // Anything beyond kind and refs is not a shape this header knows: leave the
@@ -187,9 +187,7 @@ function sourceOf(value: unknown): FrontmatterSource | null {
   if (!Array.isArray(list) || !list.every((ref) => typeof ref === "string"))
     return null;
   return {
-    ...(typeof kind === "string" && kind.trim()
-      ? { kind: sentenceCase(kind.trim()) }
-      : {}),
+    ...(typeof kind === "string" && kind.trim() ? { kind: kind.trim() } : {}),
     refs: list
       .map((ref) => ref.trim())
       .filter(Boolean)
@@ -197,8 +195,14 @@ function sourceOf(value: unknown): FrontmatterSource | null {
   };
 }
 
-function sentenceCase(text: string): string {
-  return text[0]!.toUpperCase() + text.slice(1);
+/** A key read as words: `relatedTo` → "Related to", `next_step` → "Next step". */
+function fieldLabel(key: string): string {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return words ? words[0]!.toUpperCase() + words.slice(1) : key;
 }
 
 /**
