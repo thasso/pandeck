@@ -41,6 +41,7 @@ describe("api paths that carry their own credential", () => {
     assert.equal(apiPathSkipsAuth("/api/slack/oauth/start"), true);
     for (const gated of [
       "/api/session-artifacts/s/page.png",
+      "/api/session-attachment/s/1700000000000-abc",
       "/api/knowledge/asset",
       "/api/worktrees/list",
       "/api/google/drive/file/example/preview",

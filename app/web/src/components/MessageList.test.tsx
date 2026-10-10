@@ -857,6 +857,61 @@ describe("MessageList prompt delivery", () => {
     expect(bar?.className).toContain("focus-within:opacity-100");
     expect(bar?.className).toContain("pointer-coarse:opacity-100");
   });
+
+  // A saved prompt's image is kept by attachment id only (no bytes, no URL), so
+  // after a reload the picture comes from the session's attachment store.
+  it("loads a by-reference prompt image from the session attachment store", () => {
+    act(() =>
+      root.render(
+        <MessageList
+          sessionId="s 1"
+          view={view}
+          messages={[
+            {
+              id: "u1",
+              role: "user",
+              blocks: [
+                {
+                  kind: "attachment",
+                  attachment: {
+                    id: "1700000000000-abc",
+                    name: "shot.png",
+                    mimeType: "image/png",
+                    size: 2048,
+                  },
+                },
+                {
+                  kind: "attachment",
+                  attachment: {
+                    id: "att-pdf",
+                    name: "report.pdf",
+                    mimeType: "application/pdf",
+                    size: 4096,
+                  },
+                },
+              ],
+            },
+          ]}
+        />,
+      ),
+    );
+    const images = container.querySelectorAll<HTMLImageElement>(
+      '[data-message-id="u1"] img',
+    );
+    expect(images).toHaveLength(1);
+    expect(images[0]!.alt).toBe("shot.png");
+    expect(images[0]!.getAttribute("src")).toContain(
+      "/api/session-attachment/s%201/1700000000000-abc",
+    );
+
+    // A picture the server cannot answer leaves the name/size row, not a
+    // broken-image glyph.
+    act(() => {
+      images[0]!.dispatchEvent(new Event("error"));
+    });
+    expect(container.querySelector('[data-message-id="u1"] img')).toBeNull();
+    expect(rowText("u1")).toContain("shot.png");
+  });
 });
 
 describe("MessageList prompt origins", () => {

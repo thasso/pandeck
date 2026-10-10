@@ -290,11 +290,47 @@ function formatBytes(value: number): string {
   return `${value} B`;
 }
 
+/**
+ * Where an image attachment's picture comes from: inline bytes, a served
+ * history URL, or — for a saved prompt whose durable entry keeps the image by
+ * attachment id only — the session's attachment store.
+ */
+function attachmentImageSrc(
+  attachment: DisplayAttachment,
+  sessionId: string | undefined,
+): string | undefined {
+  if (!attachment.mimeType.startsWith("image/")) return undefined;
+  if (attachment.data)
+    return `data:${attachment.mimeType};base64,${attachment.data}`;
+  if (attachment.url)
+    return withToken(`${serverHttpOrigin()}${attachment.url}`);
+  if (!sessionId) return undefined;
+  return withToken(
+    `${serverHttpOrigin()}/api/session-attachment/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachment.id)}`,
+  );
+}
+
+/** The picture of an image attachment; a load failure leaves just the chip row. */
+function AttachmentImage({ src, alt }: { src: string; alt: string }) {
+  const [failedSrc, setFailedSrc] = useState<string>();
+  if (failedSrc === src) return null;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailedSrc(src)}
+      className="max-h-72 max-w-full object-contain"
+    />
+  );
+}
+
 function AttachmentChip({
   attachment,
+  sessionId,
   onOpenTask,
 }: {
   attachment: DisplayAttachment;
+  sessionId: string | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
 }) {
   // A Task attached to the session's first prompt renders as a compact, navigable
@@ -350,26 +386,15 @@ function AttachmentChip({
       </Badge>
     );
   }
-  const isImage =
-    attachment.mimeType.startsWith("image/") &&
-    (attachment.data || attachment.url);
-  const imageSrc = attachment.data
-    ? `data:${attachment.mimeType};base64,${attachment.data}`
-    : attachment.url
-      ? withToken(`${serverHttpOrigin()}${attachment.url}`)
-      : undefined;
+  const imageSrc = attachmentImageSrc(attachment, sessionId);
   return (
     <Item
       variant="muted"
       size="sm"
       className="mt-2 flex-col items-stretch overflow-hidden"
     >
-      {isImage && imageSrc ? (
-        <img
-          src={imageSrc}
-          alt={attachment.name}
-          className="max-h-72 max-w-full object-contain"
-        />
+      {imageSrc ? (
+        <AttachmentImage src={imageSrc} alt={attachment.name} />
       ) : null}
       <div className="flex items-center gap-2">
         {attachment.mimeType.startsWith("image/") ? (
@@ -552,6 +577,7 @@ function MessageActionsBar({
 
 const UserMessage = memo(function UserMessage({
   message,
+  sessionId,
   sessionReferences,
   changedFiles,
   paObjectReferences,
@@ -567,6 +593,7 @@ const UserMessage = memo(function UserMessage({
   promptQueueState,
 }: {
   message: DisplayMessage;
+  sessionId: string | undefined;
   sessionReferences: MarkdownSessionReference[];
   changedFiles: MarkdownFileReference[];
   paObjectReferences: MarkdownPaObjectReference[];
@@ -653,6 +680,7 @@ const UserMessage = memo(function UserMessage({
         <AttachmentChip
           key={block.attachment.id}
           attachment={block.attachment}
+          sessionId={sessionId}
           onOpenTask={onOpenTask}
         />
       );
@@ -940,6 +968,7 @@ interface Props {
 
 interface MessageRowProps {
   message: DisplayMessage;
+  sessionId: string | undefined;
   focusKey?: string | undefined;
   sessionReferences: MarkdownSessionReference[];
   changedFiles: MarkdownFileReference[];
@@ -1040,6 +1069,7 @@ function isSideActivityMessage(message: DisplayMessage): boolean {
 
 const MessageRow = memo(function MessageRow({
   message,
+  sessionId,
   focusKey,
   sessionReferences,
   changedFiles,
@@ -1118,6 +1148,7 @@ const MessageRow = memo(function MessageRow({
       {message.role === "user" ? (
         <UserMessage
           message={message}
+          sessionId={sessionId}
           sessionReferences={sessionReferences}
           changedFiles={changedFiles}
           paObjectReferences={paObjectReferences}
@@ -1913,6 +1944,7 @@ export function MessageList({
             <Fragment key={key}>
               <MessageRow
                 message={m}
+                sessionId={sessionId}
                 focusKey={focusKey}
                 finalResponseSeparatorBeforeBlock={finalBoundaryByMessageId.get(
                   m.id,
