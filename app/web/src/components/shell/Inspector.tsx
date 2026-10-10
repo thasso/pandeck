@@ -528,7 +528,7 @@ export function Inspector({
           {
             key: "comment-actuation:add",
             icon: <MessageSquareQuote size={15} />,
-            label: "Add comment",
+            label: commentActuation.commentLabel ?? "Add comment",
             onRun: commentActuation.onComment,
             disabled: commentActuation.canComment !== true,
             ...(!(commentActuation.canComment === true)

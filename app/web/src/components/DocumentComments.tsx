@@ -515,6 +515,9 @@ function DocumentCommentLayerBody({
     // whole document, so the control is never dead.
     canComment: !composer.open,
     onComment: openNewComment,
+    commentLabel: selection
+      ? "Comment on the selected passage"
+      : "Comment on the whole document",
     pendingCount: count,
     onSubmitReview: openSend,
     submitLabel: "Send comments",
