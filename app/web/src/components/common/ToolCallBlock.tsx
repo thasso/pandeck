@@ -177,9 +177,9 @@ export function ToolCallBlock({
             size="sm"
             // A borderless activity row, as peer messages and thinking: the
             // whole row takes the hover, open is not a hover state, and its
-            // icon stands where theirs does (`ChatActivityRow`'s `pl-2`).
+            // icon stands where theirs does: flush with the chat's text edge.
             className={cx(
-              "w-full min-w-0 justify-start px-2 font-normal text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50",
+              "w-full min-w-0 justify-start gap-2.5 pr-2 pl-0 font-normal text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50",
               isError && "text-destructive aria-expanded:text-destructive",
             )}
           />
@@ -247,7 +247,7 @@ export function ToolCallBlock({
             // activity row (`ChatActivityRow`): no box of its own.
             // It ends short of the row's chevron (its `px-2` plus the icon), so
             // it never reads wider than the row it belongs to.
-            "mr-6 mb-2 ml-3.5 min-w-0 border-l pt-1 pb-1 pl-3 text-sm [&_pre]:text-foreground",
+            "mr-6 mb-2 ml-1.5 min-w-0 border-l pt-1 pb-1 pl-3 text-sm [&_pre]:text-foreground",
             // An output's line count and reveal (`CollapsibleOutput`) are a
             // row of their own under it, at the tool row's height.
             "[&_[data-output-footer]]:mt-1 [&_[data-output-footer]]:min-h-7",

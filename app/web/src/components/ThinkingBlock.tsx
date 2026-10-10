@@ -175,7 +175,9 @@ export function ThinkingBlock({
       {...props}
     >
       <CollapsibleTrigger
-        render={<Button variant="ghost" size="sm" className="w-fit" />}
+        render={
+          <Button variant="ghost" size="sm" className="w-fit gap-2.5 pl-0" />
+        }
         aria-controls={bodyId}
       >
         {streaming ? (
