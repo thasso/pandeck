@@ -91,6 +91,7 @@ function SidebarStory({ scenario, section, mobile, width }: SidebarStoryProps) {
         knowledgeView="files"
         knowledgeUncommitted={3}
         onOpenKnowledge={noop}
+        onOpenKnowledgeFile={noop}
         onLoadWorktrees={noop}
         onOpenWorktree={noop}
         onStartSessionInWorktree={noop}
