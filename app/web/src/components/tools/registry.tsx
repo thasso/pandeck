@@ -489,11 +489,11 @@ const TOOL_RENDERERS: ToolRenderer[] = [
   {
     match: (block) => worktreeCommitDisplay(block) !== null,
     variant: "card",
-    render: (block) => {
+    render: (block, ctx) => {
       const commit = worktreeCommitDisplay(block);
       return commit ? (
         <Suspense fallback={<LazyCardFallback label="Opening commit…" />}>
-          <LazyCommitToolCard commit={commit} />
+          <LazyCommitToolCard commit={commit} onOpenTask={ctx.onOpenTask} />
         </Suspense>
       ) : null;
     },

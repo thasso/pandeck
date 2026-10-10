@@ -520,6 +520,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <LazyCommitCard
             commit={block.commit}
             onAccept={onAcceptCommitDryRun}
+            onOpenTask={onOpenTask}
           />
         </Suspense>
       );

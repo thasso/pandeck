@@ -17,6 +17,9 @@ import { Button } from "@/components/ui/button";
 import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import { ErrorNote } from "./common/load.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
+import { TaskLinkList } from "./TaskLinkList.tsx";
+
+const noop = () => {};
 
 function statusIcon(commit: CommitDisplay) {
   if (commit.status === "committed") return <CheckCircle2 />;
@@ -48,9 +51,12 @@ function fileIcon(file: CommitFileChange) {
 export function CommitCard({
   commit,
   onAccept,
+  onOpenTask,
 }: {
   commit: CommitDisplay;
   onAccept?: ((entryId: string) => void) | undefined;
+  /** Open one of the Tasks this commit addressed. */
+  onOpenTask?: ((taskId: string) => void) | undefined;
 }) {
   // A long file list starts folded so the message stays the card's lead.
   const [filesOpen, setFilesOpen] = useState(commit.files.length <= 8);
@@ -113,20 +119,13 @@ export function CommitCard({
       {(commit.addressedTasks?.length ?? 0) > 0 && (
         <div>
           <p className="mb-1 text-xs font-medium text-muted-foreground">
-            Session Task context
+            Session Tasks
           </p>
-          <ul className="flex flex-col gap-1 text-sm">
-            {commit.addressedTasks!.map((task) => (
-              <li key={task.id} className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate">{task.title}</span>
-                <Badge
-                  variant={task.status === "done" ? "success" : "secondary"}
-                >
-                  {task.status}
-                </Badge>
-              </li>
-            ))}
-          </ul>
+          {/* The same Task rows the inspector's Tasks section draws. */}
+          <TaskLinkList
+            items={commit.addressedTasks!}
+            onOpen={onOpenTask ?? noop}
+          />
         </div>
       )}
 
