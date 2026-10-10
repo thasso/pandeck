@@ -25,7 +25,7 @@ import {
   PropertyList,
 } from "./common/PropertyList.tsx";
 import { focusDateLabel } from "../lib/backlogFocus.ts";
-import { addDays, todayIso } from "./calendar/calendarDates.ts";
+import { addDays, todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 
 /** The planning fields a Task carries, as one patch. */

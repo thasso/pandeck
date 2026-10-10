@@ -9,7 +9,7 @@ paths in the body are relative to the original subtree.
 ## Purpose
 
 Reusable React hooks for assistant WebSocket state, routing, preferences,
-backlog/task interaction, calendar data, and drag/reorder behavior.
+backlog/task interaction and drag/reorder behavior.
 
 ## Module ownership
 
@@ -595,8 +595,7 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   `NAV_ACTIONS`/`NavAction`/`NavSlot` + `isNavAction` (the app-level actions
   share that bar with the sections, per ui-shell.md) plus its order defaults
   (`DEFAULT_NAV_SLOTS` + `normalizeNavSlots`, consumed by `usePrefs.ts`).
-- Backlog/calendar hooks own their feature-specific API calls and derived client
-  state.
+- Backlog hooks own their feature-specific API calls and derived client state.
 - `useSelectionAnchor.ts` owns domain-neutral, touch-capable text-selection
   snapshotting. Its 150 ms-debounced document `selectionchange` listener accepts
   only a non-collapsed range inside the current root and captures the quote,
@@ -686,10 +685,7 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   never retire that row. A surface rendering the body must distinguish
   loading/error/not-found from an empty ready body and refuse to save over the
   former. Title and STATUS always come from the row, so lists are correct before
-  the detail arrives. Task activity comments use the same bounded keyed
-  `LoadState` cache; opening a Task watches and revalidates it, closing sends
-  `unwatchTaskComments`, and the cache remains reusable (see
-  `app/server/src/CLAUDE.md`).
+  the detail arrives.
 - `settleSession` mints a `requestId` like
   `renameSession`/`deleteSession`/`archiveSession` and is tracked in
   `pendingMutationsRef`: the server's `error` carrying that id triggers a
@@ -714,9 +710,7 @@ backlog/task interaction, calendar data, and drag/reorder behavior.
   worktree route and the panel's Worktree tab can hold the same worktree — and
   sends one list for the first and one unwatch after the last, since the wire
   has no refcount and the unwatch deletes the cached threads for everyone
-  (`docs/comments.md`). Task activity-trace comments follow the same rule:
-  authoritative per-Task full lists from `taskComments` broadcasts, requested,
-  unwatched and added only via the corresponding `useAssistant` actions.
+  (`docs/comments.md`).
 - Approval cards are store-backed overlays, not tail-appended transcript
   entries. `useAssistant.ts` keeps their authoritative lifecycle in
   `state.approvals` and rebuilds chat with each card immediately after

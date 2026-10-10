@@ -9,7 +9,7 @@ paths in the body are relative to the original subtree.
 ## Purpose
 
 Vite/React browser client for chat sessions, settings, project/task management,
-calendar views, tool cards, and PWA assets.
+tool cards and PWA assets.
 
 ## Module ownership
 

@@ -22,6 +22,7 @@ process.env.ASSISTANT_CWD = dataDir;
 
 const queue = await import("./promptQueue.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
+const { promptQueueStore } = await import("./db/promptQueueStore.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { SessionBusyError } = await import("./session/runtime/errors.ts");
 const { updateSettings, getSettings } = await import("./settings.ts");
@@ -191,6 +192,60 @@ async function startTurn(fake: ReturnType<typeof session>) {
 }
 
 const texts = (id: string) => published[id]?.items.map((i) => i.text) ?? [];
+
+test("rechecks a coordinated handoff after cold driver acquisition", async () => {
+  const s = session();
+  let acquisitionStarted!: () => void;
+  let finishAcquire!: () => void;
+  const started = new Promise<void>((resolve) => {
+    acquisitionStarted = resolve;
+  });
+  const acquisition = new Promise<void>((resolve) => {
+    finishAcquire = resolve;
+  });
+  let authorityAvailable = true;
+  promptQueueStore.append({
+    id: `queued-${s.id}`,
+    sessionId: s.id,
+    text: "user queued prompt",
+  });
+  queue.setPromptQueueHost({
+    resolve: async () => {
+      acquisitionStarted();
+      await acquisition;
+      return s.driver as never;
+    },
+    live: () => undefined,
+    publish: (id, state) => (published[id] = state),
+    reportError: (_id, message) => errors.push(message),
+    yieldToOthers: (id) => yielded.push(id),
+  });
+
+  const drain = queue.drainPromptQueue(s.id);
+  await started;
+  // The peer drain joins an already-acquiring queue drain and contributes its
+  // authority check to that in-flight delivery.
+  const coordinatedDrain = queue.drainPromptQueue(
+    s.id,
+    () => authorityAvailable,
+  );
+  // An explicit send-now takes authority while cold acquisition is pending.
+  authorityAvailable = false;
+  finishAcquire();
+  await Promise.all([drain, coordinatedDrain]);
+  assert.equal(
+    s.sent.length,
+    0,
+    "the user row yields to the selected peer row",
+  );
+  assert.equal(promptQueueStore.list(s.id).length, 1);
+
+  // Once authority is released, ordinary queue processing resumes.
+  authorityAvailable = true;
+  await queue.drainPromptQueue(s.id);
+  await until(() => s.sent.at(-1)?.text === "user queued prompt");
+  assert.equal(promptQueueStore.list(s.id).length, 0);
+});
 
 test("queued messages wait for the turn, then go one per idle edge in order", async () => {
   const s = session();

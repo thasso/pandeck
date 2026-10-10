@@ -4,13 +4,13 @@ The binding model for every comment the app collects, on any surface: a comment
 names a TARGET and carries a BUNDLE of redundant selectors. Decided in Task-424;
 the vocabulary and the resolver land in Task-425. This document is the contract
 for the selector bundle, the resolution ladder and the lifetimes; it governs
-worktree review comments, Task comments, and the browser-local comments
-collected on transcripts and documents (host files, Knowledge Base files).
+worktree review comments and the browser-local comments collected on transcripts
+and documents (host files, Knowledge Base files).
 
 Two families share that vocabulary and nothing else:
 
-- **Server-side threads** — worktree review and Task activity. Stored, synced,
-  answered and resolved by agents. Only they are RESOLVED on read.
+- **Server-side threads** — worktree review. Stored, synced, answered and
+  resolved by agents. Only they are RESOLVED on read.
 - **Pending comments** — on a transcript passage or a document. Collected in the
   browser, carried into the next prompt as prose, and gone once sent. No server
   record, no thread, no resolver.
@@ -25,15 +25,15 @@ Code: `app/shared/comments.ts` (the vocabulary and common wire projection),
 
 ## Wire and synchronization
 
-Worktree and Task comments use one command family discriminated by
-`CommentTarget`: `listComments`, `addComment`, `replyComment`, `resolveComment`,
-`editComment`, `deleteComment`, and `attachComments`. `commentsSnapshot` is only
-the subscribe/resync answer. Mutations report touched thread ids through the
-domain notification seam; the server reads only those threads and broadcasts
-revisioned `commentEvents` upserts/deletes to connections holding that target.
-For a worktree target, the snapshot also carries review sets with their own
-revision digest; set creation, closure, and derived-rollup changes travel as
-keyed `reviewSetEvents` on `commentEvents`, never as a collection rider. A
+Worktree comments use one command family discriminated by `CommentTarget`:
+`listComments`, `addComment`, `replyComment`, `resolveComment`, `editComment`,
+`deleteComment`, and `attachComments`. `commentsSnapshot` is only the
+subscribe/resync answer. Mutations report touched thread ids through the domain
+notification seam; the server reads only those threads and broadcasts revisioned
+`commentEvents` upserts/deletes to connections holding that target. For a
+worktree target, the snapshot also carries review sets with their own revision
+digest; set creation, closure, and derived-rollup changes travel as keyed
+`reviewSetEvents` on `commentEvents`, never as a collection rider. A
 process-wide ownership index, populated by every snapshot and event, resolves
 root and reply ids without connection-local state or cross-entry scans.
 Per-target notification tails serialize projection reads and revision stamps. On
@@ -54,10 +54,9 @@ leaves. A surface that calls the actions directly instead takes the other
 surface's comments away when it closes.
 
 The persistence abstraction deliberately mirrors that vocabulary and no more.
-`worktreeCommentStore` adapts SQLite review rows, and `taskCommentStore` adapts
-flat SQLite activity rows. Unsupported operations on flat Task comments are
-rejected rather than simulated. Pending comments do not implement this
-interface: they remain browser-local and never enter the wire protocol.
+`worktreeCommentStore` adapts SQLite review rows; it is the only server store.
+Pending comments do not implement this interface: they remain browser-local and
+never enter the wire protocol.
 
 ## The model
 
@@ -65,7 +64,7 @@ The vocabulary is the W3C Web Annotation Data Model's — a target plus selector
 tried in order of precision. It is a model, not a dependency.
 
 ```
-target:  worktree path:side @ revision | session entry | task | document
+target:  worktree path:side @ revision | session entry | document
 selectors:
   quote     { exact, prefix, suffix }   durable, ALWAYS stored
   position  { start, end }              character offsets into the document text
@@ -330,6 +329,3 @@ A comment BODY is Markdown wherever it is shown, at one size, through
 and agents write it, so a surface that rendered it as literal text was the app
 disagreeing with itself. The exception is a roster row, which shows a plain
 first line because it is an index, not the comment.
-
-Task comments stay flat and unanchored — they are an activity trace, not a
-review surface.

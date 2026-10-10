@@ -10,19 +10,27 @@ bytes, and left the copy behind. Session artifacts still exist for bytes a tool
 captures (browser screenshots, retained tool output). They are no longer how an
 agent shows a file it already wrote.
 
-## The three URL families
+## The URL families
 
-| URL                                           | Authenticated by                | Serves                                                           |
-| --------------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
-| `/api/files/<absolute path>`                  | app token (header or `?token=`) | Raw bytes of any file on the host, streamed, with range support  |
-| `/api/file-grants/<grant id>/<relative path>` | the grant id itself             | One file, or one sandboxed HTML directory when siblings must run |
-| `/api/session-artifacts/<session>/<path>`     | app token                       | Bytes a tool captured into `DATA_DIR` (unchanged)                |
+| URL                                                 | Authenticated by                | Serves                                                           |
+| --------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------- |
+| `/api/files/<absolute path>`                        | app token (header or `?token=`) | Raw bytes of any file on the host, streamed, with range support  |
+| `/api/file-grants/<grant id>/<relative path>`       | the grant id itself             | One file, or one sandboxed HTML directory when siblings must run |
+| `/api/session-artifacts/<session>/<path>`           | app token                       | Bytes a tool captured into `DATA_DIR` (unchanged)                |
+| `/api/session-attachment/<session>/<attachment id>` | app token                       | One IMAGE from the session's prompt attachment store             |
 
 `/api/files/` puts the absolute path IN the route path rather than in a query
 parameter, so a relative reference inside a served document (`./diagram.png` in
 Markdown, `./chart.js` in HTML) resolves to the right file with no rewriting.
 `?meta=1` answers JSON metadata instead of bytes; `?download=1` forces an
 attachment; `?name=` renames the download.
+
+The attachment route exists because a saved prompt's image is kept in the
+durable log by attachment id only, so after a reload the chat has no other way
+to show it. It answers only when the recorded MIME type is a plain `image/*`,
+always with `x-content-type-options: nosniff`, and adds
+`Content-Security-Policy: sandbox` for SVG; any other attachment is a 404, never
+a download (`app/server/src/sessionAttachmentHttp.ts`).
 
 ## No path allow-list
 

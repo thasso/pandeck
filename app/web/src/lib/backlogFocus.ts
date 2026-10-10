@@ -14,7 +14,7 @@
  */
 import type { TaskPriority } from "@assistant/shared";
 import { pendingStatusSuggestion, type Task } from "./backlogTree.ts";
-import { addDays, isoWeekday } from "../components/calendar/calendarDates.ts";
+import { addDays, isoWeekday } from "./taskDates.ts";
 
 /**
  * The buckets, in the order Focus renders them.

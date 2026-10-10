@@ -6,12 +6,7 @@ import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import { ALL_PROJECT_FILTER } from "../lib/backlogTreeModel.ts";
-import {
-  failed,
-  ready,
-  refreshing,
-  type LoadState,
-} from "../lib/loadState.ts";
+import { failed, ready, refreshing, type LoadState } from "../lib/loadState.ts";
 import { TaskManagementPage } from "./TaskManagementPage.tsx";
 
 if (!window.matchMedia)

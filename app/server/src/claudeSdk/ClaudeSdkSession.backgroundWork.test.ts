@@ -1188,6 +1188,57 @@ test("abort interrupts but does not close a retained epoch", async () => {
   session.dispose();
 });
 
+test("a Plan session returns to Build on its retained process", async () => {
+  const { session, queries } = makeHarness();
+  await sessionSkills(session.id, session.agentType);
+  session.setMode("plan");
+  const adapter = session.createRuntimeAdapter();
+  const first = adapter.prompt("start a dev server while planning");
+  await until(() => queries.length === 1);
+  const query = queries[0]!;
+  const pre = preToolHook(query);
+  const call = (toolName: string, toolInput: Record<string, unknown>) =>
+    pre(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "provider-background",
+        transcript_path: "/tmp/transcript",
+        cwd: dataDir,
+        tool_name: toolName,
+        tool_input: toolInput,
+        tool_use_id: `tool-${toolName}`,
+      },
+      `tool-${toolName}`,
+      { signal: new AbortController().signal },
+    ) as Promise<{ hookSpecificOutput?: { permissionDecision?: string } }>;
+  await call("Bash", { command: "sleep 10", run_in_background: true });
+  query.output.emit(result("plan-first"));
+  await first;
+  assert.equal(query.closeCalls, 0, "the background shell retains the query");
+  assert.ok(
+    (query.params.options!.tools as string[]).includes("Edit"),
+    "the retained process was started with Edit on its tool list",
+  );
+  assert.equal(
+    (await call("Edit", { file_path: "a.ts" })).hookSpecificOutput
+      ?.permissionDecision,
+    "deny",
+    "Plan refuses Edit on the retained process",
+  );
+
+  session.setMode("build");
+  assert.equal(session.sessionMode, "build");
+  assert.notEqual(
+    (await call("Edit", { file_path: "a.ts" })).hookSpecificOutput
+      ?.permissionDecision,
+    "deny",
+    "Build lets the same retained process edit again",
+  );
+  assert.equal(queries.length, 1, "returning to Build restarts nothing");
+  assert.equal(query.closeCalls, 0);
+  session.dispose();
+});
+
 test("a completed last task closes the retained query after frozen quiet grace", async () => {
   const { session, queries } = makeHarness(0);
   await sessionSkills(session.id, session.agentType);

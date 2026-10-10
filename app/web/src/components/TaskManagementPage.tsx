@@ -82,7 +82,7 @@ import {
 } from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
 import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
-import { todayIso } from "./calendar/calendarDates.ts";
+import { todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
 import { useTicketDetails, type TaskTicket } from "./TaskTicketProperty.tsx";

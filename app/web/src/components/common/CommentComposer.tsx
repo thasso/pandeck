@@ -115,7 +115,7 @@ export interface CommentComposerProps {
  *   anchor header plus ONE row, with refine/dictation when the host enables them
  *   and the send button inside it.
  * @useWhen Any surface that appends a comment to a list or anchored passage —
- *   Task activity, document trays, diffs, and transcript comments.
+ *   document trays, diffs, and transcript comments.
  * @avoidWhen Composing a chat prompt (`Composer.tsx` owns attachments, staged
  *   context, slash commands and runtime controls).
  * @intent Deliberately the chat composer's silhouette, because it is the same

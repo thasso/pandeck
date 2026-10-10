@@ -9,7 +9,7 @@ paths in the body are relative to the original subtree.
 ## Purpose
 
 Browser-side helper modules for API/socket origins, model filtering, backlog
-tree transforms, calendar API calls, clipboard/toasts, client IDs, and session
+tree transforms, task date helpers, clipboard/toasts, client IDs, and session
 capability logic.
 
 ## Module ownership

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createTask, deleteTask, readTask } from "../../tasks.ts";
-import { addTaskComment } from "../../taskComments.ts";
 import type { ToolCallContext, ToolResult } from "../../mcp/tool.ts";
 import { affirmed, assertPromptRules } from "../../test/promptRules.ts";
 import { taskToolsForKind } from "./taskTools.ts";
@@ -114,7 +113,6 @@ type ManageResult = {
     descriptionEditsApplied?: number;
     deduplicated?: boolean;
   }>;
-  comments?: Array<{ taskId: string; body: string; authorKind: string }>;
   warnings?: string[];
 };
 
@@ -200,7 +198,7 @@ test("task_manage applies a status the user asked for and says it did", async ()
   }
 });
 
-test("task_manage closes a Task out in ONE call: edit, comment, and suggestion", async () => {
+test("task_manage closes a Task out in ONE call: edit and suggestion", async () => {
   const task = createTask({
     title: "One-call closeout",
     description: "Intro line.\n\nOutcome: unknown.\n\nTrailer.",
@@ -220,7 +218,6 @@ test("task_manage closes a Task out in ONE call: edit, comment, and suggestion",
               { oldText: "Outcome: unknown.", newText: "Outcome: shipped." },
               { oldText: "Trailer.", newText: "Trailer, revised." },
             ],
-            comment: "Landed behind the flag.",
           },
         ],
       },
@@ -232,10 +229,6 @@ test("task_manage closes a Task out in ONE call: edit, comment, and suggestion",
     assert.equal(payload.changed[0]?.status, "todo");
     assert.equal(payload.changed[0]?.statusSuggestion?.to, "done");
     assert.equal(payload.changed[0]?.descriptionEditsApplied, 2);
-    assert.deepEqual(
-      payload.comments?.map((c) => [c.taskId, c.body, c.authorKind]),
-      [[task.id, "Landed behind the flag.", "agent"]],
-    );
     if (result.content[0]?.type === "text")
       assert.equal(result.content[0].text, JSON.stringify(payload));
 
@@ -243,33 +236,16 @@ test("task_manage closes a Task out in ONE call: edit, comment, and suggestion",
       (candidate) => candidate.name === "task_read",
     )!;
     const after = await read.execute(
-      { id: task.id, includeDescriptions: true, comments: {} },
+      { id: task.id, includeDescriptions: true },
       ctx,
     );
     const readPayload = after.details as {
       items: Array<{ description?: string }>;
-      comments?: {
-        count: number;
-        totalCount: number;
-        olderCount: number;
-        items: Array<{ body: string; authorKind: string }>;
-      };
     };
     assert.equal(
       readPayload.items[0]?.description,
       "Intro line.\n\nOutcome: shipped.\n\nTrailer, revised.",
     );
-    assert.deepEqual(
-      readPayload.comments?.items.map((c) => c.body),
-      ["Landed behind the flag."],
-    );
-    assert.equal(readPayload.comments?.items[0]?.authorKind, "agent");
-    assert.equal(readPayload.comments?.totalCount, 1);
-    assert.equal(readPayload.comments?.olderCount, 0);
-
-    // comments is opt-in: absent by default.
-    const bare = await read.execute({ id: task.id }, ctx);
-    assert.equal((bare.details as { comments?: unknown }).comments, undefined);
   } finally {
     deleteTask(task.id);
   }
@@ -421,125 +397,7 @@ test("task_manage rejects a stale or ambiguous description edit", async () => {
   }
 });
 
-test("task_manage batches bare comments across Tasks in one call", async () => {
-  const first = createTask({
-    title: "Trace target one",
-    source: { createdBy: "user" },
-  });
-  const second = createTask({
-    title: "Trace target two",
-    source: { createdBy: "user" },
-  });
-  try {
-    const result = await manageTool().execute(
-      {
-        operations: [
-          { operation: "comment", id: first.id, comment: "note one" },
-          { operation: "comment", id: second.id, comment: "note two" },
-        ],
-      },
-      ctx,
-    );
-    const payload = result.details as ManageResult;
-
-    // A bare comment mutates no Task, so it stays out of changed/changedCount.
-    assert.equal(payload.changedCount, 0);
-    assert.deepEqual(payload.changed, []);
-    assert.deepEqual(
-      payload.comments?.map((c) => [c.taskId, c.body]),
-      [
-        [first.id, "note one"],
-        [second.id, "note two"],
-      ],
-    );
-
-    await assert.rejects(
-      manageTool().execute(
-        { operations: [{ operation: "comment", id: first.id, comment: " " }] },
-        ctx,
-      ),
-      /comment must not be empty/i,
-    );
-    await assert.rejects(
-      manageTool().execute(
-        { operations: [{ operation: "comment", id: first.id }] },
-        ctx,
-      ),
-      /requires comment text/i,
-    );
-  } finally {
-    deleteTask(second.id);
-    deleteTask(first.id);
-  }
-});
-
-test("task_manage refuses a comment operation that also asks for a change", async () => {
-  const task = createTask({
-    title: "Wrong-operation probe",
-    status: "doing",
-    source: { createdBy: "user" },
-  });
-  try {
-    // The likeliest slip: meaning "update AND comment", writing "comment". The
-    // status must not be dropped on the floor.
-    await assert.rejects(
-      manageTool().execute(
-        {
-          operations: [
-            {
-              operation: "comment",
-              id: task.id,
-              comment: "closing out",
-              status: "done",
-              statusReason: "shipped",
-            },
-          ],
-        },
-        ctx,
-      ),
-      /cannot carry status, statusReason.*operation "update" with comment/is,
-    );
-    await assert.rejects(
-      manageTool().execute(
-        {
-          operations: [
-            {
-              operation: "comment",
-              id: task.id,
-              comment: "renaming",
-              title: "New title",
-            },
-          ],
-        },
-        ctx,
-      ),
-      /cannot carry title/i,
-    );
-
-    // Nothing landed: not the status, not the suggestion, not the comment.
-    const read = taskToolsForKind("assistant").find(
-      (candidate) => candidate.name === "task_read",
-    )!;
-    const after = await read.execute({ id: task.id, comments: {} }, ctx);
-    const payload = after.details as {
-      items: Array<{
-        title: string;
-        status: string;
-        statusSuggestion?: object;
-      }>;
-      comments?: { count: number; totalCount: number; items: unknown[] };
-    };
-    assert.equal(payload.items[0]?.title, "Wrong-operation probe");
-    assert.equal(payload.items[0]?.status, "doing");
-    assert.equal(payload.items[0]?.statusSuggestion, undefined);
-    assert.deepEqual(payload.comments?.items, []);
-    assert.equal(payload.comments?.totalCount, 0);
-  } finally {
-    deleteTask(task.id);
-  }
-});
-
-test("task_manage routes a create's comment onto a de-duplicated Slack Task", async () => {
+test("task_manage resolves a duplicate Slack create onto the existing Task", async () => {
   const permalink =
     "https://example.slack.com/archives/C0DEDUPE/p1700000000000100";
   const existing = createTask({
@@ -557,7 +415,6 @@ test("task_manage routes a create's comment onto a de-duplicated Slack Task", as
             operation: "create",
             title: "Re-import of the same message",
             externalLinks: [{ url: permalink, source: "slack" }],
-            comment: "seen again today",
           },
         ],
       },
@@ -565,58 +422,20 @@ test("task_manage routes a create's comment onto a de-duplicated Slack Task", as
     );
     const payload = result.details as ManageResult;
 
-    // No second Task, and the comment lands on the one that already exists.
+    // No second Task: the create resolves to the one that already exists.
     assert.equal(payload.changed[0]?.id, existing.id);
     assert.match(payload.warnings?.[0] ?? "", /Skipped duplicate Slack import/);
     // Flagged on the ENTRY too: the payload never says which operation produced
     // one, so a renderer taking the verb from the call would say "created" about
     // a Task that already existed.
     assert.equal(payload.changed[0]?.deduplicated, true);
-    assert.deepEqual(
-      payload.comments?.map((c) => [c.taskId, c.body]),
-      [[existing.id, "seen again today"]],
-    );
   } finally {
     deleteTask(existing.id);
   }
 });
 
-test("task_manage carries a comment on a create, onto the new Task", async () => {
-  const result = await manageTool().execute(
-    {
-      operations: [
-        {
-          operation: "create",
-          title: "Created with a trace entry",
-          description: "body",
-          comment: "filed from the closeout call",
-        },
-      ],
-    },
-    ctx,
-  );
-  const payload = result.details as ManageResult;
-  const createdId = payload.changed[0]!.id;
-  try {
-    assert.deepEqual(
-      payload.comments?.map((c) => [c.taskId, c.body]),
-      [[createdId, "filed from the closeout call"]],
-    );
-  } finally {
-    deleteTask(createdId);
-  }
-});
-
 /** The budget the read tool bounds itself to, plus the slack of a JSON envelope. */
 const READ_BUDGET_BYTES = 24_000;
-
-interface CommentsBlock {
-  count: number;
-  totalCount: number;
-  olderCount: number;
-  nextCursor?: string;
-  items: Array<{ id: string; body: string; bodyTruncated?: boolean }>;
-}
 
 function readPayloadOf(result: ToolResult) {
   return result.details as {
@@ -633,7 +452,6 @@ function readPayloadOf(result: ToolResult) {
       descriptionTruncated?: boolean;
       descriptionChars?: number;
     }>;
-    comments?: CommentsBlock;
   };
 }
 
@@ -641,97 +459,6 @@ function resultBytes(result: ToolResult): number {
   const first = result.content[0];
   return first?.type === "text" ? Buffer.byteLength(first.text, "utf8") : 0;
 }
-
-test("task_read returns the recent comments oldest-first and pages back through older history", async () => {
-  const task = createTask({
-    title: "Long trace probe",
-    source: { createdBy: "user" },
-  });
-  try {
-    for (let i = 1; i <= 25; i++)
-      addTaskComment({
-        taskId: task.id,
-        authorKind: "agent",
-        authorName: "probe",
-        body: `entry ${i}`,
-      });
-
-    const recent = readPayloadOf(
-      await readTool().execute({ id: task.id, comments: {} }, ctx),
-    );
-    const comments = recent.comments!;
-    assert.deepEqual(
-      comments.items.map((c) => c.body),
-      Array.from({ length: 10 }, (_, i) => `entry ${i + 16}`),
-    );
-    assert.equal(comments.count, 10);
-    assert.equal(comments.totalCount, 25);
-    assert.equal(comments.olderCount, 15);
-    assert.equal(comments.nextCursor, comments.items[0]!.id);
-
-    const older = readPayloadOf(
-      await readTool().execute(
-        { id: task.id, comments: { limit: 5, before: comments.nextCursor } },
-        ctx,
-      ),
-    ).comments!;
-    assert.deepEqual(
-      older.items.map((c) => c.body),
-      ["entry 11", "entry 12", "entry 13", "entry 14", "entry 15"],
-    );
-    assert.equal(older.totalCount, 25);
-    assert.equal(older.olderCount, 10);
-
-    await assert.rejects(
-      readTool().execute({ id: task.id, comments: { before: "999999" } }, ctx),
-      /Unknown comments.before cursor/i,
-    );
-    // A trace belongs to one Task: asking for one on a list read fails loudly
-    // rather than returning no trace and no reason why.
-    await assert.rejects(
-      readTool().execute({ query: "Long trace probe", comments: {} }, ctx),
-      /comments requires id/i,
-    );
-  } finally {
-    deleteTask(task.id);
-  }
-});
-
-test("task_read clips long comment bodies and stays inside the budget", async () => {
-  const task = createTask({
-    title: "Fat trace probe",
-    source: { createdBy: "user" },
-  });
-  try {
-    for (let i = 0; i < 20; i++)
-      addTaskComment({
-        taskId: task.id,
-        authorKind: "agent",
-        authorName: "probe",
-        body: `comment ${i} `.padEnd(19_000, "x"),
-      });
-
-    const result = await readTool().execute(
-      { id: task.id, comments: { limit: 100 } },
-      ctx,
-    );
-    const comments = readPayloadOf(result).comments!;
-
-    assert.ok(comments.count < 20, "the byte budget returned fewer comments");
-    assert.ok(comments.olderCount > 0, "dropped comments are counted as older");
-    assert.equal(comments.nextCursor, comments.items[0]!.id);
-    for (const comment of comments.items) {
-      assert.equal(comment.bodyTruncated, true);
-      assert.ok(comment.body.endsWith("…[truncated]"));
-    }
-    assert.ok(
-      resultBytes(result) <= READ_BUDGET_BYTES,
-      `result ${resultBytes(result)} bytes exceeded the budget`,
-    );
-  } finally {
-    deleteTask(task.id);
-  }
-});
 
 test("task_read degrades an epic read instead of overflowing: clip, then drop descriptions", async () => {
   const parent = createTask({
@@ -789,19 +516,11 @@ test("task_read drops the bodies rather than the Tasks when even clipped descrip
     }),
   );
   try {
-    for (let i = 0; i < 4; i++)
-      addTaskComment({
-        taskId: parent.id,
-        authorKind: "agent",
-        authorName: "probe",
-        body: `trace ${i}`,
-      });
     const result = await readTool().execute(
       {
         id: parent.id,
         includeSubtasks: true,
         includeDescriptions: true,
-        comments: {},
       },
       ctx,
     );
@@ -813,7 +532,6 @@ test("task_read drops the bodies rather than the Tasks when even clipped descrip
     assert.equal(payload.omittedForBudget, undefined);
     assert.equal(payload.items[0]?.description, undefined);
     assert.ok(payload.items[0]?.descriptionPreview);
-    assert.equal(payload.comments?.count, 4);
     assert.ok(resultBytes(result) <= READ_BUDGET_BYTES);
   } finally {
     for (const child of children) deleteTask(child.id);
@@ -879,9 +597,6 @@ test("Task descriptions carry the rules no schema field states", () => {
           /Inbox[^.\n]*untriaged|untriaged[^.\n]*Inbox/i,
         "status-is-a-suggestion": affirmed(
           /(?<subject>status writes? (are|is))(?<what> (only )?(a )?suggestions?)[^.\n]*?\buser\b[^.\n]*?(?<verb>answer|decide|accept|confirm)/i,
-        ),
-        "one-comment-per-session": affirmed(
-          /(at most|no more than|only) (one|a single) comment (per|a|each) session/i,
         ),
         "evidence-bar-for-fields": /(explicit|strong) evidence/i,
         // Folded up from six schema properties by Task-285.

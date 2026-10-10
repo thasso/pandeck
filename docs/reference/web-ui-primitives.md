@@ -154,42 +154,42 @@ tool cards, and feature pages.
   to any layout.
 - `CommentComposer.tsx` owns the app's ONE shape for appending a comment: one
   row, send button inside it, growing with the text up to a cap — deliberately
-  the chat composer's silhouette, because it is the same act. Used by the Task
-  activity trace, a Knowledge entry's comments and a worktree diff's line
-  comments/replies, so they cannot drift. Enter submits and Shift+Enter breaks
-  the line, the chat composer's rule and its touch exception
-  (`hooks/useTouchComposerMode`), with ⌘/Ctrl+Enter still accepted: a comment is
-  the same act as a prompt, and two different Enters in one app is a coin toss
-  every time. `onDirtyChange` reports whether the draft holds anything, so a
-  host such as the diff line composer can treat an empty draft as disposable and
-  a written one as protected. Its `card` layout is the same composer wearing the
-  chat composer's shell (`composerShell.ts`) for a host that OWNS a surface's
-  bottom edge — field on top, every control in the action row beneath it — and
-  `collapsed` keeps that card mounted with no height, because a field the host
-  can focus inside a tap is the only way iOS raises the keyboard on the first
-  press. `onCancel`/`onDelete` add the two answers such a host needs beside
-  send; delete appears only when the composer holds an EXISTING comment, since a
-  draft is what cancel is for. Collapsing ENDS that composer's work: the
-  recorder is cancelled, and a refinement from before the close is dropped by a
-  work EPOCH the close bumps — that request cannot be recalled, and by the time
-  it answers the card may be open again for a different comment, so "is it
-  closed" alone would let it through. A card that stays mounted never gets the
-  unmount a `row` composer relies on, so a microphone would otherwise keep
-  recording behind it with no visible Stop. Telling one UTTERANCE from another
-  is deliberately not done here: `useDictation` identifies its own work and
-  never delivers a cancelled one, which is the only place that distinction
-  exists. It is still NOT the chat composer — attachments, staged context, slash
-  commands and plain-Enter send stay in `Composer.tsx`.
+  the chat composer's silhouette, because it is the same act. Used by a
+  Knowledge entry's comments and a worktree diff's line comments/replies, so
+  they cannot drift. Enter submits and Shift+Enter breaks the line, the chat
+  composer's rule and its touch exception (`hooks/useTouchComposerMode`), with
+  ⌘/Ctrl+Enter still accepted: a comment is the same act as a prompt, and two
+  different Enters in one app is a coin toss every time. `onDirtyChange` reports
+  whether the draft holds anything, so a host such as the diff line composer can
+  treat an empty draft as disposable and a written one as protected. Its `card`
+  layout is the same composer wearing the chat composer's shell
+  (`composerShell.ts`) for a host that OWNS a surface's bottom edge — field on
+  top, every control in the action row beneath it — and `collapsed` keeps that
+  card mounted with no height, because a field the host can focus inside a tap
+  is the only way iOS raises the keyboard on the first press.
+  `onCancel`/`onDelete` add the two answers such a host needs beside send;
+  delete appears only when the composer holds an EXISTING comment, since a draft
+  is what cancel is for. Collapsing ENDS that composer's work: the recorder is
+  cancelled, and a refinement from before the close is dropped by a work EPOCH
+  the close bumps — that request cannot be recalled, and by the time it answers
+  the card may be open again for a different comment, so "is it closed" alone
+  would let it through. A card that stays mounted never gets the unmount a `row`
+  composer relies on, so a microphone would otherwise keep recording behind it
+  with no visible Stop. Telling one UTTERANCE from another is deliberately not
+  done here: `useDictation` identifies its own work and never delivers a
+  cancelled one, which is the only place that distinction exists. It is still
+  NOT the chat composer — attachments, staged context, slash commands and
+  plain-Enter send stay in `Composer.tsx`.
 - `CommentBody.tsx` is the other half of that pair: how a comment READS. It
   renders the body as Markdown at `compact` density, and every surface that
   shows a whole comment goes through it — diff line threads, Knowledge passage
-  threads, a Task's activity trace — so a comment looks the same wherever it is
-  read. Markdown because a comment is Markdown wherever it is written (the
-  composer accepts it, agents send it, and a body rendering `- item` as a
-  literal dash was the app disagreeing with itself); `compact` because a comment
-  always sits inside another surface rather than owning the column, and it is
-  then the size it was typed at. A roster row's one-line summary is NOT this —
-  that is `firstLineOf`, plain text on purpose.
+  threads — so a comment looks the same wherever it is read. Markdown because a
+  comment is Markdown wherever it is written (the composer accepts it, agents
+  send it, and a body rendering `- item` as a literal dash was the app
+  disagreeing with itself); `compact` because a comment always sits inside
+  another surface rather than owning the column, and it is then the size it was
+  typed at. A roster row's one-line summary is NOT this — that is `firstLineOf`,
+  plain text on purpose.
 - `composerShell.ts` holds that shell as TOKENS: the width clamp, the card and
   its collapsed skin, the field, the action row and its buttons — the strings
   `Composer.tsx` used to carry inline. A phone has one bottom edge, so whatever

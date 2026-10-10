@@ -38,9 +38,7 @@ const createBlock = manageBlock(
 
 const suggestionBlock = manageBlock(
   {
-    operations: [
-      { operation: "update", id: "297", status: "done", comment: "shipped" },
-    ],
+    operations: [{ operation: "update", id: "297", status: "done" }],
   },
   {
     changedCount: 1,
@@ -53,16 +51,14 @@ const suggestionBlock = manageBlock(
         descriptionEditsApplied: 1,
       },
     ],
-    comments: [{ taskId: "297", body: "shipped", authorKind: "agent" }],
   },
 );
 
 describe("task_manage payload", () => {
-  it("reads the mutations, deletions, comments and warnings", () => {
+  it("reads the mutations, deletions and warnings", () => {
     const payload = parseTaskManagePayload(suggestionBlock.output);
     expect(payload?.changed).toHaveLength(1);
     expect(payload?.changed[0]?.statusSuggestion?.to).toBe("done");
-    expect(payload?.commentedIds).toEqual(["297"]);
     expect(payload?.warnings).toEqual([]);
   });
 
@@ -80,7 +76,6 @@ describe("task_manage payload", () => {
       {
         operations: [
           { operation: "create", title: "New" },
-          { operation: "comment", id: "12", comment: "note" },
           { operation: "delete", id: "13" },
           { operation: "update", id: "14" },
         ],
@@ -106,14 +101,12 @@ describe("task_manage payload", () => {
       status: "todo" as const,
       descriptionEditsApplied: 2,
     };
-    expect(changeSummary(task, "update", true)).toBe(
-      "2 description edits · comment added",
-    );
+    expect(changeSummary(task, "update")).toBe("2 description edits");
     expect(
-      changeSummary({ ...task, descriptionEditsApplied: 1 }, "update", false),
+      changeSummary({ ...task, descriptionEditsApplied: 1 }, "update"),
     ).toBe("description updated");
     expect(
-      changeSummary({ id: "1", title: "T", status: "done" }, "create", false),
+      changeSummary({ id: "1", title: "T", status: "done" }, "create"),
     ).toBe("created");
   });
 });
@@ -171,7 +164,6 @@ describe("TaskManageToolCard", () => {
     expect(html).toContain("says done: tests pass");
     expect(html).toContain("Confirm done");
     expect(html).toContain("description updated");
-    expect(html).toContain("comment added");
   });
 
   it("shows no question for a suggestion the status already satisfies", () => {

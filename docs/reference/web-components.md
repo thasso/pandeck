@@ -544,22 +544,6 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   comment is the same act as writing a prompt and two different Enters in one
   app is a coin toss; Cmd/Ctrl+Enter still submits, and the Send tooltip states
   the rule.
-- `TaskComments.tsx` owns the presentational Task activity-trace list + composer
-  (Markdown bodies, author-kind badge, chronological oldest-first, append-only —
-  no threading/resolve/edit). Its composer is the shared
-  `common/CommentComposer` (also used by a Knowledge entry's comments): ONE row,
-  send INSIDE the card, growing with the text up to a cap — it is the same act,
-  and it was the last text entry in the app that looked like a form field with a
-  button parked beside it, and Enter submits with Shift+Enter for a newline,
-  exactly as the chat composer does. Bodies render through the shared
-  `common/CommentBody` (Markdown, `compact`), the same renderer the diff and
-  Knowledge threads use. Comments are ruler-separated rather than cards,
-  collapse individually to their header, and agent authors link to their
-  originating session when `sessionId` is present. `TaskManagementPage.tsx`
-  mounts it in the Task detail's **Activity** `CollapsibleSection`. It renders
-  the per-Task `LoadState` honestly, watches and revalidates on open, unwatches
-  on close, retains comments during refresh or failure, and keeps a comment
-  draft until correlated add success.
 - `TaskManageToolCard.tsx` owns the in-chat card for a `task_manage` result: the
   Tasks a turn created or changed, as chips that open them, plus the confirm
   button for a pending status suggestion. It is registered in `tools/` and
@@ -1410,17 +1394,16 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   a phone) but yields to a functional custom `leading`, which it then precedes.
   Every main-pane surface takes `back` and forwards it to its own header
   (`App.tsx`'s chat header, Task detail, Project detail, Worktree detail,
-  Knowledge entry/file/state views, Settings, Usage; `calendar/CalendarPage.tsx`
-  renders `PageHeaderBackButton` directly in its toolbar, which is its page
-  header). App supplies ONE object for all of them and only on mobile, so back
-  stays a single rule rather than per-surface behavior; it never calls
-  `history.back()` (see `../docs/ui-shell.md`, Small Screens). It is also
-  `undefined` on the screens whose object dock carries back in its action row
-  instead, which is most of them — a surface must therefore still look right
-  with `back` absent, falling back to its own leading control or icon box. And
-  on a phone a surface may render NO header at all when its content already says
-  what it is (the new-session screen; see `../CLAUDE.md`), so nothing may depend
-  on this row existing for layout or offsets.
+  Knowledge entry/file/state views, Settings, Usage). App supplies ONE object
+  for all of them and only on mobile, so back stays a single rule rather than
+  per-surface behavior; it never calls `history.back()` (see
+  `../docs/ui-shell.md`, Small Screens). It is also `undefined` on the screens
+  whose object dock carries back in its action row instead, which is most of
+  them — a surface must therefore still look right with `back` absent, falling
+  back to its own leading control or icon box. And on a phone a surface may
+  render NO header at all when its content already says what it is (the
+  new-session screen; see `../CLAUDE.md`), so nothing may depend on this row
+  existing for layout or offsets.
 - `agentTypeDisplay.ts` owns `AGENT_TYPE_DISPLAY`, the per-persona
   label/icon/tone/description registry: ONE definition of what an agent looks
   like, shared by the composer's persona picker, the new-session Agent row and
@@ -2199,7 +2182,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
     the same applicability condition. A missing/expired pi login degrades to a
     friendly `available: false` message (read-only; the app never refreshes the
     token).
-- `shell/`, `calendar/`, `tools/`, `diff/`, and `ui/` have child contracts.
+- `shell/`, `tools/`, `diff/`, and `ui/` have child contracts.
 - `worktree/WorktreeDetailPage.tsx` has two hosts — the `/worktrees/:id` route
   and the right panel's Worktree tab — and `narrow` (not "mobile") is what picks
   its compact single-column layout, since the panel is a column of a phone's

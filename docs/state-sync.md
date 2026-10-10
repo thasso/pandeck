@@ -214,14 +214,14 @@ per-surface sub-tasks — no page invents its own delta format.
   pins those plans. The owning session's `backgroundActivity` rides the ordinary
   session list and never sets `isStreaming`, `runStartedAt`, unread or
   `SessionSnapshot.runState`.
-- Comments: one per-`CommentTarget` projection shared by KB, worktree and Task
-  comments. `commentsSnapshot` is the cold subscribe/resync answer;
-  `commentEvents` carries revisioned upserts/deletes for touched thread ids
-  only. Worktree review sets have a separate digest in that snapshot and travel
-  as keyed `reviewSetEvents` on mutations; neither collection rides an event.
-  The object-addressed broadcaster reaches only connections holding that target,
-  so comment streams do not join a domain-wide `broadcastAll` topic. Chat
-  comments remain browser-local and are outside state sync.
+- Comments: the `commentsSnapshot` subscribe/resync answer and revisioned
+  `commentEvents` upserts/deletes carry worktree review threads only. Worktree
+  review sets have a separate digest in that snapshot and travel as keyed
+  `reviewSetEvents` on mutations; neither collection rides an event. The
+  object-addressed broadcaster reaches only connections holding that target, so
+  comment streams do not join a domain-wide `broadcastAll` topic. Session
+  transcript comments and chat comments remain browser-local and never enter the
+  wire protocol.
 
 ## Enforcement
 

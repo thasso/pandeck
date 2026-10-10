@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { CalendarDays, FileDiff } from "lucide-react";
+import { FileDiff } from "lucide-react";
 import type {
   ProjectRecord,
   PullRequestInventoryItem,
@@ -109,8 +109,6 @@ interface Props {
   assistantLabel: string;
   /** Mobile (single-pane) layout: the sidebar renders as a full-screen overlay. */
   mobile: boolean;
-  /** Open a calendar view for today from the minimal calendar browser. */
-  onOpenCalendarView: (view: "month" | "week" | "day") => void;
   /** Hover "+" on task rows: start a session with that task as context. */
   /** Hover "+" on project rows: start a session with that project as context. */
   onStartSessionForProject: (id: string) => void;
@@ -236,7 +234,7 @@ interface Props {
 
 /**
  * One destination in a section browser that lists views rather than objects
- * (Calendar, Knowledge Base, Settings). `current` marks the open page for
+ * (Knowledge Base, Settings). `current` marks the open page for
  * assistive technology; `selected` only highlights.
  */
 function BrowserRow({
@@ -275,35 +273,6 @@ function BrowserRow({
         </ItemActions>
       ) : null}
     </Item>
-  );
-}
-
-/**
- * Minimal calendar browser: the calendar's sidebar shape is not designed yet
- * (ui-shell.md allows shipping a minimal browser), so it only offers today's
- * views.
- */
-function CalendarBrowser({
-  onOpenView,
-}: {
-  onOpenView: (view: "month" | "week" | "day") => void;
-}) {
-  const views = [
-    { id: "month" as const, label: "Month view" },
-    { id: "week" as const, label: "Week view" },
-    { id: "day" as const, label: "Today" },
-  ];
-  return (
-    <div className="flex flex-col gap-0.5">
-      {views.map((view) => (
-        <BrowserRow
-          key={view.id}
-          icon={<CalendarDays />}
-          label={view.label}
-          onClick={() => onOpenView(view.id)}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -427,7 +396,7 @@ function SettingsSectionList({
  * @component Sidebar
  * @purpose Global left navigation surface, split per app/web/docs/ui-shell.md into
  * the selected section's object browser and, pinned below it, the primary
- * navigation bar (Sessions/Tasks/Worktrees/Projects/Knowledge/Calendar/Settings).
+ * navigation bar (Sessions/Tasks/Pull Requests/Projects/Knowledge/Settings).
  * @useWhen The app shell needs the left navigation rail (desktop inline panel or mobile full-screen overlay).
  * @avoidWhen Showing active-session context; use the session inspector for that. Not a layout decoration — it is a destination surface.
  * @intent Single scroll owner for the browser zone, which takes all the height the
@@ -459,7 +428,6 @@ function SidebarImpl({
   onOpenBackgroundTasks,
   assistantLabel,
   mobile,
-  onOpenCalendarView,
   onStartSessionForProject,
   tasksFresh,
   projectsFresh,
@@ -814,8 +782,6 @@ function SidebarImpl({
             onOpen={onOpenKnowledge}
             onOpenFile={onOpenKnowledgeFile}
           />
-        ) : section === "calendar" ? (
-          <CalendarBrowser onOpenView={onOpenCalendarView} />
         ) : (
           <SessionInbox
             headerSlot={inboxHeaderSlot}

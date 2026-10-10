@@ -163,22 +163,25 @@ SDK option construction, stream/message mapping, persistence, and tests.
   definition text, the rest their prompt snippets).
 - `options.ts` also owns the `SessionMode` (Build/Plan) tool policy
   ([Task-329](pa://task/329)), a second axis independent of the persona.
-  `buildClaudeSdkQueryOptions` takes the mode and, in Plan, filters the
+  `buildClaudeSdkQueryOptions` takes a getter for the session's LIVE mode and
+  never lets it shape `tools:`/`disallowedTools`: those are fixed when the
+  Claude process starts, and a process retained for background work must be able
+  to leave Plan without a restart that would kill that work
+  ([Task-756](pa://task/756)). Instead the `PreToolUse` hook refuses the
   file-mutating natives (`CLAUDE_NATIVE_MUTATING_TOOLS`: `Write`, `Edit`,
-  `MultiEdit`, `NotebookEdit`) out of whatever native set the persona — or an
-  explicit `nativeTools` override — produced. Because those names are members of
-  `KNOWN_CLAUDE_NATIVE_TOOLS`, dropping them from the allowlist moves them onto
-  `disallowedTools` by itself, with no second list to keep in step, and
-  `canUseTool` is derived from the same allowlist so it stays consistent even
-  though `bypassPermissions` shadows it entirely. The mounted MCP server also
-  filters catalog tools whose `sideEffects` are `local` or `external`, except
-  `task_manage` for durable Task organization and `session_spawn` for read-only
-  profile inspection; that tool still refuses `spawn`/`propose` against
-  persisted Plan mode. `canUseTool` independently denies the remaining blocked
-  external `mcp__pa__*` names for stale or forged calls. `Read`, `Bash`,
+  `MultiEdit`, `NotebookEdit`) per call while the mode reads Plan, so a switch
+  in either direction reaches the running process on its next tool call. The
+  builder therefore refuses a mode without `outputPolicySessionId`, whose hooks
+  carry the gate. `canUseTool` reads the same live mode so it stays consistent
+  even though `bypassPermissions` shadows it entirely. The mounted MCP server
+  also filters catalog tools whose `sideEffects` are `local` or `external`,
+  except `task_manage` for durable Task organization and `session_spawn` for
+  read-only profile inspection; that tool still refuses `spawn`/`propose`
+  against persisted Plan mode. `canUseTool` independently denies the remaining
+  blocked external `mcp__pa__*` names for stale or forged calls. `Read`, `Bash`,
   `Grep`/`Glob`, `ToolSearch`, `Skill` for coding personas, read-only app tools,
   and Task management remain, so a planning session investigates and records
-  plans at full strength. `build` is byte-identical to passing no mode. A frozen
+  plans at full strength. Both modes start an identical process. A frozen
   library plugin remains mounted in Plan, matching the retained `Skill`
   invocation surface. Deliberately NOT the SDK's own `permissionMode: "plan"`
   (`sdk.d.ts:1736`): that halts tool execution generally, imposes the CLI's
@@ -186,14 +189,13 @@ SDK option construction, stream/message mapping, persistence, and tests.
   exit — the opposite of "all tools allowed, no file mutation".
   `planModeInstructions` is likewise never set and
   `allowDangerouslySkipPermissions` is untouched. `ClaudeSdkSession.setMode`
-  persists immediately. A retained Build epoch can tighten to Plan through the
-  live `PreToolUse` guard; an epoch created in Plan cannot restore native edit
-  definitions until its background work finishes. Retained model/thinking edits
-  use SDK controls instead of another query. On acquire the RECORD's mode wins
-  over the caller's, so reopening resumes the mode the session was left in and a
-  stale client cannot silently re-enable writes. Its `state()` projection reads
-  the insert-only frozen skill row into `activeSkills` for coding personas;
-  rendering never resolves live settings.
+  persists immediately. A retained epoch switches in either direction through
+  the live `PreToolUse` gate, without restarting or stopping its background
+  work. Retained model/thinking edits use SDK controls instead of another query.
+  On acquire the RECORD's mode wins over the caller's, so reopening resumes the
+  mode the session was left in and a stale client cannot silently re-enable
+  writes. Its `state()` projection reads the insert-only frozen skill row into
+  `activeSkills` for coding personas; rendering never resolves live settings.
 - `claudeSdkRecords.ts` owns the on-disk record format (metadata beside an
   append-only timeline log, legacy single-file read, crash-safe writes); see
   `docs/claude-session-records.md`.

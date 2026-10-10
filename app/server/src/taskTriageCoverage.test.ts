@@ -3,12 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "vitest";
 import type { ClientMessage, ServerMessage } from "@assistant/shared";
 import { Connection, tasksProcessedByUserCommand } from "./connection.ts";
-import {
-  createTask,
-  deleteTask,
-  readTask,
-  markTaskProcessed,
-} from "./tasks.ts";
+import { createTask, deleteTask, readTask } from "./tasks.ts";
 
 /**
  * The "any user decision triages" invariant is only as good as its coverage, and
@@ -23,8 +18,6 @@ import {
 const DELIBERATE_EXCLUSIONS: Record<string, string> = {
   listTasks: "a read",
   getTask: "a read — merely opening a Task must not empty the Inbox",
-  listTaskComments: "a read",
-  unwatchTaskComments: "a watch-lifecycle update, not Task processing",
   deleteTask: "the Task is gone; there is nothing to triage",
   reorderTasks:
     "handled in the domain: only a real reparent triages, not renumbered siblings",
@@ -109,14 +102,6 @@ test("the commands that DO process a Task name it", () => {
     [{ type: "archiveTask", id: "8" } as unknown as ClientMessage, ["8"]],
     [
       {
-        type: "addComment",
-        target: { kind: "task", taskId: "9" },
-        body: "note",
-      } as unknown as ClientMessage,
-      ["9"],
-    ],
-    [
-      {
         type: "assignTaskProjects",
         updates: [
           { id: "14", projectId: "p" },
@@ -137,12 +122,7 @@ test("the commands that DO process a Task name it", () => {
 });
 
 test("reads never process a Task", () => {
-  for (const type of [
-    "listTasks",
-    "getTask",
-    "listTaskComments",
-    "unwatchTaskComments",
-  ]) {
+  for (const type of ["listTasks", "getTask"]) {
     const msg = {
       type,
       id: "1",
@@ -166,7 +146,7 @@ function fakeSocket(sent: ServerMessage[]) {
   } as unknown as ConstructorParameters<typeof Connection>[0];
 }
 
-test("Task detail/activity reads echo correlation and unwatch the trace", async () => {
+test("Task detail reads echo correlation", async () => {
   const sent: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(sent));
   const task = createTask({
@@ -198,19 +178,6 @@ test("Task detail/activity reads echo correlation and unwatch the trace", async 
     assert.ok(missing && missing.type === "taskDetail");
     assert.equal(missing.item, null);
     assert.equal(missing.error, undefined, "not-found is not a read failure");
-
-    const commentTarget = { kind: "task" as const, taskId: task.id };
-    await connection.handle({
-      type: "listComments",
-      target: commentTarget,
-      requestId: "comments-generation-3",
-    });
-    const comments = sent.find(
-      (message) => message.type === "commentsSnapshot",
-    );
-    assert.ok(comments && comments.type === "commentsSnapshot");
-    assert.equal(comments.requestId, "comments-generation-3");
-    assert.equal(connection.wantsComments(commentTarget), true);
   } finally {
     deleteTask(task.id);
     connection.dispose();
@@ -230,22 +197,21 @@ test("an uncorrelated command that FAILS does not process the Task", async () =>
   const sent: ServerMessage[] = [];
   const connection = new Connection(fakeSocket(sent));
   const task = createTask({
-    title: "Arrival for a refused comment",
+    title: "Arrival for a refused save",
     status: "todo",
     source: { createdBy: "agent" },
   });
 
   try {
-    // No requestId, and an empty body: the handler catches and sends an error.
+    // No requestId, and a blank title: the handler catches and sends an error.
     await connection.handle({
-      type: "addComment",
-      target: { kind: "task", taskId: task.id },
-      body: "",
+      type: "saveTask",
+      request: { id: task.id, title: " ", status: "todo" },
     } as ClientMessage);
 
     assert.ok(
       sent.some((message) => message.type === "error"),
-      "expected the refused comment to report an error",
+      "expected the refused save to report an error",
     );
     assert.equal(
       readTask(task.id)?.triagedAt,
@@ -256,55 +222,16 @@ test("an uncorrelated command that FAILS does not process the Task", async () =>
     // The same command, accepted, DOES process it — so the gate discriminates
     // rather than simply never triaging on this path.
     await connection.handle({
-      type: "addComment",
-      target: { kind: "task", taskId: task.id },
-      body: "a real note",
+      type: "saveTask",
+      request: { id: task.id, title: "Renamed", status: "todo" },
     } as ClientMessage);
     assert.ok(
       readTask(task.id)?.triagedAt,
-      "a successful comment must process the Task",
+      "a successful save must process the Task",
     );
   } finally {
     deleteTask(task.id);
     connection.dispose();
-  }
-});
-
-/**
- * The behavioural half, over the real store: the path that used to miss triage
- * (a comment) now empties an arrival out of the Inbox.
- */
-test("a browser command on an ARRIVAL processes it out of the Inbox", () => {
-  for (const msg of [
-    { type: "addComment", target: { kind: "task", taskId: "" }, body: "note" },
-  ]) {
-    // An arrival: created by an agent, so it is born untriaged and waiting.
-    const task = createTask({
-      title: `Arrival for ${msg.type}`,
-      status: "todo",
-      source: { createdBy: "agent" },
-    });
-    try {
-      assert.equal(
-        readTask(task.id)?.triagedAt,
-        undefined,
-        "an agent-created Task must start untriaged",
-      );
-
-      const targets = tasksProcessedByUserCommand({
-        ...msg,
-        target: { kind: "task", taskId: task.id },
-      } as unknown as ClientMessage);
-      assert.deepEqual(targets, [task.id], `${msg.type} must name its Task`);
-      for (const id of targets) markTaskProcessed(id);
-
-      assert.ok(
-        readTask(task.id)?.triagedAt,
-        `${msg.type} must process the Task`,
-      );
-    } finally {
-      deleteTask(task.id);
-    }
   }
 });
 

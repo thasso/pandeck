@@ -19,7 +19,13 @@ import {
   setCommentBroadcaster,
 } from "./commentEvents.ts";
 
-const taskTarget = { kind: "task", taskId: "42" } as const;
+const target42 = {
+  kind: "worktree",
+  worktreeId: "42",
+  path: "",
+  side: "new",
+  revision: "",
+} as const;
 
 function thread(
   target: CommentTarget,
@@ -68,27 +74,27 @@ function fakeStore(list: CommentStore["list"]): CommentStore {
 
 describe("comment state sync", () => {
   test("subscribing returns a snapshot and indexes roots and replies", async () => {
-    const row = thread(taskTarget, "snapshot");
+    const row = thread(target42, "snapshot");
     resetCommentEventsForTests(() => fakeStore(async () => [row]));
 
-    const snapshot = await commentsSnapshot(taskTarget, "request-1");
+    const snapshot = await commentsSnapshot(target42, "request-1");
 
     assert.equal(snapshot.type, "commentsSnapshot");
     assert.equal(snapshot.requestId, "request-1");
     assert.deepEqual(snapshot.threads, [row]);
     assert.deepEqual(snapshot.revisions, [{ id: row.id, revision: 1 }]);
     assert.deepEqual(commentOwnership(row.id), {
-      target: taskTarget,
+      target: target42,
       threadId: row.id,
     });
     assert.deepEqual(commentOwnership(`${row.id}-reply`), {
-      target: taskTarget,
+      target: target42,
       threadId: row.id,
     });
   });
 
   test("keeps snapshot content and revisions atomic against a mutation", async () => {
-    let current = thread(taskTarget, "before snapshot");
+    let current = thread(target42, "before snapshot");
     let releaseSnapshot!: () => void;
     const snapshotGate = new Promise<void>((resolve) => {
       releaseSnapshot = resolve;
@@ -114,10 +120,10 @@ describe("comment state sync", () => {
       broadcast: (_target, message) => messages.push(message),
     });
 
-    const snapshotPromise = commentsSnapshot(taskTarget);
+    const snapshotPromise = commentsSnapshot(target42);
     await snapshotStarted;
-    current = thread(taskTarget, "after snapshot");
-    const mutation = notifyCommentChanges(taskTarget, [current.id]);
+    current = thread(target42, "after snapshot");
+    const mutation = notifyCommentChanges(target42, [current.id]);
     releaseSnapshot();
     const snapshot = await snapshotPromise;
     await mutation;
@@ -134,8 +140,8 @@ describe("comment state sync", () => {
   });
 
   test("broadcasts only touched thread ids, including deletes", async () => {
-    const first = thread(taskTarget, "first", "thread-1");
-    const second = thread(taskTarget, "second", "thread-2");
+    const first = thread(target42, "first", "thread-1");
+    const second = thread(target42, "second", "thread-2");
     let rows = [first, second];
     resetCommentEventsForTests(() =>
       fakeStore(async () => structuredClone(rows)),
@@ -145,9 +151,9 @@ describe("comment state sync", () => {
       broadcast: (_target, message) => messages.push(message),
     });
 
-    await notifyCommentChanges(taskTarget, [first.id]);
+    await notifyCommentChanges(target42, [first.id]);
     rows = [second];
-    await notifyCommentChanges(taskTarget, [first.id]);
+    await notifyCommentChanges(target42, [first.id]);
 
     assert.deepEqual(
       messages.map((message) =>
@@ -222,7 +228,7 @@ describe("comment state sync", () => {
   });
 
   test("serializes projection reads and revision stamps per target", async () => {
-    let current = thread(taskTarget, "first");
+    let current = thread(target42, "first");
     let releaseFirst!: () => void;
     const firstRead = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -247,10 +253,10 @@ describe("comment state sync", () => {
       broadcast: (_target, message) => messages.push(message),
     });
 
-    const first = notifyCommentChanges(taskTarget, [current.id]);
+    const first = notifyCommentChanges(target42, [current.id]);
     await firstStarted;
-    current = thread(taskTarget, "second");
-    const second = notifyCommentChanges(taskTarget, [current.id]);
+    current = thread(target42, "second");
+    const second = notifyCommentChanges(target42, [current.id]);
     releaseFirst();
     await Promise.all([first, second]);
 
@@ -278,7 +284,6 @@ describe("comment state sync", () => {
         side: "new",
         revision: "head",
       },
-      { kind: "task", taskId: "42" },
       { kind: "session", sessionId: "s", entryId: "e", blockIndex: 3 },
     ];
     resetCommentEventsForTests((target) =>
@@ -294,52 +299,42 @@ describe("comment state sync", () => {
 });
 
 describe("comment broadcast isolation", () => {
-  for (const target of [
-    { kind: "task", taskId: "task-a" } as const,
-    {
+  test("a worktree event reaches only viewers holding that object", () => {
+    const target = {
       kind: "worktree",
       worktreeId: "wt-a",
       path: "src/a.ts",
       side: "new",
       revision: "head",
-    } as const,
-  ]) {
-    test(`a ${target.kind} event reaches only viewers holding that object`, () => {
-      const delivered: string[] = [];
-      const viewer = (name: string, held: CommentTarget): Viewer => ({
-        send: (_message: ServerMessage) => delivered.push(name),
-        wantsComments: (candidate) =>
-          candidate.kind === held.kind &&
-          (candidate.kind === "task"
-            ? held.kind === "task" && candidate.taskId === held.taskId
-            : candidate.kind === "worktree" &&
-              held.kind === "worktree" &&
-              candidate.worktreeId === held.worktreeId),
-      });
-      const other: CommentTarget =
-        target.kind === "task"
-          ? { kind: "task", taskId: "task-b" }
-          : {
-              kind: "worktree",
-              worktreeId: "wt-b",
-              path: "",
-              side: "new",
-              revision: "",
-            };
-      const message: CommentEventsMessage = {
-        type: "commentEvents",
-        target,
-        seq: 1,
-        events: [],
-      };
-
-      broadcastCommentEventToViewers(
-        [viewer("holder", target), viewer("other", other)],
-        target,
-        message,
-      );
-
-      assert.deepEqual(delivered, ["holder"]);
+    } as const;
+    const delivered: string[] = [];
+    const viewer = (name: string, held: CommentTarget): Viewer => ({
+      send: (_message: ServerMessage) => delivered.push(name),
+      wantsComments: (candidate) =>
+        candidate.kind === "worktree" &&
+        held.kind === "worktree" &&
+        candidate.worktreeId === held.worktreeId,
     });
-  }
+    const other: CommentTarget = {
+      kind: "worktree",
+      worktreeId: "wt-b",
+      path: "",
+      side: "new",
+      revision: "",
+    };
+    const message: CommentEventsMessage = {
+      type: "commentEvents",
+      target,
+      seq: 1,
+      events: [],
+    };
+
+    broadcastCommentEventToViewers(
+      [viewer("holder", target), viewer("other", other)],
+      target,
+      message,
+    );
+
+    assert.deepEqual(delivered, ["holder"]);
+  });
 });

@@ -1,8 +1,48 @@
 import { describe, expect, test } from "vitest";
 import {
   normalizeTextScale,
+  normalizeStoredPrefs,
   normalizeWorkflowRoleRuntimes,
+  type Prefs,
 } from "./usePrefs.ts";
+
+describe("normalizeStoredPrefs", () => {
+  test("preserves every active optional preference", () => {
+    const optional = {
+      worktreeReviewMode: "by-file",
+      lastModelKey: "provider:model",
+      credentialProfileId: "account",
+      lastThinkingLevel: "high",
+      workflowRoleRuntimes: {
+        coordinator: { modelKey: "provider:model", thinkingLevel: "high" },
+        roles: { implementer: [], reviewer: [], fixer: [], verdict: [] },
+      },
+      workflowRunLimits: { maxIterations: 3, maxReviewPasses: 2 },
+    } satisfies Partial<Prefs>;
+    expect(normalizeStoredPrefs(optional)).toMatchObject(optional);
+  });
+
+  test("drops retired calendar preferences and slots while keeping current settings", () => {
+    const prefs = normalizeStoredPrefs({
+      theme: "light",
+      lastModelKey: "provider:model",
+      worktreeReviewMode: "by-file",
+      navSlots: ["sessions", "calendar", "tasks"],
+      calendarView: "week",
+      calendarShowWeekends: true,
+      calendarShowTempo: true,
+      calendarHourPx: 60,
+      calendarDetailHeight: 400,
+    } as unknown as Parameters<typeof normalizeStoredPrefs>[0]);
+    expect(prefs.theme).toBe("light");
+    expect(prefs.lastModelKey).toBe("provider:model");
+    expect(prefs.worktreeReviewMode).toBe("by-file");
+    expect(prefs.navSlots).not.toContain("calendar");
+    expect(Object.keys(prefs).some((key) => key.startsWith("calendar"))).toBe(
+      false,
+    );
+  });
+});
 
 describe("normalizeTextScale", () => {
   test("keeps every supported value", () => {

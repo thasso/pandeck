@@ -1,9 +1,8 @@
 /**
  * Notify-with-ids IS the revision bump (docs/state-sync.md).
  *
- * Every public write of the Task domain — plus the comment write that changes a
- * list badge — must report the rows it touched, because an unreported row is
- * one whose viewers never hear about the change. The coverage guard at the end
+ * Every public write of the Task domain must report the rows it touched,
+ * because an unreported row is one whose viewers never hear about the change. The coverage guard at the end
  * is the part that survives new code: a newly exported write fails this test
  * until it is exercised here.
  */
@@ -28,7 +27,6 @@ import {
   updateTask,
   TASK_AUTO_ARCHIVE_AFTER_MS,
 } from "./tasks.ts";
-import { addTaskComment } from "./taskComments.ts";
 import { deleteProject, upsertProject } from "./projectRegistry.ts";
 
 const SRC = dirname(fileURLToPath(import.meta.url));
@@ -104,14 +102,6 @@ test("every Task write reports the rows it touched", () => {
         ],
         true,
       ),
-    );
-    movesRevisions([task.id], () =>
-      addTaskComment({
-        taskId: task.id,
-        authorKind: "user",
-        authorName: "Alice",
-        body: "trace",
-      }),
     );
     movesRevisions([task.id], () => notifyTaskChange([task.id]));
     movesRevisions([arrival.id], () => markTaskProcessed(arrival.id));

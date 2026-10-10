@@ -72,7 +72,7 @@ describe("Task keyed projections", () => {
     });
   });
 
-  it("bounds body and comment caches by least-recently-used key", () => {
+  it("bounds the body cache by least-recently-used key", () => {
     let state = createInitialState();
     for (let index = 0; index <= TASK_PROJECTION_CACHE_LIMIT; index += 1) {
       const id = String(index);
@@ -80,44 +80,22 @@ describe("Task keyed projections", () => {
         kind: "server",
         msg: { type: "taskDetail", id, item: task(id) },
       });
-      state = reduceAssistantState(state, {
-        kind: "server",
-        msg: {
-          type: "commentsSnapshot",
-          target: { kind: "task", taskId: id },
-          threads: [],
-          revisions: [],
-        },
-      });
     }
 
     expect(Object.keys(state.taskDetails)).toHaveLength(
       TASK_PROJECTION_CACHE_LIMIT,
     );
-    expect(Object.keys(state.taskComments)).toHaveLength(
-      TASK_PROJECTION_CACHE_LIMIT,
-    );
     expect(state.taskDetails["0"]).toBeUndefined();
-    expect(state.taskComments["0"]).toBeUndefined();
     expect(
       state.taskDetails[String(TASK_PROJECTION_CACHE_LIMIT)],
     ).toBeDefined();
   });
 
-  it("never evicts the open Task from either ready projection cache", () => {
+  it("never evicts the open Task from the ready body cache", () => {
     let state = createInitialState();
     state = reduceAssistantState(state, {
       kind: "server",
       msg: { type: "taskDetail", id: "0", item: task("0") },
-    });
-    state = reduceAssistantState(state, {
-      kind: "server",
-      msg: {
-        type: "commentsSnapshot",
-        target: { kind: "task", taskId: "0" },
-        threads: [],
-        revisions: [],
-      },
     });
     state = reduceAssistantState(state, {
       kind: "setOpenTaskProjection",
@@ -130,20 +108,9 @@ describe("Task keyed projections", () => {
         kind: "server",
         msg: { type: "taskDetail", id, item: task(id) },
       });
-      state = reduceAssistantState(state, {
-        kind: "server",
-        msg: {
-          type: "commentsSnapshot",
-          target: { kind: "task", taskId: id },
-          threads: [],
-          revisions: [],
-        },
-      });
     }
 
     expect(state.taskDetails["0"]).toBeDefined();
-    expect(state.taskComments["0"]).toBeDefined();
     expect(state.taskDetails["1"]).toBeUndefined();
-    expect(state.taskComments["1"]).toBeUndefined();
   });
 });

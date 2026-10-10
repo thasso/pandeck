@@ -543,7 +543,7 @@ export const taskManageBlock = toolBlock(
   {
     operations: [
       { operation: "create", title: "Surface retry counts in the UI" },
-      { operation: "update", id: "742", status: "done", comment: "shipped" },
+      { operation: "update", id: "742", status: "done" },
     ],
   },
   {
@@ -561,7 +561,6 @@ export const taskManageBlock = toolBlock(
       },
     ],
     deletedIds: ["700"],
-    comments: [{ taskId: "742", body: "shipped", authorKind: "agent" }],
     warnings: ["Task-701 was already archived; nothing changed."],
   },
 );

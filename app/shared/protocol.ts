@@ -2295,29 +2295,6 @@ export function parseGithubIssueRef(
     : null;
 }
 
-/** Who authored a Task comment. `system` is reserved for future lifecycle events. */
-export type TaskCommentAuthorKind = "user" | "agent" | "system";
-
-export interface TaskCommentAuthor {
-  kind: TaskCommentAuthorKind;
-  name: string;
-  /** Originating agent session id, when an agent left the comment. */
-  sessionId?: string;
-}
-
-/**
- * One append-only comment in a Task's chronological activity trace. Users (web)
- * and agents (`task_manage` comments) leave context, decisions, updates, and
- * follow-ups; comments are never edited or deleted individually.
- */
-export interface TaskComment {
-  id: string;
-  taskId: string;
-  author: TaskCommentAuthor;
-  body: string;
-  createdAt: number;
-}
-
 export interface TaskExternalLink {
   url: string;
   /** Whether this URL is a source artifact for the Task or merely related context. */
@@ -2453,8 +2430,6 @@ export interface TaskSummary {
   archivedAt?: number;
   /** Commit hash that included this completed task, when known. */
   commitHash?: string;
-  /** Number of activity-trace comments on this Task, for list badges. */
-  commentCount?: number;
   /** An agent suggests a status for this Task; the user has not answered yet. */
   statusSuggestion?: TaskStatusSuggestion;
   /**
@@ -2521,7 +2496,6 @@ export function taskSummaryOf(item: TaskItem): TaskSummary {
       : {}),
     ...(item.archivedAt !== undefined ? { archivedAt: item.archivedAt } : {}),
     ...(item.commitHash ? { commitHash: item.commitHash } : {}),
-    ...(item.commentCount ? { commentCount: item.commentCount } : {}),
     ...(item.statusSuggestion
       ? { statusSuggestion: item.statusSuggestion }
       : {}),
@@ -4199,6 +4173,12 @@ export interface SessionState {
   /** Messages waiting for the running turn to end; absent when there are none. */
   promptQueue?: PromptQueueState;
   /**
+   * Messages other sessions sent this one that are not delivered yet, in
+   * delivery order; absent when there are none. They go after the user's own
+   * queue unless the user steers one in or withdraws it.
+   */
+  queuedPeerPrompts?: QueuedPeerPrompt[];
+  /**
    * Why the session is idle, when it's idle for a specific reason the UI should
    * surface (rather than just "done"). Currently only a pending question; modeled
    * as a union so more reasons (e.g. awaiting approval) can be added.
@@ -5565,6 +5545,27 @@ export interface PromptQueueState {
   paused: boolean;
 }
 
+/**
+ * A peer prompt waiting for delivery to the session it was sent to
+ * (`peerPrompt.ts`), shown in that session's composer queue beside the user's
+ * own rows. Sanitized like {@link PeerPromptCard}: no routing ids beyond the
+ * sender's session.
+ */
+export interface QueuedPeerPrompt {
+  /** The opaque key the sender's card carries ({@link PeerPromptCard.messageKey}). */
+  id: string;
+  senderTitle: string;
+  senderSessionId: string;
+  /** An excerpt ({@link peerPromptExcerpt}); the sender's transcript has it all. */
+  message: string;
+  responseRequested: boolean;
+  createdAt: number;
+  /** Its last delivery attempt failed; it is retried after a backoff. */
+  retrying?: true;
+  /** Its delivery is under way (a steer the turn has not read yet): past withdrawing. */
+  sending?: true;
+}
+
 export interface PromptAttachment {
   id: string;
   name: string;
@@ -6668,7 +6669,9 @@ export type PromptQueueCommand = Extract<
       | "moveQueuedPrompt"
       | "clearPromptQueue"
       | "sendQueuedPromptNow"
-      | "resumePromptQueue";
+      | "resumePromptQueue"
+      | "sendQueuedPeerPromptNow"
+      | "withdrawQueuedPeerPrompt";
   }
 >;
 
@@ -6713,6 +6716,14 @@ export type ClientMessage =
   | { type: "sendQueuedPromptNow"; sessionId: string; id: string }
   /** Lift a pause and send the next message if the session is idle. */
   | { type: "resumePromptQueue"; sessionId: string }
+  /**
+   * Deliver one waiting peer prompt ({@link QueuedPeerPrompt.id}) NOW: as a
+   * steer into a running turn that takes one, else as the next turn of an
+   * idle session, ahead of the rest of the queue.
+   */
+  | { type: "sendQueuedPeerPromptNow"; sessionId: string; id: string }
+  /** Withdraw a peer prompt before delivery; its sender's card says cancelled. */
+  | { type: "withdrawQueuedPeerPrompt"; sessionId: string; id: string }
   | { type: "acceptCommitDryRun"; entryId: string }
   /**
    * Approve or reject a pending card. `edits` are the user's per-row changes to
@@ -7360,6 +7371,8 @@ export type ClientMessage =
 export type ServerMessage =
   /** A session's prompt queue changed; `queue` is its complete new state. */
   | { type: "promptQueue"; sessionId: string; queue: PromptQueueState }
+  /** The peer prompts waiting for a session changed; `items` is the complete new list. */
+  | { type: "peerPromptQueue"; sessionId: string; items: QueuedPeerPrompt[] }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>
@@ -7980,91 +7993,3 @@ export type ServerMessage =
       conflictPaths?: string[];
       agentSessionId?: string;
     };
-
-/* ============================================================================
- * Calendar view (read-only Google Calendar + own Tempo worklogs)
- *
- * These DTOs are exchanged over the REST surface under /api/calendar/* (not the
- * WebSocket protocol) but live here so the web client and server share one
- * source of truth.
- * ========================================================================== */
-
-/** A detected video-conference link on an event (clickable to join). */
-export interface CalendarConferenceLink {
-  provider: "google-meet" | "zoom" | "teams" | "other";
-  label: string;
-  uri: string;
-}
-
-/** One attendee, compacted for the detail pane. */
-export interface CalendarAttendeeDto {
-  name: string | null;
-  email: string | null;
-  self: boolean;
-  optional: boolean;
-  organizer: boolean;
-  /** accepted / declined / tentative / needsAction. */
-  response: string | null;
-}
-
-/** One calendar event normalized for UI rendering (grids + detail pane). */
-export interface CalendarEventDto {
-  id: string;
-  title: string;
-  /** Raw RFC3339 start (or YYYY-MM-DD for all-day). */
-  start: string | null;
-  /** Raw RFC3339 end (or YYYY-MM-DD for all-day). */
-  end: string | null;
-  allDay: boolean;
-  status: string | null;
-  htmlLink: string | null;
-  location: string | null;
-  description: string | null;
-  /** First detected video-conference link (Meet/Zoom/Teams), if any. */
-  meetingUrl: string | null;
-  /** All detected, de-duplicated conference links. */
-  conferenceLinks: CalendarConferenceLink[];
-  organizer: string | null;
-  /** The configured user's response status (accepted/declined/tentative/needsAction). */
-  selfResponse: string | null;
-  attendees: CalendarAttendeeDto[];
-  attendeeCount: number;
-  /** True when the event has an attachment that looks like meeting minutes/notes. */
-  hasMinutesAttachment: boolean;
-  /** "busy"/"free" transparency, mirrors Google's `transparency`. */
-  transparency: string | null;
-}
-
-export interface CalendarEventsResponse {
-  from: string;
-  to: string;
-  calendarId: string;
-  calendarSummary: string | null;
-  timeZone: string | null;
-  events: CalendarEventDto[];
-}
-
-/** One logged Tempo worklog projected for the calendar overlay (own worklogs only). */
-export interface CalendarWorklogDto {
-  id: string;
-  /** Jira issue key when Jira enrichment is available, else null (raw id only). */
-  issueKey: string | null;
-  issueUrl: string | null;
-  description: string;
-  /** User-local start date `YYYY-MM-DD`. */
-  startDate: string;
-  /** User-local `HH:MM` start, when Tempo recorded one. */
-  startTime: string | null;
-  /** Logged duration in seconds. */
-  seconds: number;
-}
-
-export interface CalendarWorklogsResponse {
-  from: string;
-  to: string;
-  /** False when Tempo is not enabled/authorized (the overlay simply shows nothing). */
-  enabled: boolean;
-  /** True when issue keys were enriched via Jira. */
-  jiraEnriched: boolean;
-  worklogs: CalendarWorklogDto[];
-}

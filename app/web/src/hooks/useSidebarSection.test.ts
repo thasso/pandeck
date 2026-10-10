@@ -18,7 +18,6 @@ describe("normalizeNavSlots", () => {
       "tasks",
       "projects",
       "knowledge",
-      "calendar",
       "settings",
       "usage",
       "background-tasks",
@@ -32,6 +31,12 @@ describe("normalizeNavSlots", () => {
   it("does not duplicate a bar that already holds both ids", () => {
     const order = normalizeNavSlots(["worktrees", "pull-requests"]);
     expect(order.filter((slot) => slot === "pull-requests")).toHaveLength(1);
+  });
+
+  it("drops the removed calendar slot from stored navigation", () => {
+    const order = normalizeNavSlots(["sessions", "calendar", "tasks"]);
+    expect(order).not.toContain("calendar");
+    expect(order).toHaveLength(DEFAULT_NAV_SLOTS.length);
   });
 
   it("still drops a genuinely unknown slot", () => {

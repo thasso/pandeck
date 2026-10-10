@@ -31,9 +31,9 @@ function LoadStory() {
       <EmptyBox>
         Nothing in this project yet.<Button size="sm">Create a task</Button>
       </EmptyBox>
-      <EmptyBox variant="inline">No comments on this task.</EmptyBox>
+      <EmptyBox variant="inline">No review comments on this worktree.</EmptyBox>
       <EmptyBox variant="item">No recent worktrees</EmptyBox>
-      <ErrorNote message="Could not load task comments." />
+      <ErrorNote message="Could not load review comments." />
       <ErrorNote message="Could not refresh sessions." onRetry={() => {}} />
     </div>
   );

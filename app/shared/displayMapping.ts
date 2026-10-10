@@ -414,7 +414,8 @@ function userBlocks(content: readonly AgentContentBlock[]): DisplayBlock[] {
     if (c.type === "text") out.push({ kind: "text", text: c.text });
     else if (c.type === "image") {
       // The durable log holds a reference only (no bytes), so render an attachment
-      // CHIP (name/type/size). Inline image preview is served separately.
+      // CHIP (name/type/size). The web client loads the picture by this id from
+      // `/api/session-attachment/<session>/<id>`.
       out.push({
         kind: "attachment",
         attachment: {

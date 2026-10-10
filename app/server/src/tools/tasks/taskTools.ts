@@ -1,6 +1,5 @@
 import type {
   AgentType,
-  TaskComment,
   TaskDueFilter,
   TaskExternalLink,
   TaskItem,
@@ -31,7 +30,6 @@ import {
   unarchiveTask,
   updateTask,
 } from "../../tasks.ts";
-import { addTaskComment, listTaskComments } from "../../taskComments.ts";
 import { getProject, lookupProjects } from "../../projectRegistry.ts";
 import { clipText } from "../../textBudget.ts";
 import {
@@ -63,21 +61,16 @@ const TASK_SCHEDULED_FILTER_VALUES = [
 
 /**
  * A `task_read` result is bounded by BYTES, not just by item count: an epic with
- * descendants, full descriptions and a long trace used to overflow the harness
+ * descendants and full descriptions used to overflow the harness
  * tool-output limit outright, which costs more round trips than the read saved.
  * The budget is deliberately far below every harness cap, and the read degrades
  * in a fixed order — clip descriptions, drop descriptions (previews survive),
  * drop trailing Tasks — always saying in the payload what it did.
  */
 const READ_BUDGET_BYTES = 24_000;
-/** Counts and flags around the two arrays; charged to the budget, not extra. */
+/** Counts and flags around the items array; charged to the budget, not extra. */
 const ENVELOPE_BYTES = 256;
-/** Comments never crowd the Tasks out entirely; the rest of the budget is theirs. */
-const COMMENT_BUDGET_BYTES = 12_000;
-const COMMENT_BODY_MAX_CHARS = 1_500;
 const DESCRIPTION_MAX_CHARS = 2_000;
-const DEFAULT_COMMENT_LIMIT = 10;
-const MAX_COMMENT_LIMIT = 100;
 
 const taskReadSchema = {
   type: "object",
@@ -107,23 +100,6 @@ const taskReadSchema = {
     sessionId: { type: "string" },
     query: { type: "string", description: "Full-text search." },
     includeDescriptions: { type: "boolean", default: false },
-    comments: {
-      type: "object",
-      additionalProperties: false,
-      description: "The Task's most recent comments, oldest-first.",
-      properties: {
-        limit: {
-          type: "integer",
-          minimum: 1,
-          maximum: 100,
-          default: DEFAULT_COMMENT_LIMIT,
-        },
-        before: {
-          type: "string",
-          description: "comments.nextCursor from a previous result.",
-        },
-      },
-    },
     includeArchived: { type: "boolean", default: false },
     maxResults: { type: "integer", minimum: 1, maximum: 100, default: 50 },
   },
@@ -151,16 +127,7 @@ const taskManageSchema = {
         properties: {
           operation: {
             type: "string",
-            enum: [
-              "create",
-              "update",
-              "archive",
-              "unarchive",
-              "delete",
-              "comment",
-            ],
-            description:
-              "comment appends to the trace without changing the Task.",
+            enum: ["create", "update", "archive", "unarchive", "delete"],
           },
           id: { type: "string" },
           title: { type: "string" },
@@ -181,11 +148,6 @@ const taskManageSchema = {
                 newText: { type: "string" },
               },
             },
-          },
-          comment: {
-            type: "string",
-            description:
-              "An EVENT worth keeping — a decision or handoff — never progress narration.",
           },
           status: {
             type: "string",
@@ -314,15 +276,9 @@ type ReadParams = {
   sessionId?: string;
   query?: string;
   includeDescriptions?: boolean;
-  comments?: CommentsRequest;
   includeArchived?: boolean;
   maxResults?: number;
 };
-
-interface CommentsRequest {
-  limit?: number;
-  before?: string;
-}
 
 interface DescriptionEdit {
   oldText: string;
@@ -343,13 +299,11 @@ interface ChangedTask {
 }
 
 interface ManageOperation {
-  operation?:
-    "create" | "update" | "archive" | "unarchive" | "delete" | "comment";
+  operation?: "create" | "update" | "archive" | "unarchive" | "delete";
   id?: string;
   title?: string;
   description?: string;
   descriptionEdits?: DescriptionEdit[];
-  comment?: string;
   status?: TaskStatus;
   statusReason?: string;
   userRequestedStatus?: boolean;
@@ -365,30 +319,6 @@ interface ManageOperation {
 }
 
 type ManageParams = { operations?: ManageOperation[] };
-
-/**
- * Every field that asks for a change to the Task itself. A `comment` operation
- * carries none of them: the likeliest agent slip is meaning "update AND
- * comment" but writing `comment`, and dropping the status suggestion on the
- * floor for it would lose the write with nothing in the result to say so.
- */
-const MANAGE_MUTATION_FIELDS = [
-  "title",
-  "description",
-  "descriptionEdits",
-  "status",
-  "statusReason",
-  "userRequestedStatus",
-  "projectId",
-  "jiraIssueKeys",
-  "githubIssues",
-  "externalLinks",
-  "dueDate",
-  "scheduledFor",
-  "priority",
-  "parentId",
-  "sortOrder",
-] as const satisfies ReadonlyArray<keyof ManageOperation>;
 
 export function taskToolsForKind(_defaultKind: AgentType) {
   return [makeTaskReadTool(), makeTaskManageTool()];
@@ -411,11 +341,6 @@ function makeTaskReadTool() {
       const parentId = cleanOptional(params.parentId);
       if (params.includeSubtasks && !id)
         throw new Error("includeSubtasks requires id.");
-      // A trace belongs to ONE Task, so asking for one on a list read says the
-      // caller means something else; returning no trace and no reason why is
-      // the silent no-op this tool exists to stop.
-      if (params.comments && !id)
-        throw new Error("comments requires id: a trace belongs to one Task.");
       if (id && parentId)
         throw new Error("Use either id or parentId, not both.");
 
@@ -458,18 +383,11 @@ function makeTaskReadTool() {
           items = items.filter((item) => item.parentId === parentId);
       }
 
-      // Comments are bounded first and the Tasks get what is left, so a long
-      // trace can never starve the read of the Tasks that were asked for.
-      const comments =
-        id && params.comments
-          ? boundedComments(id, params.comments)
-          : undefined;
-      const commentBytes = comments ? jsonBytes(comments) : 0;
       const totalCount = items.length;
       const bounded = boundedItems({
         summaries: items.slice(0, maxResults),
         includeDescriptions: Boolean(params.includeDescriptions),
-        budgetBytes: READ_BUDGET_BYTES - ENVELOPE_BYTES - commentBytes,
+        budgetBytes: READ_BUDGET_BYTES - ENVELOPE_BYTES,
       });
       const omittedForBudget =
         Math.min(items.length, maxResults) - bounded.items.length;
@@ -483,7 +401,6 @@ function makeTaskReadTool() {
         ...(bounded.descriptionsOmitted ? { descriptionsOmitted: true } : {}),
         ...(omittedForBudget > 0 ? { omittedForBudget } : {}),
         items: bounded.items,
-        ...(comments ? { comments } : {}),
       };
       return compactJsonResult(details);
     },
@@ -495,8 +412,8 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     name: "task_manage",
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
-      ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, comment on, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, unarchive, comment on, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. At most one comment per session; silence is the default. Set dates, priority, project and issue links only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, dueDate or scheduledFor and resets priority.",
+      ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
+      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Set dates, priority, project and issue links only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, dueDate or scheduledFor and resets priority.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,
@@ -516,43 +433,20 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
 
       const changed: ChangedTask[] = [];
       const deletedIds: string[] = [];
-      const appended: TaskComment[] = [];
       const warnings: string[] = [];
       for (const op of operations) {
-        const commentBody = commentBodyOf(op.comment);
-        if (op.operation === "comment") {
-          const carried = MANAGE_MUTATION_FIELDS.filter(
-            (field) => op[field] !== undefined,
-          );
-          if (carried.length > 0)
-            throw new Error(
-              `A comment operation changes nothing about the Task, so it cannot carry ${carried.join(", ")}. Use operation "update" with comment to do both in one operation.`,
-            );
-        }
         const descriptionEdits = normalizeDescriptionEdits(op.descriptionEdits);
         if (descriptionEdits && op.operation !== "update")
           throw new Error(
             "descriptionEdits applies only to an update operation.",
           );
-        if (commentBody && op.operation === "delete")
-          throw new Error("A deleted Task cannot carry a comment.");
-        // The comment rides the same operation, so it needs the id the mutation
-        // resolved to — which for a create is only known afterwards.
-        let commentTaskId: string | undefined;
 
-        if (op.operation === "comment") {
-          if (!op.id) throw new Error("Comment operation requires id.");
-          if (!commentBody)
-            throw new Error("Comment operation requires comment text.");
-          commentTaskId = op.id;
-        } else if (op.operation === "archive") {
+        if (op.operation === "archive") {
           if (!op.id) throw new Error("Archive operation requires id.");
           changed.push({ task: archiveTask(op.id) });
-          commentTaskId = op.id;
         } else if (op.operation === "unarchive") {
           if (!op.id) throw new Error("Unarchive operation requires id.");
           changed.push({ task: unarchiveTask(op.id) });
-          commentTaskId = op.id;
         } else if (op.operation === "delete") {
           if (!op.id) throw new Error("Delete operation requires id.");
           deleteTask(op.id);
@@ -598,7 +492,6 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               }),
               deduplicated: true,
             });
-            commentTaskId = duplicate.id;
           } else {
             const createParentId = cleanOptional(op.parentId);
             const createSortOrder = normalizeSortOrder(op.sortOrder);
@@ -636,7 +529,6 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               },
             });
             changed.push({ task: created });
-            commentTaskId = created.id;
           }
         } else if (op.operation === "update") {
           if (!op.id) throw new Error("Update operation requires id.");
@@ -729,29 +621,17 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               ? { descriptionEditsApplied: descriptionEdits.length }
               : {}),
           });
-          commentTaskId = op.id;
         } else {
           throw new Error(
             `Unsupported task operation: ${op.operation ?? "(missing)"}`,
           );
         }
-
-        if (commentBody && commentTaskId)
-          appended.push(
-            addTaskComment({
-              taskId: commentTaskId,
-              authorKind: "agent",
-              authorName: cleanOptional(session.title) ?? session.agentType,
-              authorSessionId: session.sessionId,
-              body: commentBody,
-            }),
-          );
       }
 
       // The RESULT shape is a contract (a web card renders it), so it says the
       // whole outcome once: every entry's `status` is the status after the
       // write, `descriptionEditsApplied` counts the targeted edits that landed,
-      // `comments` names every trace append, and a recorded `statusSuggestion`
+      // and a recorded `statusSuggestion`
       // states what is still waiting for the user. Nothing about a suggestion
       // goes in `warnings` — the server did exactly what an agent's status
       // write means, so phrasing it as a warning made a correct outcome read
@@ -774,14 +654,6 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
           }),
         ),
         ...(deletedIds.length ? { deletedIds } : {}),
-        ...(appended.length
-          ? {
-              comments: appended.map((comment) => ({
-                taskId: comment.taskId,
-                ...commentForTool(comment),
-              })),
-            }
-          : {}),
         ...(warnings.length ? { warnings: [...new Set(warnings)] } : {}),
       });
     },
@@ -943,64 +815,6 @@ function normalizeDescriptionEdits(
   });
 }
 
-function commentBodyOf(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  const body = String(value ?? "").trim();
-  if (!body) throw new Error("comment must not be empty.");
-  return body;
-}
-
-/**
- * One comment, with its body clipped so a single 20k-char comment cannot decide
- * how many comments fit. A clipped body says so rather than looking complete.
- */
-function commentForTool(comment: TaskComment) {
-  const clipped = clipText(comment.body, COMMENT_BODY_MAX_CHARS);
-  return {
-    id: comment.id,
-    author: comment.author.name,
-    authorKind: comment.author.kind,
-    createdAt: comment.createdAt,
-    body: clipped.text,
-    ...(clipped.truncated
-      ? { bodyTruncated: true, bodyChars: comment.body.length }
-      : {}),
-  };
-}
-
-/**
- * The most recent comments of one Task, oldest-first so the trace reads
- * chronologically, with `olderCount` and a `nextCursor` that pages BACKWARDS in
- * time — the rare deep-history read walks it, the common read never pays for it.
- */
-function boundedComments(taskId: string, request: CommentsRequest) {
-  const all = listTaskComments(taskId);
-  const before = cleanOptional(request.before);
-  let pool = all;
-  if (before) {
-    const index = all.findIndex((comment) => comment.id === before);
-    if (index < 0)
-      throw new Error(
-        `Unknown comments.before cursor for Task ${taskId}: ${before}`,
-      );
-    pool = all.slice(0, index);
-  }
-  const limit = normalizeCommentLimit(request.limit);
-  const items = pool
-    .slice(Math.max(0, pool.length - limit))
-    .map(commentForTool);
-  while (items.length > 1 && jsonBytes(items) > COMMENT_BUDGET_BYTES)
-    items.shift();
-  const olderCount = pool.length - items.length;
-  return {
-    count: items.length,
-    totalCount: all.length,
-    olderCount,
-    ...(olderCount > 0 && items[0] ? { nextCursor: items[0].id } : {}),
-    items,
-  };
-}
-
 interface BoundedItems {
   items: ReturnType<typeof taskForTool>[];
   descriptionsTruncated: boolean;
@@ -1008,7 +822,7 @@ interface BoundedItems {
 }
 
 /**
- * Fit the Tasks into the remaining budget by degrading, in this order: full
+ * Fit the Tasks into the budget by degrading, in this order: full
  * descriptions, clipped descriptions, no descriptions (the short previews
  * survive), then dropping trailing Tasks. Losing bodies beats losing Tasks — a
  * caller that asked for an epic wants to see the whole shape of it first.
@@ -1049,12 +863,6 @@ function boundedItems(args: {
 
 function jsonBytes(payload: unknown): number {
   return Buffer.byteLength(JSON.stringify(payload), "utf8");
-}
-
-function normalizeCommentLimit(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(1, Math.min(MAX_COMMENT_LIMIT, Math.trunc(value)))
-    : DEFAULT_COMMENT_LIMIT;
 }
 
 function findExistingSlackTask(

@@ -13,7 +13,6 @@ const { rewriteLegacyKnowledgeLinks, migrateKnowledgeLinks } =
 const { knowledgeLegacyPath } = await import("./knowledgeLegacyLinks.ts");
 const { KnowledgeBaseStore } = await import("./knowledgeBaseStore.ts");
 const { createTask, readTask } = await import("./tasks.ts");
-const { addTaskComment, listTaskComments } = await import("./taskComments.ts");
 const { createMemory } = await import("./memory/memoryService.ts");
 const { memoryStore } = await import("./db/memoryStore.ts");
 const { resolvePaObjectLinks } = await import("./objectLinkResolver.ts");
@@ -90,12 +89,6 @@ test("migrates the KB, Tasks and memory once, keeping history resolvable", async
     description: "Background: pa://knowledge/kb-acme",
     source: { createdBy: "user" },
   });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "user",
-    authorName: "me",
-    body: "Updated [](pa://knowledge/kb-acme)",
-  });
   const memory = createMemory({
     text: "Acme plan lives at pa://knowledge/kb-acme",
     kind: "fact",
@@ -113,7 +106,6 @@ test("migrates the KB, Tasks and memory once, keeping history resolvable", async
       kbCommit: undefined,
       kbFilesSkipped: ["busy.md"],
       tasks: 1,
-      taskComments: 1,
       memoryCards: 1,
       backup: undefined,
     },
@@ -132,7 +124,6 @@ test("migrates the KB, Tasks and memory once, keeping history resolvable", async
   );
   assert.equal(readTask(task.id)?.description, `Background: ${link}`);
   assert.equal(readTask(task.id)?.updatedAt, updatedAt, "not an edit");
-  assert.equal(listTaskComments(task.id)[0]?.body, `Updated [](${link})`);
   assert.equal(
     memoryStore.get(memory.card.id)?.text,
     `Acme plan lives at ${link}`,

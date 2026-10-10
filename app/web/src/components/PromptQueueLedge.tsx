@@ -1,12 +1,18 @@
 import { memo, useEffect, useRef, useState } from "react";
 import {
+  ArrowDownLeft,
   ChevronDown,
   ChevronRight,
   CornerDownRight,
   ListOrdered,
   Trash2,
 } from "lucide-react";
-import type { PromptQueueState, QueuedPrompt } from "@assistant/shared";
+import type {
+  PromptQueueState,
+  QueuedPeerPrompt,
+  QueuedPrompt,
+} from "@assistant/shared";
+import { sessionPath } from "../lib/sessionRoutes.ts";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
@@ -19,6 +25,8 @@ export interface PromptQueueLedgeProps {
    * yet; shown at the end as "Queuing…" so queueing answers at once.
    */
   queuing?: readonly { key: string; text: string }[];
+  /** What other sessions sent this one, waiting behind the user's own rows. */
+  peers?: readonly QueuedPeerPrompt[] | undefined;
   /** A turn is running, so a queued message can be steered into it. */
   running: boolean;
   /** The provider takes a steer at all. */
@@ -27,6 +35,11 @@ export interface PromptQueueLedgeProps {
   /** Steer it into the running turn, or send it next when it cannot. */
   onSendNow: (id: string) => void;
   onResume: () => void;
+  /** Deliver a waiting peer prompt now (steer, or send next). */
+  onSendPeerNow?: ((id: string) => void) | undefined;
+  /** Withdraw a peer prompt before it is delivered. */
+  onWithdrawPeer?: ((id: string) => void) | undefined;
+  onOpenSession?: ((id: string) => void) | undefined;
 }
 
 /**
@@ -35,35 +48,50 @@ export interface PromptQueueLedgeProps {
  * they will be sent, on the composer's shelf nearest the field.
  * @useWhen The session on screen has anything queued; the host renders nothing
  * otherwise, so the strip costs no space.
- * @avoidWhen Showing what agents queued for the session — peer prompts and
- * handoffs have their own cards; this is only the user's own messages.
+ * @avoidWhen Showing what agents have already delivered — those are transcript
+ * cards — or agent handoffs, which steer themselves in when they can.
  * @intent Everything typed while a turn runs lands here first, so the strip is
  * OPEN by default and opens again for every new message: the queue is what the
  * user is looking at. Each row does the two things a waiting message needs —
  * steer it into the turn now (or send it next), or drop it — and shows its
  * send while it is under way. A Stop (or a failed send) holds the queue rather
  * than feeding the next message into a session the user just halted, and the
- * strip says so with the one action that lifts it. Same object as the session
- * and background-work strips.
+ * strip says so with the one action that lifts it. Peer prompts other sessions
+ * sent wait after the user's rows, marked with their sender: the user can steer
+ * one in or withdraw it, never edit what another agent wrote. Same object as
+ * the session and background-work strips.
  * @related ComposerLedge, Composer, BackgroundWorkLedge, PendingCommentsLedge
  */
 export function PromptQueueLedge({
   queue,
   queuing = [],
+  peers = [],
   running,
   canSteer,
   onRemove,
   onSendNow,
   onResume,
+  onSendPeerNow,
+  onWithdrawPeer,
+  onOpenSession,
 }: PromptQueueLedgeProps) {
   const [open, setOpen] = useState(true);
   // A message just queued is what the user is looking for: reopen for it.
-  const knownIds = useRef(new Set(queue.items.map((item) => item.id)));
+  const knownIds = useRef(
+    new Set([
+      ...queue.items.map((item) => item.id),
+      ...peers.map((peer) => `peer:${peer.id}`),
+    ]),
+  );
   useEffect(() => {
-    const fresh = queue.items.some((item) => !knownIds.current.has(item.id));
-    knownIds.current = new Set(queue.items.map((item) => item.id));
+    const ids = [
+      ...queue.items.map((item) => item.id),
+      ...peers.map((peer) => `peer:${peer.id}`),
+    ];
+    const fresh = ids.some((id) => !knownIds.current.has(id));
+    knownIds.current = new Set(ids);
     if (fresh) setOpen(true);
-  }, [queue.items]);
+  }, [queue.items, peers]);
   // Sends this browser asked for, shown as under way before the server's
   // `sending` arrives; a row leaves the set when it leaves the queue.
   const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
@@ -82,7 +110,7 @@ export function PromptQueueLedge({
     if (queuing.length > 0) setOpen(true);
   }, [queuing.length]);
 
-  const count = queue.items.length + queuing.length;
+  const count = queue.items.length + queuing.length + peers.length;
   if (count === 0) return null;
   const steering = running && canSteer;
   const Chevron = open ? ChevronDown : ChevronRight;
@@ -136,6 +164,16 @@ export function PromptQueueLedge({
                   </span>
                 </div>
               </li>
+            ))}
+            {peers.map((peer) => (
+              <QueuedPeerRow
+                key={`peer:${peer.id}`}
+                peer={peer}
+                steering={steering}
+                {...(onSendPeerNow ? { onSendNow: onSendPeerNow } : {})}
+                {...(onWithdrawPeer ? { onWithdraw: onWithdrawPeer } : {})}
+                onOpenSession={onOpenSession}
+              />
             ))}
           </ul>
           {queue.paused ? (
@@ -239,3 +277,98 @@ const QueuedRow = memo(function QueuedRow({
     </li>
   );
 });
+
+/**
+ * A message another session sent this one, not delivered yet. Its text is the
+ * sender's, so it offers no edit: it can go in now (steer, or send next) or be
+ * withdrawn. A steer stays here until the turn reads it.
+ */
+function QueuedPeerRow({
+  peer,
+  steering,
+  onSendNow,
+  onWithdraw,
+  onOpenSession,
+}: {
+  peer: QueuedPeerPrompt;
+  steering: boolean;
+  onSendNow?: (id: string) => void;
+  onWithdraw?: (id: string) => void;
+  onOpenSession?: ((id: string) => void) | undefined;
+}) {
+  return (
+    <li data-queued-peer-prompt={peer.id} className="min-w-0">
+      <Item
+        size="xs"
+        className="flex-nowrap gap-1 rounded-none py-0 pr-1.5 pl-2.5 hover:bg-muted dark:hover:bg-muted/50"
+      >
+        <ArrowDownLeft
+          aria-label="From another session"
+          className="size-3.5 shrink-0"
+        />
+        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5">
+          <span
+            className="min-w-0 truncate text-foreground"
+            title={peer.message}
+          >
+            {peer.message}
+          </span>
+          <span className="shrink-0 truncate text-xs">
+            {"from "}
+            <a
+              href={sessionPath(peer.senderSessionId)}
+              className="underline decoration-dotted underline-offset-2 hover:decoration-solid"
+              onClick={(event) => {
+                if (
+                  !onOpenSession ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                )
+                  return;
+                event.preventDefault();
+                onOpenSession(peer.senderSessionId);
+              }}
+            >
+              {peer.senderTitle}
+            </a>
+            {peer.responseRequested ? " · wants a reply" : null}
+            {peer.retrying ? " · delivery failed, retrying" : null}
+          </span>
+        </div>
+        <ItemActions className="gap-0.5">
+          {peer.sending ? (
+            <span className="flex items-center gap-1.5 pr-1 text-xs whitespace-nowrap">
+              <Spinner size="xs" />
+              {steering ? "Steering…" : "Sending…"}
+            </span>
+          ) : (
+            <>
+              {onSendNow ? (
+                <IconButton
+                  label={steering ? "Steer it in now" : "Send it next"}
+                  title={steering ? "Steer" : "Send next"}
+                  size="icon-xs"
+                  onClick={() => onSendNow(peer.id)}
+                >
+                  <CornerDownRight />
+                </IconButton>
+              ) : null}
+              {onWithdraw ? (
+                <IconButton
+                  label="Withdraw message"
+                  title="Withdraw"
+                  size="icon-xs"
+                  onClick={() => onWithdraw(peer.id)}
+                >
+                  <Trash2 />
+                </IconButton>
+              ) : null}
+            </>
+          )}
+        </ItemActions>
+      </Item>
+    </li>
+  );
+}

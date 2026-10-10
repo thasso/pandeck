@@ -8,8 +8,8 @@ export default meta;
 export const Inline = {
   args: {
     onSubmit: () => {},
-    placeholder: "Write a task update…",
-    ariaLabel: "Add task comment",
+    placeholder: "Write a review comment…",
+    ariaLabel: "Add review comment",
     submitLabel: "Comment",
     layout: "row",
   },

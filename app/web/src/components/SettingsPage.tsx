@@ -989,8 +989,8 @@ function ProfileSection({ settings, onUpdate }: SectionProps) {
       <h2 className="text-sm font-semibold">Profile</h2>
       <p className="mt-1 text-sm text-muted-foreground">
         Who the assistant works for. The timezone decides what
-        &ldquo;today&rdquo; means everywhere: the calendar, Task planning,
-        memory reminders, and the local times tools report.
+        &ldquo;today&rdquo; means everywhere: Task planning, memory reminders,
+        and the local times tools report.
       </p>
 
       <SettingsCard className="mt-6">

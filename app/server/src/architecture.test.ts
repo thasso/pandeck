@@ -388,12 +388,30 @@ test("the peer-spawn lane never reaches into the subagent domain", () => {
 
 test("peer-prompt delivery never steers/interrupts a target or emits an info notice", () => {
   const engine = readFileSync(join(SRC_ROOT, "peerPrompt.ts"), "utf8");
-  // Task 88: peer prompts are delivered as fresh turns; never steer/abort a busy target.
+  // Task 88: peer prompts are delivered as fresh turns; never steer/abort a busy
+  // target. The one steer is the recipient's USER asking for it from the
+  // composer queue (Task 759): `steerPeerPrompt`, reached only from that command.
+  const steerStart = engine.indexOf("async function steerPeerPrompt(");
+  assert.ok(steerStart >= 0, "steerPeerPrompt exists");
+  const steerEnd = engine.indexOf("\n}\n", steerStart);
+  const outsideSteer =
+    engine.slice(0, steerStart) + engine.slice(steerEnd + "\n}\n".length);
   assert.equal(
-    /steer\s*:/.test(engine),
+    /steer\s*:/.test(outsideSteer),
     false,
-    "peer-prompt delivery must not pass steer",
+    "automatic peer-prompt delivery must not pass steer",
   );
+  const callers = engine.match(/\bsteerPeerPrompt\(/g) ?? [];
+  assert.equal(
+    callers.length,
+    2,
+    "steerPeerPrompt is declared once and called only by sendQueuedPeerPromptNow",
+  );
+  const sendNow = engine.slice(
+    engine.indexOf("export async function sendQueuedPeerPromptNow("),
+    steerStart,
+  );
+  assert.match(sendNow, /steerPeerPrompt\(/);
   assert.equal(
     /\.abort\s*\(/.test(engine),
     false,

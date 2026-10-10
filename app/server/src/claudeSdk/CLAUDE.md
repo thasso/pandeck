@@ -9,10 +9,11 @@
   assistant messages carry metadata and tool openings. A synthetic assistant
   `error` is never streamed, so its text — the only wording a provider failure
   has — becomes the turn's error, not turn text.
-- A session keeps its initial persona. Plan drops file-mutating natives from
-  `tools:` onto `disallowedTools`, never uses CLI `permissionMode: "plan"`, and
-  keeps `Read`, `Bash`, `Monitor`, search, `ToolSearch`, `Skill`, read-only app
-  tools, and `task_manage`; other side-effecting app tools stay off.
+- A session keeps its initial persona. Plan refuses file-mutating natives in
+  `PreToolUse` against the LIVE mode, never via `tools:`/`disallowedTools` (a
+  retained process must leave Plan unrestarted) or CLI `permissionMode: "plan"`;
+  it keeps `Read`, `Bash`, `Monitor`, search, `ToolSearch`, `Skill`, read-only
+  app tools and `task_manage`.
 - Persist the system-prompt suffix and apply it after the persona prompt once
   per process epoch: every fresh/resumed query gets it, while later turns on one
   retained query reuse that frozen epoch prompt.

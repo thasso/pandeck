@@ -11,7 +11,7 @@
  *    (session transcripts, memory snapshots, workflow state) resolving;
  * 2. rewrites the links in the text people and agents still read and edit —
  *    the KB's own files (one commit; a file with uncommitted edits is left as
- *    it is), Task descriptions and comments, and active memory cards — after
+ *    it is), Task descriptions, and active memory cards — after
  *    taking a consistent copy of the database.
  *
  * It records that it ran, with what it changed, and never runs again. A run
@@ -71,7 +71,6 @@ interface KnowledgeLinkMigrationSummary {
   kbCommit?: string;
   kbFilesSkipped: string[];
   tasks: number;
-  taskComments: number;
   memoryCards: number;
   backup?: string;
 }
@@ -115,7 +114,6 @@ export async function migrateKnowledgeLinks(
   const descriptions = rewrite(
     knowledgeLinkStore.taskDescriptionsWithKnowledgeLinks(),
   );
-  const comments = rewrite(knowledgeLinkStore.taskCommentsWithKnowledgeLinks());
   const memoryCards = rewrite(
     knowledgeLinkStore.memoryCardsWithKnowledgeLinks(),
   );
@@ -127,10 +125,9 @@ export async function migrateKnowledgeLinks(
     kbFiles: kbChanges.length,
     kbFilesSkipped,
     tasks: descriptions.length,
-    taskComments: comments.length,
     memoryCards: memoryCards.length,
   };
-  if (descriptions.length + comments.length + memoryCards.length > 0) {
+  if (descriptions.length + memoryCards.length > 0) {
     const backup = existsSync(join(DATA_DIR, BACKUP_NAME))
       ? join(DATA_DIR, `${BACKUP_NAME}-${Date.now()}`)
       : join(DATA_DIR, BACKUP_NAME);
@@ -147,14 +144,9 @@ export async function migrateKnowledgeLinks(
         reason: "Rewrite Knowledge links to file paths",
       })
     ).shortCommit;
-  if (descriptions.length + comments.length > 0) {
-    knowledgeLinkStore.rewriteTaskText({ descriptions, comments });
-    notifyTaskChange(
-      [
-        ...descriptions.map((row) => row.id),
-        ...comments.map((row) => row.taskId),
-      ].map(String),
-    );
+  if (descriptions.length > 0) {
+    knowledgeLinkStore.rewriteTaskDescriptions(descriptions);
+    notifyTaskChange(descriptions.map((row) => String(row.id)));
   }
   for (const card of memoryCards) {
     const result = editMemory(card.id, card.revision, {

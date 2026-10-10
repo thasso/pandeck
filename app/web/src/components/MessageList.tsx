@@ -287,6 +287,28 @@ export function reuseStableTurnEnds(
 /** `useAssistant`'s optimistic prompt echo (`optimisticEchoId`): still sending. */
 const OPTIMISTIC_PROMPT_ID_PREFIX = "creq-";
 
+/**
+ * Where an attachment's picture comes from: its inline bytes, a served history
+ * URL, the preview this browser remembered when it sent the prompt
+ * (`lib/attachmentPreviews.ts`), or — for a saved image prompt whose durable
+ * entry keeps the image by attachment id only — the session's attachment store.
+ */
+function attachmentImageSrc(
+  attachment: DisplayAttachment,
+  sessionId: string | undefined,
+): string | undefined {
+  if (attachment.data)
+    return `data:${attachment.mimeType};base64,${attachment.data}`;
+  if (attachment.url)
+    return withToken(`${serverHttpOrigin()}${attachment.url}`);
+  const remembered = attachmentPreviewSrc(attachment);
+  if (remembered) return remembered;
+  if (!attachment.mimeType.startsWith("image/") || !sessionId) return undefined;
+  return withToken(
+    `${serverHttpOrigin()}/api/session-attachment/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachment.id)}`,
+  );
+}
+
 function AttachmentChip({
   attachment,
   onOpenTask,
@@ -360,9 +382,12 @@ function AttachmentChip({
 function AttachmentThumbnails({
   attachments,
   uploading,
+  sessionId,
 }: {
   attachments: readonly DisplayAttachment[];
   uploading: boolean;
+  /** The session the prompt belongs to, for images kept by attachment id. */
+  sessionId: string | undefined;
 }) {
   if (attachments.length === 0) return null;
   return (
@@ -373,13 +398,7 @@ function AttachmentThumbnails({
           name={attachment.name}
           mimeType={attachment.mimeType}
           size={attachment.size}
-          src={
-            attachment.data
-              ? `data:${attachment.mimeType};base64,${attachment.data}`
-              : attachment.url
-                ? withToken(`${serverHttpOrigin()}${attachment.url}`)
-                : attachmentPreviewSrc(attachment)
-          }
+          src={attachmentImageSrc(attachment, sessionId)}
           uploading={uploading}
         />
       ))}
@@ -551,6 +570,7 @@ function MessageActionsBar({
 
 const UserMessage = memo(function UserMessage({
   message,
+  sessionId,
   sessionReferences,
   changedFiles,
   paObjectReferences,
@@ -566,6 +586,7 @@ const UserMessage = memo(function UserMessage({
   promptQueueState,
 }: {
   message: DisplayMessage;
+  sessionId: string | undefined;
   sessionReferences: MarkdownSessionReference[];
   changedFiles: MarkdownFileReference[];
   paObjectReferences: MarkdownPaObjectReference[];
@@ -665,6 +686,9 @@ const UserMessage = memo(function UserMessage({
           : [],
       )}
       uploading={message.id.startsWith(OPTIMISTIC_PROMPT_ID_PREFIX)}
+      // A message carried over from a fork keeps its images in the session it
+      // was first sent in.
+      sessionId={message.inheritedFrom?.sessionId ?? sessionId}
     />
   );
   const actions = (
@@ -951,6 +975,7 @@ interface Props {
 
 interface MessageRowProps {
   message: DisplayMessage;
+  sessionId: string | undefined;
   focusKey?: string | undefined;
   sessionReferences: MarkdownSessionReference[];
   changedFiles: MarkdownFileReference[];
@@ -1051,6 +1076,7 @@ function isSideActivityMessage(message: DisplayMessage): boolean {
 
 const MessageRow = memo(function MessageRow({
   message,
+  sessionId,
   focusKey,
   sessionReferences,
   changedFiles,
@@ -1129,6 +1155,7 @@ const MessageRow = memo(function MessageRow({
       {message.role === "user" ? (
         <UserMessage
           message={message}
+          sessionId={sessionId}
           sessionReferences={sessionReferences}
           changedFiles={changedFiles}
           paObjectReferences={paObjectReferences}
@@ -1930,6 +1957,7 @@ export function MessageList({
             <Fragment key={key}>
               <MessageRow
                 message={m}
+                sessionId={sessionId}
                 focusKey={focusKey}
                 finalResponseSeparatorBeforeBlock={finalBoundaryByMessageId.get(
                   m.id,

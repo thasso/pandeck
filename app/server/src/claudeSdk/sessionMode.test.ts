@@ -8,9 +8,10 @@
  * `options.test.ts` covers the tool policy a mode produces; this covers the
  * SESSION carrying it:
  *   1. A fresh session is `build`, and its turn is built with the full native set.
- *   2. Switching to Plan mid-conversation reaches the NEXT turn's query options —
- *      no `Write`/`Edit` or side-effecting app tools, while `Bash` and read-only
- *      `mcp__pa__*` tools remain — and switching back restores them.
+ *   2. Switching to Plan mid-conversation refuses `Write`/`Edit` and
+ *      side-effecting app tools through the query's live gate, while `Bash`
+ *      and read-only `mcp__pa__*` tools remain — and switching back restores
+ *      them on the same query.
  *   3. The mode is persisted on the record and restored from disk, so it
  *      survives a server restart (the store's rehydrate path), with the server
  *      record winning over a stale client's requested mode.
@@ -76,20 +77,39 @@ async function main(): Promise<void> {
   const planOptions = captured[1];
   const planTools = planOptions?.tools as string[];
   assert.ok(planTools, "the second turn built query options");
+  assert.deepEqual(
+    planTools,
+    buildTools,
+    "Plan starts the same process: the tool list never carries the mode",
+  );
+  const preToolUse = planOptions!.hooks!.PreToolUse![0]!.hooks[0]!;
+  const gate = async (toolName: string) =>
+    (
+      (await preToolUse(
+        {
+          hook_event_name: "PreToolUse",
+          session_id: "provider-1",
+          transcript_path: "/tmp/transcript",
+          cwd: "/tmp",
+          tool_name: toolName,
+          tool_input: {},
+          tool_use_id: `${toolName}-1`,
+        },
+        `${toolName}-1`,
+        { signal: new AbortController().signal },
+      )) as { hookSpecificOutput?: { permissionDecision?: string } }
+    ).hookSpecificOutput?.permissionDecision;
   for (const t of ["Write", "Edit"]) {
-    assert.ok(
-      !planTools.includes(t),
-      `a session switched to Plan cannot call ${t} on the next turn`,
-    );
-    assert.ok(
-      (planOptions!.disallowedTools as string[]).includes(t),
-      `Plan disallows ${t} outright`,
+    assert.equal(
+      await gate(t),
+      "deny",
+      `a session switched to Plan cannot call ${t}`,
     );
     const verdict = await planOptions!.canUseTool!(t, {}, {} as never);
     assert.ok(verdict, `Plan's canUseTool returns a verdict for ${t}`);
     assert.equal(verdict.behavior, "deny", `Plan's canUseTool denies ${t}`);
   }
-  assert.ok(planTools.includes("Bash"), "a Plan turn still runs Bash");
+  assert.notEqual(await gate("Bash"), "deny", "a Plan turn still runs Bash");
   const mcpVerdict = await planOptions!.canUseTool!(
     "mcp__pa__task_read",
     {},
@@ -127,11 +147,18 @@ async function main(): Promise<void> {
     /not available in Plan mode because it can make changes/,
   );
 
+  // The gate reads the live mode, so even the query Plan started on — the one
+  // a retained process keeps running — gets Edit back ([Task-756](pa://task/756)).
   session.setMode("build");
+  assert.notEqual(
+    await gate("Edit"),
+    "deny",
+    "switching back to Build lets the running query edit again",
+  );
   await adapter.prompt("back to build");
   assert.ok(
     (captured[2]!.tools as string[]).includes("Edit"),
-    "switching back to Build restores the mutating tools",
+    "a Build turn exposes the mutating tools",
   );
 
   // 3. The record carries the mode…

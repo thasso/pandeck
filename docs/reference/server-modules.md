@@ -75,40 +75,40 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   from its shell cache sends `loadSession` before `ready`, and that newer
   navigation must win over a slow reopen. Every handler that creates, forks,
   reopens or hands off to a session (new session, both harnesses' first send,
-  draft, fork, the post-reload continuation, the comment handoffs, the calendar
-  day) claims at the point it commits to viewing — before its first await — and
-  attaches through `viewIfCurrent`, so intent order is ARRIVAL order, never
-  completion order (the claim goes ahead of the model lookup and the worktree
-  resolution too — any await ahead of it is a window in which a newer load
-  completes and the older operation would take the view back; `viewIfCurrent`'s
-  doc is the rule, `sessionCreateRace.test.ts` holds those awaits open against a
-  newer load); the session is still created (and a first send's prompt still
-  runs) when a newer navigation keeps the view, but no route message tries to
-  move the client to it. A claim follows synchronous validation, so an invalid
-  or guarded request (a bad calendar date) cancels nothing. A claim names the
-  session it is for when its claimant knows it (`viewRequestTarget`: a load, the
-  deep link, a send into an existing session, every attach; a creation or fork
-  names none). A LEAVE — deleting or archiving a session — supersedes only a
-  newest claim for THAT session, on show or still acquiring: the attach itself,
-  a reload of it (the client's snapshot fallback), or a cold load of it from
-  another session, any of which would otherwise bring back what was just
-  archived or deleted; otherwise `clearSessionView` only detaches, so a load of
-  another session that arrived before OR during the delete's blocker check keeps
-  its claim and attaches when it completes, and a delete refused for background
-  work claims nothing at all. The client is told (`sessionViewCleared`, with its
-  `reason`) whether the session was on show or only loading, so a route naming
-  it can leave. Deletion is HUB-WIDE (`hub.clearSessionViews`): every registered
-  connection viewing or loading the session leaves it in the same synchronous
-  run as the tombstone and eviction, before the shared driver is disposed — a
-  viewer left on it would keep routing commands into it — while archiving is per
-  connection, since an archived session can still be viewed on purpose (a later
-  deliberate open is a new claim). `ready` gathers what it awaits first and
-  captures `state` and `contextInfo` together, so they describe the session the
-  client's snapshot holds. `dispose` claims and `view` refuses after disposal,
-  so a load completing after the socket closed attaches no ghost transport or
-  viewer (a pi session's idle eviction and read marks key off its viewers); on
-  the pi side `piStore.track` arms the zero-view idle clock on registration, so
-  an acquisition nobody ends up viewing is evicted like any idle session,
+  draft, fork, the post-reload continuation, the comment handoffs) claims at the
+  point it commits to viewing — before its first await — and attaches through
+  `viewIfCurrent`, so intent order is ARRIVAL order, never completion order (the
+  claim goes ahead of the model lookup and the worktree resolution too — any
+  await ahead of it is a window in which a newer load completes and the older
+  operation would take the view back; `viewIfCurrent`'s doc is the rule,
+  `sessionCreateRace.test.ts` holds those awaits open against a newer load); the
+  session is still created (and a first send's prompt still runs) when a newer
+  navigation keeps the view, but no route message tries to move the client to
+  it. A claim follows synchronous validation, so an invalid or guarded request
+  cancels nothing. A claim names the session it is for when its claimant knows
+  it (`viewRequestTarget`: a load, the deep link, a send into an existing
+  session, every attach; a creation or fork names none). A LEAVE — deleting or
+  archiving a session — supersedes only a newest claim for THAT session, on show
+  or still acquiring: the attach itself, a reload of it (the client's snapshot
+  fallback), or a cold load of it from another session, any of which would
+  otherwise bring back what was just archived or deleted; otherwise
+  `clearSessionView` only detaches, so a load of another session that arrived
+  before OR during the delete's blocker check keeps its claim and attaches when
+  it completes, and a delete refused for background work claims nothing at all.
+  The client is told (`sessionViewCleared`, with its `reason`) whether the
+  session was on show or only loading, so a route naming it can leave. Deletion
+  is HUB-WIDE (`hub.clearSessionViews`): every registered connection viewing or
+  loading the session leaves it in the same synchronous run as the tombstone and
+  eviction, before the shared driver is disposed — a viewer left on it would
+  keep routing commands into it — while archiving is per connection, since an
+  archived session can still be viewed on purpose (a later deliberate open is a
+  new claim). `ready` gathers what it awaits first and captures `state` and
+  `contextInfo` together, so they describe the session the client's snapshot
+  holds. `dispose` claims and `view` refuses after disposal, so a load
+  completing after the socket closed attaches no ghost transport or viewer (a pi
+  session's idle eviction and read marks key off its viewers); on the pi side
+  `piStore.track` arms the zero-view idle clock on registration, so an
+  acquisition nobody ends up viewing is evicted like any idle session,
   concurrent reopens of one session share one open, and a cold reopen the delete
   beat to registration (record tombstoned, `evict` found nothing yet) is refused
   at the ownership boundary: nothing is tracked, what `create` built is disposed
@@ -1390,33 +1390,21 @@ APIs, agent/tool integrations, settings, tasks and persistence.
 - `objectLinkResolver.ts` owns compact server-side title/route/existence
   resolution for shared `pa://` object links; it must not load full object
   bodies.
-- `taskComments.ts` owns the Task activity trace (Task 116): flat, append-only,
-  chronological comments over `db/taskCommentStore.ts`, projected to the wire
-  `TaskComment` shape. `addTaskComment` (user via `connection.ts`, agent via a
-  `task_manage` operation's `comment`) appends, broadcasts the authoritative
-  `taskComments` list through the `taskEvents.ts` seam, and calls `tasks.ts`
-  `notifyTaskChange()` so `TaskSummary.commentCount` badges refresh; there is no
-  threading, resolve/reopen, editing, or text anchoring. `taskEvents.ts` is the
-  broadcaster seam, installed by the hub. `connection.ts` watches only the
-  currently open Task trace: a correlated `listTaskComments` answer starts it
-  and `unwatchTaskComments` stops it; later broadcasts carry no originating
-  browser request id. `tasks.ts` `listTasks` fills `commentCount` from
-  `taskCommentStore.countsByTask()`, and `deleteTask` hard-removes the trace.
 - `taskContext.ts` builds the hidden `task-context` prompt attachment for a
   Task-attached session (harness-neutral; both `connection.ts` first-send paths
   and the ordinary `prompt` path use it). It takes the post-nudge `TaskItem`
-  `linkTaskStart` returns, reads the parent/grandparent and the trace itself,
-  and renders the header, the Task description, the clipped parent description,
-  the most recent comment and the folded project context
-  (`sessionProjectContext.ts` `buildProjectContext`) inside one ~8 KB budget
-  spent in priority order, replacing any dropped block with a line naming what
-  is missing. The attachment id encodes the Task id (`taskctx-<id>`) so the web
-  chip can link back. `taskNaming.ts` chooses the first linked Jira key as the
-  Task's naming reference and falls back to its internal id. `taskContext.ts`
-  writes that primary key into the header, and `sessionNaming.ts` parses it with
-  `- Title:`/`- Status:`/`## Description`. The no-tool model returns only the
-  descriptive title; server code adds the exact reference to generated and
-  fallback titles. The product rule it implements is in `docs/tasks.md`.
+  `linkTaskStart` returns, reads the parent/grandparent itself, and renders the
+  header, the Task description, the clipped parent description and the folded
+  project context (`sessionProjectContext.ts` `buildProjectContext`) inside one
+  ~8 KB budget spent in priority order, replacing any dropped block with a line
+  naming what is missing. The attachment id encodes the Task id (`taskctx-<id>`)
+  so the web chip can link back. `taskNaming.ts` chooses the first linked Jira
+  key as the Task's naming reference and falls back to its internal id.
+  `taskContext.ts` writes that primary key into the header, and
+  `sessionNaming.ts` parses it with `- Title:`/`- Status:`/`## Description`. The
+  no-tool model returns only the descriptive title; server code adds the exact
+  reference to generated and fallback titles. The product rule it implements is
+  in `docs/tasks.md`.
 - `sessionProjectContext.ts` resolves a session's Project (standalone link
   first, then the originating Task) and renders that Project's registry evidence
   as the `project-context` attachment or the folded block inside a task-context
@@ -2671,10 +2659,10 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   unsubscribed while an agent/tool changed a checkout; retaining an old browser
   array and waiting for the NEXT mutation would leave the UI stale. A connection
   that never subscribes receives none of the ongoing traffic. Purely
-  event-shaped `knowledge` invalidations and `calendar` scan progress have no
-  subscribe snapshot; their mounted surfaces issue authoritative HTTP reads.
-  Memory invalidations stay `broadcastAll`: they are a handful of ids, and their
-  consumers are ad-hoc panels rather than a list surface.
+  event-shaped `knowledge` invalidations have no subscribe snapshot; their
+  mounted surfaces issue authoritative HTTP reads. Memory invalidations stay
+  `broadcastAll`: they are a handful of ids, and their consumers are ad-hoc
+  panels rather than a list surface.
 - `buildInfo.ts` resolves which build this process IS — declared version plus
   the commit it came from — and is also imported by `app/web/vite.config.ts` to
   bake the same answer into the browser bundle, so Settings → About compares two
@@ -2749,14 +2737,6 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   events and once when the tree becomes clean, suppressing repeat-empty pushes;
   it used to reach every connected browser because SOMEONE had a worktree open.
   Only `worktreeList` stays topic-wide — it is list-level and small.
-- Task activity traces are delivered per holder, not broadcast:
-  `Viewer.wantsTaskComments(taskId)` gates `taskEvents.ts`'s
-  `broadcastTaskComments`, and `connection.ts` subscribes a connection when it
-  lists or adds that Task's comments (bounded by `MAX_OPEN_TASK_COMMENT_TRACES`,
-  oldest evicted — a dropped Task simply refetches on reopen). The largest
-  production trace is ~18 KB and used to reach every connected browser on every
-  append. A `Viewer` that does not implement the predicate receives nothing,
-  which is correct: it never asked for a trace.
 - Prefer adding focused modules over expanding already-large switchboards unless
   central coordination is the change.
 

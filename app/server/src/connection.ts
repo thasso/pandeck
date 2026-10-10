@@ -55,7 +55,12 @@ import {
   type PromptAttachment,
 } from "@assistant/shared";
 import { TIMELINE_RANGE_MAX_LIMIT } from "@assistant/shared/runtime";
-import { drainRecipient, peerPromptAnchorFor } from "./peerPrompt.ts";
+import {
+  drainRecipient,
+  peerPromptAnchorFor,
+  sendQueuedPeerPromptNow,
+  withdrawQueuedPeerPrompt,
+} from "./peerPrompt.ts";
 import {
   availableAgents,
   isAgentAvailable,
@@ -313,11 +318,6 @@ import {
 } from "./comments/commentEvents.ts";
 
 /**
- * How many Tasks' activity traces one connection stays subscribed to. Generous
- * for real use (you do not have dozens of Task pages open) and bounded so a
- * long-lived tab cannot accumulate subscriptions indefinitely.
- */
-/**
  * The mutation a connection is currently answering, carried in async context.
  *
  * Correlated commands interleave (the socket does not await `handle`), so this
@@ -374,7 +374,7 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
  * fails if one is added without a decision either way.
  *
  * The `[]` cases are the deliberate exclusions:
- *  - reads (`listTasks`, `getTask`, `listTaskComments`) — an inbox that empties
+ *  - reads (`listTasks`, `getTask`) — an inbox that empties
  *    itself when you glance at a row cannot track what you owe an answer to;
  *  - `deleteTask` — the Task is gone, there is nothing to triage;
  *  - `reorderTasks` — a drop renumbers every sibling, so `tasks.ts`
@@ -394,11 +394,8 @@ export function tasksProcessedByUserCommand(msg: ClientMessage): string[] {
       return msg.updates.map((update) => update.id);
     case "archiveTask":
       return [msg.id];
-    case "addComment":
-      return msg.target.kind === "task" ? [msg.target.taskId] : [];
     case "listTasks":
     case "getTask":
-    case "listComments":
     case "deleteTask":
     case "reorderTasks":
       return [];
@@ -877,6 +874,8 @@ export class Connection implements Viewer {
       case "clearPromptQueue":
       case "sendQueuedPromptNow":
       case "resumePromptQueue":
+      case "sendQueuedPeerPromptNow":
+      case "withdrawQueuedPeerPrompt":
         return this.onPromptQueueCommand(msg);
       case "loadTimelineBlock":
         return this.onLoadTimelineBlock(msg.entryId, msg.blockIndex, msg.kind);
@@ -1643,8 +1642,8 @@ export class Connection implements Viewer {
    * list here: the web
    * client only uses that shape, and a snapshot is required after reconnecting
    * or re-subscribing because broadcasts intentionally go only to active
-   * subscribers. Purely event-shaped Knowledge invalidations and calendar scan
-   * progress have no snapshot here; their mounted surfaces issue HTTP reads.
+   * subscribers. Purely event-shaped Knowledge invalidations have no snapshot
+   * here; their mounted surfaces issue HTTP reads.
    */
   private onSubscribe(
     topics: BroadcastTopic[],
@@ -3342,9 +3341,10 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The user's own queue for one session (`promptQueue.ts`). Addressed by id,
-   * not by the view, so a phone and a desktop edit the same queue; the
-   * permanent Assistant has its own intake queue and takes none of these.
+   * The user's own queue for one session (`promptQueue.ts`), and the peer
+   * prompts waiting beside it (`peerPrompt.ts`). Addressed by id, not by the
+   * view, so a phone and a desktop edit the same queue; the permanent
+   * Assistant has its own intake queue and takes none of these.
    */
   private async onPromptQueueCommand(msg: PromptQueueCommand): Promise<void> {
     const { sessionId } = msg;
@@ -3383,6 +3383,10 @@ export class Connection implements Viewer {
           return await sendQueuedPromptNow(sessionId, msg.id);
         case "resumePromptQueue":
           return resumePromptQueue(sessionId);
+        case "sendQueuedPeerPromptNow":
+          return await sendQueuedPeerPromptNow(sessionId, msg.id);
+        case "withdrawQueuedPeerPrompt":
+          return withdrawQueuedPeerPrompt(sessionId, msg.id);
       }
     } catch (err) {
       this.send({

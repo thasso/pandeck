@@ -50,23 +50,35 @@ describe("timeline payload policy", () => {
     const output = JSON.stringify({
       renderKind: "taskManage",
       version: 1,
-      changedCount: 1,
-      changed: [
-        { id: "297", title: "Render Task mutations as a card", status: "todo" },
-      ],
-      comments: [{ taskId: "297", body: "x".repeat(4_000) }],
+      changedCount: 16,
+      changed: Array.from({ length: 16 }, (_, index) => ({
+        id: String(297 + index),
+        title: `Update task ${index} ${"x".repeat(80)}`,
+        status: "todo",
+        ...(index === 0 ? { descriptionEditsApplied: 1 } : {}),
+      })),
     });
     const call = {
       entryId: "e1",
       blockIndex: 0,
       name: "mcp__pa__task_manage",
       input: {
-        operations: [
-          { operation: "update", id: "297", comment: "x".repeat(4_000) },
-        ],
+        operations: Array.from({ length: 16 }, (_, index) => ({
+          operation: "update" as const,
+          id: String(297 + index),
+          title: `Update task ${index} ${"x".repeat(80)}`,
+          ...(index === 0
+            ? {
+                descriptionEdits: [
+                  { oldText: "x".repeat(4_000), newText: "y".repeat(4_000) },
+                ],
+              }
+            : {}),
+        })),
       },
     };
 
+    expect(output.length).toBeGreaterThan(1_200);
     const projected = lazyToolResultContent(toolResult(output), call);
     expect(projected[0]).toEqual({ type: "text", text: output });
     // Both harnesses' names for the same tool (pi registers the bare name, the

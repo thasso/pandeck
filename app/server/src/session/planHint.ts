@@ -1,7 +1,7 @@
 /**
  * Plan mode's per-turn, model-only hint ([Task-330](pa://task/330)).
  *
- * The tool policy is what Plan mode ENFORCES (the harness drops its
+ * The tool policy is what Plan mode ENFORCES (the harness refuses its
  * file-mutating native tools), but it cannot reach the shell — v1 keeps `Bash`,
  * so `>`, `sed -i` or `git checkout` would still mutate the worktree. That part
  * of Plan is a convention, and a convention has to be told to the model.
@@ -36,7 +36,7 @@ const PLAN_MODE_HINTS: Record<Harness, string> = {
   "claude-sdk": [
     "<session-mode>",
     "Plan mode: investigate and propose, change nothing on disk. The file-writing",
-    "tools are gone and the shell is not a way around them — no `>`/`>>` redirects,",
+    "tools are refused and the shell is not a way around them — no `>`/`>>` redirects,",
     "no `sed -i`, `tee`, `patch`, `git checkout`/`git apply`, no command that writes",
     "build or test artifacts. Reading, searching, `git log`, `rg` and the app tools",
     "are all fine. You may create and organize durable Tasks with `task_manage`; do not",

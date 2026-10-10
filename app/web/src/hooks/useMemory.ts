@@ -2,7 +2,7 @@
  * Feature-specific memory hook (Tasks 101/102): drives the bounded memory
  * management + load-audit requests over the shared socket and holds the derived
  * browser state. Kept out of the central `useAssistant` reducer like the other
- * feature hooks (backlog/calendar). Server broadcasts (`memoryInvalidated` /
+ * feature hooks (backlog). Server broadcasts (`memoryInvalidated` /
  * `memoryLoadInvalidated`) trigger authoritative refetches so concurrent tabs,
  * agents, and the processor converge.
  */

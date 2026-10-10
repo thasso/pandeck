@@ -6,8 +6,8 @@
  * the pi first-send and ordinary-prompt paths, which both build it).
  *
  * It also owns the AUTHORITATIVE-context regression: the attachment is built
- * after `linkTaskStart`'s `doing` nudge and carries the parent chain and latest
- * comment within a byte budget, so the session needs no Task read to start.
+ * after `linkTaskStart`'s `doing` nudge and carries the parent chain within a
+ * byte budget, so the session needs no Task read to start.
  *
  * Run through the server Vitest suite:
  *   pnpm --filter @assistant/server test src/claudeSdkFirstSendContext.test.ts
@@ -48,7 +48,6 @@ const { Connection } = await import("./connection.ts");
 const { claudeSdkStore } = await import("./claudeSdk/claudeSdkStore.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { createTask, readTask } = await import("./tasks.ts");
-const { addTaskComment } = await import("./taskComments.ts");
 const { createCredentialProfile } = await import("./credentialProfiles.ts");
 const claudeProfile = createCredentialProfile({
   name: "Test Claude",
@@ -168,7 +167,7 @@ test("the injected status is the post-nudge stored status, not the pre-nudge one
   );
 });
 
-test("the attachment carries the parent chain, the latest comment and no re-read instruction", async () => {
+test("the attachment carries the parent chain and no re-read instruction", async () => {
   const grandparent = createTask({
     title: "Make Tasks cheap",
     description: "Grandparent body nobody needs inline.",
@@ -185,24 +184,6 @@ test("the attachment carries the parent chain, the latest comment and no re-read
     description: "Own body, never clipped.",
     parentId: parent.id,
     source: { createdBy: "user" },
-  });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "agent",
-    authorName: "Claude",
-    body: "First event.",
-  });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "agent",
-    authorName: "Claude",
-    body: "Second event.",
-  });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "user",
-    authorName: "Alice",
-    body: `Newest event. ${"c".repeat(4_000)}`,
   });
   const { conn } = makeConnection();
 
@@ -245,13 +226,6 @@ test("the attachment carries the parent chain, the latest comment and no re-read
     "clipped rather than injected whole",
   );
   assert.match(body, /…\[truncated\]/, "using the shared truncation marker");
-  assert.match(body, /Newest event\./, "the most recent comment");
-  assert.doesNotMatch(body, /First event\./, "not the whole trace");
-  assert.match(
-    body,
-    /2 older comments not shown/,
-    "with a count of the comments it left out",
-  );
   assert.doesNotMatch(
     body,
     /use the `task_read` tool with the id above/i,
@@ -259,7 +233,7 @@ test("the attachment carries the parent chain, the latest comment and no re-read
   );
 });
 
-test("a huge epic parent and a huge comment stay inside the attachment budget", async () => {
+test("a huge epic parent stays inside the attachment budget", async () => {
   const parent = createTask({
     title: "Oversized epic",
     description: "E".repeat(20_000),
@@ -270,12 +244,6 @@ test("a huge epic parent and a huge comment stay inside the attachment budget", 
     description: "Small own body.",
     parentId: parent.id,
     source: { createdBy: "user" },
-  });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "agent",
-    authorName: "Claude",
-    body: "C".repeat(20_000),
   });
   const { conn } = makeConnection();
 
@@ -315,12 +283,6 @@ test("a Task with a huge own description keeps it in full and drops the rest wit
     parentId: parent.id,
     source: { createdBy: "user" },
   });
-  addTaskComment({
-    taskId: task.id,
-    authorKind: "agent",
-    authorName: "Claude",
-    body: "Comment body that will not fit.",
-  });
   const { conn } = makeConnection();
 
   await conn.handleFirstSend({
@@ -348,16 +310,6 @@ test("a Task with a huge own description keeps it in full and drops the rest wit
       `Parent Task ${parent.id}'s description is omitted here for size`,
     ),
     "and says so instead of pretending there was none",
-  );
-  assert.doesNotMatch(
-    body,
-    /Comment body that will not fit/,
-    "the comment gives way too",
-  );
-  assert.match(
-    body,
-    /This Task has 1 comment, omitted here for size/,
-    "and says so",
   );
 });
 
