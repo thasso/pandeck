@@ -608,6 +608,8 @@ function firstTurnAttachments(
 
 /** One in-flight drain per recipient; concurrent calls coalesce onto it. */
 const drainLocks = new Map<string, Promise<void>>();
+/** Explicit send-now callers waiting for recipient authority outrank auto drains. */
+const explicitDrainWaiters = new Map<string, number>();
 
 /**
  * Run an explicit claim under the same recipient authority as automatic drains.
@@ -620,8 +622,16 @@ async function withRecipientDrainLock<T>(
   recipientId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
+  explicitDrainWaiters.set(
+    recipientId,
+    (explicitDrainWaiters.get(recipientId) ?? 0) + 1,
+  );
   while (drainLocks.has(recipientId))
     await drainLocks.get(recipientId)?.catch(() => {});
+  const remainingWaiters = (explicitDrainWaiters.get(recipientId) ?? 1) - 1;
+  if (remainingWaiters > 0)
+    explicitDrainWaiters.set(recipientId, remainingWaiters);
+  else explicitDrainWaiters.delete(recipientId);
   let release!: () => void;
   const reservation = new Promise<void>((resolve) => {
     release = resolve;
@@ -633,11 +643,13 @@ async function withRecipientDrainLock<T>(
     if (drainLocks.get(recipientId) === reservation)
       drainLocks.delete(recipientId);
     release();
-    // Send-now is prioritized ahead of the remaining FIFO queue; resume the
-    // ordinary drain once this exclusive delivery/steer admission is complete.
-    void drainRecipient(recipientId).catch(() => {});
-    if (noticeWakesPending.delete(recipientId))
+    // Waiting explicit sends retain authority before ordinary FIFO draining.
+    // drainRecipient also checks this count for idle hooks racing the handoff.
+    if ((explicitDrainWaiters.get(recipientId) ?? 0) === 0) {
       void drainRecipient(recipientId).catch(() => {});
+      if (noticeWakesPending.delete(recipientId))
+        void drainRecipient(recipientId).catch(() => {});
+    }
   }
 }
 /**
@@ -742,6 +754,8 @@ function cancelInterruptionNoticeRetries(): void {
  */
 export function drainRecipient(recipientId: string): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
+  if ((explicitDrainWaiters.get(recipientId) ?? 0) > 0)
+    return Promise.resolve();
   const existing = drainLocks.get(recipientId);
   if (existing) return existing;
   const run = drainRecipientOnce(recipientId).finally(() => {

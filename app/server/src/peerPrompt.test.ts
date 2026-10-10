@@ -2739,14 +2739,20 @@ describe("waiting peer prompts in the composer queue", () => {
     const recipient = seed("R");
     const driver = driverFor(recipient);
     const release = driver.holdTurns();
-    const first = await sendPeerPrompt({
+    const older = await sendPeerPrompt({
       senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "older queued",
+      responseRequested: false,
+    });
+    const first = await sendPeerPrompt({
+      senderSessionId: seed("First sender"),
       targetSessionId: recipient,
       prompt: "first now",
       responseRequested: false,
     });
     const second = await sendPeerPrompt({
-      senderSessionId: seed("Other"),
+      senderSessionId: seed("Second sender"),
       targetSessionId: recipient,
       prompt: "second now",
       responseRequested: false,
@@ -2769,6 +2775,13 @@ describe("waiting peer prompts in the composer queue", () => {
       peerPromptStore.getById(second.message.id)!.status,
       "completed",
     );
+    await until(
+      () => peerPromptStore.getById(older.message.id)!.status === "completed",
+      "the older row to run after explicit sends",
+    );
+    const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    assert.ok(log.indexOf("first now") < log.indexOf("second now"));
+    assert.ok(log.indexOf("second now") < log.indexOf("older queued"));
   });
 
   it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {
