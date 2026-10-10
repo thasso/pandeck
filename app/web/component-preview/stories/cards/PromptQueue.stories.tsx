@@ -1,5 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { PromptQueueState, SessionState } from "@assistant/shared";
+import type {
+  PromptQueueState,
+  QueuedPeerPrompt,
+  SessionState,
+} from "@assistant/shared";
 import { Composer } from "../../../src/components/Composer.tsx";
 import { PromptQueueLedge } from "../../../src/components/PromptQueueLedge.tsx";
 import type { AssistantActions } from "../../../src/hooks/useAssistant.ts";
@@ -54,6 +58,30 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
   };
 }
 
+/** What other sessions sent, waiting behind the drafts; one is mid-steer. */
+function peersFor(scenario: PromptQueueScenario): QueuedPeerPrompt[] {
+  return [
+    {
+      id: "p1",
+      senderTitle: "Review the queue rework",
+      senderSessionId: "session-reviewer",
+      message:
+        "Two findings on the drain: the held queue never yields when its last row is removed, and the steer path skips the busy check.",
+      responseRequested: true,
+      createdAt: Date.now() - 20_000,
+      ...(scenario === "running" ? { sending: true as const } : {}),
+    },
+    {
+      id: "p2",
+      senderTitle: "Coordinator",
+      senderSessionId: "session-coordinator",
+      message: "When you are done, push the branch and report back.",
+      responseRequested: false,
+      createdAt: Date.now() - 5_000,
+    },
+  ];
+}
+
 /** Every command a story's composer could issue does nothing. */
 const inertActions = new Proxy(
   {},
@@ -62,7 +90,8 @@ const inertActions = new Proxy(
 
 /**
  * The composer of a session whose turn is running, with the user's queue on
- * its top edge: the Steer/Queue switch, Stop beside Send, and the ledge rows.
+ * its top edge: the Steer/Queue switch, Stop beside Send, and the ledge rows —
+ * the user's drafts, then the peer prompts other sessions sent.
  */
 export function PromptQueueStory({
   frameWidth,
@@ -86,6 +115,7 @@ export function PromptQueueStory({
           ledge={
             <PromptQueueLedge
               queue={queueFor(scenario)}
+              peers={peersFor(scenario)}
               running={running}
               canSteer
               onEdit={() => {}}
@@ -94,6 +124,8 @@ export function PromptQueueStory({
               onSendNow={() => {}}
               onClear={() => {}}
               onResume={() => {}}
+              onSendPeerNow={() => {}}
+              onWithdrawPeer={() => {}}
             />
           }
         />

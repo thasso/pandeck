@@ -18,6 +18,7 @@ import type {
   PeerPromptThread,
   PeerPromptThreadMessage,
   PeerPromptThreadsProjection,
+  QueuedPeerPrompt,
 } from "@assistant/shared";
 import { peerPromptExcerpt } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -33,6 +34,10 @@ import { sessionFirstTurnContext } from "./sessionContext.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import type { SessionLogEntry } from "./session/log/rawEntry.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
+import {
+  SessionBusyError,
+  SteerWithdrawnError,
+} from "./session/runtime/index.ts";
 import { readTask } from "./tasks.ts";
 import {
   promptRuntimeSession,
@@ -115,6 +120,8 @@ export interface PeerPromptHub {
       failureReason?: string;
     },
   ): void;
+  /** Tell a recipient's viewers what still waits for it; optional for test hubs. */
+  broadcastPeerPromptQueue?(sessionId: string, items: QueuedPeerPrompt[]): void;
 }
 
 let hubOverride: PeerPromptHub | undefined;
@@ -244,6 +251,211 @@ export function cancelQueuedPeerPrompts(
   void broadcastParticipants(cancelled);
   for (const message of cancelled) void broadcastCardUpdateFor(message);
   return cancelled;
+}
+
+/* ---------------------------- the composer queue ---------------------------- */
+
+const WITHDRAWN_REASON = "Withdrawn by the user before delivery.";
+const STEER_UNCERTAIN_REASON =
+  "The turn it was steered into stopped; the recipient may already have read it.";
+const STEERED_RUN_FAILED_REASON = "The turn it was steered into failed.";
+
+/**
+ * What still waits for a recipient, as its composer queue shows it: queued,
+ * retrying, or being dispatched (a steer the turn has not read yet).
+ */
+function queuedPeerPromptsFor(recipientId: string): QueuedPeerPrompt[] {
+  return peerPromptStore.listUndeliveredForRecipient(recipientId).map((r) => ({
+    id: opaqueKey(r.id),
+    senderTitle: r.senderLabel ?? "another session",
+    senderSessionId: r.senderSessionId,
+    message: peerPromptExcerpt(r.prompt),
+    responseRequested: r.responseRequested,
+    createdAt: r.createdAt,
+    ...(r.status === "retryable_failed" ? { retrying: true as const } : {}),
+    ...(r.status === "dispatching" ? { sending: true as const } : {}),
+  }));
+}
+
+/** The session state's waiting-peer field; absent when nothing waits. */
+export function peerPromptQueueField(sessionId: string): {
+  queuedPeerPrompts?: QueuedPeerPrompt[];
+} {
+  const items = queuedPeerPromptsFor(sessionId);
+  return items.length > 0 ? { queuedPeerPrompts: items } : {};
+}
+
+/**
+ * Recipients whose queue projection is due. One delivery moves several rows
+ * through several transitions; their viewers get the list once, after them.
+ */
+const queuePublishes = new Set<string>();
+
+function publishPeerQueue(recipientId: string): void {
+  if (queuePublishes.has(recipientId)) return;
+  queuePublishes.add(recipientId);
+  queueMicrotask(() => {
+    queuePublishes.delete(recipientId);
+    void getHub()
+      .then((hub) =>
+        hub.broadcastPeerPromptQueue?.(
+          recipientId,
+          queuedPeerPromptsFor(recipientId),
+        ),
+      )
+      .catch(() => {});
+  });
+}
+
+/** A row still waiting for this recipient, by the opaque key its rows carry. */
+function undeliveredByKey(
+  recipientId: string,
+  key: string,
+): PeerPromptRecord | undefined {
+  return peerPromptStore
+    .listUndeliveredForRecipient(recipientId)
+    .find((r) => opaqueKey(r.id) === key);
+}
+
+/**
+ * The recipient's user withdraws a peer prompt before it is delivered. One
+ * that is already being dispatched is past recalling; one already delivered
+ * is gone from the queue, and the projection the client gets says so.
+ */
+export function withdrawQueuedPeerPrompt(
+  recipientId: string,
+  key: string,
+): void {
+  const row = undeliveredByKey(recipientId, key);
+  if (!row) return;
+  const cancelled = peerPromptStore.cancelOne(row.id, WITHDRAWN_REASON);
+  if (!cancelled) throw new Error("That message is already being delivered.");
+  void broadcastParticipants([cancelled]);
+  void broadcastCardUpdateFor(cancelled);
+}
+
+/**
+ * The recipient's user sends a waiting peer prompt now: as a steer into a
+ * running turn that takes one, else as the next turn of an idle session —
+ * ahead of the user's own queue, because they asked for this one.
+ */
+export async function sendQueuedPeerPromptNow(
+  recipientId: string,
+  key: string,
+): Promise<void> {
+  if (deliveryStopped) return;
+  const row = undeliveredByKey(recipientId, key);
+  if (!row || row.status === "dispatching") return;
+  const hub = await getHub();
+  const live =
+    hub.getLiveById(recipientId) ?? (await hub.acquireById(recipientId));
+  if (!isRuntimePromptDriver(live))
+    throw new Error("That session could not be resumed.");
+  const steer = live.isRunning;
+  if (steer && !live.canSteer)
+    throw new Error(
+      "This session takes no messages mid-turn; it gets this one when the turn ends.",
+    );
+  const claimed = peerPromptStore.claimOne(
+    row.id,
+    steer ? "steer" : "send-now",
+  );
+  if (!claimed) return;
+  publishPeerQueue(recipientId);
+  if (steer) await steerPeerPrompt(live, claimed);
+  // Records its own outcome; the reply is not held for the whole turn.
+  else void deliverBatch(live, [claimed]).catch(() => {});
+}
+
+/**
+ * Hand one claimed row to the running turn, resolving once the turn has READ
+ * it — at submission for a harness that answers then, at its next step for
+ * one that decides later — or refused it. Until then it shows as being sent.
+ * It joins that run, so it completes when the run does.
+ */
+async function steerPeerPrompt(
+  driver: RuntimePromptDriver,
+  m: PeerPromptRecord,
+): Promise<void> {
+  const batch = [m];
+  const { envelope, receivedCard, context } = deliveryParts(batch);
+  let admitted = false;
+  let ownsContext = false;
+  // Every run ends by going idle, whichever path ended it; a failed one says
+  // so first. A follow-up the turn takes after its reply stays in the run.
+  let failure: string | undefined;
+  let runEnded: () => void = () => {};
+  const ended = new Promise<void>((resolve) => {
+    runEnded = resolve;
+  });
+  const unsubscribe = sessionRuntime.subscribeEvents((sessionId, event) => {
+    if (sessionId !== driver.sessionId || !admitted) return;
+    if (event.type === "runStatus" && event.status === "error")
+      failure = event.message ?? STEERED_RUN_FAILED_REASON;
+    else if (event.type === "runStateChanged" && event.runState === "idle")
+      runEnded();
+  });
+  try {
+    await promptRuntimeSession(driver, envelope, {
+      origin: { kind: "agent", agentId: PEER_ORIGIN_AGENT_ID },
+      clientRequestId: peerKey(m.id),
+      peerMessageIds: [peerKey(m.id)],
+      peerPrompt: receivedCard,
+      steer: true,
+      // Runs inside the runtime's append; nothing here may throw.
+      onUserEntry: () => {
+        admitted = true;
+        try {
+          peerPromptStore.markDeliveryBatch([m.id], m.id);
+          peerPromptStore.markAdmitted(m.id);
+          peerPromptStore.markAcknowledged(m.id);
+          // A reply in this run correlates to the steered sender, unless the
+          // run is another peer's delivery that already holds the context.
+          if (!activeContexts.has(driver.sessionId)) {
+            activeContexts.set(driver.sessionId, context);
+            ownsContext = true;
+          }
+          void broadcastParticipants(batch);
+          void broadcastBatchCardUpdates([m.id]);
+        } catch (err) {
+          console.warn("[peer-prompt] could not record a steer:", err);
+        }
+      },
+    });
+  } catch (err) {
+    unsubscribe();
+    if (ownsContext) activeContexts.delete(driver.sessionId);
+    const reason = err instanceof Error ? err.message : String(err);
+    if (admitted) {
+      peerPromptStore.markInterrupted(m.id, reason, "failure");
+      wakeSendersOwingNotice(batch, driver.sessionId);
+    } else if (err instanceof SteerWithdrawnError && err.uncertain) {
+      // Never put back what the turn may have read: the sender decides.
+      peerPromptStore.markInterrupted(m.id, STEER_UNCERTAIN_REASON, "failure");
+      wakeSendersOwingNotice(batch, driver.sessionId);
+    } else if (err instanceof SessionBusyError) {
+      // Withdrawn unread, or the turn ended first: it waits as it did.
+      peerPromptStore.releaseToQueue(m.id);
+      void drainRecipient(driver.sessionId).catch(() => {});
+    } else {
+      retryOrFail(m.id, m.attempts, reason);
+    }
+    await broadcastParticipants(batch);
+    await broadcastBatchCardUpdates([m.id]);
+    return;
+  }
+  // The turn has it; what is left is the run it joined, which can be long.
+  void ended.then(async () => {
+    unsubscribe();
+    if (ownsContext && activeContexts.get(driver.sessionId) === context)
+      activeContexts.delete(driver.sessionId);
+    if (failure) {
+      peerPromptStore.markInterrupted(m.id, failure, "failure");
+      wakeSendersOwingNotice(batch, driver.sessionId);
+    } else peerPromptStore.markCompleted(m.id);
+    await broadcastParticipants(batch);
+    await broadcastBatchCardUpdates([m.id]);
+  });
 }
 
 /* --------------------------- target resolution --------------------------- */
@@ -848,6 +1060,35 @@ function findAdmittedBatch(
   return undefined;
 }
 
+/** What delivering a batch hands the recipient, however it is delivered. */
+function deliveryParts(batch: PeerPromptRecord[]): {
+  envelope: string;
+  receivedCard: PeerPromptCard;
+  context: ActiveDeliveryContext;
+} {
+  const head = batch[0]!;
+  const primaryRequest = [...batch].reverse().find((m) => m.responseRequested);
+  return {
+    envelope: buildEnvelope(batch),
+    // The recipient card's responseRequested reflects whether ANY batched
+    // message wants a reply, not just the head. Its messageKey is the DISTINCT
+    // batch key (not the head's own opaque key), so a later aggregate-state
+    // broadcast can never bleed into the head's own individual sender-side card.
+    receivedCard: {
+      ...cardFor(head, "received", undefined, batchMessage(batch)),
+      messageKey: batchCardKey(head.id),
+      responseRequested: batch.some((m) => m.responseRequested),
+      state: "delivered",
+    },
+    context: {
+      senderSessionId: head.senderSessionId,
+      conversationId: head.conversationId,
+      chainId: head.chainId,
+      ...(primaryRequest ? { primaryRequestMessageId: primaryRequest.id } : {}),
+    },
+  };
+}
+
 async function deliverBatch(
   driver: RuntimePromptDriver,
   batch: PeerPromptRecord[],
@@ -873,26 +1114,9 @@ async function deliverBatch(
     await broadcastBatchCardUpdates(batch.map((m) => m.id));
     return;
   }
-  const envelope = buildEnvelope(batch);
-  const primaryRequest = [...batch].reverse().find((m) => m.responseRequested);
-  const context: ActiveDeliveryContext = {
-    senderSessionId: head.senderSessionId,
-    conversationId: head.conversationId,
-    chainId: head.chainId,
-    ...(primaryRequest ? { primaryRequestMessageId: primaryRequest.id } : {}),
-  };
+  const { envelope, receivedCard, context } = deliveryParts(batch);
   activeContexts.set(driver.sessionId, context);
   try {
-    // The recipient card's responseRequested reflects whether ANY batched
-    // message wants a reply, not just the head. Its messageKey is the DISTINCT
-    // batch key (not the head's own opaque key), so a later aggregate-state
-    // broadcast can never bleed into the head's own individual sender-side card.
-    const receivedCard: PeerPromptCard = {
-      ...cardFor(head, "received", undefined, batchMessage(batch)),
-      messageKey: batchCardKey(head.id),
-      responseRequested: batch.some((m) => m.responseRequested),
-      state: "delivered",
-    };
     const turn = promptRuntimeSession(driver, envelope, {
       origin: { kind: "agent", agentId: PEER_ORIGIN_AGENT_ID },
       clientRequestId: peerKey(head.id),
@@ -1223,6 +1447,8 @@ function aggregateCardState(rows: PeerPromptRecord[]): PeerPromptState {
  * a solo delivery is a trivial one-member "batch" so this degrades safely.
  */
 async function broadcastCardUpdateFor(m: PeerPromptRecord): Promise<void> {
+  // Every transition passes here, so the recipient's composer queue follows.
+  publishPeerQueue(m.recipientSessionId);
   const effectiveHeadId = m.batchHeadId ?? m.id;
   const members = peerPromptStore.listByBatchHead(
     m.recipientSessionId,

@@ -44,7 +44,7 @@ import { listSessionArtifacts } from "./mcp/toolGroups/packRuntime.ts";
 import { storedSessionModelOption } from "./harnesses/models.ts";
 import { engineTranscript } from "./harnesses/storage.ts";
 import { sessionToolExposure } from "./tools/sessionToolExposure.ts";
-import { peerPromptThreadsFor } from "./peerPrompt.ts";
+import { peerPromptQueueField, peerPromptThreadsFor } from "./peerPrompt.ts";
 import { promptQueueField } from "./promptQueue.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -190,6 +190,7 @@ export class ViewSession implements HarnessDriver {
         : {}),
       peerPrompts: peerPromptThreadsFor(this.id),
       ...promptQueueField(this.id),
+      ...peerPromptQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };

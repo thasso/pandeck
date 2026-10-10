@@ -909,6 +909,17 @@ class SessionHub {
     });
   }
 
+  broadcastPeerPromptQueue(
+    sessionId: string,
+    items: import("@assistant/shared").QueuedPeerPrompt[],
+  ): void {
+    this.sendToSessionViewers(sessionId, {
+      type: "peerPromptQueue",
+      sessionId,
+      items,
+    });
+  }
+
   /** A failure that belongs to one session, told to that session's viewers. */
   reportSessionError(sessionId: string, message: string): void {
     this.sendToSessionViewers(sessionId, {
