@@ -36,6 +36,7 @@ import {
 } from "./DocumentZoom.tsx";
 import { PageHeader, type PageHeaderIconTone } from "./PageHeader.tsx";
 import { IconButton } from "./common/IconButton.tsx";
+import { Separator } from "./ui/separator.tsx";
 import { worktreePath } from "../hooks/useSessionRouting.ts";
 
 export interface DocumentSourceAction {
@@ -117,8 +118,14 @@ export function useDocumentNavigationRegistration(): DocumentNavigationRegistrat
 /** Desktop controls for a source page that supplies its own identity header. */
 export function DocumentNavigationActions({
   className = "",
+  showClose = true,
 }: {
   className?: string;
+  /**
+   * False where the page IS the place the document lives (a Knowledge file):
+   * there is nothing to close back to, so Close would only navigate away.
+   */
+  showClose?: boolean;
 }) {
   const navigation = useDocumentNavigationRegistration();
   if (!navigation) return null;
@@ -140,11 +147,31 @@ export function DocumentNavigationActions({
       >
         <ArrowRight />
       </IconButton>
-      {navigation.zoom ? <DocumentZoomActions zoom={navigation.zoom} /> : null}
-      <IconButton label="Close document" onClick={navigation.close}>
-        <X />
-      </IconButton>
+      {navigation.zoom ? (
+        <>
+          <GroupSeparator />
+          <DocumentZoomActions zoom={navigation.zoom} />
+        </>
+      ) : null}
+      {showClose ? (
+        <>
+          <GroupSeparator />
+          <IconButton label="Close document" onClick={navigation.close}>
+            <X />
+          </IconButton>
+        </>
+      ) : null}
     </div>
+  );
+}
+
+/** Between the header's action groups: history, zoom, close. */
+function GroupSeparator() {
+  return (
+    <Separator
+      orientation="vertical"
+      className="mx-1 h-4 data-vertical:self-center"
+    />
   );
 }
 

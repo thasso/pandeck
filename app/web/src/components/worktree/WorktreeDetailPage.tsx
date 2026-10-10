@@ -1739,6 +1739,12 @@ export default function WorktreeDetailPage({
     </Popover>
   );
 
+  // The open file's folder in a document folder's header ("Knowledge Base" at
+  // its root); the Changes view names the folder itself.
+  const documentFolder =
+    filePath && view === "files"
+      ? splitWorktreePath(filePath).dir || (title ?? worktree.branch)
+      : (title ?? worktree.branch);
   const pendingReviewIds = pendingWorktreeReviewIds(comments);
   const documentTarget = useMemo(
     () =>
@@ -1823,29 +1829,39 @@ export default function WorktreeDetailPage({
             // where in the folder it sits), the way any document page reads.
             <PageHeader
               back={back}
+              // The standard compact row, as a chat session's: the name, and
+              // a small second line under it inside the same height.
               density="compact"
               icon={filePath ? <FileText size={16} /> : <BookOpen size={16} />}
               title={
-                filePath && view === "files"
-                  ? splitWorktreePath(filePath).name
-                  : view === "changes"
-                    ? "Uncommitted changes"
-                    : (title ?? worktree.branch)
-              }
-              subtitle={
-                filePath && view === "files"
-                  ? [title, splitWorktreePath(filePath).dir]
-                      .filter(Boolean)
-                      .join(" / ")
-                  : view === "changes"
-                    ? title
-                    : undefined
+                <div className="flex min-w-0 flex-col">
+                  <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                    {filePath && view === "files"
+                      ? splitWorktreePath(filePath).name
+                      : view === "changes"
+                        ? "Uncommitted changes"
+                        : (title ?? worktree.branch)}
+                  </h2>
+                  {/* The folder, cut from the LEFT: its tail (the nearest
+                    folders) is what tells two files apart, not the shared
+                    root. */}
+                  <p
+                    className="truncate text-left text-xs text-muted-foreground"
+                    dir="rtl"
+                    title={documentFolder}
+                  >
+                    <span dir="ltr">{documentFolder}</span>
+                  </p>
+                </div>
               }
               actions={
                 embedded ? (
                   headerActions
                 ) : filePath ? (
-                  <DocumentNavigationActions className="hidden md:flex" />
+                  <DocumentNavigationActions
+                    className="hidden md:flex"
+                    showClose={false}
+                  />
                 ) : undefined
               }
             />
