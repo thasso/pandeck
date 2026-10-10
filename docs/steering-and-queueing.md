@@ -131,7 +131,9 @@ card, which the commands address it by.
   delivered when the turn ends. Send-now holds the recipient's delivery
   authority: one arriving during an automatic delivery waits out that turn and
   goes before the drain claims its next batch, which resumes from the FIFO head
-  once the send is done.
+  once the send is done. A peer drain held up by a send-now settles only after
+  that resumed drain (the user's queued message sent, or the peer FIFO drained),
+  so a background completion waiting on it never takes their turn.
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 

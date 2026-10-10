@@ -757,11 +757,20 @@ function cancelInterruptionNoticeRetries(): void {
  * Deliver queued peer prompts to a recipient without interrupting a running
  * turn. Idle/resumable targets receive one FIFO batch as a fresh turn. Concurrent
  * calls for the same recipient coalesce so competing drains cannot double-admit.
+ *
+ * The promise settles once this priority phase is over — the user's queued
+ * message sent, or the peer FIFO drained — which is what the background phase
+ * waits on before it offers a completion of its own.
  */
 export function drainRecipient(recipientId: string): Promise<void> {
   if (deliveryStopped) return Promise.resolve();
+  // A send-now holds the recipient. Its release resumes the drain, and THAT
+  // drain is the phase a caller waits for: resolving on the release alone let
+  // a background completion take the turn the resumed drain was owed.
   if (explicitSendWaiting(recipientId))
-    return waitForExplicitRecipientAuthorityRelease(recipientId);
+    return waitForExplicitRecipientAuthorityRelease(recipientId).then(() =>
+      drainRecipient(recipientId),
+    );
   const existing = drainLocks.get(recipientId);
   if (existing) return existing;
   const run = drainRecipientOnce(recipientId).finally(() => {
@@ -820,7 +829,9 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
     // The queue resolves its own driver asynchronously. Recheck recipient
     // authority after that acquisition, or a send-now registered while this
     // automatic drain was awaiting acquireById could lose the next turn.
-    void drainPromptQueue(
+    // Awaited, so the phase covers that send: it settles once the message is
+    // in the session, before anything behind it is offered the idle edge.
+    await drainPromptQueue(
       recipientId,
       () => !hasExplicitRecipientAuthority(recipientId),
     );

@@ -2990,6 +2990,126 @@ describe("waiting peer prompts in the composer queue", () => {
     }
   });
 
+  it("a background completion waits for the priority drain a send-now's release resumes", async () => {
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    const older = await sendPeerPrompt({
+      senderSessionId: seed("Older sender"),
+      targetSessionId: recipient,
+      prompt: "older peer row",
+      responseRequested: false,
+    });
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "chosen by the user",
+      responseRequested: false,
+    });
+    const delay = () => new Promise((resolve) => setTimeout(resolve, 15));
+    // Resolving the queue's driver takes time, as a cold acquisition does.
+    promptQueue.setPromptQueueHost({
+      resolve: async () => {
+        await delay();
+        return driver as never;
+      },
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+    const logText = () =>
+      readFileSync(canonicalSessionLogPath(recipient), "utf8");
+    const offers: Array<{ result: string; log: string; older: string }> = [];
+    const background = new BackgroundCompletionDelivery({
+      drainPeers: (sessionId) => drainRecipient(sessionId),
+      offer: async () => {
+        const result = driver.isRunning ? "busy" : "delivered";
+        offers.push({
+          result,
+          log: logText(),
+          older: peerPromptStore.getById(older.message.id)!.status,
+        });
+        return result;
+      },
+    });
+    // The idle edge as production runs it: the user's queue, then the
+    // background phase, whose peer drain goes first.
+    setSessionIdleHook((sessionId) => {
+      void promptQueue
+        .drainPromptQueue(sessionId)
+        .then(() => background.drain(sessionId));
+    });
+    const originalGetLive = fakeHub.getLiveById;
+    const originalAcquire = fakeHub.acquireById;
+    try {
+      const sendNow = sendQueuedPeerPromptNow(
+        recipient,
+        chosen.card.messageKey,
+      );
+      await until(() => driver.isRunning, "the send-now turn");
+      promptQueueStore.append({
+        id: `queued-${recipient}`,
+        sessionId: recipient,
+        text: "user queue prompt",
+      });
+      // The completion lands while the send-now holds the recipient: its
+      // peer phase waits on that authority.
+      background.enqueue(recipient, {
+        itemId: "w1",
+        revision: 1,
+        label: "work w1",
+        state: "completed",
+        humanLink: "/background-tasks?task=w1",
+        backend: "claude-query",
+        stopRequested: false,
+        ownerTurnRunning: false,
+      });
+      // The resumed drain finds the recipient cold and acquires it.
+      fakeHub.getLiveById = (id: string) =>
+        id === recipient ? undefined : originalGetLive(id);
+      fakeHub.acquireById = async (id: string) => {
+        if (id !== recipient) return originalAcquire(id);
+        await delay();
+        return driver;
+      };
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(offers.length, 0, "nothing is offered while send-now runs");
+
+      release();
+      // The user's queued turn stays open, as a real one does for a while.
+      const releaseQueued = driver.holdTurns();
+      await sendNow;
+      await until(() => offers.length > 0, "the background offer");
+      assert.ok(
+        offers[0]!.log.includes("user queue prompt"),
+        "the user's queued message took the next turn before the offer",
+      );
+      assert.equal(offers[0]!.result, "busy");
+      assert.equal(offers[0]!.older, "queued");
+      releaseQueued();
+
+      // Eventually every phase runs, in priority order.
+      await until(
+        () => offers.some((o) => o.result === "delivered"),
+        "the background completion to be delivered",
+      );
+      const delivered = offers.find((o) => o.result === "delivered")!;
+      assert.equal(delivered.older, "completed", "the peer FIFO went first");
+      const log = logText();
+      assert.ok(
+        log.indexOf("chosen by the user") < log.indexOf("user queue prompt"),
+      );
+      assert.ok(
+        log.indexOf("user queue prompt") < log.indexOf("older peer row"),
+      );
+    } finally {
+      fakeHub.getLiveById = originalGetLive;
+      fakeHub.acquireById = originalAcquire;
+      background.stop();
+    }
+  });
+
   it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {
     const sender = seed("S");
     const recipient = seed("R");
