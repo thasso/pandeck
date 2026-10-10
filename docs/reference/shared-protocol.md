@@ -620,13 +620,13 @@ vocabulary, display projection, and normalized session model types.
   inspector can render a rich pierre diff and a rendered-Markdown diff.
   `KnowledgeHistoryRow.commentThreadId` (from the commit's `KB-Comment` trailer)
   links a content edit back to the review thread it addressed.
-- `comments.ts` owns the cross-surface comment anchor vocabulary:
-  `CommentTarget` (kb / worktree / session / task), the `SelectorBundle` of
-  quote, position and block selectors, the `ResolvedAnchor` a resolver answers
-  with, the shared 32-character `PREFIX_LEN`/`SUFFIX_LEN`, and
-  `normalizeAnchorText` — which is a COMPARISON helper only, since stored
-  selectors keep raw text and every offset is into the raw document. Contract:
-  `docs/comments.md`.
+- `comments.ts` owns the comment anchor vocabulary for server-synced worktree
+  review threads and session transcript comments: `CommentTarget` (worktree /
+  session), the `SelectorBundle` of quote, position and block selectors, the
+  `ResolvedAnchor` a resolver answers with, the shared 32-character
+  `PREFIX_LEN`/`SUFFIX_LEN`, and `normalizeAnchorText` — which is a COMPARISON
+  helper only, since stored selectors keep raw text and every offset is into the
+  raw document. Contract: `docs/comments.md`.
 - `usage.ts` owns the Usage page's provider account usage/rate-limit snapshot
   types (`ClaudeUsageSnapshot`, `OpenAiUsageSnapshot`). Each is a deliberately
   small, stable projection over an unstable upstream: Claude's experimental
