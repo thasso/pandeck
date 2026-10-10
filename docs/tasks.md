@@ -1,18 +1,18 @@
 # Task contract
 
 A Task is the USER's durable object. Agents read Tasks, may fold a decision into
-one, may leave a sparse comment, and may suggest a status — they do not use the
-backlog to keep track of the work they are doing right now, because the app
-deliberately gives them no place to do that.
+one, and may suggest a status — they do not use the backlog to keep track of the
+work they are doing right now, because the app deliberately gives them no place
+to do that.
 
 This document exists so that boundary stops being re-derived. It is the product
 contract for Tasks; the module detail lives in `docs/reference/server-tools.md`
-(the Task tools), `docs/reference/server-modules.md` (`tasks.ts`,
-`taskComments.ts`), and `docs/reference/shared-protocol.md` (the wire shapes) —
-those describe the code and carry no rule of their own. The wire-level rule this
-contract turns on lives in `app/shared/CLAUDE.md`; the rules agents must follow
-when acting on a Task live in the Task tools' own `description` and schema
-prose, which every harness renders — never in a harness-specific prompt layer.
+(the Task tools), `docs/reference/server-modules.md` (`tasks.ts`), and
+`docs/reference/shared-protocol.md` (the wire shapes) — those describe the code
+and carry no rule of their own. The wire-level rule this contract turns on lives
+in `app/shared/CLAUDE.md`; the rules agents must follow when acting on a Task
+live in the Task tools' own `description` and schema prose, which every harness
+renders — never in a harness-specific prompt layer.
 
 ## What a Task is
 
@@ -20,7 +20,7 @@ A Task is one commitment the user keeps: something they intend to happen, worth
 seeing again tomorrow. It carries a title, a Markdown description that is the
 durable statement of the work, a status, a priority, an optional parent (subtask
 edges form epics), an optional project, Jira keys, GitHub issue links and
-external source links, an append-only comment trace, and two independent dates.
+external source links, and two independent dates.
 
 An external link records which provider it points at (`slack`, `jira`, `github`,
 `forgejo`, `unknown`), inferred from the URL when the writer omits it. Only
@@ -105,20 +105,19 @@ not Jira keys, not GitHub issues, not external links.
 
 ## Where a piece of work belongs
 
-| The thing in front of you                                                       | Where it goes                                                      |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| A commitment that will not be finished in this session                          | A new Task — it lands in the user's Inbox, untriaged               |
-| A decision, constraint, or scope change a later reader of this work needs       | Fold it into the Task's description as a targeted edit             |
-| The record that something happened: work finished, a handoff, a small follow-up | At most one comment on the Task                                    |
-| The steps of the work in flight — the plan, progress so far, what is next       | Nowhere. Reply text and the streamed tool activity already show it |
-| Durable long-form material: research, a brief, a plan, a reference              | A Knowledge Base file (`kb_write`), linked from the Task           |
-| A short atomic preference, fact, or constraint the user asked you to remember   | Memory (`memory_manage`), not a Task and not a KB file             |
-| Review remarks on a code change                                                 | Worktree comments (`review_comment_*`), never the Task trace       |
-| Bookkeeping about your own tool calls, retries, or intentions                   | Nowhere                                                            |
+| The thing in front of you                                                     | Where it goes                                                      |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| A commitment that will not be finished in this session                        | A new Task — it lands in the user's Inbox, untriaged               |
+| A decision, constraint, or scope change a later reader of this work needs     | Fold it into the Task's description as a targeted edit             |
+| The steps of the work in flight — the plan, progress so far, what is next     | Nowhere. Reply text and the streamed tool activity already show it |
+| Durable long-form material: research, a brief, a plan, a reference            | A Knowledge Base file (`kb_write`), linked from the Task           |
+| A short atomic preference, fact, or constraint the user asked you to remember | Memory (`memory_manage`), not a Task and not a KB file             |
+| Review remarks on a code change                                               | Worktree comments (`review_comment_*`), never the Task trace       |
+| Bookkeeping about your own tool calls, retries, or intentions                 | Nowhere                                                            |
 
 When two of these look plausible, prefer the cheaper one, and prefer silence
 over a record nobody asked for. The description is where meaning accumulates; a
-comment is an event; a new Task is a claim on the user's future attention.
+new Task is a claim on the user's future attention.
 
 ## Who owns status
 
@@ -164,9 +163,8 @@ the attachment says so instead of asking to be re-read.
   what used to open a session on a stale `Status: todo`; the injected status may
   never contradict the stored one.
 - It carries the Task's title/status/description, the parent's title and a
-  clipped description, the grandparent's title as a breadcrumb, and the single
-  most recent comment plus a count of the rest. No siblings and no subtree —
-  those are a `task_read` away, and so is a parent's full body.
+  clipped description, and the grandparent's title as a breadcrumb. No siblings
+  and no subtree — those are a `task_read` away, and so is a parent's full body.
 - The WHOLE attachment is budgeted (~8 KB) and spent in that priority order,
   because parents are epics and epics are the long bodies: injecting a parent in
   full systematically injects the worst case. Only the Task's own description is
@@ -178,9 +176,8 @@ the attachment says so instead of asking to be re-read.
   of the moment the Task was attached", and the zero-calls rule is "before doing
   real work" rather than "at session start".
 - Truncation has ONE vocabulary app-wide: the marker in `textBudget.ts`, shared
-  with the bounded `task_read` payload, and an "older" count for what a bounded
-  trace left out. A second marker format would make the same signal something an
-  agent has to learn twice.
+  with the bounded `task_read` payload. A second marker format would make the
+  same signal something an agent has to learn twice.
 
 ## When an agent may create a Task
 
@@ -193,24 +190,17 @@ is no exception for "the user asked me to file it" — triage is the user's act 
 processing an arrival, and no tool sets it. Write the title and description so
 the user can decide about it later without asking what it meant.
 
-## What a comment is for
+## Tasks carry no comments
 
-A comment records an EVENT on the user's object: a decision, a handoff, or a
-follow-up too small for its own Task. The decision itself belongs in the
-description; the comment says it happened and when.
+A Task has no comment trace: no tool writes one, no read returns one, and the
+Task page shows none. What a comment used to record goes elsewhere — a decision
+into the description, a follow-up into its own Task, review remarks onto the
+worktree, and progress nowhere.
 
-- At most one per session. Silence is the default, and a filler closeout receipt
-  ("did the work, tests pass") is never worth a permanent line.
-- Comments are append-only — they cannot be edited or deleted — so a comment is
-  a permanent addition to something the user owns.
-- Not for code review (worktree comments own that), not for progress narration,
-  not for restating a diff the user can read.
-- Writing one is not its own tool call: a comment rides the `task_manage`
-  operation it belongs to, so a closeout that changes status, edits the
-  description and records the event is ONE call. `{operation: "comment", …}`
-  covers the case where nothing about the Task itself changed, and it carries
-  ONLY the comment — asking for a change there is an error, never a silently
-  dropped write.
+The `task_comments` table (migration `0020`) and its existing rows are kept,
+untouched, in the user's database. Only the historical audit
+(`pnpm run measure:tasks`) still reads them; exporting or deleting them is the
+user's decision and needs its own migration.
 
 ## Who may rewrite a description
 
@@ -344,14 +334,13 @@ for durable multi-session orchestration.**
   `KNOWN_CLAUDE_NATIVE_TOOLS` (`app/server/src/claudeSdk/options.ts`), which is
   filtered into `disallowedTools`. The one-shot helper paths disallow every
   native tool. Pi has no todo tool to disallow.
-- Agents do not create Tasks, Task comments, or provider-native todo items to
-  track steps they intend to finish as part of the work already in flight.
+- Agents do not create Tasks or provider-native todo items to track steps they
+  intend to finish as part of the work already in flight.
 - A Workflow Run is user-started, linked to the Task, and owns its durable
   execution steps, structured results, decisions, and recovery state. It does
   not change what a Task means or who owns Task status.
 - Workflow state is advanced by the deterministic runtime and structured agent
-  results, not by an agent maintaining a prose checklist. Routine transitions
-  never become Task comments.
+  results, not by an agent maintaining a prose checklist.
 - The agreed but not-yet-implemented architecture is `docs/agent-workflows.md`.
   Until it ships, agents continue to plan in reply text and the session view
   continues to show tool activity; the absence of a Workflow Run surface is not

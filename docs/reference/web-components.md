@@ -544,22 +544,6 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   comment is the same act as writing a prompt and two different Enters in one
   app is a coin toss; Cmd/Ctrl+Enter still submits, and the Send tooltip states
   the rule.
-- `TaskComments.tsx` owns the presentational Task activity-trace list + composer
-  (Markdown bodies, author-kind badge, chronological oldest-first, append-only —
-  no threading/resolve/edit). Its composer is the shared
-  `common/CommentComposer` (also used by a Knowledge entry's comments): ONE row,
-  send INSIDE the card, growing with the text up to a cap — it is the same act,
-  and it was the last text entry in the app that looked like a form field with a
-  button parked beside it, and Enter submits with Shift+Enter for a newline,
-  exactly as the chat composer does. Bodies render through the shared
-  `common/CommentBody` (Markdown, `compact`), the same renderer the diff and
-  Knowledge threads use. Comments are ruler-separated rather than cards,
-  collapse individually to their header, and agent authors link to their
-  originating session when `sessionId` is present. `TaskManagementPage.tsx`
-  mounts it in the Task detail's **Activity** `CollapsibleSection`. It renders
-  the per-Task `LoadState` honestly, watches and revalidates on open, unwatches
-  on close, retains comments during refresh or failure, and keeps a comment
-  draft until correlated add success.
 - `TaskManageToolCard.tsx` owns the in-chat card for a `task_manage` result: the
   Tasks a turn created or changed, as chips that open them, plus the confirm
   button for a pending status suggestion. It is registered in `tools/` and

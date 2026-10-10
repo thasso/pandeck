@@ -800,16 +800,6 @@ persona toolsets.
   (`descriptionsOmitted`), then drop trailing Tasks (`omittedForBudget`, with
   `truncated` and `totalCount`). Losing bodies beats losing Tasks: a caller that
   asked for an epic wants its whole shape first.
-- `comments` (with `id`, an object rather than a flag so the bound is explicit)
-  returns the Task's activity trace: the most recent `limit` comments (default
-  10, max 100) rendered oldest-first so the trace reads chronologically, each
-  body clipped to 1 500 chars (`bodyTruncated`, `bodyChars`) so one 20 k-char
-  comment cannot decide how many comments fit. The block carries `count`,
-  `totalCount`, `olderCount` and a `nextCursor` that pages BACKWARDS in time
-  through `comments.before` — the rare deep-history read walks it, the common
-  read never pays for it. An unknown cursor throws, and so does `comments`
-  without `id` — a trace belongs to one Task, so a list read that asked for one
-  meant something else. Omitting `comments` returns no trace at all.
 - Clipped bodies here use the shared marker in `textBudget.ts`, not a local one:
   the Task-context attachment clips text too, and one vocabulary means an agent
   learns the "there was more here" signal once.
@@ -824,41 +814,24 @@ persona toolsets.
   of going stale.
 - `task_manage`'s result is a fixed payload — `renderKind: "taskManage"`,
   `version`, `changedCount` (mutated + deleted Tasks), `changed[]`, optional
-  `deletedIds`, `comments` and `warnings` — carried identically in the TEXT and
-  `details` through `compactJsonResult`. `changed` follows input op order and
-  each entry's `status` is the status AFTER the write, with `statusSuggestion`
-  stating what is still waiting for the user, `statusSetByRequest` marking a
-  status `userRequestedStatus` applied, `descriptionEditsApplied` counting the
-  targeted body edits that landed, and `deduplicated` marking an entry a
-  `create` op resolved onto an EXISTING Task (the Slack source-link dedupe) —
-  flagged on the entry and not only in `warnings`, since a renderer taking the
-  verb from the op would otherwise call an existing Task "created". `comments`
-  lists every trace append in op order, each carrying its own `taskId` because
-  one batch may comment on several Tasks. A suggestion is never phrased as a
-  warning: the server did exactly what an agent's status write means, and
+  `deletedIds` and `warnings` — carried identically in the TEXT and `details`
+  through `compactJsonResult`. `changed` follows input op order and each entry's
+  `status` is the status AFTER the write, with `statusSuggestion` stating what
+  is still waiting for the user, `statusSetByRequest` marking a status
+  `userRequestedStatus` applied, `descriptionEditsApplied` counting the targeted
+  body edits that landed, and `deduplicated` marking an entry a `create` op
+  resolved onto an EXISTING Task (the Slack source-link dedupe) — flagged on the
+  entry and not only in `warnings`, since a renderer taking the verb from the op
+  would otherwise call an existing Task "created". A suggestion is never phrased
+  as a warning: the server did exactly what an agent's status write means, and
   `warnings` keeps its existing users (project-link resolution, Slack dedupe).
   Failure still throws, so the payload has no error field; ops before a throw
-  stay applied, including their comments. Within ONE op the mutation lands
-  before its comment is appended, so a throw from the append itself (only
-  reachable through a concurrent delete) leaves that mutation applied and the
-  comment missing. `task_read` stays a plain body with no `renderKind`. The web
+  stay applied. `task_read` stays a plain body with no `renderKind`. The web
   card that renders this (`components/TaskManageToolCard.tsx`) also reads the
   CALL's `operations` for the verb per changed Task, since the payload states
   the outcome and not the operation — so op order in `changed` is part of the
   contract, and both the result and the call's input stay whole in a reloaded
   snapshot (`session/log/timelinePayloadPolicy.ts`).
-- Comment writing lives INSIDE `task_manage` (there is no `task_comment` tool):
-  any operation may carry a `comment`, and `{operation: "comment", id, comment}`
-  appends without mutating the Task — so a status change, a description edit and
-  a comment are one provider round trip. A create's comment lands on the id the
-  create resolved to, including the Slack-dedupe target; `delete` refuses one.
-  It routes through `../taskComments.ts` `addTaskComment`, which broadcasts the
-  authoritative `taskComments` list and refreshes `commentCount`; comments
-  cannot be edited or deleted. A bare comment mutates nothing, so it stays out
-  of `changed`/`changedCount` — and it may carry NO change field
-  (`MANAGE_MUTATION_FIELDS`): meaning "update and comment" while writing
-  `comment` is the likeliest slip, so it throws and names the offending fields
-  rather than dropping a status suggestion on the floor.
 - An agent cannot replace a whole Task description: `description` on an `update`
   operation THROWS, and the body changes only through `descriptionEdits`
   (`{oldText, newText}`, mirroring `kb_edit` — each `oldText` must occur exactly

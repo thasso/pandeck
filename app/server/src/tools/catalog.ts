@@ -359,7 +359,7 @@ function commonToolGroups(agentType: AgentType): UnclassifiedToolGroup[] {
       id: "tasks",
       label: "Tasks",
       description:
-        "Durable Tasks: read, search, create, update, and comment on the user's task list.",
+        "Durable Tasks: read, search, create, and update the user's task list.",
       loading: "eager",
       family: "shared",
       tools: taskToolsForKind(agentType),

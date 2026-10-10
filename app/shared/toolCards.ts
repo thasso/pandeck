@@ -380,8 +380,6 @@ export interface ChangedTaskPayload {
 export interface TaskManagePayload {
   changed: ChangedTaskPayload[];
   deletedIds: string[];
-  /** Trace appends, by the Task they landed on (one batch may comment on several). */
-  commentedIds: string[];
   warnings: string[];
 }
 
@@ -442,21 +440,16 @@ export function parseTaskManagePayload(
   const deletedIds = Array.isArray(record.deletedIds)
     ? record.deletedIds.filter((id): id is string => typeof id === "string")
     : [];
-  const commentedIds = Array.isArray(record.comments)
-    ? record.comments
-        .map((comment) => asRecord(comment)?.taskId)
-        .filter((id): id is string => typeof id === "string")
-    : [];
   const warnings = Array.isArray(record.warnings)
     ? record.warnings.filter((text): text is string => typeof text === "string")
     : [];
-  return { changed, deletedIds, commentedIds, warnings };
+  return { changed, deletedIds, warnings };
 }
 
 /**
  * Task MUTATIONS only: `task_manage` carries the `taskManage` render kind and
  * `task_read` deliberately does not. The card then shows something only for a
- * payload with at least one changed, deleted or commented Task — a batch that
+ * payload with at least one changed or deleted Task — a batch that
  * touched nothing renders nothing, so its payload is a generic body.
  */
 export function taskManagePayloadOf(
@@ -467,9 +460,7 @@ export function taskManagePayloadOf(
   const payload = parseTaskManagePayload(c.output);
   if (
     !payload ||
-    (payload.changed.length === 0 &&
-      payload.deletedIds.length === 0 &&
-      payload.commentedIds.length === 0)
+    (payload.changed.length === 0 && payload.deletedIds.length === 0)
   )
     return null;
   return payload;

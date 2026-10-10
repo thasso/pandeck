@@ -35,7 +35,6 @@ import {
   taskSummaryOf,
 } from "@assistant/shared";
 import { taskStore, type TaskStatusActor } from "./db/taskStore.ts";
-import { taskCommentStore } from "./db/taskCommentStore.ts";
 import {
   addLink,
   allLinks,
@@ -175,8 +174,7 @@ function notify(ids: Iterable<string>): void {
 
 /**
  * Public trigger for a task-list change originating outside this module (e.g. a
- * new activity-trace comment changing a Task's `commentCount`), so viewers see
- * the change. The touched ids are required — they ARE the revision bump.
+ * Project removal orphaning a Task's project link), so viewers see the change. The touched ids are required — they ARE the revision bump.
  */
 export function notifyTaskChange(ids: Iterable<string>): void {
   notify(ids);
@@ -239,9 +237,7 @@ export function taskSummaryFor(id: string): TaskSummary | null {
   const nid = parseId(id);
   const item = nid === undefined ? null : readTask(id);
   if (!item || nid === undefined || item.archivedAt !== undefined) return null;
-  const commentCount = taskCommentStore.countForTask(nid);
-  const summary = taskSummaryOf(item);
-  return commentCount ? { ...summary, commentCount } : summary;
+  return taskSummaryOf(item);
 }
 
 /** Sessions currently linked to a live Task, for the per-session back-link refresh. */
@@ -329,12 +325,7 @@ export function listTasks(filter: TaskListFilter = {}): TaskSummary[] {
     )
     .filter((item) => !query || matchesQuery(item, query));
 
-  const commentCounts = taskCommentStore.countsByTask();
-  return order(items).map((item) => {
-    const summary = toSummary(item);
-    const count = commentCounts.get(item.id);
-    return count ? { ...summary, commentCount: count } : summary;
-  });
+  return order(items).map(toSummary);
 }
 
 export function readTask(id: string): TaskItem | null {
@@ -382,14 +373,7 @@ function sessionLinkedTasks(sessionId: string): TaskItem[] {
 }
 
 function sessionTaskSummaries(sessionId: string): TaskSummary[] {
-  const items = sessionLinkedTasks(sessionId);
-  if (items.length === 0) return [];
-  const commentCounts = taskCommentStore.countsByTask();
-  return items.map((item) => {
-    const summary = toSummary(item);
-    const count = commentCounts.get(item.id);
-    return count ? { ...summary, commentCount: count } : summary;
-  });
+  return sessionLinkedTasks(sessionId).map(toSummary);
 }
 
 export function listSessionTasks(
@@ -650,7 +634,6 @@ export function deleteTask(id: string): void {
   // Backlog drag sends that dead id back as a placement — which `reorderTasks`
   // refuses, failing the whole reorder.
   const orphaned = taskStore.children(nid).map((child) => String(child.id));
-  taskCommentStore.removeForTask(nid); // activity trace only survives while the Task does
   taskStore.remove(nid); // tombstone + edge cleanup
   notify([id, ...orphaned]);
 }

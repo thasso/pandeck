@@ -1,6 +1,5 @@
 import type { CommentTarget, WorktreeReviewSet } from "@assistant/shared";
 import type { CommentStore } from "./commentStore.ts";
-import { taskCommentStoreAdapter } from "./taskCommentStore.ts";
 import {
   worktreeCommentStore,
   worktreeReviewSetsForTarget,
@@ -19,8 +18,6 @@ export function commentStoreFor(target: CommentTarget): CommentStore {
   switch (target.kind) {
     case "worktree":
       return worktreeCommentStore;
-    case "task":
-      return taskCommentStoreAdapter;
     case "session":
       throw new Error("Session comments are browser-local.");
   }

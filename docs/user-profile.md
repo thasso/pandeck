@@ -57,7 +57,5 @@ end of the gap.
 
 ## Name
 
-- A new Task comment the user writes stores `displayName`, or `"You"` when
-  unset. Persisted comments keep the name they were stored with.
 - Worktree comments store only that the user wrote them. The projection names
   them with the current display name, or `"You"`.

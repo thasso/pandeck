@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "vitest";
 import type { CommentStore } from "./commentStore.ts";
-import { taskCommentStoreAdapter } from "./taskCommentStore.ts";
 import { worktreeCommentStore } from "./worktreeCommentStore.ts";
 
 const OPERATIONS = [
@@ -38,4 +37,3 @@ function commentStoreConformance(name: string, store: CommentStore): void {
 }
 
 commentStoreConformance("worktree", worktreeCommentStore);
-commentStoreConformance("task", taskCommentStoreAdapter);

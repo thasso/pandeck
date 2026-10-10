@@ -63,19 +63,6 @@ function taskDescriptionsWithKnowledgeLinks(): {
     .all() as unknown as { id: number; text: string }[];
 }
 
-/** Task comments that mention a Knowledge link. */
-function taskCommentsWithKnowledgeLinks(): {
-  id: string;
-  taskId: number;
-  text: string;
-}[] {
-  return getDb()
-    .prepare(
-      "SELECT id, task_id AS taskId, body AS text FROM task_comments WHERE body LIKE '%pa://knowledge/%'",
-    )
-    .all() as unknown as { id: string; taskId: number; text: string }[];
-}
-
 /** Active memory cards that mention a Knowledge link, with their revision. */
 function memoryCardsWithKnowledgeLinks(): {
   id: string;
@@ -90,23 +77,16 @@ function memoryCardsWithKnowledgeLinks(): {
 }
 
 /**
- * Write rewritten Task text in one transaction. `updated_at_ms` is left alone:
- * a link's new spelling is not an edit anyone made, and must not reorder lists.
+ * Write rewritten Task descriptions in one transaction. `updated_at_ms` is left
+ * alone: a link's new spelling is not an edit anyone made, and must not reorder
+ * lists.
  */
-function rewriteTaskText(rows: {
-  descriptions: { id: number; text: string }[];
-  comments: { id: string; text: string }[];
-}): void {
+function rewriteTaskDescriptions(rows: { id: number; text: string }[]): void {
   withDbTransaction(() => {
-    const db = getDb();
-    const description = db.prepare(
+    const description = getDb().prepare(
       "UPDATE tasks SET description = ? WHERE id = ?",
     );
-    for (const row of rows.descriptions) description.run(row.text, row.id);
-    const comment = db.prepare(
-      "UPDATE task_comments SET body = ? WHERE id = ?",
-    );
-    for (const row of rows.comments) comment.run(row.text, row.id);
+    for (const row of rows) description.run(row.text, row.id);
   });
 }
 
@@ -122,8 +102,7 @@ export const knowledgeLinkStore = {
   migrationDone,
   recordMigration,
   taskDescriptionsWithKnowledgeLinks,
-  taskCommentsWithKnowledgeLinks,
   memoryCardsWithKnowledgeLinks,
-  rewriteTaskText,
+  rewriteTaskDescriptions,
   backupTo,
 };

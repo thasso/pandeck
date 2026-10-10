@@ -95,11 +95,6 @@ test("the eager tools keep the guidance that no other surface carries", () => {
         ),
       },
     },
-    // The trace stays readable only if narration never reaches it.
-    "task_manage.operations.comment": {
-      ...surface("task_manage.operations.comment"),
-      rules: { "no-progress-narration": /(never|not|no)[^.\n]*narration/i },
-    },
     // 'source' is what Slack intake and minutes processing deduplicate on, and
     // both values validate.
     "task_manage.operations.externalLinks.type": {
@@ -108,12 +103,6 @@ test("the eager tools keep the guidance that no other surface carries", () => {
         "source-is-origin": /source[^;\n]*(came from|origin)/i,
         "related-is-context": /related/,
       },
-    },
-    // A bounded trace returns the LATEST page; read as the oldest N it hides
-    // current decisions.
-    "task_read.comments": {
-      ...surface("task_read.comments"),
-      rules: { "is-the-latest-page": /most recent|latest|newest/i },
     },
     // A Task-32 lookup passed as query silently returns text hits instead.
     "task_read.id": {

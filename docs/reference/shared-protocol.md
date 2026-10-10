@@ -826,11 +826,7 @@ vocabulary, display projection, and normalized session model types.
 - Any protocol change must be reflected in server producers/validators and web
   reducers/renderers. Knowledge entry and document comments never reach the
   wire: they are browser-local until sent as prompt prose (`docs/comments.md`).
-  Task activity-trace comments (`TaskComment`) use validated, request-correlated
-  `listTaskComments`/`addTaskComment` commands, an explicit
-  `unwatchTaskComments` lifecycle, and authoritative `taskComments` full-list
-  broadcasts; direct read answers echo `requestId`, while broadcasts to other
-  viewers do not. `TaskSummary.commentCount` is the list badge. Integration
+  Tasks carry no comments: `CommentTarget` has no `task` kind. Integration
   settings projections must remain minimal and secret-free; Slack's browser
   state carries only the booleans required by its end-user settings surfaces.
 - Viewed-chat run state belongs in runtime snapshots/events; `SessionState` must

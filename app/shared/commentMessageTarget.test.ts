@@ -6,7 +6,7 @@ import { PA_OBJECT_TYPES } from "./objectLinks.ts";
  * A comment failure names the object the thread is ON (`docs/messaging.md`).
  *
  * A comment is not an object the user navigates to: it is drawn by whatever
- * renders the entry, Task, diff or transcript it hangs off, so that host is the
+ * renders the entry, diff or transcript it hangs off, so that host is the
  * only surface that can report the failure in place. Naming the thread instead
  * would produce a target no client could route.
  */
@@ -27,10 +27,6 @@ describe("the object a comment failure names", () => {
         { kind: "session", sessionId: "s1", entryId: "e9", blockIndex: 2 },
         { type: "session", id: "s1" },
       ],
-      [
-        { kind: "task", taskId: "t1" },
-        { type: "task", id: "t1" },
-      ],
     ];
     for (const [target, expected] of cases)
       expect(messageTargetForComment(target)).toEqual(expected);
@@ -40,7 +36,6 @@ describe("the object a comment failure names", () => {
   // failure that reaches the user as neither a home nor a name.
   it("only ever names a known object type", () => {
     const targets: CommentTarget[] = [
-      { kind: "task", taskId: "t" },
       { kind: "session", sessionId: "s", entryId: "e", blockIndex: 0 },
       {
         kind: "worktree",

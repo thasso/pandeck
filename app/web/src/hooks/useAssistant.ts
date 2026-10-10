@@ -94,7 +94,6 @@ import type {
   TempoConnectionStatus,
   TempoSettingsPatch,
   ThinkingLevel,
-  TaskComment,
   TaskItem,
   TaskListRequest,
   TaskListResponse,
@@ -606,11 +605,7 @@ export interface UIState {
   worktreeComments: Record<string, WorktreeComment[]>;
   worktreeReviewSets: Record<string, WorktreeReviewSet[]>;
   worktreeReviewSetRevisions: Record<string, Record<string, number>>;
-  /** Keyed activity projections; unanswered and authoritative empty stay distinct. */
-  taskComments: Record<string, LoadState<TaskComment[]>>;
-  /** Least-recently-used order for the bounded per-Task comments cache. */
-  taskCommentsLru: string[];
-  /** Task route whose ready detail/activity entries are pinned in both caches. */
+  /** Task route whose ready detail entry is pinned in its cache. */
   openTaskProjectionId: string | null;
   /** Merge-back progress per worktree id (survives dialog close). */
   worktreeMerge: Record<
@@ -854,8 +849,6 @@ const emptyInitial: UIState = {
   worktreeComments: {},
   worktreeReviewSets: {},
   worktreeReviewSetRevisions: {},
-  taskComments: {},
-  taskCommentsLru: [],
   openTaskProjectionId: null,
   worktreeMerge: {},
   taskDetails: {},
@@ -1422,7 +1415,7 @@ const MUTATION_SETTLE_TIMEOUT_MS = 30_000;
  * timeout would fire while the action still runs.
  */
 const LONG_MUTATION_SETTLE_TIMEOUT_MS = 15 * 60_000;
-/** Full Task bodies and comment traces are useful on revisit but must stay bounded. */
+/** Full Task bodies are useful on revisit but must stay bounded. */
 export const TASK_PROJECTION_CACHE_LIMIT = 16;
 const PROJECT_DETAIL_CACHE_LIMIT = 12;
 /** Digest catch-up degrades to the full snapshot instead of hanging stale. */
@@ -1461,8 +1454,7 @@ export type TaskMutationOperation =
   | "rename"
   | "description"
   | "reorder"
-  | "assignProjects"
-  | "comment";
+  | "assignProjects";
 
 export function taskMutationKey(
   taskId: string | null,
@@ -1677,14 +1669,7 @@ type Action =
       item: TaskItem | null;
       error?: string;
     }
-  | { kind: "taskCommentsLoad"; taskId: string }
   | { kind: "unwatchComments"; target: CommentTarget }
-  | {
-      kind: "taskCommentsResult";
-      taskId: string;
-      comments: TaskComment[];
-      error?: string;
-    }
   | { kind: "taskMutationStart"; key: string }
   | { kind: "taskMutationResult"; key: string; error?: string }
   | { kind: "setOpenTaskProjection"; id: string | null }
@@ -3945,16 +3930,6 @@ function applyTaskSaved(
   };
 }
 
-function taskCommentOf(thread: CommentThread): TaskComment {
-  return {
-    id: thread.root.id,
-    taskId: thread.target.kind === "task" ? thread.target.taskId : "",
-    author: thread.root.author,
-    body: thread.root.body,
-    createdAt: thread.root.createdAt,
-  };
-}
-
 function worktreeCommentsOf(thread: CommentThread): WorktreeComment[] {
   const worktreeId =
     thread.target.kind === "worktree" ? thread.target.worktreeId : "";
@@ -4823,19 +4798,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
     delete comments[key];
     delete commentTargets[key];
     delete commentRevisions[key];
-    if (action.target.kind === "task") {
-      const taskId = action.target.taskId;
-      const taskComments = { ...state.taskComments };
-      delete taskComments[taskId];
-      return {
-        ...state,
-        comments,
-        commentTargets,
-        commentRevisions,
-        taskComments,
-        taskCommentsLru: state.taskCommentsLru.filter((id) => id !== taskId),
-      };
-    }
     if (action.target.kind === "worktree") {
       const worktreeComments = { ...state.worktreeComments };
       const worktreeReviewSets = { ...state.worktreeReviewSets };
@@ -4856,35 +4818,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       };
     }
     return { ...state, comments, commentTargets, commentRevisions };
-  }
-  if (action.kind === "taskCommentsLoad") {
-    const current = state.taskComments[action.taskId] ?? idle<TaskComment[]>();
-    return {
-      ...state,
-      taskComments: {
-        ...state.taskComments,
-        [action.taskId]: beginLoad(current),
-      },
-      taskCommentsLru: touchLru(state.taskCommentsLru, action.taskId),
-    };
-  }
-  if (action.kind === "taskCommentsResult") {
-    const current = state.taskComments[action.taskId] ?? idle<TaskComment[]>();
-    const next = action.error
-      ? failFrom(current, action.error)
-      : ready(action.comments);
-    const lru = touchLru(state.taskCommentsLru, action.taskId);
-    const projection = pruneProjectionCache(
-      { ...state.taskComments, [action.taskId]: next },
-      lru,
-      state.taskMutations,
-      state.openTaskProjectionId,
-    );
-    return {
-      ...state,
-      taskComments: projection.cache,
-      taskCommentsLru: projection.lru,
-    };
   }
   if (action.kind === "taskMutationStart") {
     return {
@@ -5568,28 +5501,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           msg.revisions.map((entry) => [entry.id, entry.revision]),
         ),
       };
-      if (msg.target.kind === "task") {
-        const taskId = msg.target.taskId;
-        const current = state.taskComments[taskId] ?? idle<TaskComment[]>();
-        const next = msg.error
-          ? failFrom(current, msg.error)
-          : ready(msg.threads.map(taskCommentOf));
-        const lru = touchLru(state.taskCommentsLru, taskId);
-        const projection = pruneProjectionCache(
-          { ...state.taskComments, [taskId]: next },
-          lru,
-          state.taskMutations,
-          state.openTaskProjectionId,
-        );
-        return {
-          ...state,
-          comments,
-          commentTargets,
-          commentRevisions,
-          taskComments: projection.cache,
-          taskCommentsLru: projection.lru,
-        };
-      }
       if (msg.target.kind === "worktree")
         return {
           ...state,
@@ -5681,20 +5592,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         ...state.commentTargets,
         [targetKey]: state.commentTargets[targetKey] ?? msg.target,
       };
-      if (msg.target.kind === "task") {
-        const taskId = msg.target.taskId;
-        return {
-          ...state,
-          comments,
-          commentTargets,
-          commentRevisions,
-          taskComments: {
-            ...state.taskComments,
-            [taskId]: ready(threads.map(taskCommentOf)),
-          },
-          taskCommentsLru: touchLru(state.taskCommentsLru, taskId),
-        };
-      }
       if (msg.target.kind === "worktree")
         return {
           ...state,
@@ -6267,7 +6164,7 @@ export interface AssistantActions {
   /** Hide a Task from the Backlog; `archived=false` restores it (the archive Undo). */
   archiveTask: (id: string, archived?: boolean) => void;
   deleteTask: (id: string) => void;
-  /** Pin/unpin the Task route's keyed body/activity entries in their LRU caches. */
+  /** Pin/unpin the Task route's keyed detail entry in its LRU cache. */
   setOpenTaskProjection: (id: string | null) => void;
   /** Request the full task body for the Task surface; same-id reads are correlated. */
   requestTaskDetail: (id: string) => void;
@@ -6353,12 +6250,6 @@ export interface AssistantActions {
   /** Start/stop live change watching for a worktree (view open/closed). */
   watchWorktree: (worktreeId: string) => void;
   unwatchWorktree: (worktreeId: string) => void;
-  /** Fetch/watch a Task's authoritative activity-trace comments. */
-  listTaskComments: (taskId: string) => void;
-  /** Stop broadcasts and drop the closed Task's comment projection. */
-  unwatchTaskComments: (taskId: string) => void;
-  /** Append a correlated user comment to a Task's activity trace. */
-  addTaskComment: (input: { taskId: string; body: string }) => void;
   /** Fetch a worktree's review comments. */
   listWorktreeComments: (worktreeId: string) => void;
   unwatchWorktreeComments: (worktreeId: string) => void;
@@ -6545,7 +6436,6 @@ export function useAssistant({
   /** Latest in-flight keyed reads; a superseded same-id answer is ignored. */
   const taskDetailRequestsRef = useRef(new Map<string, string>());
   const projectDetailRequestsRef = useRef(new Map<string, string>());
-  const taskCommentRequestsRef = useRef(new Map<string, string>());
   /** Latest list generation for every comment target. */
   const commentRequestsRef = useRef(new Map<string, string>());
   /** Immediate surface ownership, independent of asynchronous reducer updates. */
@@ -7216,18 +7106,6 @@ export function useAssistant({
         });
         return;
       }
-      if (
-        msg.type === "commentsSnapshot" &&
-        msg.target.kind === "task" &&
-        msg.requestId
-      ) {
-        const taskId = msg.target.taskId;
-        if (taskCommentRequestsRef.current.get(taskId) !== msg.requestId)
-          return;
-        taskCommentRequestsRef.current.delete(taskId);
-        dispatch({ kind: "server", msg });
-        return;
-      }
       // A delivery click is answered by the RUN LIST, so its overlay is retired
       // here rather than on the generic settle. Two ways out, and both are the
       // list's: the server states an action on that card — durable, seen by
@@ -7683,14 +7561,6 @@ export function useAssistant({
             error: "Connection lost while loading this Project.",
           });
         projectDetailRequestsRef.current.clear();
-        for (const taskId of taskCommentRequestsRef.current.keys())
-          dispatch({
-            kind: "taskCommentsResult",
-            taskId,
-            comments: [],
-            error: "Connection lost while loading Task activity.",
-          });
-        taskCommentRequestsRef.current.clear();
         // A delivery click belongs to the connection it was sent on: its
         // `mutationSettled` and any stamped refusal can only arrive there, and
         // the reconnect answers with a fresh run list instead. So the claim is
@@ -8680,49 +8550,6 @@ export function useAssistant({
         send({ type: "watchWorktree", worktreeId }),
       unwatchWorktree: (worktreeId) =>
         send({ type: "unwatchWorktree", worktreeId }),
-      listTaskComments: (taskId) => {
-        const target: CommentTarget = { kind: "task", taskId };
-        if (commentResyncRef.current.has(commentTargetKey(target))) return;
-        if (taskCommentRequestsRef.current.has(taskId)) return;
-        const requestId = createClientId();
-        taskCommentRequestsRef.current.set(taskId, requestId);
-        heldCommentTargetsRef.current.set(commentTargetKey(target), target);
-        commentRequestsRef.current.set(commentTargetKey(target), requestId);
-        dispatch({ kind: "taskCommentsLoad", taskId });
-        send({
-          type: "listComments",
-          target,
-          requestId,
-        });
-      },
-      unwatchTaskComments: (taskId) => {
-        const target: CommentTarget = { kind: "task", taskId };
-        taskCommentRequestsRef.current.delete(taskId);
-        heldCommentTargetsRef.current.delete(commentTargetKey(target));
-        commentRequestsRef.current.delete(commentTargetKey(target));
-        commentResyncRef.current.delete(commentTargetKey(target));
-        dispatch({ kind: "unwatchComments", target });
-        send({ type: "unwatchComments", target });
-      },
-      addTaskComment: ({ taskId, body }) => {
-        const key = taskMutationKey(taskId, "comment");
-        const current = stateRef.current.taskMutations[key];
-        if (current?.status === "loading" || current?.status === "refreshing")
-          return;
-        const requestId = trackMutation(
-          { topic: "tasks", objectIds: [taskId] },
-          refetchTasks,
-        );
-        taskMutationRequestsRef.current.set(requestId, key);
-        dispatch({ kind: "taskMutationStart", key });
-        dispatch({ kind: "clearObjectFailure", type: "task", id: taskId });
-        send({
-          type: "addComment",
-          target: { kind: "task", taskId },
-          body,
-          requestId,
-        });
-      },
       listWorktreeComments: (worktreeId) => {
         const target: CommentTarget = {
           kind: "worktree",

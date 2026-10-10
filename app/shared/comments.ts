@@ -27,8 +27,7 @@ export type CommentTarget =
       side: "old" | "new";
       revision: string;
     }
-  | { kind: "session"; sessionId: string; entryId: string; blockIndex: number }
-  | { kind: "task"; taskId: string };
+  | { kind: "session"; sessionId: string; entryId: string; blockIndex: number };
 
 /** The durable selector: the quoted text plus the raw text around it. */
 export interface QuoteSelector {
@@ -122,7 +121,7 @@ export interface CommentLocation {
   heading?: string;
 }
 
-/** One wire shape for KB, worktree and flat Task comments. */
+/** One wire shape for KB and worktree comments. */
 export interface CommentThread {
   id: string;
   target: CommentTarget;
@@ -150,13 +149,13 @@ export interface CommentThread {
  * comment or the thread.
  *
  * A comment is not an object the user can navigate to — it is drawn by whatever
- * renders the entry, the Task, the diff or the transcript it hangs off — so that
+ * renders the entry, the diff or the transcript it hangs off — so that
  * host is the only surface that can report the failure in place
  * (`docs/messaging.md`). One function, so the server sites that raise those
  * failures cannot disagree about which object they were about.
  */
 export function messageTargetForComment(target: CommentTarget): {
-  type: "worktree" | "session" | "task";
+  type: "worktree" | "session";
   id: string;
 } {
   switch (target.kind) {
@@ -164,8 +163,6 @@ export function messageTargetForComment(target: CommentTarget): {
       return { type: "worktree", id: target.worktreeId };
     case "session":
       return { type: "session", id: target.sessionId };
-    case "task":
-      return { type: "task", id: target.taskId };
   }
 }
 
@@ -176,8 +173,6 @@ export function commentTargetKey(target: CommentTarget): string {
       return `worktree:${target.worktreeId}`;
     case "session":
       return `session:${target.sessionId}:${target.entryId}:${target.blockIndex}`;
-    case "task":
-      return `task:${target.taskId}`;
   }
 }
 
