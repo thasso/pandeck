@@ -12,7 +12,7 @@
  * @useWhen A `/pr` command opens or reuses a pull request, or the watcher
  *   observes a CI/review/mergeability change.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -42,15 +42,7 @@ import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -61,46 +53,45 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
  */
 type PullRequestCardData = ClientPullRequestCard;
 
-function HeaderIcon({ status }: { status: PullRequestCardData["status"] }) {
-  if (status === "merged") return <GitMerge className="size-4 text-primary" />;
-  if (status === "closed" || status === "failed")
-    return (
-      <GitPullRequestClosed
-        className={`size-4 ${status === "failed" ? "text-destructive" : "text-warning"}`}
-      />
-    );
-  return <GitPullRequestArrow className="size-4 text-success" />;
-}
-
-function StatusBadge({ card }: { card: PullRequestCardData }) {
+/** The card's header: its state in words, its tone, and its glyph. */
+function pullRequestHeader(card: PullRequestCardData): {
+  tone: AppCardTone;
+  label: string;
+  icon: ReactNode;
+} {
   switch (card.status) {
     case "choosing-task":
-      return <Badge variant="warning">Choose a Task</Badge>;
+      return {
+        tone: "warning",
+        label: "Choose a Task",
+        icon: <GitPullRequestArrow />,
+      };
     case "creating":
-      return (
-        <Badge variant="secondary">
-          <Spinner size="sm" />
-          Creating
-        </Badge>
-      );
+      return {
+        tone: "info",
+        label: "Opening pull request",
+        icon: <Spinner size="sm" />,
+      };
     case "failed":
-      return (
-        <Badge variant="destructive">
-          <XCircle />
-          Failed
-        </Badge>
-      );
+      return {
+        tone: "destructive",
+        label: "Pull request failed",
+        icon: <XCircle />,
+      };
     case "merged":
-      return (
-        <Badge>
-          <GitMerge />
-          Merged
-        </Badge>
-      );
+      return { tone: "success", label: "Merged", icon: <GitMerge /> };
     case "closed":
-      return <Badge variant="outline">Closed</Badge>;
+      return {
+        tone: "neutral",
+        label: "Pull request closed",
+        icon: <GitPullRequestClosed />,
+      };
     default:
-      return <Badge variant="success">Open</Badge>;
+      return {
+        tone: "info",
+        label: card.reused ? "Pull request reused" : "Pull request open",
+        icon: card.reused ? <RotateCcw /> : <GitPullRequestArrow />,
+      };
   }
 }
 
@@ -171,7 +162,7 @@ function TaskChooser({
   }, [busy]);
   const candidates = card.taskCandidates ?? [];
   return (
-    <CardContent className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
       <p className="text-muted-foreground">
         Several linked Tasks qualify. Which one does this pull request address?
       </p>
@@ -204,7 +195,7 @@ function TaskChooser({
           None of these
         </Button>
       </div>
-    </CardContent>
+    </div>
   );
 }
 
@@ -302,7 +293,7 @@ function ActionButton({
   return (
     <Button
       variant={danger ? "destructive" : primary ? "default" : "outline"}
-      size="sm"
+      size="xs"
       title={title}
       disabled={disabled}
       busy={busy}
@@ -332,23 +323,25 @@ function ActionButton({
  * single `false` no second read has reproduced) is not it, and pre-judging that
  * would take away a merge the provider would have accepted.
  */
-function CardActions({
+function usePullRequestCardActions({
   card,
   sessionBusy,
   sessionWorktreeId,
   worktreeLiveSiblings,
-  onAction,
+  onAction: onActionProp,
 }: {
   card: PullRequestCardData;
   sessionBusy: boolean;
   sessionWorktreeId?: string | undefined;
   worktreeLiveSiblings: number;
-  onAction: (
-    cardId: string,
-    action: PullRequestCardAction,
-    options?: PullRequestCardActionOptions,
-  ) => void;
-}) {
+  onAction?:
+    | ((
+        cardId: string,
+        action: PullRequestCardAction,
+        options?: PullRequestCardActionOptions,
+      ) => void)
+    | undefined;
+}): { form: ReactNode; buttons: ReactNode; notes: ReactNode } | null {
   // Only what the repository CURRENTLY allows may be offered. Unknown
   // capabilities offer nothing rather than a method the backend would refuse,
   // and a set that changes under a pending choice invalidates it below.
@@ -398,22 +391,28 @@ function CardActions({
   const hasButton = open || canCleanup || (merged && taskOpen);
   const hasNote =
     Boolean(card.actionError) || Boolean(card.actionMessage) || card.cleanedUp;
+  if (!onActionProp) return null;
+  const onAction = onActionProp;
   if ((!open && !merged) || (!hasButton && !hasNote)) return null;
 
-  return (
-    <CardFooter className="flex-col items-stretch gap-2">
+  return {
+    form: open ? (
       <div className="flex flex-wrap items-center gap-1.5">
+        <MergeMethodPicker
+          offered={offeredMethods}
+          known={Boolean(supportedMethods)}
+          selected={selectedMethod}
+          onSelect={setMethod}
+          deleteBranch={deleteBranch}
+          onDeleteBranchChange={setDeleteBranch}
+          disabled={Boolean(running) || conflicted}
+        />
+      </div>
+    ) : null,
+    buttons: (
+      <>
         {open && (
           <>
-            <MergeMethodPicker
-              offered={offeredMethods}
-              known={Boolean(supportedMethods)}
-              selected={selectedMethod}
-              onSelect={setMethod}
-              deleteBranch={deleteBranch}
-              onDeleteBranchChange={setDeleteBranch}
-              disabled={Boolean(running) || conflicted}
-            />
             <ActionButton
               icon={<GitMerge />}
               label="Merge"
@@ -475,54 +474,58 @@ function CardActions({
             onRun={() => onAction(card.id, "mark-task-done")}
           />
         )}
-      </div>
-      {/* Why merge is off, in text: a `title` tooltip is unreachable on a
+      </>
+    ),
+    notes: (
+      <>
+        {/* Why merge is off, in text: a `title` tooltip is unreachable on a
           phone and on a disabled button, and the colour alone says nothing. */}
-      {conflicted && (
-        <Alert variant="warning" role="note">
-          <AlertTriangle />
-          <AlertDescription>
-            {card.headBranch} conflicts with {card.baseBranch}, so it cannot be
-            merged.{" "}
-            {/* Once the work is with the agent the instruction changes: the
+        {conflicted && (
+          <Alert variant="warning" role="note">
+            <AlertTriangle />
+            <AlertDescription>
+              {card.headBranch} conflicts with {card.baseBranch}, so it cannot
+              be merged.{" "}
+              {/* Once the work is with the agent the instruction changes: the
                 button that sentence points at is the one now disabled. */}
-            {handedOff
-              ? "This session's agent was asked to resolve the conflicts and republish the branch; follow it below."
-              : local
-                ? "Update with main rebases it and republishes the branch; a conflict git cannot resolve on its own is handed to this session's agent."
-                : `Resolve the conflicts on ${card.headBranch} and push it, then merge.`}
-          </AlertDescription>
-        </Alert>
-      )}
-      {/* What the merge will do to the remote branch — stated before the click,
+              {handedOff
+                ? "This session's agent was asked to resolve the conflicts and republish the branch; follow it below."
+                : local
+                  ? "Update with main rebases it and republishes the branch; a conflict git cannot resolve on its own is handed to this session's agent."
+                  : `Resolve the conflicts on ${card.headBranch} and push it, then merge.`}
+            </AlertDescription>
+          </Alert>
+        )}
+        {/* What the merge will do to the remote branch — stated before the click,
           and only while there is a merge to click: pairing it with "cannot be
           merged" would describe a button that is off. */}
-      {open && !conflicted && (
-        <p className="text-xs text-muted-foreground">
-          {deleteBranch
-            ? `Merging deletes the remote branch ${card.headBranch}; the local checkout stays until you clean it up.`
-            : `The remote branch ${card.headBranch} is KEPT after the merge; delete it yourself when you are done with it.`}
-        </p>
-      )}
-      {canCleanup && (
-        <p className="text-xs text-muted-foreground">
-          Cleanup removes this worktree and deletes {card.headBranch} locally —
-          only after {card.baseBranch} is confirmed to contain it.
-          {siblings > 0 &&
-            ` ${siblings === 1 ? "One other live session" : `${siblings} other live sessions`} run${siblings === 1 ? "s" : ""} on this worktree and will be settled too.`}
-        </p>
-      )}
-      {card.cleanedUp && (
-        <p className="text-muted-foreground">
-          Worktree removed and {card.headBranch} deleted locally.
-        </p>
-      )}
-      {card.actionError && <ErrorNote message={card.actionError} />}
-      {card.actionMessage && !card.actionError && (
-        <p className="text-muted-foreground">{card.actionMessage}</p>
-      )}
-    </CardFooter>
-  );
+        {open && !conflicted && (
+          <p className="text-xs text-muted-foreground">
+            {deleteBranch
+              ? `Merging deletes the remote branch ${card.headBranch}; the local checkout stays until you clean it up.`
+              : `The remote branch ${card.headBranch} is KEPT after the merge; delete it yourself when you are done with it.`}
+          </p>
+        )}
+        {canCleanup && (
+          <p className="text-xs text-muted-foreground">
+            Cleanup removes this worktree and deletes {card.headBranch} locally
+            — only after {card.baseBranch} is confirmed to contain it.
+            {siblings > 0 &&
+              ` ${siblings === 1 ? "One other live session" : `${siblings} other live sessions`} run${siblings === 1 ? "s" : ""} on this worktree and will be settled too.`}
+          </p>
+        )}
+        {card.cleanedUp && (
+          <p className="text-muted-foreground">
+            Worktree removed and {card.headBranch} deleted locally.
+          </p>
+        )}
+        {card.actionError && <ErrorNote message={card.actionError} />}
+        {card.actionMessage && !card.actionError && (
+          <p className="text-muted-foreground">{card.actionMessage}</p>
+        )}
+      </>
+    ),
+  };
 }
 
 export function PullRequestCard({
@@ -557,90 +560,89 @@ export function PullRequestCard({
     : pullRequest;
   const open = card.status === "open";
 
+  const header = pullRequestHeader(card);
+  const actions = usePullRequestCardActions({
+    card,
+    sessionBusy,
+    sessionWorktreeId,
+    worktreeLiveSiblings,
+    onAction,
+  });
+  const hasBadges =
+    card.draft || (open && (card.ci || card.review?.changesRequested)) || open;
+
   return (
-    <Card size="sm" className="my-1.5">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <HeaderIcon status={card.status} />
-          {card.reused ? "Pull request reused" : "Pull request"}
-          {card.provider && card.number !== undefined && (
-            <span className="font-normal text-muted-foreground">
-              {card.provider} #{card.number}
-            </span>
-          )}
-          <StatusBadge card={card} />
-          {card.draft && <Badge variant="warning">draft</Badge>}
-          {open && card.ci && <CiBadge ci={card.ci} />}
-          {open && card.review?.changesRequested && (
-            <Badge variant="warning">
-              <AlertTriangle />
-              Changes requested
-            </Badge>
-          )}
-          {open && <MergeabilityBadge card={card} />}
-          {card.reused && (
-            <RotateCcw className="size-3.5 text-muted-foreground" />
-          )}
-        </CardTitle>
-        <CardDescription>
-          <p className="truncate text-foreground">{card.title}</p>
-          <p className="font-mono">
-            {card.headBranch} → {card.baseBranch}
-          </p>
-        </CardDescription>
-        {card.url && (
-          <CardAction>
+    <AppCard
+      tone={header.tone}
+      icon={header.icon}
+      label={header.label}
+      status={
+        card.provider && card.number !== undefined
+          ? `${card.provider} #${card.number}`
+          : null
+      }
+      actions={
+        <>
+          {card.url ? (
             <LinkButton
-              size="sm"
+              variant="ghost"
+              size="xs"
               href={card.url}
               target="_blank"
               rel="noreferrer"
             >
+              <ExternalLink />
               Open
-              <ExternalLink data-icon="inline-end" />
             </LinkButton>
-          </CardAction>
-        )}
-      </CardHeader>
+          ) : null}
+          {actions?.buttons}
+        </>
+      }
+      contentClassName="gap-3"
+    >
+      {/* The pull request itself: its title, where it goes, and its checks. */}
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className="truncate font-medium">{card.title}</p>
+        <p className="font-mono text-muted-foreground">
+          {card.headBranch} → {card.baseBranch}
+        </p>
+        {hasBadges ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {card.draft && <Badge variant="warning">draft</Badge>}
+            {open && card.ci && <CiBadge ci={card.ci} />}
+            {open && card.review?.changesRequested && (
+              <Badge variant="warning">
+                <AlertTriangle />
+                Changes requested
+              </Badge>
+            )}
+            {open && <MergeabilityBadge card={card} />}
+          </div>
+        ) : null}
+      </div>
 
       {card.status === "choosing-task" && (
         <TaskChooser card={card} onChooseTask={onChooseTask} />
       )}
-
-      {((card.status === "failed" && card.error) ||
-        (card.body?.length ?? 0) > 0 ||
-        card.warnings.length > 0 ||
-        card.linkedTask) && (
-        <CardContent className="flex flex-col gap-3">
-          {card.status === "failed" && card.error && (
-            <ErrorNote message={card.error} />
-          )}
-          {card.linkedTask && (
-            <p className="text-muted-foreground">
-              Linked to{" "}
-              <span className="font-medium text-foreground">
-                Task-{card.linkedTask.id}: {card.linkedTask.title}
-              </span>
-            </p>
-          )}
-          {(card.body?.length ?? 0) > 0 && (
-            <div className="rounded-lg border p-2">
-              <Markdown text={card.body!.join("\n\n")} />
-            </div>
-          )}
-          <NoticeList title="Warnings" items={card.warnings} />
-        </CardContent>
+      {card.status === "failed" && card.error && (
+        <ErrorNote message={card.error} />
       )}
-
-      {onAction && (
-        <CardActions
-          card={card}
-          sessionBusy={sessionBusy}
-          sessionWorktreeId={sessionWorktreeId}
-          worktreeLiveSiblings={worktreeLiveSiblings}
-          onAction={onAction}
-        />
+      {card.linkedTask && (
+        <p className="text-muted-foreground">
+          Linked to{" "}
+          <span className="font-medium text-foreground">
+            Task-{card.linkedTask.id}: {card.linkedTask.title}
+          </span>
+        </p>
       )}
-    </Card>
+      {(card.body?.length ?? 0) > 0 && (
+        <div className="border-t pt-2">
+          <Markdown text={card.body!.join("\n\n")} />
+        </div>
+      )}
+      <NoticeList title="Warnings" items={card.warnings} />
+      {actions?.form}
+      {actions?.notes}
+    </AppCard>
   );
 }

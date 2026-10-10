@@ -2,14 +2,7 @@ import { BookOpen, PanelRight, SquareArrowOutUpRight } from "lucide-react";
 import type { KnowledgeEntryCard } from "@assistant/shared";
 import { useKnowledgeOpenTargets } from "./KnowledgeOpenTargets.tsx";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 
 /**
  * @component KnowledgeEntryToolCard
@@ -27,49 +20,53 @@ export function KnowledgeEntryToolCard({ card }: { card: KnowledgeEntryCard }) {
   const targets = useKnowledgeOpenTargets();
   const openInPanel = targets?.openInPanel;
   return (
-    <Card size="sm" className="not-prose my-2 text-left">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          <BookOpen className="size-4 shrink-0 text-primary" />
-          <span className="truncate" title={card.title}>
-            {card.title}
-          </span>
-        </CardTitle>
-        {card.path ? (
-          <CardDescription className="truncate text-xs" title={card.path}>
-            {card.path}
-          </CardDescription>
-        ) : null}
-      </CardHeader>
-      {(card.note ?? card.summary) ? (
-        <CardContent>
-          <p className="line-clamp-3 text-xs text-muted-foreground">
-            {card.note ?? card.summary}
-          </p>
-        </CardContent>
-      ) : null}
-      {targets ? (
-        <CardFooter className="gap-1">
-          {openInPanel ? (
+    <AppCard
+      className="not-prose text-left"
+      icon={<BookOpen />}
+      label="Knowledge Base"
+      actions={
+        targets ? (
+          <>
+            {openInPanel ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => openInPanel(card.path)}
+              >
+                <PanelRight />
+                Open in side panel
+              </Button>
+            ) : null}
             <Button
               variant="ghost"
-              size="sm"
-              onClick={() => openInPanel(card.path)}
+              size="xs"
+              onClick={() => targets.openInMain(card.path)}
             >
-              <PanelRight />
-              Open in side panel
+              <SquareArrowOutUpRight />
+              Open in Knowledge
             </Button>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => targets.openInMain(card.path)}
+          </>
+        ) : null
+      }
+    >
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className="truncate font-medium" title={card.title}>
+          {card.title}
+        </p>
+        {card.path ? (
+          <p
+            className="truncate text-xs text-muted-foreground"
+            title={card.path}
           >
-            <SquareArrowOutUpRight />
-            Open in Knowledge
-          </Button>
-        </CardFooter>
+            {card.path}
+          </p>
+        ) : null}
+      </div>
+      {(card.note ?? card.summary) ? (
+        <p className="line-clamp-3 text-xs text-muted-foreground">
+          {card.note ?? card.summary}
+        </p>
       ) : null}
-    </Card>
+    </AppCard>
   );
 }

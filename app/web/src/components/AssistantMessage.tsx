@@ -9,7 +9,7 @@ import {
 } from "react";
 import { Bot, PackageCheck, Scissors } from "lucide-react";
 import { Badge } from "./ui/badge.tsx";
-import { Card, CardContent } from "./ui/card.tsx";
+import { AppCard } from "./common/AppCard.tsx";
 import { ErrorNote, PaneLoading } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import type {
@@ -194,29 +194,24 @@ function ToolGroupNoticeCard({
 }) {
   const shownTools = tools.slice(0, 6);
   return (
-    <Card className="my-2">
-      <CardContent className="flex min-w-0 items-start gap-2">
-        <PackageCheck size={15} className="mt-0.5 shrink-0" />
-        <div className="min-w-0">
-          <div className="font-medium text-foreground">{title}</div>
-          {summary && <div className="mt-0.5">{summary}</div>}
-          {shownTools.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {shownTools.map((tool) => (
-                <Badge key={tool} variant="secondary">
-                  {tool}
-                </Badge>
-              ))}
-              {tools.length > shownTools.length && (
-                <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
-                  +{tools.length - shownTools.length} more
-                </span>
-              )}
-            </div>
+    <AppCard icon={<PackageCheck />} label="Tools">
+      <p className="font-medium">{title}</p>
+      {summary && <p className="text-muted-foreground">{summary}</p>}
+      {shownTools.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {shownTools.map((tool) => (
+            <Badge key={tool} variant="secondary">
+              {tool}
+            </Badge>
+          ))}
+          {tools.length > shownTools.length && (
+            <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
+              +{tools.length - shownTools.length} more
+            </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </AppCard>
   );
 }
 

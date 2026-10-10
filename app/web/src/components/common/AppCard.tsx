@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Card, CardContent, CardFooter, CardHeader } from "../ui/card.tsx";
 
 export type AppCardTone =
@@ -38,6 +38,7 @@ export function AppCard({
   flush = false,
   className = "",
   contentClassName = "",
+  style,
   role,
   children,
 }: {
@@ -45,7 +46,10 @@ export function AppCard({
   icon?: ReactNode;
   /** What kind of card this is ("Commit", "Approval needed", "Suggestion"). */
   label: ReactNode;
-  /** State on the header's right: a badge, a hash, a count. Never a button. */
+  /**
+   * State on the header's right: a badge, a hash, a count. Never a button.
+   * Several elements line up on the one row, separated by "·".
+   */
   status?: ReactNode;
   /** The footer's buttons, right-aligned. No actions, no footer. */
   actions?: ReactNode;
@@ -55,19 +59,28 @@ export function AppCard({
   flush?: boolean;
   className?: string;
   contentClassName?: string;
+  /** For a card sized against something other than its column (a wide table). */
+  style?: CSSProperties;
   role?: string;
   children?: ReactNode;
 }) {
   const hasFooter = Boolean(actions || footerStart);
   return (
-    <Card size="sm" role={role} className={`my-1.5 gap-0 py-0 ${className}`}>
+    <Card
+      size="sm"
+      role={role}
+      style={style}
+      className={`my-1.5 gap-0 py-0 ${className}`}
+    >
       <CardHeader
         className={`flex h-8 items-center gap-1.5 border-b py-0 text-xs font-medium [.border-b]:pb-0 [&_svg]:size-3.5 ${HEADER_TONE[tone]}`}
       >
         {icon}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {status ? (
-          <span className="flex shrink-0 items-center gap-1">{status}</span>
+          <span className="flex max-w-[60%] min-w-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap [&>*+*]:before:mr-1 [&>*+*]:before:content-['·']">
+            {status}
+          </span>
         ) : null}
       </CardHeader>
       {children ? (
@@ -80,7 +93,7 @@ export function AppCard({
       {hasFooter ? (
         <CardFooter className="min-h-8 flex-wrap gap-1 py-1">
           {footerStart ? (
-            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            <span className="min-w-0 flex-1 text-xs text-muted-foreground">
               {footerStart}
             </span>
           ) : null}

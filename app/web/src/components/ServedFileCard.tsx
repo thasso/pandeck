@@ -23,18 +23,10 @@ import {
   externalDocumentActionEnabled,
   runExternalDocumentAction,
 } from "../lib/documentActions.ts";
-import { IconButton } from "./common/IconButton.tsx";
 import { ImageLightbox } from "./common/ImageLightbox.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 
 /**
  * One served file, as its producer described it: a captured `SessionArtifact`
@@ -93,29 +85,18 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
   if (!url) return null;
 
   return (
-    <Card size="sm" className="not-prose my-2 text-left">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          <Icon className="size-4 shrink-0 text-primary" />
-          <span className="truncate" title={title}>
-            {title}
-          </span>
-        </CardTitle>
-        <CardDescription className="min-w-0 text-xs">
-          <span className="block truncate" title={path || name}>
-            {path || name || "Served file"}
-            {size ? ` · ${size}` : ""}
-          </span>
-          <span className="block truncate">
-            Preview only · not added to assistant context
-          </span>
-        </CardDescription>
-        <CardAction className="flex">
+    <AppCard
+      className="not-prose text-left"
+      icon={<Icon />}
+      label="File"
+      status={size || null}
+      footerStart="Preview only · not added to assistant context"
+      actions={
+        <>
           {viewerHref ? (
             <LinkButton
               variant="ghost"
-              label="Open in the file viewer"
-              size="icon-sm"
+              size="xs"
               href={viewerHref}
               onClick={(event) => {
                 if (
@@ -130,13 +111,13 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
               }}
             >
               <Eye />
+              Open
             </LinkButton>
           ) : null}
           {target ? (
-            <IconButton
-              label={
-                kind === "other" ? "Download this file" : "Open in a new window"
-              }
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() =>
                 void runExternalDocumentAction(
                   target,
@@ -151,53 +132,64 @@ export function ServedFileCard({ file }: ServedFileCardProps) {
               }
             >
               <ExternalLink />
-            </IconButton>
+              {kind === "other" ? "Download" : "New window"}
+            </Button>
           ) : (
             <LinkButton
               variant="ghost"
-              label="Open external file"
-              size="icon-sm"
+              size="xs"
               href={url}
               target="_blank"
               rel="noreferrer noopener"
             >
               <ExternalLink />
+              New window
             </LinkButton>
           )}
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        {kind === "image" ? (
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => setEnlarged(true)}
-              title="Click to enlarge"
-              aria-label={`Enlarge ${title}`}
-              className="h-auto w-full cursor-zoom-in p-0"
-            >
-              <img
-                src={url}
-                alt={title}
-                className="max-h-128 w-full object-contain"
-              />
-            </Button>
-            {enlarged ? (
-              <ImageLightbox
-                src={url}
-                alt={title}
-                caption={name ?? title}
-                onClose={() => setEnlarged(false)}
-              />
-            ) : null}
-          </>
-        ) : (
-          <p className="text-muted-foreground">
-            {viewerHref ? VIEWER_COPY[kind] : NO_VIEWER_COPY[kind]}
-          </p>
-        )}
-      </CardContent>
-    </Card>
+        </>
+      }
+    >
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className="truncate font-medium" title={title}>
+          {title}
+        </p>
+        <p
+          className="truncate text-xs text-muted-foreground"
+          title={path || name}
+        >
+          {path || name || "Served file"}
+        </p>
+      </div>
+      {kind === "image" ? (
+        <>
+          <Button
+            variant="ghost"
+            onClick={() => setEnlarged(true)}
+            title="Click to enlarge"
+            aria-label={`Enlarge ${title}`}
+            className="h-auto w-full cursor-zoom-in p-0"
+          >
+            <img
+              src={url}
+              alt={title}
+              className="max-h-128 w-full object-contain"
+            />
+          </Button>
+          {enlarged ? (
+            <ImageLightbox
+              src={url}
+              alt={title}
+              caption={name ?? title}
+              onClose={() => setEnlarged(false)}
+            />
+          ) : null}
+        </>
+      ) : (
+        <p className="text-muted-foreground">
+          {viewerHref ? VIEWER_COPY[kind] : NO_VIEWER_COPY[kind]}
+        </p>
+      )}
+    </AppCard>
   );
 }
 

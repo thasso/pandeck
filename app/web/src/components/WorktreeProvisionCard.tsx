@@ -3,13 +3,7 @@ import type { WorktreeProvisionDisplay } from "@assistant/shared";
 
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 
 /**
  * @component WorktreeProvisionCard
@@ -39,59 +33,46 @@ export function WorktreeProvisionCard({
   const done = provision.state === "created";
 
   return (
-    <Card size="sm" className="my-1.5">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-x-2">
-          {failed ? (
-            <XCircle className="size-4 text-destructive" />
-          ) : done ? (
-            <GitBranch className="size-4 text-success" />
+    <AppCard
+      tone={failed ? "destructive" : done ? "success" : "info"}
+      icon={failed ? <XCircle /> : done ? <GitBranch /> : <Spinner />}
+      label={phaseLabel(provision)}
+      actions={
+        failed && onRetry ? (
+          <Button variant="outline" size="xs" onClick={onRetry}>
+            <RotateCw />
+            Retry
+          </Button>
+        ) : null
+      }
+    >
+      <div className="flex min-w-0 flex-col items-start gap-0.5">
+        {provision.branch &&
+          (done && provision.worktreeId && onOpenWorktree ? (
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto max-w-full px-0 font-mono"
+              onClick={() => onOpenWorktree(provision.worktreeId!)}
+            >
+              <span className="truncate">{provision.branch}</span>
+            </Button>
           ) : (
-            <Spinner />
-          )}
-          {phaseLabel(provision)}
-          {provision.branch &&
-            (done && provision.worktreeId && onOpenWorktree ? (
-              <Button
-                variant="link"
-                size="sm"
-                className="min-w-0 px-0 font-mono"
-                onClick={() => onOpenWorktree(provision.worktreeId!)}
-              >
-                <span className="truncate">{provision.branch}</span>
-              </Button>
-            ) : (
-              // Until the checkout exists there is nothing to open, so the
-              // name is just a name.
-              <span className="min-w-0 truncate font-mono font-normal text-muted-foreground">
-                {provision.branch}
-              </span>
-            ))}
-        </CardTitle>
+            // Until the checkout exists there is nothing to open, so the
+            // name is just a name.
+            <span className="min-w-0 truncate font-mono">
+              {provision.branch}
+            </span>
+          ))}
         {provision.baseBranch && (
-          <CardDescription>
+          <span className="text-muted-foreground">
             forked from{" "}
             <span className="font-mono">{provision.baseBranch}</span>
-          </CardDescription>
+          </span>
         )}
-      </CardHeader>
-      {(provision.error || (failed && onRetry)) && (
-        <CardContent className="flex flex-col items-start gap-2">
-          {provision.error && (
-            <ErrorNote
-              message={provision.error}
-              onRetry={failed ? onRetry : undefined}
-            />
-          )}
-          {!provision.error && failed && onRetry && (
-            <Button variant="outline" size="sm" onClick={onRetry}>
-              <RotateCw />
-              Retry
-            </Button>
-          )}
-        </CardContent>
-      )}
-    </Card>
+      </div>
+      {provision.error && <ErrorNote message={provision.error} />}
+    </AppCard>
   );
 }
 

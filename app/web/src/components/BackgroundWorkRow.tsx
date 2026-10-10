@@ -1,5 +1,5 @@
 import { memo, type MutableRefObject } from "react";
-import { Square } from "lucide-react";
+import { Square, SquareTerminal } from "lucide-react";
 import type { BackgroundWorkItemSummary } from "@assistant/shared";
 import {
   backgroundWorkAgeLabel,
@@ -12,19 +12,11 @@ import {
   backgroundWorkStateBadge,
   backgroundWorkStopDisabledReason,
 } from "../lib/backgroundWork.ts";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 import { BackgroundWorkCommand } from "./BackgroundWorkCommand.tsx";
 import { BackgroundWorkOutput } from "./BackgroundWorkOutput.tsx";
-import { TONE_BADGE } from "./common/statusBadge.ts";
+import { TONE_CARD } from "./common/statusBadge.ts";
 
 export interface BackgroundWorkRowProps {
   item: BackgroundWorkItemSummary;
@@ -108,85 +100,87 @@ function BackgroundWorkRowImpl({
       data-background-anchored={anchored ? "true" : undefined}
       className={`rounded-xl outline-none ${anchored ? "ring-2 ring-primary/40" : ""}`}
     >
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle className="truncate" title={item.label}>
+      <AppCard
+        className="my-0"
+        tone={TONE_CARD[badge.tone]}
+        icon={<SquareTerminal />}
+        label={badge.label}
+        status={`${backgroundWorkAgeLabel(item, now)} · ${backgroundWorkDeadlineLabel(item, now)}`}
+        actions={
+          <Button
+            variant="outline"
+            size="xs"
+            busy={stopPending}
+            disabled={Boolean(stopBlocked)}
+            title={stopBlocked ?? "Stop this background work"}
+            aria-label={`Stop ${item.label}`}
+            onClick={() => onStop(item.id)}
+          >
+            <Square aria-hidden="true" />
+            Stop
+          </Button>
+        }
+        contentClassName="items-start text-muted-foreground"
+      >
+        <div className="flex w-full min-w-0 flex-col gap-0.5">
+          <p
+            className="truncate font-medium text-foreground"
+            title={item.label}
+          >
             {item.label}
-          </CardTitle>
-          <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Badge variant={TONE_BADGE[badge.tone]}>{badge.label}</Badge>
-            <span>{backgroundWorkKindLabel(item)}</span>
-            <span aria-hidden="true">·</span>
-            <span>{backgroundWorkBackendLabel(item)}</span>
-            <span aria-hidden="true">·</span>
-            <span>{backgroundWorkAgeLabel(item, now)}</span>
-            <span aria-hidden="true">·</span>
-            <span>{backgroundWorkDeadlineLabel(item, now)}</span>
-          </CardDescription>
-          <CardAction>
-            <Button
-              variant="outline"
-              busy={stopPending}
-              disabled={Boolean(stopBlocked)}
-              title={stopBlocked ?? "Stop this background work"}
-              aria-label={`Stop ${item.label}`}
-              onClick={() => onStop(item.id)}
-            >
-              <Square aria-hidden="true" />
-              Stop
-            </Button>
-          </CardAction>
-        </CardHeader>
-        <CardContent className="flex min-w-0 flex-col items-start gap-1 text-muted-foreground">
-          {command ? (
-            <BackgroundWorkCommand
-              command={command}
-              truncated={item.commandTruncated}
-              className="w-full"
-            />
-          ) : null}
-          {onOpenOwner ? (
-            <Button
-              variant="link"
-              size="sm"
-              className="max-w-full px-0"
-              onClick={() => onOpenOwner(item.ownerSessionId)}
-            >
-              <span className="truncate">
-                {ownerTitle || "Open owning session"}
-              </span>
-            </Button>
-          ) : null}
-          {onOpenRegistry ? (
-            <Button
-              variant="link"
-              size="sm"
-              className="px-0"
-              onClick={() => onOpenRegistry(item.id)}
-            >
-              Open in the background registry
-            </Button>
-          ) : null}
-          {evidenceUrl ? (
-            <BackgroundWorkOutput
-              url={evidenceUrl}
-              capturedBytes={item.evidence?.capturedBytes}
-              truncated={item.evidence?.truncated}
-              className="w-full"
-            />
-          ) : null}
-          {facts.length > 0 ? (
-            <dl className="mt-1 flex flex-col gap-0.5">
-              {facts.map((fact) => (
-                <div key={fact.label} className="flex gap-3">
-                  <dt className="shrink-0">{fact.label}</dt>
-                  <dd className="min-w-0 break-words">{fact.value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-        </CardContent>
-      </Card>
+          </p>
+          <p>
+            {backgroundWorkKindLabel(item)} · {backgroundWorkBackendLabel(item)}
+          </p>
+        </div>
+        {command ? (
+          <BackgroundWorkCommand
+            command={command}
+            truncated={item.commandTruncated}
+            className="w-full"
+          />
+        ) : null}
+        {onOpenOwner ? (
+          <Button
+            variant="link"
+            size="sm"
+            className="max-w-full px-0"
+            onClick={() => onOpenOwner(item.ownerSessionId)}
+          >
+            <span className="truncate">
+              {ownerTitle || "Open owning session"}
+            </span>
+          </Button>
+        ) : null}
+        {onOpenRegistry ? (
+          <Button
+            variant="link"
+            size="sm"
+            className="px-0"
+            onClick={() => onOpenRegistry(item.id)}
+          >
+            Open in the background registry
+          </Button>
+        ) : null}
+        {evidenceUrl ? (
+          <BackgroundWorkOutput
+            url={evidenceUrl}
+            capturedBytes={item.evidence?.capturedBytes}
+            truncated={item.evidence?.truncated}
+            className="w-full"
+          />
+        ) : null}
+        {facts.length > 0 ? (
+          <dl className="flex flex-col gap-0.5">
+            {facts.map((fact) => (
+              <div key={fact.label} className="flex gap-3">
+                <dt className="shrink-0">{fact.label}</dt>
+                <dd className="min-w-0 break-words">{fact.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
+      </AppCard>
     </li>
   );
 }

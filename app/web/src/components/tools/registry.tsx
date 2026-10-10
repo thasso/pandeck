@@ -45,7 +45,8 @@ import {
 } from "@assistant/shared/toolCards";
 import { resolveShowFilesTarget } from "../../lib/showFilesCard.ts";
 import { normalizedToolName } from "./toolName.ts";
-import { Card, CardContent } from "@/components/ui/card";
+import { AppCard } from "../common/AppCard.tsx";
+import { Spinner } from "../common/load.tsx";
 
 export type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -141,11 +142,7 @@ const LazyPushToolCard = lazy(() =>
 );
 
 function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
-  return (
-    <Card size="sm" className="my-2">
-      <CardContent className="text-muted-foreground">{label}</CardContent>
-    </Card>
-  );
+  return <AppCard icon={<Spinner size="sm" />} label={label} />;
 }
 
 // --- shouldRenderX helpers (moved verbatim from AssistantMessage) ------------
