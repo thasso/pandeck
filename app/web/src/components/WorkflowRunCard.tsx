@@ -4,6 +4,7 @@ import {
   GitMerge,
   MessageSquare,
   TriangleAlert,
+  Workflow,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type {
@@ -29,27 +30,26 @@ import { WORKFLOW_PHASE_LABEL } from "../lib/sessionInbox.ts";
 import { MergeMethodPicker } from "./PullRequestCard.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
+import { shortCommit } from "@assistant/shared/buildInfo";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 
-const LIFECYCLE_BADGE = {
-  active: "secondary",
+const LIFECYCLE_TONE: Record<WorkflowRunSummary["lifecycle"], AppCardTone> = {
+  active: "info",
   paused: "warning",
   completed: "success",
-  cancelled: "outline",
-} as const;
+  cancelled: "neutral",
+};
+
+const LIFECYCLE_LABEL: Record<WorkflowRunSummary["lifecycle"], string> = {
+  active: "Active",
+  paused: "Paused",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
 
 const VERDICT_TONE = {
   pass: "text-success",
@@ -138,10 +138,6 @@ function routedRuntime(
   return config
     ? `${config.provider}:${config.modelId} (${config.thinkingLevel})`
     : undefined;
-}
-
-function shortCommit(commit: string): string {
-  return commit.slice(0, 8);
 }
 
 function SessionButton({
@@ -508,17 +504,87 @@ export function WorkflowRunCard({
   };
 
   return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          <h3>Workflow</h3>
-          {run.branch ? (
-            <span className="min-w-0 truncate font-mono font-normal text-muted-foreground">
-              {run.branch}
-            </span>
-          ) : null}
-        </CardTitle>
-        <CardDescription>
+    <AppCard
+      tone={LIFECYCLE_TONE[run.lifecycle]}
+      icon={<Workflow />}
+      label="Workflow run"
+      status={LIFECYCLE_LABEL[run.lifecycle]}
+      footerStart={
+        run.lifecycle === "cancelled"
+          ? "No more work will run. Delete it when you no longer need its history."
+          : null
+      }
+      actions={
+        run.lifecycle === "cancelled" ? (
+          <Button
+            variant="destructive"
+            size="xs"
+            onClick={() => setDeleteRunOpen(true)}
+          >
+            Delete run…
+          </Button>
+        ) : !terminal ? (
+          <>
+            {run.lifecycle === "active" ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onPause(run.id)}
+              >
+                Pause
+              </Button>
+            ) : null}
+            {/* The server decides this: Resume is offered only where it would
+              actually move the run. A pause the recipe re-derives from the same
+              history comes straight back, and a run with no card at all is one
+              this build has no decision function for. */}
+            {card?.canResume ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onResume(run.id)}
+              >
+                Resume
+              </Button>
+            ) : null}
+            {card?.canRebaseAndReview ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void confirmRebaseAndReview()}
+              >
+                Rebase and re-review
+              </Button>
+            ) : null}
+            {card?.canRetry ? (
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void confirmRetry()}
+              >
+                {repeatedAttempts ? "Retry again" : "Retry"}
+              </Button>
+            ) : null}
+            <Button
+              size="xs"
+              variant="destructive"
+              onClick={() => void confirmCancel(() => onCancel(run.id))}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : null
+      }
+      contentClassName="gap-3 text-muted-foreground"
+    >
+      {/* What the run is on and where it stands: the card's subject. */}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        {run.branch ? (
+          <span className="min-w-0 truncate font-mono text-foreground">
+            {run.branch}
+          </span>
+        ) : null}
+        <p>
           <span className="font-medium text-foreground">
             {WORKFLOW_PHASE_LABEL[phase]}
           </span>
@@ -526,445 +592,379 @@ export function WorkflowRunCard({
           {run.limits.maxIterations > 0
             ? ` · iteration ${iteration} of ${run.limits.maxIterations}`
             : " · no fix rounds"}
-        </CardDescription>
-        <CardAction>
-          <Badge variant={LIFECYCLE_BADGE[run.lifecycle]}>
-            {run.lifecycle}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-
-      <CardContent className="flex flex-col gap-3 text-muted-foreground">
-        {run.lifecycle === "paused" ? (
-          <Notice variant="warning">{run.lifecycleReason || "Paused"}</Notice>
-        ) : null}
-
-        {blockedSummary && blocked ? (
-          <p className="break-words">
-            <span className="font-medium text-foreground">
-              {blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"}{" "}
-              {blocked.status}
-            </span>{" "}
-            — {blockedSummary}
-          </p>
-        ) : null}
-
-        {run.lifecycle === "paused" && blocked?.rebaseConflict ? (
-          <Notice variant="warning" title="Rebase conflict">
-            {blocked.rebaseConflict.files.length > 0 ? (
-              <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                {blocked.rebaseConflict.files.map((file) => (
-                  <li key={file} className="break-words font-mono">
-                    {file}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-1">
-                Git could not determine the conflicted files.
-              </p>
-            )}
-            {blocked.rebaseConflict.truncated ? (
-              <p className="mt-1 text-muted-foreground">
-                The file list was shortened.
-              </p>
-            ) : null}
-            <p className="mt-2 break-words">
-              {blocked.rebaseConflict.restored
-                ? "The failed rebase was aborted, so the run branch was restored and the worktree is clean."
-                : "The server could not verify that the run branch was restored and clean. Inspect the run worktree before continuing."}{" "}
-              Resolve the rebase onto {blocked.rebaseConflict.baseBranch} in the
-              run worktree, then Retry.
-            </p>
-          </Notice>
-        ) : null}
-
-        {run.lifecycle === "paused" && blocked?.operationTriage ? (
-          <Notice variant="warning" title="Automatic triage already spent">
-            <p className="break-words">
-              The {WORKFLOW_PHASE_LABEL[blocked.operationTriage.phase]} step
-              failed the same way twice, so the run handed its implementer one
-              diagnostic assignment before stopping here.{" "}
-              {blocked.operationTriage.stoppedOn === "triage"
-                ? "The summary above is what that agent found."
-                : "The operation ran again afterwards and failed on its own terms; the summary above is its error."}{" "}
-              {blocked.operationTriage.restored
-                ? "The run branch was left exactly as the triage found it."
-                : "The server could not verify that the run branch was left as the triage found it. Inspect the run worktree before continuing."}
-            </p>
-          </Notice>
-        ) : null}
-
-        {repeatedAttempts ? (
-          <p className="break-words">
-            <span className="font-medium text-foreground">
-              Retry re-runs the same assignment
-            </span>{" "}
-            — exactly as this step received it, and usually in the same session,
-            which remembers the attempt that stopped. It can still end
-            differently: the condition it reported may have been repaired
-            outside the run.
-          </p>
-        ) : null}
-
-        {card?.workPlan ? (
-          <div className="rounded-lg border px-3 py-2">
-            <p className="font-medium text-foreground capitalize">
-              {card.workPlan.complexity} complexity
-            </p>
-            <div className="mt-1 break-words">
-              Implement: {card.workPlan.implementer.provider}:
-              {card.workPlan.implementer.modelId} (
-              {card.workPlan.implementer.thinkingLevel},{" "}
-              {card.workPlan.implementer.family}){" · "}
-              Review: {card.workPlan.reviewer.provider}:
-              {card.workPlan.reviewer.modelId} (
-              {card.workPlan.reviewer.thinkingLevel},{" "}
-              {card.workPlan.reviewer.family})
-            </div>
-            <p className="mt-1 break-words">{card.workPlan.rationale}</p>
-          </div>
-        ) : null}
-
-        {card?.reviewDecision ? (
-          <div>
-            <p>
-              After review pass {card.reviewDecision.afterPass}, the run{" "}
-              <span className="font-medium text-foreground">
-                {card.reviewDecision.decision === "deliver"
-                  ? "delivered"
-                  : card.reviewDecision.decision === "fix"
-                    ? card.reviewDecision.assignee === "implementer"
-                      ? "sent the findings back to the implementer"
-                      : "took a fix round"
-                    : "took another review pass"}
-              </span>
-              {routedRuntime(card.reviewDecision)
-                ? ` on ${routedRuntime(card.reviewDecision)}`
-                : ""}
-              .
-            </p>
-            <p className="mt-1 break-words">{card.reviewDecision.rationale}</p>
-            <ReviewList
-              label={
-                card.reviewDecision.decision === "fix"
-                  ? "Focus for the fix round"
-                  : "Focus for the next pass"
-              }
-              items={card.reviewDecision.focus}
-            />
-            {card.reviewDecision.truncated ? (
-              <p className="mt-1">
-                Shortened for this card — the coordinator session has the full
-                decision.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {card?.latestAssessment ? (
-          <div>
-            <p>
-              Reviewed commit{" "}
-              <span className="font-mono text-foreground">
-                {shortCommit(card.latestAssessment.headCommit)}
-              </span>{" "}
-              —{" "}
-              <span
-                className={`font-medium ${VERDICT_TONE[card.latestAssessment.verdict]}`}
-              >
-                {card.latestAssessment.verdict}
-              </span>
-              {card.latestAssessment.stale
-                ? " (outdated — workspace moved)"
-                : ""}
-            </p>
-            {card.latestAssessment.summary ? (
-              <p className="mt-1 break-words">
-                {card.latestAssessment.summary}
-              </p>
-            ) : null}
-            <ReviewList
-              label="Findings — these must be addressed before delivery"
-              items={card.latestAssessment.findings}
-            />
-            <ReviewList
-              label="Observations — noted, not required"
-              items={card.latestAssessment.observations}
-            />
-            {card.latestAssessment.truncated ? (
-              <p className="mt-1">
-                Shortened for this card — the reviewer session has the full
-                review.
-              </p>
-            ) : null}
-            {card.reviewSet ? (
-              <p className="mt-1">
-                Published as a review set on the worktree:{" "}
-                {card.reviewSet.findingCount} anchored{" "}
-                {card.reviewSet.findingCount === 1 ? "finding" : "findings"} —{" "}
-                {card.reviewSet.resolvedCount} resolved,{" "}
-                {card.reviewSet.disputedCount} answered and left open,{" "}
-                {card.reviewSet.openCount} unanswered. Open the worktree's
-                review to read the threads.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-
-        {card?.pullRequest ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <LinkButton
-              variant="link"
-              size="sm"
-              className="px-0"
-              href={card.pullRequest.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Pull request #{card.pullRequest.number}
-            </LinkButton>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onOpenSession(card.pullRequest!.sessionId)}
-            >
-              Open live PR card
-            </Button>
-          </div>
-        ) : null}
-
-        {card?.coordinatorSessionId ||
-        card?.implementerSessionId ||
-        card?.fixerSessionId ||
-        card?.verdictSessionId ||
-        card?.reviewerSessions?.length ? (
-          // `grid-cols-1` is load-bearing, not noise: a bare `grid` leaves an
-          // implicit `auto` column, whose minimum is the row's min-content — and a
-          // `truncate` (white-space: nowrap) session title contributes its FULL
-          // width there, so a long title pushes the buttons out of the card
-          // instead of ellipsing. `grid-cols-*` tracks are `minmax(0, 1fr)`.
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {card.coordinatorSessionId ? (
-              <SessionButton
-                label="Coordinator"
-                sessionId={card.coordinatorSessionId}
-                sessions={sessions}
-                onOpenSession={onOpenSession}
-              />
-            ) : null}
-            {card.implementerSessionId ? (
-              <SessionButton
-                label="Implementer"
-                sessionId={card.implementerSessionId}
-                sessions={sessions}
-                onOpenSession={onOpenSession}
-              />
-            ) : null}
-            {card.fixerSessionId ? (
-              <SessionButton
-                label="Fixer"
-                sessionId={card.fixerSessionId}
-                sessions={sessions}
-                onOpenSession={onOpenSession}
-              />
-            ) : null}
-            {card.verdictSessionId ? (
-              <SessionButton
-                label="Verdict"
-                sessionId={card.verdictSessionId}
-                sessions={sessions}
-                onOpenSession={onOpenSession}
-              />
-            ) : null}
-            {(card.reviewerSessions ?? []).map((review) => (
-              <SessionButton
-                key={review.sessionId}
-                label={
-                  (card.reviewerSessions ?? []).length > 1
-                    ? `Reviewer ${review.pass}`
-                    : "Reviewer"
-                }
-                sessionId={review.sessionId}
-                sessions={sessions}
-                onOpenSession={onOpenSession}
-              />
-            ))}
-          </div>
-        ) : null}
-
-        {card?.cancelRequested ? (
-          <Notice variant="warning">
-            Cancelling — waiting for the step in flight to finish. Nothing
-            further will be started.
-          </Notice>
-        ) : null}
-
-        {card?.ceilingDecision ? (
-          <Notice variant="warning">
-            <p>
-              The run reached its{" "}
-              {card.ceilingDecision.blocked === "iterations"
-                ? "fix-round"
-                : "review-pass"}{" "}
-              ceiling and wanted to {card.ceilingDecision.wanted}.
-            </p>
-            <p className="mt-1">
-              Spent so far: {card.ceilingDecision.spent.iterations} fix{" "}
-              {card.ceilingDecision.spent.iterations === 1 ? "round" : "rounds"}{" "}
-              of {card.ceilingDecision.ceilings.maxIterations},{" "}
-              {card.ceilingDecision.spent.reviewPasses} review{" "}
-              {card.ceilingDecision.spent.reviewPasses === 1
-                ? "pass"
-                : "passes"}{" "}
-              of {card.ceilingDecision.ceilings.maxReviewPasses}, and{" "}
-              {card.ceilingDecision.spent.sessions}{" "}
-              {card.ceilingDecision.spent.sessions === 1
-                ? "session"
-                : "sessions"}
-              .
-            </p>
-            {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
-              <p className="mt-1">
-                There is no commit to deliver from here. Commit or discard the
-                stray work yourself and choose “Look again”, or extend the run.
-              </p>
-            ) : !card.ceilingDecision.allowedChoices.includes("deliver") ? (
-              <p className="mt-1">
-                There is no commit to deliver from here. Extend the run, or
-                cancel it and keep the worktree.
-              </p>
-            ) : !card.ceilingDecision.headCarriesDiscoveryReview ? (
-              <p className="mt-1 font-medium">
-                Delivering as it stands would ship work no review pass has
-                accepted.
-              </p>
-            ) : null}
-            <div className="mt-2 flex flex-wrap gap-2">
-              <CeilingRaiseControl
-                key={`${card.ceilingDecision.blocked}:${String(card.ceilingDecision.ceilings.maxIterations)}:${String(card.ceilingDecision.ceilings.maxReviewPasses)}`}
-                decision={card.ceilingDecision}
-                onRaise={(raise) => onAnswerCeiling(run.id, "raise", raise)}
-              />
-              {card.ceilingDecision.allowedChoices.includes("deliver") ? (
-                <Button
-                  variant="outline"
-                  onClick={() => onAnswerCeiling(run.id, "deliver")}
-                >
-                  Deliver as it stands
-                </Button>
-              ) : null}
-              {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
-                <Button
-                  variant="outline"
-                  onClick={() => onAnswerCeiling(run.id, "re-evaluate")}
-                >
-                  Look again
-                </Button>
-              ) : null}
-              <Button
-                variant="destructive"
-                onClick={() =>
-                  void confirmCancel(() => onAnswerCeiling(run.id, "cancel"))
-                }
-              >
-                Cancel run
-              </Button>
-            </div>
-          </Notice>
-        ) : null}
-
-        {card?.mergeDecisionReady ? (
-          <Notice variant="success">
-            Reviewed head passed CI and is mergeable. Merge below to record this
-            run's decision, or cancel the run.
-          </Notice>
-        ) : null}
-
-        {run.lifecycle === "completed" ? (
-          <Notice variant="success">
-            Pull request merged.
-            {delivery?.canCleanUp
-              ? " Clean up below to retire the checkout and settle the run."
-              : delivery?.cleanedUp
-                ? " The checkout was cleaned up."
-                : ""}{" "}
-            Answering the Task's own status stays a separate choice.
-          </Notice>
-        ) : null}
-
-        {delivery && onMerge && onCleanUp ? (
-          <DeliveryControls
-            runId={run.id}
-            delivery={delivery}
-            branch={run.branch}
-            onMerge={onMerge}
-            onCleanUp={onCleanUp}
-          />
-        ) : null}
-
-        {showNextAction ? (
-          <p className="text-foreground">
-            {card?.nextAction ??
-              (run.lifecycle === "paused"
-                ? // No card means this build has no decision function for the
-                  // run's recipe, and none is coming. "Preparing…" would promise
-                  // a status that never arrives, in the one state where the user
-                  // has to decide to cancel.
-                  "This build does not recognize this run's recipe, so it cannot be continued. Cancelling keeps the worktree, branch, sessions and any pull request."
-                : "Preparing workflow status…")}
-          </p>
-        ) : null}
-      </CardContent>
-
-      {run.lifecycle === "cancelled" ? (
-        <CardFooter className="flex-wrap gap-3">
-          <p className="min-w-0 flex-1 text-muted-foreground">
-            No more work will run. Delete this attempt when you no longer need
-            its history.
-          </p>
-          <Button variant="destructive" onClick={() => setDeleteRunOpen(true)}>
-            Delete run…
-          </Button>
-        </CardFooter>
+        </p>
+      </div>
+      {run.lifecycle === "paused" ? (
+        <Notice variant="warning">{run.lifecycleReason || "Paused"}</Notice>
       ) : null}
 
-      {!terminal ? (
-        <CardFooter className="flex-wrap gap-2">
-          {run.lifecycle === "active" ? (
-            <Button variant="outline" onClick={() => onPause(run.id)}>
-              Pause
-            </Button>
+      {blockedSummary && blocked ? (
+        <p className="break-words">
+          <span className="font-medium text-foreground">
+            {blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"}{" "}
+            {blocked.status}
+          </span>{" "}
+          — {blockedSummary}
+        </p>
+      ) : null}
+
+      {run.lifecycle === "paused" && blocked?.rebaseConflict ? (
+        <Notice variant="warning" title="Rebase conflict">
+          {blocked.rebaseConflict.files.length > 0 ? (
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              {blocked.rebaseConflict.files.map((file) => (
+                <li key={file} className="break-words font-mono">
+                  {file}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1">
+              Git could not determine the conflicted files.
+            </p>
+          )}
+          {blocked.rebaseConflict.truncated ? (
+            <p className="mt-1 text-muted-foreground">
+              The file list was shortened.
+            </p>
           ) : null}
-          {/* The server decides this: Resume is offered only where it would
-              actually move the run. A pause the recipe re-derives from the same
-              history comes straight back, and a run with no card at all is one
-              this build has no decision function for. */}
-          {card?.canResume ? (
-            <Button variant="outline" onClick={() => onResume(run.id)}>
-              Resume
-            </Button>
+          <p className="mt-2 break-words">
+            {blocked.rebaseConflict.restored
+              ? "The failed rebase was aborted, so the run branch was restored and the worktree is clean."
+              : "The server could not verify that the run branch was restored and clean. Inspect the run worktree before continuing."}{" "}
+            Resolve the rebase onto {blocked.rebaseConflict.baseBranch} in the
+            run worktree, then Retry.
+          </p>
+        </Notice>
+      ) : null}
+
+      {run.lifecycle === "paused" && blocked?.operationTriage ? (
+        <Notice variant="warning" title="Automatic triage already spent">
+          <p className="break-words">
+            The {WORKFLOW_PHASE_LABEL[blocked.operationTriage.phase]} step
+            failed the same way twice, so the run handed its implementer one
+            diagnostic assignment before stopping here.{" "}
+            {blocked.operationTriage.stoppedOn === "triage"
+              ? "The summary above is what that agent found."
+              : "The operation ran again afterwards and failed on its own terms; the summary above is its error."}{" "}
+            {blocked.operationTriage.restored
+              ? "The run branch was left exactly as the triage found it."
+              : "The server could not verify that the run branch was left as the triage found it. Inspect the run worktree before continuing."}
+          </p>
+        </Notice>
+      ) : null}
+
+      {repeatedAttempts ? (
+        <p className="break-words">
+          <span className="font-medium text-foreground">
+            Retry re-runs the same assignment
+          </span>{" "}
+          — exactly as this step received it, and usually in the same session,
+          which remembers the attempt that stopped. It can still end
+          differently: the condition it reported may have been repaired outside
+          the run.
+        </p>
+      ) : null}
+
+      {card?.workPlan ? (
+        <div className="rounded-lg border px-3 py-2">
+          <p className="font-medium text-foreground capitalize">
+            {card.workPlan.complexity} complexity
+          </p>
+          <div className="mt-1 break-words">
+            Implement: {card.workPlan.implementer.provider}:
+            {card.workPlan.implementer.modelId} (
+            {card.workPlan.implementer.thinkingLevel},{" "}
+            {card.workPlan.implementer.family}){" · "}
+            Review: {card.workPlan.reviewer.provider}:
+            {card.workPlan.reviewer.modelId} (
+            {card.workPlan.reviewer.thinkingLevel},{" "}
+            {card.workPlan.reviewer.family})
+          </div>
+          <p className="mt-1 break-words">{card.workPlan.rationale}</p>
+        </div>
+      ) : null}
+
+      {card?.reviewDecision ? (
+        <div>
+          <p>
+            After review pass {card.reviewDecision.afterPass}, the run{" "}
+            <span className="font-medium text-foreground">
+              {card.reviewDecision.decision === "deliver"
+                ? "delivered"
+                : card.reviewDecision.decision === "fix"
+                  ? card.reviewDecision.assignee === "implementer"
+                    ? "sent the findings back to the implementer"
+                    : "took a fix round"
+                  : "took another review pass"}
+            </span>
+            {routedRuntime(card.reviewDecision)
+              ? ` on ${routedRuntime(card.reviewDecision)}`
+              : ""}
+            .
+          </p>
+          <p className="mt-1 break-words">{card.reviewDecision.rationale}</p>
+          <ReviewList
+            label={
+              card.reviewDecision.decision === "fix"
+                ? "Focus for the fix round"
+                : "Focus for the next pass"
+            }
+            items={card.reviewDecision.focus}
+          />
+          {card.reviewDecision.truncated ? (
+            <p className="mt-1">
+              Shortened for this card — the coordinator session has the full
+              decision.
+            </p>
           ) : null}
-          {card?.canRebaseAndReview ? (
-            <Button
-              variant="outline"
-              onClick={() => void confirmRebaseAndReview()}
+        </div>
+      ) : null}
+
+      {card?.latestAssessment ? (
+        <div>
+          <p>
+            Reviewed commit{" "}
+            <span className="font-mono text-foreground">
+              {shortCommit(card.latestAssessment.headCommit)}
+            </span>{" "}
+            —{" "}
+            <span
+              className={`font-medium ${VERDICT_TONE[card.latestAssessment.verdict]}`}
             >
-              Rebase and re-review
-            </Button>
+              {card.latestAssessment.verdict}
+            </span>
+            {card.latestAssessment.stale ? " (outdated — workspace moved)" : ""}
+          </p>
+          {card.latestAssessment.summary ? (
+            <p className="mt-1 break-words">{card.latestAssessment.summary}</p>
           ) : null}
-          {card?.canRetry ? (
-            <Button variant="outline" onClick={() => void confirmRetry()}>
-              {repeatedAttempts ? "Retry again" : "Retry"}
-            </Button>
+          <ReviewList
+            label="Findings — these must be addressed before delivery"
+            items={card.latestAssessment.findings}
+          />
+          <ReviewList
+            label="Observations — noted, not required"
+            items={card.latestAssessment.observations}
+          />
+          {card.latestAssessment.truncated ? (
+            <p className="mt-1">
+              Shortened for this card — the reviewer session has the full
+              review.
+            </p>
           ) : null}
-          <Button
-            variant="destructive"
-            onClick={() => void confirmCancel(() => onCancel(run.id))}
+          {card.reviewSet ? (
+            <p className="mt-1">
+              Published as a review set on the worktree:{" "}
+              {card.reviewSet.findingCount} anchored{" "}
+              {card.reviewSet.findingCount === 1 ? "finding" : "findings"} —{" "}
+              {card.reviewSet.resolvedCount} resolved,{" "}
+              {card.reviewSet.disputedCount} answered and left open,{" "}
+              {card.reviewSet.openCount} unanswered. Open the worktree's review
+              to read the threads.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {card?.pullRequest ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <LinkButton
+            variant="link"
+            size="sm"
+            className="px-0"
+            href={card.pullRequest.url}
+            target="_blank"
+            rel="noreferrer"
           >
-            Cancel
+            Pull request #{card.pullRequest.number}
+          </LinkButton>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpenSession(card.pullRequest!.sessionId)}
+          >
+            Open live PR card
           </Button>
-        </CardFooter>
+        </div>
+      ) : null}
+
+      {card?.coordinatorSessionId ||
+      card?.implementerSessionId ||
+      card?.fixerSessionId ||
+      card?.verdictSessionId ||
+      card?.reviewerSessions?.length ? (
+        // `grid-cols-1` is load-bearing, not noise: a bare `grid` leaves an
+        // implicit `auto` column, whose minimum is the row's min-content — and a
+        // `truncate` (white-space: nowrap) session title contributes its FULL
+        // width there, so a long title pushes the buttons out of the card
+        // instead of ellipsing. `grid-cols-*` tracks are `minmax(0, 1fr)`.
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {card.coordinatorSessionId ? (
+            <SessionButton
+              label="Coordinator"
+              sessionId={card.coordinatorSessionId}
+              sessions={sessions}
+              onOpenSession={onOpenSession}
+            />
+          ) : null}
+          {card.implementerSessionId ? (
+            <SessionButton
+              label="Implementer"
+              sessionId={card.implementerSessionId}
+              sessions={sessions}
+              onOpenSession={onOpenSession}
+            />
+          ) : null}
+          {card.fixerSessionId ? (
+            <SessionButton
+              label="Fixer"
+              sessionId={card.fixerSessionId}
+              sessions={sessions}
+              onOpenSession={onOpenSession}
+            />
+          ) : null}
+          {card.verdictSessionId ? (
+            <SessionButton
+              label="Verdict"
+              sessionId={card.verdictSessionId}
+              sessions={sessions}
+              onOpenSession={onOpenSession}
+            />
+          ) : null}
+          {(card.reviewerSessions ?? []).map((review) => (
+            <SessionButton
+              key={review.sessionId}
+              label={
+                (card.reviewerSessions ?? []).length > 1
+                  ? `Reviewer ${review.pass}`
+                  : "Reviewer"
+              }
+              sessionId={review.sessionId}
+              sessions={sessions}
+              onOpenSession={onOpenSession}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {card?.cancelRequested ? (
+        <Notice variant="warning">
+          Cancelling — waiting for the step in flight to finish. Nothing further
+          will be started.
+        </Notice>
+      ) : null}
+
+      {card?.ceilingDecision ? (
+        <Notice variant="warning">
+          <p>
+            The run reached its{" "}
+            {card.ceilingDecision.blocked === "iterations"
+              ? "fix-round"
+              : "review-pass"}{" "}
+            ceiling and wanted to {card.ceilingDecision.wanted}.
+          </p>
+          <p className="mt-1">
+            Spent so far: {card.ceilingDecision.spent.iterations} fix{" "}
+            {card.ceilingDecision.spent.iterations === 1 ? "round" : "rounds"}{" "}
+            of {card.ceilingDecision.ceilings.maxIterations},{" "}
+            {card.ceilingDecision.spent.reviewPasses} review{" "}
+            {card.ceilingDecision.spent.reviewPasses === 1 ? "pass" : "passes"}{" "}
+            of {card.ceilingDecision.ceilings.maxReviewPasses}, and{" "}
+            {card.ceilingDecision.spent.sessions}{" "}
+            {card.ceilingDecision.spent.sessions === 1 ? "session" : "sessions"}
+            .
+          </p>
+          {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
+            <p className="mt-1">
+              There is no commit to deliver from here. Commit or discard the
+              stray work yourself and choose “Look again”, or extend the run.
+            </p>
+          ) : !card.ceilingDecision.allowedChoices.includes("deliver") ? (
+            <p className="mt-1">
+              There is no commit to deliver from here. Extend the run, or cancel
+              it and keep the worktree.
+            </p>
+          ) : !card.ceilingDecision.headCarriesDiscoveryReview ? (
+            <p className="mt-1 font-medium">
+              Delivering as it stands would ship work no review pass has
+              accepted.
+            </p>
+          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <CeilingRaiseControl
+              key={`${card.ceilingDecision.blocked}:${String(card.ceilingDecision.ceilings.maxIterations)}:${String(card.ceilingDecision.ceilings.maxReviewPasses)}`}
+              decision={card.ceilingDecision}
+              onRaise={(raise) => onAnswerCeiling(run.id, "raise", raise)}
+            />
+            {card.ceilingDecision.allowedChoices.includes("deliver") ? (
+              <Button
+                variant="outline"
+                onClick={() => onAnswerCeiling(run.id, "deliver")}
+              >
+                Deliver as it stands
+              </Button>
+            ) : null}
+            {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
+              <Button
+                variant="outline"
+                onClick={() => onAnswerCeiling(run.id, "re-evaluate")}
+              >
+                Look again
+              </Button>
+            ) : null}
+            <Button
+              variant="destructive"
+              onClick={() =>
+                void confirmCancel(() => onAnswerCeiling(run.id, "cancel"))
+              }
+            >
+              Cancel run
+            </Button>
+          </div>
+        </Notice>
+      ) : null}
+
+      {card?.mergeDecisionReady ? (
+        <Notice variant="success">
+          Reviewed head passed CI and is mergeable. Merge below to record this
+          run's decision, or cancel the run.
+        </Notice>
+      ) : null}
+
+      {run.lifecycle === "completed" ? (
+        <Notice variant="success">
+          Pull request merged.
+          {delivery?.canCleanUp
+            ? " Clean up below to retire the checkout and settle the run."
+            : delivery?.cleanedUp
+              ? " The checkout was cleaned up."
+              : ""}{" "}
+          Answering the Task's own status stays a separate choice.
+        </Notice>
+      ) : null}
+
+      {delivery && onMerge && onCleanUp ? (
+        <DeliveryControls
+          runId={run.id}
+          delivery={delivery}
+          branch={run.branch}
+          onMerge={onMerge}
+          onCleanUp={onCleanUp}
+        />
+      ) : null}
+
+      {showNextAction ? (
+        <p className="text-foreground">
+          {card?.nextAction ??
+            (run.lifecycle === "paused"
+              ? // No card means this build has no decision function for the
+                // run's recipe, and none is coming. "Preparing…" would promise
+                // a status that never arrives, in the one state where the user
+                // has to decide to cancel.
+                "This build does not recognize this run's recipe, so it cannot be continued. Cancelling keeps the worktree, branch, sessions and any pull request."
+              : "Preparing workflow status…")}
+        </p>
       ) : null}
       {deleteRunOpen ? (
         <ConfirmDialog
@@ -1017,6 +1017,6 @@ export function WorkflowRunCard({
           </FieldGroup>
         </ConfirmDialog>
       ) : null}
-    </Card>
+    </AppCard>
   );
 }

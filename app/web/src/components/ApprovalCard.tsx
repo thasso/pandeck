@@ -14,7 +14,6 @@ import { createElement, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Archive,
-  CheckCircle2,
   CheckCheck,
   CircleDot,
   ExternalLink,
@@ -31,7 +30,6 @@ import {
   Tag,
   Trash2,
   UserPlus,
-  XCircle,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -64,14 +62,7 @@ import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -94,57 +85,36 @@ import {
 type PullRequestApprovalBody =
   GithubPullRequestApprovalBody | ForgejoPullRequestApprovalBody;
 
-function StatusBadge({ approval }: { approval: ApprovalCardData }) {
+/**
+ * The card's header: its state, said in words and tinted by tone, so the
+ * header alone tells whether this still waits on the reader.
+ */
+function approvalHeader(approval: ApprovalCardData): {
+  tone: AppCardTone;
+  label: string;
+  title?: string;
+} {
   const { status } = approval;
   if (status === "pending" && approval.autoApproved)
-    return (
-      <Badge
-        variant="secondary"
-        title="Approved for this session; runs when the agent's turn ends"
-      >
-        Queued
-      </Badge>
-    );
+    return {
+      tone: "neutral",
+      label: "Queued",
+      title: "Approved for this session; runs when the agent's turn ends",
+    };
   if (status === "pending")
-    return <Badge variant="warning">Pending approval</Badge>;
-  if (status === "executing")
-    return (
-      <Badge variant="secondary">
-        <Spinner size="sm" />
-        Executing
-      </Badge>
-    );
+    return { tone: "warning", label: "Approval needed" };
+  if (status === "executing") return { tone: "info", label: "Running" };
   if (status === "executed" && approvalHasWarnings(approval))
-    return (
-      <Badge variant="warning">
-        <CheckCircle2 />
-        Done with warnings
-      </Badge>
-    );
-  if (status === "executed")
-    return (
-      <Badge variant="success">
-        <CheckCircle2 />
-        Done
-      </Badge>
-    );
-  if (status === "failed")
-    return (
-      <Badge variant="destructive">
-        <XCircle />
-        Failed
-      </Badge>
-    );
+    return { tone: "warning", label: "Done with warnings" };
+  if (status === "executed") return { tone: "success", label: "Done" };
+  if (status === "failed") return { tone: "destructive", label: "Failed" };
   if (status === "superseded")
-    return (
-      <Badge
-        variant="outline"
-        title="A newer request from this session replaced it"
-      >
-        Superseded
-      </Badge>
-    );
-  return <Badge variant="outline">Rejected</Badge>;
+    return {
+      tone: "neutral",
+      label: "Superseded",
+      title: "A newer request from this session replaced it",
+    };
+  return { tone: "neutral", label: "Rejected" };
 }
 
 function approvalHasWarnings(approval: ApprovalCardData): boolean {
@@ -1014,150 +984,144 @@ export function ApprovalCard({
     ? (grants ?? []).filter((grant) => grant.sourceApprovalId === approval.id)
     : [];
   const awaitingUser = approval.status === "pending" && !approval.autoApproved;
+  const header = approvalHeader(approval);
+  const showDecision = awaitingUser && approval.body.kind !== "settingsInput";
   return (
-    <Card size="sm" className="my-2">
-      <CardHeader>
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          {createElement(headerIcon(approval.body), {
-            className: "size-4 shrink-0 text-primary",
-          })}
-          <span className="truncate">{approval.title}</span>
-          <StatusBadge approval={approval} />
-          {approval.autoApproved && approval.status !== "pending" && (
-            <Badge
-              variant="outline"
-              title="Ran under an Approve-for-session grant"
+    <AppCard
+      tone={header.tone}
+      icon={createElement(headerIcon(approval.body))}
+      label={<span title={header.title}>{header.label}</span>}
+      status={
+        approval.status === "executing" ? (
+          <Spinner size="sm" />
+        ) : approval.autoApproved && approval.status !== "pending" ? (
+          <span
+            className="inline-flex items-center gap-1"
+            title="Ran under an Approve-for-session grant"
+          >
+            <CheckCheck />
+            Auto-approved
+          </span>
+        ) : null
+      }
+      footerStart={
+        ownGrants.length > 0 ? (
+          <span className="inline-flex items-center gap-1">
+            <CheckCheck className="size-3 shrink-0" />
+            Approved for this session:{" "}
+            {ownGrants.map((grant) => approvalGrantLabel(grant.key)).join(", ")}
+          </span>
+        ) : null
+      }
+      actions={
+        <>
+          {ownGrants.length > 0 && onRevokeGrant ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => {
+                for (const grant of ownGrants)
+                  onRevokeGrant(approval.sessionId, grant.key);
+              }}
             >
-              <CheckCheck />
-              Auto-approved
-            </Badge>
-          )}
-        </CardTitle>
-        {approval.summary && (
-          <CardDescription className="truncate">
-            {approval.summary}
-          </CardDescription>
-        )}
-      </CardHeader>
-
-      <CardContent className="flex flex-col gap-2 text-muted-foreground">
-        <Body
-          approval={approval}
-          onDecide={awaitingUser && busy === null ? decide : undefined}
-          settingsInput={{
-            active: awaitingUser && busy === null,
-            busy:
-              busy === "approved"
-                ? "submit"
-                : busy === "rejected"
-                  ? "dismiss"
-                  : null,
-            onSubmit: submitSettingsInput,
-            onDismiss: () => decide("rejected"),
-          }}
-          spawn={{
-            editable: awaitingUser,
-            models: accountModels ?? [],
-            edits: spawnEdits,
-            onEdit: (rowId, patch) =>
-              setSpawnEdits((current) => ({
-                ...current,
-                [rowId]: { ...current[rowId], ...patch },
-              })),
-            ...(onOpenSession !== undefined ? { onOpenSession } : {}),
-          }}
-        />
-        {approval.status === "executed" &&
-          (approval.resultUrl || approval.resultSummary) &&
-          (approval.resultUrl ? (
-            <LinkButton
-              variant="link"
-              size="sm"
-              className="self-start px-0"
-              href={approval.resultUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <ExternalLink />
-              {approval.resultSummary ?? "View result"}
-            </LinkButton>
-          ) : (
-            <p className="text-success">{approval.resultSummary}</p>
-          ))}
-        {approval.status === "failed" && (
-          <ErrorNote message={approval.error ?? "The action failed."} />
-        )}
-        {approval.status === "superseded" && (
-          <p>Replaced by a newer request for the same action; nothing ran.</p>
-        )}
-        {/* A refused auto-approval hands the card back with its reason; an
-            executed one whose outcome could not reach the agent says so. */}
-        {(approval.status === "pending" || approval.status === "executed") &&
-          approval.error && <ErrorNote message={approval.error} />}
-      </CardContent>
-
-      {(ownGrants.length > 0 ||
-        (awaitingUser && approval.body.kind !== "settingsInput")) && (
-        <CardFooter className="flex-col items-stretch gap-2">
-          {ownGrants.length > 0 && (
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <CheckCheck className="size-3 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">
-                Approved for this session:{" "}
-                {ownGrants
-                  .map((grant) => approvalGrantLabel(grant.key))
-                  .join(", ")}
-              </span>
-              {onRevokeGrant && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => {
-                    for (const grant of ownGrants)
-                      onRevokeGrant(approval.sessionId, grant.key);
-                  }}
-                >
-                  Revoke
-                </Button>
-              )}
-            </div>
-          )}
-          {awaitingUser && approval.body.kind !== "settingsInput" && (
-            <div className="flex flex-wrap items-center justify-end gap-2">
+              Revoke
+            </Button>
+          ) : null}
+          {showDecision ? (
+            <>
               <Button
-                variant="outline"
-                size="sm"
+                variant="ghost"
+                size="xs"
                 onClick={() => decide("rejected")}
                 disabled={busy !== null}
                 busy={busy === "rejected"}
               >
-                {busy === "rejected" ? null : <XCircle />}
                 Reject
               </Button>
               <Button
-                variant="secondary"
-                size="sm"
+                variant="outline"
+                size="xs"
                 onClick={() => decide("approvedForSession")}
                 disabled={busy !== null}
                 busy={busy === "approvedForSession"}
                 title={`Approve, and run ${operations.join(", ")} without asking for the rest of this session`}
               >
-                {busy === "approvedForSession" ? null : <CheckCheck />}
                 Approve for session
               </Button>
               <Button
-                size="sm"
+                size="xs"
                 onClick={() => decide("approved")}
                 disabled={busy !== null}
                 busy={busy === "approved"}
               >
-                {busy === "approved" ? null : <CheckCircle2 />}
                 Approve
               </Button>
-            </div>
-          )}
-        </CardFooter>
+            </>
+          ) : null}
+        </>
+      }
+      contentClassName="text-muted-foreground"
+    >
+      {/* The subject leads the content; the header says only its state. */}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <p className="font-medium text-foreground">{approval.title}</p>
+        {approval.summary ? (
+          <p className="truncate">{approval.summary}</p>
+        ) : null}
+      </div>
+      <Body
+        approval={approval}
+        onDecide={awaitingUser && busy === null ? decide : undefined}
+        settingsInput={{
+          active: awaitingUser && busy === null,
+          busy:
+            busy === "approved"
+              ? "submit"
+              : busy === "rejected"
+                ? "dismiss"
+                : null,
+          onSubmit: submitSettingsInput,
+          onDismiss: () => decide("rejected"),
+        }}
+        spawn={{
+          editable: awaitingUser,
+          models: accountModels ?? [],
+          edits: spawnEdits,
+          onEdit: (rowId, patch) =>
+            setSpawnEdits((current) => ({
+              ...current,
+              [rowId]: { ...current[rowId], ...patch },
+            })),
+          ...(onOpenSession !== undefined ? { onOpenSession } : {}),
+        }}
+      />
+      {approval.status === "executed" &&
+        (approval.resultUrl || approval.resultSummary) &&
+        (approval.resultUrl ? (
+          <LinkButton
+            variant="link"
+            size="sm"
+            className="self-start px-0"
+            href={approval.resultUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink />
+            {approval.resultSummary ?? "View result"}
+          </LinkButton>
+        ) : (
+          <p className="text-success">{approval.resultSummary}</p>
+        ))}
+      {approval.status === "failed" && (
+        <ErrorNote message={approval.error ?? "The action failed."} />
       )}
-    </Card>
+      {approval.status === "superseded" && (
+        <p>Replaced by a newer request for the same action; nothing ran.</p>
+      )}
+      {/* A refused auto-approval hands the card back with its reason; an
+            executed one whose outcome could not reach the agent says so. */}
+      {(approval.status === "pending" || approval.status === "executed") &&
+        approval.error && <ErrorNote message={approval.error} />}
+    </AppCard>
   );
 }

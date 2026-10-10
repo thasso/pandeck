@@ -26,7 +26,7 @@ import { Button } from "./ui/button.tsx";
 import { sessionPath } from "../lib/sessionRoutes.ts";
 import { followRowLink } from "../lib/rowLink.ts";
 import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
-import { Card, CardContent, CardFooter, CardHeader } from "./ui/card.tsx";
+import { AppCard } from "./common/AppCard.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { ActionRow } from "./common/ActionRow.tsx";
 import { TaskLinkList } from "./TaskLinkList.tsx";
@@ -1336,19 +1336,14 @@ function TaskNoticeCard({
   children: ReactNode;
 }) {
   return (
-    <Card size="sm" role="status" className="my-1 gap-0 py-0">
-      <CardHeader
-        className={`flex h-8 items-center gap-1.5 border-b py-0 text-xs font-medium [.border-b]:pb-0 [&_svg]:size-3.5 ${
-          tone === "warning"
-            ? "bg-warning-soft text-warning"
-            : "bg-primary/10 text-primary"
-        }`}
-      >
-        {icon}
-        {title}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2 py-3">{children}</CardContent>
-      <CardFooter className="h-8 justify-end gap-1 py-0">{actions}</CardFooter>
-    </Card>
+    <AppCard
+      role="status"
+      tone={tone}
+      icon={icon}
+      label={title}
+      actions={actions}
+    >
+      {children}
+    </AppCard>
   );
 }

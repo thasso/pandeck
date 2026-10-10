@@ -1,0 +1,94 @@
+import type { ReactNode } from "react";
+import { Card, CardContent, CardFooter, CardHeader } from "../ui/card.tsx";
+
+export type AppCardTone =
+  "neutral" | "info" | "warning" | "success" | "destructive";
+
+const HEADER_TONE: Record<AppCardTone, string> = {
+  neutral: "bg-muted/50 text-muted-foreground",
+  info: "bg-primary/10 text-primary",
+  warning: "bg-warning-soft text-warning",
+  success: "bg-success-soft text-success",
+  destructive: "bg-destructive/10 text-destructive",
+};
+
+/**
+ * @component AppCard
+ * @purpose The one card the app shows an object or event in: a 32px header row
+ *   naming WHAT it is (icon, label, tinted by tone, status on the right), the
+ *   content — the object itself — and an optional 32px footer row holding its
+ *   actions, right-aligned.
+ * @useWhen A transcript result (commit, approval, workflow run), a notice that
+ *   asks for a decision (a Task suggestion), or one item of a card list.
+ * @avoidWhen A page or settings section that only groups rows (no kind, no
+ *   actions), or side activity, which stays a one-line row.
+ * @intent The header is the card's KIND, never its subject: the subject leads
+ *   the content, so every card reads the same way top to bottom. Buttons live
+ *   in the footer only — the header carries state (tone, `status`) — so a
+ *   reader always finds what they can do in the same place. Forms belong in the
+ *   content; the footer holds the buttons that submit them.
+ */
+export function AppCard({
+  tone = "neutral",
+  icon,
+  label,
+  status,
+  actions,
+  footerStart,
+  flush = false,
+  className = "",
+  contentClassName = "",
+  role,
+  children,
+}: {
+  tone?: AppCardTone;
+  icon?: ReactNode;
+  /** What kind of card this is ("Commit", "Approval needed", "Suggestion"). */
+  label: ReactNode;
+  /** State on the header's right: a badge, a hash, a count. Never a button. */
+  status?: ReactNode;
+  /** The footer's buttons, right-aligned. No actions, no footer. */
+  actions?: ReactNode;
+  /** Quiet text at the footer's left, beside the actions (a time, a hint). */
+  footerStart?: ReactNode;
+  /** Content edge to edge, for a table or a list that draws its own rows. */
+  flush?: boolean;
+  className?: string;
+  contentClassName?: string;
+  role?: string;
+  children?: ReactNode;
+}) {
+  const hasFooter = Boolean(actions || footerStart);
+  return (
+    <Card size="sm" role={role} className={`my-1.5 gap-0 py-0 ${className}`}>
+      <CardHeader
+        className={`flex h-8 items-center gap-1.5 border-b py-0 text-xs font-medium [.border-b]:pb-0 [&_svg]:size-3.5 ${HEADER_TONE[tone]}`}
+      >
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {status ? (
+          <span className="flex shrink-0 items-center gap-1">{status}</span>
+        ) : null}
+      </CardHeader>
+      {children ? (
+        <CardContent
+          className={`flex flex-col gap-2 ${flush ? "px-0 py-0" : "py-3"} ${contentClassName}`}
+        >
+          {children}
+        </CardContent>
+      ) : null}
+      {hasFooter ? (
+        <CardFooter className="min-h-8 flex-wrap gap-1 py-1">
+          {footerStart ? (
+            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {footerStart}
+            </span>
+          ) : null}
+          <span className="ml-auto flex flex-wrap items-center justify-end gap-1">
+            {actions}
+          </span>
+        </CardFooter>
+      ) : null}
+    </Card>
+  );
+}

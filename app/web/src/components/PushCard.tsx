@@ -1,22 +1,11 @@
-import {
-  CheckCircle2,
-  ChevronDown,
-  CloudCheck,
-  CloudUpload,
-  XCircle,
-} from "lucide-react";
+import { ChevronDown, CloudCheck, CloudUpload, XCircle } from "lucide-react";
 import { useState } from "react";
 import type { PushDisplay } from "@assistant/shared";
+import { shortCommit } from "@assistant/shared/buildInfo";
 import { ErrorNote } from "./common/load.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,11 +13,15 @@ import {
 } from "@/components/ui/collapsible";
 
 function statusIcon(push: PushDisplay) {
-  if (push.status === "pushed")
-    return <CheckCircle2 className="size-4 text-success" />;
-  if (push.status === "up-to-date")
-    return <CloudCheck className="size-4 text-primary" />;
-  return <XCircle className="size-4 text-destructive" />;
+  if (push.status === "pushed") return <CloudUpload />;
+  if (push.status === "up-to-date") return <CloudCheck />;
+  return <XCircle />;
+}
+
+function statusTone(push: PushDisplay): AppCardTone {
+  if (push.status === "pushed") return "success";
+  if (push.status === "up-to-date") return "neutral";
+  return "destructive";
 }
 
 function statusLabel(push: PushDisplay): string {
@@ -44,55 +37,57 @@ export function PushCard({ push }: { push: PushDisplay }) {
       ? `${push.remote}/${push.branch}`
       : (push.remote ?? push.branch);
   return (
-    <Card size="sm" className="my-1.5">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-x-2">
-          {statusIcon(push)}
-          <CloudUpload className="size-3.5 text-muted-foreground" />
-          {statusLabel(push)}
-          {target && (
-            <span className="font-mono text-sm font-normal text-muted-foreground">
-              {target}
+    <AppCard
+      tone={statusTone(push)}
+      icon={statusIcon(push)}
+      label={statusLabel(push)}
+      status={
+        push.localHead ? (
+          <span className="font-mono" title={push.localHead}>
+            {shortCommit(push.localHead)}
+          </span>
+        ) : null
+      }
+      contentClassName="gap-3"
+    >
+      {/* Where it went, and how: the card's subject. */}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        {target ? (
+          <span className="min-w-0 truncate font-mono text-foreground">
+            {target}
+          </span>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          {push.repoRoot && (
+            <span className="min-w-0 font-mono wrap-anywhere">
+              {push.repoRoot}
             </span>
           )}
-        </CardTitle>
-        <CardDescription className="flex flex-wrap items-center gap-2">
-          {push.repoRoot && <span className="font-mono">{push.repoRoot}</span>}
           {push.setUpstream && <Badge variant="secondary">set upstream</Badge>}
           {push.forced && <Badge variant="warning">force-with-lease</Badge>}
-          {push.localHead && (
-            <span className="font-mono" title={push.localHead}>
-              local {push.localHead.slice(0, 12)}
-            </span>
-          )}
           {push.expectedRemoteHead && (
             <span className="font-mono" title={push.expectedRemoteHead}>
-              leased {push.expectedRemoteHead.slice(0, 12)}
+              leased {shortCommit(push.expectedRemoteHead)}
             </span>
           )}
-        </CardDescription>
-      </CardHeader>
-
-      {(push.output || push.error) && (
-        <CardContent className="flex flex-col gap-3">
-          {push.error && <ErrorNote message={push.error} />}
-          {push.output && (
-            <Collapsible open={outputOpen} onOpenChange={setOutputOpen}>
-              <CollapsibleTrigger
-                render={<Button variant="ghost" size="xs" className="-ml-2" />}
-              >
-                <ChevronDown className={outputOpen ? "" : "-rotate-90"} />
-                Git output
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <pre className="mt-1 rounded-lg bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
-                  {push.output}
-                </pre>
-              </CollapsibleContent>
-            </Collapsible>
-          )}
-        </CardContent>
+        </div>
+      </div>
+      {push.error && <ErrorNote message={push.error} />}
+      {push.output && (
+        <Collapsible open={outputOpen} onOpenChange={setOutputOpen}>
+          <CollapsibleTrigger
+            render={<Button variant="ghost" size="xs" className="-ml-2" />}
+          >
+            <ChevronDown className={outputOpen ? "" : "-rotate-90"} />
+            Git output
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <pre className="mt-1 rounded-lg bg-muted p-2 font-mono text-sm whitespace-pre-wrap">
+              {push.output}
+            </pre>
+          </CollapsibleContent>
+        </Collapsible>
       )}
-    </Card>
+    </AppCard>
   );
 }

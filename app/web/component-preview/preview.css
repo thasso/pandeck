@@ -6,3 +6,13 @@
    so a story cannot look approximately right while silently missing utilities. */
 @source "../src";
 @source "./";
+
+/* The app locks the page (`html, body { overflow: hidden }`) because it
+   scrolls inside its own panes. A story is a page of its own: let the canvas
+   scroll, so a story taller than the viewport can be read to the end. */
+html,
+body {
+  height: auto;
+  min-height: 100%;
+  overflow-y: auto;
+}
