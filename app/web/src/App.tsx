@@ -7063,7 +7063,7 @@ function AppContent() {
                     lineComments={false}
                     markdownPreviewFirst
                     // The sidebar's Knowledge section is the file tree.
-                    hideFileRail
+                    browseAsDocuments
                     documentComments={knowledgeCommentDocument}
                     narrow={mobileLayout}
                     view={route.view ?? "files"}

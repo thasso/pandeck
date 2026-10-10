@@ -24,12 +24,14 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BookOpen,
   Check,
   ChevronLeft,
   Download,
   ExternalLink,
   Eye,
   File,
+  FileText,
   FolderTree,
   GitBranch,
   GitCompareArrows,
@@ -189,10 +191,13 @@ export interface WorktreeDetailPageProps {
    */
   markdownPreviewFirst?: boolean;
   /**
-   * Desktop: the Files view draws no tree rail of its own, because one beside
-   * the page already browses this checkout (the Knowledge sidebar).
+   * The checkout is read as a folder of documents, not reviewed as a worktree
+   * (the Knowledge Base): the header names the open FILE, the Files view drops
+   * the worktree chrome (view tabs, hidden-files toggle, diff options, path
+   * bar), and on desktop it draws no tree rail, because the sidebar beside the
+   * page already browses this checkout.
    */
-  hideFileRail?: boolean;
+  browseAsDocuments?: boolean;
   /**
    * Comment on files the way any document is commented on — a passage or the
    * whole file, collected in its browser-local tray and sent to a session
@@ -1011,7 +1016,7 @@ function FilesView({
   pivot,
   onPivotChange,
   markdownPreviewFirst,
-  hideFileRail,
+  browseAsDocuments,
   documentComments,
   commentsConfigFor,
 }: {
@@ -1028,7 +1033,7 @@ function FilesView({
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
   markdownPreviewFirst: boolean;
-  hideFileRail: boolean;
+  browseAsDocuments: boolean;
   documentComments: ((path: string) => CommentDocument) | undefined;
   commentsConfigFor: (
     path: string,
@@ -1205,47 +1210,62 @@ function FilesView({
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-        {navigationControls}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  size="sm"
-                  aria-label={ignoredVisibilityLabel}
-                  pressed={includeIgnored}
-                  onPressedChange={setIncludeIgnored}
-                />
-              }
-            >
-              <Eye />
-            </TooltipTrigger>
-            <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
-          </Tooltip>
-          {!narrow ? pivotControls : null}
-          {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
-            <NavigatorViewToggle
-              mode={navigatorMode}
-              onChange={setNavigatorMode}
-            />
-          ) : null}
-          {!narrow && !hideFileRail ? (
-            <NavigatorVisibilityToggle
-              collapsed={prefs.worktreeChangesRailCollapsed}
-              onChange={(collapsed) =>
-                onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
-              }
-            />
-          ) : null}
-          {filePath ? viewOptionsControl : null}
+      {browseAsDocuments ? (
+        // Only the file's own pivots (Preview / File / History) remain; with
+        // no file open there is nothing to switch, so no toolbar at all.
+        filePath && (pivotControls || shownRefresh !== null) ? (
+          <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+            {shownRefresh !== null ? (
+              <RefreshIndicator label={shownRefresh} />
+            ) : null}
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {pivotControls}
+            </div>
+          </div>
+        ) : null
+      ) : (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+          {navigationControls}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    size="sm"
+                    aria-label={ignoredVisibilityLabel}
+                    pressed={includeIgnored}
+                    onPressedChange={setIncludeIgnored}
+                  />
+                }
+              >
+                <Eye />
+              </TooltipTrigger>
+              <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
+            </Tooltip>
+            {!narrow ? pivotControls : null}
+            {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
+              <NavigatorViewToggle
+                mode={navigatorMode}
+                onChange={setNavigatorMode}
+              />
+            ) : null}
+            {!narrow ? (
+              <NavigatorVisibilityToggle
+                collapsed={prefs.worktreeChangesRailCollapsed}
+                onChange={(collapsed) =>
+                  onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
+                }
+              />
+            ) : null}
+            {filePath ? viewOptionsControl : null}
+          </div>
         </div>
-      </div>
+      )}
       <WorktreeRailLayout
         title="Files"
         subtitle={worktree.branch}
         collapsedSummary={
-          selectedParts ? (
+          selectedParts && !(browseAsDocuments && !narrow) ? (
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="min-w-0 max-w-1/2 truncate font-medium text-foreground">
                 {selectedParts.name}
@@ -1268,7 +1288,7 @@ function FilesView({
         onUpdatePrefs={onUpdatePrefs}
         narrow={narrow}
         narrowListHeader={false}
-        railHidden={hideFileRail}
+        railHidden={browseAsDocuments}
         detailActive={Boolean(filePath)}
         {...(!filePath
           ? { onBack: () => navigate(worktreePath(worktree.id, "files")) }
@@ -1287,7 +1307,7 @@ function FilesView({
       >
         {filePath ? (
           <>
-            {!narrow ? (
+            {!narrow && !browseAsDocuments ? (
               <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
                   {filePath}
@@ -1449,7 +1469,7 @@ function FilesView({
           </>
         ) : (
           <div className="p-6 text-sm text-muted-foreground">
-            {hideFileRail && !narrow
+            {browseAsDocuments && !narrow
               ? "Pick a file in the sidebar to read it."
               : "Select a file to view it."}
           </div>
@@ -1490,7 +1510,7 @@ export default function WorktreeDetailPage({
   title,
   lineComments = true,
   markdownPreviewFirst = false,
-  hideFileRail = false,
+  browseAsDocuments = false,
   documentComments,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
@@ -1798,37 +1818,70 @@ export default function WorktreeDetailPage({
             uselessness on a phone. The path is stated in full by the panel's
             Checkout facts, and the dirty counts the chips repeated are now the
             Delivery section's plus the changed-files header in the pane itself. */}
-          <PageHeader
-            back={back}
-            density="compact"
-            icon={
-              pathCopied ? (
-                <Check size={16} strokeWidth={2.5} />
-              ) : (
-                <GitBranch size={16} />
-              )
-            }
-            onIconClick={
-              worktree.path
-                ? () => {
-                    void copyWithToast(worktree.path, {
-                      successMessage: "Copied worktree path",
-                    });
-                    setPathCopied(true);
-                    window.setTimeout(() => setPathCopied(false), 1200);
-                  }
-                : undefined
-            }
-            iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
-            title={title ?? worktree.branch}
-            actions={
-              embedded ? (
-                headerActions
-              ) : filePath ? (
-                <DocumentNavigationActions className="hidden md:flex" />
-              ) : undefined
-            }
-          />
+          {browseAsDocuments ? (
+            // A document folder: the header is the open FILE (its name, and
+            // where in the folder it sits), the way any document page reads.
+            <PageHeader
+              back={back}
+              density="compact"
+              icon={filePath ? <FileText size={16} /> : <BookOpen size={16} />}
+              title={
+                filePath && view === "files"
+                  ? splitWorktreePath(filePath).name
+                  : view === "changes"
+                    ? "Uncommitted changes"
+                    : (title ?? worktree.branch)
+              }
+              subtitle={
+                filePath && view === "files"
+                  ? [title, splitWorktreePath(filePath).dir]
+                      .filter(Boolean)
+                      .join(" / ")
+                  : view === "changes"
+                    ? title
+                    : undefined
+              }
+              actions={
+                embedded ? (
+                  headerActions
+                ) : filePath ? (
+                  <DocumentNavigationActions className="hidden md:flex" />
+                ) : undefined
+              }
+            />
+          ) : (
+            <PageHeader
+              back={back}
+              density="compact"
+              icon={
+                pathCopied ? (
+                  <Check size={16} strokeWidth={2.5} />
+                ) : (
+                  <GitBranch size={16} />
+                )
+              }
+              onIconClick={
+                worktree.path
+                  ? () => {
+                      void copyWithToast(worktree.path, {
+                        successMessage: "Copied worktree path",
+                      });
+                      setPathCopied(true);
+                      window.setTimeout(() => setPathCopied(false), 1200);
+                    }
+                  : undefined
+              }
+              iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
+              title={title ?? worktree.branch}
+              actions={
+                embedded ? (
+                  headerActions
+                ) : filePath ? (
+                  <DocumentNavigationActions className="hidden md:flex" />
+                ) : undefined
+              }
+            />
+          )}
           {view === "files" ? (
             <FilesView
               worktree={worktree}
@@ -1844,7 +1897,7 @@ export default function WorktreeDetailPage({
               pivot={filePivot}
               onPivotChange={setFilePivot}
               markdownPreviewFirst={markdownPreviewFirst}
-              hideFileRail={hideFileRail}
+              browseAsDocuments={browseAsDocuments}
               documentComments={documentComments}
               commentsConfigFor={commentsConfigFor}
             />
