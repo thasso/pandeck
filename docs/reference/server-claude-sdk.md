@@ -189,14 +189,13 @@ SDK option construction, stream/message mapping, persistence, and tests.
   exit — the opposite of "all tools allowed, no file mutation".
   `planModeInstructions` is likewise never set and
   `allowDangerouslySkipPermissions` is untouched. `ClaudeSdkSession.setMode`
-  persists immediately. A retained Build epoch can tighten to Plan through the
-  live `PreToolUse` guard; an epoch created in Plan cannot restore native edit
-  definitions until its background work finishes. Retained model/thinking edits
-  use SDK controls instead of another query. On acquire the RECORD's mode wins
-  over the caller's, so reopening resumes the mode the session was left in and a
-  stale client cannot silently re-enable writes. Its `state()` projection reads
-  the insert-only frozen skill row into `activeSkills` for coding personas;
-  rendering never resolves live settings.
+  persists immediately. A retained epoch switches in either direction through
+  the live `PreToolUse` gate, without restarting or stopping its background
+  work. Retained model/thinking edits use SDK controls instead of another query.
+  On acquire the RECORD's mode wins over the caller's, so reopening resumes the
+  mode the session was left in and a stale client cannot silently re-enable
+  writes. Its `state()` projection reads the insert-only frozen skill row into
+  `activeSkills` for coding personas; rendering never resolves live settings.
 - `claudeSdkRecords.ts` owns the on-disk record format (metadata beside an
   append-only timeline log, legacy single-file read, crash-safe writes); see
   `docs/claude-session-records.md`.
