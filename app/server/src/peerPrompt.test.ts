@@ -7,6 +7,7 @@ import {
   peerPromptExcerpt,
 } from "@assistant/shared";
 import { sessionStore } from "./db/sessionStore.ts";
+import { promptQueueStore } from "./db/promptQueueStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { getSettings, updateSettings } from "./settings.ts";
@@ -153,6 +154,7 @@ const {
   sweepPeerPromptRetries,
   withdrawQueuedPeerPrompt,
 } = await import("./peerPrompt.ts");
+const promptQueue = await import("./promptQueue.ts");
 const { sessionSendPromptTools } =
   await import("./tools/sessions/sessionSendPromptTool.ts");
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
@@ -2836,6 +2838,85 @@ describe("waiting peer prompts in the composer queue", () => {
       log.indexOf("chosen by the user") < log.indexOf("older still queued"),
       "the drain yielded instead of claiming the older batch first",
     );
+  });
+
+  it("gives send-now priority over the user queue after cold acquisition", async () => {
+    const recipient = seed("Cold recipient");
+    const driver = driverFor(recipient);
+    const chosen = await sendPeerPrompt({
+      senderSessionId: seed("Chosen sender"),
+      targetSessionId: recipient,
+      prompt: "selected peer prompt",
+      responseRequested: false,
+    });
+    promptQueueStore.append({
+      id: `queued-${recipient}`,
+      sessionId: recipient,
+      text: "user queue prompt",
+    });
+    promptQueue.setPromptQueueHost({
+      resolve: async () => driver as never,
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+
+    const originalGetLive = fakeHub.getLiveById;
+    const originalAcquire = fakeHub.acquireById;
+    let finishAcquire!: () => void;
+    let acquisitionStarted!: () => void;
+    const acquisition = new Promise<void>((resolve) => {
+      finishAcquire = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      acquisitionStarted = resolve;
+    });
+    fakeHub.getLiveById = (id: string) =>
+      id === recipient ? undefined : originalGetLive(id);
+    fakeHub.acquireById = async (id: string) => {
+      if (id === recipient) {
+        acquisitionStarted();
+        await acquisition;
+        return driver;
+      }
+      return originalAcquire(id);
+    };
+    try {
+      const automaticDrain = drainRecipient(recipient);
+      await started;
+      const sendNow = sendQueuedPeerPromptNow(
+        recipient,
+        chosen.card.messageKey,
+      );
+      finishAcquire();
+      await Promise.all([automaticDrain, sendNow]);
+      const logAfterSendNow = readFileSync(
+        canonicalSessionLogPath(recipient),
+        "utf8",
+      );
+      assert.ok(logAfterSendNow.includes("selected peer prompt"));
+      assert.ok(
+        !logAfterSendNow.includes("user queue prompt"),
+        "the user queue must not start concurrently with the selected turn",
+      );
+      await promptQueue.drainPromptQueue(recipient);
+      await until(
+        () =>
+          readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
+            "user queue prompt",
+          ),
+        "the user queue to resume after send-now",
+      );
+      const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
+      assert.ok(
+        log.indexOf("selected peer prompt") < log.indexOf("user queue prompt"),
+      );
+    } finally {
+      fakeHub.getLiveById = originalGetLive;
+      fakeHub.acquireById = originalAcquire;
+      promptQueue.setPromptQueueHost(undefined);
+    }
   });
 
   it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {

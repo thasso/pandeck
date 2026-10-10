@@ -261,6 +261,7 @@ export function deleteSessionPromptQueue(sessionId: string): void {
 /** Queued items whose send is in flight, so no second path sends them again. */
 const sending = new Set<string>();
 const drainLocks = new Map<string, Promise<void>>();
+const drainAuthorityGuards = new Map<string, Set<() => boolean>>();
 const rerunAfterDrain = new Set<string>();
 
 /**
@@ -268,16 +269,28 @@ const rerunAfterDrain = new Set<string>();
  * held. Coalesces per session; a call during a drain reruns after it, because
  * that drain may already have decided "still running".
  */
-export function drainPromptQueue(sessionId: string): Promise<void> {
+export function drainPromptQueue(
+  sessionId: string,
+  shouldStart: () => boolean = () => true,
+): Promise<void> {
   if (deliveryStopped || !host) return Promise.resolve();
   const existing = drainLocks.get(sessionId);
   if (existing) {
+    drainAuthorityGuards.get(sessionId)?.add(shouldStart);
     rerunAfterDrain.add(sessionId);
     return existing;
   }
-  const run = drainOnce(sessionId).finally(() => {
+  const guards = new Set([shouldStart]);
+  drainAuthorityGuards.set(sessionId, guards);
+  const run = drainOnce(sessionId, () =>
+    [...guards].every((guard) => guard()),
+  ).finally(() => {
     drainLocks.delete(sessionId);
-    if (rerunAfterDrain.delete(sessionId)) void drainPromptQueue(sessionId);
+    drainAuthorityGuards.delete(sessionId);
+    if (rerunAfterDrain.delete(sessionId))
+      void drainPromptQueue(sessionId, () =>
+        [...guards].every((guard) => guard()),
+      );
   });
   drainLocks.set(sessionId, run);
   return run;
@@ -289,9 +302,15 @@ export function drainPromptQueuesOnBoot(): void {
     if (!promptQueueStore.isPaused(sessionId)) void drainPromptQueue(sessionId);
 }
 
-async function drainOnce(sessionId: string): Promise<void> {
+async function drainOnce(
+  sessionId: string,
+  shouldStart: () => boolean,
+): Promise<void> {
   if (!promptQueueHasPriority(sessionId)) return;
   const driver = await host?.resolve(sessionId).catch(() => undefined);
+  // Resolution can cold-acquire a session. Callers coordinating a higher
+  // priority delivery may have lost authority while that await was pending.
+  if (!shouldStart()) return;
   const head = promptQueueStore.list(sessionId)[0];
   if (!head || deliveryStopped || sending.has(head.id)) return;
   if (!driver) {

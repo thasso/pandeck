@@ -610,6 +610,8 @@ function firstTurnAttachments(
 const drainLocks = new Map<string, Promise<void>>();
 /** Explicit send-now callers waiting for recipient authority outrank auto drains. */
 const explicitDrainWaiters = new Map<string, number>();
+/** Recipient authority currently held by an explicit send-now operation. */
+const explicitDrainActive = new Set<string>();
 
 /**
  * Whether a send-now is waiting for this recipient's authority. An automatic
@@ -646,9 +648,11 @@ async function withRecipientDrainLock<T>(
     release = resolve;
   });
   drainLocks.set(recipientId, reservation);
+  explicitDrainActive.add(recipientId);
   try {
     return await operation();
   } finally {
+    explicitDrainActive.delete(recipientId);
     if (drainLocks.get(recipientId) === reservation)
       drainLocks.delete(recipientId);
     release();
@@ -819,7 +823,15 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
   // The user's own queued messages go first; their drain sends one now, and
   // this session's next idle edge comes back here once none is owed.
   if (promptQueueHasPriority(recipientId)) {
-    void drainPromptQueue(recipientId);
+    // The queue resolves its own driver asynchronously. Recheck recipient
+    // authority after that acquisition, or a send-now registered while this
+    // automatic drain was awaiting acquireById could lose the next turn.
+    void drainPromptQueue(
+      recipientId,
+      () =>
+        !explicitSendWaiting(recipientId) &&
+        !explicitDrainActive.has(recipientId),
+    );
     return;
   }
 
