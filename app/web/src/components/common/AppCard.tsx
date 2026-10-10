@@ -70,7 +70,9 @@ export function AppCard({
       size="sm"
       role={role}
       style={style}
-      className={`my-1.5 gap-0 py-0 ${className}`}
+      // A real border, not the Card's outside ring: transcript rows clip
+      // paint to their box, which cut a full-width card's side edges.
+      className={`my-1.5 gap-0 border border-foreground/10 py-0 ring-0 ${className}`}
     >
       <CardHeader
         className={`flex h-8 items-center gap-1.5 border-b py-0 text-xs font-medium [.border-b]:pb-0 [&_svg]:size-3.5 ${HEADER_TONE[tone]}`}
