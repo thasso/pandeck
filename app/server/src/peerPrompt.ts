@@ -344,27 +344,35 @@ export async function sendQueuedPeerPromptNow(
   key: string,
 ): Promise<void> {
   if (deliveryStopped) return;
-  const row = undeliveredByKey(recipientId, key);
-  if (!row || row.status === "dispatching") return;
-  const hub = await getHub();
-  const live =
-    hub.getLiveById(recipientId) ?? (await hub.acquireById(recipientId));
-  if (!isRuntimePromptDriver(live))
-    throw new Error("That session could not be resumed.");
-  const steer = live.isRunning;
-  if (steer && !live.canSteer)
-    throw new Error(
-      "This session takes no messages mid-turn; it gets this one when the turn ends.",
+  await withRecipientDrainLock(recipientId, async () => {
+    if (deliveryStopped) return;
+    const row = undeliveredByKey(recipientId, key);
+    if (!row || row.status === "dispatching") return;
+    const hub = await getHub();
+    const live =
+      hub.getLiveById(recipientId) ?? (await hub.acquireById(recipientId));
+    if (!isRuntimePromptDriver(live))
+      throw new Error("That session could not be resumed.");
+    const steer = live.isRunning;
+    if (steer && !live.canSteer)
+      throw new Error(
+        "This session takes no messages mid-turn; it gets this one when the turn ends.",
+      );
+    if (steer && activeContexts.has(recipientId))
+      throw new Error(
+        "This session already has a peer prompt in its current turn; wait for that turn to finish before steering another.",
+      );
+    const claimed = peerPromptStore.claimOne(
+      row.id,
+      steer ? "steer" : "send-now",
     );
-  const claimed = peerPromptStore.claimOne(
-    row.id,
-    steer ? "steer" : "send-now",
-  );
-  if (!claimed) return;
-  publishPeerQueue(recipientId);
-  if (steer) await steerPeerPrompt(live, claimed);
-  // Records its own outcome; the reply is not held for the whole turn.
-  else void deliverBatch(live, [claimed]).catch(() => {});
+    if (!claimed) return;
+    publishPeerQueue(recipientId);
+    if (steer) await steerPeerPrompt(live, claimed);
+    // Hold the recipient authority through the idle delivery so an automatic
+    // drainer cannot start a competing turn or replace its reply context.
+    else await deliverBatch(live, [claimed]);
+  });
 }
 
 /**
@@ -390,7 +398,10 @@ async function steerPeerPrompt(
   });
   const unsubscribe = sessionRuntime.subscribeEvents((sessionId, event) => {
     if (sessionId !== driver.sessionId || !admitted) return;
-    if (event.type === "runStatus" && event.status === "error")
+    if (
+      event.type === "runStatus" &&
+      (event.status === "error" || event.status === "aborted")
+    )
       failure = event.message ?? STEERED_RUN_FAILED_REASON;
     else if (event.type === "runStateChanged" && event.runState === "idle")
       runEnded();
@@ -409,12 +420,10 @@ async function steerPeerPrompt(
           peerPromptStore.markDeliveryBatch([m.id], m.id);
           peerPromptStore.markAdmitted(m.id);
           peerPromptStore.markAcknowledged(m.id);
-          // A reply in this run correlates to the steered sender, unless the
-          // run is another peer's delivery that already holds the context.
-          if (!activeContexts.has(driver.sessionId)) {
-            activeContexts.set(driver.sessionId, context);
-            ownsContext = true;
-          }
+          // sendQueuedPeerPromptNow refuses steering into an existing peer
+          // delivery context, so this run has one unambiguous reply owner.
+          activeContexts.set(driver.sessionId, context);
+          ownsContext = true;
           void broadcastParticipants(batch);
           void broadcastBatchCardUpdates([m.id]);
         } catch (err) {
@@ -599,6 +608,38 @@ function firstTurnAttachments(
 
 /** One in-flight drain per recipient; concurrent calls coalesce onto it. */
 const drainLocks = new Map<string, Promise<void>>();
+
+/**
+ * Run an explicit claim under the same recipient authority as automatic drains.
+ * If a drain is in flight, wait for it and re-check: it may have delivered or
+ * started the target turn. The reservation is installed synchronously before
+ * awaiting the operation, so no automatic drain can slip between claim and
+ * delivery.
+ */
+async function withRecipientDrainLock<T>(
+  recipientId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  while (drainLocks.has(recipientId))
+    await drainLocks.get(recipientId)?.catch(() => {});
+  let release!: () => void;
+  const reservation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  drainLocks.set(recipientId, reservation);
+  try {
+    return await operation();
+  } finally {
+    if (drainLocks.get(recipientId) === reservation)
+      drainLocks.delete(recipientId);
+    release();
+    // Send-now is prioritized ahead of the remaining FIFO queue; resume the
+    // ordinary drain once this exclusive delivery/steer admission is complete.
+    void drainRecipient(recipientId).catch(() => {});
+    if (noticeWakesPending.delete(recipientId))
+      void drainRecipient(recipientId).catch(() => {});
+  }
+}
 /**
  * Senders newly owed a notice while their drain was already in flight. That
  * drain may be past its owed-notice read (or inside the notice turn itself),

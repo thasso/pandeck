@@ -2413,9 +2413,12 @@ describe("waiting peer prompts in the composer queue", () => {
    * deferred steer waits for `answerSteer`, as the Claude CLI's next step does.
    */
   function steerableRecipient(id: string, options: { deferSteer?: boolean }) {
-    let release: (() => void) | undefined;
+    let release: ((result?: Record<string, unknown>) => void) | undefined;
     let answer: ((result: Record<string, unknown>) => void) | undefined;
     const steers: string[] = [];
+    const adapterListeners = new Set<
+      (event: { type: string; stopReason?: string }) => void
+    >();
     const adapter = {
       provider: "fake",
       capabilities: {
@@ -2425,7 +2428,12 @@ describe("waiting peer prompts in the composer queue", () => {
         steer: true,
         ...(options.deferSteer ? { steerAcceptance: "deferred" } : {}),
       },
-      subscribe: () => () => {},
+      subscribe: (
+        listener: (event: { type: string; stopReason?: string }) => void,
+      ) => {
+        adapterListeners.add(listener);
+        return () => adapterListeners.delete(listener);
+      },
       getBinding: () => ({ provider: "fake" }),
       prompt: (
         text: string,
@@ -2443,7 +2451,12 @@ describe("waiting peer prompts in the composer queue", () => {
           });
         }
         return new Promise((resolve) => {
-          release = () => resolve({ stopReason: "end" });
+          release = (result = { stopReason: "end" }) => {
+            if (result.stopReason === "aborted")
+              for (const listener of adapterListeners)
+                listener({ type: "runCompleted", stopReason: "aborted" });
+            resolve(result as never);
+          };
         });
       },
       abort: () => {},
@@ -2474,7 +2487,8 @@ describe("waiting peer prompts in the composer queue", () => {
         void promptRuntimeSession(driver as never, "the running turn");
         await until(() => release !== undefined, "the running turn");
       },
-      finishTurn: () => release?.(),
+      finishTurn: (result: Record<string, unknown> = { stopReason: "end" }) =>
+        release?.(result),
       answerSteer: (result: Record<string, unknown>) => answer?.(result),
       steerAsked: () => answer !== undefined,
     };
@@ -2595,6 +2609,55 @@ describe("waiting peer prompts in the composer queue", () => {
     );
   });
 
+  it("refuses a second steer when the active run already owns peer reply context", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, {});
+    await r.startTurn();
+    const first = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "first",
+      responseRequested: true,
+    });
+    await sendQueuedPeerPromptNow(recipient, first.card.messageKey);
+    const second = await sendPeerPrompt({
+      senderSessionId: seed("Other"),
+      targetSessionId: recipient,
+      prompt: "second",
+      responseRequested: true,
+    });
+    await assert.rejects(
+      sendQueuedPeerPromptNow(recipient, second.card.messageKey),
+      /already has a peer prompt/,
+    );
+    assert.equal(peerPromptStore.getById(second.message.id)!.status, "queued");
+    r.finishTurn();
+  });
+
+  it("marks an aborted steered run interrupted and wakes its response-requesting sender", async () => {
+    const sender = seed("S");
+    const recipient = seed("R", { harness: "claude-sdk" });
+    const r = steerableRecipient(recipient, {});
+    await r.startTurn();
+    const { message, card } = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "please answer",
+      responseRequested: true,
+    });
+    await sendQueuedPeerPromptNow(recipient, card.messageKey);
+    r.finishTurn({ stopReason: "aborted" });
+    await until(
+      () => peerPromptStore.getById(message.id)!.status === "interrupted",
+      `the aborted steer to be interrupted (${peerPromptStore.getById(message.id)!.status}; ${peerPromptStore.getById(message.id)!.failureReason ?? "no reason"})`,
+    );
+    await until(
+      () => peerPromptStore.getById(message.id)!.senderNotifiedAt !== undefined,
+      "the sender interruption notice",
+    );
+  });
+
   it("a deferred steer stays in the queue as sending until the turn reads it", async () => {
     const sender = seed("S");
     const recipient = seed("R", { harness: "claude-sdk" });
@@ -2671,6 +2734,43 @@ describe("waiting peer prompts in the composer queue", () => {
     r.finishTurn();
   });
 
+  it("serializes concurrent idle send-now deliveries through the recipient drain lock", async () => {
+    const sender = seed("S");
+    const recipient = seed("R");
+    const driver = driverFor(recipient);
+    const release = driver.holdTurns();
+    const first = await sendPeerPrompt({
+      senderSessionId: sender,
+      targetSessionId: recipient,
+      prompt: "first now",
+      responseRequested: false,
+    });
+    const second = await sendPeerPrompt({
+      senderSessionId: seed("Other"),
+      targetSessionId: recipient,
+      prompt: "second now",
+      responseRequested: false,
+    });
+    const firstSend = sendQueuedPeerPromptNow(recipient, first.card.messageKey);
+    await until(() => driver.isRunning, "the first send-now turn");
+    const secondSend = sendQueuedPeerPromptNow(
+      recipient,
+      second.card.messageKey,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(peerPromptStore.getById(second.message.id)!.status, "queued");
+    release();
+    await Promise.all([firstSend, secondSend]);
+    assert.equal(
+      peerPromptStore.getById(first.message.id)!.status,
+      "completed",
+    );
+    assert.equal(
+      peerPromptStore.getById(second.message.id)!.status,
+      "completed",
+    );
+  });
+
   it("sends a waiting prompt now to an idle session, ahead of the rest", async () => {
     const sender = seed("S");
     const recipient = seed("R");
@@ -2693,6 +2793,9 @@ describe("waiting peer prompts in the composer queue", () => {
       () => peerPromptStore.getById(chosen.message.id)!.status === "completed",
       "the chosen prompt to run",
     );
-    assert.equal(peerPromptStore.getById(older.message.id)!.status, "queued");
+    await until(
+      () => peerPromptStore.getById(older.message.id)!.status === "completed",
+      "the ordinary drain to resume after send-now",
+    );
   });
 });
