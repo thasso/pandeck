@@ -106,6 +106,37 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
 
 The permanent Assistant has its own intake queue and does not offer this one.
 
+### Peer prompts in the queue
+
+Peer prompts other sessions sent are not the user's drafts, but until delivery
+they wait in the same place. The session state projects them as
+`queuedPeerPrompts` (`peerPrompt.ts`, every row not yet delivered: queued,
+retrying or being dispatched), re-sent as `peerPromptQueue` on every transition
+of one. A row carries its sender, an excerpt, and the opaque key of the sender's
+card, which the commands address it by.
+
+- **Withdraw** (`withdrawQueuedPeerPrompt`) cancels a row that has not started
+  dispatching; the sender's card says `cancelled` with the reason. A row being
+  dispatched is past recalling. The sender agent is not prompted about it.
+- **Send now** (`sendQueuedPeerPromptNow`) claims that one row out of FIFO
+  order. Into a running turn that steers, it goes as a steer and stays
+  `dispatching` (shown as being sent) until the turn reads it; it then joins
+  that run and completes, or is interrupted, when the run ends. The claim takes
+  no lease, since a deferred steer can wait a whole tool step and a lease sweep
+  would requeue it to be sent twice; boot recovery reconciles a stranded one. A
+  steer withdrawn unread goes back to waiting; one the CLI may already have read
+  is marked `interrupted`, which tells a sender waiting on a reply. An idle
+  session gets it as its next turn, ahead of the user's own queue, because the
+  user chose it. A running turn that cannot steer offers no send-now: the row is
+  delivered when the turn ends. Send-now holds the recipient's delivery
+  authority: one arriving during an automatic delivery waits out that turn and
+  goes before the drain claims its next batch, which resumes from the FIFO head
+  once the send is done. A peer drain held up by a send-now settles only after
+  that resumed drain (the user's queued message sent, or the peer FIFO drained),
+  so a background completion waiting on it never takes their turn.
+- Agent handoffs are not listed: they steer themselves into a turn that takes
+  one and queue only behind a turn that cannot.
+
 ### Composer
 
 While a turn runs the composer offers Steer or Queue. On a phone the resting
@@ -114,4 +145,6 @@ records into it, while Stop keeps Send's slot. Enter does what this device last
 chose (`lib/busySendMode.ts`, `localStorage`) and Alt+Enter the other. A
 provider that cannot steer only queues. Stop keeps its own button while a
 message is being typed. The queue renders as `PromptQueueLedge` on the
-composer's ledge, nearest the field it was typed in.
+composer's ledge, nearest the field it was typed in: the user's rows, then the
+waiting peer prompts, each marked with its sender and offering send-now and
+withdraw but no edit or move.

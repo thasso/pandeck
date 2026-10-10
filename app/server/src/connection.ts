@@ -60,6 +60,8 @@ import {
   HISTORY_EXPANSION_MAX_MESSAGES,
   peerPromptAnchorFor,
   peerPromptThreadsFor,
+  sendQueuedPeerPromptNow,
+  withdrawQueuedPeerPrompt,
 } from "./peerPrompt.ts";
 import {
   availableAgents,
@@ -873,6 +875,8 @@ export class Connection implements Viewer {
       case "clearPromptQueue":
       case "sendQueuedPromptNow":
       case "resumePromptQueue":
+      case "sendQueuedPeerPromptNow":
+      case "withdrawQueuedPeerPrompt":
         return this.onPromptQueueCommand(msg);
       case "loadTimelineBlock":
         return this.onLoadTimelineBlock(msg.entryId, msg.blockIndex, msg.kind);
@@ -3348,9 +3352,10 @@ export class Connection implements Viewer {
   }
 
   /**
-   * The user's own queue for one session (`promptQueue.ts`). Addressed by id,
-   * not by the view, so a phone and a desktop edit the same queue; the
-   * permanent Assistant has its own intake queue and takes none of these.
+   * The user's own queue for one session (`promptQueue.ts`), and the peer
+   * prompts waiting beside it (`peerPrompt.ts`). Addressed by id, not by the
+   * view, so a phone and a desktop edit the same queue; the permanent
+   * Assistant has its own intake queue and takes none of these.
    */
   private async onPromptQueueCommand(msg: PromptQueueCommand): Promise<void> {
     const { sessionId } = msg;
@@ -3389,6 +3394,10 @@ export class Connection implements Viewer {
           return await sendQueuedPromptNow(sessionId, msg.id);
         case "resumePromptQueue":
           return resumePromptQueue(sessionId);
+        case "sendQueuedPeerPromptNow":
+          return await sendQueuedPeerPromptNow(sessionId, msg.id);
+        case "withdrawQueuedPeerPrompt":
+          return withdrawQueuedPeerPrompt(sessionId, msg.id);
       }
     } catch (err) {
       this.send({

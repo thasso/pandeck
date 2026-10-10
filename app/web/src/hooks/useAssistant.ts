@@ -5806,6 +5806,19 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             : rest,
       };
     }
+    case "peerPromptQueue": {
+      // Like `promptQueue`: the next `state` frame carries the same list.
+      const viewed = state.session;
+      if (!viewed || viewed.sessionId !== msg.sessionId) return state;
+      const { queuedPeerPrompts: _previous, ...rest } = viewed;
+      return {
+        ...state,
+        session:
+          msg.items.length > 0
+            ? { ...rest, queuedPeerPrompts: msg.items }
+            : rest,
+      };
+    }
     case "peerPromptCardUpdate":
       if (msg.sessionId !== state.session?.sessionId) return state;
       // Store-backed reconciliation: patch the card sharing this messageKey in
