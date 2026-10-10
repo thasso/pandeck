@@ -203,6 +203,8 @@ function driverFor(id: string): FakeRuntimeDriver {
 }
 
 afterEach(() => {
+  setSessionIdleHook(undefined);
+  promptQueue.setPromptQueueHost(undefined);
   for (const id of created.splice(0)) {
     sessionStore.remove(id);
     fakeDrivers.delete(id);
@@ -2790,6 +2792,16 @@ describe("waiting peer prompts in the composer queue", () => {
     const recipient = seed("R");
     const driver = driverFor(recipient);
     const release = driver.holdTurns();
+    promptQueue.setPromptQueueHost({
+      resolve: async () => driver as never,
+      live: () => driver as never,
+      publish: () => {},
+      reportError: () => {},
+      yieldToOthers: () => {},
+    });
+    setSessionIdleHook((sessionId) => {
+      void promptQueue.drainPromptQueue(sessionId);
+    });
     // Three senders, so each row is its own FIFO batch.
     const running = await sendPeerPrompt({
       senderSessionId: seed("Running sender"),
@@ -2815,10 +2827,17 @@ describe("waiting peer prompts in the composer queue", () => {
       peerPromptStore.getById(running.message.id)!.status,
       "acknowledged",
     );
+    promptQueueStore.append({
+      id: `queued-${recipient}`,
+      sessionId: recipient,
+      text: "user queue prompt",
+    });
 
     // The user picks the newest row while the drain is mid-turn.
     const sendNow = sendQueuedPeerPromptNow(recipient, chosen.card.messageKey);
     await new Promise((resolve) => setTimeout(resolve, 10));
+    // The automatic peer turn's completion invokes the idle hook directly,
+    // without going through drainRecipient's guarded handoff.
     release();
     await Promise.all([drain, sendNow]);
     assert.equal(
@@ -2826,17 +2845,26 @@ describe("waiting peer prompts in the composer queue", () => {
       "completed",
       "the explicit send delivered its row",
     );
-    await until(
-      () => peerPromptStore.getById(older.message.id)!.status === "completed",
-      "FIFO draining to resume after the explicit send",
-    );
     const log = readFileSync(canonicalSessionLogPath(recipient), "utf8");
     assert.ok(
       log.indexOf("automatic first") < log.indexOf("chosen by the user"),
     );
+    assert.equal(
+      peerPromptStore.getById(older.message.id)!.status,
+      "queued",
+      "ordinary queue work keeps precedence over the remaining peer FIFO",
+    );
+    await until(
+      () =>
+        readFileSync(canonicalSessionLogPath(recipient), "utf8").includes(
+          "user queue prompt",
+        ),
+      "the user queue to resume after send-now",
+    );
+    const finalLog = readFileSync(canonicalSessionLogPath(recipient), "utf8");
     assert.ok(
-      log.indexOf("chosen by the user") < log.indexOf("older still queued"),
-      "the drain yielded instead of claiming the older batch first",
+      finalLog.indexOf("chosen by the user") <
+        finalLog.indexOf("user queue prompt"),
     );
   });
 

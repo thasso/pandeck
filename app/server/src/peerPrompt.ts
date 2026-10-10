@@ -10,6 +10,13 @@
  * adds lifecycle projections and the history view.
  */
 import { drainPromptQueue, promptQueueHasPriority } from "./promptQueue.ts";
+import {
+  clearExplicitRecipientAuthority,
+  hasExplicitRecipientAuthority,
+  markExplicitRecipientAuthority,
+  markExplicitRecipientWaiter,
+  releaseExplicitRecipientWaiter,
+} from "./recipientDrainAuthority.ts";
 import { existsSync, readFileSync } from "node:fs";
 import type {
   PeerPromptCard,
@@ -608,18 +615,9 @@ function firstTurnAttachments(
 
 /** One in-flight drain per recipient; concurrent calls coalesce onto it. */
 const drainLocks = new Map<string, Promise<void>>();
-/** Explicit send-now callers waiting for recipient authority outrank auto drains. */
-const explicitDrainWaiters = new Map<string, number>();
-/** Recipient authority currently held by an explicit send-now operation. */
-const explicitDrainActive = new Set<string>();
-
-/**
- * Whether a send-now is waiting for this recipient's authority. An automatic
- * drain neither starts nor claims another batch while one is: the waiter goes
- * first, and its release resumes FIFO draining.
- */
+/** Whether a send-now is waiting for this recipient's authority. */
 function explicitSendWaiting(recipientId: string): boolean {
-  return (explicitDrainWaiters.get(recipientId) ?? 0) > 0;
+  return hasExplicitRecipientAuthority(recipientId);
 }
 
 /**
@@ -633,26 +631,20 @@ async function withRecipientDrainLock<T>(
   recipientId: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  explicitDrainWaiters.set(
-    recipientId,
-    (explicitDrainWaiters.get(recipientId) ?? 0) + 1,
-  );
+  markExplicitRecipientWaiter(recipientId);
   while (drainLocks.has(recipientId))
     await drainLocks.get(recipientId)?.catch(() => {});
-  const remainingWaiters = (explicitDrainWaiters.get(recipientId) ?? 1) - 1;
-  if (remainingWaiters > 0)
-    explicitDrainWaiters.set(recipientId, remainingWaiters);
-  else explicitDrainWaiters.delete(recipientId);
+  releaseExplicitRecipientWaiter(recipientId);
   let release!: () => void;
   const reservation = new Promise<void>((resolve) => {
     release = resolve;
   });
   drainLocks.set(recipientId, reservation);
-  explicitDrainActive.add(recipientId);
+  markExplicitRecipientAuthority(recipientId);
   try {
     return await operation();
   } finally {
-    explicitDrainActive.delete(recipientId);
+    clearExplicitRecipientAuthority(recipientId);
     if (drainLocks.get(recipientId) === reservation)
       drainLocks.delete(recipientId);
     release();
@@ -828,9 +820,7 @@ async function drainRecipientOnce(recipientId: string): Promise<void> {
     // automatic drain was awaiting acquireById could lose the next turn.
     void drainPromptQueue(
       recipientId,
-      () =>
-        !explicitSendWaiting(recipientId) &&
-        !explicitDrainActive.has(recipientId),
+      () => !hasExplicitRecipientAuthority(recipientId),
     );
     return;
   }

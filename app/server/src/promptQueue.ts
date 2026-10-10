@@ -28,6 +28,7 @@ import {
   slashCommandApplies,
 } from "@assistant/shared";
 import { errorText } from "./errors.ts";
+import { hasExplicitRecipientAuthority } from "./recipientDrainAuthority.ts";
 import { promptQueueStore } from "./db/promptQueueStore.ts";
 import {
   CONTEXT_ONLY_SLASH_COMMANDS,
@@ -274,13 +275,15 @@ export function drainPromptQueue(
   shouldStart: () => boolean = () => true,
 ): Promise<void> {
   if (deliveryStopped || !host) return Promise.resolve();
+  const authorized = () =>
+    !hasExplicitRecipientAuthority(sessionId) && shouldStart();
   const existing = drainLocks.get(sessionId);
   if (existing) {
-    drainAuthorityGuards.get(sessionId)?.add(shouldStart);
+    drainAuthorityGuards.get(sessionId)?.add(authorized);
     rerunAfterDrain.add(sessionId);
     return existing;
   }
-  const guards = new Set([shouldStart]);
+  const guards = new Set([authorized]);
   drainAuthorityGuards.set(sessionId, guards);
   const run = drainOnce(sessionId, () =>
     [...guards].every((guard) => guard()),
