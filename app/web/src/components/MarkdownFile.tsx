@@ -1,9 +1,14 @@
-import { useMemo, type ComponentProps } from "react";
+import { Fragment, useMemo, type ComponentProps } from "react";
 import {
   splitMarkdownFrontmatter,
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
@@ -44,8 +49,8 @@ export function MarkdownFile({
 /**
  * @component MarkdownFrontmatterHeader
  * @purpose Compact metadata header above a rendered Markdown FILE: its
- * frontmatter title, tags as chips, and every other field as a label/value
- * row. Frontmatter outside the shared YAML subset shows as the raw block in a
+ * frontmatter title, then a `PropertyList` — the tags as chips, and every
+ * other field as a label/value row, in the same label column as everywhere else. Frontmatter outside the shared YAML subset shows as the raw block in a
  * collapsed disclosure instead of leaking into the rendered body.
  * @useWhen Through `MarkdownFile`.
  */
@@ -90,28 +95,35 @@ function MarkdownFrontmatterHeader({
             <CardTitle>{title}</CardTitle>
           </CardHeader>
         ) : null}
-        <CardContent className="flex flex-col gap-2">
-          {tags.length > 0 ? (
-            <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
-              {tags.map((tag, index) => (
-                <li key={`${index}:${tag}`}>
-                  <Badge variant="outline">{tag}</Badge>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {fields.length > 0 ? (
-            <dl className="flex flex-col gap-1 text-muted-foreground">
-              {fields.map((field) => (
-                <div key={field.key} className="flex min-w-0 gap-3">
-                  <dt className="w-28 shrink-0 truncate">{field.key}</dt>
-                  <dd className="min-w-0 break-words" title={field.full}>
-                    {field.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
+        <CardContent>
+          <PropertyList align="start">
+            {tags.length > 0 ? (
+              <>
+                <PropertyLabel>Tags</PropertyLabel>
+                <PropertyText>
+                  <ul className="flex flex-wrap gap-1" aria-label="Tags">
+                    {tags.map((tag, index) => (
+                      <li key={`${index}:${tag}`}>
+                        <Badge variant="outline">{tag}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </PropertyText>
+              </>
+            ) : null}
+            {fields.map((field) => (
+              <Fragment key={field.key}>
+                <PropertyLabel>
+                  <span className="truncate" title={field.key}>
+                    {field.key}
+                  </span>
+                </PropertyLabel>
+                <PropertyText className="break-words" title={field.full}>
+                  {field.value}
+                </PropertyText>
+              </Fragment>
+            ))}
+          </PropertyList>
         </CardContent>
       </Card>
     </header>
