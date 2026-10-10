@@ -1,6 +1,7 @@
-import { useMemo, type ComponentProps } from "react";
+import { Fragment, useMemo, type ComponentProps, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
+  compareFrontmatterLabels,
   splitMarkdownFrontmatter,
   type FrontmatterField,
   type FrontmatterRef,
@@ -115,6 +116,63 @@ function MarkdownFrontmatterHeader({
       </Collapsible>
     );
   }
+  const rows: Array<{ label: string; node: ReactNode }> = [
+    ...(tags.length > 0
+      ? [
+          {
+            label: "Tags",
+            node: (
+              <>
+                <PropertyLabel>Tags</PropertyLabel>
+                <PropertyText>
+                  <ul className="flex flex-wrap gap-1" aria-label="Tags">
+                    {tags.map((tag, index) => (
+                      <li key={`${index}:${tag}`}>
+                        <Badge variant="outline">{tag}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(source
+      ? [
+          {
+            label: "Source",
+            node: (
+              <>
+                <PropertyLabel>Source</PropertyLabel>
+                <PropertyText className="flex flex-col items-start gap-0.5">
+                  {source.kind ? (
+                    <FrontmatterValue field="kind" value={source.kind} />
+                  ) : null}
+                  {source.refs.length > 0 ? (
+                    <RefLinks
+                      refs={source.refs}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  ) : null}
+                </PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...fields.map((field) => ({
+      label: field.label,
+      node: (
+        <FieldRow
+          field={field}
+          paObjectReferences={paObjectReferences}
+          onOpenPaObject={onOpenPaObject}
+        />
+      ),
+    })),
+  ].sort((a, b) => compareFrontmatterLabels(a.label, b.label));
   if (
     !title &&
     tags.length === 0 &&
@@ -133,44 +191,8 @@ function MarkdownFrontmatterHeader({
         ) : null}
         <CardContent>
           <PropertyList align="start">
-            {tags.length > 0 ? (
-              <>
-                <PropertyLabel>Tags</PropertyLabel>
-                <PropertyText>
-                  <ul className="flex flex-wrap gap-1" aria-label="Tags">
-                    {tags.map((tag, index) => (
-                      <li key={`${index}:${tag}`}>
-                        <Badge variant="outline">{tag}</Badge>
-                      </li>
-                    ))}
-                  </ul>
-                </PropertyText>
-              </>
-            ) : null}
-            {source ? (
-              <>
-                <PropertyLabel>Source</PropertyLabel>
-                <PropertyText className="flex flex-col items-start gap-0.5">
-                  {source.kind ? (
-                    <FrontmatterValue field="kind" value={source.kind} />
-                  ) : null}
-                  {source.refs.length > 0 ? (
-                    <RefLinks
-                      refs={source.refs}
-                      paObjectReferences={paObjectReferences}
-                      onOpenPaObject={onOpenPaObject}
-                    />
-                  ) : null}
-                </PropertyText>
-              </>
-            ) : null}
-            {fields.map((field) => (
-              <FieldRow
-                key={field.key}
-                field={field}
-                paObjectReferences={paObjectReferences}
-                onOpenPaObject={onOpenPaObject}
-              />
+            {rows.map((row) => (
+              <Fragment key={row.label}>{row.node}</Fragment>
             ))}
           </PropertyList>
           {hiddenFields.length > 0 ? (
@@ -191,14 +213,16 @@ function MarkdownFrontmatterHeader({
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <PropertyList align="start" className="mt-1">
-                  {hiddenFields.map((field) => (
-                    <FieldRow
-                      key={field.key}
-                      field={field}
-                      paObjectReferences={paObjectReferences}
-                      onOpenPaObject={onOpenPaObject}
-                    />
-                  ))}
+                  {[...hiddenFields]
+                    .sort((a, b) => compareFrontmatterLabels(a.label, b.label))
+                    .map((field) => (
+                      <FieldRow
+                        key={field.key}
+                        field={field}
+                        paObjectReferences={paObjectReferences}
+                        onOpenPaObject={onOpenPaObject}
+                      />
+                    ))}
                 </PropertyList>
               </CollapsibleContent>
             </Collapsible>

@@ -73,6 +73,29 @@ function linkList(value: unknown): FrontmatterRef[] | null {
   return refs;
 }
 
+/**
+ * The rows a reader looks for first, in this order, by their shown label;
+ * every other row follows alphabetically, so two files with the same keys
+ * always list them the same way whatever order they were written in.
+ */
+const LEADING_LABELS = [
+  "Type",
+  "Status",
+  "Created",
+  "Updated",
+  "Source",
+  "Links",
+];
+
+/** Order of the header's rows: `LEADING_LABELS` first, then by label. */
+export function compareFrontmatterLabels(a: string, b: string): number {
+  const rank = (label: string) => {
+    const index = LEADING_LABELS.indexOf(label);
+    return index < 0 ? LEADING_LABELS.length : index;
+  };
+  return rank(a) - rank(b) || a.localeCompare(b);
+}
+
 /** Bookkeeping keys the header folds under "more" rather than lists up front. */
 const HIDDEN_KEYS = new Set(["schema", "id"]);
 
