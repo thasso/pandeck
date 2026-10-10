@@ -9,7 +9,7 @@ import {
 } from "./propertyDates.ts";
 
 /** One frontmatter field shown as a label and a one-line value. */
-interface FrontmatterField {
+export interface FrontmatterField {
   key: string;
   /** The key as a label: as written, or read as words for a date field. */
   label: string;
@@ -33,6 +33,8 @@ export interface MarkdownFrontmatter {
   tags: string[];
   /** Every other non-empty field, in document order. */
   fields: FrontmatterField[];
+  /** Fields a reader rarely needs (`HIDDEN_KEYS`), shown folded away. */
+  hiddenFields: FrontmatterField[];
   /**
    * `source: { kind, refs }` — where the document came from, its references
    * named the way a reader knows them rather than as raw URLs.
@@ -71,6 +73,9 @@ function linkList(value: unknown): FrontmatterRef[] | null {
   return refs;
 }
 
+/** Bookkeeping keys the header folds under "more" rather than lists up front. */
+const HIDDEN_KEYS = new Set(["schema", "id"]);
+
 const OPENING_FENCE_RE = /^---\r?\n/;
 const MAX_VALUE_CHARS = 240;
 
@@ -104,11 +109,18 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
   try {
     value = parseYamlSubset(raw, "frontmatter");
   } catch {
-    return { raw, tags: [], fields: [], parsed: false };
+    return { raw, tags: [], fields: [], hiddenFields: [], parsed: false };
   }
   const root = unwrapNamespace(value);
-  if (!isRecord(root)) return { raw, tags: [], fields: [], parsed: false };
-  const out: MarkdownFrontmatter = { raw, tags: [], fields: [], parsed: true };
+  if (!isRecord(root))
+    return { raw, tags: [], fields: [], hiddenFields: [], parsed: false };
+  const out: MarkdownFrontmatter = {
+    raw,
+    tags: [],
+    fields: [],
+    hiddenFields: [],
+    parsed: true,
+  };
   for (const [key, field] of Object.entries(root)) {
     if (key === "title" && typeof field === "string" && field.trim()) {
       out.title = field.trim();
@@ -135,12 +147,17 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
         ? parsePropertyDate(field)
         : null;
     if (date) {
-      out.fields.push({ key, label: dateFieldLabel(key), value: shown, date });
+      (HIDDEN_KEYS.has(key) ? out.hiddenFields : out.fields).push({
+        key,
+        label: dateFieldLabel(key),
+        value: shown,
+        date,
+      });
       continue;
     }
     const links = linkList(field);
     if (links) {
-      out.fields.push({
+      (HIDDEN_KEYS.has(key) ? out.hiddenFields : out.fields).push({
         key,
         label: fieldLabel(key),
         value: shown,
@@ -148,7 +165,7 @@ function projectFrontmatter(raw: string): MarkdownFrontmatter {
       });
       continue;
     }
-    out.fields.push(
+    (HIDDEN_KEYS.has(key) ? out.hiddenFields : out.fields).push(
       shown.length > MAX_VALUE_CHARS
         ? {
             key,

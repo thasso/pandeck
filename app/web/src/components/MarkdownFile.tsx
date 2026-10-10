@@ -1,6 +1,8 @@
-import { Fragment, useMemo, type ComponentProps } from "react";
+import { useMemo, type ComponentProps } from "react";
+import { ChevronRight } from "lucide-react";
 import {
   splitMarkdownFrontmatter,
+  type FrontmatterField,
   type FrontmatterRef,
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
@@ -87,7 +89,8 @@ function MarkdownFrontmatterHeader({
   onOpenPaObject: MarkdownProps["onOpenPaObject"];
   className?: string;
 }) {
-  const { title, tags, fields, source, parsed, raw } = frontmatter;
+  const { title, tags, fields, hiddenFields, source, parsed, raw } =
+    frontmatter;
   if (!parsed) {
     return (
       <Collapsible className={className}>
@@ -112,7 +115,13 @@ function MarkdownFrontmatterHeader({
       </Collapsible>
     );
   }
-  if (!title && tags.length === 0 && fields.length === 0 && !source)
+  if (
+    !title &&
+    tags.length === 0 &&
+    fields.length === 0 &&
+    hiddenFields.length === 0 &&
+    !source
+  )
     return null;
   return (
     <header aria-label="Document metadata" className={className}>
@@ -156,37 +165,87 @@ function MarkdownFrontmatterHeader({
               </>
             ) : null}
             {fields.map((field) => (
-              <Fragment key={field.key}>
-                <PropertyLabel>
-                  <span className="truncate" title={field.key}>
-                    {field.label}
-                  </span>
-                </PropertyLabel>
-                {field.date ? (
-                  <DateProperty date={field.date} />
-                ) : isVocabularyField(field.key) && !field.links ? (
-                  <PropertyText>
-                    <FrontmatterValue field={field.key} value={field.value} />
-                  </PropertyText>
-                ) : field.links ? (
-                  <PropertyText>
-                    <RefLinks
-                      refs={field.links}
+              <FieldRow
+                key={field.key}
+                field={field}
+                paObjectReferences={paObjectReferences}
+                onOpenPaObject={onOpenPaObject}
+              />
+            ))}
+          </PropertyList>
+          {hiddenFields.length > 0 ? (
+            // Bookkeeping a reader rarely needs (the schema, the entry's id):
+            // folded away under the rest, one click from view.
+            <Collapsible className="mt-1">
+              <CollapsibleTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                  />
+                }
+              >
+                <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+                {hiddenFields.length} more
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <PropertyList align="start" className="mt-1">
+                  {hiddenFields.map((field) => (
+                    <FieldRow
+                      key={field.key}
+                      field={field}
                       paObjectReferences={paObjectReferences}
                       onOpenPaObject={onOpenPaObject}
                     />
-                  </PropertyText>
-                ) : (
-                  <PropertyText className="break-words" title={field.full}>
-                    {field.value}
-                  </PropertyText>
-                )}
-              </Fragment>
-            ))}
-          </PropertyList>
+                  ))}
+                </PropertyList>
+              </CollapsibleContent>
+            </Collapsible>
+          ) : null}
         </CardContent>
       </Card>
     </header>
+  );
+}
+
+/** One frontmatter field as a label and its value, formatted by what it holds. */
+function FieldRow({
+  field,
+  paObjectReferences,
+  onOpenPaObject,
+}: {
+  field: FrontmatterField;
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
+}) {
+  return (
+    <>
+      <PropertyLabel>
+        <span className="truncate" title={field.key}>
+          {field.label}
+        </span>
+      </PropertyLabel>
+      {field.date ? (
+        <DateProperty date={field.date} />
+      ) : isVocabularyField(field.key) && !field.links ? (
+        <PropertyText>
+          <FrontmatterValue field={field.key} value={field.value} />
+        </PropertyText>
+      ) : field.links ? (
+        <PropertyText>
+          <RefLinks
+            refs={field.links}
+            paObjectReferences={paObjectReferences}
+            onOpenPaObject={onOpenPaObject}
+          />
+        </PropertyText>
+      ) : (
+        <PropertyText className="break-words" title={field.full}>
+          {field.value}
+        </PropertyText>
+      )}
+    </>
   );
 }
 
