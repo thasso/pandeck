@@ -60,6 +60,7 @@ function renderPage(state: "loading" | "empty" | "tasks" | "notices") {
       connected
       workflowRuns={[]}
       workflowCards={{}}
+      accountNames={{}}
       sessions={[]}
       taskMutations={{}}
       actions={actions}
@@ -82,6 +83,7 @@ const meta = {
     connected: true,
     workflowRuns: [],
     workflowCards: {},
+    accountNames: {},
     sessions: [],
     taskMutations: {},
     actions,

@@ -1,24 +1,27 @@
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import {
+  ChevronRight,
   CircleCheck,
   Eraser,
   GitMerge,
   MessageSquare,
+  MoreHorizontal,
   TriangleAlert,
   Workflow,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import type {
   PullRequestMergeMethod,
   ReviewFinding,
   SessionListItem,
   WorkflowCeilingRaise,
+  WorkflowCommitCheckBlocker,
+  WorkflowCommitCheckChoice,
   WorkflowRunCard as WorkflowRunCardProjection,
+  WorkflowRunCardRoleConfig,
   WorkflowRunSummary,
 } from "@assistant/shared";
-import type {
-  ClientWorkflowRunCard,
-  ClientWorkflowRunDelivery,
-} from "../hooks/useAssistant.ts";
+import type { ClientWorkflowRunCard } from "../hooks/useAssistant.ts";
 
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { ConfirmDialog, useDialogs } from "./common/dialogs.tsx";
@@ -28,14 +31,31 @@ import { DiscreteSlider } from "./common/RuntimePicker.tsx";
 // it is opened.
 import { WORKFLOW_PHASE_LABEL } from "../lib/sessionInbox.ts";
 import { MergeMethodPicker } from "./PullRequestCard.tsx";
-import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
+import {
+  DateProperty,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { shortCommit } from "@assistant/shared/buildInfo";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useStoredOpen } from "../hooks/useStoredOpen.ts";
 
 const LIFECYCLE_TONE: Record<WorkflowRunSummary["lifecycle"], AppCardTone> = {
   active: "info",
@@ -57,72 +77,40 @@ const VERDICT_TONE = {
   fail: "text-destructive",
 } as const;
 
-/** A condition the run is in, stated where its controls are. */
-function Notice({
-  variant,
-  title,
-  children,
-}: {
-  variant: "warning" | "success";
-  title?: string;
-  children: ReactNode;
-}) {
-  return (
-    <Alert variant={variant} role="note">
-      {variant === "warning" ? <TriangleAlert /> : <CircleCheck />}
-      {title ? <AlertTitle>{title}</AlertTitle> : null}
-      <AlertDescription>{children}</AlertDescription>
-    </Alert>
-  );
+/** "commit step 2215 ended as blocked" → "Commit step 2215 ended as blocked". */
+function sentence(text: string): string {
+  const trimmed = shortCommits(text.trim());
+  return trimmed ? trimmed[0]!.toUpperCase() + trimmed.slice(1) : trimmed;
 }
 
-/** A touch-friendly N-more choice; absolute targets remain on the wire/API. */
-function CeilingRaiseControl({
-  decision,
-  onRaise,
-}: {
-  decision: NonNullable<WorkflowRunCardProjection["ceilingDecision"]>;
-  onRaise: (raise: WorkflowCeilingRaise) => void;
-}) {
-  // Starts where the run's own history suggests rather than at one. A run that
-  // needs four more rounds used to be four interruptions, each granting a
-  // decision the user had already made; the slider still reaches every amount.
-  const [amount, setAmount] = useState(() =>
-    Math.min(10, Math.max(1, decision.suggestedRaise)),
-  );
-  const noun =
-    decision.blocked === "iterations" ? "fix rounds" : "review passes";
-  const singular =
-    decision.blocked === "iterations" ? "fix round" : "review pass";
-  const field =
-    decision.blocked === "iterations" ? "maxIterations" : "maxReviewPasses";
-  return (
-    <div className="flex w-full flex-col gap-2 rounded-lg border px-3 py-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="font-medium text-muted-foreground">Extend by</span>
-        <span className="font-medium tabular-nums text-foreground">
-          {amount} {amount === 1 ? singular : noun}
-        </span>
-      </div>
-      <DiscreteSlider
-        min={1}
-        max={10}
-        value={amount}
-        onChange={setAmount}
-        ariaLabel={`Additional ${noun}`}
-        valueText={`${String(amount)} additional ${noun}`}
-      />
-      <Button
-        variant="outline"
-        className="self-start"
-        onClick={() =>
-          onRaise({ mode: "raise-by", amounts: { [field]: amount } })
-        }
-      >
-        Allow {amount} more
-      </Button>
-    </div>
-  );
+/** Server prose names full 40-character commits; a reader needs the short id. */
+function shortCommits(text: string): string {
+  return text.replace(/\b[0-9a-f]{40}\b/g, (oid) => shortCommit(oid) ?? oid);
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/** What the commit check called each problem, in a reader's words. */
+const COMMIT_CHECK_KIND_LABEL: Record<
+  WorkflowCommitCheckBlocker["kind"],
+  string
+> = {
+  secret: "Secret",
+  unrelated: "Unrelated change",
+  too_broad: "Too broad for one commit",
+  unsafe: "Unsafe",
+  unclear: "Unclear",
+  other: "Problem",
+};
+
+/**
+ * A stopped step's summary without the operation's own prefix ("commit phase
+ * blocked: …"): the box around it already says which step stopped and how.
+ */
+function stepSummaryText(summary: string): string {
+  return sentence(summary.replace(/^[\w -]+ phase (blocked|failed):\s*/i, ""));
 }
 
 /** The runtime a carried-out decision named, whichever role it was for. */
@@ -140,202 +128,33 @@ function routedRuntime(
     : undefined;
 }
 
-function SessionButton({
-  label,
-  sessionId,
-  sessions,
-  onOpenSession,
-}: {
-  label: string;
-  sessionId: string;
-  sessions: SessionListItem[];
-  onOpenSession: (id: string) => void;
-}) {
-  const session = sessions.find((item) => item.id === sessionId);
-  const title = session?.title || sessionId;
-  return (
-    <Item
-      variant="outline"
-      size="xs"
-      render={
-        <button
-          type="button"
-          onClick={() => onOpenSession(sessionId)}
-          // The spinner is decorative (R6), so what it stands for — this
-          // step's session is still running — has to be in the row's NAME,
-          // which is otherwise just the two lines of text below.
-          aria-label={
-            session?.isStreaming
-              ? `${label}: ${title} — session is running`
-              : undefined
-          }
-        />
-      }
-    >
-      <ItemMedia variant="icon">
-        {session?.isStreaming ? <Spinner size="sm" /> : <MessageSquare />}
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full">
-          {label}
-          <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground">
-            {title}
-          </span>
-        </ItemTitle>
-      </ItemContent>
-    </Item>
-  );
-}
-
 /**
- * The run's two DELIVERY controls, where the run's evidence is.
- *
- * Both act on the pull request the run published, and both used to be reachable
- * only from that card's own session — so finishing a run meant leaving the Task
- * for a chat, merging there, cleaning up there, and coming back to the Sessions
- * inbox for the acknowledgement. They are one block here because they are one
- * sequence: merge, then retire what the merge made disposable.
- *
- * What is offered is the SERVER's answer (`canMerge`/`canCleanUp`), never a
- * rule re-derived from the run's lifecycle: the same conditions guard the
- * messages these buttons send, so nothing offered here is refused there.
- *
- * What is RUNNING is the server's answer too, one beat later: the run's
- * `busyAction` is the pull-request card's, re-projected onto the run list, so
- * every viewer sees the same action. Only the browser that pressed the button
- * reads `pendingAction` as well — the click's own bridge to that echo, because
- * a control that moves only when the server answers is a control the user
- * presses twice (`app/web/docs/loading-states.md` R5).
- *
- * Neither asks for a confirmation, exactly as the live card does not: each
- * button states its consequence in full beside it, which a dialog the user
- * learns to click through would only replace with a worse copy.
+ * The run's ONE condition that needs the reader, stated where its controls
+ * are. A run can be in several at once (paused, blocked, at a ceiling), but
+ * only the first that asks for a decision is shown: the rest are either the
+ * same fact restated or follow from it.
  */
-function DeliveryControls({
-  runId,
-  delivery,
-  branch,
-  onMerge,
-  onCleanUp,
+function Attention({
+  variant,
+  title,
+  children,
 }: {
-  runId: string;
-  delivery: ClientWorkflowRunDelivery;
-  branch: string | undefined;
-  onMerge: (
-    runId: string,
-    options: {
-      mergeMethod: PullRequestMergeMethod;
-      deleteBranch: boolean;
-    },
-  ) => void;
-  onCleanUp: (runId: string) => void;
+  variant: "warning" | "success";
+  title: string;
+  children?: ReactNode;
 }) {
-  // Both are per-click decisions and neither is remembered: a method chosen for
-  // one merge must not silently become the next run's.
-  const [method, setMethod] = useState<PullRequestMergeMethod>();
-  const [deleteBranch, setDeleteBranch] = useState(true);
-  const offered = delivery.mergeMethods ?? [];
-  const selected =
-    method && offered.includes(method)
-      ? method
-      : delivery.defaultMergeMethod &&
-          offered.includes(delivery.defaultMergeMethod)
-        ? delivery.defaultMergeMethod
-        : offered[0];
-  const running = delivery.busyAction ?? delivery.pendingAction;
-  const busy = Boolean(running);
-  // The card clears its stored failure only when the server DEQUEUES the next
-  // action, so until this click reaches that write the sentence in hand is the
-  // PREVIOUS action's — one this click has already answered. It is hidden, not
-  // dropped: the same field carries THIS action's refusal, and the moment the
-  // click stops owning the control the failure standing there is shown.
-  const error =
-    delivery.pendingAction && !delivery.busyAction ? undefined : delivery.error;
-
-  // A block with no control left can still be the only place a CONDITION is
-  // stated: a retired checkout whose run was not settled with it. What the last
-  // action came to is not one of those — the run's own banner already says it
-  // merged and was cleaned up, and repeating it here would be a second success
-  // note under the first.
-  if (
-    !delivery.canMerge &&
-    !delivery.canCleanUp &&
-    !error &&
-    !delivery.settleStillNeeded
-  )
-    return null;
-
   return (
-    <div className="flex flex-col items-start gap-2 rounded-lg border px-3 py-2.5">
-      {delivery.canMerge ? (
-        <>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <MergeMethodPicker
-              offered={offered}
-              known={Boolean(delivery.mergeMethods)}
-              selected={selected}
-              onSelect={setMethod}
-              deleteBranch={deleteBranch}
-              onDeleteBranchChange={setDeleteBranch}
-              disabled={busy}
-            />
-            <Button
-              size="sm"
-              disabled={busy || !selected}
-              busy={running === "merge"}
-              onClick={() =>
-                selected &&
-                onMerge(runId, { mergeMethod: selected, deleteBranch })
-              }
-            >
-              {running === "merge" ? null : <GitMerge />}
-              Merge
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Merging records this run's decision and completes it
-            {deleteBranch && branch
-              ? `, and deletes the remote branch ${branch}; the local checkout stays until you clean it up.`
-              : deleteBranch
-                ? ", and deletes the remote branch; the local checkout stays until you clean it up."
-                : `. The remote branch${branch ? ` ${branch}` : ""} is KEPT — delete it yourself when you are done with it.`}
-          </p>
-        </>
+    <Alert variant={variant} role="note">
+      {variant === "warning" ? <TriangleAlert /> : <CircleCheck />}
+      <AlertTitle>{title}</AlertTitle>
+      {children ? (
+        // The flex gap spaces the paragraphs; the description's own paragraph
+        // margin would stack on top of it.
+        <AlertDescription className="flex flex-col gap-1.5 [&_p:not(:last-child)]:mb-0">
+          {children}
+        </AlertDescription>
       ) : null}
-
-      {delivery.canCleanUp ? (
-        <>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={busy}
-            busy={running === "cleanup"}
-            onClick={() => onCleanUp(runId)}
-          >
-            {running === "cleanup" ? null : <Eraser />}
-            Clean up
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            Removes this run's worktree and its local branch — only once the
-            base branch is confirmed to contain it — settles every session on
-            that checkout, and settles the run itself, which takes it out of the
-            Sessions inbox.
-          </p>
-        </>
-      ) : null}
-
-      {/* A present-tense CONDITION, derived from the run's attention cursor, so
-          it goes away by itself the moment the run is settled anywhere. It does
-          not repeat WHY the Settle is refused: the inbox item carries that
-          live, on the Settle it disables. */}
-      {delivery.settleStillNeeded ? (
-        <p className="text-muted-foreground">
-          The checkout is gone, but this run is still waiting for its Settle in
-          the Sessions inbox.
-        </p>
-      ) : null}
-      {error ? <ErrorNote message={error} /> : null}
-    </div>
+    </Alert>
   );
 }
 
@@ -349,21 +168,161 @@ function ReviewList({
 }) {
   if (!items || items.length === 0) return null;
   return (
-    <div className="mt-2">
+    <div>
       <p className="font-medium text-foreground">{label}</p>
-      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+      <ul className="mt-1 flex list-disc flex-col gap-1 pl-4">
         {items.map((item, index) => (
           <li
             key={`${index}-${typeof item === "string" ? item : `${item.severity}-${item.text}`}`}
             className="break-words"
           >
-            {typeof item === "string"
-              ? item
-              : `[${item.severity}] ${item.path && item.line ? `${item.path}:${item.line} — ` : ""}${item.text}`}
+            {typeof item === "string" ? (
+              item
+            ) : (
+              <>
+                <span className="font-medium text-foreground">
+                  {item.severity}
+                </span>
+                {item.path ? (
+                  <span className="font-mono text-xs">
+                    {" "}
+                    {item.path}
+                    {item.line ? `:${item.line}` : ""}
+                  </span>
+                ) : null}{" "}
+                — {item.text}
+              </>
+            )}
           </li>
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * A folded part of the run's evidence: closed by default, and whether it is
+ * open is remembered for every run, so a reader who always reads the review
+ * finds it open on the next run too.
+ */
+function RunSection({
+  storageKey,
+  title,
+  children,
+}: {
+  storageKey: string;
+  title: string;
+  children: ReactNode;
+}) {
+  const [open, toggleOpen] = useStoredOpen(storageKey, false);
+  return (
+    <Collapsible open={open} onOpenChange={toggleOpen}>
+      <CollapsibleTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-mx-2 w-fit justify-start font-medium text-foreground"
+          />
+        }
+      >
+        <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+        {title}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-2 pt-1 pb-1">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** A role's model as a property value: the model, its thinking level, the account. */
+function RuntimeText({
+  runtime,
+  accountName,
+}: {
+  runtime: WorkflowRunCardRoleConfig;
+  accountName: string | undefined;
+}) {
+  return (
+    <PropertyText title={`${runtime.provider}:${runtime.modelId}`}>
+      {runtimeLabel({
+        model: runtime.modelId,
+        thinkingLevel: runtime.thinkingLevel,
+        account: accountName,
+      })}
+    </PropertyText>
+  );
+}
+
+/** A role's session, as one row of the Sessions list. */
+function SessionRow({
+  label,
+  sessionId,
+  sessions,
+  onOpenSession,
+}: {
+  label: string;
+  sessionId: string;
+  sessions: SessionListItem[];
+  onOpenSession: (id: string) => void;
+}) {
+  const session = sessions.find((item) => item.id === sessionId);
+  const title = session?.title || sessionId;
+  return (
+    <li>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full justify-start gap-2 font-normal"
+        onClick={() => onOpenSession(sessionId)}
+        // The spinner is decorative (R6), so what it stands for — this step's
+        // session is still running — has to be in the row's NAME.
+        aria-label={
+          session?.isStreaming
+            ? `${label}: ${title} — session is running`
+            : undefined
+        }
+      >
+        {session?.isStreaming ? <Spinner size="sm" /> : <MessageSquare />}
+        <span className="shrink-0 font-medium">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">
+          {title}
+        </span>
+      </Button>
+    </li>
+  );
+}
+
+/**
+ * A session named inline — in a summary row or a sentence — opened on click.
+ * Its full title is the tooltip; a running session carries the spinner.
+ */
+function SessionLink({
+  sessionId,
+  sessions,
+  onOpenSession,
+  children,
+}: {
+  sessionId: string;
+  sessions: SessionListItem[];
+  onOpenSession: (id: string) => void;
+  /** The words to show; the session's title when omitted. */
+  children?: ReactNode;
+}) {
+  const session = sessions.find((item) => item.id === sessionId);
+  const title = session?.title || sessionId;
+  return (
+    <Button
+      variant="link"
+      size="xs"
+      className="h-auto max-w-full gap-1 p-0 align-baseline font-normal"
+      title={title}
+      onClick={() => onOpenSession(sessionId)}
+    >
+      {session?.isStreaming ? <Spinner size="sm" /> : null}
+      <span className="min-w-0 truncate">{children ?? title}</span>
+    </Button>
   );
 }
 
@@ -372,6 +331,7 @@ export function WorkflowRunCard({
   run,
   card,
   sessions,
+  accountNames,
   onOpenSession,
   onPause,
   onResume,
@@ -379,14 +339,18 @@ export function WorkflowRunCard({
   onDelete,
   onRetry,
   onAnswerCeiling,
+  onAnswerCommitCheck,
   onRebaseAndReview,
   onMerge,
   onCleanUp,
+  defaultCollapsed = false,
 }: {
   run: WorkflowRunSummary;
   /** The wire projection plus this browser's unanswered delivery click. */
   card: ClientWorkflowRunCard | undefined;
   sessions: SessionListItem[];
+  /** Account names by credential profile id, to say which account a role uses. */
+  accountNames?: Readonly<Record<string, string>>;
   onOpenSession: (id: string) => void;
   onPause: (runId: string) => void;
   onResume: (runId: string) => void;
@@ -401,6 +365,10 @@ export function WorkflowRunCard({
     choice: "raise" | "deliver" | "re-evaluate" | "cancel",
     raise?: WorkflowCeilingRaise,
   ) => void;
+  onAnswerCommitCheck: (
+    runId: string,
+    choice: WorkflowCommitCheckChoice,
+  ) => void;
   onRebaseAndReview: (runId: string) => void;
   /** Merge the run's pull request at its merge seam; omitted where it cannot. */
   onMerge?: (
@@ -409,11 +377,17 @@ export function WorkflowRunCard({
   ) => void;
   /** Retire the finished run's checkout and settle the run with it. */
   onCleanUp?: (runId: string) => void;
+  /**
+   * Start as one line (header, outcome, "Show details"): an older, finished
+   * run under a newer one on the same Task.
+   */
+  defaultCollapsed?: boolean;
 }) {
   const dialogs = useDialogs();
-  // A CANCELLED run's "Delete run…", which is not this card's "Clean up": that
-  // one retires a delivered run's checkout, this one discards an abandoned
-  // attempt's history.
+  const [expanded, setExpanded] = useState(!defaultCollapsed);
+  // A CANCELLED run's "Delete run…", which is not "Clean up": that one retires
+  // a delivered run's checkout, this one discards an abandoned attempt's
+  // history.
   const [deleteRunOpen, setDeleteRunOpen] = useState(false);
   // Runs are first broadcast before provisioning binds their worktree. Keep the
   // default derived until the user actually changes it, so that later binding
@@ -421,31 +395,43 @@ export function WorkflowRunCard({
   const [deleteWorktreeChoice, setDeleteWorktreeChoice] = useState<boolean>();
   const deleteWorktree = deleteWorktreeChoice ?? Boolean(run.worktreeId);
   const [archiveSessions, setArchiveSessions] = useState(true);
+
+  // Merge options are per-click decisions and neither is remembered: a method
+  // chosen for one merge must not silently become the next run's.
+  const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>();
+  const [deleteBranch, setDeleteBranch] = useState(true);
+
+  // The ceiling's "Allow N more" starts where the run's own history suggests
+  // rather than at one, and starts over when the run hits a different ceiling.
+  const ceiling = card?.ceilingDecision;
+  const ceilingKey = ceiling
+    ? `${ceiling.blocked}:${String(ceiling.ceilings.maxIterations)}:${String(ceiling.ceilings.maxReviewPasses)}`
+    : "";
+  const [raiseChoice, setRaiseChoice] = useState<{
+    key: string;
+    amount: number;
+  }>();
+  const raiseAmount =
+    raiseChoice?.key === ceilingKey
+      ? raiseChoice.amount
+      : Math.min(10, Math.max(1, ceiling?.suggestedRaise ?? 1));
+
   const terminal =
     run.lifecycle === "completed" || run.lifecycle === "cancelled";
   const delivery = card?.pullRequest?.delivery;
   const phase = card?.phase ?? "starting";
-  const activity = card?.activity;
-  const activityLabel =
-    activity === "running"
-      ? "working"
-      : activity === "waiting"
-        ? "waiting to start"
-        : null;
+  const running = card?.activity === "running";
+
   // `maxIterations` may legitimately be 0 — "review it, and no agent touches
-  // the code again" — and there is then no iteration to be on; counting one
-  // would read "iteration 0 of 0".
+  // the code again" — and there is then no iteration to be on.
   const iteration = Math.min(
     (card?.iterationsUsed ?? 0) + 1,
     run.limits.maxIterations,
   );
-  const showNextAction = !(
-    run.lifecycle === "paused" &&
-    run.lifecycleReason &&
-    card?.nextAction.trim() === run.lifecycleReason.trim()
-  );
-  // The stopped step's own words, but only where they add something: the banner
-  // and `nextAction` may already carry the very same sentence.
+  const reviewPasses = card?.reviewerSessions?.length ?? 0;
+
+  // The stopped step's own words, but only where they add something: the
+  // headline may already carry the very same sentence.
   const blocked = card?.blockedReason;
   const blockedSummary =
     run.lifecycle === "paused" &&
@@ -454,19 +440,37 @@ export function WorkflowRunCard({
     blocked.summary.trim() !== card?.nextAction.trim()
       ? blocked.summary
       : null;
-  // A retry that reproduced its predecessor's outcome. The COUNT belongs to the
-  // recipe's pause reason, which the banner or `nextAction` already renders
-  // verbatim; repeating it here would be exactly the duplication `blockedSummary`
-  // above avoids. What neither says is what pressing Retry again would do.
+  // A retry that reproduced its predecessor's outcome: Retry then asks first.
   const attempts = card?.repeatedAttempts ?? 1;
   const repeatedAttempts =
     run.lifecycle === "paused" && attempts > 1 ? attempts : null;
 
-  // Every control below asks before it acts, so each is an async body reached
-  // from a `() => void` slot: `dialogs` settles rather than rejecting, and what
-  // follows a yes is a plain synchronous callback. The ceiling gate's Cancel and
-  // the footer's Cancel are the SAME irreversible action, so they share one
-  // question here rather than restating it in two places.
+  // Delivery: what is offered is the SERVER's answer (`canMerge`/`canCleanUp`),
+  // and what is running is the server's answer one beat later (`busyAction`),
+  // bridged by this browser's own click (`pendingAction`) so a control never
+  // waits for the echo to move (`app/web/docs/loading-states.md` R5).
+  const offeredMethods = delivery?.mergeMethods ?? [];
+  const selectedMethod =
+    mergeMethod && offeredMethods.includes(mergeMethod)
+      ? mergeMethod
+      : delivery?.defaultMergeMethod &&
+          offeredMethods.includes(delivery.defaultMergeMethod)
+        ? delivery.defaultMergeMethod
+        : offeredMethods[0];
+  const deliveryRunning = delivery?.busyAction ?? delivery?.pendingAction;
+  const deliveryBusy = Boolean(deliveryRunning);
+  // The stored failure is the PREVIOUS action's until this click reaches the
+  // server's dequeue, so it is hidden — not dropped — while the click owns it.
+  const deliveryError =
+    delivery?.pendingAction && !delivery.busyAction
+      ? undefined
+      : delivery?.error;
+  const canMerge = Boolean(delivery?.canMerge && onMerge);
+  const canCleanUp = Boolean(delivery?.canCleanUp && onCleanUp);
+
+  // Every control asks before it acts where the action cannot be taken back.
+  // The ceiling's Cancel and the menu's Cancel are the SAME action, so they
+  // share one question.
   const confirmCancel = async (answer: () => void) => {
     const confirmed = await dialogs.confirm({
       title: "Cancel this workflow run?",
@@ -477,6 +481,15 @@ export function WorkflowRunCard({
     });
     if (confirmed) answer();
   };
+  const confirmCommitAnyway = async () => {
+    const confirmed = await dialogs.confirm({
+      title: "Commit over the commit check?",
+      body: "The change is committed as it is, with the problems the check found. The run then reviews it as usual.",
+      confirmLabel: "Commit anyway",
+      danger: true,
+    });
+    if (confirmed) onAnswerCommitCheck(run.id, "commit-anyway");
+  };
   const confirmRebaseAndReview = async () => {
     const confirmed = await dialogs.confirm({
       title: "Rebase and send through review again?",
@@ -485,17 +498,15 @@ export function WorkflowRunCard({
     });
     if (confirmed) onRebaseAndReview(run.id);
   };
-  // Retries stay uncapped: only the user can know whether the condition the step
-  // reported has been repaired outside the run, and an agent tail's next attempt
-  // runs a fresh session, so a repeat is evidence rather than a verdict. A cap
-  // would strand the run of someone who just repaired it — so this asks once the
-  // same outcome has come back, and then does whatever they chose.
+  // Retries stay uncapped: only the user can know whether the condition the
+  // step reported has been repaired outside the run. Once the same outcome has
+  // come back, this asks first, and then does whatever they chose.
   const confirmRetry = async () => {
     if (
       repeatedAttempts &&
       !(await dialogs.confirm({
         title: "Retry anyway?",
-        body: `The last ${repeatedAttempts} attempts ended with the same result. Retry re-runs the same assignment.`,
+        body: `The last ${repeatedAttempts} attempts ended with the same result. Retry re-runs the same assignment, usually in the same session, which remembers the attempt that stopped.`,
         confirmLabel: "Retry",
       }))
     )
@@ -503,469 +514,726 @@ export function WorkflowRunCard({
     onRetry(run.id);
   };
 
+  const commitCheck = card?.commitCheckDecision;
+  // What the run is doing, or what it needs: the line under the branch. Where
+  // the attention box below explains a pause, this only says the run is waiting
+  // and on whom — the box is where the why and the what-now are.
+  const explainedPause =
+    run.lifecycle !== "paused"
+      ? null
+      : commitCheck
+        ? "Paused until you decide what happens to the refused commit."
+        : ceiling
+          ? "Paused at the run's limit until you decide."
+          : blocked?.rebaseConflict ||
+              blocked?.operationTriage ||
+              blockedSummary
+            ? "Paused. Retry once the cause is fixed, or cancel the run."
+            : null;
+  const headline =
+    run.lifecycle === "completed"
+      ? card?.pullRequest
+        ? `Merged pull request #${card.pullRequest.number}.${delivery?.cleanedUp ? " The checkout was cleaned up." : ""}`
+        : "Completed."
+      : run.lifecycle === "cancelled"
+        ? "Cancelled. No more work will run."
+        : card?.cancelRequested
+          ? "Cancelling — waiting for the step in flight to finish. Nothing further will be started."
+          : explainedPause
+            ? explainedPause
+            : run.lifecycle === "paused" && run.lifecycleReason
+              ? sentence(run.lifecycleReason)
+              : card
+                ? sentence(card.nextAction)
+                : run.lifecycle === "paused"
+                  ? // No card means this build has no decision function for the
+                    // run's recipe, and none is coming.
+                    "This build does not recognize this run's recipe, so it cannot be continued. Cancelling keeps the worktree, branch, sessions and any pull request."
+                  : "Preparing workflow status…";
+
+  const attention: ReactNode = commitCheck ? (
+    <Attention
+      variant="warning"
+      title={
+        commitCheck.autoFixSpent ? "Commit refused again" : "Commit refused"
+      }
+    >
+      <p>
+        The commit check read the change and did not commit it
+        {commitCheck.autoFixSpent ? ", even after two fixes" : ""}:
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {commitCheck.blockers.map((item, index) => (
+          <li key={`${index}-${item.kind}`} className="flex flex-col">
+            <span className="font-medium">
+              {COMMIT_CHECK_KIND_LABEL[item.kind]}
+              {item.file ? (
+                <span className="font-mono text-xs font-normal">
+                  {" "}
+                  · {item.file}
+                </span>
+              ) : null}
+            </span>
+            <span className="break-words">{item.reason}</span>
+          </li>
+        ))}
+      </ul>
+      {commitCheck.changedBySessionId ? (
+        <p>
+          The change came from the{" "}
+          <SessionLink
+            sessionId={commitCheck.changedBySessionId}
+            sessions={sessions}
+            onOpenSession={onOpenSession}
+          >
+            {commitCheck.changedBySessionId === card?.fixerSessionId
+              ? "fixer's session"
+              : "implementer's session"}
+          </SessionLink>
+          .
+        </p>
+      ) : null}
+      <p>
+        {commitCheck.blockers.some((item) => item.kind === "secret")
+          ? "A secret must not be committed: send it back to take it out, or cancel the run."
+          : commitCheck.autoFixSpent
+            ? "Send it back for another fix, commit it as it is, or cancel the run."
+            : "This is your call: send it back for a fix, commit it as it is, or cancel the run."}
+      </p>
+    </Attention>
+  ) : ceiling ? (
+    <Attention
+      variant="warning"
+      title={
+        ceiling.blocked === "iterations"
+          ? "Fix-round limit reached"
+          : "Review-pass limit reached"
+      }
+    >
+      <p>The run wanted to {shortCommits(ceiling.wanted)}.</p>
+      <p>
+        Spent {ceiling.spent.iterations} of {ceiling.ceilings.maxIterations} fix
+        rounds and {ceiling.spent.reviewPasses} of{" "}
+        {ceiling.ceilings.maxReviewPasses} review passes, in{" "}
+        {plural(ceiling.spent.sessions, "session", "sessions")}.
+      </p>
+      {ceiling.allowedChoices.includes("re-evaluate") ? (
+        <p>
+          There is no commit to deliver. Commit or discard the stray work
+          yourself and choose “Look again”, or extend the run.
+        </p>
+      ) : !ceiling.allowedChoices.includes("deliver") ? (
+        <p>There is no commit to deliver. Extend the run, or cancel it.</p>
+      ) : !ceiling.headCarriesDiscoveryReview ? (
+        <p className="font-medium">
+          Delivering as it stands ships work no review pass has accepted.
+        </p>
+      ) : null}
+      <div className="flex flex-col gap-1.5 pt-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span>Extend by</span>
+          <span className="font-medium tabular-nums">
+            {ceiling.blocked === "iterations"
+              ? plural(raiseAmount, "fix round", "fix rounds")
+              : plural(raiseAmount, "review pass", "review passes")}
+          </span>
+        </div>
+        <DiscreteSlider
+          min={1}
+          max={10}
+          value={raiseAmount}
+          onChange={(amount) => setRaiseChoice({ key: ceilingKey, amount })}
+          ariaLabel={
+            ceiling.blocked === "iterations"
+              ? "Additional fix rounds"
+              : "Additional review passes"
+          }
+          valueText={`${String(raiseAmount)} more`}
+        />
+      </div>
+    </Attention>
+  ) : run.lifecycle === "paused" && blocked?.rebaseConflict ? (
+    <Attention variant="warning" title="Rebase conflict">
+      {blocked.rebaseConflict.files.length > 0 ? (
+        <ul className="list-disc pl-4">
+          {blocked.rebaseConflict.files.map((file) => (
+            <li key={file} className="font-mono text-xs break-words">
+              {file}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>Git could not determine the conflicted files.</p>
+      )}
+      {blocked.rebaseConflict.truncated ? (
+        <p>The file list was shortened.</p>
+      ) : null}
+      <p>
+        {blocked.rebaseConflict.restored
+          ? "The run branch was restored and the worktree is clean."
+          : "The server could not verify that the run branch was restored. Inspect the worktree first."}{" "}
+        Resolve the rebase onto {blocked.rebaseConflict.baseBranch} in the run
+        worktree, then Retry.
+      </p>
+    </Attention>
+  ) : run.lifecycle === "paused" && blocked?.operationTriage ? (
+    <Attention variant="warning" title="Automatic triage already spent">
+      <p>
+        The {WORKFLOW_PHASE_LABEL[blocked.operationTriage.phase]} step failed
+        the same way twice, so the implementer got one diagnostic assignment
+        before the run stopped.{" "}
+        {blocked.operationTriage.restored
+          ? "The run branch is as the triage left it."
+          : "The server could not verify the run branch afterwards. Inspect the worktree first."}
+      </p>
+      {blockedSummary ? (
+        <p className="break-words">{stepSummaryText(blockedSummary)}</p>
+      ) : null}
+    </Attention>
+  ) : blockedSummary && blocked ? (
+    <Attention
+      variant="warning"
+      title={`${blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"} ${blocked.status}`}
+    >
+      <p className="break-words">{stepSummaryText(blockedSummary)}</p>
+      {repeatedAttempts ? (
+        <p>The last {repeatedAttempts} attempts ended the same way.</p>
+      ) : null}
+    </Attention>
+  ) : card?.mergeDecisionReady ? (
+    <Attention variant="success" title="Ready to merge">
+      <p>The reviewed head passed CI and is mergeable.</p>
+    </Attention>
+  ) : null;
+
+  const plan = card?.workPlan;
+  // Who does the work, role by role: the plan's implementer and reviewer, and
+  // the fixer or verdict when the latest decision named one.
+  const roleRuntimes: Array<{
+    label: string;
+    runtime: WorkflowRunCardRoleConfig;
+  }> = plan
+    ? [
+        { label: "Implementer", runtime: plan.implementer },
+        { label: "Reviewer", runtime: plan.reviewer },
+        ...(card?.reviewDecision?.fixer
+          ? [{ label: "Fixer", runtime: card.reviewDecision.fixer }]
+          : []),
+        ...(card?.reviewDecision?.verdict
+          ? [{ label: "Verdict", runtime: card.reviewDecision.verdict }]
+          : []),
+      ]
+    : [];
+  const assessment = card?.latestAssessment;
+  const decision = card?.reviewDecision;
+  const sessionRows: Array<{ key: string; label: string; sessionId: string }> =
+    [
+      ...(card?.coordinatorSessionId
+        ? [
+            {
+              key: "coordinator",
+              label: "Coordinator",
+              sessionId: card.coordinatorSessionId,
+            },
+          ]
+        : []),
+      ...(card?.implementerSessionId
+        ? [
+            {
+              key: "implementer",
+              label: "Implementer",
+              sessionId: card.implementerSessionId,
+            },
+          ]
+        : []),
+      ...(card?.fixerSessionId
+        ? [{ key: "fixer", label: "Fixer", sessionId: card.fixerSessionId }]
+        : []),
+      ...(card?.reviewerSessions ?? []).map((review) => ({
+        key: `review-${review.sessionId}`,
+        label:
+          (card?.reviewerSessions ?? []).length > 1
+            ? `Reviewer ${review.pass}`
+            : "Reviewer",
+        sessionId: review.sessionId,
+      })),
+      ...(card?.verdictSessionId
+        ? [
+            {
+              key: "verdict",
+              label: "Verdict",
+              sessionId: card.verdictSessionId,
+            },
+          ]
+        : []),
+      ...(card?.pullRequest
+        ? [
+            {
+              key: "pull-request",
+              label: "Pull request",
+              sessionId: card.pullRequest.sessionId,
+            },
+          ]
+        : []),
+    ];
+  // The role whose session is working right now, so the card can say where.
+  const liveRow = sessionRows.find(
+    (row) => sessions.find((item) => item.id === row.sessionId)?.isStreaming,
+  );
+
+  // The footer: the one thing to do now on the right, the rest in a menu.
+  const menuItems: ReactNode[] = [];
+  if (!terminal && run.lifecycle === "active" && !card?.cancelRequested)
+    menuItems.push(
+      <DropdownMenuItem key="pause" onClick={() => onPause(run.id)}>
+        Pause
+      </DropdownMenuItem>,
+    );
+  if (!terminal && card?.canRebaseAndReview)
+    menuItems.push(
+      <DropdownMenuItem
+        key="rebase"
+        onClick={() => void confirmRebaseAndReview()}
+      >
+        Rebase and re-review
+      </DropdownMenuItem>,
+    );
+  if (card?.pullRequest) {
+    const prSession = card.pullRequest.sessionId;
+    menuItems.push(
+      <DropdownMenuItem key="pr-card" onClick={() => onOpenSession(prSession)}>
+        Open live PR card
+      </DropdownMenuItem>,
+    );
+  }
+  if (!terminal && !card?.cancelRequested)
+    menuItems.push(
+      <DropdownMenuSeparator key="sep" />,
+      <DropdownMenuItem
+        key="cancel"
+        variant="destructive"
+        onClick={() => void confirmCancel(() => onCancel(run.id))}
+      >
+        Cancel run…
+      </DropdownMenuItem>,
+    );
+
+  const primary: ReactNode[] = [];
+  if (!terminal && commitCheck) {
+    if (commitCheck.allowedChoices.includes("commit-anyway"))
+      primary.push(
+        <Button
+          key="commit-anyway"
+          size="xs"
+          variant="outline"
+          onClick={() => void confirmCommitAnyway()}
+        >
+          Commit anyway
+        </Button>,
+      );
+    primary.push(
+      <Button
+        key="send-to-implementer"
+        size="xs"
+        onClick={() => onAnswerCommitCheck(run.id, "send-to-implementer")}
+      >
+        Send back for a fix
+      </Button>,
+    );
+  }
+  if (!terminal && ceiling) {
+    if (ceiling.allowedChoices.includes("re-evaluate"))
+      primary.push(
+        <Button
+          key="look"
+          size="xs"
+          variant="outline"
+          onClick={() => onAnswerCeiling(run.id, "re-evaluate")}
+        >
+          Look again
+        </Button>,
+      );
+    if (ceiling.allowedChoices.includes("deliver"))
+      primary.push(
+        <Button
+          key="deliver"
+          size="xs"
+          variant="outline"
+          onClick={() => onAnswerCeiling(run.id, "deliver")}
+        >
+          Deliver as it stands
+        </Button>,
+      );
+    primary.push(
+      <Button
+        key="raise"
+        size="xs"
+        onClick={() =>
+          onAnswerCeiling(run.id, "raise", {
+            mode: "raise-by",
+            amounts: {
+              [ceiling.blocked === "iterations"
+                ? "maxIterations"
+                : "maxReviewPasses"]: raiseAmount,
+            },
+          })
+        }
+      >
+        Allow {raiseAmount} more
+      </Button>,
+    );
+  }
+  if (canMerge)
+    primary.push(
+      <Button
+        key="merge"
+        size="xs"
+        disabled={deliveryBusy || !selectedMethod}
+        busy={deliveryRunning === "merge"}
+        onClick={() =>
+          selectedMethod &&
+          onMerge?.(run.id, { mergeMethod: selectedMethod, deleteBranch })
+        }
+      >
+        {deliveryRunning === "merge" ? null : <GitMerge />}
+        Merge
+      </Button>,
+    );
+  if (canCleanUp)
+    primary.push(
+      <Button
+        key="cleanup"
+        size="xs"
+        variant="outline"
+        disabled={deliveryBusy}
+        busy={deliveryRunning === "cleanup"}
+        onClick={() => onCleanUp?.(run.id)}
+      >
+        {deliveryRunning === "cleanup" ? null : <Eraser />}
+        Clean up
+      </Button>,
+    );
+  // The server decides these: each is offered only where it would move the run.
+  if (!terminal && card?.canRetry)
+    primary.push(
+      <Button key="retry" size="xs" onClick={() => void confirmRetry()}>
+        {repeatedAttempts ? "Retry again" : "Retry"}
+      </Button>,
+    );
+  if (!terminal && card?.canResume)
+    primary.push(
+      <Button
+        key="resume"
+        size="xs"
+        variant={card.canRetry ? "outline" : "default"}
+        onClick={() => onResume(run.id)}
+      >
+        Resume
+      </Button>,
+    );
+  if (run.lifecycle === "cancelled" && expanded)
+    primary.push(
+      <Button
+        key="delete"
+        variant="destructive"
+        size="xs"
+        onClick={() => setDeleteRunOpen(true)}
+      >
+        Delete run…
+      </Button>,
+    );
+
+  const footerStart = canMerge
+    ? deleteBranch
+      ? "Completes the run and deletes the remote branch."
+      : "Completes the run and keeps the remote branch."
+    : canCleanUp
+      ? "Removes the worktree and local branch, and settles the run."
+      : run.lifecycle === "cancelled" && expanded
+        ? "Deleting discards the run's history."
+        : null;
+
+  const status = (
+    <>
+      {!terminal ? <span>{WORKFLOW_PHASE_LABEL[phase]}</span> : null}
+      <span>
+        {card?.cancelRequested && !terminal
+          ? "Cancelling"
+          : run.lifecycle === "completed" && card?.pullRequest
+            ? "Merged"
+            : LIFECYCLE_LABEL[run.lifecycle]}
+      </span>
+    </>
+  );
+
   return (
     <AppCard
       tone={LIFECYCLE_TONE[run.lifecycle]}
-      icon={<Workflow />}
+      icon={running ? <Spinner size="sm" /> : <Workflow />}
       label="Workflow run"
-      status={LIFECYCLE_LABEL[run.lifecycle]}
-      footerStart={
-        run.lifecycle === "cancelled"
-          ? "No more work will run. Delete it when you no longer need its history."
-          : null
-      }
+      status={status}
+      footerStart={expanded ? footerStart : null}
       actions={
-        run.lifecycle === "cancelled" ? (
-          <Button
-            variant="destructive"
-            size="xs"
-            onClick={() => setDeleteRunOpen(true)}
-          >
-            Delete run…
+        expanded ? (
+          primary.length || menuItems.length ? (
+            <>
+              {menuItems.length ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label="More run actions"
+                      />
+                    }
+                  >
+                    <MoreHorizontal />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    {menuItems}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
+              {primary}
+            </>
+          ) : null
+        ) : (
+          <Button variant="ghost" size="xs" onClick={() => setExpanded(true)}>
+            Show details
           </Button>
-        ) : !terminal ? (
-          <>
-            {run.lifecycle === "active" ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => onPause(run.id)}
-              >
-                Pause
-              </Button>
-            ) : null}
-            {/* The server decides this: Resume is offered only where it would
-              actually move the run. A pause the recipe re-derives from the same
-              history comes straight back, and a run with no card at all is one
-              this build has no decision function for. */}
-            {card?.canResume ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => onResume(run.id)}
-              >
-                Resume
-              </Button>
-            ) : null}
-            {card?.canRebaseAndReview ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void confirmRebaseAndReview()}
-              >
-                Rebase and re-review
-              </Button>
-            ) : null}
-            {card?.canRetry ? (
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void confirmRetry()}
-              >
-                {repeatedAttempts ? "Retry again" : "Retry"}
-              </Button>
-            ) : null}
-            <Button
-              size="xs"
-              variant="destructive"
-              onClick={() => void confirmCancel(() => onCancel(run.id))}
-            >
-              Cancel
-            </Button>
-          </>
-        ) : null
+        )
       }
-      contentClassName="gap-3 text-muted-foreground"
+      contentClassName="gap-3"
     >
-      {/* What the run is on and where it stands: the card's subject. */}
+      {/* The card's subject: what the run is on, and where it stands. */}
       <div className="flex min-w-0 flex-col gap-0.5">
         {run.branch ? (
-          <span className="min-w-0 truncate font-mono text-foreground">
+          <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
             {run.branch}
           </span>
         ) : null}
-        <p>
-          <span className="font-medium text-foreground">
-            {WORKFLOW_PHASE_LABEL[phase]}
-          </span>
-          {activityLabel ? ` — ${activityLabel}` : ""}
-          {run.limits.maxIterations > 0
-            ? ` · iteration ${iteration} of ${run.limits.maxIterations}`
-            : " · no fix rounds"}
-        </p>
+        <p className="break-words text-foreground">{headline}</p>
       </div>
-      {run.lifecycle === "paused" ? (
-        <Notice variant="warning">{run.lifecycleReason || "Paused"}</Notice>
-      ) : null}
 
-      {blockedSummary && blocked ? (
-        <p className="break-words">
-          <span className="font-medium text-foreground">
-            {blocked.phase ? WORKFLOW_PHASE_LABEL[blocked.phase] : "Step"}{" "}
-            {blocked.status}
-          </span>{" "}
-          — {blockedSummary}
-        </p>
-      ) : null}
+      {expanded ? (
+        <>
+          {attention}
 
-      {run.lifecycle === "paused" && blocked?.rebaseConflict ? (
-        <Notice variant="warning" title="Rebase conflict">
-          {blocked.rebaseConflict.files.length > 0 ? (
-            <ul className="mt-1 list-disc space-y-0.5 pl-4">
-              {blocked.rebaseConflict.files.map((file) => (
-                <li key={file} className="break-words font-mono">
-                  {file}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-1">
-              Git could not determine the conflicted files.
-            </p>
-          )}
-          {blocked.rebaseConflict.truncated ? (
-            <p className="mt-1 text-muted-foreground">
-              The file list was shortened.
-            </p>
-          ) : null}
-          <p className="mt-2 break-words">
-            {blocked.rebaseConflict.restored
-              ? "The failed rebase was aborted, so the run branch was restored and the worktree is clean."
-              : "The server could not verify that the run branch was restored and clean. Inspect the run worktree before continuing."}{" "}
-            Resolve the rebase onto {blocked.rebaseConflict.baseBranch} in the
-            run worktree, then Retry.
-          </p>
-        </Notice>
-      ) : null}
-
-      {run.lifecycle === "paused" && blocked?.operationTriage ? (
-        <Notice variant="warning" title="Automatic triage already spent">
-          <p className="break-words">
-            The {WORKFLOW_PHASE_LABEL[blocked.operationTriage.phase]} step
-            failed the same way twice, so the run handed its implementer one
-            diagnostic assignment before stopping here.{" "}
-            {blocked.operationTriage.stoppedOn === "triage"
-              ? "The summary above is what that agent found."
-              : "The operation ran again afterwards and failed on its own terms; the summary above is its error."}{" "}
-            {blocked.operationTriage.restored
-              ? "The run branch was left exactly as the triage found it."
-              : "The server could not verify that the run branch was left as the triage found it. Inspect the run worktree before continuing."}
-          </p>
-        </Notice>
-      ) : null}
-
-      {repeatedAttempts ? (
-        <p className="break-words">
-          <span className="font-medium text-foreground">
-            Retry re-runs the same assignment
-          </span>{" "}
-          — exactly as this step received it, and usually in the same session,
-          which remembers the attempt that stopped. It can still end
-          differently: the condition it reported may have been repaired outside
-          the run.
-        </p>
-      ) : null}
-
-      {card?.workPlan ? (
-        <div className="rounded-lg border px-3 py-2">
-          <p className="font-medium text-foreground capitalize">
-            {card.workPlan.complexity} complexity
-          </p>
-          <div className="mt-1 break-words">
-            Implement: {card.workPlan.implementer.provider}:
-            {card.workPlan.implementer.modelId} (
-            {card.workPlan.implementer.thinkingLevel},{" "}
-            {card.workPlan.implementer.family}){" · "}
-            Review: {card.workPlan.reviewer.provider}:
-            {card.workPlan.reviewer.modelId} (
-            {card.workPlan.reviewer.thinkingLevel},{" "}
-            {card.workPlan.reviewer.family})
-          </div>
-          <p className="mt-1 break-words">{card.workPlan.rationale}</p>
-        </div>
-      ) : null}
-
-      {card?.reviewDecision ? (
-        <div>
-          <p>
-            After review pass {card.reviewDecision.afterPass}, the run{" "}
-            <span className="font-medium text-foreground">
-              {card.reviewDecision.decision === "deliver"
-                ? "delivered"
-                : card.reviewDecision.decision === "fix"
-                  ? card.reviewDecision.assignee === "implementer"
-                    ? "sent the findings back to the implementer"
-                    : "took a fix round"
-                  : "took another review pass"}
-            </span>
-            {routedRuntime(card.reviewDecision)
-              ? ` on ${routedRuntime(card.reviewDecision)}`
-              : ""}
-            .
-          </p>
-          <p className="mt-1 break-words">{card.reviewDecision.rationale}</p>
-          <ReviewList
-            label={
-              card.reviewDecision.decision === "fix"
-                ? "Focus for the fix round"
-                : "Focus for the next pass"
-            }
-            items={card.reviewDecision.focus}
-          />
-          {card.reviewDecision.truncated ? (
-            <p className="mt-1">
-              Shortened for this card — the coordinator session has the full
-              decision.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {card?.latestAssessment ? (
-        <div>
-          <p>
-            Reviewed commit{" "}
-            <span className="font-mono text-foreground">
-              {shortCommit(card.latestAssessment.headCommit)}
-            </span>{" "}
-            —{" "}
-            <span
-              className={`font-medium ${VERDICT_TONE[card.latestAssessment.verdict]}`}
-            >
-              {card.latestAssessment.verdict}
-            </span>
-            {card.latestAssessment.stale ? " (outdated — workspace moved)" : ""}
-          </p>
-          {card.latestAssessment.summary ? (
-            <p className="mt-1 break-words">{card.latestAssessment.summary}</p>
-          ) : null}
-          <ReviewList
-            label="Findings — these must be addressed before delivery"
-            items={card.latestAssessment.findings}
-          />
-          <ReviewList
-            label="Observations — noted, not required"
-            items={card.latestAssessment.observations}
-          />
-          {card.latestAssessment.truncated ? (
-            <p className="mt-1">
-              Shortened for this card — the reviewer session has the full
-              review.
-            </p>
-          ) : null}
-          {card.reviewSet ? (
-            <p className="mt-1">
-              Published as a review set on the worktree:{" "}
-              {card.reviewSet.findingCount} anchored{" "}
-              {card.reviewSet.findingCount === 1 ? "finding" : "findings"} —{" "}
-              {card.reviewSet.resolvedCount} resolved,{" "}
-              {card.reviewSet.disputedCount} answered and left open,{" "}
-              {card.reviewSet.openCount} unanswered. Open the worktree's review
-              to read the threads.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {card?.pullRequest ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <LinkButton
-            variant="link"
-            size="sm"
-            className="px-0"
-            href={card.pullRequest.url}
-            target="_blank"
-            rel="noreferrer"
-          >
-            Pull request #{card.pullRequest.number}
-          </LinkButton>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onOpenSession(card.pullRequest!.sessionId)}
-          >
-            Open live PR card
-          </Button>
-        </div>
-      ) : null}
-
-      {card?.coordinatorSessionId ||
-      card?.implementerSessionId ||
-      card?.fixerSessionId ||
-      card?.verdictSessionId ||
-      card?.reviewerSessions?.length ? (
-        // `grid-cols-1` is load-bearing, not noise: a bare `grid` leaves an
-        // implicit `auto` column, whose minimum is the row's min-content — and a
-        // `truncate` (white-space: nowrap) session title contributes its FULL
-        // width there, so a long title pushes the buttons out of the card
-        // instead of ellipsing. `grid-cols-*` tracks are `minmax(0, 1fr)`.
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {card.coordinatorSessionId ? (
-            <SessionButton
-              label="Coordinator"
-              sessionId={card.coordinatorSessionId}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
+          {canMerge && delivery ? (
+            <MergeMethodPicker
+              offered={offeredMethods}
+              known={Boolean(delivery.mergeMethods)}
+              selected={selectedMethod}
+              onSelect={setMergeMethod}
+              deleteBranch={deleteBranch}
+              onDeleteBranchChange={setDeleteBranch}
+              disabled={deliveryBusy}
             />
           ) : null}
-          {card.implementerSessionId ? (
-            <SessionButton
-              label="Implementer"
-              sessionId={card.implementerSessionId}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
-            />
-          ) : null}
-          {card.fixerSessionId ? (
-            <SessionButton
-              label="Fixer"
-              sessionId={card.fixerSessionId}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
-            />
-          ) : null}
-          {card.verdictSessionId ? (
-            <SessionButton
-              label="Verdict"
-              sessionId={card.verdictSessionId}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
-            />
-          ) : null}
-          {(card.reviewerSessions ?? []).map((review) => (
-            <SessionButton
-              key={review.sessionId}
-              label={
-                (card.reviewerSessions ?? []).length > 1
-                  ? `Reviewer ${review.pass}`
-                  : "Reviewer"
-              }
-              sessionId={review.sessionId}
-              sessions={sessions}
-              onOpenSession={onOpenSession}
-            />
-          ))}
-        </div>
-      ) : null}
 
-      {card?.cancelRequested ? (
-        <Notice variant="warning">
-          Cancelling — waiting for the step in flight to finish. Nothing further
-          will be started.
-        </Notice>
-      ) : null}
-
-      {card?.ceilingDecision ? (
-        <Notice variant="warning">
-          <p>
-            The run reached its{" "}
-            {card.ceilingDecision.blocked === "iterations"
-              ? "fix-round"
-              : "review-pass"}{" "}
-            ceiling and wanted to {card.ceilingDecision.wanted}.
-          </p>
-          <p className="mt-1">
-            Spent so far: {card.ceilingDecision.spent.iterations} fix{" "}
-            {card.ceilingDecision.spent.iterations === 1 ? "round" : "rounds"}{" "}
-            of {card.ceilingDecision.ceilings.maxIterations},{" "}
-            {card.ceilingDecision.spent.reviewPasses} review{" "}
-            {card.ceilingDecision.spent.reviewPasses === 1 ? "pass" : "passes"}{" "}
-            of {card.ceilingDecision.ceilings.maxReviewPasses}, and{" "}
-            {card.ceilingDecision.spent.sessions}{" "}
-            {card.ceilingDecision.spent.sessions === 1 ? "session" : "sessions"}
-            .
-          </p>
-          {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
-            <p className="mt-1">
-              There is no commit to deliver from here. Commit or discard the
-              stray work yourself and choose “Look again”, or extend the run.
-            </p>
-          ) : !card.ceilingDecision.allowedChoices.includes("deliver") ? (
-            <p className="mt-1">
-              There is no commit to deliver from here. Extend the run, or cancel
-              it and keep the worktree.
-            </p>
-          ) : !card.ceilingDecision.headCarriesDiscoveryReview ? (
-            <p className="mt-1 font-medium">
-              Delivering as it stands would ship work no review pass has
-              accepted.
+          {/* A present-tense CONDITION from the run's attention cursor: it goes
+              away by itself the moment the run is settled anywhere. */}
+          {delivery?.settleStillNeeded ? (
+            <p className="text-muted-foreground">
+              The checkout is gone, but this run still waits for its Settle in
+              the Sessions inbox.
             </p>
           ) : null}
-          <div className="mt-2 flex flex-wrap gap-2">
-            <CeilingRaiseControl
-              key={`${card.ceilingDecision.blocked}:${String(card.ceilingDecision.ceilings.maxIterations)}:${String(card.ceilingDecision.ceilings.maxReviewPasses)}`}
-              decision={card.ceilingDecision}
-              onRaise={(raise) => onAnswerCeiling(run.id, "raise", raise)}
-            />
-            {card.ceilingDecision.allowedChoices.includes("deliver") ? (
-              <Button
-                variant="outline"
-                onClick={() => onAnswerCeiling(run.id, "deliver")}
-              >
-                Deliver as it stands
-              </Button>
+          {deliveryError ? <ErrorNote message={deliveryError} /> : null}
+
+          <PropertyList align="start" size="sm">
+            {card?.coordinatorSessionId ? (
+              <>
+                <PropertyLabel>Coordinator</PropertyLabel>
+                <PropertyText className="flex min-w-0">
+                  <SessionLink
+                    sessionId={card.coordinatorSessionId}
+                    sessions={sessions}
+                    onOpenSession={onOpenSession}
+                  />
+                </PropertyText>
+              </>
             ) : null}
-            {card.ceilingDecision.allowedChoices.includes("re-evaluate") ? (
-              <Button
-                variant="outline"
-                onClick={() => onAnswerCeiling(run.id, "re-evaluate")}
-              >
-                Look again
-              </Button>
+            {liveRow && liveRow.key !== "coordinator" ? (
+              <>
+                <PropertyLabel>Working in</PropertyLabel>
+                <PropertyText className="flex min-w-0">
+                  <SessionLink
+                    sessionId={liveRow.sessionId}
+                    sessions={sessions}
+                    onOpenSession={onOpenSession}
+                  >
+                    {liveRow.label} session
+                  </SessionLink>
+                </PropertyText>
+              </>
             ) : null}
-            <Button
-              variant="destructive"
-              onClick={() =>
-                void confirmCancel(() => onAnswerCeiling(run.id, "cancel"))
-              }
+            <PropertyLabel>Progress</PropertyLabel>
+            <PropertyText>
+              {run.limits.maxIterations > 0
+                ? `Fix round ${iteration} of ${run.limits.maxIterations}`
+                : "No fix rounds"}
+              {` · ${reviewPasses} of ${run.limits.maxReviewPasses} review passes`}
+            </PropertyText>
+            {plan ? (
+              <>
+                <PropertyLabel>Complexity</PropertyLabel>
+                <PropertyText className="capitalize">
+                  {plan.complexity}
+                </PropertyText>
+                {roleRuntimes.map((row) => (
+                  <Fragment key={row.label}>
+                    <PropertyLabel>{row.label}</PropertyLabel>
+                    <RuntimeText
+                      runtime={row.runtime}
+                      accountName={
+                        row.runtime.credentialProfileId
+                          ? accountNames?.[row.runtime.credentialProfileId]
+                          : undefined
+                      }
+                    />
+                  </Fragment>
+                ))}
+              </>
+            ) : null}
+            {assessment ? (
+              <>
+                <PropertyLabel>Last review</PropertyLabel>
+                <PropertyText>
+                  <span
+                    className={`font-medium capitalize ${VERDICT_TONE[assessment.verdict]}`}
+                  >
+                    {assessment.verdict}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" · "}
+                    <span className="font-mono">
+                      {shortCommit(assessment.headCommit)}
+                    </span>
+                    {assessment.findings?.length
+                      ? ` · ${plural(assessment.findings.length, "finding", "findings")}`
+                      : ""}
+                    {assessment.stale ? " · outdated" : ""}
+                  </span>
+                </PropertyText>
+              </>
+            ) : null}
+            {card?.pullRequest ? (
+              <>
+                <PropertyLabel>Pull request</PropertyLabel>
+                <PropertyText>
+                  <a
+                    href={card.pullRequest.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  >
+                    #{card.pullRequest.number}
+                  </a>
+                </PropertyText>
+              </>
+            ) : null}
+            <PropertyLabel>Started</PropertyLabel>
+            <DateProperty date={{ ms: run.createdAt, dateOnly: false }} />
+          </PropertyList>
+
+          {assessment || decision ? (
+            <RunSection storageKey="workflow-run-review" title="Review">
+              {assessment?.summary ? (
+                <p className="break-words whitespace-pre-line text-muted-foreground">
+                  {assessment.summary}
+                </p>
+              ) : null}
+              <ReviewList
+                label="Findings — must be addressed before delivery"
+                items={assessment?.findings}
+              />
+              <ReviewList
+                label="Observations — noted, not required"
+                items={assessment?.observations}
+              />
+              {assessment?.truncated ? (
+                <p className="text-muted-foreground">
+                  Shortened here — the reviewer session has the full review.
+                </p>
+              ) : null}
+              {card?.reviewSet ? (
+                <p className="text-muted-foreground">
+                  Review threads on the worktree: {card.reviewSet.resolvedCount}{" "}
+                  resolved, {card.reviewSet.disputedCount} answered,{" "}
+                  {card.reviewSet.openCount} open.
+                </p>
+              ) : null}
+              {decision ? (
+                <div className="flex flex-col gap-1">
+                  <p>
+                    After pass {decision.afterPass}, the run{" "}
+                    <span className="font-medium">
+                      {decision.decision === "deliver"
+                        ? "delivered"
+                        : decision.decision === "fix"
+                          ? decision.assignee === "implementer"
+                            ? "sent the findings back to the implementer"
+                            : "took a fix round"
+                          : "took another review pass"}
+                    </span>
+                    {routedRuntime(decision)
+                      ? ` on ${routedRuntime(decision)}`
+                      : ""}
+                    .
+                  </p>
+                  <p className="break-words text-muted-foreground">
+                    {decision.rationale}
+                  </p>
+                  <ReviewList
+                    label={
+                      decision.decision === "fix"
+                        ? "Focus for the fix round"
+                        : "Focus for the next pass"
+                    }
+                    items={decision.focus}
+                  />
+                  {decision.truncated ? (
+                    <p className="text-muted-foreground">
+                      Shortened here — the coordinator session has the full
+                      decision.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </RunSection>
+          ) : null}
+
+          {plan ? (
+            <RunSection storageKey="workflow-run-plan" title="Why this plan">
+              <p className="break-words text-muted-foreground">
+                {plan.rationale}
+              </p>
+            </RunSection>
+          ) : null}
+
+          {sessionRows.length ? (
+            <RunSection
+              storageKey="workflow-run-sessions"
+              title={`Sessions (${sessionRows.length})`}
             >
-              Cancel run
-            </Button>
-          </div>
-        </Notice>
+              <ul className="-mx-2 flex flex-col">
+                {sessionRows.map((row) => (
+                  <SessionRow
+                    key={row.key}
+                    label={row.label}
+                    sessionId={row.sessionId}
+                    sessions={sessions}
+                    onOpenSession={onOpenSession}
+                  />
+                ))}
+              </ul>
+            </RunSection>
+          ) : null}
+        </>
       ) : null}
 
-      {card?.mergeDecisionReady ? (
-        <Notice variant="success">
-          Reviewed head passed CI and is mergeable. Merge below to record this
-          run's decision, or cancel the run.
-        </Notice>
-      ) : null}
-
-      {run.lifecycle === "completed" ? (
-        <Notice variant="success">
-          Pull request merged.
-          {delivery?.canCleanUp
-            ? " Clean up below to retire the checkout and settle the run."
-            : delivery?.cleanedUp
-              ? " The checkout was cleaned up."
-              : ""}{" "}
-          Answering the Task's own status stays a separate choice.
-        </Notice>
-      ) : null}
-
-      {delivery && onMerge && onCleanUp ? (
-        <DeliveryControls
-          runId={run.id}
-          delivery={delivery}
-          branch={run.branch}
-          onMerge={onMerge}
-          onCleanUp={onCleanUp}
-        />
-      ) : null}
-
-      {showNextAction ? (
-        <p className="text-foreground">
-          {card?.nextAction ??
-            (run.lifecycle === "paused"
-              ? // No card means this build has no decision function for the
-                // run's recipe, and none is coming. "Preparing…" would promise
-                // a status that never arrives, in the one state where the user
-                // has to decide to cancel.
-                "This build does not recognize this run's recipe, so it cannot be continued. Cancelling keeps the worktree, branch, sessions and any pull request."
-              : "Preparing workflow status…")}
-        </p>
-      ) : null}
       {deleteRunOpen ? (
         <ConfirmDialog
           title="Delete this cancelled workflow run?"

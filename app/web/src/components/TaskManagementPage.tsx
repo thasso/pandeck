@@ -41,6 +41,7 @@ import type {
   SessionListItem,
   TaskItem,
   WorkflowCeilingRaise,
+  WorkflowCommitCheckChoice,
   WorkflowRunSummary,
 } from "@assistant/shared";
 import {
@@ -146,6 +147,7 @@ export function TaskManagementPage({
   onDismissFailure,
   workflowRuns,
   workflowCards,
+  accountNames,
   sessions,
   taskMutations,
   actions,
@@ -177,6 +179,8 @@ export function TaskManagementPage({
   onDismissFailure?: () => void;
   workflowRuns: WorkflowRunSummary[] | null;
   workflowCards: Record<string, ClientWorkflowRunCard>;
+  /** Account names by credential profile id, for the run card's roles. */
+  accountNames: Readonly<Record<string, string>>;
   sessions: SessionListItem[];
   taskMutations: UIState["taskMutations"];
   actions: AssistantActions;
@@ -499,6 +503,7 @@ export function TaskManagementPage({
               runs={selectedRuns}
               runsLoaded={workflowRuns !== null}
               workflowCards={workflowCards}
+              accountNames={accountNames}
               sessions={sessions}
               onOpenSession={onOpenSession}
               onPauseRun={actions.pauseWorkflowRun}
@@ -507,6 +512,7 @@ export function TaskManagementPage({
               onDeleteRun={actions.deleteWorkflowRun}
               onRetryRun={actions.retryWorkflowRun}
               onAnswerCeiling={actions.answerWorkflowCeiling}
+              onAnswerCommitCheck={actions.answerWorkflowCommitCheck}
               onRebaseAndReviewRun={actions.rebaseAndReviewWorkflowRun}
               onMergeRun={actions.mergeWorkflowRun}
               onCleanUpRun={actions.cleanUpWorkflowRun}
@@ -629,6 +635,7 @@ function TaskDetailPanel({
   runs,
   runsLoaded,
   workflowCards,
+  accountNames,
   sessions,
   onOpenSession,
   onPauseRun,
@@ -637,6 +644,7 @@ function TaskDetailPanel({
   onDeleteRun,
   onRetryRun,
   onAnswerCeiling,
+  onAnswerCommitCheck,
   onRebaseAndReviewRun,
   onMergeRun,
   onCleanUpRun,
@@ -673,6 +681,7 @@ function TaskDetailPanel({
   runs: WorkflowRunSummary[];
   runsLoaded: boolean;
   workflowCards: UIState["workflowCards"];
+  accountNames: Readonly<Record<string, string>>;
   sessions: UIState["sessions"];
   onOpenSession: (id: string) => void;
   onPauseRun: (id: string) => void;
@@ -687,6 +696,10 @@ function TaskDetailPanel({
     runId: string,
     choice: "raise" | "deliver" | "re-evaluate" | "cancel",
     raise?: WorkflowCeilingRaise,
+  ) => void;
+  onAnswerCommitCheck: (
+    runId: string,
+    choice: WorkflowCommitCheckChoice,
   ) => void;
   onRebaseAndReviewRun: (id: string) => void;
   onMergeRun: (
@@ -807,7 +820,7 @@ function TaskDetailPanel({
               </div>
             ) : runs.length ? (
               <div className="mb-6 flex flex-col gap-3">
-                {runs.map((run) => (
+                {runs.map((run, index) => (
                   // The run's durable ADDRESS on this page: what
                   // `/tasks/:taskId#workflow-run-:runId` resolves to, and the
                   // element {@link useWorkflowRunAnchor} scrolls to and focuses
@@ -823,6 +836,7 @@ function TaskDetailPanel({
                     <WorkflowRunCard
                       run={run}
                       card={workflowCards[run.id]}
+                      accountNames={accountNames}
                       sessions={sessions}
                       onOpenSession={onOpenSession}
                       onPause={onPauseRun}
@@ -831,9 +845,17 @@ function TaskDetailPanel({
                       onDelete={onDeleteRun}
                       onRetry={onRetryRun}
                       onAnswerCeiling={onAnswerCeiling}
+                      onAnswerCommitCheck={onAnswerCommitCheck}
                       onRebaseAndReview={onRebaseAndReviewRun}
                       onMerge={onMergeRun}
                       onCleanUp={onCleanUpRun}
+                      // The newest run leads; an older one that has finished
+                      // starts as one line under it.
+                      defaultCollapsed={
+                        index > 0 &&
+                        (run.lifecycle === "completed" ||
+                          run.lifecycle === "cancelled")
+                      }
                     />
                   </div>
                 ))}

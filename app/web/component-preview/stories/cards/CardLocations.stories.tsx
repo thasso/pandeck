@@ -181,6 +181,7 @@ function TranscriptLocation() {
               onDelete={noop}
               onRetry={noop}
               onAnswerCeiling={noop}
+              onAnswerCommitCheck={noop}
               onRebaseAndReview={noop}
               onMerge={noop}
               onCleanUp={noop}

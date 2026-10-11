@@ -860,6 +860,14 @@ function AppContent() {
   const credentialProfileProjection = dataOf(credentialProfileFetch.state);
   const credentialProfiles =
     credentialProfileProjection?.profiles ?? NO_CREDENTIAL_PROFILES;
+  // Account names by id, for surfaces that name an account a run or role uses.
+  const accountNames = useMemo(
+    () =>
+      Object.fromEntries(
+        credentialProfiles.map((profile) => [profile.id, profile.name]),
+      ),
+    [credentialProfiles],
+  );
   const activeCredentialProfiles = useMemo(
     () => credentialProfiles.filter((profile) => profile.enabled),
     [credentialProfiles],
@@ -6869,6 +6877,7 @@ function AppContent() {
                       }
                       workflowRuns={selectedTaskWorkflowRuns}
                       workflowCards={selectedTaskWorkflowCards}
+                      accountNames={accountNames}
                       sessions={backlogSessions}
                       taskMutations={selectedTaskMutations}
                       actions={actions}
