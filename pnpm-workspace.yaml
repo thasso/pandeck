@@ -101,11 +101,12 @@ catalogs:
 # runtime lacks.
 #
 # pi-coding-agent pins `undici` exactly while jsdom floats it. `openai` takes
-# undici as a peer, so two versions split pi-ai into two copies with separate
-# provider registries. Keep the catalog on pi's exact pin.
+# undici as a peer, so two 8.x versions split pi-ai into two copies with
+# separate provider registries. Hold the 8.x line on pi's exact pin; other
+# majors (shadcn's 7.x) resolve on their own.
 overrides:
   "@types/node": "catalog:"
-  undici: "catalog:"
+  "undici@^8": "catalog:"
 
 # An entry WITHOUT a version exempts every version of that package, so the
 # Claude agent SDK — which we deliberately track at latest, harness fixes and

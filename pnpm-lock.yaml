@@ -229,7 +229,7 @@ catalogs:
 
 overrides:
   '@types/node': 24.13.3
-  undici: 8.10.2
+  undici@^8: 8.10.2
 
 importers:
 
@@ -5173,6 +5173,10 @@ packages:
   undici-types@8.10.1:
     resolution: {integrity: sha512-ZpkgovMu+ALwfuo6Bgys8H82gHJ25d4ARMB51FD2BeLnUCDRgY6N3caWk3N6CtKR77gHmRKYHnLF723owNYPNA==}
 
+  undici@7.30.0:
+    resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
+    engines: {node: '>=20.18.1'}
+
   undici@8.10.2:
     resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
@@ -6022,7 +6026,7 @@ snapshots:
       open: 8.4.2
       picomatch: 4.0.7
       systeminformation: 5.33.15
-      undici: 8.10.2
+      undici: 7.30.0
       which: 4.0.0
       yocto-spinner: 1.2.2
 
@@ -7131,7 +7135,7 @@ snapshots:
       ts-morph: 26.0.0
       tsconfig-paths: 4.2.0
       type-fest: 4.41.0
-      undici: 8.10.2
+      undici: 7.30.0
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
@@ -9950,7 +9954,7 @@ snapshots:
       stringify-object: 5.0.0
       ts-morph: 26.0.0
       tsconfig-paths: 4.2.0
-      undici: 8.10.2
+      undici: 7.30.0
       validate-npm-package-name: 7.0.2
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
@@ -10247,6 +10251,8 @@ snapshots:
   undici-types@7.18.2: {}
 
   undici-types@8.10.1: {}
+
+  undici@7.30.0: {}
 
   undici@8.10.2: {}
 
