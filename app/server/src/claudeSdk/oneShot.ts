@@ -126,6 +126,9 @@ function buildOneShotOptions(
     // Disable Claude's native auto-memory globally; our in-app Memory is the
     // single authoritative memory surface (see CLAUDE_SDK_HARNESS_SETTINGS).
     settings: CLAUDE_SDK_HARNESS_SETTINGS,
+    // Pinned: an omitted mode is left to Claude Code, which can start in auto
+    // mode and let its classifier decide tool calls instead of `canUseTool`.
+    permissionMode: "default",
     maxTurns: toolServer ? (input.maxTurns ?? 8) : 1,
     ...(toolServer
       ? {
