@@ -28,6 +28,7 @@
     "@assistant/shared": "workspace:*",
     "@earendil-works/pi-ai": "catalog:",
     "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-mcp": "catalog:",
     "@modelcontextprotocol/sdk": "catalog:",
     "@mozilla/readability": "catalog:",
     "@opendocsg/pdf2md": "catalog:",

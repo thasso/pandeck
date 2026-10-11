@@ -468,6 +468,32 @@ test("command monitor uses the configured shell and command prefix", async () =>
   assert.equal(readFileSync(outputPath, "utf8"), "prefix=applied");
 });
 
+test("a nonzero foreground exit fails the call with its output and exit code", async () => {
+  serial += 1;
+  const sessionId = `pi-foreground-exit-${serial}`;
+  const session: ToolSession = {
+    sessionId,
+    harness: "pi",
+    agentType: "developer",
+    cwd: dataDir,
+  };
+  const bash = createPiBackgroundTools({
+    session: () => session,
+    identity: () => ({ sessionId }),
+  })[0]!;
+  // pi resolves this as an `isError` result; the app contract is a rejection.
+  await assert.rejects(
+    () =>
+      bash.execute(
+        { command: "printf partial; exit 7" },
+        { toolCallId: `foreground-exit-${serial}`, session },
+      ),
+    (error: Error) =>
+      error.message.includes("partial") &&
+      error.message.includes("Command exited with code 7"),
+  );
+});
+
 test("excluded owners keep foreground bash while background admission is denied", async () => {
   serial += 1;
   const sessionId = `pi-background-internal-${serial}`;

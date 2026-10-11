@@ -65,7 +65,7 @@
     },
     "developer": {
       "pi": {
-        "prompt": 13500,
+        "prompt": 13600,
         "eagerTools": 20500,
         "firstRequest": 33900
       },
@@ -536,6 +536,14 @@
       "task": 659,
       "date": "2026-09-23",
       "why": "carries the prompt raise above"
+    },
+    {
+      "budget": "developer.pi.prompt",
+      "from": 13500,
+      "to": 13600,
+      "task": "pi-sdk-1x",
+      "date": "2026-10-11",
+      "why": "vendor growth, not ours: pi 1.1's default prompt adds MCP and codemode pointers (+120) to its documentation-paths line, which pi's buildSystemPrompt renders and the app cannot trim without replacing pi's default prompt"
     }
   ]
 }
