@@ -285,6 +285,19 @@ function bridgeResult(result: {
   return { content, details: result.details };
 }
 
+/** The text blocks of an upstream result, joined as pi renders them. */
+function resultText(result: {
+  content: ReadonlyArray<{ type: string; text?: string }>;
+}): string {
+  return result.content
+    .flatMap((block) =>
+      block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
+    )
+    .join("\n");
+}
+
 interface BackgroundOutputResult {
   eventCount: number;
   droppedEventCount: number;
@@ -874,21 +887,23 @@ export function createPiBackgroundTools(
             env: withPiEnvironment(withChildProcessEnv(spawn.env), identity),
           }),
         });
-        return bridgeResult(
-          await upstream.execute(
-            ctx.toolCallId,
-            {
-              command: params.command,
-              ...(params.timeout !== undefined
-                ? { timeout: params.timeout }
-                : {}),
-            },
-            ctx.signal,
-            ctx.progress
-              ? (partial) => ctx.progress!(bridgeResult(partial))
-              : undefined,
-          ),
+        const result = await upstream.execute(
+          ctx.toolCallId,
+          {
+            command: params.command,
+            ...(params.timeout !== undefined
+              ? { timeout: params.timeout }
+              : {}),
+          },
+          ctx.signal,
+          ctx.progress
+            ? (partial) => ctx.progress!(bridgeResult(partial))
+            : undefined,
         );
+        // pi resolves a nonzero exit as an `isError` result; app tools report
+        // failure by throwing, which is the only failure the adapter carries.
+        if (result.isError) throw new Error(resultText(result));
+        return bridgeResult(result);
       }
       validateBashTimeout(params.timeout);
       return admitProcess({
