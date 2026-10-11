@@ -1,3 +1,4 @@
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { Fragment, memo, useEffect, useRef, useState } from "react";
 import {
   Activity,
@@ -55,7 +56,6 @@ import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
-import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
@@ -265,10 +265,12 @@ function ActiveSessionCardImpl({
   // always true, so the row never holds the age alone.
   const identity = [
     agent.label,
-    session.model ? (session.model.name ?? session.model.id) : undefined,
-    session.thinkingLevel && session.thinkingLevel !== "off"
-      ? THINKING_LABELS[session.thinkingLevel]
-      : undefined,
+    runtimeLabel({
+      model: session.model
+        ? (session.model.name ?? session.model.id)
+        : undefined,
+      thinkingLevel: session.thinkingLevel,
+    }),
   ]
     .filter(Boolean)
     .join(" · ");

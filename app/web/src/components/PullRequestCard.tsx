@@ -45,7 +45,12 @@ import { Button } from "@/components/ui/button";
 import { AppCard, type AppCardTone } from "./common/AppCard.tsx";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 
 /**
  * The wire card plus the reducer's browser-local click overlay — one type, so
@@ -228,28 +233,34 @@ export function MergeMethodPicker({
   onDeleteBranchChange: (value: boolean) => void;
   disabled: boolean;
 }) {
+  // One compact row: a dropdown rather than a button per method, so the
+  // method and the branch choice sit side by side even on a phone.
   return (
-    <>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
       {offered.length > 0 ? (
-        <ToggleGroup
-          variant="outline"
-          size="sm"
-          spacing={0}
-          aria-label="Merge method"
-          value={selected ? [selected] : []}
+        <Select
+          value={selected ?? null}
           disabled={disabled}
-          onValueChange={(next) => {
-            if (next[0]) onSelect(next[0] as PullRequestMergeMethod);
+          onValueChange={(next: string | null) => {
+            const method = offered.find((id) => id === next);
+            if (method) onSelect(method);
           }}
         >
-          {PULL_REQUEST_MERGE_METHODS.filter((id) => offered.includes(id)).map(
-            (id) => (
-              <ToggleGroupItem key={id} value={id}>
+          <SelectTrigger size="sm" aria-label="Merge method">
+            <span className="truncate">
+              {selected ? MERGE_METHOD_LABELS[selected] : "Merge method"}
+            </span>
+          </SelectTrigger>
+          <SelectContent align="start">
+            {PULL_REQUEST_MERGE_METHODS.filter((id) =>
+              offered.includes(id),
+            ).map((id) => (
+              <SelectItem key={id} value={id}>
                 {MERGE_METHOD_LABELS[id]}
-              </ToggleGroupItem>
-            ),
-          )}
-        </ToggleGroup>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       ) : (
         <span className="text-muted-foreground">
           {known
@@ -265,7 +276,7 @@ export function MergeMethodPicker({
         />
         Delete remote branch
       </Label>
-    </>
+    </div>
   );
 }
 
@@ -397,17 +408,15 @@ function usePullRequestCardActions({
 
   return {
     form: open ? (
-      <div className="flex flex-wrap items-center gap-1.5">
-        <MergeMethodPicker
-          offered={offeredMethods}
-          known={Boolean(supportedMethods)}
-          selected={selectedMethod}
-          onSelect={setMethod}
-          deleteBranch={deleteBranch}
-          onDeleteBranchChange={setDeleteBranch}
-          disabled={Boolean(running) || conflicted}
-        />
-      </div>
+      <MergeMethodPicker
+        offered={offeredMethods}
+        known={Boolean(supportedMethods)}
+        selected={selectedMethod}
+        onSelect={setMethod}
+        deleteBranch={deleteBranch}
+        onDeleteBranchChange={setDeleteBranch}
+        disabled={Boolean(running) || conflicted}
+      />
     ) : null,
     buttons: (
       <>

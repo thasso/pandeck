@@ -1,3 +1,4 @@
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { useMemo, type ReactNode } from "react";
 import {
   Archive,
@@ -270,10 +271,11 @@ function sessionRuntimeSubtitle(session: SessionListItem): string | undefined {
   const model = session.model;
   const parts = [
     session.isStreaming ? "Running" : undefined,
-    model
-      ? `${providerLabel(model.provider)} · ${model.name ?? model.id}`
-      : undefined,
-    session.thinkingLevel ? `thinking ${session.thinkingLevel}` : undefined,
+    model ? providerLabel(model.provider) : undefined,
+    runtimeLabel({
+      model: model ? (model.name ?? model.id) : undefined,
+      thinkingLevel: session.thinkingLevel,
+    }),
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }

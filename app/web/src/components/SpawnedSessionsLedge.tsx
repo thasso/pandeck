@@ -1,3 +1,4 @@
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import {
   createContext,
   Fragment,
@@ -29,7 +30,6 @@ import {
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
-import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
 import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { Spinner } from "./common/load.tsx";
@@ -343,15 +343,11 @@ export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
     ({} as SpawnedSessionDetails);
   const worktreeId = session.worktreeId;
   const model = session.model;
-  const runtime = [
-    details.account,
-    model ? (model.name ?? model.id) : undefined,
-    session.thinkingLevel && session.thinkingLevel !== "off"
-      ? THINKING_LABELS[session.thinkingLevel]
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const runtime = runtimeLabel({
+    model: model ? (model.name ?? model.id) : undefined,
+    thinkingLevel: session.thinkingLevel,
+    account: details.account,
+  });
   const agent =
     AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
     AGENT_TYPE_DISPLAY.assistant;

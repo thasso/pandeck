@@ -10,6 +10,7 @@
  * @payload `approval` DisplayBlock (`ApprovalCard`).
  * @useWhen A mutation tool prepares a proposal or its status changes via approvalUpdate.
  */
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { createElement, useEffect, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
@@ -616,13 +617,11 @@ function SpawnRow({
           </div>
         ) : (
           <p className="text-muted-foreground">
-            {[
-              selected?.name ?? item.modelName ?? item.modelId,
-              selected?.accountName ?? item.accountName,
-              `${thinkingLevel} thinking`,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+            {runtimeLabel({
+              model: selected?.name ?? item.modelName ?? item.modelId,
+              thinkingLevel,
+              account: selected?.accountName ?? item.accountName,
+            })}
           </p>
         )}
         {warning && (
