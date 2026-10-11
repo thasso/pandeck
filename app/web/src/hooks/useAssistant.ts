@@ -107,6 +107,7 @@ import type {
   WorkflowRunCard,
   WorkflowRunDelivery,
   WorkflowCeilingRaise,
+  WorkflowCommitCheckChoice,
   WorkflowRunLimits,
   WorkflowRunStartPhase,
   WorkflowRunSummary,
@@ -6338,6 +6339,10 @@ export interface AssistantActions {
     choice: "raise" | "deliver" | "re-evaluate" | "cancel",
     raise?: WorkflowCeilingRaise,
   ) => void;
+  answerWorkflowCommitCheck: (
+    runId: string,
+    choice: WorkflowCommitCheckChoice,
+  ) => void;
   rebaseAndReviewWorkflowRun: (runId: string) => void;
   /**
    * The run's two delivery controls. Both write the pull-request card the run
@@ -8680,6 +8685,8 @@ export function useAssistant({
           choice,
           ...(raise ? { raise } : {}),
         }),
+      answerWorkflowCommitCheck: (runId, choice) =>
+        send({ type: "answerWorkflowCommitCheck", runId, choice }),
       rebaseAndReviewWorkflowRun: (runId) =>
         send({ type: "rebaseAndReviewWorkflowRun", runId }),
       mergeWorkflowRun: (runId, { mergeMethod, deleteBranch }) => {

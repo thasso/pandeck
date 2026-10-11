@@ -221,7 +221,9 @@ async function executeOperation(
       commitResult = await dependencies.commit({
         source: "tool",
         cwd: worktree.path,
-        force: false,
+        // Only the user's "Commit anyway" at a refused commit writes this: it
+        // is the one way past the commit check, and a human's call.
+        force: record(context.step.payload).force === true,
         additionalContext: `Workflow Run ${run.id} for Task-${run.taskId}.`,
       });
     } catch (err) {
@@ -233,10 +235,20 @@ async function executeOperation(
       commitResult.status !== "committed" &&
       !isNoChangesCommitResult(commitResult)
     ) {
-      if (commitResult.status === "blocked")
-        return blocked(
-          `commit phase blocked: ${commitFailureReason(commitResult)}`,
-        );
+      if (commitResult.status === "blocked") {
+        // The commit check's own problems travel structured, so the recipe can
+        // hand code problems back to the implementer and the card can say
+        // which file and why, instead of one flattened sentence.
+        const blockers = commitCheckBlockersOf(commitResult);
+        return blockers.length > 0
+          ? blocked(
+              `the commit check refused this change: ${commitFailureReason(commitResult)}`,
+              { commitCheck: { blockers } },
+            )
+          : blocked(
+              `commit phase blocked: ${commitFailureReason(commitResult)}`,
+            );
+      }
       return failed(
         `commit phase failed: ${commitFailureReason(commitResult)}`,
       );
@@ -646,6 +658,20 @@ async function fullCommitOid(
   label: string,
 ): Promise<string> {
   return requireFullOid(await dependencies.commitOid(cwd, ref), label);
+}
+
+/** The commit check's problems, bounded, in the shape the recipe reads back. */
+function commitCheckBlockersOf(
+  result: CommitWorkflowResult,
+): WorkflowJsonValue[] {
+  return result.blockers
+    .filter((item) => item.reason.trim())
+    .slice(0, 20)
+    .map((item) => ({
+      kind: item.kind,
+      ...(item.file ? { file: item.file } : {}),
+      reason: boundedSummary(item.reason).slice(0, 600),
+    }));
 }
 
 function commitFailureReason(result: CommitWorkflowResult): string {

@@ -16,7 +16,9 @@ import {
   identicalTailAttempts,
   isRecheckablePullRequestObservation,
   isStaleAssessment,
+  addressCommitCheckPayloadOf,
   ceilingDecisionPayloadOf,
+  commitCheckDecisionPayloadOf,
   mergeDecisionPayloadOf,
   phaseOf,
   rebaseConflictOf,
@@ -47,6 +49,7 @@ const PHASE_ACTION: Record<RecipePhase, string> = {
   review: "review",
   "review-decision": "the coordinator's post-assessment decision",
   "ceiling-decision": "your decision at the run's ceiling",
+  "commit-check-decision": "your decision on the refused commit",
   delivery: "delivery",
   observe: "CI and pull request observation",
   merge: "merge decision",
@@ -164,6 +167,11 @@ function projectedRoleConfig(
     thinkingLevel: config.thinkingLevel,
     family: config.family,
     ...(config.notes ? { notes: config.notes } : {}),
+    // The account it runs under, by id: the card names it from the client's
+    // own account list, as session rows do.
+    ...(config.credentialProfileId
+      ? { credentialProfileId: config.credentialProfileId }
+      : {}),
   };
 }
 
@@ -188,16 +196,37 @@ function newestSessionForRole(
     const payload = payloadOf(step);
     if (step.kind !== "agent" || step.executor?.kind !== "session" || !payload)
       continue;
+    // A fixer's assignment — a fix round, or its fix for the commit check —
+    // names its runtime; the implementer's own never does.
+    const fixerAssignment =
+      (payload.objective === "revise" ||
+        payload.objective === "address-commit-check") &&
+      Boolean(payload.fixer);
     const matches =
       role === "fixer"
-        ? payload.role === "implementer" &&
-          payload.objective === "revise" &&
-          Boolean(payload.fixer)
+        ? payload.role === "implementer" && fixerAssignment
         : role === "implementer"
-          ? payload.role === "implementer" &&
-            !(payload.objective === "revise" && payload.fixer)
+          ? payload.role === "implementer" && !fixerAssignment
           : payload.role === role;
     if (matches) return step.executor.id;
+  }
+  return undefined;
+}
+
+/**
+ * The session whose work a commit carried: the nearest agent step before it
+ * that ran in a session, across refused attempts and the fixes between them.
+ */
+function changedBySession(
+  steps: readonly WorkflowStepRow[],
+  commitStepId: number,
+): string | undefined {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  let step = byId.get(commitStepId);
+  while (step?.predecessorId !== undefined) {
+    step = byId.get(step.predecessorId);
+    if (step?.kind === "agent" && step.executor?.kind === "session")
+      return step.executor.id;
   }
   return undefined;
 }
@@ -497,6 +526,10 @@ function nextActionOf(
       const phase = step ? phaseOf(step) : undefined;
       const action = phase ? PHASE_ACTION[phase] : (step?.kind ?? "work");
       if (step?.kind === "user-decision") return `Decision required: ${action}`;
+      if (step && addressCommitCheckPayloadOf(step))
+        return step.status === "running"
+          ? "Working: fixing what the commit check found"
+          : "Waiting to start: the fix for the commit check";
       return step?.status === "running"
         ? `Working: ${action}`
         : `Waiting to start: ${action}`;
@@ -584,6 +617,13 @@ export function workflowRunCardOf(
     last && !isTerminalWorkflowStepStatus(last.status)
       ? ceilingDecisionPayloadOf(last)
       : undefined;
+  const openCommitCheckDecision =
+    last && !isTerminalWorkflowStepStatus(last.status)
+      ? commitCheckDecisionPayloadOf(last)
+      : undefined;
+  const commitChangedBy = openCommitCheckDecision
+    ? changedBySession(steps, openCommitCheckDecision.refusedStepId)
+    : undefined;
   const stoppedTail =
     run.lifecycle === "paused" &&
     last &&
@@ -686,6 +726,19 @@ export function workflowRunCardOf(
           },
         }
       : {}),
+    ...(openCommitCheckDecision
+      ? {
+          commitCheckDecision: {
+            blockers: openCommitCheckDecision.blockers.map((item) => ({
+              ...item,
+              reason: boundedWorkflowProjectionText(item.reason),
+            })),
+            allowedChoices: openCommitCheckDecision.allowedChoices,
+            autoFixSpent: openCommitCheckDecision.autoFixSpent,
+            ...(commitChangedBy ? { changedBySessionId: commitChangedBy } : {}),
+          },
+        }
+      : {}),
     ...(run.cancelRequestedAt !== undefined ? { cancelRequested: true } : {}),
     mergeDecisionReady,
     // A cancellation the user has asked for takes every control with it, not
@@ -707,6 +760,7 @@ export function workflowRunCardOf(
       decision.kind !== "pause" &&
       !cancelling &&
       openCeilingDecision === undefined &&
+      openCommitCheckDecision === undefined &&
       !mergeDecisionReady &&
       !canRebaseAndReview,
     ...(blockedReason ? { blockedReason } : {}),

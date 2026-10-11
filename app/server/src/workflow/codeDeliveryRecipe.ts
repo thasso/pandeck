@@ -47,6 +47,8 @@ import {
   WORKFLOW_PAYLOAD_MAX_CHARS,
   type ReviewFinding,
   type ReviewFindingResolution,
+  type WorkflowCommitCheckBlocker,
+  type WorkflowCommitCheckChoice,
   type WorkflowJsonValue,
   type WorkflowStepKind,
 } from "@assistant/shared";
@@ -81,7 +83,10 @@ export const CODE_DELIVERY_RECIPE_ID = "code-delivery";
  * The version of THIS decision function. A change in behavior bumps it in
  * place; runs recorded against an older version then pause as an unknown
  * recipe. That is deliberate — dev-time runs are debris, not data to migrate,
- * and this repo does not carry backwards compatibility.
+ * and this repo does not carry backwards compatibility. A purely ADDITIVE
+ * change — one that decides every existing history exactly as before — keeps
+ * the version: the commit-check handling reacts only to steps and result
+ * payloads no older history contains, so it did not bump it.
  */
 export const CODE_DELIVERY_RECIPE_VERSION = 19;
 
@@ -572,6 +577,7 @@ const RECIPE_PHASES = [
   "review",
   "review-decision",
   "ceiling-decision",
+  "commit-check-decision",
   "delivery",
   "observe",
   "merge",
@@ -629,6 +635,7 @@ export function phaseOf(step: WorkflowStepRow): RecipePhase | undefined {
   if (step.kind === "user-decision") {
     if (payload.decision === "merge-pull-request") return "merge";
     if (payload.decision === "raise-ceilings") return "ceiling-decision";
+    if (payload.decision === "commit-check") return "commit-check-decision";
   }
   return undefined;
 }
@@ -1046,6 +1053,340 @@ function operationTriageAssignment(
       predecessorId: last.id,
     },
   };
+}
+
+/* ------------------------- when the commit check refuses ------------------------ */
+
+/**
+ * Kinds the commit check reports that only a human may answer: whether a
+ * secret belongs in history, whether unrelated files ride along, whether a
+ * change is too broad for one commit. The others are code problems.
+ */
+const HUMAN_CALL_COMMIT_CHECK_KINDS: ReadonlySet<string> = new Set([
+  "secret",
+  "unrelated",
+  "too_broad",
+]);
+
+const COMMIT_CHECK_KINDS: ReadonlySet<string> = new Set([
+  "secret",
+  "unrelated",
+  "too_broad",
+  "unsafe",
+  "unclear",
+  "other",
+]);
+
+/**
+ * How many times the run hands one refused commit back to its implementer on
+ * its own before asking the user. Two: a first fix that the check still finds
+ * wanting gets one more turn; a third would be the run arguing with itself.
+ */
+const COMMIT_CHECK_AUTO_FIX_ROUNDS = 2;
+
+function commitCheckBlockerList(
+  value: WorkflowJsonValue | undefined,
+): WorkflowCommitCheckBlocker[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const blockers: WorkflowCommitCheckBlocker[] = [];
+  for (const item of value) {
+    const record = payloadRecord(item);
+    if (
+      typeof record.kind !== "string" ||
+      !COMMIT_CHECK_KINDS.has(record.kind) ||
+      typeof record.reason !== "string" ||
+      !record.reason.trim()
+    )
+      return undefined;
+    blockers.push({
+      kind: record.kind as WorkflowCommitCheckBlocker["kind"],
+      ...(typeof record.file === "string" && record.file
+        ? { file: record.file }
+        : {}),
+      reason: record.reason,
+    });
+  }
+  return blockers;
+}
+
+/** The commit check's problems on a commit it refused, from the host's result. */
+function commitCheckBlockersOf(
+  step: WorkflowStepRow,
+): WorkflowCommitCheckBlocker[] | undefined {
+  const phase = phaseOf(step);
+  if (
+    step.kind !== "host-operation" ||
+    (phase !== "commit" && phase !== "commit-sync") ||
+    step.status !== "blocked"
+  )
+    return undefined;
+  return commitCheckBlockerList(
+    payloadRecord(payloadRecord(step.result?.payload).commitCheck).blockers,
+  );
+}
+
+/** An implementer assignment to fix what the commit check found. */
+export type AddressCommitCheckEvidence = {
+  refusedStepId: number;
+  operation: string;
+  blockers: WorkflowCommitCheckBlocker[];
+  /** `run` when the run sent it on its own, `user` when the user chose to. */
+  requestedBy: "run" | "user";
+};
+
+export function addressCommitCheckPayloadOf(
+  step: WorkflowStepRow,
+): AddressCommitCheckEvidence | undefined {
+  const payload = payloadRecord(step.payload);
+  if (
+    step.kind !== "agent" ||
+    payload.role !== "implementer" ||
+    payload.objective !== "address-commit-check"
+  )
+    return undefined;
+  const refused = payloadRecord(payload.refusedCommit);
+  const blockers = commitCheckBlockerList(payload.blockers);
+  return typeof refused.stepId === "number" &&
+    Number.isInteger(refused.stepId) &&
+    (refused.operation === COMMIT_ONLY_OPERATION_ID ||
+      refused.operation === COMMIT_SYNC_OPERATION_ID) &&
+    blockers &&
+    (payload.requestedBy === "run" || payload.requestedBy === "user")
+    ? {
+        refusedStepId: refused.stepId,
+        operation: refused.operation,
+        blockers,
+        requestedBy: payload.requestedBy,
+      }
+    : undefined;
+}
+
+/**
+ * The gate a refused commit reaches when the run will not fix it on its own:
+ * the check named a human's call, or the implementer already had its turns.
+ */
+export type CommitCheckDecisionStepPayload = {
+  decision: "commit-check";
+  refusedStepId: number;
+  blockers: WorkflowCommitCheckBlocker[];
+  /** `commit-anyway` is never offered over a secret. */
+  allowedChoices: WorkflowCommitCheckChoice[];
+  autoFixSpent: boolean;
+};
+
+export function commitCheckDecisionPayloadOf(
+  step: WorkflowStepRow,
+): CommitCheckDecisionStepPayload | undefined {
+  if (phaseOf(step) !== "commit-check-decision") return undefined;
+  const payload = payloadRecord(step.payload);
+  const blockers = commitCheckBlockerList(payload.blockers);
+  const choices = payload.allowedChoices;
+  return typeof payload.refusedStepId === "number" &&
+    blockers &&
+    Array.isArray(choices) &&
+    choices.includes("send-to-implementer")
+    ? {
+        decision: "commit-check",
+        refusedStepId: payload.refusedStepId,
+        blockers,
+        allowedChoices: choices.filter(
+          (choice): choice is WorkflowCommitCheckChoice =>
+            choice === "send-to-implementer" || choice === "commit-anyway",
+        ),
+        autoFixSpent: payload.autoFixSpent === true,
+      }
+    : undefined;
+}
+
+/** What the user answered at a refused commit, when the step is settled. */
+function commitCheckDecisionResultOf(
+  step: WorkflowStepRow,
+): WorkflowCommitCheckChoice | "cancel" | undefined {
+  if (
+    !commitCheckDecisionPayloadOf(step) ||
+    step.result?.status !== "completed"
+  )
+    return undefined;
+  const choice = payloadRecord(step.result.payload).choice;
+  return choice === "send-to-implementer" ||
+    choice === "commit-anyway" ||
+    choice === "cancel"
+    ? choice
+    : undefined;
+}
+
+/**
+ * How many times the run already sent THIS refused commit back on its own. The
+ * walk crosses the episode — refused commits, the fixes between them, and any
+ * gate the user answered — and stops at the work that produced the change.
+ */
+function commitCheckAutoFixes(
+  steps: readonly WorkflowStepRow[],
+  tail: WorkflowStepRow,
+): number {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  let fixes = 0;
+  let current = tail;
+  while (current.predecessorId !== undefined) {
+    const predecessor = byId.get(current.predecessorId);
+    if (!predecessor) break;
+    const fix = addressCommitCheckPayloadOf(predecessor);
+    if (fix) {
+      if (fix.requestedBy === "run") fixes += 1;
+    } else if (
+      !commitCheckBlockersOf(predecessor) &&
+      !commitCheckDecisionPayloadOf(predecessor)
+    )
+      break;
+    current = predecessor;
+  }
+  return fixes;
+}
+
+/**
+ * The fixer that wrote a refused change, when a fixer did: its runtime and
+ * lineage, so the commit-check fix lands in the very session that made the
+ * change and remembers it. The walk crosses refused attempts, earlier fixes and
+ * answered gates; an implementer's change carries nothing and stays with the
+ * implementer.
+ */
+function changeAuthorFixer(
+  steps: readonly WorkflowStepRow[],
+  refused: WorkflowStepRow,
+): Record<string, WorkflowJsonValue> {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  let step: WorkflowStepRow | undefined = refused;
+  while (step?.predecessorId !== undefined) {
+    step = byId.get(step.predecessorId);
+    if (!step || step.kind !== "agent") continue;
+    const payload = payloadRecord(step.payload);
+    if (payload.role !== "implementer") return {};
+    return payload.fixer === undefined
+      ? {}
+      : {
+          fixer: payload.fixer,
+          ...(payload.fixerLineage !== undefined
+            ? { fixerLineage: payload.fixerLineage }
+            : {}),
+        };
+  }
+  return {};
+}
+
+function addressCommitCheckStep(
+  steps: readonly WorkflowStepRow[],
+  predecessor: WorkflowStepRow,
+  refused: WorkflowStepRow,
+  blockers: WorkflowCommitCheckBlocker[],
+  requestedBy: "run" | "user",
+): WorkflowDecision {
+  return {
+    kind: "append",
+    step: {
+      kind: "agent",
+      payload: {
+        role: "implementer",
+        objective: "address-commit-check",
+        refusedCommit: {
+          stepId: refused.id,
+          operation: payloadRecord(refused.payload).operation ?? "",
+        },
+        blockers: blockers as unknown as WorkflowJsonValue,
+        requestedBy,
+        ...changeAuthorFixer(steps, refused),
+        resultContract: IMPLEMENTATION_RESULT_CONTRACT_ID,
+      },
+      predecessorId: predecessor.id,
+    },
+  };
+}
+
+/**
+ * The refused commit again, re-reserved against the step that answered it: its
+ * payload travels whole, only the reservation is new — and `force` is set only
+ * by the user's "Commit anyway", never carried over from an earlier attempt.
+ */
+function commitStepAfter(
+  run: WorkflowRunRow,
+  predecessor: WorkflowStepRow,
+  refused: WorkflowStepRow,
+  force: boolean,
+): WorkflowDecision {
+  const { force: _carried, ...payload } = payloadRecord(refused.payload);
+  const operation = payload.operation;
+  return {
+    kind: "append",
+    step: {
+      kind: "host-operation",
+      payload: {
+        ...payload,
+        idempotencyKey:
+          operation === COMMIT_ONLY_OPERATION_ID
+            ? commitOnlyIdempotencyKey(run.id, predecessor.id)
+            : commitSyncIdempotencyKey(run.id, predecessor.id),
+        ...(force ? { force: true } : {}),
+      },
+      predecessorId: predecessor.id,
+    },
+  };
+}
+
+/**
+ * A refused commit's next step. Code problems go back to the implementer, up to
+ * {@link COMMIT_CHECK_AUTO_FIX_ROUNDS} times; a human's call, or problems that
+ * survived those turns, open a gate where the user sends it back again, commits
+ * over the check, or cancels.
+ */
+function commitCheckAssignment(
+  run: WorkflowRunRow,
+  steps: readonly WorkflowStepRow[],
+  last: WorkflowStepRow,
+): WorkflowDecision | undefined {
+  const blockers = commitCheckBlockersOf(last);
+  if (!blockers) return undefined;
+  const humanCall = blockers.some((item) =>
+    HUMAN_CALL_COMMIT_CHECK_KINDS.has(item.kind),
+  );
+  const autoFixSpent =
+    commitCheckAutoFixes(steps, last) >= COMMIT_CHECK_AUTO_FIX_ROUNDS;
+  if (!humanCall && !autoFixSpent && acceptedWorkPlan(run, steps))
+    return addressCommitCheckStep(steps, last, last, blockers, "run");
+  const payload: CommitCheckDecisionStepPayload = {
+    decision: "commit-check",
+    refusedStepId: last.id,
+    blockers,
+    allowedChoices: blockers.some((item) => item.kind === "secret")
+      ? ["send-to-implementer"]
+      : ["send-to-implementer", "commit-anyway"],
+    autoFixSpent,
+  };
+  return {
+    kind: "append",
+    step: {
+      kind: "user-decision",
+      payload: payload as unknown as WorkflowJsonValue,
+      predecessorId: last.id,
+    },
+  };
+}
+
+/** The refused commit, handed back once the implementer's fix is in. */
+function reissuedCommitAfterFix(
+  run: WorkflowRunRow,
+  steps: readonly WorkflowStepRow[],
+  fix: WorkflowStepRow,
+): WorkflowDecision | undefined {
+  const evidence = addressCommitCheckPayloadOf(fix);
+  if (!evidence) return undefined;
+  const refused = steps.find((step) => step.id === evidence.refusedStepId);
+  if (
+    !refused ||
+    payloadRecord(refused.payload).operation !== evidence.operation
+  )
+    return pause(
+      `commit-check fix step ${fix.id} is not attached to the commit it was assigned`,
+    );
+  return commitStepAfter(run, fix, refused, false);
 }
 
 /**
@@ -1549,6 +1890,9 @@ function implementerReportOf(
       phaseOf(step) === "implement" &&
       payload.objective !== "triage-operation" &&
       payload.objective !== "repair-rebase" &&
+      // A commit-check fix answers the commit check, not the reviewer: the
+      // report the reviewer is owed is the one that answered its findings.
+      payload.objective !== "address-commit-check" &&
       Boolean(readStepResult(step, IMPLEMENTATION_RESULT_CONTRACT_ID))
     );
   });
@@ -3326,6 +3670,12 @@ export function decideNextStep(
   // A host operation that reproduced its own failure gets ONE automatic triage
   // in the run's existing implementer session before the run stands in front of
   // the human with an error nobody has read.
+  // A commit the commit check refused goes back to the implementer when the
+  // problems are code, and to the user when they are a human's call (or the
+  // implementer already had its turns at them).
+  const commitCheck = commitCheckAssignment(run, steps, last);
+  if (commitCheck) return commitCheck;
+
   const triage = operationTriageAssignment(run, steps, last);
   if (triage) return triage;
 
@@ -3385,6 +3735,9 @@ export function decideNextStep(
       // than a chain it has to reconstruct.
       const triaged = reissuedOperationAfterTriage(run, steps, last);
       if (triaged) return triaged;
+      // A commit-check fix hands the refused commit straight back, the same way.
+      const recommitted = reissuedCommitAfterFix(run, steps, last);
+      if (recommitted) return recommitted;
       const commitOnly = objective === "revise";
       const repaired =
         objective === "repair-rebase"
@@ -3886,6 +4239,32 @@ export function decideNextStep(
       // numbers rather than stopping: the card's controls are the only way to
       // move a ceiling, so a dead end here would strand the run.
       return decideNextStep(run, steps.slice(0, -1));
+    }
+    case "commit-check-decision": {
+      const answer = commitCheckDecisionResultOf(last);
+      const asked = commitCheckDecisionPayloadOf(last);
+      if (!answer || !asked)
+        return pause(
+          `commit check decision step ${last.id} has no recorded choice`,
+        );
+      if (answer === "cancel")
+        return pause("the user cancelled the run at the refused commit");
+      const refused = steps.find((step) => step.id === asked.refusedStepId);
+      if (!refused || !commitCheckBlockersOf(refused))
+        return pause(
+          `commit check decision step ${last.id} is not attached to the commit it answers`,
+        );
+      if (answer === "send-to-implementer")
+        return addressCommitCheckStep(
+          steps,
+          last,
+          refused,
+          asked.blockers,
+          "user",
+        );
+      // The ONE way past the commit check, and the user's call, recorded as
+      // one on the operation itself.
+      return commitStepAfter(run, last, refused, true);
     }
     case "delivery": {
       const operation = payloadRecord(last.payload).operation;

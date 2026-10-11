@@ -853,6 +853,7 @@ export const WORKFLOW_PHASE_LABEL: Record<WorkflowRunPhase, string> = {
   review: "Review",
   "review-decision": "Review decision",
   "ceiling-decision": "Your decision",
+  "commit-check-decision": "Your decision",
   delivery: "Delivery",
   observe: "CI and pull request",
   merge: "Merge decision",

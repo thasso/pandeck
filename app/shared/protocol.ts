@@ -6323,14 +6323,34 @@ export type WorkflowRunPhase =
   | "review"
   | "review-decision"
   | "ceiling-decision"
+  | "commit-check-decision"
   | "delivery"
   | "observe"
   | "merge";
 
+/**
+ * Why the commit check refused a run's change, one item per problem it named.
+ * `secret`, `unrelated` and `too_broad` are a human's call; the rest are code
+ * problems the run hands back to its implementer on its own.
+ */
+export interface WorkflowCommitCheckBlocker {
+  kind: "secret" | "unrelated" | "too_broad" | "unsafe" | "unclear" | "other";
+  file?: string;
+  reason: string;
+}
+
+/** What the user may answer when the commit check refused the run's change. */
+export type WorkflowCommitCheckChoice = "send-to-implementer" | "commit-anyway";
+
 /** A coordinator-selected role config safe to show on a run card. */
 export type WorkflowRunCardRoleConfig = Pick<
   WorkflowRoleCandidate,
-  "provider" | "modelId" | "thinkingLevel" | "family" | "notes"
+  | "provider"
+  | "modelId"
+  | "thinkingLevel"
+  | "family"
+  | "notes"
+  | "credentialProfileId"
 >;
 
 /**
@@ -6513,6 +6533,22 @@ export interface WorkflowRunCard {
    * refused while this stands, so it must not be shown.
    */
   cancelRequested?: boolean;
+  /**
+   * The open gate a refused commit reached, when the run is waiting at one: the
+   * commit check's problems, and what the user may do about them. `commit-anyway`
+   * is not offered when the check found a secret.
+   */
+  commitCheckDecision?: {
+    blockers: WorkflowCommitCheckBlocker[];
+    allowedChoices: WorkflowCommitCheckChoice[];
+    /** The run already handed these problems to its implementer and they came back. */
+    autoFixSpent: boolean;
+    /**
+     * The session whose change the check refused: the implementer's, or the
+     * fixer's in a fix round. The check itself runs in no session.
+     */
+    changedBySessionId?: string;
+  };
   /**
    * The open gate an exhausted ceiling reached, when the run is waiting at one:
    * what it wanted to do, what it has spent, and whether "deliver as it stands"
@@ -7249,6 +7285,17 @@ export type ClientMessage =
       runId: string;
       choice: "raise" | "deliver" | "re-evaluate" | "cancel";
       raise?: WorkflowCeilingRaise;
+    }
+  /**
+   * Answer the gate a refused commit opened: hand the commit check's problems
+   * to the implementer, or commit over them. Cancelling uses
+   * `cancelWorkflowRun` (`docs/agent-workflows.md`, "When the commit check
+   * refuses").
+   */
+  | {
+      type: "answerWorkflowCommitCheck";
+      runId: string;
+      choice: WorkflowCommitCheckChoice;
     }
   | { type: "pauseWorkflowRun"; runId: string; reason?: string }
   | { type: "resumeWorkflowRun"; runId: string }

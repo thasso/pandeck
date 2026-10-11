@@ -157,6 +157,7 @@ import {
 import { startCodeDeliveryRun } from "./workflow/runStart.ts";
 import {
   answerCeilingDecision,
+  answerCommitCheckDecision,
   cancelRun,
   pauseRun,
   rebaseAndReviewRun,
@@ -1168,6 +1169,12 @@ export class Connection implements Viewer {
                   : { choice: "cancel" },
             { kind: "user" },
           ),
+        );
+      case "answerWorkflowCommitCheck":
+        return this.onWorkflowRunControl(msg.runId, () =>
+          answerCommitCheckDecision(Number(msg.runId), msg.choice, {
+            kind: "user",
+          }),
         );
       case "pauseWorkflowRun":
         return this.onWorkflowRunControl(msg.runId, () =>

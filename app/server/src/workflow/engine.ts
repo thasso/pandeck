@@ -42,6 +42,7 @@ import {
   raiseWorkflowRunLimits,
   type WorkflowActor,
   type WorkflowCeilingRaise,
+  type WorkflowCommitCheckChoice,
   type WorkflowJsonValue,
 } from "@assistant/shared";
 import { sessionStore } from "../db/sessionStore.ts";
@@ -76,6 +77,7 @@ import {
   COMMIT_SYNC_OPERATION_ID,
   commitSyncIdempotencyKey,
   ceilingDecisionPayloadOf,
+  commitCheckDecisionPayloadOf,
   isRecheckablePullRequestObservation,
   mergeDecisionPayloadOf,
   operationIdempotencyKey,
@@ -414,6 +416,15 @@ async function dispatchStep(
  * engine rather than the question the user is being asked.
  */
 function userDecisionPauseReason(step: WorkflowStepRow): string {
+  const commitCheck = commitCheckDecisionPayloadOf(step);
+  if (commitCheck)
+    return `the commit check refused this change${
+      commitCheck.autoFixSpent ? " again after two fixes" : ""
+    }; ${
+      commitCheck.allowedChoices.includes("commit-anyway")
+        ? "send it back for a fix, commit anyway, or cancel this run"
+        : "send it back for a fix, or cancel this run"
+    }`;
   const ceiling = ceilingDecisionPayloadOf(step);
   return ceiling
     ? `the run reached its ${
@@ -627,7 +638,9 @@ export function cancelRun(
     // step is completed with that answer rather than merely cancelled by the
     // lifecycle transition passing over it.
     const ceiling =
-      open.length === 1 && ceilingDecisionPayloadOf(open[0]!)
+      open.length === 1 &&
+      (ceilingDecisionPayloadOf(open[0]!) ||
+        commitCheckDecisionPayloadOf(open[0]!))
         ? open[0]
         : undefined;
     const repair =
@@ -710,7 +723,9 @@ export function cancelRun(
         status: "completed",
         result: {
           status: "completed",
-          summary: "user cancelled the run at its ceiling",
+          summary: commitCheckDecisionPayloadOf(ceiling)
+            ? "user cancelled the run at the refused commit"
+            : "user cancelled the run at its ceiling",
           payload: { choice: "cancel" },
         },
         actor,
@@ -886,6 +901,55 @@ export async function answerCeilingDecision(
                     ? { reviewedHeadCommit: asked.reviewedHeadCommit }
                     : {}),
                 },
+      },
+      actor,
+    });
+    broadcastWorkflowRuns();
+  });
+  await advanceRun(runId, actor);
+}
+
+/**
+ * Answer the gate a refused commit opened: hand the commit check's problems to
+ * the implementer, or commit over them. Either is recorded on the durable step
+ * as the user's choice; the recipe derives the move from it. Cancelling goes
+ * through `cancelRun`, which records that answer on the same step.
+ */
+export async function answerCommitCheckDecision(
+  runId: number,
+  choice: WorkflowCommitCheckChoice,
+  actor: WorkflowActor,
+): Promise<void> {
+  await withRunLock(runId, async () => {
+    const run = getRun(runId);
+    if (!run) throw new Error(`workflow run ${runId} does not exist`);
+    if (run.cancelRequestedAt !== undefined)
+      throw new WorkflowValidationError(
+        `workflow run ${runId} is being cancelled at the user's request`,
+      );
+    const open = listOpenSteps(runId);
+    const step = open.length === 1 ? open[0] : undefined;
+    const asked = step ? commitCheckDecisionPayloadOf(step) : undefined;
+    if (!step || !asked)
+      throw new Error(
+        `workflow run ${runId} has no open commit check decision`,
+      );
+    if (!asked.allowedChoices.includes(choice))
+      throw new WorkflowValidationError(
+        `workflow run ${runId} does not offer "${choice}" for this commit`,
+      );
+    if (run.lifecycle === "paused") setRunLifecycle(runId, "active", { actor });
+    if (step.status === "pending")
+      startStep(step.id, { kind: "operation", id: "user-decision" }, actor);
+    completeStep(step.id, {
+      status: "completed",
+      result: {
+        status: "completed",
+        summary:
+          choice === "commit-anyway"
+            ? "user chose to commit over the commit check"
+            : "user sent the commit check's problems back for a fix",
+        payload: { choice },
       },
       actor,
     });
