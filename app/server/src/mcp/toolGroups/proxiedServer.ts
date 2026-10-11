@@ -1,8 +1,7 @@
 /**
  * Session-scoped connections to EXTERNAL MCP servers (currently Playwright
- * MCP), consumed by mcp-proxy toolGroups. Replaces the old hand-rolled
- * stdio JSON-RPC client with the official MCP SDK `Client` +
- * `StdioClientTransport`.
+ * MCP), consumed by mcp-proxy toolGroups, through pi's standalone MCP client
+ * (`McpClient` + `StdioTransport` from `@earendil-works/pi-mcp`).
  *
  * One connection per session, created lazily on the first proxied tool call
  * and closed on toolGroup disable, session unbind, or an explicit close tool
@@ -10,8 +9,7 @@
  * bookkeeping the session drawer's runtime list needs ({@link BrowserRuntimeInfo}).
  */
 import { mkdirSync } from "node:fs";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { McpClient, StdioTransport } from "@earendil-works/pi-mcp";
 import type { BrowserRuntimeInfo } from "@assistant/shared";
 import { errorText } from "../../errors.ts";
 import { releaseChildOomScore } from "../../childOomScore.ts";
@@ -232,37 +230,40 @@ export async function closeProxiedConnection(sessionId: string): Promise<void> {
   await connection.close();
 }
 
-/** Real client: official MCP SDK Client over a stdio child-process transport. */
+/** Stderr kept for the unexpected-exit message. */
+const STDERR_TAIL_BYTES = 4000;
+
+/** Real client: pi-mcp `McpClient` over a stdio child-process transport. */
 const stdioClientFactory: ProxiedMcpClientFactory = async (spawn) => {
-  const transport = new StdioClientTransport({
+  const transport = new StdioTransport({
     command: spawn.command,
     args: spawn.args,
     env: externalSubprocessEnv(spawn.trustedEnv),
+    // pi-mcp merges `process.env` under `env` unless told not to; the server
+    // must see only the external-process allowlist.
+    inheritEnv: false,
     ...(spawn.cwd !== undefined ? { cwd: spawn.cwd } : {}),
-    stderr: "pipe",
+    maxStderrBytes: STDERR_TAIL_BYTES,
   });
-  let stderrTail = "";
-  transport.stderr?.on("data", (chunk: Buffer | string) => {
-    stderrTail = `${stderrTail}${String(chunk)}`.slice(-4000);
+  const client = new McpClient({
+    name: "personal-assistant-workshop",
+    version: "0.1.0",
   });
-  const client = new Client(
-    { name: "personal-assistant-workshop", version: "0.1.0" },
-    { capabilities: {} },
-  );
-  await client.connect(transport);
   let closeHandler: ((reason?: string) => void) | undefined;
   let closedByUs = false;
-  client.onclose = () => {
-    if (!closedByUs) closeHandler?.(stderrTail.trim() || undefined);
-  };
+  client.onClose(() => {
+    if (!closedByUs) closeHandler?.(transport.stderr.trim() || undefined);
+  });
+  // A failed handshake closes the client and its transport before rejecting.
+  await client.connect(transport);
   return {
     get pid(): number | undefined {
-      return transport.pid ?? undefined;
+      return transport.pid;
     },
     async callTool(name, args) {
-      return (await client.callTool({ name, arguments: args }, undefined, {
-        timeout: PROXIED_CALL_TIMEOUT_MS,
-      })) as { content?: unknown; isError?: unknown };
+      return await client.callTool(name, args, {
+        timeoutMs: PROXIED_CALL_TIMEOUT_MS,
+      });
     },
     onUnexpectedClose(handler) {
       closeHandler = handler;

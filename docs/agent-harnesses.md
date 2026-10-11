@@ -195,6 +195,13 @@ table when a later step needs them.
   comparison deletes its entry in the same change, and a measurement module that
   needs neither any more leaves `MEASUREMENT_MODULES`; the test fails on a stale
   entry so the lists cannot drift above reality.
+- pi sessions load none of pi's built-in extensions (`mcp`, `codemode`,
+  `tool-search`, `llama.cpp`). Only pi's CLI adds them; the SDK loader knows the
+  built-ins it is handed, and `piSdk/options.ts` hands it only app extensions,
+  so a `builtin:` entry in a user's pi settings cannot enable one either. pi
+  therefore reads no `mcpServers` config, and tools reach it only through the
+  direct adapter. External MCP servers are the app's proxied tool groups, whose
+  stdio client is the standalone `@earendil-works/pi-mcp` for both harnesses.
 - Unchanged by this migration: SDK packages stay inside their folders
   (`architecture.test.ts`), app prompts go through `runtimePrompt.ts`, app tools
   come from `tools/catalog.ts`, and background work goes through the ports in
