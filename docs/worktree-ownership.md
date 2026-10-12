@@ -70,6 +70,41 @@ of the tree see delivery without a provider call of their own:
 Nothing here removes a worktree. A merged pull request leaves its checkout where
 it is; whether to keep working in it or retire it stays the user's call.
 
+## Idle worktrees: the cleanup queue's other half
+
+The Pull Requests view's **Needs cleanup** group lists a merged or closed pull
+request whose checkout is still here. Most checkouts left behind never had a
+pull request, so the same view also lists **Idle worktrees**
+(`GET /api/worktrees/idle`, `worktrees/idleWorktrees.ts`).
+
+A spawned worktree is IDLE when:
+
+- no session that holds it is live — its creator, the sessions running in it,
+  and every coordinator above any of them along the spawn edges, because a
+  coordinator may still act on what its peer left. Live is the removal guard's
+  own sense: neither settled, archived nor deleted;
+- no pull-request card for it is still moving (`choosing-task`, `creating`,
+  `open`) — that one is in the pull-request flow;
+- no merge is in flight on it.
+
+Each is classified by its live git status into what retiring it would lose:
+`delivered` (clean, and nothing outside the base branch — or its pull request
+merged, since a squash merge lands upstream and this read never fetches; the
+retire path verifies against the refreshed base), `unmerged` (commits the base
+does not contain, and whether they are pushed), `uncommitted` (a dirty tree),
+`missing` (the folder is gone) and `unknown` (git could not answer, or the base
+resolves to nothing — never read as delivered). The read runs git status for the
+candidates only, four at a time, and only while the Pull Requests section is on
+screen (`hooks/useIdleWorktrees.ts`, beside the inventory's poll).
+
+The browser drops a worktree a pull-request row already covers, orders the rest
+safest first and most idle first (`lib/idleWorktrees.ts`), and draws each with
+its pull request's mark. A row opens the worktree, whose own Retire carries the
+consent ladder. The one bulk act — **Retire N…** — takes only `delivered`
+worktrees, runs the ordinary retire path one at a time without force (refresh
+the base, verify containment, remove, settle), and keeps any refusal in its
+dialog. Nothing is ever removed automatically.
+
 ## The creator backfill
 
 Worktrees created before `worktree_create` recorded its caller get their creator

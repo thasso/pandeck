@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { PullRequestInventoryItem } from "@assistant/shared";
+import type { IdleWorktree, PullRequestInventoryItem } from "@assistant/shared";
 import { PullRequestBrowser } from "../../../src/components/PullRequestBrowser.tsx";
 import { PullRequestDetailPage } from "../../../src/components/pullRequest/PullRequestDetailPage.tsx";
 import {
@@ -24,6 +24,44 @@ import {
 } from "../../fixtures/worktree.ts";
 
 type BrowserState = "populated" | "loading" | "empty" | "error";
+
+/**
+ * The cleanup queue's worktree half under the populated browser: what an idle
+ * checkout holds decides whether the bulk act may take it.
+ */
+function idleWorktrees(): IdleWorktree[] {
+  const day = 86_400_000;
+  const at = (id: string, branch: string) => ({
+    ...featureWorktree,
+    id,
+    branch,
+    path: `/work/${branch}`,
+    sessionIds: [],
+  });
+  return [
+    {
+      worktree: {
+        ...at("pd-idle-merged", "pd-row-density"),
+        pullRequest: { status: "merged", number: 312 },
+      },
+      kind: "delivered",
+      lastActivityAt: NOW - 9 * day,
+    },
+    {
+      worktree: at("pd-idle-spike", "pd-cache-spike"),
+      kind: "unmerged",
+      ahead: 3,
+      pushed: false,
+      lastActivityAt: NOW - 4 * day,
+    },
+    {
+      worktree: at("pd-idle-dirty", "pd-onboarding-copy"),
+      kind: "uncommitted",
+      changedFiles: 6,
+      lastActivityAt: NOW - 2 * day,
+    },
+  ];
+}
 type DetailState = "open" | "merged" | "loading" | "joins-loading";
 
 export interface PullRequestStoryProps {
@@ -123,6 +161,16 @@ export function PullRequestStory({
             selected={selected}
             onOpen={setSelected}
             density="comfortable"
+            idle={
+              browserState === "populated"
+                ? {
+                    state: ready(idleWorktrees()),
+                    onReload: () => {},
+                    onOpenWorktree: () => {},
+                    onRetired: () => {},
+                  }
+                : undefined
+            }
           />
         ) : (
           <PullRequestDetailPage

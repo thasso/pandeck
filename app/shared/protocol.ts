@@ -5389,6 +5389,45 @@ export interface WorktreeHostingListResponse {
   fetchedAt: number;
 }
 
+/**
+ * What is left in an idle worktree, by its live git state
+ * (`docs/worktree-ownership.md`):
+ * - `delivered` — clean, and every commit is in the base branch (or there are
+ *   none), or its pull request merged: retiring it loses nothing, which the
+ *   retire path still verifies against the refreshed base.
+ * - `unmerged` — clean, with commits the base branch does not contain.
+ * - `uncommitted` — the working tree has changes nobody committed.
+ * - `missing` — the checkout's folder is gone.
+ * - `unknown` — git could not answer, or the base branch resolves to nothing;
+ *   never read as delivered.
+ */
+export type IdleWorktreeKind =
+  "delivered" | "unmerged" | "uncommitted" | "missing" | "unknown";
+
+/**
+ * A spawned worktree nobody is working in: no session that holds it — its
+ * creator, the sessions running in it, and every coordinator above them — is
+ * live, no pull-request card for it is still moving, and no merge is in flight.
+ */
+export interface IdleWorktree {
+  worktree: WorktreeRecord;
+  kind: IdleWorktreeKind;
+  /** The latest activity of the worktree row or any session holding it. */
+  lastActivityAt: number;
+  /** Commits not in the base branch (`unmerged`). */
+  ahead?: number;
+  /** Whether those commits are on the branch's upstream (`unmerged`). */
+  pushed?: boolean;
+  /** Changed plus untracked files (`uncommitted`). */
+  changedFiles?: number;
+}
+
+/** GET /api/worktrees/idle — the worktree half of the cleanup queue. */
+export interface IdleWorktreesResponse {
+  worktrees: IdleWorktree[];
+  fetchedAt: number;
+}
+
 /** POST /api/worktrees/:id/create-pr body. */
 export interface WorktreeCreatePrRequest {
   title: string;

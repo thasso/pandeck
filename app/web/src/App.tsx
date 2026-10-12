@@ -232,6 +232,7 @@ import { rowWorktreeStatus } from "./lib/worktreeRowStatuses.ts";
 import { taskRowsHaveMeta } from "./lib/taskRowMeta.ts";
 import { SIDEBAR_BACKLOG_DENSITY } from "./lib/backlogTreeModel.ts";
 import { useWorktreeHosting } from "./hooks/useWorktreeHosting.ts";
+import { useIdleWorktrees } from "./hooks/useIdleWorktrees.ts";
 import { usePullRequestInventory } from "./hooks/usePullRequestInventory.ts";
 import {
   pullRequestDetailState,
@@ -1459,6 +1460,8 @@ function AppContent() {
     route.name === "pullRequests" ||
     (sidebarPanelOpen && sidebarSection === "pull-requests");
   const pullRequestInventory = usePullRequestInventory(pullRequestsActive);
+  // The cleanup queue's worktree half, polled exactly while the inventory is.
+  const idleWorktreeQueue = useIdleWorktrees(pullRequestsActive);
   const pullRequestDetail = useMemo(
     () => pullRequestDetailState(pullRequestInventory.state, pullRequestTarget),
     [pullRequestInventory.state, pullRequestTarget],
@@ -3317,6 +3320,27 @@ function AppContent() {
       navigate(worktreePath(id));
     },
     [navigate],
+  );
+  // One stable object for the memoized sidebar: a retirement refetches BOTH
+  // halves of the queue, since a retired checkout also leaves Needs cleanup.
+  const reloadIdleWorktrees = idleWorktreeQueue.reload;
+  const reloadPullRequestInventory = pullRequestInventory.reload;
+  const idleWorktreesProps = useMemo(
+    () => ({
+      state: idleWorktreeQueue.state,
+      onReload: reloadIdleWorktrees,
+      onOpenWorktree: openWorktree,
+      onRetired: () => {
+        reloadIdleWorktrees();
+        reloadPullRequestInventory();
+      },
+    }),
+    [
+      idleWorktreeQueue.state,
+      reloadIdleWorktrees,
+      reloadPullRequestInventory,
+      openWorktree,
+    ],
   );
   const openPullRequest = useCallback(
     (target: PullRequestTarget) => navigate(pullRequestPath(target)),
@@ -6354,6 +6378,7 @@ function AppContent() {
         onSetInboxPositions={setInboxPositions}
         pullRequestInventory={pullRequestInventory.state}
         onReloadPullRequests={pullRequestInventory.reload}
+        idleWorktrees={idleWorktreesProps}
         selectedPullRequest={pullRequestTarget}
         onOpenPullRequest={openPullRequest}
         selectedWorktreeId={selectedWorktreeId}

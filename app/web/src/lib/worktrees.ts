@@ -5,6 +5,7 @@
  * `worktreeId:updatedAt` so a watcher push naturally invalidates it.
  */
 import type {
+  IdleWorktreesResponse,
   WorktreeAutoCommitRequest,
   WorktreeAutoCommitResponse,
   WorktreeChangesResponse,
@@ -135,6 +136,14 @@ export function fetchWorktreeHosting(
  */
 export function fetchWorktreeHostingAll(): Promise<WorktreeHostingListResponse> {
   return getJson(`/api/worktrees/hosting`);
+}
+
+/**
+ * The worktree half of the cleanup queue: every spawned worktree nobody is
+ * working in, with what retiring it would lose (`docs/worktree-ownership.md`).
+ */
+export function fetchIdleWorktrees(): Promise<IdleWorktreesResponse> {
+  return getJson(`/api/worktrees/idle`);
 }
 
 /** Create a pull request for the worktree branch against its base. */

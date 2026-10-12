@@ -9,9 +9,11 @@ import {
   Search,
 } from "lucide-react";
 import type {
+  IdleWorktree,
   ProjectRecord,
   PullRequestInventoryItem,
 } from "@assistant/shared";
+import { IdleWorktreesSection } from "./IdleWorktreesSection.tsx";
 import {
   EmptyBox,
   ErrorNote,
@@ -221,6 +223,20 @@ interface Props {
   selected?: PullRequestTarget | null | undefined;
   onOpen: (target: PullRequestTarget) => void;
   density: RowDensity;
+  /**
+   * The cleanup queue's worktree half (`hooks/useIdleWorktrees.ts`), drawn
+   * under the pull-request groups. Absent on a host that does not offer it.
+   */
+  idle?: IdleWorktreesProps | undefined;
+}
+
+/** What the browser needs to draw and act on idle worktrees. */
+export interface IdleWorktreesProps {
+  state: LoadState<IdleWorktree[]>;
+  onReload: () => void;
+  onOpenWorktree: (id: string) => void;
+  /** A retirement landed: refetch both halves of the queue. */
+  onRetired: () => void;
 }
 
 /**
@@ -247,6 +263,7 @@ export function PullRequestBrowser({
   selected,
   density,
   onOpen,
+  idle,
 }: Props) {
   useShortcuts(PULL_REQUEST_SHORTCUTS);
   const [query, setQuery] = useState("");
@@ -376,6 +393,18 @@ export function PullRequestBrowser({
           ))}
         </section>
       ))}
+
+      {idle ? (
+        <IdleWorktreesSection
+          idle={idle.state}
+          pullRequests={items}
+          projects={projectsById}
+          density={density}
+          onReload={idle.onReload}
+          onOpenWorktree={idle.onOpenWorktree}
+          onRetired={idle.onRetired}
+        />
+      ) : null}
     </div>
   );
 }

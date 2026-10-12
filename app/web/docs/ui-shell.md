@@ -607,6 +607,11 @@ list (that is the Project page), in three groups in this order:
    head branch. The checkout is what is left to deal with, and it is what keeps
    a finished pull request visible until it is gone.
 
+Under them, **Idle worktrees** lists the checkouts nobody is working in that no
+pull-request row covers, each saying what retiring it would lose
+(`docs/worktree-ownership.md`). A row opens the worktree; the group's one bulk
+act retires only the ones with nothing unmerged, behind a confirmation.
+
 Within a group the most recently updated is first, an unknown `updatedAt` sorts
 LAST rather than first, and the tie-break is the row's identity — project,
 provider, repository and number — which makes the order total, so a poll that
