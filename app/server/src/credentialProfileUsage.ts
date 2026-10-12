@@ -88,6 +88,7 @@ export async function clearProfilePins(
         sessionNaming: settings.sessionNaming,
         commitAgent: settings.commitAgent,
         prAgent: settings.prAgent,
+        sessionStatus: settings.sessionStatus,
         pdfConversion: settings.pdfConversion,
         promptRefinement: settings.promptRefinement,
         taskIntakeAgent: settings.taskIntakeAgent,

@@ -37,6 +37,7 @@ it("reports which panel is the visible one", async () => {
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
         onActivePanelChange={(panel) => active.push(panel)}
       />,
     );
@@ -55,6 +56,7 @@ it("uses the available-panel home after the final tab closes", async () => {
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
       />,
     );
   });
@@ -73,6 +75,7 @@ it("keeps an open Inspector mounted while Personal Assistant is selected", async
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
       />,
     );
   });
@@ -93,6 +96,7 @@ it("opens Personal Assistant from the panel home", async () => {
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
       />,
     );
   });
@@ -113,6 +117,7 @@ it("opens the Knowledge panel on an outside request and keeps it mounted", async
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
         openRequest={nonce === null ? undefined : { panel: "knowledge", nonce }}
       />,
     );
@@ -154,6 +159,7 @@ it("builds a tab's surface when it is first seen, not when it is merely open", a
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
         visible={visible}
       />,
     );
@@ -186,6 +192,7 @@ it("leaves an open tab behind another one unbuilt until it is selected", async (
         inspector={<div>Inspector body</div>}
         knowledge={<div>Knowledge body</div>}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
       />,
     );
   });
@@ -205,6 +212,7 @@ it("offers no Knowledge tab while the Knowledge Base is off, and keeps its place
         inspector={<div>Inspector body</div>}
         {...(knowledge ? { knowledge: <div>Knowledge body</div> } : {})}
         worktree={<div>Worktree body</div>}
+        status={<div>Status body</div>}
         openRequest={{ panel: "knowledge", nonce: 1 }}
       />,
     );

@@ -216,6 +216,10 @@ const defaultSettings: AppSettings = {
     ...DEFAULT_HELPER_MODEL,
     thinkingLevel: "off",
   },
+  sessionStatus: {
+    ...DEFAULT_HELPER_MODEL,
+    thinkingLevel: "high",
+  },
   pdfConversion: {
     fallbackEnabled: true,
     provider: "claude-sdk",

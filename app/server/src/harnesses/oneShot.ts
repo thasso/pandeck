@@ -17,7 +17,10 @@ import {
   type ThinkingLevel,
 } from "@assistant/shared";
 import type { AgentUsage } from "@assistant/shared/session";
-import { runClaudeSdkOneShot } from "../claudeSdk/oneShot.ts";
+import {
+  OUTPUT_LIMIT_FAILURE,
+  runClaudeSdkOneShot,
+} from "../claudeSdk/oneShot.ts";
 import type { ClaudeUsage } from "../claudeSdk/messageMapper.ts";
 import type { AgentTool } from "../mcp/tool.ts";
 import {
@@ -173,7 +176,9 @@ async function runOnPi(request: OneShotRequest): Promise<EngineRun> {
       ? {
           failure:
             result.errorMessage?.trim() ||
-            `The model stopped with ${result.stopReason}.`,
+            (result.stopReason === "length"
+              ? OUTPUT_LIMIT_FAILURE
+              : `The model stopped with ${result.stopReason}.`),
         }
       : {}),
   };

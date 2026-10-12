@@ -211,6 +211,7 @@ export const BackgroundProcesses: Story = {
 export const PortForwarding: Story = { args: { section: "port-forwarding" } };
 export const Commit: Story = { args: { section: "commit" } };
 export const PullRequest: Story = { args: { section: "pull-request" } };
+export const SessionStatus: Story = { args: { section: "session-status" } };
 export const TaskIntake: Story = { args: { section: "task-intake" } };
 export const PdfConversion: Story = { args: { section: "pdf-conversion" } };
 export const BrowserTools: Story = { args: { section: "browserTools" } };

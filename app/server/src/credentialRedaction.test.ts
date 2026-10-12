@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { test } from "vitest";
+import { redactCredentials } from "./credentialRedaction.ts";
+
+const JWT =
+  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+
+test("masks pasted credentials and keeps the text around them", () => {
+  const cases: Array<[string, string]> = [
+    [
+      'export AWS_ACCESS_KEY_ID="ASIA2UC3BAT77R2S3DGM"',
+      'export AWS_ACCESS_KEY_ID="[redacted]"',
+    ],
+    [`Authorization: Bearer ${JWT}`, "Authorization: Bearer [redacted]"],
+    [
+      'curl -H "Authorization: Basic dXNlcjpwYXNz" https://x.test',
+      'curl -H "Authorization: Basic [redacted]" https://x.test',
+    ],
+    [`use Bearer ${JWT} for the call`, "use Bearer [redacted] for the call"],
+    ["password=shortpw please", "password=[redacted] please"],
+    ['{"api_key": "abc"}', '{"api_key": "[redacted]"}'],
+  ];
+  for (const [input, expected] of cases)
+    assert.equal(redactCredentials(input), expected, input);
+});
+
+test("leaves ordinary prose alone", () => {
+  const prose = "The bearer of this note should check the token count.";
+  assert.equal(redactCredentials(prose), prose);
+});

@@ -44,6 +44,7 @@ export const SETTINGS_SECTION_IDS = [
   "memory",
   "knowledge-base",
   "naming",
+  "session-status",
   "refinement",
   "dictation",
   "notifications",
@@ -382,6 +383,7 @@ export const SETTINGS_REGISTRY: readonly SettingDescriptor[] = [
   ),
   setting("sessionNaming.enabled", "naming", "Name new sessions", BOOLEAN),
   ...modelSlot("sessionNaming", "naming", "Session naming"),
+  ...modelSlot("sessionStatus", "session-status", "Session status"),
   ...modelSlot("promptRefinement", "refinement", "Prompt refinement"),
   setting("speechToText.enabled", "dictation", "Dictation", BOOLEAN),
   setting("speechToText.modelId", "dictation", "Recognition model", STRING, {

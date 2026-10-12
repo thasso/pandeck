@@ -68,6 +68,7 @@ export const settingsFixture: AppSettings = {
   sessionNaming: { ...agent, enabled: true },
   commitAgent: agent,
   prAgent: agent,
+  sessionStatus: { ...agent, thinkingLevel: "high" },
   promptRefinement: agent,
   pdfConversion: { ...agent, fallbackEnabled: true, timeoutMs: 120_000 },
   speechToText: {

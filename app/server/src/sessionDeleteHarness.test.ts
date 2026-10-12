@@ -29,6 +29,8 @@ const questions = await import("./tools/core/questionTool.ts");
 const promptQueue = await import("./promptQueue.ts");
 const toolGroups = await import("./mcp/toolGroups/registry.ts");
 const { projectStore } = await import("./db/projectStore.ts");
+const statusAgent = await import("./sessionStatus/statusAgent.ts");
+const { sessionStatusCardPath } = await import("./sessionStorage.ts");
 const { hub } = await import("./hub.ts");
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -48,6 +50,7 @@ function cleanups() {
     vi.spyOn(questions, "clearPendingQuestion"),
     vi.spyOn(promptQueue, "deleteSessionPromptQueue"),
     vi.spyOn(toolGroups, "deleteToolGroupSessionData"),
+    vi.spyOn(statusAgent, "deleteSessionStatusCard"),
   ];
 }
 
@@ -77,6 +80,18 @@ test("a pi session's delete evicts it and removes its transcript", async () => {
   assert.deepEqual(evict.mock.calls, [[id]]);
   assert.equal(existsSync(file), false);
   for (const cleanup of ran) assert.deepEqual(cleanup.mock.calls, [[id]]);
+});
+
+test("a delete removes the session's status card", async () => {
+  const id = "delete-session-with-status-card";
+  sessionStore.upsert({ id, harness: "claude-sdk", agentType: "assistant" });
+  const card = sessionStatusCardPath(id);
+  mkdirSync(dirname(card), { recursive: true });
+  writeFileSync(card, "{}");
+
+  await connection().onDeleteSession(id);
+
+  assert.equal(existsSync(card), false);
 });
 
 test("a cleanup step that fails leaves the rest of the delete to run", async () => {

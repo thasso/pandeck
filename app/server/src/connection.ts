@@ -246,6 +246,7 @@ import {
   cancelPostReloadContinuation,
   deleteToolGroupSessionData,
 } from "./mcp/toolGroups/registry.ts";
+import { deleteSessionStatusCard } from "./sessionStatus/statusAgent.ts";
 import {
   archiveProject,
   deleteProject,
@@ -4707,6 +4708,7 @@ export class Connection implements Viewer {
       (sessionId: string) =>
         delegationFailureNoticeStore.dropForSession(sessionId, "deleted"),
       deleteToolGroupSessionData,
+      deleteSessionStatusCard,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
     ]) {
       try {
