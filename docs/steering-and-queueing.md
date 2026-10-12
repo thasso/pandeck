@@ -100,7 +100,8 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   comes, under the same worktree guard as a typed one. It leaves the queue only
   once it ran; meeting a turn that started first (`SessionBusyError`) keeps it
   for the next idle edge, and a real failure holds the queue on it. A command
-  the web app runs itself (`/review`) cannot be queued.
+  the web app runs itself (`/review`) cannot be queued; one that only touches
+  session metadata (`/rename`) runs at once instead, even mid-turn.
 - **Attachments** are saved to the session attachment store when queued. The row
   keeps only their metadata, and the send reads the bytes back.
 

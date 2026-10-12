@@ -28,6 +28,7 @@ import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
 import { sessionRunStartedAt } from "./sessionActivity.ts";
+import { isRetitlingSession } from "./sessionRetitlePending.ts";
 import { worktreeIdBySession } from "./db/worktreeStore.ts";
 import { worktreeMissingProbe } from "./worktrees/sessionCwd.ts";
 import { objectRefsBySession } from "./db/sessionObjectStore.ts";
@@ -451,7 +452,9 @@ export async function listSessions(
       harness: row.harness,
       agentType: row.agentType,
       title: l?.title ?? row.title,
-      ...(l?.titleGenerationPending ? { titleGenerationPending: true } : {}),
+      ...(l?.titleGenerationPending || isRetitlingSession(row.id)
+        ? { titleGenerationPending: true }
+        : {}),
       createdAt: row.createdAt,
       updatedAt,
       messageCount,
@@ -556,7 +559,9 @@ export async function listSessions(
       harness: "pi",
       agentType: l.kind,
       title: l.title,
-      ...(l.titleGenerationPending ? { titleGenerationPending: true } : {}),
+      ...(l.titleGenerationPending || isRetitlingSession(l.sessionId)
+        ? { titleGenerationPending: true }
+        : {}),
       createdAt: l.createdAt ?? l.updatedAt,
       updatedAt: l.updatedAt,
       messageCount: l.messageCount,

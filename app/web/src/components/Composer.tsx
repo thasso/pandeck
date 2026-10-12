@@ -718,8 +718,16 @@ export type SlashSubmit =
   | { kind: "error"; message: string }
   /** Dispatch `runSlashCommand` to the server. */
   | { kind: "host"; name: string; rawArgs: string }
-  /** Handle in the web app via `onClientSlashCommand`; never reaches the wire. */
-  | { kind: "client"; name: string; rawArgs: string };
+  /**
+   * Handle in the web app via `onClientSlashCommand`; never reaches the wire.
+   * `runsWhileStreaming` runs it at once mid-turn instead of refusing to queue.
+   */
+  | {
+      kind: "client";
+      name: string;
+      rawArgs: string;
+      runsWhileStreaming?: true;
+    };
 
 /**
  * What submitting the composer does about slash commands. Pure and exported
@@ -746,7 +754,7 @@ export function resolveSlashSubmit(
       message: `/${command.cmd.name} is not available for this session.`,
     };
   }
-  if (context.streaming) {
+  if (context.streaming && !command.cmd.runsWhileStreaming) {
     return {
       kind: "error",
       message: "Cannot run slash commands while the agent is streaming.",
@@ -764,11 +772,14 @@ export function resolveSlashSubmit(
       message: "Slash commands do not support attached comments yet.",
     };
   }
-  return {
-    kind: command.cmd.execution === "client" ? "client" : "host",
-    name: command.cmd.name,
-    rawArgs: command.rawArgs,
-  };
+  if (command.cmd.execution === "client")
+    return {
+      kind: "client",
+      name: command.cmd.name,
+      rawArgs: command.rawArgs,
+      ...(command.cmd.runsWhileStreaming ? { runsWhileStreaming: true } : {}),
+    };
+  return { kind: "host", name: command.cmd.name, rawArgs: command.rawArgs };
 }
 
 /**
@@ -1380,7 +1391,11 @@ export const Composer = memo(function Composer({
       setAttachmentError(slashAction.message);
       return;
     }
-    if (slashAction.kind === "client" && queueing) {
+    if (
+      slashAction.kind === "client" &&
+      queueing &&
+      !slashAction.runsWhileStreaming
+    ) {
       setAttachmentError(
         `/${slashAction.name} runs in the app right away, so it cannot be queued.`,
       );

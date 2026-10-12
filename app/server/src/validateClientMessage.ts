@@ -922,6 +922,7 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
   renameSession: fields({ id: STRING, title: STRING }),
+  regenerateSessionTitle: fields({ id: STRING }, { guidance: STRING }),
   setSpawnOwnership: fields({
     id: STRING,
     ownership: {

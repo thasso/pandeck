@@ -1445,6 +1445,12 @@ export interface SlashCommandInfo {
    * registry and one help list either way.
    */
   execution?: "host" | "client";
+  /**
+   * A client command that may run mid-turn, immediately rather than queued,
+   * because it touches session metadata and never the model context (e.g.
+   * /rename). Omitted = refused while the agent is streaming.
+   */
+  runsWhileStreaming?: boolean;
 }
 
 /**
@@ -6962,6 +6968,13 @@ export type ClientMessage =
       requestId?: string;
     }
   | { type: "renameSession"; id: string; title: string; requestId?: string }
+  /**
+   * `/rename`: rerun the session-naming agent over the session's recent user
+   * prompts and agent replies. `guidance` is the user's own hint and outweighs
+   * the transcript. The list shows `titleGenerationPending` while it runs; a
+   * manual rename in the meantime wins.
+   */
+  | { type: "regenerateSessionTitle"; id: string; guidance?: string }
   /**
    * Take a spawned peer session over (`taken-over`), or hand it back to the
    * coordinator that spawned it (`coordinator`) — the user's EXPLICIT word on

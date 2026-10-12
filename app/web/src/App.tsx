@@ -3612,9 +3612,20 @@ function AppContent() {
   const runClientSlashCommand = useCallback(
     (name: string, rawArgs: string): string | null => {
       if (name === "review") return startReviewSessionForSession(rawArgs);
+      if (name === "rename") {
+        if (!displayCurrentId || !displayHasUserPrompt)
+          return "Nothing to name yet — this session has no conversation.";
+        actions.regenerateSessionTitle(displayCurrentId, rawArgs);
+        return null;
+      }
       return `/${name} is not available here.`;
     },
-    [startReviewSessionForSession],
+    [
+      actions,
+      displayCurrentId,
+      displayHasUserPrompt,
+      startReviewSessionForSession,
+    ],
   );
 
   /**
