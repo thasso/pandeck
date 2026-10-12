@@ -512,6 +512,88 @@ test("GitHub reads the app behind failed checks and change requests", async () =
   );
 });
 
+/** Answers review pages from `pages`, linking each to the next like GitHub. */
+async function withPagedReviews(
+  pages: (page: number) => unknown[],
+  lastPage: number,
+  run: (provider: GitHostingProvider) => Promise<void>,
+): Promise<number[]> {
+  const provider = githubProvider(
+    { host: "github.com", owner: "acme", repo: "repo" },
+    { token: "t", apiBaseUrl: "https://api.github.com" },
+  );
+  const requested: number[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const page = Number(url.searchParams.get("page") ?? "1");
+    requested.push(page);
+    const next = new URL(url);
+    next.searchParams.set("page", String(page + 1));
+    return new Response(JSON.stringify(pages(page)), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        ...(page < lastPage ? { link: `<${next}>; rel="next"` } : {}),
+      },
+    });
+  }) as typeof fetch;
+  try {
+    await run(provider);
+  } finally {
+    globalThis.fetch = original;
+  }
+  return requested;
+}
+
+// Reviews come oldest first: an app's objection on page 1 may have been
+// withdrawn on page 2, and only the whole history can say it still stands.
+test("an app's later approval on another page withdraws its objection", async () => {
+  const requested = await withPagedReviews(
+    (page) =>
+      page === 1
+        ? [
+            {
+              state: "CHANGES_REQUESTED",
+              user: { login: "cl-percy[bot]" },
+              submitted_at: "2026-10-12T18:05:23Z",
+            },
+            {
+              state: "CHANGES_REQUESTED",
+              user: { login: "ana" },
+              submitted_at: "2026-10-12T18:06:00Z",
+            },
+          ]
+        : [
+            {
+              state: "APPROVED",
+              user: { login: "cl-percy[bot]" },
+              submitted_at: "2026-10-12T18:13:22Z",
+            },
+          ],
+    2,
+    async (provider) => {
+      const review = await provider.pullRequestReview(19);
+      assert.deepEqual(review, { changesRequested: true });
+      assert.equal(
+        ciBesideReviewGates(gatedCi(["cl-percy"]), review)?.state,
+        "failure",
+      );
+    },
+  );
+  assert.deepEqual(requested, [1, 2]);
+});
+
+test("a review history past the page cap is unknown", async () => {
+  await withPagedReviews(
+    () => [{ state: "CHANGES_REQUESTED", user: { login: "cl-percy[bot]" } }],
+    Number.POSITIVE_INFINITY,
+    async (provider) => {
+      assert.equal(await provider.pullRequestReview(19), null);
+    },
+  );
+});
+
 test("Forgejo reviews name no apps", async () => {
   const provider = forgejoProvider(
     { host: "git.example.com", owner: "acme", repo: "repo" },

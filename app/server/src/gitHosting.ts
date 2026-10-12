@@ -1241,6 +1241,9 @@ export function resetGithubOpenPullAnnotationsForTests(): void {
 /** Pages of the REST reviewer list read before giving up as unknown. */
 const REVIEW_REQUEST_PAGE_CAP = 10;
 
+/** Pages of a pull request's REST review history read before giving up as unknown. */
+const REVIEW_PAGE_CAP = 10;
+
 /**
  * Is `login` among this pull request's requested reviewers, by the complete
  * REST list? It pages until a short page proves the end, and THROWS when the
@@ -1760,17 +1763,27 @@ export function githubProvider(
       };
     },
     async pullRequestReview(prNumber) {
-      const res = await githubRequest<ProviderReview[]>(
-        config,
-        "GET",
-        `${repoApi}/pulls/${prNumber}/reviews`,
-        {
-          query: { per_page: 100 },
-          signal: signal(),
-        },
-      );
-      const reviews = requireData(res, "pull request reviews");
-      if (!Array.isArray(reviews)) return null;
+      // Every page: GitHub lists reviews oldest first, so a first page alone
+      // can hold an app's old objection and miss the approval that withdrew
+      // it — and that objection is what clears the app's failing check from
+      // CI. A history past the cap is unknown, not the part that was read.
+      const reviews: ProviderReview[] = [];
+      for (let page = 1; ; page += 1) {
+        if (page > REVIEW_PAGE_CAP) return null;
+        const res = await githubRequest<ProviderReview[]>(
+          config,
+          "GET",
+          `${repoApi}/pulls/${prNumber}/reviews`,
+          {
+            query: { per_page: 100, page },
+            signal: signal(),
+          },
+        );
+        const batch = requireData(res, "pull request reviews");
+        if (!Array.isArray(batch)) return null;
+        reviews.push(...batch);
+        if (!res.nextUrl || batch.length === 0) break;
+      }
       // No `unresolvedThreads`: thread resolution is GraphQL-only on GitHub.
       return reviewFromProviderReviews(reviews, (review) =>
         githubReviewApp(review.user?.login, false),
