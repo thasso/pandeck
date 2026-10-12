@@ -695,7 +695,7 @@ function SidebarImpl({
     // its own last rows clear of it.
     <aside
       ref={containerRef}
-      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
+      className="relative flex h-full w-full shrink-0 flex-col overflow-hidden surface-sidebar border-border sm:border-r"
     >
       {/* The attention list's counts bar (or the Tasks toolbar), above the
           scroll container: it stays put without the scrollbar running through

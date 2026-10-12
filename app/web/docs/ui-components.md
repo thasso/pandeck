@@ -89,6 +89,11 @@ The audit does not count a `render={<button` target.
   `ring`, plus the app's `success` and `warning` (with `-soft` fills). No
   Tailwind palette colors (`text-emerald-500`, `bg-black/40`) and no arbitrary
   values (`bg-[#…]`, `w-[13rem]`) in feature code.
+- The left browser and right panel roots carry `surface-sidebar`, which paints
+  the `--sidebar` surface and repoints `background`, `card`, `muted`, `accent`,
+  `secondary` and `border` at the `--sidebar*` set for that subtree. Content
+  inside a panel keeps using the generic tokens; tune the panel look through the
+  `--sidebar*` values in `index.css`, never per component.
 - Typography is Tailwind's stock scale, `text-xs` to `text-xl`, scaled by the
   `--text-scale` preference in `index.css` (`typographyAudit.test.ts`).
 - Icons are `lucide-react`. Inside a `ui/` component let it size the icon.
