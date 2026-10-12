@@ -3459,9 +3459,11 @@ describe("the manual inbox order", () => {
     expect(planInboxDrop(items, "a", "run:7")).toEqual([
       { kind: "session", id: "a", position: NOW - 2_750_000 },
     ]);
-    // The run dropped on `a`'s place goes to the top, just above it.
+    // The run dropped on `a`'s place takes `a`'s number, and `a` steps down
+    // between that and `b` — never above the old top.
     expect(planInboxDrop(items, "run:7", "a")).toEqual([
-      { kind: "run", runId: "7", position: NOW - 1_000_000 + 1_000 },
+      { kind: "run", runId: "7", position: NOW - 1_000_000 },
+      { kind: "session", id: "a", position: NOW - 1_500_000 },
     ]);
     // And `a` dropped on the last place goes just below `c`.
     expect(planInboxDrop(items, "a", "c")).toEqual([
@@ -3483,6 +3485,40 @@ describe("the manual inbox order", () => {
       return entry ? { ...row, inboxPosition: entry.position } : row;
     });
     expect(ids(active(placed))).toEqual(["c", "a", "b"]);
+  });
+
+  it("never places a card above the current top, however often it is dropped there", () => {
+    let sessions = [
+      session({ id: "a", createdAt: NOW }),
+      session({ id: "b", createdAt: NOW - 2_000 }),
+      session({ id: "c", createdAt: NOW - 4_000 }),
+    ];
+    const apply = (plan: ReturnType<typeof planInboxDrop>) => {
+      sessions = sessions.map((row) => {
+        const entry = plan?.find(
+          (each) => each.kind === "session" && each.id === row.id,
+        );
+        return entry ? { ...row, inboxPosition: entry.position } : row;
+      });
+    };
+    // Drag whatever is last to the top, many times over.
+    for (let round = 0; round < 60; round += 1) {
+      const items = active(sessions);
+      apply(
+        planInboxDrop(
+          items,
+          inboxItemId(items[items.length - 1]!),
+          inboxItemId(items[0]!),
+        ),
+      );
+      const positions = sessions.map(
+        (row) => row.inboxPosition ?? row.createdAt,
+      );
+      expect(Math.max(...positions)).toBeLessThanOrEqual(NOW);
+    }
+    // A session created a moment later still arrives above all of them.
+    const fresh = session({ id: "fresh", createdAt: NOW + 1 });
+    expect(ids(active([...sessions, fresh]))[0]).toBe("fresh");
   });
 
   it("renumbers the whole list when the neighbours leave no room", () => {

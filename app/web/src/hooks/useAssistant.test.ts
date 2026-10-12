@@ -2589,5 +2589,25 @@ describe("the dragged Sessions inbox order", () => {
     expect(next.sessions[0]?.updatedAt).toBe(2_000);
     expect(next.sessions[1]).toBe(untouched);
     expect(next.workflowRuns?.[0]?.inboxPosition).toBe(4_000);
+
+    // Refused: what the drop wrote goes back — a never-dragged session loses
+    // the field again — unless an authoritative list has replaced it since.
+    const replaced: UIState = {
+      ...next,
+      workflowRuns: next.workflowRuns!.map((run) => ({
+        ...run,
+        inboxPosition: 9_000,
+      })),
+    };
+    const reverted = reduceAssistantState(replaced, {
+      kind: "revertInboxPositions",
+      reverts: [
+        { kind: "session", id: "a", position: 5_000.5, previous: undefined },
+        { kind: "run", runId: "7", position: 4_000, previous: 3_000 },
+      ],
+    });
+    expect("inboxPosition" in reverted.sessions[0]!).toBe(false);
+    expect(reverted.sessions[1]).toBe(untouched);
+    expect(reverted.workflowRuns?.[0]?.inboxPosition).toBe(9_000);
   });
 });

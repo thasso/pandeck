@@ -23,7 +23,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { isShelvedSession } from "@assistant/shared";
+import { isShelvedSession, MAX_INBOX_POSITIONS } from "@assistant/shared";
 import type {
   InboxPositionEntry,
   ProjectRecord,
@@ -982,7 +982,18 @@ export function SessionInbox({
         String(active.id),
         String(over.id),
       );
-      if (positions) onSetInboxPositions(positions);
+      if (!positions) return;
+      // Refused HERE, before anything moves: the server takes at most this
+      // many, and a renumbering past it would show an order it then refuses.
+      // The card is back where it was, so the message says why.
+      if (positions.length > MAX_INBOX_POSITIONS) {
+        showToast(
+          `Couldn't move the card: reordering here would renumber more than ${MAX_INBOX_POSITIONS} items. Settle some first.`,
+          { tone: "error" },
+        );
+        return;
+      }
+      onSetInboxPositions(positions);
     },
     [view.active, onSetInboxPositions],
   );

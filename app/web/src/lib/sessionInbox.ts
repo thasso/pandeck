@@ -1957,20 +1957,24 @@ function itemPosition(item: SessionInboxItem): number {
 }
 
 /**
- * How far apart a renumbered list is spread, and how far past its neighbour an
- * item dropped at either END lands. Small on purpose: an item dragged to the
- * top must stay below the NEXT session to be created, which arrives at its
- * creation time.
+ * How far apart a renumbered list is spread, and how far below the last item
+ * an item dropped at the BOTTOM lands.
  */
 const INBOX_POSITION_STEP = 1_000;
 
 /**
  * What dropping `activeId` on `overId`'s place writes, in `items` (one group,
- * already in display order): normally the ONE dragged item, at the midpoint of
- * its new neighbours, or just past the end it was dropped at. When the two
- * neighbours leave no number between them — equal creation times, or many
- * drops into the same gap — the whole list is renumbered in its new order,
- * from its current top down. `undefined` when the drop moves nothing.
+ * already in display order). Normally ONE item: the dragged one, at the
+ * midpoint of its new neighbours, or a step below the last. A drop at the TOP
+ * writes two: the dragged item takes the old top's number and the old top steps
+ * down into the gap under it. Nothing is ever placed ABOVE the group's current
+ * top, because positions share a scale with creation times: a number above it
+ * could be in the future, and the next session created would land below the
+ * card the user just put first.
+ *
+ * When the neighbours leave no number between them — equal creation times, or
+ * many drops into the same gap — the whole group is renumbered in its new
+ * order, from its current top down. `undefined` when the drop moves nothing.
  */
 export function planInboxDrop(
   items: readonly SessionInboxItem[],
@@ -1985,16 +1989,32 @@ export function planInboxDrop(
   moved.splice(to, 0, item);
   const above = moved[to - 1];
   const below = moved[to + 1];
-  const position =
-    above && below
-      ? (itemPosition(above) + itemPosition(below)) / 2
-      : above
-        ? itemPosition(above) - INBOX_POSITION_STEP
-        : itemPosition(below!) + INBOX_POSITION_STEP;
-  const fits =
-    (!above || position < itemPosition(above)) &&
-    (!below || position > itemPosition(below));
-  if (fits) return [inboxPositionEntry(item, position)];
+  const between = (
+    upper: SessionInboxItem,
+    lower: SessionInboxItem | undefined,
+  ): number | undefined => {
+    const high = itemPosition(upper);
+    const position = lower
+      ? (high + itemPosition(lower)) / 2
+      : high - INBOX_POSITION_STEP;
+    return position < high && (!lower || position > itemPosition(lower))
+      ? position
+      : undefined;
+  };
+  if (above) {
+    const position = between(above, below);
+    if (position !== undefined) return [inboxPositionEntry(item, position)];
+  } else {
+    // `below` is the old top: the dragged item takes its number, and it moves
+    // down between that number and the item that was second.
+    const top = below!;
+    const lowered = between(top, moved[to + 2]);
+    if (lowered !== undefined)
+      return [
+        inboxPositionEntry(item, itemPosition(top)),
+        inboxPositionEntry(top, lowered),
+      ];
+  }
   const top = Math.max(...items.map(itemPosition));
   return moved.map((each, index) =>
     inboxPositionEntry(each, top - index * INBOX_POSITION_STEP),
