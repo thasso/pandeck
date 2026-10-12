@@ -7,9 +7,9 @@
  * The persona drives which native (Read/Write/Edit/Bash) tools the SDK query is
  * allowed to use:
  *   - "workshop" keeps the full native toolset;
- *   - "assistant" gets NONE — every known native tool is disallowed and the
- *     canUseTool permission callback denies them (its capability is the bridged
- *     `pa` MCP tools only, mirroring the pi assistant).
+ *   - "assistant" gets NONE — every known native tool is disallowed (its
+ *     capability is the bridged `pa` MCP tools only, mirroring the pi
+ *     assistant).
  *
  * The session MODE is the second, independent axis: `plan` refuses the
  * file-mutating natives per call against the live mode, and never changes the
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   }
   assert.ok(
     (workshop.tools as string[]).includes("ToolSearch"),
-    "ToolSearch must ride the tools: allowlist itself (not just canUseTool) or the CLI silently loads every mcp__pa__ tool definition upfront",
+    "ToolSearch must ride the tools: allowlist itself or the CLI silently loads every mcp__pa__ tool definition upfront",
   );
   assert.ok(
     (workshop.tools as string[]).includes("Skill"),
@@ -80,7 +80,12 @@ async function main(): Promise<void> {
   assert.equal(
     workshop.allowedTools,
     undefined,
-    "bare allowedTools must not shadow canUseTool",
+    "bypass mode approves before allowedTools is consulted",
+  );
+  assert.equal(
+    workshop.canUseTool,
+    undefined,
+    "bypass mode never calls canUseTool, so none is passed (the SDK warns otherwise)",
   );
   assert.equal(
     workshop.permissionMode,
@@ -92,11 +97,11 @@ async function main(): Promise<void> {
     true,
     "bypass mode is explicitly acknowledged",
   );
-  for (const t of ["Bash", "Read", "Write", "Edit", "Skill"]) {
-    const verdict = await workshop.canUseTool!(t, {}, {} as never);
-    assert.ok(verdict, `workshop canUseTool returns a verdict for ${t}`);
-    assert.equal(verdict.behavior, "allow", `workshop canUseTool allows ${t}`);
-  }
+  for (const t of ["Bash", "Read", "Write", "Edit", "Skill"])
+    assert.ok(
+      (workshop.tools as string[]).includes(t),
+      `workshop's tools allowlist carries ${t}`,
+    );
 
   const withLibrarySkills = buildClaudeSdkQueryOptions({
     ...base,
@@ -196,9 +201,6 @@ async function main(): Promise<void> {
       (assistant.disallowedTools as string[]).includes(t),
       `assistant disallows native ${t}`,
     );
-    const verdict = await assistant.canUseTool!(t, {}, {} as never);
-    assert.ok(verdict, `assistant canUseTool returns a verdict for ${t}`);
-    assert.equal(verdict.behavior, "deny", `assistant canUseTool denies ${t}`);
   }
 
   // Claude's native auto-memory is disabled globally for every persona: our
@@ -292,13 +294,6 @@ async function main(): Promise<void> {
       `plan's PreToolUse gate refuses the mutating native ${t}`,
     );
     assert.match(decision?.permissionDecisionReason ?? "", /Plan mode/);
-    const verdict = await plan.canUseTool!(t, {}, {} as never);
-    assert.ok(verdict, `plan canUseTool returns a verdict for ${t}`);
-    assert.equal(
-      verdict.behavior,
-      "deny",
-      `plan canUseTool denies ${t} (kept consistent even though bypassPermissions shadows it)`,
-    );
   }
   for (const t of ["Read", "Bash", "Monitor", "Grep", "Glob"]) {
     assert.notEqual(
@@ -306,9 +301,6 @@ async function main(): Promise<void> {
       "deny",
       `plan's PreToolUse gate lets ${t} run`,
     );
-    const verdict = await plan.canUseTool!(t, {}, {} as never);
-    assert.ok(verdict, `plan canUseTool returns a verdict for ${t}`);
-    assert.equal(verdict.behavior, "allow", `plan still allows ${t}`);
   }
   // The same process returns to Build without a restart.
   liveMode = "build";
@@ -317,52 +309,10 @@ async function main(): Promise<void> {
     "deny",
     "switching the live mode back to Build lets Edit run on the same query",
   );
-  const backInBuild = await plan.canUseTool!("Edit", {}, {} as never);
-  assert.equal(backInBuild?.behavior, "allow");
   liveMode = "plan";
 
-  const planWithMcp = buildClaudeSdkQueryOptions({
-    ...base,
-    outputPolicySessionId: "options-plan-test",
-    mode: () => "plan",
-    mcpServer: {} as never,
-  });
-  const mcpVerdict = await planWithMcp.canUseTool!(
-    "mcp__pa__kb_write",
-    {},
-    {} as never,
-  );
-  assert.ok(
-    mcpVerdict,
-    "plan canUseTool returns a verdict for an mcp__pa__ tool",
-  );
-  assert.equal(mcpVerdict.behavior, "deny");
-  assert.match(
-    "message" in mcpVerdict ? (mcpVerdict.message ?? "") : "",
-    /not available in Plan mode because it can make changes/,
-  );
-  const taskManageVerdict = await planWithMcp.canUseTool!(
-    "mcp__pa__task_manage",
-    {},
-    {} as never,
-  );
-  assert.ok(taskManageVerdict);
-  assert.equal(
-    taskManageVerdict.behavior,
-    "allow",
-    "Plan permits durable Task mutations",
-  );
-  const readMcpVerdict = await planWithMcp.canUseTool!(
-    "mcp__pa__kb_read",
-    {},
-    {} as never,
-  );
-  assert.ok(readMcpVerdict);
-  assert.equal(
-    readMcpVerdict.behavior,
-    "allow",
-    "Plan keeps read-only app tools reachable",
-  );
+  // Plan's app-tool gate is the session tool server's, which lists and refuses
+  // mcp__pa__* tools against the live mode (mcp/sessionToolServer.test.ts).
   assert.equal(
     plan.permissionMode,
     "bypassPermissions",
