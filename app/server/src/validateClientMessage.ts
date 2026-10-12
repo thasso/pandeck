@@ -23,6 +23,7 @@ import {
   BROADCAST_TOPICS,
   isHarness,
   isPeerRuntimeRelativeCost,
+  MAX_INBOX_POSITIONS,
   MAX_PEER_RUNTIME_DESCRIPTION_CHARS,
   PULL_REQUEST_CARD_ACTIONS,
   PULL_REQUEST_MERGE_METHODS,
@@ -921,6 +922,24 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   // Same rule for a Workflow Run's Settle (Task-677): the observed revision is
   // required, so a stale item cannot acknowledge an outcome it never rendered.
   settleWorkflowRun: fields({ runId: STRING, throughRevision: COUNT }),
+  setInboxPositions: (msg) => {
+    const { positions } = msg;
+    if (!Array.isArray(positions) || positions.length === 0)
+      return "positions is required and must be a non-empty array";
+    if (positions.length > MAX_INBOX_POSITIONS)
+      return `positions may carry at most ${MAX_INBOX_POSITIONS} entries`;
+    for (const entry of positions as unknown[]) {
+      if (!isPlainObject(entry)) return "each position must be an object";
+      const missing =
+        entry.kind === "session"
+          ? checkRequiredFields(entry, { id: STRING, position: NUMBER })
+          : entry.kind === "run"
+            ? checkRequiredFields(entry, { runId: STRING, position: NUMBER })
+            : 'each position\'s kind must be "session" or "run"';
+      if (missing) return missing;
+    }
+    return checkOptionalFields(msg, { requestId: STRING });
+  },
   renameSession: fields({ id: STRING, title: STRING }),
   regenerateSessionTitle: fields({ id: STRING }, { guidance: STRING }),
   setSpawnOwnership: fields({

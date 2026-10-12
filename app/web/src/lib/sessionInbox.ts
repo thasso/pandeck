@@ -14,6 +14,7 @@
  * the list, and the rules stay testable against malformed/partial rows.
  */
 import type {
+  InboxPositionEntry,
   SessionListItem,
   SpawnClusterForest,
   WorkflowRunCard,
@@ -23,6 +24,7 @@ import type {
 import {
   awaitedBackgroundCount,
   backgroundWorkBusy,
+  inboxPositionOf,
   isDormantInSpawnTree,
   isShelvedSession,
   isTerminalWorkflowRunLifecycle,
@@ -1936,21 +1938,96 @@ function workflowRunItem(
 
 /**
  * Ordering across BOTH kinds of item, within one group (the view has already
- * split what needs the user from the rest): newest created first, then a
- * stable id tie-break. Deliberately NOT by tier or activity — a card that
- * jumped whenever it started, finished or was read made the list move under
- * the reader; its state is on the card instead.
+ * split what needs the user from the rest): highest {@link inboxPositionOf}
+ * first — where the user dragged the item, else newest created — then a stable
+ * id tie-break. Deliberately NOT by tier or activity — a card that jumped
+ * whenever it started, finished or was read made the list move under the
+ * reader; its state is on the card instead.
  */
 function compareInboxItems(a: SessionInboxItem, b: SessionInboxItem): number {
-  const created = itemCreatedAt(b) - itemCreatedAt(a);
-  if (created !== 0) return created;
+  const position = itemPosition(b) - itemPosition(a);
+  if (position !== 0) return position;
   const left = inboxItemId(a);
   const right = inboxItemId(b);
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function itemCreatedAt(item: SessionInboxItem): number {
-  return item.kind === "run" ? item.run.createdAt : item.card.session.createdAt;
+function itemPosition(item: SessionInboxItem): number {
+  return inboxPositionOf(item.kind === "run" ? item.run : item.card.session);
+}
+
+/**
+ * How far apart a renumbered list is spread, and how far below the last item
+ * an item dropped at the BOTTOM lands.
+ */
+const INBOX_POSITION_STEP = 1_000;
+
+/**
+ * What dropping `activeId` on `overId`'s place writes, in `items` (one group,
+ * already in display order). Normally ONE item: the dragged one, at the
+ * midpoint of its new neighbours, or a step below the last. A drop at the TOP
+ * writes two: the dragged item takes the old top's number and the old top steps
+ * down into the gap under it. Nothing is ever placed ABOVE the group's current
+ * top, because positions share a scale with creation times: a number above it
+ * could be in the future, and the next session created would land below the
+ * card the user just put first.
+ *
+ * When the neighbours leave no number between them — equal creation times, or
+ * many drops into the same gap — the whole group is renumbered in its new
+ * order, from its current top down. `undefined` when the drop moves nothing.
+ */
+export function planInboxDrop(
+  items: readonly SessionInboxItem[],
+  activeId: string,
+  overId: string,
+): InboxPositionEntry[] | undefined {
+  const from = items.findIndex((item) => inboxItemId(item) === activeId);
+  const to = items.findIndex((item) => inboxItemId(item) === overId);
+  if (from < 0 || to < 0 || from === to) return undefined;
+  const moved = [...items];
+  const [item] = moved.splice(from, 1) as [SessionInboxItem];
+  moved.splice(to, 0, item);
+  const above = moved[to - 1];
+  const below = moved[to + 1];
+  const between = (
+    upper: SessionInboxItem,
+    lower: SessionInboxItem | undefined,
+  ): number | undefined => {
+    const high = itemPosition(upper);
+    const position = lower
+      ? (high + itemPosition(lower)) / 2
+      : high - INBOX_POSITION_STEP;
+    return position < high && (!lower || position > itemPosition(lower))
+      ? position
+      : undefined;
+  };
+  if (above) {
+    const position = between(above, below);
+    if (position !== undefined) return [inboxPositionEntry(item, position)];
+  } else {
+    // `below` is the old top: the dragged item takes its number, and it moves
+    // down between that number and the item that was second.
+    const top = below!;
+    const lowered = between(top, moved[to + 2]);
+    if (lowered !== undefined)
+      return [
+        inboxPositionEntry(item, itemPosition(top)),
+        inboxPositionEntry(top, lowered),
+      ];
+  }
+  const top = Math.max(...items.map(itemPosition));
+  return moved.map((each, index) =>
+    inboxPositionEntry(each, top - index * INBOX_POSITION_STEP),
+  );
+}
+
+function inboxPositionEntry(
+  item: SessionInboxItem,
+  position: number,
+): InboxPositionEntry {
+  return item.kind === "run"
+    ? { kind: "run", runId: item.run.id, position }
+    : { kind: "session", id: item.card.session.id, position };
 }
 
 /** One candidate session while the spawn forest is being folded. */

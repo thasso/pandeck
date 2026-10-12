@@ -259,6 +259,27 @@ paging says how much more there is. There is no session search: finding a
 session by title is the shelves' job, and the field cost a permanent row of
 chrome for it.
 
+The cards hold still: a card's state never moves it. **Needs you** and the
+working set below it are each ordered by one number per item, highest first —
+`inboxPositionOf`: where the user dragged the item, else its creation time — so
+a list nobody has dragged reads newest first, and a new session or run arrives
+at the top. The working set below **Needs you** is the one group that DRAGS (a
+mouse after a few px, touch after a long press, so a click still opens and a
+quick thumb still swipes; no keyboard drag, since the cards own their keys). A
+drop writes the dragged item alone, at the midpoint of its new neighbours or a
+step below the last; a drop at the TOP takes the old top's number and moves the
+old top down under it, because nothing may be placed above the current top — a
+higher number could be in the future and hold a card above sessions not yet
+created. Only when the neighbours leave no number between them is the whole
+group renumbered (`planInboxDrop`); a renumbering larger than the server takes
+(`MAX_INBOX_POSITIONS`) is refused before anything moves, with a toast. The
+position is durable (`setInboxPositions`,
+`session_index`/`workflow_runs.inbox_position`), the same on every device, and
+survives the item leaving: a card that goes to **Needs you** or the Settled
+shelf comes back to the place it was dragged to. Needs you does not drag,
+because it empties as it is answered; the shelves are history, ordered by when
+each was put down; a cluster's peers keep their spawn-tree order.
+
 Sessions **Settle** is an ACKNOWLEDGEMENT of an outcome, not a visibility flag
 that activity resets. A user-facing run on a directly owned session raises a
 durable attention revision when it COMPLETES or FAILS, and at nothing else: not
@@ -549,8 +570,8 @@ browser: focusable, swipeable, and openable. Beyond Settle, a run carries no
 archive, delete or run control of its own: those are on the Workflow card on its
 Task, which is where its evidence is, and where selecting the item lands.
 
-The two kinds of item are ordered in ONE list by the same rule — attention tier,
-then when each last moved — because a run is the coarser unit of the same
+The two kinds of item are ordered in ONE list by the same rule — the dragged
+position, else creation time — because a run is the coarser unit of the same
 attention, not a more important one. A run's own sessions are folded out of the
 Settled shelf as well, since a session put down inside a live run belongs to the
 run rather than to a shelf the user cannot see it from.

@@ -326,6 +326,11 @@ export interface WorkflowRunSummary {
    * this alone ({@link pendingWorkflowRunAttention}).
    */
   attention?: WorkflowRunAttention;
+  /**
+   * Where the user dragged this run in the Sessions inbox (`inboxPositionOf`
+   * in `protocol.ts`). Absent until the first drag.
+   */
+  inboxPosition?: number;
 }
 
 /* --------------------------------- steps --------------------------------- */
