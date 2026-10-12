@@ -173,24 +173,36 @@ unheld.
 - **Background facts survive a restart.** Completions owed to a session are
   recorded in `background_delivery_outbox` (identities only; the notice is
   rebuilt from its background-work row) and leave it once delivered or dropped
-  by the bounded queue, never on a failed offer or a shutdown. Boot restores the
-  owed wake and deferred facts of every session still held, without offering
-  them, and forgets the rest: an unheld session's delivery queue never survived
-  a restart and still does not, so no past job is announced again. Monitor
-  activity stays the lossy in-memory stream it always was.
+  by the bounded queue, never on a failed offer or a shutdown. A row a Stop
+  touched — saved while its session was held, or owed when a Stop landed — is
+  `retained`, and boot restores every retained row with its original wake or
+  defer decision until it is delivered, held or not: a Resume authorizes
+  delivery, it does not perform it, so a fact released and then cut off by the
+  restart, refused as busy or unavailable, or carried by a prompt that never
+  committed comes back. A session no longer held is offered its restored wake
+  facts at boot through the usual peer-first drain; one still held waits for
+  Resume; a deferred fact rides the next turn. A row no Stop touched is
+  forgotten at boot, as pending delivery always was, so no past job is announced
+  again. Delivery is at-least-once: a fact is retired only after its turn
+  resolved (a deferred fact, after its carrying prompt was appended and
+  resolved), so a restart inside an admitted turn delivers it again; nothing is
+  lost before admission. Monitor activity stays the lossy in-memory stream it
+  always was.
 - **What lifts it.** The user, and only under the Stop that stood when they
   acted. Every Stop starts a new generation, also on a held session; the
   authority a message captures as it is sent names that generation, so a newer
   Stop that lands while it is admitted wins. Resume (also "Send next" on a
   queued row) lifts the hold at once and offers the whole idle chain in its
   usual order, the Assistant's intake included. A message the user sends now
-  lifts it once appended as a turn of its own; a refused send, a steer into the
-  turn being stopped, or a resend of an intake row already stored lifts nothing.
-  Send-now on a waiting peer prompt lifts it once it claims the row as the next
-  turn (as a steer it lifts nothing). Words of the user's own handed over with
-  review comments lift it only when delivered inline; queued behind held
-  decisions they wait with them. Peer messages, background facts, approvals,
-  reconnects, mounts and idle edges never lift it.
+  lifts it once appended as a turn of its own — for the Assistant, once a new
+  intake row is stored, whether typed in the app or a Slack DM from the account
+  owner (its authority read before the placeholder is posted); a refused send, a
+  steer into the turn being stopped, or a redelivered message (an intake row
+  already stored) lifts nothing. Send-now on a waiting peer prompt lifts it once
+  it claims the row as the next turn (as a steer it lifts nothing). Words of the
+  user's own handed over with review comments lift it only when delivered
+  inline; queued behind held decisions they wait with them. Peer messages,
+  background facts, approvals, reconnects, mounts and idle edges never lift it.
 - **What the user sees.** The session's `promptQueue` carries
   `automaticTurnsHeld: true`, sent even when nothing of the user's is queued, so
   the composer ledge stays with its Resume ("Stopped"). The permanent Assistant

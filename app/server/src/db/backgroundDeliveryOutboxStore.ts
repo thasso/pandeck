@@ -11,6 +11,11 @@ export interface BackgroundDeliveryOutboxRow {
   itemId: string;
   revision: number;
   disposition: "wake" | "defer";
+  /**
+   * A Stop touched it: saved while its session was held, or owed when a Stop
+   * landed. Boot restores it until it is delivered, held or not.
+   */
+  retained: boolean;
 }
 
 interface Row {
@@ -18,21 +23,33 @@ interface Row {
   item_id: string;
   revision: number;
   disposition: "wake" | "defer";
+  retained: number;
 }
 
 export const backgroundDeliveryOutboxStore = {
+  /** Once retained, a row stays retained. */
   save(row: BackgroundDeliveryOutboxRow): void {
     getDb()
       .prepare(
-        "INSERT INTO background_delivery_outbox(session_id,item_id,revision,disposition,created_at_ms) VALUES(?,?,?,?,?) ON CONFLICT(session_id,item_id,revision) DO UPDATE SET disposition=excluded.disposition",
+        "INSERT INTO background_delivery_outbox(session_id,item_id,revision,disposition,retained,created_at_ms) VALUES(?,?,?,?,?,?) ON CONFLICT(session_id,item_id,revision) DO UPDATE SET disposition=excluded.disposition, retained=MAX(retained,excluded.retained)",
       )
       .run(
         row.sessionId,
         row.itemId,
         row.revision,
         row.disposition,
+        row.retained ? 1 : 0,
         Date.now(),
       );
+  },
+
+  /** A Stop landed: everything this session is owed now outlives a restart. */
+  retainSession(sessionId: string): void {
+    getDb()
+      .prepare(
+        "UPDATE background_delivery_outbox SET retained=1 WHERE session_id=?",
+      )
+      .run(sessionId);
   },
 
   remove(sessionId: string, itemId: string, revision: number): void {
@@ -48,7 +65,7 @@ export const backgroundDeliveryOutboxStore = {
     return (
       getDb()
         .prepare(
-          "SELECT session_id,item_id,revision,disposition FROM background_delivery_outbox ORDER BY created_at_ms, rowid",
+          "SELECT session_id,item_id,revision,disposition,retained FROM background_delivery_outbox ORDER BY created_at_ms, rowid",
         )
         .all() as unknown as Row[]
     ).map((r) => ({
@@ -56,6 +73,7 @@ export const backgroundDeliveryOutboxStore = {
       itemId: r.item_id,
       revision: r.revision,
       disposition: r.disposition,
+      retained: r.retained === 1,
     }));
   },
 

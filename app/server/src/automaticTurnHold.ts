@@ -25,6 +25,7 @@
  * authorization at all.
  */
 import { automaticTurnHoldStore } from "./db/automaticTurnHoldStore.ts";
+import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import { SessionBusyError } from "./session/runtime/errors.ts";
 
 /**
@@ -86,6 +87,10 @@ export function captureHumanResume(sessionId: string): HumanResumeToken {
 export function holdAutomaticTurns(sessionId: string): void {
   const wasHeld = automaticTurnHoldStore.isHeld(sessionId);
   automaticTurnHoldStore.hold(sessionId);
+  // What the session is owed now waits on the user, so it must outlive a
+  // restart until it is delivered — also after they resume (a completion that
+  // arrives later is retained as it is saved, while the hold stands).
+  backgroundDeliveryOutboxStore.retainSession(sessionId);
   if (!wasHeld) host?.changed(sessionId);
 }
 

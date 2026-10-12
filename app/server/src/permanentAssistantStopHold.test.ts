@@ -13,6 +13,21 @@ import type {
   PromptableAdapter,
 } from "./session/adapters/contract.ts";
 
+// The Slack DM handler runs for real; only its account settings and transport
+// are stood in for.
+vi.mock("./slackSettings.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./slackSettings.ts")>()),
+  getSlackRuntimeSettings: () => ({
+    enabled: true,
+    accountUserId: "U-OWNER",
+    botUserId: "U-BOT",
+  }),
+  getSlackToolConfig: () => ({ enabled: true, token: "xoxb-test" }),
+}));
+vi.mock("./slackSocketMode.ts", () => ({
+  slackSocketMode: { subscribe: () => () => undefined },
+}));
+
 const tmp = mkdtempSync(join(tmpdir(), "permanent-assistant-stop-hold-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.DATA_DIR = join(tmp, "data");
@@ -25,6 +40,8 @@ const { getDb } = await import("./db/index.ts");
 const { hub } = await import("./hub.ts");
 const hold = await import("./automaticTurnHold.ts");
 const { updateSettings, getSettings } = await import("./settings.ts");
+const { handleSlackAssistantEnvelope } =
+  await import("./slackAssistantChat.ts");
 
 updateSettings({ memory: { ...getSettings().memory, learningMode: "off" } });
 
@@ -103,8 +120,10 @@ const web = (dedupeKey: string, text = dedupeKey) => ({
 const statusOf = (dedupeKey: string) =>
   permanentAssistantStore.find(dedupeKey)?.status;
 
+const originalFetch = globalThis.fetch;
 afterEach(async () => {
   await idle();
+  globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
   getDb().prepare("DELETE FROM permanent_assistant_queue").run();
   permanentAssistantStore.clearSessionId();
@@ -205,4 +224,83 @@ test("a Stop landing while an intake item is on its way puts it back, unspent", 
   assert.equal(item?.status, "queued");
   assert.equal(item?.attempts, 0, "a held refusal is not a failed attempt");
   assert.equal(item?.error, undefined);
+});
+
+/** A Slack DM event; the account owner's unless overridden. */
+function dm(ts: string, text: string, over: Record<string, unknown> = {}) {
+  return {
+    type: "events_api",
+    payload: {
+      team_id: "T1",
+      event: {
+        type: "message",
+        channel_type: "im",
+        channel: "D1",
+        user: "U-OWNER",
+        ts,
+        text,
+        ...over,
+      },
+    },
+  };
+}
+
+/** Answer every Slack Web API call; the placeholder can be held back. */
+function slackApi(placeholder?: Promise<void>) {
+  globalThis.fetch = vi.fn(async () => {
+    await placeholder;
+    return new Response(JSON.stringify({ ok: true, ts: "900.1" }));
+  }) as typeof fetch;
+}
+
+test("a new Slack DM from the account owner resumes a stopped Assistant, after its backlog", async () => {
+  const a = boundAssistant("assistant-slack");
+  slackApi();
+  hold.holdAutomaticTurns(a.id);
+  assistant.enqueuePermanentAssistant(web("before", "queued before the Stop"));
+  await idle();
+  assert.deepEqual(a.sent, []);
+
+  // Not the owner's words: a bot, an edit, someone else. None resumes.
+  await handleSlackAssistantEnvelope(dm("1.1", "bot", { bot_id: "B1" }));
+  await handleSlackAssistantEnvelope(
+    dm("1.2", "edited", { subtype: "message_changed" }),
+  );
+  await handleSlackAssistantEnvelope(dm("1.3", "other", { user: "U-OTHER" }));
+  await idle();
+  assert.equal(hold.automaticTurnsHeld(a.id), true);
+  assert.deepEqual(a.sent, []);
+
+  await handleSlackAssistantEnvelope(dm("2.1", "a new DM"));
+  await until(() => a.sent.length === 2, "the intake to resume");
+  await idle();
+  assert.deepEqual(a.sent, ["queued before the Stop", "a new DM"], "FIFO");
+  assert.equal(hold.automaticTurnsHeld(a.id), false);
+
+  // Stopped again: Slack redelivering that same event resumes nothing.
+  hold.holdAutomaticTurns(a.id);
+  await handleSlackAssistantEnvelope(dm("2.1", "a new DM"));
+  await idle();
+  assert.equal(hold.automaticTurnsHeld(a.id), true);
+  assert.equal(a.sent.length, 2);
+});
+
+test("a Stop that lands while the Slack placeholder is posted wins over the DM", async () => {
+  const a = boundAssistant("assistant-slack-race");
+  let postPlaceholder!: () => void;
+  slackApi(new Promise<void>((resolve) => (postPlaceholder = resolve)));
+  hold.holdAutomaticTurns(a.id);
+  const handled = handleSlackAssistantEnvelope(dm("3.1", "sent before"));
+  // The DM's authority is already captured; the user stops again meanwhile.
+  hold.holdAutomaticTurns(a.id);
+  postPlaceholder();
+  await handled;
+  await idle();
+  assert.equal(hold.automaticTurnsHeld(a.id), true);
+  assert.deepEqual(a.sent, []);
+  assert.equal(
+    permanentAssistantStore.find("slack:T1:D1:3.1")?.status,
+    "queued",
+    "stored, in its place, for Resume",
+  );
 });

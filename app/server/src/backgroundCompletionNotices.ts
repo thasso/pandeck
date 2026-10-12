@@ -3,11 +3,11 @@
  * durable record of what is still owed (`background_delivery_outbox`).
  *
  * A notice is rebuilt from its row rather than stored, so the outbox holds only
- * identities. That is what lets a fact owed to a session a Stop holds survive a
- * restart (`automaticTurnHold.ts`): boot restores the owed rows of every held
- * session, and forgets the rest — an unheld session never had its delivery
- * queue survive a restart, and does not start now, so no historical job is
- * announced again.
+ * identities. That is what lets a fact owed to a session a Stop touched survive
+ * a restart (`automaticTurnHold.ts`) until it is delivered — through a Resume
+ * too. A fact no Stop touched keeps the old rule and is forgotten at boot: the
+ * delivery queue never survived a restart, so no historical job is announced
+ * again.
  */
 import { automaticTurnsHeld } from "./automaticTurnHold.ts";
 import type {
@@ -129,6 +129,9 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
         itemId: notice.itemId,
         revision: notice.revision,
         disposition,
+        // Owed to a stopped session: it must outlive a restart until it is
+        // delivered, whatever the user does with the hold meanwhile.
+        retained: automaticTurnsHeld(sessionId),
       });
     } catch (err) {
       console.warn(
@@ -154,17 +157,28 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
 };
 
 /**
- * Boot: put back what a held session is still owed, in the order it was owed,
- * and forget the rest. A row whose item is gone, changed revision or changed
- * owner no longer names the fact it was saved for, and is forgotten too.
+ * Boot: put back every fact a Stop touched that was not yet delivered, in the
+ * order it was owed, as it was decided then. "Not held now" never means
+ * "delivered": a Resume authorizes delivery, it does not perform it, so a fact
+ * released and then cut off by the restart is restored too, and offered at
+ * once to a session that is no longer held (one still held waits for Resume).
+ * A row no Stop touched is forgotten, as a restart always forgot pending
+ * delivery, and so is one whose item is gone or changed revision or owner:
+ * it no longer names the fact it was saved for.
+ *
+ * Delivery is at-least-once across the crash windows: a fact is retired only
+ * once its turn resolved (a wake) or its carrying prompt was appended and
+ * resolved (a deferred fact), so a restart inside an admitted turn delivers it
+ * again; one before admission delivers it the first time.
  */
-export function restoreHeldBackgroundDelivery(
+export function restoreOwedBackgroundDelivery(
   delivery: BackgroundCompletionDelivery,
 ): { restored: number; forgotten: number } {
   let restored = 0;
   let forgotten = 0;
+  const resumed = new Set<string>();
   for (const row of backgroundDeliveryOutboxStore.list()) {
-    const item = automaticTurnsHeld(row.sessionId)
+    const item = row.retained
       ? backgroundWorkStore.getItem(row.itemId)
       : undefined;
     const notice =
@@ -184,6 +198,11 @@ export function restoreHeldBackgroundDelivery(
     }
     delivery.restore(row.sessionId, notice, row.disposition);
     restored += 1;
+    if (!automaticTurnsHeld(row.sessionId)) resumed.add(row.sessionId);
   }
+  // Released before the restart, so nothing else will come for these: the
+  // usual peer-first drain offers them now (a deferred fact still waits for
+  // the session's next turn).
+  for (const sessionId of resumed) void delivery.requestDrain(sessionId);
   return { restored, forgotten };
 }

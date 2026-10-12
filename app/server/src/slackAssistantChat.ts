@@ -1,5 +1,6 @@
 import { errorText } from "./errors.ts";
 import {
+  capturePermanentAssistantResume,
   enqueuePermanentAssistant,
   hasPermanentAssistantMessage,
   permanentAssistantIsBusy,
@@ -74,6 +75,11 @@ export async function handleSlackAssistantEnvelope(
   )
     return;
   acceptingEventKeys.add(dedupeKey);
+  // A new message from the account owner resumes a stopped Assistant like one
+  // typed in the app. Its authority is read NOW, before the placeholder is
+  // awaited: a Stop that lands meanwhile is newer, and wins
+  // (`automaticTurnHold.ts`). A redelivered event never gets this far.
+  const resumeHold = capturePermanentAssistantResume();
   const queued = permanentAssistantIsBusy();
   let placeholderTs: string | undefined;
   try {
@@ -91,17 +97,20 @@ export async function handleSlackAssistantEnvelope(
       `[slack-assistant] placeholder failed; request remains queued: ${errorText(error)}`,
     );
   }
-  enqueuePermanentAssistant({
-    dedupeKey,
-    source: "slack",
-    sourceMetadata: {
-      channel: event.channel,
-      messageTs: event.ts,
-      threadTs: event.thread_ts,
-      placeholderTs,
+  enqueuePermanentAssistant(
+    {
+      dedupeKey,
+      source: "slack",
+      sourceMetadata: {
+        channel: event.channel,
+        messageTs: event.ts,
+        threadTs: event.thread_ts,
+        placeholderTs,
+      },
+      text: event.text.trim(),
     },
-    text: event.text.trim(),
-  });
+    resumeHold ? { resumeHold } : {},
+  );
   acceptingEventKeys.delete(dedupeKey);
 }
 

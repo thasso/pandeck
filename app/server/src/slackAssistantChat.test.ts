@@ -4,6 +4,7 @@ import { afterEach, beforeEach, test, vi } from "vitest";
 const enqueue = vi.fn();
 const seen = new Set<string>();
 vi.mock("./permanentAssistant.ts", () => ({
+  capturePermanentAssistantResume: () => undefined,
   enqueuePermanentAssistant: (input: { dedupeKey: string }) => {
     seen.add(input.dedupeKey);
     enqueue(input);

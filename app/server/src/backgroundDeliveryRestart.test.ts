@@ -1,7 +1,8 @@
 /**
- * Background completions owed to a stopped session survive a restart: each
- * phase below is a SEPARATE Node process on the same database, so nothing but
- * SQLite carries a fact from one to the next.
+ * Background completions a Stop touched stay owed across a restart until they
+ * are delivered — through a Resume too. Each phase below is a SEPARATE Node
+ * process on the same database, so nothing but SQLite carries a fact from one
+ * to the next, and each wires delivery the way `index.ts` does.
  *   pnpm --filter @assistant/server test src/backgroundDeliveryRestart.test.ts
  */
 import assert from "node:assert/strict";
@@ -18,8 +19,18 @@ afterAll(() => rmSync(dataDir, { recursive: true, force: true }));
 const url = (path: string) => new URL(path, import.meta.url).href;
 
 /**
- * One process lifetime. It wires delivery the way `index.ts` does — the real
- * outbox, policy and boot restore — with a recording offer in place of a model.
+ * Owners, each one crash window:
+ *  release   Stopped, owed a wake and a deferred fact, resumed, killed before
+ *            any drain ran.
+ *  busy      Stopped, resumed; the offer found the session busy.
+ *  gone      Stopped, resumed; the offer found it unavailable.
+ *  failed    Stopped, resumed; the offer threw.
+ *  peeked    Stopped, owed a deferred fact, resumed; a human prompt carried
+ *            it (peeked) but was cut off before it committed.
+ *  held      Stopped and still held at the restart.
+ *  delivered Stopped, resumed, delivered and committed before the restart.
+ *  never     Never stopped; busy at the restart.
+ *  before    Owed (busy) BEFORE a Stop landed; then stopped and resumed.
  */
 const script = `
   const phase = process.argv[1];
@@ -29,63 +40,89 @@ const script = `
   const { BackgroundCompletionDelivery } = await import(${JSON.stringify(url("./backgroundWork/completionDelivery.ts"))});
   const notices = await import(${JSON.stringify(url("./backgroundCompletionNotices.ts"))});
   const { reconcileBackgroundWorkOnBoot } = await import(${JSON.stringify(url("./backgroundWorkBoot.ts"))});
+  const owners = ["release", "busy", "gone", "failed", "peeked", "held", "delivered", "never", "before"];
   const offered = [];
+  const answer = {};
   const delivery = new BackgroundCompletionDelivery({
     drainPeers: async () => {},
     held: hold.automaticTurnsHeld,
     disposition: notices.completionDisposition,
     outbox: notices.backgroundDeliveryOutbox,
     offer: async (sessionId, _offer, key) => {
-      offered.push(key);
-      // The unheld owner is busy, so its fact is still owed at exit.
-      return sessionId === "unheld-owner" ? "busy" : "delivered";
+      offered.push(sessionId + "=" + key);
+      const result = answer[sessionId] ?? "delivered";
+      if (result === "throw") throw new Error("provider exploded");
+      return result;
     },
   });
   const finished = (owner, label, stop) => {
     const item = backgroundWorkStore.reserveItem({
       ownerSessionId: owner, backend: "host-process", kind: "shell", label,
-      sourceRequestId: label, lifetimeMs: 60000, settingsGeneration: 1,
-      bootEpoch: "seed", ownerLimit: 100,
+      sourceRequestId: owner + ":" + label, lifetimeMs: 60000,
+      settingsGeneration: 1, bootEpoch: "seed", ownerLimit: 100,
     });
     if (stop) {
       backgroundWorkStore.markRunning({ itemId: item.id });
-      backgroundWorkStore.requestStop({ itemId: item.id, reason: "asked", sourceRequestId: label + "-stop" });
+      backgroundWorkStore.requestStop({ itemId: item.id, reason: "asked", sourceRequestId: owner + ":" + label + ":stop" });
     }
     return backgroundWorkStore.terminalize({ itemId: item.id, state: stop ? "stopped" : "completed" });
   };
-  const out = { phase };
+  const owe = (owner, item) => delivery.enqueue(owner, notices.completionNoticeOf(item, false));
+  const out = { phase, items: {} };
   if (phase === "seed") {
-    for (const id of ["held-owner", "unheld-owner"])
+    for (const id of owners)
       sessionStore.upsert({ id, scope: "user", harness: "pi", agentType: "developer" });
-    hold.holdAutomaticTurns("held-owner");
-    const woken = finished("held-owner", "woken job", false);
-    const deferred = finished("held-owner", "deferred job", true);
-    const unheld = finished("unheld-owner", "unheld job", false);
-    for (const item of [woken, deferred, unheld])
-      delivery.enqueue(item.ownerSessionId, notices.completionNoticeOf(item, false));
-    await delivery.drain("held-owner");
-    await delivery.drain("unheld-owner");
-    Object.assign(out, { woken: woken.id, deferred: deferred.id, unheld: unheld.id });
+    // Owed while unheld, and offered while the session was busy.
+    answer.before = "busy";
+    const early = finished("before", "wake", false);
+    out.items["before:wake"] = early.id;
+    owe("before", early);
+    await delivery.drain("before");
+    delete answer.before;
+    for (const owner of owners.filter((o) => o !== "never")) hold.holdAutomaticTurns(owner);
+    for (const owner of ["release", "busy", "gone", "failed", "held", "delivered", "never"]) {
+      const wake = finished(owner, "wake", false);
+      out.items[owner + ":wake"] = wake.id;
+      owe(owner, wake);
+    }
+    for (const owner of ["release", "peeked", "held", "delivered"]) {
+      const deferred = finished(owner, "deferred", true);
+      out.items[owner + ":deferred"] = deferred.id;
+      owe(owner, deferred);
+    }
+    Object.assign(answer, { busy: "busy", gone: "unavailable", failed: "throw", never: "busy" });
+    // The drains each enqueue started read the hold while it still stands.
+    for (const owner of owners) await delivery.drain(owner).catch(() => {});
+    for (const owner of ["release", "busy", "gone", "failed", "peeked", "delivered", "before"])
+      hold.resumeAutomaticTurns(owner);
+    for (const owner of ["busy", "gone", "failed", "delivered"])
+      await delivery.requestDrain(owner).catch(() => {});
+    // A prompt that carried the deferred fact but never finished: peeked only.
+    out.peeked = Boolean(delivery.peekDeferredContext("peeked"));
+    delivery.peekDeferredContext("delivered")?.commit();
   } else {
     reconcileBackgroundWorkOnBoot();
-    if (phase === "reboot") hold.holdAutomaticTurns("held-owner");
-    out.restore = notices.restoreHeldBackgroundDelivery(delivery);
-    out.heldAtBoot = hold.automaticTurnsHeld("held-owner");
-    await delivery.requestDrain("held-owner");
-    out.offeredWhileHeld = [...offered];
-    hold.resumeAutomaticTurns("held-owner");
-    await delivery.requestDrain("held-owner");
-    await delivery.requestDrain("unheld-owner");
-    const deferred = delivery.peekDeferredContext("held-owner");
-    out.deferredBlock = deferred?.block ?? null;
-    deferred?.commit();
+    if (phase === "reboot") for (const owner of owners) hold.holdAutomaticTurns(owner);
+    out.restore = notices.restoreOwedBackgroundDelivery(delivery);
+    for (const owner of owners) await delivery.drain(owner);
+    out.offeredAtBoot = [...offered];
+    for (const owner of owners) hold.resumeAutomaticTurns(owner);
+    for (const owner of owners) await delivery.requestDrain(owner);
+    out.deferred = {};
+    for (const owner of owners) {
+      const pending = delivery.peekDeferredContext(owner);
+      if (pending) {
+        out.deferred[owner] = pending.block;
+        pending.commit();
+      }
+    }
   }
   out.offered = offered;
   console.log("RESULT " + JSON.stringify(out));
   process.exit(0);
 `;
 
-async function runPhase(phase: string): Promise<Record<string, unknown>> {
+async function runPhase(phase: string): Promise<Record<string, any>> {
   const { stdout } = await promisify(execFile)(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "-e", script, phase],
@@ -99,43 +136,66 @@ async function runPhase(phase: string): Promise<Record<string, unknown>> {
     .reverse()
     .find((l) => l.startsWith("RESULT "));
   assert.ok(line, `phase ${phase} reported nothing:\n${stdout}`);
-  return JSON.parse(line.slice("RESULT ".length)) as Record<string, unknown>;
+  return JSON.parse(line.slice("RESULT ".length)) as Record<string, any>;
 }
 
-test("a completion owed to a stopped session is delivered exactly once after a restart and Resume", async () => {
+/** Which owner each offered key went to, in order. */
+const ownersOf = (offered: string[]) => offered.map((o) => o.split("=")[0]);
+
+test("a fact a Stop touched is delivered after a restart unless it already was, a Resume notwithstanding", async () => {
   const seed = await runPhase("seed");
-  // Only the unheld owner was offered (and was busy); the stopped one never.
-  const seeded = seed.offered as string[];
-  assert.ok(seeded.length > 0);
-  assert.ok(
-    seeded.every((key) => key.includes(String(seed.unheld))),
-    "nothing offered to the stopped session",
-  );
+  assert.equal(seed.peeked, true, "the cut-off prompt did carry it");
+  // Offered before the restart: never the released-but-undrained owner, nor
+  // the ones still held or holding only a deferred fact (a busy one is
+  // offered on every drain).
+  assert.deepEqual([...new Set(ownersOf(seed.offered))].sort(), [
+    "before",
+    "busy",
+    "delivered",
+    "failed",
+    "gone",
+    "never",
+  ]);
 
   const boot = await runPhase("boot");
   assert.deepEqual(
     boot.restore,
-    { restored: 2, forgotten: 1 },
-    "the stopped session's two facts come back; the unheld session's is forgotten",
+    { restored: 9, forgotten: 1 },
+    "every undelivered fact a Stop touched comes back; the never-stopped one is forgotten",
   );
-  assert.equal(boot.heldAtBoot, true, "the hold survived the restart");
-  assert.deepEqual(boot.offeredWhileHeld, [], "nothing offered before Resume");
-  const offered = boot.offered as string[];
-  assert.equal(offered.length, 1, "delivered once after Resume");
-  assert.ok(offered[0]!.includes(String(seed.woken)));
-  assert.equal(
-    offered.some((key) => key.includes(String(seed.unheld))),
-    false,
-    "a forgotten fact is never announced",
+  // Released before the restart: offered at boot, held or not by then. Each
+  // exactly once; neither the delivered nor the never-stopped owner again.
+  assert.deepEqual(ownersOf(boot.offeredAtBoot).sort(), [
+    "before",
+    "busy",
+    "failed",
+    "gone",
+    "release",
+  ]);
+  assert.deepEqual(
+    ownersOf(boot.offered).sort(),
+    ["before", "busy", "failed", "gone", "held", "release"],
+    "the still-held owner's wake goes only after its Resume",
   );
-  assert.ok(
-    String(boot.deferredBlock).includes(String(seed.deferred)),
-    "the deferred fact rides the next turn",
-  );
+  for (const owner of ["before", "busy", "failed", "gone", "release", "held"]) {
+    const key = boot.offered.find((o: string) => o.startsWith(owner + "="));
+    assert.ok(key.includes(seed.items[`${owner}:wake`]), owner);
+  }
+  assert.deepEqual(Object.keys(boot.deferred).sort(), [
+    "held",
+    "peeked",
+    "release",
+  ]);
+  for (const owner of ["held", "peeked", "release"])
+    assert.ok(
+      boot.deferred[owner].includes(seed.items[`${owner}:deferred`]),
+      `${owner}: its deferred fact rides the next turn`,
+    );
 
-  // Stopped again before another restart: nothing owed is left to repeat.
+  // Everything was delivered or committed, and every owner is stopped again
+  // before this restart: nothing is left to repeat.
   const reboot = await runPhase("reboot");
   assert.deepEqual(reboot.restore, { restored: 0, forgotten: 0 });
   assert.deepEqual(reboot.offered, []);
-  assert.equal(reboot.deferredBlock, null);
+  assert.deepEqual(reboot.deferred, {});
 }, 180_000);

@@ -118,7 +118,7 @@ import {
   backgroundWorkHumanLink,
   completionDisposition,
   completionNoticeOf,
-  restoreHeldBackgroundDelivery,
+  restoreOwedBackgroundDelivery,
 } from "./backgroundCompletionNotices.ts";
 import {
   removeBackgroundDeliveryOutput,
@@ -1914,15 +1914,6 @@ server.listen(PORT, HOST, () => {
         `[background] ${deleted.blockedOwners} deleted session(s) still own live background work; left as members`,
       );
   });
-  bootStep("held background delivery", () => {
-    // After reconciliation, so a restored notice reads the row as it ended. A
-    // session a Stop holds gets back what it was owed; nothing else does.
-    const outbox = restoreHeldBackgroundDelivery(backgroundCompletionDelivery);
-    if (outbox.restored > 0 || outbox.forgotten > 0)
-      console.log(
-        `[background] restored ${outbox.restored} completion(s) owed to stopped sessions; forgot ${outbox.forgotten}`,
-      );
-  });
   setPromptQueueHost({
     resolve: async (sessionId) => {
       const live =
@@ -1997,6 +1988,17 @@ server.listen(PORT, HOST, () => {
       offerIdleEdge(sessionId, true);
       resumePermanentAssistantIntake(sessionId);
     },
+  });
+  bootStep("owed background delivery", () => {
+    // After reconciliation (each notice reads its row as it ended) and after
+    // the idle chain is wired: a fact released before the restart is offered
+    // through the usual peer-first drain. What a Stop touched comes back until
+    // it is delivered; nothing else does.
+    const outbox = restoreOwedBackgroundDelivery(backgroundCompletionDelivery);
+    if (outbox.restored > 0 || outbox.forgotten > 0)
+      console.log(
+        `[background] restored ${outbox.restored} owed completion(s) of stopped sessions; forgot ${outbox.forgotten}`,
+      );
   });
   // Offered in the same order as the idle edge, though only offered: both
   // calls return once their per-session work is in flight, so this is a

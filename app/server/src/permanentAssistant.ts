@@ -11,6 +11,7 @@ import { errorText } from "./errors.ts";
 import {
   AutomaticTurnsHeldError,
   automaticTurnsHeld,
+  captureHumanResume,
   spendHumanResume,
   type HumanResumeToken,
 } from "./automaticTurnHold.ts";
@@ -130,6 +131,17 @@ export function startPermanentAssistant(): void {
   stopping = false;
   permanentAssistantStore.recover();
   void drainPermanentAssistantQueue();
+}
+
+/**
+ * The user's authority to resume the Assistant, captured as a new message of
+ * theirs arrives — before anything is awaited — and spent by
+ * {@link enqueuePermanentAssistant} once that message is stored new.
+ */
+export function capturePermanentAssistantResume():
+  HumanResumeToken | undefined {
+  const sessionId = permanentAssistantStore.sessionId();
+  return sessionId ? captureHumanResume(sessionId) : undefined;
 }
 
 /**
