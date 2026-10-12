@@ -174,10 +174,11 @@ the global rules already forbid those packages outside their own folders.
   acknowledgement terminalizes the item as `stopped`; two unanswered attempts
   leave the row running with `stopState: unconfirmed`. A later explicit request
   identity may try again. A Stop that wins while the row is `pending-launch`
-  records `not-started` / `stopped-by-owner` and `launch` does not call the
-  backend. A Claude Stop between `markRunning` and `bindProvider` remains
-  `awaiting-binding`; `providerBound` starts the targeted attempt after the
-  authoritative binding is durable.
+  records `not-started` / `stopped-by-owner` (`stopped-at-deadline` for the
+  deadline's own Stop) and `launch` does not call the backend. A Claude Stop
+  between `markRunning` and `bindProvider` remains `awaiting-binding`;
+  `providerBound` starts the targeted attempt after the authoritative binding is
+  durable.
 
   `stopAllOwner` reserves every item's Stop, reserves the retained host's
   Stop-all when one exists, then calls each owner/backend port once. Repeating
@@ -210,22 +211,45 @@ the global rules already forbid those packages outside their own folders.
 
   Two reasons DEFER. A requested Stop is already answered wherever it came from:
   the agent holds the terminal row its `background_tasks` stop call returned,
-  the human is looking at the UI they clicked, and a frozen-deadline Stop spends
-  a budget the agent set itself. Those three are deliberately not distinguished,
-  since keying on a stop reason string would couple the policy to supervisor
-  wording — but the reported reason stays specific so a log or test can tell the
-  rules apart. And a `claude-query` item settling inside a live turn defers
-  because a turn was there to receive whatever the CLI injected for itself,
-  which makes a turn of PA's own redundant.
+  and the human is looking at the UI they clicked. Keying on a stop reason
+  string would couple the policy to supervisor wording, so WHO stopped the work
+  is a typed fact instead — but the reported reason stays specific so a log or
+  test can tell the rules apart. And a `claude-query` item settling inside a
+  live turn defers because a turn was there to receive whatever the CLI injected
+  for itself, which makes a turn of PA's own redundant.
 
-  The one Stop that WAKES is the one nobody requested. `stopOrigin: "system"`
-  covers PA stopping work the owner neither asked for nor could predict — today
-  only the monitor event-rate Stop — where the row alone leaves the agent
-  believing its monitor is still watching. Deferring there would confirm that
-  belief by saying nothing, which is the exact failure the Stop exists to end.
-  It is a TYPED origin, decided in `index.ts` by comparing the row's
-  `terminalReason` against the supervisor's own exported constant, so the
-  exception does not reintroduce the wording coupling the rule above forbids.
+  A Stop nobody requested WAKES, inside a live turn too. The row's `stop_origin`
+  (migration `0076_background_work_stop_origin.sql`) records it: `requester` for
+  every agent, human or worktree-removal Stop, `system` for the monitor
+  event-rate Stop, `deadline` for the frozen deadline. `requestStop` records the
+  reservation's origin (a later reservation replaces it, as it replaces the
+  reason), and the Stop whose acknowledgement terminalizes the row records its
+  own, so the row names the Stop that actually WON. When the provider reports
+  `stopped` first, the outstanding reservation's origin stands. Only the
+  supervisor's deadline timer and rate limit pass anything but `requester`; no
+  caller supplies an origin. `completionNoticeOf` reads it as the policy's
+  `stopOrigin`.
+
+  The deadline case was a measured failure: two implementer sessions parked on
+  one-hour test runs sat idle after the deadline Stop — one for over two hours —
+  until a human or coordinator prompted them, because a deadline Stop deferred
+  as if requested. A deadline notice now carries an outcome sentence saying PA
+  stopped the work at its frozen deadline and nothing restarted it; it never
+  claims what the work achieved. Its outbox receipt is written by the store
+  INSIDE the transaction that terminalizes the row (`mutation` records it after
+  the revision stamp, before COMMIT and the state-change notifier), for every
+  terminal path a deadline Stop can end in: the Stop's own acknowledgement, the
+  provider reporting first, and a lost host. The supervisor passes `oweNotice`
+  only while delivery is open, so drain stays silent. The receipt is `retained`
+  held or not, so a crash anywhere after that commit restores it and offers it
+  to an unheld owner at boot (`docs/steering-and-queueing.md`); if the receipt
+  cannot be written, the terminal transition rolls back with it. Boot restores a
+  retained row under the revision it was owed, accepting a terminal row whose
+  revision moved on (a host closing re-stamps its children), since a terminal
+  row's outcome never changes. Natural exit that wins the race keeps its real
+  outcome; with a deadline Stop outstanding it still wakes. Boot does not
+  announce work left nonterminal by a crash, deadline Stop in flight or not: it
+  ends `lost` and restart resumes nothing.
 
   An earlier revision DROPPED that second case outright, on the reasoning that
   the CLI's `<task-notification>` had already put the fact in the transcript.
@@ -358,13 +382,15 @@ the global rules already forbid those packages outside their own folders.
   `runTargetedStop` terminalizes the row ITSELF and returns; only the backend's
   `completed` event reaches `completionRecorded`, and the pi backend suppresses
   that event once `stopping` is set. A targeted Stop is therefore SILENT by
-  design — correct for every Stop that has a requester, wrong for this one. So
-  `activityRateExceeded` hands the terminal item to `completionRecorded` itself,
-  and only when its own call is what stopped the row: `already-terminal` means
-  `completed` beat it there and has notified, and `stop-unconfirmed` leaves a
-  nonterminal row with no fact to send. Without that hop the
-  `stopOrigin: "system"` branch is unreachable, which is why the regression test
-  asserts the delivery seam and the policy decision rather than the row alone.
+  design — correct for every Stop that has a requester, wrong for PA's own. So
+  `runTargetedStop` hands the item to `completionRecorded` itself when a
+  `deadline` or `system` Stop's acknowledgement is what terminalized the row:
+  `already-terminal` means `completed` beat it there and has notified, and
+  `stop-unconfirmed` leaves a nonterminal row with no fact to send. A Stop
+  parked `awaiting-binding` resumes with the origin the row recorded. Without
+  that hop the waking branches are unreachable, which is why the regression
+  tests assert the delivery seam and the policy decision rather than the row
+  alone.
 
 - Boot reconciliation sweeps only owned `pa-claude-<pid>-*`, `pa-pi-<pid>-*`,
   and `pa-background-delivery-<pid>-*` temp trees whose owning pid is provably

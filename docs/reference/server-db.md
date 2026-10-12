@@ -162,9 +162,15 @@ facade.
   the store and the schema refuse the same states and an incoherent capture is a
   named error rather than a raw constraint failure. Stop is REQUEST metadata
   (`none`/`requested`/`awaiting-binding`/`unconfirmed`) on a still-nonterminal
-  row, so an unanswered Stop never fabricates a terminal state; a Stop that wins
-  the pre-execution race terminalizes as `not-started` with `stopped-by-owner`,
-  and a host close writes the distinct `stopped-by-host-close`.
+  row, so an unanswered Stop never fabricates a terminal state, and
+  `stop_origin` (`requester`/`deadline`/`system`) records who wanted it, the
+  terminalizing Stop's origin replacing the reservation's; a Stop that wins the
+  pre-execution race terminalizes as `not-started` with `stopped-by-owner` (or
+  `stopped-at-deadline` for the deadline's), and a host close writes the
+  distinct `stopped-by-host-close`. A terminal transition that ends work under a
+  deadline Stop, when its caller passes `oweNotice`, also writes the retained
+  `background_delivery_outbox` receipt in the same `mutation`, after the
+  revision stamp and before COMMIT, so the row and the owed fact are one write.
   `background_hosts` is the OPTIONAL Claude retained query epoch, created lazily
   on the first admitted or observed background item (an ordinary transient query
   writes no row), unique per `epoch_key` and limited to one live epoch per owner

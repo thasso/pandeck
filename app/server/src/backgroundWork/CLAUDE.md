@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3600 reason="nine contracts, each prohibiting a silent failure review or production already hit: transcript membership inferred from backend plus turn-running, a deferred fact committed the provider never took, a steer refusal counted as delivered, a muted monitor read as a quiet one, and a background shell streamed like a monitor — 31 turns in one session to say a dev server was still running." task=673 date=2026-09-07 -->
+<!-- instruction-budget: bytes=3800 reason="nine contracts, each prohibiting a silent failure review or production already hit: transcript membership inferred from backend plus turn-running, a deferred fact committed the provider never took, a steer refusal counted as delivered, a muted monitor read as a quiet one, a background shell streamed like a monitor — 31 turns in one session to say a dev server was still running — and a frozen-deadline Stop deferred as if requested, leaving parked owners idle for hours." task=background-deadline-wake date=2026-10-12 -->
 
 # Background work service
 
@@ -33,8 +33,9 @@
 - `deliveryPolicy.ts` is the ONE decision on how a terminal fact reaches the
   model, and stays pure. It never discards: a requested Stop and a
   `claude-query` item settling in a live turn DEFER, everything else WAKES. A
-  Stop nobody requested is the ONE exception and wakes — typed
-  `stopOrigin: "system"`, never a reason match. `backend` + turn-running is NOT
+  Stop nobody requested wakes: the row's typed `stopOrigin` (`deadline`,
+  `system`) from the Stop that WON, never a reason match; a deadline fact's
+  outbox receipt commits WITH its terminal row. `backend` + turn-running is NOT
   evidence the provider transcribed the fact — the Stop snapshot terminalizes
   when the notification is missing. A deferred fact rides the next turn's
   model-only context, never reads as that turn's instruction, and is consumed

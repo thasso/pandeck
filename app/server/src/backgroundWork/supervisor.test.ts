@@ -23,13 +23,18 @@ process.env.DATA_DIR = dataDir;
 process.env.ASSISTANT_CWD = dataDir;
 
 const {
+  BACKGROUND_DEADLINE_TERMINAL_REASON,
   BACKGROUND_DEPLOYMENT_STOP_REASON,
   BACKGROUND_EVENT_RATE_TERMINAL_REASON,
   BACKGROUND_STOP_ACK_DEADLINE_MS,
   BackgroundWorkSupervisor,
 } = await import("./supervisor.ts");
 const { backgroundCompletionDisposition } = await import("./deliveryPolicy.ts");
-const { backgroundWorkStore } = await import("../db/backgroundWorkStore.ts");
+const { backgroundWorkStore, setBackgroundWorkStateChangeNotifier } =
+  await import("../db/backgroundWorkStore.ts");
+const { backgroundDeliveryOutboxStore } =
+  await import("../db/backgroundDeliveryOutboxStore.ts");
+const { getDb } = await import("../db/index.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const { updateSettings } = await import("../settings.ts");
 const { setBackgroundWorkAdmissionsOpenForTests } =
@@ -239,6 +244,8 @@ test("an exceeded activity rate Stops the item and hands the fact to delivery", 
   // Typed, so `deliveryPolicy.ts` can separate this from a stop somebody asked
   // for without reading either side's prose.
   assert.equal(stopped?.terminalReason, BACKGROUND_EVENT_RATE_TERMINAL_REASON);
+  assert.equal(stopped?.stopOrigin, "system");
+  assert.deepEqual(receipts(item.id), [], "scoped to deadline facts");
   assert.match(stopped?.stopReason ?? "", /20 notifications in 60s/);
 
   // The row alone is NOT the fix. A targeted Stop terminalizes the row itself
@@ -254,10 +261,7 @@ test("an exceeded activity rate Stops the item and hands the fact to delivery", 
     backgroundCompletionDisposition({
       backend: delivered[0]!.backend,
       stopRequested: delivered[0]!.stopState !== "none",
-      stopOrigin:
-        delivered[0]!.terminalReason === BACKGROUND_EVENT_RATE_TERMINAL_REASON
-          ? "system"
-          : "requester",
+      stopOrigin: delivered[0]!.stopOrigin!,
       ownerTurnRunning: true,
     }),
     { disposition: "wake", reason: "unrequested-stop" },
@@ -282,8 +286,10 @@ test("an owner Stop stays silent, so the rate-limit notice is not a blanket one"
   });
   await settle();
   assert.equal(result.state, "stopped");
+  assert.equal(result.item?.stopOrigin, "requester");
   // The requester is holding the terminal row this call returned.
   assert.deepEqual(delivered, []);
+  assert.deepEqual(receipts(item.id), []);
 });
 
 test("a terminal item ignores a late activity-rate report", async () => {
@@ -320,6 +326,353 @@ test("deadline Stop is reserved before the targeted side effect", async () => {
   assert.equal(port.stops.length, 1);
   assert.equal(backgroundWorkStore.getItem(item.id)?.state, "stopped");
   assert.equal(backgroundWorkStore.getItem(item.id)?.stopAttempts, 1);
+});
+
+/** A port whose targeted Stops each wait for the test to answer them. */
+function manualStops(port: FakePort) {
+  const answers: Array<(ack: { acknowledged: boolean }) => void> = [];
+  port.stopImpl = () =>
+    new Promise((resolve) => {
+      answers.push(resolve);
+    });
+  return answers;
+}
+
+/** The owed-fact receipts the store wrote for one item. */
+function receipts(itemId: string) {
+  return backgroundDeliveryOutboxStore
+    .list()
+    .filter((row) => row.itemId === itemId)
+    .map((row) => [row.revision, row.disposition, row.retained]);
+}
+
+function supervisorRecording(clock: FakeClock, port: FakePort) {
+  const delivered: BackgroundWorkItem[] = [];
+  const supervisor = new BackgroundWorkSupervisor({
+    ports: [port],
+    clock,
+    completionRecorded: (item) => void delivered.push(item),
+  });
+  return { supervisor, delivered };
+}
+
+test("a deadline Stop records its own origin and tells the parked owner once", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const item = await admitRunning(supervisor, owner());
+  // The receipt must exist by the time the terminal row is observable at all.
+  const seenAtCommit: unknown[] = [];
+  setBackgroundWorkStateChangeNotifier((change) => {
+    const row = backgroundWorkStore.getItem(item.id);
+    if (change.itemIds.includes(item.id) && row?.state === "stopped")
+      seenAtCommit.push(...receipts(item.id));
+  });
+
+  // The pi backend suppresses its own `completed` once stopping, so nothing
+  // but the supervisor can carry this fact.
+  await clock.advance(item.deadlineAt - clock.now());
+  await settle();
+  setBackgroundWorkStateChangeNotifier(undefined);
+  const stopped = backgroundWorkStore.getItem(item.id)!;
+  assert.deepEqual(seenAtCommit, [[stopped.revision, "wake", true]]);
+  assert.deepEqual(receipts(item.id), [[stopped.revision, "wake", true]]);
+  assert.equal(stopped.state, "stopped");
+  assert.equal(stopped.stopOrigin, "deadline");
+  assert.equal(stopped.terminalReason, BACKGROUND_DEADLINE_TERMINAL_REASON);
+  assert.deepEqual(
+    delivered.map((entry) => [entry.id, entry.stopOrigin]),
+    [[item.id, "deadline"]],
+  );
+  assert.deepEqual(
+    backgroundCompletionDisposition({
+      backend: delivered[0]!.backend,
+      stopRequested: delivered[0]!.stopState !== "none",
+      stopOrigin: delivered[0]!.stopOrigin!,
+      ownerTurnRunning: false,
+    }),
+    { disposition: "wake", reason: "deadline-expired" },
+  );
+
+  // A late provider report and a second clock pass change nothing.
+  supervisor.completed({ itemId: item.id, state: "stopped" });
+  await clock.advance(60_000);
+  assert.equal(delivered.length, 1);
+  assert.equal(port.stops.length, 1, "the work is stopped, never restarted");
+  assert.equal(port.launches.length, 1);
+});
+
+test("a monitor reaching its deadline is told the same way", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const ownerSessionId = owner();
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "host-process",
+    kind: "monitor-command",
+    label: "watch the log",
+    sourceRequestId: "deadline-monitor",
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  const item = (await supervisor.launch(admission))!;
+  await clock.advance(item.deadlineAt - clock.now());
+  await settle();
+  assert.equal(backgroundWorkStore.getItem(item.id)?.stopOrigin, "deadline");
+  assert.deepEqual(
+    delivered.map((entry) => entry.id),
+    [item.id],
+  );
+});
+
+test("when the provider reports the deadline Stop first, that report is the one notice", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const answers = manualStops(port);
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const ownerSessionId = owner("claude-sdk");
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "claude test run",
+    sourceRequestId: "claude-deadline",
+    hostEpochKey: `epoch-${ownerSessionId}`,
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  await supervisor.launch(admission);
+  supervisor.providerBound({
+    itemId: admission.item.id,
+    providerTaskId: "task-deadline",
+  });
+  await clock.advance(admission.item.deadlineAt - clock.now());
+  assert.equal(answers.length, 1, "the deadline Stop is in flight");
+
+  // The CLI's task notification lands before the Stop acknowledgement.
+  supervisor.completed({
+    itemId: admission.item.id,
+    state: "stopped",
+    outcomeSummary: "Claude reported the task as stopped",
+  });
+  supervisor.completed({ itemId: admission.item.id, state: "stopped" });
+  answers[0]!({ acknowledged: true });
+  await settle();
+
+  const row = backgroundWorkStore.getItem(admission.item.id)!;
+  assert.equal(row.state, "stopped");
+  assert.equal(row.stopOrigin, "deadline");
+  assert.equal(row.terminalReason, BACKGROUND_DEADLINE_TERMINAL_REASON);
+  assert.equal(delivered.length, 1, "one notice, not one per callback");
+  assert.equal(delivered[0]!.stopOrigin, "deadline");
+  assert.deepEqual(receipts(row.id), [[row.revision, "wake", true]]);
+});
+
+test("the Stop whose acknowledgement wins decides who stopped the work", async () => {
+  for (const winner of ["deadline", "requester"] as const) {
+    const clock = new FakeClock();
+    const port = new FakePort();
+    const answers = manualStops(port);
+    const { supervisor, delivered } = supervisorRecording(clock, port);
+    const item = await admitRunning(supervisor, owner());
+    // Inside the manual Stop's acknowledgement window, so it is not retried.
+    await clock.advance(item.deadlineAt - clock.now() - 1_000);
+    const manual = supervisor.stopOne({
+      itemId: item.id,
+      ownerSessionId: item.ownerSessionId,
+      sourceRequestId: `manual-${winner}`,
+      reason: "no longer needed",
+    });
+    await settle();
+    await clock.advance(1_000);
+    assert.equal(answers.length, 2, `${winner}: both Stops reached the port`);
+    // answers[0] is the manual Stop, answers[1] the deadline's.
+    answers[winner === "deadline" ? 1 : 0]!({ acknowledged: true });
+    await settle();
+    answers[winner === "deadline" ? 0 : 1]!({ acknowledged: true });
+    const manualResult = await manual;
+    await settle();
+
+    const row = backgroundWorkStore.getItem(item.id)!;
+    assert.equal(row.stopOrigin, winner);
+    assert.equal(
+      manualResult.state,
+      winner === "requester" ? "stopped" : "already-terminal",
+    );
+    assert.deepEqual(
+      delivered.map((entry) => entry.stopOrigin),
+      winner === "deadline" ? ["deadline"] : [],
+      `${winner}: only a deadline win tells the owner`,
+    );
+    assert.deepEqual(
+      receipts(item.id),
+      winner === "deadline" ? [[row.revision, "wake", true]] : [],
+      `${winner}: a lost race owes nothing`,
+    );
+  }
+});
+
+test("natural exit decides the outcome even with a deadline Stop outstanding", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  const answers = manualStops(port);
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const item = await admitRunning(supervisor, owner());
+  await clock.advance(item.deadlineAt - clock.now());
+  supervisor.completed({ itemId: item.id, state: "completed", exitCode: 0 });
+  answers[0]!({ acknowledged: true });
+  await settle();
+  const row = backgroundWorkStore.getItem(item.id)!;
+  assert.equal(row.state, "completed");
+  assert.equal(row.exitCode, 0);
+  assert.equal(row.terminalReason, undefined, "not called a deadline Stop");
+  assert.equal(delivered.length, 1);
+
+  // Finished before the deadline: the timer is cancelled and no Stop is sent.
+  const early = await admitRunning(supervisor, owner());
+  supervisor.completed({ itemId: early.id, state: "completed", exitCode: 0 });
+  await clock.advance(early.deadlineAt - clock.now());
+  assert.equal(answers.length, 1);
+  assert.equal(backgroundWorkStore.getItem(early.id)?.stopState, "none");
+});
+
+test("an unconfirmed deadline Stop sends nothing until the work really ends", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  port.stopImpl = () => Promise.resolve({ acknowledged: false });
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const item = await admitRunning(supervisor, owner());
+  await clock.advance(item.deadlineAt - clock.now());
+  await settle();
+  assert.equal(port.stops.length, 2, "one retry, then it stops trying");
+  assert.equal(backgroundWorkStore.getItem(item.id)?.stopState, "unconfirmed");
+  assert.deepEqual(delivered, []);
+
+  supervisor.completed({ itemId: item.id, state: "stopped" });
+  const row = backgroundWorkStore.getItem(item.id)!;
+  assert.equal(row.stopOrigin, "deadline");
+  assert.equal(row.terminalReason, BACKGROUND_DEADLINE_TERMINAL_REASON);
+  assert.equal(delivered.length, 1);
+  assert.equal(port.stops.length, 2, "no automatic retry");
+});
+
+test("a deadline Stop parked for its binding notifies once the binding lands", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const ownerSessionId = owner("claude-sdk");
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "unbound claude run",
+    sourceRequestId: "claude-unbound-deadline",
+    hostEpochKey: `epoch-${ownerSessionId}`,
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  await supervisor.launch(admission);
+  await clock.advance(admission.item.deadlineAt - clock.now());
+  assert.equal(
+    backgroundWorkStore.getItem(admission.item.id)?.stopState,
+    "awaiting-binding",
+  );
+  assert.deepEqual(port.stops, []);
+  supervisor.providerBound({
+    itemId: admission.item.id,
+    providerTaskId: "task-late",
+  });
+  await settle();
+  assert.equal(
+    backgroundWorkStore.getItem(admission.item.id)?.state,
+    "stopped",
+  );
+  assert.deepEqual(
+    delivered.map((entry) => entry.stopOrigin),
+    ["deadline"],
+  );
+});
+
+test("a deadline Stop during deployment drain stays silent", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const item = await admitRunning(supervisor, owner());
+  supervisor.closeAdmissions();
+  await clock.advance(item.deadlineAt - clock.now());
+  await settle();
+  assert.equal(backgroundWorkStore.getItem(item.id)?.state, "stopped");
+  assert.deepEqual(delivered, [], "the hub stopped delivery with admission");
+  assert.deepEqual(receipts(item.id), [], "drain stays silent across restart");
+  setBackgroundWorkAdmissionsOpenForTests(true);
+});
+
+test("a deadline fact owes nothing if its receipt cannot be written: the terminal transition rolls back with it", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort();
+  const errors: string[] = [];
+  const delivered: BackgroundWorkItem[] = [];
+  const supervisor = new BackgroundWorkSupervisor({
+    ports: [port],
+    clock,
+    completionRecorded: (item) => void delivered.push(item),
+    reportError: (message) => errors.push(message),
+  });
+  const item = await admitRunning(supervisor, owner());
+  getDb().exec(
+    `CREATE TEMP TRIGGER refuse_receipt BEFORE INSERT ON background_delivery_outbox
+     BEGIN SELECT RAISE(ABORT, 'outbox unavailable'); END`,
+  );
+  try {
+    await clock.advance(item.deadlineAt - clock.now());
+    await settle();
+  } finally {
+    getDb().exec("DROP TRIGGER refuse_receipt");
+  }
+  const row = backgroundWorkStore.getItem(item.id)!;
+  assert.equal(row.state, "running", "no terminal row without its receipt");
+  assert.equal(row.stopOrigin, "deadline");
+  assert.deepEqual(receipts(item.id), []);
+  assert.deepEqual(delivered, []);
+  assert.match(errors[0] ?? "", /deadline Stop failed.*outbox unavailable/);
+  // The work's real end, reported later, is still owed and told once.
+  supervisor.completed({ itemId: item.id, state: "stopped" });
+  supervisor.completed({ itemId: item.id, state: "stopped" });
+  const ended = backgroundWorkStore.getItem(item.id)!;
+  assert.deepEqual(receipts(item.id), [[ended.revision, "wake", true]]);
+  assert.equal(delivered.length, 1);
+});
+
+test("a host lost under a deadline Stop owes its child's fact in the same transaction", async () => {
+  const clock = new FakeClock();
+  const port = new FakePort("claude-query");
+  manualStops(port);
+  const { supervisor, delivered } = supervisorRecording(clock, port);
+  const ownerSessionId = owner("claude-sdk");
+  const epoch = `epoch-${ownerSessionId}`;
+  const admission = supervisor.admit({
+    ownerSessionId,
+    backend: "claude-query",
+    kind: "shell",
+    label: "claude run on a dying host",
+    sourceRequestId: "claude-host-lost-deadline",
+    hostEpochKey: epoch,
+  });
+  assert.equal(admission.admitted, true);
+  if (!admission.admitted) return;
+  await supervisor.launch(admission);
+  supervisor.providerBound({
+    itemId: admission.item.id,
+    providerTaskId: "task-host-lost",
+  });
+  await clock.advance(admission.item.deadlineAt - clock.now());
+  supervisor.hostLost(ownerSessionId, epoch, "the Claude process exited");
+  const row = backgroundWorkStore.getItem(admission.item.id)!;
+  assert.equal(row.state, "lost");
+  assert.equal(row.stopOrigin, "deadline");
+  assert.deepEqual(receipts(row.id), [[row.revision, "wake", true]]);
+  assert.equal(delivered.length, 1);
 });
 
 test("an acknowledgement may arrive any time inside the ten-second deadline", async () => {
