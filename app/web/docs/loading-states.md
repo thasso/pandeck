@@ -160,13 +160,15 @@ cannot retry from.
 draw a dashed box:
 
 - `Spinner` — the one glyph (`LoaderCircle`), sizes `xs`/`sm`/`md`/`lg` =
-  10/13/16/22px (`xs` fits inside `text-micro` chrome such as a card's state
-  badge), `motion-safe:animate-spin`, `aria-hidden`. `variant="ring"` draws the
-  transcript's bordered circle at the same tokens instead of the glyph: one
-  element, no icon module, for the streaming tool-call and thinking headers that
-  render on every token. Task-390 folded that visual in rather than exempting
-  those two files from the audit — the ring is a variant of the app's spinner,
-  not a second spinner.
+  10/14/16/24px (`xs` fits inside `text-micro` chrome such as a card's state
+  badge), `motion-safe:animate-spin`, `aria-hidden`. The arc turns inside a
+  still `<svg>`: WebKit (Safari, the Tauri shell) snaps a rotating `<svg>` to
+  the pixel grid but turns it about its unsnapped center, so a spinning icon
+  wobbles there. `variant="ring"` draws the transcript's bordered circle at the
+  same tokens instead of the glyph: one element, no icon module, for the
+  streaming tool-call and thinking headers that render on every token. Task-390
+  folded that visual in rather than exempting those two files from the audit —
+  the ring is a variant of the app's spinner, not a second spinner.
 - `PaneLoading` — centered spinner + label, `role="status"`, for whole-pane
   first loads. Announcing and NOT busy; see R6 above for why the two do not go
   on the same element.
@@ -193,7 +195,8 @@ draw a dashed box:
   to the glyphs, which no primitive can express.
 - `DASHED_EDGE` and `LIVE_PULSE` — the two class tokens for treatments that look
   like a loading state and are not. See "What is not a loading state" below.
-- `ui/Button`'s `busy` prop — spinner + `disabled` + `aria-busy`, for R5;
+- `ui/Button`'s `busy` prop — spinner + `disabled` + `aria-busy`, for R5; the
+  spinner takes the size that button size gives its icons;
   `common/GhostIconButton`'s `busy` is the same thing for an inline icon action.
   A control with its own geometry (a transcript card's pill, a panel row, a
   dialog's confirm) does it by hand with `Spinner` — the three parts are the

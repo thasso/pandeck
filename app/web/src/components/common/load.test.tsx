@@ -40,7 +40,15 @@ it("hides the spinner glyph from assistive tech and animates motion-safely", () 
   const svg = host.querySelector("svg")!;
   expect(svg.getAttribute("aria-hidden")).toBe("true");
   expect(svg.getAttribute("class")).toContain("size-6");
-  expect(svg.getAttribute("class")).toContain("motion-safe:animate-spin");
+  // The arc turns, the box stays: WebKit snaps a rotating `<svg>` to the pixel
+  // grid but turns it about its unsnapped center, so a spinning root wobbles.
+  expect(svg.getAttribute("class")).not.toContain("animate-spin");
+  const pathClass = svg.querySelector("path")!.getAttribute("class");
+  expect(pathClass).toContain("motion-safe:animate-spin");
+  // Without the view box as reference, the path turns about its own bounding
+  // box's center, which is not the arc's center.
+  expect(pathClass).toContain("origin-center");
+  expect(pathClass).toContain("[transform-box:view-box]");
 });
 
 // The transcript's ring: one element, no icon module, the same size tokens as
@@ -127,6 +135,28 @@ it("swaps an icon-only button's icon for the spinner", () => {
   const button = host.querySelector("button")!;
   expect(button.querySelector("[data-testid='icon']")).toBeNull();
   expect(button.querySelector("svg")).not.toBeNull();
+});
+
+it("sizes a busy button's spinner like the icon it stands in for", () => {
+  const sizes = [
+    ["xs", "size-3"],
+    ["icon-xs", "size-3"],
+    ["sm", "size-3.5"],
+    ["default", "size-4"],
+    ["icon", "size-4"],
+  ] as const;
+  for (const [size, expected] of sizes) {
+    const host = render(
+      <Button busy size={size}>
+        Save
+      </Button>,
+    );
+    const spinner = host.querySelector("[data-slot='spinner']")!;
+    expect(spinner.getAttribute("class")).toContain(expected);
+    expect(spinner.getAttribute("class")).not.toMatch(
+      expected === "size-4" ? /size-3/ : /size-4/,
+    );
+  }
 });
 
 it("leaves a button untouched without busy", () => {

@@ -28,8 +28,26 @@ function Gallery() {
               Run task
             </UI.Button>
           ))}
-          <UI.Button busy>Starting session</UI.Button>
           <UI.Button disabled>Unavailable</UI.Button>
+        </div>
+        {/* A busy button's spinner takes the size the button gives its icons. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {(["xs", "sm", "default", "lg"] as const).map((s) => (
+            <UI.Button key={s} size={s} busy>
+              Approve
+            </UI.Button>
+          ))}
+          {(["icon-xs", "icon-sm", "icon", "icon-lg"] as const).map((s) => (
+            <UI.Button
+              key={s}
+              size={s}
+              variant="outline"
+              busy
+              aria-label="Refresh"
+            >
+              <span />
+            </UI.Button>
+          ))}
         </div>
       </div>
     </main>
