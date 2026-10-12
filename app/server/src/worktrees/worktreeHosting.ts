@@ -35,6 +35,7 @@ import type {
 import { gitOptional, resolveRepoRoot } from "../gitExec.ts";
 import type { WorktreeRow } from "../db/worktreeStore.ts";
 import {
+  ciBesideReviewGates,
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type BranchStatus,
@@ -178,8 +179,9 @@ function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
 async function hostingPayload(
   row: WorktreeRow,
   provider: GitHostingProvider,
-  { pr, ci, review }: BranchStatus,
+  { pr, ci: rawCi, review }: BranchStatus,
 ): Promise<WorktreeHostingStatusResponse> {
+  const ci = ciBesideReviewGates(rawCi, review);
   const capabilities =
     pr && pr.state === "open"
       ? await repositoryCapabilitiesFor(provider)

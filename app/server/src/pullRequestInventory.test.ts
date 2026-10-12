@@ -294,6 +294,42 @@ test("an annotation from the open list replaces the per-pull-request reads", asy
   assert.deepEqual(item?.review, { changesRequested: true });
 });
 
+// A review bot fails its own check while its "changes requested" review
+// stands. Listed or read per pull request, that is "Review", not "CI failed".
+test("a review bot's failing check is left out of CI", async () => {
+  const projectId = "review-gate";
+  const gated = {
+    state: "failure" as const,
+    total: 2,
+    failedApps: ["cl-percy"],
+    besideFailures: { state: "success" as const },
+  };
+  const review = {
+    changesRequested: true,
+    changesRequestedByApps: ["cl-percy"],
+  };
+  serveProviders({
+    [mainPath(projectId)]: provider(projectId, {
+      listOpenPullRequests: async () => [
+        pull(projectId, 21, { mine: true }),
+        pull(projectId, 22, { mine: true }),
+      ],
+      openPullRequestAnnotation: (number: number) =>
+        number === 21 ? { detail: detail(21), ci: gated, review } : undefined,
+      ciStatus: async () => gated,
+      pullRequestReview: async () => review,
+    }),
+  });
+
+  const items = await pullRequestInventory([mainRow(projectId)]);
+
+  for (const number of [21, 22]) {
+    const item = items.find((candidate) => candidate.number === number);
+    assert.deepEqual(item?.ci, { state: "success", total: 2 }, `#${number}`);
+    assert.deepEqual(item?.review, review, `#${number}`);
+  }
+});
+
 // A merged pull request is inventoried for the checkout it leaves behind: it
 // stays visible exactly as long as that worktree does.
 test("a merged pull request is listed while its worktree exists", async () => {

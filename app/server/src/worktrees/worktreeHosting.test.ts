@@ -228,6 +228,42 @@ test("a failed review read keeps the answered pull request", async () => {
   assert.equal(status.review, undefined);
 });
 
+// Percival fails its own check while its "changes requested" review stands:
+// the row asks for a review, not a CI fix, and the raw fields never ship.
+test("a review bot's failing check reads as its review", async () => {
+  hoisted.resolvePushTarget.mockResolvedValue({
+    repoRoot: "/repo",
+    remote: "origin",
+    upstream: { remote: "origin", branch: row.branch },
+  });
+  hoisted.provider.mockResolvedValue({
+    ...provider(),
+    ciStatus: async () => ({
+      state: "failure",
+      url: "https://github.com/acme/fork/runs/1",
+      total: 2,
+      failedApps: ["cl-percy"],
+      besideFailures: {
+        state: "success",
+        url: "https://github.com/acme/fork/runs/2",
+      },
+    }),
+    pullRequestReview: async () => ({
+      changesRequested: true,
+      changesRequestedByApps: ["cl-percy"],
+    }),
+  } as unknown as GitHostingProvider);
+
+  const status = await worktreeHostingStatus(row);
+
+  assert.deepEqual(status.ci, {
+    state: "success",
+    url: "https://github.com/acme/fork/runs/2",
+    total: 2,
+  });
+  assert.equal(status.review?.changesRequested, true);
+});
+
 // A provider with a batched read answers every row of a repository in ONE
 // request instead of a lookup, CI and review per row.
 test("rows of one repository share one batched provider read", async () => {

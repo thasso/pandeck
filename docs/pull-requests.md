@@ -497,6 +497,17 @@ choosing-task → creating → open (CI · review · mergeable/conflicting · dr
   it is a CONFIRMED conflict, claimed only once a second read of the same head
   reproduces `mergeable: false` (or a merge attempt was refused for it), because
   a single `false` is also what a queued conflict check answers.
+
+  A review bot such as Percival fails its own check while its findings are open,
+  so a team can make that check required. When EVERY failed check was posted by
+  a GitHub App whose own review currently requests changes
+  (`review.changesRequestedByApps`), `ci` leaves those failures out
+  (`ciBesideReviewGates`), and the pull request reads as "Review", not "CI
+  failed". One failure from anywhere else keeps `ci` red, and so does an app's
+  failing check while its review does not request changes. The worktree hosting
+  projection and the Pull Requests inventory apply the same rule. Check-watch
+  tools still list every check, Percival's included.
+
 - **merged** / **closed** — terminal; the watcher stops polling. A `merged` card
   still offers the local cleanup and the linked Task's answer.
 - **failed** — drafting or creation raised; `error` holds the message. Reached

@@ -23,6 +23,7 @@
  */
 import type { PullRequestCard, PullRequestCardStatus } from "@assistant/shared";
 import {
+  ciBesideReviewGates,
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type GitHostingProvider,
@@ -231,9 +232,10 @@ async function pollCard(cardId: string): Promise<void> {
     return;
   }
 
-  const ci = await provider.ciStatus(detail.headSha);
+  const rawCi = await provider.ciStatus(detail.headSha);
   const review =
     detail.state === "open" ? await provider.pullRequestReview(number) : null;
+  const ci = ciBesideReviewGates(rawCi, review);
   // What the repository allows decides which methods the card's merge picker
   // may offer, so it rides along with the poll (its own cache coalesces the
   // reads). Unknown stays unknown: the picker then offers nothing rather than

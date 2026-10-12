@@ -231,7 +231,8 @@ export interface GitHostingProvider {
    * and coalesces per repository; a provider implements only the raw read.
    */
   repositoryCapabilities(): Promise<PullRequestRepositoryCapabilities>;
-  ciStatus(ref: string): Promise<WorktreeCiStatus | null>;
+  /** Raw: callers pass it through {@link ciBesideReviewGates} with the review. */
+  ciStatus(ref: string): Promise<ProviderCiStatus | null>;
   /** Per-check machine evidence for an exact ref, used by Workflow Runs. */
   refChecks(ref: string): Promise<GitHostingRefChecks>;
   /** Review state of one open PR. `null` = could not be determined. */
@@ -284,7 +285,7 @@ interface BranchStatusRequest {
 
 export interface BranchStatus {
   pr: WorktreePullRequestInfo | null;
-  ci: WorktreeCiStatus | null;
+  ci: ProviderCiStatus | null;
   /** Only for an OPEN pull request; `null` otherwise. */
   review: WorktreePullRequestReview | null;
 }
@@ -292,7 +293,7 @@ export interface BranchStatus {
 /** An open pull request's detail, head CI and review, read with its list. */
 interface OpenPullRequestAnnotation {
   detail: PullRequestDetail;
-  ci: WorktreeCiStatus | null;
+  ci: ProviderCiStatus | null;
   review: WorktreePullRequestReview;
 }
 
@@ -677,6 +678,130 @@ interface ProviderReview {
 export function changesRequestedFromReviews(
   reviews: ProviderReview[],
 ): boolean {
+  return standingChangeRequests(reviews).length > 0;
+}
+
+/**
+ * The review read model, plus the GitHub Apps among the reviewers asking for
+ * changes. `appOf` names the app behind a review's author, `null` for a person;
+ * a provider without apps (Forgejo) passes none.
+ */
+function reviewFromProviderReviews(
+  reviews: ProviderReview[],
+  appOf?: (review: ProviderReview) => string | null,
+): WorktreePullRequestReview {
+  const standing = standingChangeRequests(reviews);
+  const apps = appOf
+    ? [
+        ...new Set(
+          standing.flatMap((review) => {
+            const app = appOf(review);
+            return app ? [app] : [];
+          }),
+        ),
+      ]
+    : [];
+  return {
+    changesRequested: standing.length > 0,
+    ...(apps.length > 0 ? { changesRequestedByApps: apps } : {}),
+  };
+}
+
+/**
+ * The app slug behind a GitHub review author. An app's bot account is
+ * `<slug>[bot]` over REST; GraphQL types it `Bot` and drops the suffix.
+ */
+function githubReviewApp(
+  login: string | undefined,
+  bot: boolean,
+): string | null {
+  if (!login) return null;
+  const slug = login.replace(/\[bot\]$/i, "");
+  return bot || slug !== login ? slug.toLowerCase() : null;
+}
+
+/**
+ * CI as a provider reads it, before {@link ciBesideReviewGates} sets aside the
+ * failures that are really a review. Never sent as is: the gate strips the two
+ * extra fields.
+ */
+export interface ProviderCiStatus extends WorktreeCiStatus {
+  /** One per FAILED row: the GitHub App that posted it, `null` when none is known. */
+  failedApps?: Array<string | null>;
+  /** State and link with every failed row set aside. */
+  besideFailures?: { state: "success" | "pending"; url?: string };
+}
+
+/**
+ * CI without the checks that are a reviewer's verdict. A review bot such as
+ * Percival fails its own check while its findings are open, so a team can make
+ * it required; that is the same objection as its "changes requested" review,
+ * not a broken build, and reading it as CI paints the pull request red. A
+ * failure is set aside only when EVERY failed row was posted by an app whose
+ * review currently requests changes: one failing build keeps the whole state
+ * a failure, and a failing check without such a review (a broken config) stays
+ * CI.
+ */
+export function ciBesideReviewGates(
+  ci: ProviderCiStatus | null,
+  review: WorktreePullRequestReview | null | undefined,
+): WorktreeCiStatus | null {
+  if (!ci) return null;
+  const { failedApps, besideFailures, ...plain } = ci;
+  const gates = review?.changesRequested ? review.changesRequestedByApps : [];
+  if (
+    plain.state !== "failure" ||
+    !besideFailures ||
+    !failedApps?.length ||
+    !gates?.length ||
+    !failedApps.every((app) => app !== null && gates.includes(app))
+  )
+    return plain;
+  return {
+    ...plain,
+    state: besideFailures.state,
+    ...(besideFailures.url ? { url: besideFailures.url } : {}),
+  };
+}
+
+/** One check run or legacy status, reduced to what the CI rule reads. */
+interface CiRow {
+  failed: boolean;
+  terminal: boolean;
+  url: string | null;
+  /** The GitHub App slug that posted it; `null` for a legacy status. */
+  app: string | null;
+}
+
+/**
+ * The CI rule over check rows: any failed row fails, a row still running — or
+ * rows beyond the first page — keep it pending, and no checks at all is `null`.
+ */
+function ciFromRows(
+  rows: CiRow[],
+  total: number,
+  commitUrl: string,
+): ProviderCiStatus | null {
+  if (total === 0) return null;
+  const failed = rows.filter((row) => row.failed);
+  const others = rows.filter((row) => !row.failed);
+  const besideState =
+    total > rows.length || others.some((row) => !row.terminal)
+      ? "pending"
+      : "success";
+  const besideUrl = others[0]?.url || commitUrl;
+  if (failed.length === 0) return { state: besideState, url: besideUrl, total };
+  return {
+    state: "failure",
+    url: failed[0]?.url || commitUrl,
+    total,
+    failedApps: failed.map((row) => row.app?.toLowerCase() || null),
+    besideFailures: { state: besideState, url: besideUrl },
+  };
+}
+
+/** Each person's latest opinionated review, where that review asks for changes. */
+function standingChangeRequests(reviews: ProviderReview[]): ProviderReview[] {
   const latestByUser = new Map<string, ProviderReview>();
   for (const review of reviews) {
     const state = (review.state ?? "").toUpperCase();
@@ -691,12 +816,10 @@ export function changesRequestedFromReviews(
     )
       latestByUser.set(login, review);
   }
-  for (const review of latestByUser.values()) {
+  return [...latestByUser.values()].filter((review) => {
     const state = (review.state ?? "").toUpperCase();
-    if (state === "REQUEST_CHANGES" || state === "CHANGES_REQUESTED")
-      return true;
-  }
-  return false;
+    return state === "REQUEST_CHANGES" || state === "CHANGES_REQUESTED";
+  });
 }
 
 /**
@@ -795,7 +918,7 @@ const GITHUB_ROLLUP_FIELDS = `statusCheckRollup {
     totalCount
     nodes {
       __typename
-      ... on CheckRun { status conclusion url detailsUrl }
+      ... on CheckRun { status conclusion url detailsUrl checkSuite { app { slug } } }
       ... on StatusContext { state targetUrl }
     }
   }
@@ -810,22 +933,19 @@ interface GithubRollup {
       conclusion?: string | null;
       url?: string | null;
       detailsUrl?: string | null;
+      checkSuite?: { app?: { slug?: string | null } | null } | null;
       state?: string | null;
       targetUrl?: string | null;
     } | null>;
   };
 }
 
-/**
- * The REST `ciStatus` rule over a rollup: any failed row fails, a row still
- * running — or rows beyond the first page — keep it pending, and no checks at
- * all is `null`.
- */
+/** The REST `ciStatus` rule over a rollup; see {@link ciFromRows}. */
 function ciFromGithubRollup(
   rollup: GithubRollup | null | undefined,
   commitUrl: string,
-): WorktreeCiStatus | null {
-  const rows = (rollup?.contexts?.nodes ?? []).flatMap((node) => {
+): ProviderCiStatus | null {
+  const rows = (rollup?.contexts?.nodes ?? []).flatMap((node): CiRow[] => {
     if (!node) return [];
     const check = node.__typename === "CheckRun";
     return [
@@ -833,25 +953,19 @@ function ciFromGithubRollup(
         failed: isFailedGitCheckStatus(check ? node.conclusion : node.state),
         terminal: isTerminalGitCheckStatus(check ? node.status : node.state),
         url: (check ? node.url || node.detailsUrl : node.targetUrl) || null,
+        app: (check && node.checkSuite?.app?.slug) || null,
       },
     ];
   });
-  const total = rollup?.contexts?.totalCount ?? rows.length;
-  if (total === 0) return null;
-  const state: WorktreeCiStatus["state"] = rows.some((row) => row.failed)
-    ? "failure"
-    : total > rows.length || rows.some((row) => !row.terminal)
-      ? "pending"
-      : "success";
-  return {
-    state,
-    url: rows.find((row) => row.failed)?.url || rows[0]?.url || commitUrl,
-    total,
-  };
+  return ciFromRows(
+    rows,
+    rollup?.contexts?.totalCount ?? rows.length,
+    commitUrl,
+  );
 }
 
 const GITHUB_REVIEW_FIELDS = `latestOpinionatedReviews(first: 100) {
-  nodes { state submittedAt author { login } }
+  nodes { state submittedAt author { __typename login } }
 }`;
 
 interface GithubGraphqlReviews {
@@ -859,7 +973,7 @@ interface GithubGraphqlReviews {
     nodes?: Array<{
       state?: string;
       submittedAt?: string | null;
-      author?: { login?: string } | null;
+      author?: { __typename?: string; login?: string } | null;
     } | null>;
   };
 }
@@ -867,23 +981,24 @@ interface GithubGraphqlReviews {
 function reviewFromGithubGraphql(
   pull: GithubGraphqlReviews,
 ): WorktreePullRequestReview {
+  const bots = new Set<string>();
   const reviews = (pull.latestOpinionatedReviews?.nodes ?? []).flatMap(
-    (review) =>
-      review
-        ? [
-            {
-              state: review.state ?? "",
-              ...(review.author?.login
-                ? { user: { login: review.author.login } }
-                : {}),
-              ...(review.submittedAt
-                ? { submitted_at: review.submittedAt }
-                : {}),
-            },
-          ]
-        : [],
+    (review) => {
+      if (!review) return [];
+      const login = review.author?.login;
+      if (login && review.author?.__typename === "Bot") bots.add(login);
+      return [
+        {
+          state: review.state ?? "",
+          ...(login ? { user: { login } } : {}),
+          ...(review.submittedAt ? { submitted_at: review.submittedAt } : {}),
+        },
+      ];
+    },
   );
-  return { changesRequested: changesRequestedFromReviews(reviews) };
+  return reviewFromProviderReviews(reviews, (review) =>
+    githubReviewApp(review.user?.login, bots.has(review.user?.login ?? "")),
+  );
 }
 
 function githubGraphqlState(
@@ -1581,20 +1696,25 @@ export function githubProvider(
         refOid,
         signal(),
       );
-      if (!summary || summary.total === 0) return null;
-      const state: WorktreeCiStatus["state"] =
-        summary.state === "failure"
-          ? "failure"
-          : summary.truncated
-            ? "pending"
-            : summary.state === "success"
-              ? "success"
-              : "pending";
-      return {
-        state,
-        url: summary.url || `${repoWebUrl}/commit/${refOid}`,
-        total: summary.total,
-      };
+      if (!summary) return null;
+      return ciFromRows(
+        [
+          ...summary.checkRuns.map((run) => ({
+            failed: isFailedGitCheckStatus(run.conclusion),
+            terminal: isTerminalGitCheckStatus(run.status),
+            url: run.url,
+            app: run.appSlug,
+          })),
+          ...summary.statuses.map((status) => ({
+            failed: isFailedGitCheckStatus(status.state),
+            terminal: isTerminalGitCheckStatus(status.state),
+            url: status.url,
+            app: null,
+          })),
+        ],
+        summary.total,
+        `${repoWebUrl}/commit/${refOid}`,
+      );
     },
     async refChecks(refOid) {
       const summary = await githubRefChecks(
@@ -1652,7 +1772,9 @@ export function githubProvider(
       const reviews = requireData(res, "pull request reviews");
       if (!Array.isArray(reviews)) return null;
       // No `unresolvedThreads`: thread resolution is GraphQL-only on GitHub.
-      return { changesRequested: changesRequestedFromReviews(reviews) };
+      return reviewFromProviderReviews(reviews, (review) =>
+        githubReviewApp(review.user?.login, false),
+      );
     },
     listOpenPullRequests() {
       return githubOpenPullRequests(config, ref, repoWebUrl, signal());
