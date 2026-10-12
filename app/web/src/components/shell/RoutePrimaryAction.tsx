@@ -131,7 +131,7 @@ export function usePublishRouteSecondaryActions(): (
 /**
  * Publish a page's secondary actions from its own header, on every layout —
  * for an object whose header menu exists on phones too (the chat session's
- * ⋮), where the inspector is not mounted to publish them. Renders nothing.
+ * ⋯), where the inspector is not mounted to publish them. Renders nothing.
  */
 export function PublishRouteSecondaryActions({
   actions,

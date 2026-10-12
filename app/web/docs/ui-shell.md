@@ -87,7 +87,7 @@ target, with “Select text to comment” naming the enabling gesture.
 
 A chat session is the first surface on the unified model, on EVERY layout: its
 header carries exactly two actions — **Add comment** on the transcript
-selection, then **⋮** (`ChatHeaderMenu`: transcript view options and the
+selection, then **⋯** (`ChatHeaderMenu`: transcript view options and the
 session's actions, a top sheet on a phone). The session header publishes those
 actions itself (`sessionInspectorActions`), because on a phone the inspector
 only mounts while its sheet is open; the inspector panel therefore lists no

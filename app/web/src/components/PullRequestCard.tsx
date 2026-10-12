@@ -478,7 +478,10 @@ function usePullRequestCardActions({
             disabled={Boolean(running)}
             contentClassName="w-48"
           >
+            {/* Disabled itself too: disabling the trigger leaves an already
+                open menu live while another action starts. */}
             <DropdownMenuItem
+              disabled={Boolean(running)}
               title={`Rebase ${card.headBranch} onto an up-to-date ${card.baseBranch} and force-push it with lease`}
               onClick={() => onAction(card.id, "update-with-main")}
             >
