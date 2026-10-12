@@ -457,6 +457,17 @@ function awaitingRow(sender: string, recipient: string): void {
   assert.equal(peerPromptStore.getById(m.id)?.status, "awaiting_response");
 }
 
+/** Notices ever recorded for a coordinator, delivered or not. */
+function recordedFor(coordinatorId: string): number {
+  return (
+    getDb()
+      .prepare(
+        "SELECT COUNT(*) AS n FROM delegation_failure_notices WHERE coordinator_session_id = ?",
+      )
+      .get(coordinatorId) as { n: number }
+  ).n;
+}
+
 /** Run a turn on a child and swallow its expected failure. */
 async function turn(
   driver: PiChild | ClaudeChild,
@@ -2405,6 +2416,107 @@ describe("a journaled failure replays only what it was owed when it happened", (
       assert.equal(row.status, "acknowledged");
       assert.equal(row.senderNotifiedAt, undefined);
     }
+  });
+
+  it("a failure no store would take is retried by the runtime exactly as it was seen", async () => {
+    for (const readsAtFailure of ["refused", "read"] as const)
+      for (const skew of [0, -60_000]) {
+        freshJournal();
+        const { id: parent } = coordinator("Parent");
+        const { id: asker } = coordinator("Asker at the failure");
+        const { id: later } = coordinator("Later sender");
+        const child = piChild(parent);
+        await turn(child, "start");
+        awaitingRow(asker, child.sessionId);
+        // Journal, database writes and (in one case) reads all refuse.
+        rmSync(journalFile(), { force: true });
+        mkdirSync(journalFile());
+        const spies = [
+          vi
+            .spyOn(delegationFailureNoticeStore, "record")
+            .mockImplementation(() => {
+              throw new Error("SQLITE_FULL");
+            }),
+          ...(readsAtFailure === "refused"
+            ? [
+                vi
+                  .spyOn(peerPromptStore, "openForRecipient")
+                  .mockImplementation(() => {
+                    throw new Error("SQLITE_BUSY");
+                  }),
+              ]
+            : []),
+          vi.spyOn(console, "error").mockImplementation(() => {}),
+        ];
+        child.steps.push({ kind: "error", message: QUOTA });
+        const at = Date.now();
+        try {
+          await turn(child, "fails");
+        } finally {
+          for (const spy of spies) spy.mockRestore();
+          rmSync(journalFile(), { recursive: true, force: true });
+          journal.reloadJournal();
+        }
+        assert.equal(recordedFor(parent), 0);
+        // The stores work again; new healthy work arrives before any retry —
+        // in the same millisecond, or under a clock rollback.
+        const future = laterRequest(later, child.sessionId, at + skew);
+        // The child's next turn retries the old report.
+        await turn(child, "next");
+        const case_ = `${readsAtFailure} reads, skew ${skew}`;
+        assert.equal(recordedFor(parent), 1, case_);
+        assert.equal(
+          recordedFor(asker),
+          readsAtFailure === "read" ? 1 : 0,
+          `${case_}: the asker only if the failure's own plan named it`,
+        );
+        assert.equal(recordedFor(later), 0, case_);
+        const row = peerPromptStore.getById(future.id)!;
+        assert.equal(row.status, "acknowledged", case_);
+        assert.equal(row.senderNotifiedAt, undefined, case_);
+        // A real failure of the child later is its own incident, and its
+        // plan sees the later sender's open request.
+        child.steps.push({ kind: "error", message: QUOTA });
+        await turn(child, "fails again");
+        assert.equal(
+          recordedFor(later),
+          1,
+          `${case_}: the later sender is told of the later failure`,
+        );
+      }
+  });
+
+  it("a plan known to owe nobody stays empty across reload and compaction", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent, archived at the failure");
+    const child = piChild(parent);
+    // The cut: journaled with the plan read at the failure — nobody owed,
+    // since the parent was archived then — and never retired.
+    journal.journalFailure({
+      incidentKey: `run:${child.sessionId}:owed-nobody`,
+      sessionId: child.sessionId,
+      runId: "owed-nobody",
+      category: "auth",
+      at: Date.now(),
+      noticeTurn: false,
+      plan: { routes: [], inTurnIds: [] },
+    });
+    assert.match(readFileSync(journalFile(), "utf8"), /"planParts":0/);
+    journal.reloadJournal();
+    assert.deepEqual(journal.pendingJournaledFailures()[0]!.plan, {
+      routes: [],
+      inTurnIds: [],
+    });
+    journal.compactJournal();
+    journal.reloadJournal();
+    assert.deepEqual(journal.pendingJournaledFailures()[0]!.plan, {
+      routes: [],
+      inTurnIds: [],
+    });
+    // The parent is live now; the failure still owed nobody when it happened.
+    assert.deepEqual(replayJournaledFailures(), []);
+    assert.equal(recordedFor(parent), 0);
+    assert.deepEqual(journal.pendingJournaledFailures(), [], "retired");
   });
 
   it("a plan-less failure still recovers its original spawn route after a restart", () => {

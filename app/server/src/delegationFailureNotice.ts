@@ -428,27 +428,65 @@ function planOf(failure: JournaledFailure): FailurePlan {
  * Record what one failed turn of `report.sessionId` owes — the runtime's
  * failure hook, called before anything else learns of the failure.
  *
- * The routing is planned from the evidence at hand, then the safe facts and
+ * Everything about the failure is decided once, at the first call: whether
+ * it owes anything, its classification and its routing (or that the routing
+ * could not be read — then only the spawn edge, at replay). The safe facts and
  * that plan go to the journal FIRST (`delegationFailureJournal.ts`), then to
  * the database, and the journal entry is retired only once the database holds
  * them. A database that refuses leaves the entry pending for the retry sweep
- * and the next boot, and this returns normally: the failure is durable. One
- * that cannot even be read leaves a plan-less entry, which a replay plans from
- * the evidence as it stood at the failure. Only when NEITHER store took the
- * failure does this throw, so the runtime keeps it in memory and tries again.
+ * and the next boot, and this returns normally: the failure is durable. Only
+ * when NEITHER store took the failure does this throw, so the runtime keeps
+ * the report in memory and calls again — and gets the same prepared failure.
  */
 export function recordRunFailureNotices(
   report: RunFailureReport,
   now = Date.now(),
 ): DelegationFailureNotice[] {
-  const facts = safeFailureOf(report);
-  if (!facts) return [];
-  let failure: JournaledFailure = facts;
+  const key = `${report.sessionId}:${report.runId}`;
+  const failure = prepared.get(key) ?? prepare(report);
+  if (!failure) return [];
   try {
-    failure = { ...facts, plan: planFailure(facts) };
-  } catch {
-    // replayed with the spawn edge alone: nothing read later can be trusted
+    const written = persist(failure, now);
+    prepared.delete(key);
+    return written;
+  } catch (err) {
+    // Neither store took it: the runtime retries this report, and the retry
+    // must be the SAME failure — classified, cancelled or not, and routed
+    // exactly as it was seen, never re-read from what is current by then.
+    prepared.set(key, failure);
+    throw err;
   }
+}
+
+/**
+ * Failures the hook prepared but could not store anywhere yet, by session and
+ * run, so a retry of the same report reuses what was decided at the failure.
+ * Holds only those, and only until one store takes them.
+ */
+const prepared = new Map<string, JournaledFailure>();
+
+/**
+ * Everything decided AT the failure, once: whether it owes anything at all
+ * (stand-down, Stop), its safe classification, and its routing — the plan as
+ * read then, or, when that read was refused, no plan (the spawn edge alone,
+ * at replay). Undefined when nothing is owed.
+ */
+function prepare(report: RunFailureReport): JournaledFailure | undefined {
+  const facts = safeFailureOf(report);
+  if (!facts) return undefined;
+  try {
+    return { ...facts, plan: planFailure(facts) };
+  } catch {
+    // no plan: replayed with the spawn edge alone, never re-read later
+    return facts;
+  }
+}
+
+/** Journal, then record, then retire; throws only if neither store took it. */
+function persist(
+  failure: JournaledFailure,
+  now: number,
+): DelegationFailureNotice[] {
   let journaled = false;
   try {
     journalFailure(failure);

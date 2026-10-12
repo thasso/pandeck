@@ -134,10 +134,11 @@ export interface RunFailureReport {
  * of it: before the turn's error entry is appended or announced, before the
  * run's closing marker, `runStatus` and {@link subscribeSessionRunCompleted}.
  * A consumer that persists a consequence here therefore never loses it to a
- * crash between the failure and a listener. A hook that THROWS has recorded
- * nothing: the runtime keeps the failure, retries it at every turn boundary
- * and names it on every run marker meanwhile, so a boot can still recover it
- * from the log. An aborted turn, or one an abort was asked of, never reaches
+ * crash between the failure and a listener. A hook that THROWS stored nothing
+ * anywhere: the runtime keeps the report in memory and retries it at every
+ * turn boundary (a process exit loses it). What the hook decided at the
+ * failure is the hook's to keep across those retries. An aborted turn, or one
+ * an abort was asked of, never reaches
  * it, and neither does a straggler of an earlier provider run. Kept as a seam
  * so the runtime layer does not depend on the peer-prompt engine.
  */

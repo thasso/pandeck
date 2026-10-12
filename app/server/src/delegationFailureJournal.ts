@@ -260,9 +260,10 @@ function parse(raw: string): Line | undefined {
       : {}),
     at: v.at,
     noticeTurn: v.noticeTurn === true,
+    // 0 is a plan that was read and owed nobody: known, not unknown.
     ...(typeof v.planParts === "number" &&
     Number.isInteger(v.planParts) &&
-    v.planParts > 0
+    v.planParts >= 0
       ? { planParts: v.planParts }
       : {}),
   };
@@ -311,9 +312,11 @@ class JournalReader {
   result(): Map<string, JournaledFailure> {
     const out = new Map<string, JournaledFailure>();
     for (const [key, { planParts: count, ...facts }] of this.failed) {
-      const parts = this.parts.get(key);
+      const parts = this.parts.get(key) ?? new Map<number, PlanPart>();
+      // No count: no plan was written. A count whose parts are not all here
+      // is no plan either. A count of 0 is a whole, empty plan.
       const ordered =
-        count === undefined || parts === undefined
+        count === undefined
           ? undefined
           : Array.from({ length: count }, (_, i) => parts.get(i));
       out.set(

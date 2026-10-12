@@ -163,11 +163,13 @@ newline, so a torn tail left by a process that died mid-append invalidates only
 itself, never the record written after it. No record exceeds 64 KiB of encoded
 bytes: the writer refuses a longer one rather than truncate it, and a plan of
 any size is written as numbered `plan` parts that each fit, followed by the
-`failed` record that commits them; a failure whose parts are not all present is
-read as having no plan, never a partial one. The reader measures every line in
-bytes before it decodes or parses it and skips a longer one without keeping it.
-A torn `done` leaves its failure pending; the replay finds it recorded and only
-retires it.
+`failed` record that commits them with their count; a failure whose parts are
+not all present is read as having no plan, never a partial one. A plan read at
+the failure that owed nobody is written with a count of 0 and read back as that
+— known and empty, never mistaken for a plan that could not be read. The reader
+measures every line in bytes before it decodes or parses it and skips a longer
+one without keeping it. A torn `done` leaves its failure pending; the replay
+finds it recorded and only retires it.
 
 **Reading.** The journal is read once per process (at boot, or the first time it
 is needed), in 64 KiB chunks. Only the pending facts stay in memory. A journal
@@ -205,8 +207,12 @@ the journal starts empty.
 Only when NEITHER the journal nor the database takes a failure does the hook
 throw. The runtime then keeps the report in memory, retries it at every turn
 boundary, and logs that it could not store it — naming the run, never the error.
-That failure is lost if the process ends first: the one case with no durable
-storage at all.
+Every such retry is the SAME failure: the hook keeps what it decided at the
+failure — whether anything is owed (stand-down, Stop), the category, and the
+plan or that no plan could be read — and reuses it, so a retry never re-reads
+routing, holds or cancellations from what is current by then. That memory holds
+only failures no store has taken yet, and is cleared once one does. The failure
+is lost if the process ends first: the one case with no durable storage at all.
 
 A crash before the hook ran leaves no failure anyone was told of; the run is
 only marked interrupted, as before.
