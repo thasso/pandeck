@@ -8,7 +8,7 @@ import { Composer } from "../../../src/components/Composer.tsx";
 import { PromptQueueLedge } from "../../../src/components/PromptQueueLedge.tsx";
 import type { AssistantActions } from "../../../src/hooks/useAssistant.ts";
 
-export type PromptQueueScenario = "running" | "paused";
+export type PromptQueueScenario = "running" | "paused" | "stopped";
 
 export interface PromptQueueStoryProps {
   frameWidth: number;
@@ -24,6 +24,9 @@ const session: SessionState = {
 };
 
 function queueFor(scenario: PromptQueueScenario): PromptQueueState {
+  // A Stop with nothing of the user's queued: only the hold, and its Resume.
+  if (scenario === "stopped")
+    return { paused: false, items: [], automaticTurnsHeld: true };
   return {
     paused: scenario === "paused",
     items: [
@@ -60,6 +63,7 @@ function queueFor(scenario: PromptQueueScenario): PromptQueueState {
 
 /** What other sessions sent, waiting behind the drafts; one is mid-steer. */
 function peersFor(scenario: PromptQueueScenario): QueuedPeerPrompt[] {
+  if (scenario === "stopped") return [];
   return [
     {
       id: "p1",
@@ -139,7 +143,7 @@ const meta = {
   parameters: { layout: "fullscreen" },
   argTypes: {
     frameWidth: { control: { type: "range", min: 360, max: 960, step: 1 } },
-    scenario: { control: "radio", options: ["running", "paused"] },
+    scenario: { control: "radio", options: ["running", "paused", "stopped"] },
   },
 } satisfies Meta<typeof PromptQueueStory>;
 
@@ -152,6 +156,10 @@ export const Running: Story = {
 
 export const Paused: Story = {
   args: { frameWidth: 720, scenario: "paused" },
+};
+
+export const Stopped: Story = {
+  args: { frameWidth: 720, scenario: "stopped" },
 };
 
 export const Phone: Story = {

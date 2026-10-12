@@ -535,12 +535,15 @@ type TransitionPatch = Partial<{
   failureReason: string | null;
   interruptionKind: PeerPromptInterruptionKind | null;
   nextAttemptAt: number | null;
-  acceptedAt: number;
-  acknowledgedAt: number;
+  acceptedAt: number | null;
+  acknowledgedAt: number | null;
   completedAt: number;
   repliedAt: number;
   repliedByMessageId: string;
   bumpAttempts: boolean;
+  /** Give back the attempt a claim took, for a delivery that never failed. */
+  refundAttempt: boolean;
+  clearBatchHead: boolean;
 }>;
 
 /** Compare-and-set transition logic, assuming the caller already holds a transaction. */
@@ -605,6 +608,8 @@ function transitionInTxn(
     params.push(patch.repliedByMessageId);
   }
   if (patch.bumpAttempts) sets.push("attempts = attempts + 1");
+  if (patch.refundAttempt) sets.push("attempts = MAX(attempts - 1, 0)");
+  if (patch.clearBatchHead) sets.push("batch_head_id = NULL");
   const placeholders = from.map(() => "?").join(", ");
   const sql = `UPDATE peer_prompts SET ${sets.join(", ")} WHERE id = ? AND status IN (${placeholders})`;
   const result = db
@@ -736,6 +741,29 @@ const releaseToQueue = (id: string, reason?: string, now = Date.now()) =>
     ["dispatching"],
     "queued",
     { leaseOwner: null, leaseExpiresAt: null, failureReason: reason ?? null },
+    now,
+  );
+/**
+ * Put back a row a Stop refused at the run door (`automaticTurnHold.ts`). The
+ * drain marks a batch admitted before the runtime appends it, so the refusal
+ * can find it `admitted` or `acknowledged` although nothing reached the
+ * session. It returns to the queue as it was: no lease, no acceptance, no
+ * batch, and the claim's attempt refunded, since nothing failed.
+ */
+const returnHeldToQueue = (id: string, now = Date.now()) =>
+  transition(
+    id,
+    ["dispatching", "admitted", "acknowledged"],
+    "queued",
+    {
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      failureReason: null,
+      acceptedAt: null,
+      acknowledgedAt: null,
+      refundAttempt: true,
+      clearBatchHead: true,
+    },
     now,
   );
 const markAdmitted = (id: string, now = Date.now()) =>
@@ -1644,6 +1672,7 @@ export const peerPromptStore = {
   claimBatch,
   claimOne,
   releaseToQueue,
+  returnHeldToQueue,
   markAdmitted,
   markAcknowledged,
   markDeliveryBatch,

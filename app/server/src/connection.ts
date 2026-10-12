@@ -118,7 +118,12 @@ import {
   ensureRuntimeSessionWithRuntime as ensureRuntimeSession,
   promptRuntimeSession,
 } from "./session/runtimePrompt.ts";
-import { deliverAgentHandoff } from "./agentHandoffs.ts";
+import { deliverAgentHandoff, enqueueAgentHandoff } from "./agentHandoffs.ts";
+import {
+  automaticTurnsHeld,
+  deleteAutomaticTurnHold,
+  holdAutomaticTurns,
+} from "./automaticTurnHold.ts";
 import { forgetPlanHintState } from "./session/planHint.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
@@ -859,7 +864,12 @@ export class Connection implements Viewer {
         return this.onAcceptCommitDryRun(msg.entryId);
       case "respondToQuestion":
         return this.onRespondToQuestion(msg.response);
-      case "abort":
+      case "abort": {
+        // Stop stays stopped: automatic turns are held before anything is
+        // awaited, so neither the turn's idle edge nor a delivery that was
+        // already waiting on it can start another (`automaticTurnHold.ts`).
+        const stopped = this.viewing?.sessionId;
+        if (stopped) holdAutomaticTurns(stopped);
         // Aborting needs the harness this view may not have opened yet; a
         // detached session has nothing running, so the upgrade is what makes
         // the abort meaningful at all. A Stop holds the user's queue BEFORE the
@@ -868,6 +878,7 @@ export class Connection implements Viewer {
           if (driver.isRunning) pausePromptQueueForStop(driver.sessionId);
           return view?.abort();
         });
+      }
       case "queuePrompt":
       case "updateQueuedPrompt":
       case "removeQueuedPrompt":
@@ -1613,6 +1624,17 @@ export class Connection implements Viewer {
     const continuation = hub.consumePostReloadContinuation();
     if (!continuation) return;
     if (!this.guardExistingKind(continuation.kind)) return;
+    // Consuming it deleted its only copy, and a stopped session takes no
+    // automatic turn: it waits as a durable handoff for the user's Resume.
+    if (automaticTurnsHeld(continuation.sessionId)) {
+      enqueueAgentHandoff({
+        sessionId: continuation.sessionId,
+        text: continuation.message,
+        origin: { kind: "system", source: "post-reload-continuation" },
+        visible: true,
+      });
+      return;
+    }
     // The continuation views its session, but a navigation the client made
     // while it reopened is newer and keeps the view; the prompt runs either way.
     const ticket = this.claimViewRequest();
@@ -4634,6 +4656,7 @@ export class Connection implements Viewer {
     for (const cleanup of [
       clearPendingQuestion,
       deleteSessionPromptQueue,
+      deleteAutomaticTurnHold,
       deleteToolGroupSessionData,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
     ]) {

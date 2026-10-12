@@ -83,7 +83,9 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
   every later step sees a busy session.
 - **Stop means stop.** Stopping a turn that has messages queued pauses the queue
   (`session_prompt_queue_pause`), so its idle edge sends nothing. Sending a
-  message of their own or "Send next" lifts the pause.
+  message of their own or "Send next" lifts the pause. A Stop also holds the
+  session's automatic turns; see
+  [Stop holds automatic turns](#stop-holds-automatic-turns).
 - **A noted row holds the queue.** A row carrying a note — a failed send, or a
   steer Claude may already have read — stops the queue at it until the user
   sends it explicitly. A message of their own lifts a Stop, never a note, since
@@ -137,6 +139,42 @@ card, which the commands address it by.
 - Agent handoffs are not listed: they steer themselves into a turn that takes
   one and queue only behind a turn that cannot.
 
+### Stop holds automatic turns
+
+A Stop is the user saying "stop", so nothing an agent or the app queued for the
+session may start the next turn either (`automaticTurnHold.ts`, table
+`session_automatic_turn_hold`). The hold is written before the turn is aborted,
+whether or not anything is waiting, and survives a harness release, a reload and
+a restart. Fresh sessions start unheld.
+
+- **What it holds.** Every turn whose origin is not the user: peer prompts and
+  interruption notices, background-work updates (including the Claude CLI waking
+  itself for its own background task), approval outcomes, question answers and
+  other card handoffs, and a post-reload continuation. Approvals still EXECUTE
+  under their grants; only the turn that would tell the agent waits. Child
+  sessions and background commands keep running, and deadline expiry is
+  unchanged.
+- **Where.** `runtimePrompt.ts` refuses a non-human origin on a held session, at
+  entry and again after its last await, so a delivery that sampled the session
+  before the Stop cannot start a turn after it. Each drain also reads the hold
+  before it claims a batch or cold-resumes a session, including a peer drain
+  already awaiting the stopped turn, which checks again before its next batch.
+- **Nothing is lost or spent.** Held work stays where it was: peer rows queued
+  (a batch refused between its claim and the append goes back with its attempt
+  refunded), handoffs in their table, background updates in their pending batch.
+  The refusal is a `SessionBusyError`, which every automatic caller already
+  answers by waiting for a later edge rather than retrying or dropping.
+- **What lifts it.** Resume, "Send next" on a queued row or send-now on a
+  waiting peer prompt, or a message of the user's own once it is appended as a
+  turn (a steer into the turn being stopped does not count), including a review
+  handoff carrying their words. Resume then offers the whole idle chain in its
+  usual order. Peer messages, background facts, approvals, reconnects, mounts
+  and idle edges never lift it.
+- **What the user sees.** The session's `promptQueue` carries
+  `automaticTurnsHeld: true`, sent even when nothing of the user's is queued, so
+  the composer ledge stays with its Resume. The permanent Assistant has no
+  ledge; its next intake message lifts the hold.
+
 ### Composer
 
 While a turn runs, a message is QUEUED. The composer's one primary button is
@@ -152,7 +190,8 @@ The queue renders as `PromptQueueLedge` on the composer's ledge, nearest the
 field it was typed in, OPEN by default and reopening for every new message. Each
 row offers **Steer** (or **Send next** when no running turn takes a steer, and
 always for a command) and **Remove**, and shows its send while it is under way;
-a held queue (a Stop, a failed send) offers **Resume**. Editing and reordering
+a held queue (a Stop, a failed send) offers **Resume**, as does a stopped
+session with nothing of the user's queued ("Stopped"). Editing and reordering
 stay server operations but are not offered in the strip. Below the user's rows
 come the waiting peer prompts, each marked with its sender and offering send-now
 and withdraw, but no edit or move.

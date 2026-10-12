@@ -32,6 +32,7 @@ import {
 } from "./stories/cards/ApprovalSessionGrant.stories.tsx";
 import {
   Paused as QueuePaused,
+  Stopped as QueueStopped,
   Phone as QueuePhone,
   PromptQueueStory,
   Running as QueueRunning,
@@ -129,6 +130,9 @@ const storyRenderers: Record<StoryPreviewId, () => ReactElement> = {
   ),
   "prompt-queue--paused": () => (
     <PromptQueueStory {...queueArgsOf(QueuePaused)} />
+  ),
+  "prompt-queue--stopped": () => (
+    <PromptQueueStory {...queueArgsOf(QueueStopped)} />
   ),
   "prompt-queue--phone": () => (
     <PromptQueueStory {...queueArgsOf(QueuePhone)} />

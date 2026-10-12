@@ -474,3 +474,66 @@ test("a drain requested while one is in flight runs again after it", async () =>
   for (let i = 0; i < 20 && peerPasses < 2; i += 1) await flush();
   assert.equal(peerPasses, 2);
 });
+
+test("a Stop's hold keeps a completion pending, unoffered and unconsumed, until it is lifted", async () => {
+  let held = true;
+  const offered: string[] = [];
+  const discarded: string[] = [];
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: () => held,
+    offer: (_sessionId, _offer, key) => {
+      offered.push(key);
+      return Promise.resolve("delivered");
+    },
+    discard: (entry) => discarded.push(entry.notice.itemId),
+  });
+
+  delivery.enqueue("owner-held", notice("item-held"));
+  await delivery.drain("owner-held");
+  // An idle edge, a later completion's own drain, a resume of the peer phase:
+  // none of them offers while the session is held.
+  await delivery.requestDrain("owner-held");
+  assert.deepEqual(offered, []);
+  assert.deepEqual(discarded, [], "nothing consumed");
+
+  held = false;
+  await delivery.requestDrain("owner-held");
+  await delivery.requestDrain("owner-held");
+  assert.deepEqual(offered, ["background-completion:item-held:1"], "once");
+  assert.deepEqual(discarded, ["item-held"]);
+});
+
+test("a Stop racing an offer leaves the completion for Resume instead of consuming it", async () => {
+  let held = false;
+  const offered: string[] = [];
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: () => held,
+    offer: (_sessionId, _offer, key) => {
+      offered.push(key);
+      // The Stop lands while the offer awaits the session: the run door
+      // refuses the turn, which the offer answers as busy.
+      if (offered.length === 1) {
+        held = true;
+        return Promise.resolve("busy");
+      }
+      return Promise.resolve("delivered");
+    },
+  });
+
+  delivery.enqueue("owner-race-stop", notice("item-race"));
+  await delivery.drain("owner-race-stop");
+  assert.equal(offered.length, 1);
+  await delivery.drain("owner-race-stop");
+  assert.equal(offered.length, 1, "no second offer while held");
+
+  held = false;
+  await delivery.requestDrain("owner-race-stop");
+  assert.deepEqual(offered, [
+    "background-completion:item-race:1",
+    "background-completion:item-race:1",
+  ]);
+  await delivery.requestDrain("owner-race-stop");
+  assert.equal(offered.length, 2, "delivered once, then gone");
+});

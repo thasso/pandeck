@@ -70,8 +70,28 @@ test("background lifecycle and idle delivery stay wired behind peer FIFO", () =>
   );
   assert.match(
     source,
-    /setSessionIdleHook\s*\(\s*\(sessionId\)\s*=>\s*\{[\s\S]{0,400}?void backgroundCompletionDelivery\.drain\(sessionId\)/,
-    "the idle hook must enter the peer-first background delivery gate",
+    /const offerIdleEdge = [\s\S]{0,1200}?backgroundCompletionDelivery\.drain\(sessionId\)/,
+    "the idle chain must enter the peer-first background delivery gate",
+  );
+  assert.match(
+    source,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId\)\s*\)/,
+    "the idle hook must run that chain",
+  );
+});
+
+test("a Stop's hold gates background delivery and Resume reruns the idle chain", () => {
+  const source = readFileSync(join(SRC_ROOT, "index.ts"), "utf8");
+
+  assert.match(
+    source,
+    /new BackgroundCompletionDelivery\s*\(\s*\{[\s\S]{0,300}?held:\s*\(sessionId\)\s*=>\s*automaticTurnsHeld\(sessionId\)/,
+    "background completion must read the session's Stop hold",
+  );
+  assert.match(
+    source,
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId,\s*true\)/,
+    "Resume must offer the whole idle chain again, rerunning background delivery",
   );
 });
 

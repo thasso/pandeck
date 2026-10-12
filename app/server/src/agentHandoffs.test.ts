@@ -40,6 +40,7 @@ const {
 } = await import("./agentHandoffs.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
+const hold = await import("./automaticTurnHold.ts");
 const { reserveWorktreeForRemoval, setSessionWorktreeResolverForTests } =
   await import("./session/sessionRunLease.ts");
 
@@ -536,6 +537,70 @@ describe("agent handoffs", () => {
     assert.equal(handoffTurn?.hidden, undefined);
   });
 
+  it("holds a card outcome for a stopped session, never resuming it, and Resume delivers it once", async () => {
+    const driver = seed();
+    hold.holdAutomaticTurns(driver.sessionId);
+    const acquire = vi.spyOn(fakeHub, "acquireById");
+    try {
+      const outcome = await deliverAgentHandoff({
+        sessionId: driver.sessionId,
+        driver,
+        text: "[approval decision] approved",
+        origin: { kind: "system", source: "approval-decision" },
+        outcomeRef: { kind: TEST_OUTCOME, id: "card-held" },
+      });
+      assert.equal(outcome, "queued");
+      await drainAgentHandoffs(driver.sessionId);
+      recoverAgentHandoffsOnBoot();
+      await tick();
+      assert.equal(driver.promptOptions.length, 0, "no turn while held");
+      assert.equal(acquire.mock.calls.length, 0, "no session was resumed");
+      const [row] = agentHandoffStore.listForSession(driver.sessionId);
+      assert.equal(row?.attempts, 0, "a held decision has not failed");
+      assert.deepEqual(outcomes, []);
+
+      hold.setAutomaticTurnHoldHost({
+        changed: () => {},
+        resumed: (id) => void drainAgentHandoffs(id),
+      });
+      hold.resumeAutomaticTurns(driver.sessionId);
+      for (let i = 0; i < 20 && outcomes.length === 0; i += 1) await tick();
+      assert.deepEqual(outcomes, ["delivered:card-held"]);
+      assert.equal(driver.promptOptions.length, 1);
+      assert.equal(
+        agentHandoffStore.listForSession(driver.sessionId).length,
+        0,
+      );
+    } finally {
+      acquire.mockRestore();
+      hold.setAutomaticTurnHoldHost(undefined);
+    }
+  });
+
+  it("a handoff in the user's own words resumes a stopped session, after the decisions it held", async () => {
+    const driver = seed();
+    hold.holdAutomaticTurns(driver.sessionId);
+    await deliverAgentHandoff({
+      sessionId: driver.sessionId,
+      driver,
+      text: "[approval decision] approved",
+      origin: { kind: "system", source: "approval-decision" },
+    });
+    assert.equal(driver.promptOptions.length, 0);
+    await deliverAgentHandoff({
+      sessionId: driver.sessionId,
+      driver,
+      text: "Please address these review comments.",
+      origin: { kind: "human" },
+      visible: true,
+    });
+    for (let i = 0; i < 20 && driver.promptOptions.length < 2; i += 1)
+      await tick();
+    assert.equal(hold.automaticTurnsHeld(driver.sessionId), false);
+    assert.equal(driver.promptOptions.length, 2, "both, in the order decided");
+    assert.equal(agentHandoffStore.listForSession(driver.sessionId).length, 0);
+  });
+
   it("goes quiet for a graceful shutdown without losing the row", async () => {
     const driver = seed();
     await deliverAgentHandoff({
@@ -580,8 +645,13 @@ test("index.ts drains handoffs on the idle edge, at boot, and stops for shutdown
   );
   assert.match(
     source,
-    /setSessionIdleHook\s*\(\s*\(sessionId\)\s*=>\s*\{(?:\s*\/\/[^\n]*)*\s*void runAutoApprovals\(sessionId\)\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => drainAgentHandoffs\(sessionId\)\)/,
+    /const offerIdleEdge = \(sessionId: string, resumed = false\): void => \{(?:\s*\/\/[^\n]*)*\s*void runAutoApprovals\(sessionId\)\s*\.catch\(\(\) => \{\}\)\s*\.then\(\(\) => drainAgentHandoffs\(sessionId\)\)/,
     "session-granted approvals, then queued handoffs, must take the running→idle edge before the other drains",
+  );
+  assert.match(
+    source,
+    /setSessionIdleHook\(\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId\)\s*\)/,
+    "the running→idle edge must run that chain",
   );
   // Each inside its own boot step: a bare mention (a comment, an import) must
   // not satisfy this, and one step's throw must not skip the other.

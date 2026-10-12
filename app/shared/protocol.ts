@@ -4199,7 +4199,10 @@ export interface SessionState {
   mode?: SessionMode;
   /** True when this provider can accept a user steering prompt during a running turn. */
   canSteer?: boolean;
-  /** Messages waiting for the running turn to end; absent when there are none. */
+  /**
+   * Messages waiting for the running turn to end; absent when there are none
+   * and no Stop holds the session's automatic turns.
+   */
   promptQueue?: PromptQueueState;
   /**
    * Messages other sessions sent this one that are not delivered yet, in
@@ -5572,6 +5575,13 @@ export type QueuedPromptAttachment = Omit<PromptAttachment, "data">;
 export interface PromptQueueState {
   items: QueuedPrompt[];
   paused: boolean;
+  /**
+   * The user stopped this session, so nothing an agent or the app queued for
+   * it (peer prompts, background updates, approval outcomes) starts a turn
+   * until they resume or send a message. Sent with an empty `items` too: a
+   * held session needs its Resume even with nothing of the user's queued.
+   */
+  automaticTurnsHeld?: true;
 }
 
 /**

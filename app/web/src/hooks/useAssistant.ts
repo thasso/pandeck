@@ -5818,7 +5818,7 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return {
         ...state,
         session:
-          msg.queue.items.length > 0
+          msg.queue.items.length > 0 || msg.queue.automaticTurnsHeld
             ? { ...rest, promptQueue: msg.queue }
             : rest,
       };

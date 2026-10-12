@@ -15,6 +15,11 @@ import type {
 } from "@assistant/shared";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
 import { sessionWorktreeMissing } from "../worktrees/sessionCwd.ts";
+import {
+  assertAutomaticTurnAllowed,
+  isAutomaticOrigin,
+  releaseAutomaticTurnsForHumanPrompt,
+} from "../automaticTurnHold.ts";
 import type { PromptOrigin, SessionSnapshot } from "@assistant/shared/session";
 import type { PromptableAdapter } from "./adapters/contract.ts";
 import type { RuntimePromptOptions } from "./runtime/liveSession.ts";
@@ -162,10 +167,12 @@ export async function beginRuntimeProviderTurn(
   origin: PromptOrigin,
 ): Promise<() => void> {
   assertSessionWorktreePresent(driver.sessionId);
+  assertAutomaticTurnAllowed(driver.sessionId, origin);
   const releaseRun = beginPromptRun(driver.sessionId);
   const releaseAdmission = sessionRuntime.admitPrompt(driver.sessionId);
   try {
     await sessionSkills(driver.sessionId, driver.agentType);
+    assertAutomaticTurnAllowed(driver.sessionId, origin);
     const live = ensureRuntimeSessionWithRuntime(sessionRuntime, driver);
     // The provider supplied no user message. Stamp its provenance on the next
     // durable assistant entry instead of fabricating a user row.
@@ -194,6 +201,10 @@ export async function promptRuntimeSessionWithRuntime(
   // BEFORE the runtime session is ensured and before any append: a refused turn
   // must leave no trace of itself in the session.
   assertSessionWorktreePresent(driver.sessionId);
+  // A Stop holds every turn the user did not ask for (`automaticTurnHold.ts`).
+  // Checked here and again after the last await below, so a caller that
+  // sampled the session before the Stop cannot start a turn after it.
+  assertAutomaticTurnAllowed(driver.sessionId, options.origin);
   // A session whose WORKTREE is being removed right now must not start a run —
   // and a run that starts here must block that removal until it is done. The
   // session's worktree is resolved HERE, at admission, so a session linked to a
@@ -211,11 +222,42 @@ export async function promptRuntimeSessionWithRuntime(
     // the first post-upgrade start of a legacy coding session. It happens before
     // the runtime session exists or any user entry can be appended.
     await sessionSkills(driver.sessionId, driver.agentType);
-    return await runPromptWithRuntime(runtime, driver, text, options);
+    assertAutomaticTurnAllowed(driver.sessionId, options.origin);
+    return await runPromptWithRuntime(
+      runtime,
+      driver,
+      text,
+      withHumanResume(driver, options),
+    );
   } finally {
     releaseAdmission();
     releaseRun();
   }
+}
+
+/**
+ * A human prompt that reaches the session as a turn of its own lifts a Stop's
+ * hold on automatic turns. Only once its entry is APPENDED: a refused send
+ * resumed nothing. A steer does not count — a session held by a Stop runs only
+ * the turn being stopped, and a message aimed at that turn is not a resume.
+ */
+function withHumanResume(
+  driver: RuntimePromptDriver,
+  options: RuntimePromptFacadeOptions,
+): RuntimePromptFacadeOptions {
+  if (isAutomaticOrigin(options.origin) || options.steer) return options;
+  return {
+    ...options,
+    // Runs inside the runtime's append; nothing here may throw.
+    onUserEntry: (entryId) => {
+      try {
+        releaseAutomaticTurnsForHumanPrompt(driver.sessionId);
+      } catch (err) {
+        console.warn("[stop-hold] could not lift a hold:", err);
+      }
+      options.onUserEntry?.(entryId);
+    },
+  };
 }
 
 /**

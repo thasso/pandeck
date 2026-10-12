@@ -305,6 +305,43 @@ test("Stop holds the queue; resuming or a message of the user's own lifts it", a
   await s.finishTurn();
 });
 
+test("Resume lifts a Stop's hold on automatic turns too, and hands the edge to the whole idle chain", async () => {
+  const { holdAutomaticTurns, automaticTurnsHeld, setAutomaticTurnHoldHost } =
+    await import("./automaticTurnHold.ts");
+  const s = session();
+  const resumed: string[] = [];
+  setAutomaticTurnHoldHost({
+    changed: (id) => queue.publishPromptQueue(id),
+    // The production chain runs the queue after the handoffs it owes.
+    resumed: (id) => {
+      resumed.push(id);
+      void queue.drainPromptQueue(id);
+    },
+  });
+  try {
+    await startTurn(s);
+    queue.queuePrompt(s.id, { text: "after the stop" });
+    holdAutomaticTurns(s.id);
+    queue.pausePromptQueueForStop(s.id);
+    await s.finishTurn();
+    assert.deepEqual(published[s.id], {
+      items: published[s.id]!.items,
+      paused: true,
+      automaticTurnsHeld: true,
+    });
+    assert.equal(s.sent.length, 1);
+
+    queue.resumePromptQueue(s.id);
+    assert.equal(automaticTurnsHeld(s.id), false);
+    assert.deepEqual(resumed, [s.id]);
+    await until(() => s.sent.at(-1)?.text === "after the stop");
+    assert.equal(s.sent.length, 2, "sent once");
+    await s.finishTurn();
+  } finally {
+    setAutomaticTurnHoldHost(undefined);
+  }
+});
+
 test("a queued message goes before an agent's while one is owed", async () => {
   const s = session();
   await startTurn(s);

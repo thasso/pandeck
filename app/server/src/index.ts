@@ -200,8 +200,13 @@ import {
   stopAgentHandoffDelivery,
 } from "./agentHandoffs.ts";
 import {
+  automaticTurnsHeld,
+  setAutomaticTurnHoldHost,
+} from "./automaticTurnHold.ts";
+import {
   drainPromptQueue,
   drainPromptQueuesOnBoot,
+  publishPromptQueue,
   setPromptQueueHost,
   stopPromptQueueDelivery,
   type PromptQueueDriver,
@@ -289,6 +294,7 @@ function backgroundWorkHumanLink(itemId: string): string {
 
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   drainPeers: (sessionId) => drainRecipient(sessionId),
+  held: (sessionId) => automaticTurnsHeld(sessionId),
   offer: async (sessionId, signal, clientRequestId) => {
     const candidate =
       hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
@@ -2020,7 +2026,13 @@ server.listen(PORT, HOST, () => {
   // first turn there. The cost is one turn of ordering for a session that
   // happens to owe both, and paying for it would mean holding every other
   // session's peer delivery behind a handoff turn that can run for minutes.
-  setSessionIdleHook((sessionId) => {
+  //
+  // A Stop holds every automatic step of this chain (`automaticTurnHold.ts`);
+  // approvals still EXECUTE under their grants, and only the turns that would
+  // tell the agent wait. Resume offers the same chain again, and its
+  // background step reruns after a drain in flight rather than coalescing
+  // onto one that already read the hold.
+  const offerIdleEdge = (sessionId: string, resumed = false): void => {
     // Cards a session grant approves run first: each queues its outcome as a
     // handoff, so the drain below carries it to the agent in order.
     void runAutoApprovals(sessionId)
@@ -2030,8 +2042,15 @@ server.listen(PORT, HOST, () => {
       .then(() => drainPromptQueue(sessionId))
       .catch(() => {})
       .then(() => {
-        void backgroundCompletionDelivery.drain(sessionId);
+        void (resumed
+          ? backgroundCompletionDelivery.requestDrain(sessionId)
+          : backgroundCompletionDelivery.drain(sessionId));
       });
+  };
+  setSessionIdleHook((sessionId) => offerIdleEdge(sessionId));
+  setAutomaticTurnHoldHost({
+    changed: (sessionId) => publishPromptQueue(sessionId),
+    resumed: (sessionId) => offerIdleEdge(sessionId, true),
   });
   // Offered in the same order as the idle edge, though only offered: both
   // calls return once their per-session work is in flight, so this is a

@@ -32,8 +32,9 @@
   `SessionBusyError`. Never report a started turn as a steer.
 - `runtimePrompt.ts` is the ONE door every run passes, so session-wide safety
   invariants belong there, ahead of the runtime session and any append — never
-  only at a client entry point. A session whose worktree is gone is refused
-  there today; keep new ones beside it.
+  only at a client entry point. A gone worktree and an automatic turn on a
+  Stop-held session (`automaticTurnHold.ts`) are refused there; keep new ones
+  beside them.
 - A provider scan is the harness's OWN transcript, not our log: bind ONLY the
   turn that just completed, matched from the END by turn structure and call ids
   — never positionally, never the history — all-or-nothing, and fork at its

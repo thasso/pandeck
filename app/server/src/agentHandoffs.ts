@@ -40,6 +40,10 @@
  *    queues; every other refusal is thrown back to whoever asked, which already
  *    reports it against the card or the session.
  */
+import {
+  automaticTurnsHeld,
+  releaseAutomaticTurnsForHumanPrompt,
+} from "./automaticTurnHold.ts";
 import { errorText } from "./errors.ts";
 import {
   agentHandoffStore,
@@ -214,6 +218,10 @@ export async function deliverAgentHandoff(
   input: AgentHandoffInput,
 ): Promise<AgentHandoffOutcome> {
   const { driver } = input;
+  // The user's own words (review comments with a message of theirs) resume a
+  // stopped session like any message they send; a card outcome waits for that.
+  if (input.origin.kind === "human")
+    releaseAutomaticTurnsForHumanPrompt(input.sessionId);
   // A running session behind a provider that cannot steer has nothing to try:
   // the attempt would append nothing and throw, so it goes straight to the
   // queue rather than through a failure the caller would have to interpret.
@@ -309,6 +317,9 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
   // the failure paths below, which would report it abandoned to a card that has
   // it.
   if (!clearDeliveredRows(sessionId)) return;
+  // A Stop holds the session: what it is owed stays queued, and a session
+  // that is not live is not resumed for it, until the user resumes it.
+  if (automaticTurnsHeld(sessionId)) return;
   const head = agentHandoffStore.next(sessionId);
   if (!head) return;
   const driver = await resolveDriver(sessionId);
@@ -320,7 +331,8 @@ async function drainSessionOnce(sessionId: string): Promise<void> {
     return;
   }
   for (;;) {
-    if (deliveryStopped || driver.isRunning) return;
+    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+      return;
     if (!clearDeliveredRows(sessionId)) return;
     const row = agentHandoffStore.next(sessionId);
     if (!row) return;
@@ -379,7 +391,8 @@ async function deliverQueued(
     return true;
   } catch (err) {
     if (appended) return true; // the agent has it; the run failing is its own story
-    if (err instanceof SessionBusyError) return false; // the next idle edge takes it
+    // The next idle edge takes it — or Resume, when a Stop refused it.
+    if (err instanceof SessionBusyError) return false;
     failRow(row, errorText(err));
     return false;
   }

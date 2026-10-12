@@ -89,6 +89,11 @@ export interface BackgroundCompletionDeliveryOptions {
   /** Drains the existing durable peer FIFO, including any admitted peer turn. */
   drainPeers(sessionId: string): Promise<void>;
   /**
+   * The user stopped this session, so no automatic turn may start: the batch
+   * stays pending, unoffered, until a later drain finds the hold lifted.
+   */
+  held?(sessionId: string): boolean;
+  /**
    * How a terminal fact reaches the model: a turn of its own, the next turn, or
    * not at all when it is already in the session's context. Absent means every
    * completion wakes, which is the pre-policy behaviour and what the activity
@@ -302,7 +307,10 @@ export class BackgroundCompletionDelivery {
 
   private async drainOnce(sessionId: string): Promise<void> {
     await this.options.drainPeers(sessionId);
-    if (this.stopped) return;
+    // Read AFTER the peer phase: a Stop during that turn holds this batch too.
+    // One that lands while the offer below awaits is refused at the run door
+    // and answered `busy`, which puts the batch back.
+    if (this.stopped || this.options.held?.(sessionId)) return;
     const liveBatch = this.pending.get(sessionId);
     if (!liveBatch || liveBatch.notices.length === 0) return;
     const offered: PendingCompletionBatch = {
