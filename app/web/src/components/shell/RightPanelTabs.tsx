@@ -294,7 +294,7 @@ export function RightPanelTabs({
     worktree,
   };
   return (
-    <div className="flex h-full min-h-0 flex-col border-l border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col surface-sidebar border-l border-border">
       {showTabs ? (
         <div className="flex min-h-11 shrink-0 items-center gap-1 border-b border-border px-2">
           <Tabs

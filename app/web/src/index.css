@@ -76,13 +76,13 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
+  --sidebar: oklch(0.97 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent: oklch(0.93 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-border: oklch(0.91 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 }
 :root[data-text-scale="110"] {
@@ -194,11 +194,11 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
+  --sidebar: oklch(0.225 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent: oklch(0.29 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
@@ -292,6 +292,20 @@ body {
 }
 
 @layer components {
+  /* The left browser and the right object panel: a surface set apart from the
+     main pane. The panels' contents are shared with the main pane and paint
+     with the generic tokens, so this repoints those tokens at the sidebar set
+     for the subtree — otherwise a hover or chip the same shade as the panel
+     vanishes. Portaled popovers live outside the subtree and keep theirs. */
+  .surface-sidebar {
+    --background: var(--sidebar);
+    --card: var(--sidebar);
+    --muted: var(--sidebar-accent);
+    --accent: var(--sidebar-accent);
+    --secondary: var(--sidebar-accent);
+    --border: var(--sidebar-border);
+    background-color: var(--sidebar);
+  }
   /* `PropertyList`: one label column for every list, so labels and values
      line up the same wherever a list appears; narrower at the `sm` density. */
   .property-list {
