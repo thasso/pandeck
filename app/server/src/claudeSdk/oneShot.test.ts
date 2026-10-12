@@ -151,6 +151,11 @@ async function main(): Promise<void> {
     "function",
     "MCP namespace permission is explicit",
   );
+  assert.equal(
+    toolOpts?.permissionMode,
+    "default",
+    "canUseTool decides tool calls, never a CLI-selected auto mode",
+  );
 
   // documents: the prompt becomes a streaming user turn carrying a document block.
   const docCapture: { current?: ClaudeQueryParams } = {};

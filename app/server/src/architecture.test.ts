@@ -12,7 +12,8 @@
  * Import boundaries: the pi SDK is owned by `piSdk/` and the Claude Agent SDK
  * by `claudeSdk/`; the harness-neutral tool layer (`mcp/`, `tools/`) must
  * import neither — pi runs tools through its direct adapter, Claude by mounting
- * the session tool server.
+ * the session tool server. `@earendil-works/pi-mcp` is the one exception: a
+ * standalone MCP client with no pi dependencies, used by both harnesses.
  */
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -33,6 +34,12 @@ const ADAPTER_CONSTRUCTION_FILES = new Set([
 ]);
 
 const RUNTIME_PROMPT_BRIDGE_FILES = new Set(["session/runtimePrompt.ts"]);
+
+/**
+ * A pi SDK import. `pi-mcp` is excluded: it is a standalone MCP client with no
+ * pi dependencies, so the harness-neutral proxied-server layer may use it.
+ */
+const PI_SDK_IMPORT = /from\s+"@earendil-works\/(?!pi-mcp")/;
 
 /** A path INTO one of the two provider folders, at any depth. */
 const PROVIDER_FOLDER_SPECIFIER = /(?:^|\/)(?:claudeSdk|piSdk)\//;
@@ -81,7 +88,7 @@ test("harness SDK imports stay inside their harness folders", () => {
 
     // The pi SDK is only imported under piSdk/ (session lifecycle, options,
     // models, one-shot runs, and the AgentTool→pi adapter live there).
-    if (!rel.startsWith("piSdk/") && /from\s+"@earendil-works\//.test(source)) {
+    if (!rel.startsWith("piSdk/") && PI_SDK_IMPORT.test(source)) {
       piViolations.push(`${rel}: import the pi SDK only under piSdk/`);
     }
 
@@ -103,9 +110,8 @@ test("harness SDK imports stay inside their harness folders", () => {
       (rel.startsWith("mcp/") ||
         rel.startsWith("tools/") ||
         rel.startsWith("backgroundWork/")) &&
-      /from\s+"(?:@earendil-works\/|@anthropic-ai\/claude-agent-sdk)/.test(
-        source,
-      )
+      (PI_SDK_IMPORT.test(source) ||
+        /from\s+"@anthropic-ai\/claude-agent-sdk/.test(source))
     ) {
       toolLayerViolations.push(
         `${rel}: mcp/, tools/ and backgroundWork/ are harness-neutral — no pi or Claude SDK imports`,
@@ -296,7 +302,8 @@ function engineLoads(reach: { modules: string[]; packages: string[] }) {
     ...reach.modules.filter((rel) => rel === "piSdk/models.ts"),
     ...reach.packages.filter(
       (name) =>
-        name.startsWith("@earendil-works/") ||
+        (name.startsWith("@earendil-works/") &&
+          name !== "@earendil-works/pi-mcp") ||
         name === "@anthropic-ai/claude-agent-sdk",
     ),
   ];

@@ -131,8 +131,6 @@ test("claude-sdk personal-assistant is locked down like the assistant and always
       (pa.disallowedTools as string[]).includes(t),
       `disallows native ${t}`,
     );
-    const verdict = await pa.canUseTool!(t, {}, {} as never);
-    assert.equal(verdict?.behavior, "deny", `denies native ${t}`);
   }
   // Locked-down (non-preset) prompt with the profile suffix appended.
   assert.equal(

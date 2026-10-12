@@ -129,8 +129,9 @@ tools). The pi harness consumes AgentTools directly via
   `SessionArtifact`/`PendingPostReloadContinuation`/`BrowserRuntimeInfo`
   protocol types wire-compatible; coordinate `app/shared` + web when they must
   change.
-- Proxied packs spawn external MCP servers via the official SDK
-  `StdioClientTransport`; keep the client factory injectable for tests.
+- Proxied packs spawn external MCP servers via pi-mcp's `StdioTransport` with
+  `inheritEnv: false`, so the child sees only the external-process allowlist;
+  keep the client factory injectable for tests.
 
 ## Verification commands
 

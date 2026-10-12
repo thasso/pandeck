@@ -19,11 +19,11 @@ sizes only.
 | assistant | claude | 6,188 | 9,405 | 15,593 |
 | personal-assistant | pi | 5,438 | 10,108 | 15,546 |
 | personal-assistant | claude | 5,418 | 9,405 | 14,823 |
-| workshop | pi | 13,025 | 19,886 | 32,911 |
+| workshop | pi | 13,145 | 19,886 | 33,031 |
 | workshop | claude | 6,892 | 11,368 | 18,260 |
 | workflow-coordinator | pi | 3,386 | 2,232 | 5,618 |
 | workflow-coordinator | claude | 3,366 | 1,475 | 4,841 |
-| developer | pi | 13,459 | 19,399 | 32,858 |
+| developer | pi | 13,579 | 19,399 | 32,978 |
 | developer | claude | 7,326 | 10,872 | 18,198 |
 
 ## assistant — pi
@@ -126,8 +126,8 @@ sizes only.
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
-| `harness-base` | prompt | yes | 1,447 |
-| `harness-base:pi-docs` | prompt | no | 1,017 |
+| `harness-base` | prompt | yes | 1,567 |
+| `harness-base:pi-docs` | prompt | no | 1,137 |
 | `pi-tool-list:builtin` | prompt | yes | 283 |
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
 | `pi-guidelines:builtin` | prompt | yes | 609 |
@@ -206,8 +206,8 @@ sizes only.
 
 | Layer | Section | Counted | Chars |
 | --- | --- | --- | ---: |
-| `harness-base` | prompt | yes | 1,447 |
-| `harness-base:pi-docs` | prompt | no | 1,017 |
+| `harness-base` | prompt | yes | 1,567 |
+| `harness-base:pi-docs` | prompt | no | 1,137 |
 | `pi-tool-list:builtin` | prompt | yes | 283 |
 | `pi-tool-list:app-eager` | prompt | yes | 0 |
 | `pi-guidelines:builtin` | prompt | yes | 609 |

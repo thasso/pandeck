@@ -11,7 +11,7 @@
   (`directFileGrants.ts`) whose opaque id is its ONLY credential. Never token a
   grant URL, add `allow-same-origin`, trust a client-resolved path, or widen a
   grant past its source directory (`docs/served-files.md`).
-- `@earendil-works/*` is imported only under `piSdk/`,
+- `@earendil-works/*` (not `pi-mcp`) is imported only under `piSdk/`,
   `@anthropic-ai/claude-agent-sdk` only under `claudeSdk/`, and neither under
   `mcp/` or `tools/`. App-level prompts go through `runtimePrompt.ts`, not a raw
   engine call. `architecture.test.ts` guards both. App code reaches `piSdk/` and
