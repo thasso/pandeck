@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, Profiler, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionListItem } from "@assistant/shared";
 import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { stubMatchMedia } from "../test/matchMedia.ts";
@@ -61,7 +61,7 @@ describe("the host-drawn Sessions bar", () => {
     );
   }
 
-  function inbox(sessions: SessionListItem[]) {
+  function inbox(sessions: SessionListItem[], animateListChanges = false) {
     return (
       <SessionInbox
         barStore={store}
@@ -77,7 +77,7 @@ describe("the host-drawn Sessions bar", () => {
         workflowRuns={[]}
         workflowCards={{}}
         worktreeStatuses={{}}
-        animateListChanges={false}
+        animateListChanges={animateListChanges}
         density="tight"
         onSelect={() => {}}
         onSettle={() => {}}
@@ -95,9 +95,11 @@ describe("the host-drawn Sessions bar", () => {
   }
 
   /** Mount the host once, then hand it the inbox for each session list. */
-  function render(sessions: SessionListItem[]) {
+  function render(sessions: SessionListItem[], animateListChanges = false) {
     view ??= mount();
-    act(() => view!.root.render(<Host>{inbox(sessions)}</Host>));
+    act(() =>
+      view!.root.render(<Host>{inbox(sessions, animateListChanges)}</Host>),
+    );
   }
 
   const chip = (label: string) =>
@@ -142,5 +144,80 @@ describe("the host-drawn Sessions bar", () => {
     act(() => view!.root.render(<Host>{null}</Host>));
     expect(store.get()).toBeNull();
     expect(chip("Nothing is waiting for you")).toBeNull();
+  });
+
+  /**
+   * The bar appears only after the list's first reorder pass has measured, and
+   * on a phone that first pass runs on every return from a chat. The bar then
+   * pushes the whole list down without any card moving IN it, and the next
+   * repaint must not slide every card down from one bar height above.
+   */
+  describe("and the cards' reorder animation", () => {
+    const BAR_PX = 40;
+    const CARD_PX = 80;
+    const animate = vi.fn();
+
+    beforeEach(() => {
+      animate.mockReset();
+      animate.mockImplementation(() => ({
+        cancel() {},
+        addEventListener() {},
+      }));
+      // jsdom has no layout: a card stands at its index in the list, and the
+      // list stands below the bar once the bar is drawn.
+      const list = () =>
+        [...view!.container.children].find((child) =>
+          child.querySelector("[data-inbox-card]"),
+        );
+      vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockImplementation(
+        function (this: HTMLElement) {
+          return this.dataset.inboxCard ? (list() ?? null) : null;
+        },
+      );
+      vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockImplementation(
+        function (this: HTMLElement) {
+          if (this === list()) {
+            return view!.container.firstElementChild === this ? 0 : BAR_PX;
+          }
+          const cards = [
+            ...view!.container.querySelectorAll("[data-inbox-card]"),
+          ];
+          return Math.max(0, cards.indexOf(this)) * CARD_PX;
+        },
+      );
+      Object.defineProperty(HTMLElement.prototype, "animate", {
+        value: animate,
+        configurable: true,
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete (HTMLElement.prototype as Partial<HTMLElement>).animate;
+    });
+
+    const animated = () =>
+      animate.mock.contexts.map(
+        (node) => (node as HTMLElement).dataset.inboxCard,
+      );
+
+    it("does not move the cards when the bar pushes the list down", () => {
+      render([session("a"), session("b")], true);
+      expect(chip("Nothing is waiting for you")).not.toBeNull();
+
+      // A repaint that moves no card: one of them is retitled.
+      render([session("a", { title: "Renamed" }), session("b")], true);
+      expect(animated()).toEqual([]);
+
+      // A real reorder still travels: b now asks, and leads the list.
+      render(
+        [
+          session("a", { title: "Renamed" }),
+          session("b", { attention: "question" }),
+        ],
+        true,
+      );
+      expect(animated().sort()).toEqual(["a", "b"]);
+    });
   });
 });
