@@ -43,6 +43,20 @@ type AdapterEvent = import("./adapters/contract.ts").AdapterEvent;
 type AgentRunResult = import("./adapters/contract.ts").AgentRunResult;
 type PromptableAdapter = import("./adapters/contract.ts").PromptableAdapter;
 
+/** A fixed title: no automatic naming, so no helper model is ever asked. */
+const FIXED_TITLE = "Run progress test";
+
+// Fail closed: nothing in this file may reach a network. The fixture config and
+// temp data directory come from `src/test/setup.ts`; this checks they did.
+vi.stubGlobal("fetch", () =>
+  Promise.reject(new Error("network access is not allowed in this test")),
+);
+const { DATA_DIR } = await import("../config.ts");
+assert.ok(
+  DATA_DIR.startsWith(tmpdir()),
+  "the data directory is a disposable temp directory",
+);
+
 afterAll(() => {
   closeDb();
   rmSync(tmp, { recursive: true, force: true });
@@ -250,7 +264,10 @@ function claudeScript(): Scripted[] {
 test("Claude: progress reaches the wire at every transition, before the turn commits", async () => {
   const gated = gatedSeam(claudeScript());
   const runtime = new SessionRuntime(new SessionLogStore(true));
-  const session = new ClaudeSdkSession("cs", { seam: async () => gated.seam });
+  const session = new ClaudeSdkSession("cs", {
+    seam: async () => gated.seam,
+    title: FIXED_TITLE,
+  });
   runtime.createSession("cs", session.createRuntimeAdapter());
   const live = viewer(runtime, "cs");
   assert.equal(live.snapshot().progress, undefined, "idle: no progress");
@@ -431,6 +448,7 @@ test("Claude: an empty response's metadata is not output, and does not reset rea
     const runtime = new SessionRuntime(new SessionLogStore(true));
     const session = new ClaudeSdkSession("ce", {
       seam: async () => gated.seam,
+      title: FIXED_TITLE,
     });
     runtime.createSession("ce", session.createRuntimeAdapter());
     const live = viewer(runtime, "ce");
@@ -479,7 +497,9 @@ test("Claude: an empty response's metadata is not output, and does not reset rea
   }
 });
 
-test("Claude: a closing epoch's late messages credit nothing to the next turn", async () => {
+test("Claude: a closing epoch's late messages never reach the next turn", async () => {
+  const LATE_TEXT = "LATE-OLD-TEXT";
+  const LATE_MODEL = "claude-opus-4-6";
   const gated = gatedSeam(
     [
       stream({ type: "message_start", message: { id: "m1" } }),
@@ -491,19 +511,76 @@ test("Claude: a closing epoch's late messages credit nothing to the next turn", 
       assistantText("m1", "one"),
       result(),
       GATE, // 1: turn one is over; its process has not exited yet
-      apiRetry(9),
-      stream({ type: "message_start", message: { id: "m-late" } }),
+      { ...apiRetry(9), session_id: "s-old" } as ClaudeSdkMessage,
+      {
+        ...stream({ type: "message_start", message: { id: "m-late" } }),
+        session_id: "s-old",
+      } as ClaudeSdkMessage,
       stream({
         type: "content_block_start",
         index: 0,
-        content_block: { type: "tool_use", id: "toolu_late", name: "Bash" },
+        content_block: { type: "text", text: "" },
       }),
       stream({
         type: "content_block_delta",
         index: 0,
-        delta: { type: "input_json_delta", partial_json: '{"c":1}' },
+        delta: { type: "text_delta", text: LATE_TEXT },
+      }),
+      stream({
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "old-tool", name: "Bash" },
+      }),
+      stream({
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"command":' },
       }),
       ...emptyResponse("m-late"),
+      {
+        type: "assistant",
+        uuid: "a-late",
+        session_id: "s-old",
+        message: {
+          id: "m-late",
+          model: LATE_MODEL,
+          content: [
+            { type: "text", text: LATE_TEXT },
+            {
+              type: "tool_use",
+              id: "old-tool",
+              name: "Bash",
+              input: { command: "old-command" },
+            },
+          ],
+          usage: { input_tokens: 1 },
+        },
+      } as unknown as ClaudeSdkMessage,
+      {
+        type: "user",
+        uuid: "u-late",
+        session_id: "s-old",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "old-tool",
+              content: "old output",
+              is_error: false,
+            },
+          ],
+        },
+      } as unknown as ClaudeSdkMessage,
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        session_id: "s-old",
+        usage: { input_tokens: 1 },
+        total_cost_usd: 0,
+      } as unknown as ClaudeSdkMessage,
     ],
     [
       GATE, // 2: turn two's own query, before it says anything
@@ -520,7 +597,10 @@ test("Claude: a closing epoch's late messages credit nothing to the next turn", 
     ],
   );
   const runtime = new SessionRuntime(new SessionLogStore(true));
-  const session = new ClaudeSdkSession("cl", { seam: async () => gated.seam });
+  const session = new ClaudeSdkSession("cl", {
+    seam: async () => gated.seam,
+    title: FIXED_TITLE,
+  });
   runtime.createSession("cl", session.createRuntimeAdapter());
   await runtime.prompt("cl", "one");
   await gated.atGate();
@@ -532,11 +612,39 @@ test("Claude: a closing epoch's late messages credit nothing to the next turn", 
   gated.release(); // the old epoch delivers everything it still had
 
   await gated.atGate();
+  const leaked = (value: unknown) => {
+    const text = JSON.stringify(value);
+    return (
+      text.includes(LATE_TEXT) ||
+      text.includes("old-tool") ||
+      text.includes("old-command") ||
+      text.includes(LATE_MODEL) ||
+      text.includes("a-late")
+    );
+  };
+  const mid = runtime.get("cl")!.getSnapshot();
+  assert.equal(mid.runState, "running");
+  assert.equal(leaked(mid.streaming), false, "no old text or tool goes live");
+  assert.ok(
+    !mid.streaming.some((stream) => stream.kind === "tool"),
+    "no old tool runs in the new turn",
+  );
   assert.deepEqual(
     stateOf(runtime, "cl"),
     fresh,
     "no retry, output, tool or activity from the old epoch",
   );
+  // Nor did the old epoch move what turn two will be anchored to.
+  const native = session as unknown as {
+    pendingNativeMessageId?: string;
+    providerSessionId?: string;
+  };
+  assert.notEqual(native.pendingNativeMessageId, "a-late");
+  assert.notEqual(native.providerSessionId, "s-old");
+  // A viewer joining now sees the same clean turn.
+  const joiner = viewer(runtime, "cl");
+  assert.equal(leaked(joiner.snapshot().streaming), false);
+  joiner.transport.detach();
   gated.release();
 
   await gated.atGate();
@@ -544,8 +652,38 @@ test("Claude: a closing epoch's late messages credit nothing to the next turn", 
   assert.equal(runProgressPhase(own), "receiving", "turn two's output counts");
   assert.equal(own.retry, undefined);
   assert.deepEqual(own.runningTools, []);
+  const live = runtime.get("cl")!.getSnapshot().streaming;
+  assert.ok(JSON.stringify(live).includes("two"), "turn two streams its own");
+  assert.equal(leaked(live), false);
   gated.release();
+
+  // The old epoch's error result did not fail turn two.
   await second;
+  const entries = runtime.get("cl")!.getSnapshot().entries;
+  assert.equal(leaked(entries), false, "nothing old became durable");
+  const assistants = entries.filter(
+    (entry) => entry.type === "message" && entry.role === "assistant",
+  );
+  const turnTwo = assistants.at(-1)!;
+  assert.ok(turnTwo.type === "message");
+  assert.deepEqual(
+    turnTwo.content,
+    [{ type: "text", text: "two" }],
+    "turn two's durable content is its own",
+  );
+  assert.equal(
+    (turnTwo as { error?: string }).error,
+    undefined,
+    "and carries no old failure",
+  );
+  assert.ok(
+    !entries.some(
+      (entry) =>
+        entry.type === "message" &&
+        entry.role === "toolResult" &&
+        entry.toolCallId === "old-tool",
+    ),
+  );
 });
 
 /* ------------------------- runtime, scripted adapter ---------------------- */

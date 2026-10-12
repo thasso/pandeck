@@ -1862,11 +1862,18 @@ export class ClaudeSdkSession implements LiveSession {
           const admitted = await this.beginProviderInitiatedTurn(epochKey);
           if (!admitted) continue;
         }
-        // Only the epoch that owns the open turn speaks for its run: anything
-        // else still reaches the transcript, but credits no live progress.
+        // Only the epoch that owns the open turn may write to it. A turn's
+        // content arriving from any other epoch while a turn is open — a
+        // closing process still delivering after the next turn started —
+        // belongs to a turn that already settled and was committed then, so it
+        // is DROPPED before it can touch the open turn's live message, tools,
+        // native anchor, model or error. Never re-homed into the open turn.
+        // Everything else from that epoch (background task lifecycle,
+        // compaction, its process closing below) is still handled, unattributed
+        // to any run.
         if (this.activeTurnEpochKey === epochKey)
           this.handleSdkMessage(message);
-        else
+        else if (!(this.running && isTurnTranscriptMessage(message)))
           this.adapterEvents.unattributed(() => this.handleSdkMessage(message));
         if (message.type !== "result") continue;
         await this.refreshToolLoadState(query);
@@ -4014,6 +4021,22 @@ function terminalStateFromProviderStatus(
     default:
       return undefined;
   }
+}
+
+/**
+ * A message that writes a turn's transcript or outcome: its stream, its
+ * assistant and tool-result messages, its result, and a retry of its request.
+ */
+function isTurnTranscriptMessage(
+  message: import("./sdkSeam.ts").ClaudeSdkMessage,
+): boolean {
+  return (
+    message.type === "stream_event" ||
+    message.type === "assistant" ||
+    message.type === "user" ||
+    message.type === "result" ||
+    (message.type === "system" && message.subtype === "api_retry")
+  );
 }
 
 /**

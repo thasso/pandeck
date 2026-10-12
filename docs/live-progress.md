@@ -88,9 +88,18 @@ tool in the current one:
   host-command result). A retry or a follow-up inside the turn continues it.
   Because both harnesses emit in their provider's own order, what a harness
   emits after its turn closed carries no run, whenever it reaches the runtime.
-- Claude also checks where a message came from: one from a query epoch that does
-  not own the open turn (a closing process still delivering) is handled
-  `unattributed` — its transcript events flow, and they carry no run.
+- Claude also checks where a message came from. While a turn is open, a turn
+  message — stream event, assistant message, tool result, result, `api_retry` —
+  from a query epoch that does not own that turn is DROPPED before it touches
+  anything: a closing process still delivering after the next turn started
+  writes nothing into that turn's live message or tools, its durable content,
+  its native anchor, model or error, and credits no progress. Such a message
+  belongs to a turn that already settled and was committed then; it is not
+  re-homed into the open turn or transcribed afterwards. The rest of that
+  epoch's traffic (background-task lifecycle, compaction, the process closing)
+  is still handled, `unattributed` to any run. With no turn open, a provider
+  message opens a provider-initiated turn on its own epoch as before, and a
+  turn's own follow-ups and retries come from the epoch that owns it.
 - The runtime binds its running state to the run its first message announces and
   credits nothing else: an event of another run, or of none, moves no progress.
   A run an earlier running state was bound to is never rebound, and a new
