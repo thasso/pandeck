@@ -80,7 +80,7 @@ export function AppCard({
         {icon}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {status ? (
-          <span className="flex max-w-[60%] min-w-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap [&>*+*]:before:mr-1 [&>*+*]:before:content-['·']">
+          <span className="app-card-status flex max-w-3/5 min-w-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap">
             {status}
           </span>
         ) : null}

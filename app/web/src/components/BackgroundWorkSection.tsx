@@ -348,7 +348,7 @@ function BackgroundWorkLine({
             // Panel density: a framed block at the detail list's 12px size,
             // not the transcript's 14px fences. `!` because `.shiki`'s size and
             // padding are unlayered in index.css and beat any layered utility.
-            className="[&_.shiki]:border [&_.shiki]:px-2! [&_.shiki]:py-1.5! [&_.shiki]:text-xs! [&_.shiki]:leading-4!"
+            className="[&_.shiki]:border [&_.shiki]:px-2! [&_.shiki]:py-1.5! [&_.shiki]:text-xs!"
           />
           {item.commandTruncated ? (
             <p className="mt-0.5 text-xs text-muted-foreground">

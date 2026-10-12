@@ -49,13 +49,13 @@ export function ComposerLedge({
     edge === "top"
       ? // Stepped aside while the phone keyboard is up: nothing on the shelf
         // is needed mid-sentence, and that height is the transcript's.
-        `rounded-t-xl border-b-0 ${keepWithKeyboard ? "" : "in-data-[keyboard-open]:hidden"} ${joined ? "-mb-4 pb-4" : ""}`
+        `rounded-t-xl border-b-0 ${keepWithKeyboard ? "" : "keyboard-open:hidden"} ${joined ? "-mb-4 pb-4" : ""}`
       : `rounded-b-xl border-t-0 ${joined ? "-mt-4 pt-4" : ""}`;
   return (
     <div
       data-composer-ledge
       // Clips the strips' edge-to-edge headers to the rounded top. The inset
-      // IS the composer's corner radius (20px, `rounded-[1.25rem]`): the strip
+      // IS the composer's corner radius (20px, `rounded-composer`): the strip
       // starts exactly where the curve ends. Less and the tucked-in bottom
       // shows through the curve; change the two together.
       className={`relative z-1 mx-5 divide-y overflow-hidden border bg-card ${edgeClass}`}

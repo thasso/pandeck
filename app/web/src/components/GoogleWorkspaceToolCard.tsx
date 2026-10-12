@@ -1083,11 +1083,7 @@ function GmailMessageCard({
 }) {
   if (!message) return null;
   return (
-    <ChatWideCard
-      maxWidth={900}
-      icon={<Mail />}
-      title="Email"
-    >
+    <ChatWideCard maxWidth={900} icon={<Mail />} title="Email">
       <div className="p-3">
         <GmailMessageArticle message={message} />
       </div>

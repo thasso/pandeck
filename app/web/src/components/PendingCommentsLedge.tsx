@@ -262,7 +262,7 @@ function CodeExcerpt({
   const after = code.after.split("\n").slice(0, CODE_CONTEXT_LINES + 1);
   const tail = after.shift() ?? "";
   return (
-    <pre className="overflow-x-auto rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs leading-relaxed whitespace-pre">
+    <pre className="overflow-x-auto rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs whitespace-pre">
       {before.length > 0 ? (
         <span className="text-muted-foreground">
           {before.join("\n")}

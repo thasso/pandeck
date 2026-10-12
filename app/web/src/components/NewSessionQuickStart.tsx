@@ -367,8 +367,9 @@ export function NewSessionQuickStart({
                     : `Create a worktree in ${projectName(selectedProjectId)} when you send`
                 }
                 onClick={() => onSelectNewWorktree(!newWorktreeStaged)}
-                // Dashed: the one card that makes something rather than picks it.
-                className={`min-w-40 border-dashed ${QUICK_CARD}`}
+                // The one card that makes something rather than picks it, said
+                // by its + glyph: a dashed edge means an empty state here.
+                className={`min-w-40 ${QUICK_CARD}`}
               >
                 <span className="flex w-full min-w-0 items-center gap-1.5">
                   <Plus

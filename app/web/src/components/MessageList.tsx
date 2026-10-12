@@ -2045,7 +2045,11 @@ export function MessageList({
             the dock and keeps a pinned reader at the bottom. */}
         <div
           aria-hidden
-          className="mt-0! h-[calc(var(--chat-dock-height,0px)+var(--app-keyboard-inset-bottom,0px))] shrink-0"
+          className="mt-0! shrink-0"
+          style={{
+            height:
+              "calc(var(--chat-dock-height, 0px) + var(--app-keyboard-inset-bottom, 0px))",
+          }}
         />
       </div>
     </div>

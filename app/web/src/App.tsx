@@ -659,7 +659,7 @@ function useMobileKeyboardInset() {
     const mobileMedia = window.matchMedia("(max-width: 767px)");
 
     // `data-keyboard-open` is the same estimate as a flag, for chrome that
-    // should step aside while the user types (`in-data-[keyboard-open]:`).
+    // should step aside while the user types (the `keyboard-open:` variant).
     const reset = () => {
       root.style.removeProperty("--app-keyboard-inset-bottom");
       root.style.removeProperty("--app-composer-bottom-padding");
@@ -5482,10 +5482,8 @@ function AppContent() {
   // anchor and comment mode focuses its own field: focusing it here first would
   // hand the caret to the transcript's `removeAllRanges` and lose it.
   const commentOnSelection = useCallback(() => {
-    if (mobileLayout) {
-      setInspectorOpen(false);
-      openComposerRef.current?.();
-    }
+    if (mobileLayout) setInspectorOpen(false);
+    if (mobileLayout) openComposerRef.current?.();
     chatCommentSelection?.onComment();
   }, [chatCommentSelection, mobileLayout, setInspectorOpen]);
 

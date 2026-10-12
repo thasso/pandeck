@@ -4,6 +4,13 @@
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
+/* While the phone keyboard is up (`App.tsx` sets `data-keyboard-open` on the
+   root): chrome that should step aside while the user types. */
+@custom-variant keyboard-open (:where([data-keyboard-open]) &);
+/* An InputGroup whose own control is focused or disabled, for a host that
+   restyles those states (the composer card). */
+@custom-variant field-focus-visible (&:has([data-slot=input-group-control]:focus-visible));
+@custom-variant field-disabled (&:has([data-slot=input-group-control]:disabled));
 
 /* App status colors (shadcn has no success/warning token), themed via :root / .dark. */
 @theme {
@@ -11,6 +18,11 @@
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+
+  /* The composer card's corners: deliberately rounder than the theme radius
+     and independent of it — the composer is the one object on the page meant
+     to read as such (`Composer.tsx`, `ComposerLedge.tsx`). */
+  --radius-composer: 1.25rem;
 
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -277,6 +289,22 @@ body {
 }
 .new-session-quick-start [role="listbox"]::-webkit-scrollbar {
   display: none;
+}
+
+@layer components {
+  /* `PropertyList`: one label column for every list, so labels and values
+     line up the same wherever a list appears; narrower at the `sm` density. */
+  .property-list {
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+  }
+  .property-list-sm {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+  }
+  /* `AppCard`'s header status: its signals separated by a middle dot. */
+  .app-card-status > * + *::before {
+    content: "·";
+    margin-right: 0.25rem;
+  }
 }
 
 /* Right-panel tabs still support horizontal wheel/trackpad scrolling, without

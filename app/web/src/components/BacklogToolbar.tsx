@@ -366,7 +366,7 @@ function BacklogFilterPopover({
       >
         <SlidersHorizontal />
         {active ? (
-          <span className="min-w-4 rounded-full bg-primary px-1 text-xs leading-4 font-medium text-primary-foreground tabular-nums">
+          <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
             {active}
           </span>
         ) : null}

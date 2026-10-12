@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   ChevronDown,
@@ -19,6 +19,7 @@ import {
   resolveInternalDocumentTarget,
 } from "../lib/documentTargets.ts";
 import { dataOf, errorOf, type LoadState } from "../lib/loadState.ts";
+import { useFetchState } from "../hooks/useFetchState.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
 import { servedFileKind } from "../lib/servedFiles.ts";
 
@@ -192,36 +193,29 @@ export function StagedDocumentLedge({
   );
 }
 
+/** A staged document's text, for the strip's unfolded body. */
+async function fetchDocumentText(
+  url: string,
+  signal: AbortSignal,
+): Promise<string> {
+  try {
+    const response = await fetch(url, { signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } catch (error) {
+    throw new Error(
+      `Could not load the document: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 function StagedDocumentBody({ href, title }: { href: string; title: string }) {
   const target = resolveInternalDocumentTarget(href);
   const kind = target ? servedFileKind(target.path) : null;
   const textual = kind === "markdown" || kind === "text";
   const rawUrl =
     target && textual ? artifactHttpUrl(documentTargetRawUrl(target)) : null;
-  const [text, setText] = useState<LoadState<string>>({ status: "loading" });
-  useEffect(() => {
-    if (!rawUrl) return;
-    let cancelled = false;
-    setText({ status: "loading" });
-    fetch(rawUrl)
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.text();
-      })
-      .then((body) => {
-        if (!cancelled) setText({ status: "ready", data: body });
-      })
-      .catch((error: unknown) => {
-        if (!cancelled)
-          setText({
-            status: "error",
-            error: `Could not load the document: ${error instanceof Error ? error.message : String(error)}`,
-          });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [rawUrl]);
+  const { state: text } = useFetchState(rawUrl, fetchDocumentText);
 
   if (!target) return <p className="text-muted-foreground">{title}</p>;
   if (!textual) return <InlineDocumentEmbed target={target} label={title} />;

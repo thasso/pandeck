@@ -64,7 +64,8 @@ export function FloatingComposerDock({
             whenever no keyboard is open — always, on desktop. */}
         <div
           aria-hidden
-          className="pointer-events-none! absolute inset-x-0 top-full -z-10 h-[var(--app-keyboard-inset-bottom,0px)] bg-background"
+          className="pointer-events-none! absolute inset-x-0 top-full -z-10 bg-background"
+          style={{ height: "var(--app-keyboard-inset-bottom, 0px)" }}
         />
         {dock}
       </div>

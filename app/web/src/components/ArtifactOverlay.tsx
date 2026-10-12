@@ -37,7 +37,14 @@ export function ArtifactOverlay({
       <DialogContent
         showCloseButton={false}
         aria-label={label}
-        className="inset-0 z-100 flex h-[var(--app-viewport-height)] w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none p-0 pt-[var(--app-safe-area-top)] pb-[var(--app-safe-area-bottom)] sm:max-w-none"
+        className="inset-0 z-100 flex w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none p-0 sm:max-w-none"
+        // The visual viewport's height, clear of the notch and the home
+        // indicator: runtime values the app keeps on the root.
+        style={{
+          height: "var(--app-viewport-height)",
+          paddingTop: "var(--app-safe-area-top)",
+          paddingBottom: "var(--app-safe-area-bottom)",
+        }}
         onKeyDown={(event) => {
           event.stopPropagation();
           if (event.key !== "Escape") return;

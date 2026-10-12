@@ -17,6 +17,15 @@ import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { searchTickets } from "../lib/ticketApi.ts";
 import { IconButton } from "./common/IconButton.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
+import {
+  beginLoad,
+  dataOf,
+  errorOf,
+  failed,
+  loading,
+  ready,
+  type LoadState,
+} from "../lib/loadState.ts";
 import { Button } from "./ui/button.tsx";
 import {
   Command,
@@ -127,11 +136,6 @@ export function TaskTicketProperty({
   );
 }
 
-type SearchState =
-  | { status: "loading"; data?: TicketSearchResponse }
-  | { status: "ready"; data: TicketSearchResponse }
-  | { status: "error"; error: string };
-
 /** The popover's body: mounted per opening, so each one starts fresh. */
 function TicketSearch({
   current,
@@ -145,16 +149,17 @@ function TicketSearch({
   onPick: (ticket: TaskTicket | null) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [state, setState] = useState<SearchState>({ status: "loading" });
+  // A new query keeps the last results on screen while it runs (`refreshing`);
+  // a failure drops them, since they answered another query.
+  const [state, setState] = useState<LoadState<TicketSearchResponse>>(
+    loading<TicketSearchResponse>,
+  );
   // Strings, not the arrays: their identity changes on every render.
   const jiraScope = jiraProjects.join(",");
   const repoScope = repos.join(",");
   useEffect(() => {
     const controller = new AbortController();
-    setState((prev) => ({
-      status: "loading",
-      ...("data" in prev && prev.data ? { data: prev.data } : {}),
-    }));
+    setState(beginLoad);
     const timer = window.setTimeout(() => {
       searchTickets(
         {
@@ -164,13 +169,12 @@ function TicketSearch({
         },
         controller.signal,
       )
-        .then((data) => setState({ status: "ready", data }))
+        .then((data) => setState(ready(data)))
         .catch((error: unknown) => {
           if (error instanceof Error && error.name === "AbortError") return;
-          setState({
-            status: "error",
-            error: error instanceof Error ? error.message : String(error),
-          });
+          setState(
+            failed(error instanceof Error ? error.message : String(error)),
+          );
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -179,7 +183,8 @@ function TicketSearch({
     };
   }, [query, jiraScope, repoScope]);
 
-  const data = "data" in state ? state.data : undefined;
+  const data = dataOf(state);
+  const error = errorOf(state);
   const results = data?.results ?? [];
   const jira = results.filter((result) => result.source === "jira");
   const github = results.filter((result) => result.source === "github");
@@ -206,7 +211,7 @@ function TicketSearch({
         placeholder="Search Jira and GitHub, or paste a link…"
       />
       <CommandList>
-        {state.status === "loading" && !data ? (
+        {state.status === "loading" ? (
           <div
             role="status"
             className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground"
@@ -215,9 +220,9 @@ function TicketSearch({
             Searching…
           </div>
         ) : null}
-        {state.status === "error" ? (
+        {error ? (
           <div className="p-2">
-            <ErrorNote message={state.error} />
+            <ErrorNote message={error} />
           </div>
         ) : null}
         {data && results.length === 0 && state.status === "ready" ? (

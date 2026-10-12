@@ -282,7 +282,7 @@ function MemoryNote({
           )}
         </span>
         <span
-          className={`min-w-0 flex-1 text-sm leading-5 text-foreground ${open ? "wrap-anywhere" : "line-clamp-2"}`}
+          className={`min-w-0 flex-1 text-sm text-foreground ${open ? "wrap-anywhere" : "line-clamp-2"}`}
         >
           {/* The kind as the note's first glyph, inline with its words. */}
           <kind.Icon

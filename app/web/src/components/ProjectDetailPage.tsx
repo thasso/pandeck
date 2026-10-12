@@ -515,7 +515,7 @@ function ProjectDetail({
             <span className="flex h-5 shrink-0 items-center">
               <CornerLeftUp className="size-3.5" aria-hidden />
             </span>
-            <span className="shrink-0 leading-5">Part of</span>
+            <span className="shrink-0">Part of</span>
             <Button
               variant="link"
               size="xs"
@@ -530,7 +530,7 @@ function ProjectDetail({
                   aria-hidden
                 />
               </span>
-              <span className="min-w-0 leading-5 wrap-anywhere">
+              <span className="min-w-0 wrap-anywhere">
                 <span className="font-mono text-xs">{parent.key}</span>
                 <span className="text-muted-foreground"> · {parent.name}</span>
               </span>
@@ -882,7 +882,7 @@ function RepoRow({
         <Button
           variant="ghost"
           size="sm"
-          className={`${PROPERTY_TRIGGER} h-auto min-h-7 justify-start py-1 text-left leading-5 whitespace-normal`}
+          className={`${PROPERTY_TRIGGER} h-auto min-h-7 justify-start py-1 text-left whitespace-normal`}
           onClick={onClick}
           title={`Edit ${label.toLowerCase()}`}
         >

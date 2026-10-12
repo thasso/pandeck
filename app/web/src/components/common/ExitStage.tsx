@@ -31,9 +31,11 @@ export function ExitStage({
       inert={leaving}
       className={`grid ${
         leaving
-          ? "grid-rows-[0fr] motion-safe:transition-all motion-safe:delay-200 motion-safe:duration-150 motion-safe:ease-out"
-          : "grid-rows-[1fr]"
+          ? "motion-safe:transition-all motion-safe:delay-200 motion-safe:duration-150 motion-safe:ease-out"
+          : ""
       }`}
+      // The one track collapses from its content's height to none.
+      style={{ gridTemplateRows: leaving ? "0fr" : "1fr" }}
     >
       <div
         className={`min-h-0 overflow-hidden ${

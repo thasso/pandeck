@@ -1314,7 +1314,7 @@ function TaskTitleBlock({
           <span className="flex h-5 shrink-0 items-center">
             <CornerLeftUp className="size-3.5" aria-hidden />
           </span>
-          <span className="shrink-0 leading-5">Part of</span>
+          <span className="shrink-0">Part of</span>
           <Button
             variant="link"
             size="xs"
@@ -1324,9 +1324,7 @@ function TaskTitleBlock({
             <span className="flex h-5 shrink-0 items-center">
               <TaskStatusIcon status={parentTask.status} size={14} />
             </span>
-            <span className="min-w-0 leading-5 wrap-anywhere">
-              {parentTask.title}
-            </span>
+            <span className="min-w-0 wrap-anywhere">{parentTask.title}</span>
           </Button>
         </div>
       ) : null}

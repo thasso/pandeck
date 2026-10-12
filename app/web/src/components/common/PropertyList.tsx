@@ -40,7 +40,7 @@ export function PropertyList({
   return (
     <PropertyListSizeContext.Provider value={size}>
       <div
-        className={`grid ${size === "sm" ? "grid-cols-[4.5rem_minmax(0,1fr)] text-xs" : "grid-cols-[5.5rem_minmax(0,1fr)] gap-y-0.5 px-1"} ${align === "start" ? "items-start" : "items-center"} ${className}`}
+        className={`grid ${size === "sm" ? "property-list-sm text-xs" : "property-list gap-y-0.5 px-1"} ${align === "start" ? "items-start" : "items-center"} ${className}`}
       >
         {children}
       </div>
@@ -81,7 +81,9 @@ export function PropertyText({
   const size = useContext(PropertyListSizeContext);
   return (
     <span
-      className={`min-w-0 leading-5 ${size === "sm" ? "text-xs" : "px-2 py-1 text-sm"} ${className}`}
+      // `sm`: 12px text centred on the list's 20px line (`min-h-5` with
+      // `py-0.5`), the label's height, without overriding its line height.
+      className={`min-w-0 ${size === "sm" ? "min-h-5 py-0.5 text-xs" : "px-2 py-1 text-sm"} ${className}`}
       title={title}
       dir={dir}
     >

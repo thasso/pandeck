@@ -42,13 +42,16 @@ export function EdgeSheet({
         // every corner — not a drawer glued to the title bar.
         className={
           top
-            ? "gap-0 overflow-hidden rounded-xl border data-[side=top]:inset-x-2"
+            ? "gap-0 overflow-hidden rounded-xl border"
             : `max-h-[85vh] gap-0 rounded-t-xl ${BOTTOM_SHEET_BOTTOM_PADDING_CLASS}`
         }
         style={
           top
             ? {
                 top: offsetTop + 8,
+                // Inset from both edges (the side's own inset-x-0 yields).
+                left: 8,
+                right: 8,
                 maxHeight: `calc(85vh - ${offsetTop + 8}px)`,
               }
             : undefined
