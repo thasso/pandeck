@@ -50,9 +50,11 @@ import {
   taskIdsForWorktree,
 } from "./db/worktreeStore.ts";
 import {
+  ciBesideReviewGates,
   hostingProviderForRepo,
   repositoryCapabilitiesFor,
   type GitHostingProvider,
+  type ProviderCiStatus,
 } from "./gitHosting.ts";
 import {
   pullRequestCardLinksByPullRequest,
@@ -142,7 +144,7 @@ async function cachedRead<T>(
 }
 
 const detailReads = readStore<PullRequestDetail>();
-const ciReads = readStore<WorktreeCiStatus | null>();
+const ciReads = readStore<ProviderCiStatus | null>();
 const reviewReads = readStore<WorktreePullRequestReview>();
 
 /** Drop every cached read; the seam a test resets between cases. */
@@ -219,13 +221,15 @@ async function annotate(
   // The open list may already have read all of it in the same request
   // (GitHub's GraphQL list): no per-pull-request round trip at all.
   const listed = provider.openPullRequestAnnotation?.(number);
-  if (listed)
+  if (listed) {
+    const ci = ciBesideReviewGates(listed.ci, reusedReview ?? listed.review);
     return {
       mergeable: listed.detail.mergeable,
       ...(listed.detail.headSha ? { headSha: listed.detail.headSha } : {}),
-      ...(listed.ci ? { ci: listed.ci } : {}),
+      ...(ci ? { ci } : {}),
       ...(reusedReview ? {} : { review: listed.review }),
     };
+  }
   const annotation: PullRequestAnnotation = {};
   const detail = await cachedRead(detailReads, key, async () => {
     const value = await provider.pullRequestDetail(number);
@@ -239,12 +243,11 @@ async function annotate(
     if (detail.headSha) annotation.headSha = detail.headSha;
   }
   const headSha = annotation.headSha;
-  if (headSha) {
-    const ci = await cachedRead(ciReads, `${key}@${headSha}`, () =>
-      provider.ciStatus(headSha),
-    ).catch(() => null);
-    if (ci) annotation.ci = ci;
-  }
+  const rawCi = headSha
+    ? await cachedRead(ciReads, `${key}@${headSha}`, () =>
+        provider.ciStatus(headSha),
+      ).catch(() => null)
+    : null;
   if (!reusedReview) {
     const review = await cachedRead(reviewReads, key, async () => {
       const value = await provider.pullRequestReview(number);
@@ -254,6 +257,8 @@ async function annotate(
     }).catch(() => undefined);
     if (review) annotation.review = review;
   }
+  const ci = ciBesideReviewGates(rawCi, reusedReview ?? annotation.review);
+  if (ci) annotation.ci = ci;
   return annotation;
 }
 

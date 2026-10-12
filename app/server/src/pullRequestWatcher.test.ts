@@ -614,6 +614,32 @@ test("a failing CI conclusion also notifies", async () => {
   assert.match(notifications[0]!.title, /CI failed/);
 });
 
+// A review bot's failing check is its "changes requested" review: the card
+// records the review and the CI the build actually reached.
+test("a review bot's failing check lands on the card as review", async () => {
+  const card = openCard();
+  setPullRequestWatcherNotifierForTests(async () => {});
+  setPullRequestWatcherProviderResolverForTests(async () =>
+    fakeProvider({
+      pullRequestDetail: async () => detail(),
+      ciStatus: async () => ({
+        state: "failure",
+        total: 2,
+        failedApps: ["cl-percy"],
+        besideFailures: { state: "success" },
+      }),
+      pullRequestReview: async () => ({
+        changesRequested: true,
+        changesRequestedByApps: ["cl-percy"],
+      }),
+    }),
+  );
+  await sweepPullRequestWatcherForTests();
+  const stored = pullRequestCardById(card.id);
+  assert.deepEqual(stored?.ci, { state: "success", total: 2 });
+  assert.equal(stored?.review?.changesRequested, true);
+});
+
 /* --------------------------- boot restore ---------------------------- */
 
 test("reconcile on boot schedules every still-open card for an immediate poll", async () => {

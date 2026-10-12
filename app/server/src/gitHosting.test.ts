@@ -15,6 +15,7 @@ import type {
 } from "@assistant/shared";
 import {
   changesRequestedFromReviews,
+  ciBesideReviewGates,
   forgejoPullRequestTitle,
   forgejoReadyPullRequestTitle,
   forgejoProvider,
@@ -375,6 +376,235 @@ test("an observed GitHub failure stays red when the bounded result is truncated"
     async () => {
       assert.equal((await provider.refChecks("abc")).state, "failure");
       assert.equal((await provider.ciStatus("abc"))?.state, "failure");
+    },
+  );
+});
+
+/* ------------------------------ review gates ------------------------------ */
+
+// A review bot such as Percival fails its own check while its findings are
+// open. With its "changes requested" review standing, that is a review, and
+// reading it as CI painted the pull request red instead of "Review".
+const percivalReview = {
+  changesRequested: true,
+  changesRequestedByApps: ["cl-percy"],
+};
+
+function gatedCi(failedApps: Array<string | null>) {
+  return {
+    state: "failure" as const,
+    url: "https://github.com/acme/repo/runs/1",
+    total: 3,
+    failedApps,
+    besideFailures: {
+      state: "success" as const,
+      url: "https://github.com/acme/repo/runs/2",
+    },
+  };
+}
+
+test("a failing check from an app requesting changes is review, not CI", () => {
+  assert.deepEqual(ciBesideReviewGates(gatedCi(["cl-percy"]), percivalReview), {
+    state: "success",
+    url: "https://github.com/acme/repo/runs/2",
+    total: 3,
+  });
+});
+
+test("any other failure keeps the whole state red", () => {
+  // A failing build beside the review check, a legacy status, and a failing
+  // check from an app without a standing objection are all CI.
+  for (const failedApps of [
+    ["cl-percy", "github-actions"],
+    ["cl-percy", null],
+    ["other-bot"],
+  ])
+    assert.deepEqual(ciBesideReviewGates(gatedCi(failedApps), percivalReview), {
+      state: "failure",
+      url: "https://github.com/acme/repo/runs/1",
+      total: 3,
+    });
+});
+
+test("without a standing change request the app's failure stays CI", () => {
+  for (const review of [
+    null,
+    undefined,
+    { changesRequested: false, changesRequestedByApps: ["cl-percy"] },
+    // A person objects; the app's failing check is still unexplained.
+    { changesRequested: true },
+  ])
+    assert.equal(
+      ciBesideReviewGates(gatedCi(["cl-percy"]), review)?.state,
+      "failure",
+    );
+});
+
+test("a gated failure beside a running check is pending", () => {
+  assert.equal(
+    ciBesideReviewGates(
+      {
+        ...gatedCi(["cl-percy"]),
+        besideFailures: { state: "pending" },
+      },
+      percivalReview,
+    )?.state,
+    "pending",
+  );
+});
+
+test("GitHub reads the app behind failed checks and change requests", async () => {
+  const provider = githubProvider(
+    { host: "github.com", owner: "acme", repo: "repo" },
+    { token: "t", apiBaseUrl: "https://api.github.com" },
+  );
+  await withRecordedFetch(
+    (request) =>
+      request.path.endsWith("/check-runs")
+        ? {
+            total_count: 2,
+            check_runs: [
+              {
+                name: "Percival",
+                status: "completed",
+                conclusion: "failure",
+                html_url: "https://github.com/acme/repo/runs/1",
+                app: { name: "cl-percy", slug: "cl-percy" },
+              },
+              {
+                name: "test",
+                status: "completed",
+                conclusion: "success",
+                html_url: "https://github.com/acme/repo/runs/2",
+                app: { name: "GitHub Actions", slug: "github-actions" },
+              },
+            ],
+          }
+        : request.path.endsWith("/status")
+          ? { total_count: 0, statuses: [] }
+          : [
+              {
+                state: "CHANGES_REQUESTED",
+                user: { login: "cl-percy[bot]" },
+                submitted_at: "2026-10-12T18:05:23Z",
+              },
+              {
+                state: "CHANGES_REQUESTED",
+                user: { login: "ana" },
+                submitted_at: "2026-10-12T18:06:00Z",
+              },
+            ],
+    async () => {
+      const review = await provider.pullRequestReview(19);
+      assert.deepEqual(review, {
+        changesRequested: true,
+        changesRequestedByApps: ["cl-percy"],
+      });
+      assert.deepEqual(
+        ciBesideReviewGates(await provider.ciStatus("abc"), review),
+        {
+          state: "success",
+          url: "https://github.com/acme/repo/runs/2",
+          total: 2,
+        },
+      );
+    },
+  );
+});
+
+/** Answers review pages from `pages`, linking each to the next like GitHub. */
+async function withPagedReviews(
+  pages: (page: number) => unknown[],
+  lastPage: number,
+  run: (provider: GitHostingProvider) => Promise<void>,
+): Promise<number[]> {
+  const provider = githubProvider(
+    { host: "github.com", owner: "acme", repo: "repo" },
+    { token: "t", apiBaseUrl: "https://api.github.com" },
+  );
+  const requested: number[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = new URL(String(input));
+    const page = Number(url.searchParams.get("page") ?? "1");
+    requested.push(page);
+    const next = new URL(url);
+    next.searchParams.set("page", String(page + 1));
+    return new Response(JSON.stringify(pages(page)), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        ...(page < lastPage ? { link: `<${next}>; rel="next"` } : {}),
+      },
+    });
+  }) as typeof fetch;
+  try {
+    await run(provider);
+  } finally {
+    globalThis.fetch = original;
+  }
+  return requested;
+}
+
+// Reviews come oldest first: an app's objection on page 1 may have been
+// withdrawn on page 2, and only the whole history can say it still stands.
+test("an app's later approval on another page withdraws its objection", async () => {
+  const requested = await withPagedReviews(
+    (page) =>
+      page === 1
+        ? [
+            {
+              state: "CHANGES_REQUESTED",
+              user: { login: "cl-percy[bot]" },
+              submitted_at: "2026-10-12T18:05:23Z",
+            },
+            {
+              state: "CHANGES_REQUESTED",
+              user: { login: "ana" },
+              submitted_at: "2026-10-12T18:06:00Z",
+            },
+          ]
+        : [
+            {
+              state: "APPROVED",
+              user: { login: "cl-percy[bot]" },
+              submitted_at: "2026-10-12T18:13:22Z",
+            },
+          ],
+    2,
+    async (provider) => {
+      const review = await provider.pullRequestReview(19);
+      assert.deepEqual(review, { changesRequested: true });
+      assert.equal(
+        ciBesideReviewGates(gatedCi(["cl-percy"]), review)?.state,
+        "failure",
+      );
+    },
+  );
+  assert.deepEqual(requested, [1, 2]);
+});
+
+test("a review history past the page cap is unknown", async () => {
+  await withPagedReviews(
+    () => [{ state: "CHANGES_REQUESTED", user: { login: "cl-percy[bot]" } }],
+    Number.POSITIVE_INFINITY,
+    async (provider) => {
+      assert.equal(await provider.pullRequestReview(19), null);
+    },
+  );
+});
+
+test("Forgejo reviews name no apps", async () => {
+  const provider = forgejoProvider(
+    { host: "git.example.com", owner: "acme", repo: "repo" },
+    { baseUrl: "https://git.example.com", token: "t" },
+  );
+  await withRecordedFetch(
+    () => [{ state: "REQUEST_CHANGES", user: { login: "percy[bot]" } }],
+    async () => {
+      assert.deepEqual(await provider.pullRequestReview(3), {
+        changesRequested: true,
+      });
     },
   );
 });

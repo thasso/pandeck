@@ -4715,6 +4715,10 @@ export interface WorktreePullRequestInfo {
 }
 
 export interface WorktreeCiStatus {
+  /**
+   * Excludes a failing check posted by an app whose review requests changes
+   * (`WorktreePullRequestReview.changesRequestedByApps`): that is a review.
+   */
   state: "success" | "failure" | "pending" | "error";
   /** Where to inspect the runs (commit status page). */
   url?: string;
@@ -4729,6 +4733,12 @@ export interface WorktreeCiStatus {
 export interface WorktreePullRequestReview {
   /** A reviewer asked for changes and that review still stands. */
   changesRequested: boolean;
+  /**
+   * The GitHub Apps (by slug) among those reviewers. A failing check one of
+   * them posted is its review verdict, not CI, so the server leaves it out of
+   * `WorktreeCiStatus.state`. Absent when none, and always on Forgejo.
+   */
+  changesRequestedByApps?: string[];
   /**
    * Open (unresolved) review threads. OPTIONAL because thread resolution is
    * not reachable over the REST surfaces we use — reporting 0 where we cannot

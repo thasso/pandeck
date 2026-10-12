@@ -169,7 +169,17 @@ test("branch statuses for many worktrees are one GraphQL request", async () => {
         title: "open",
         state: "open",
       },
-      ci: { state: "failure", url: "https://ci.example/2", total: 2 },
+      // Raw: the hosting projection sets review gates aside, not the batch.
+      ci: {
+        state: "failure",
+        url: "https://ci.example/2",
+        total: 2,
+        failedApps: [null],
+        besideFailures: {
+          state: "success",
+          url: "https://github.com/acme/repo/runs/1",
+        },
+      },
       review: { changesRequested: true },
     },
     {
@@ -217,6 +227,79 @@ test("more checks than the first page stay pending", async () => {
   ]);
   assert.equal(status!.ci?.state, "pending");
   assert.equal(status!.ci?.total, 150);
+});
+
+test("the batch names the apps behind failed checks and change requests", async () => {
+  const calls = stubFetch(() => ({
+    data: {
+      repository: {
+        b0: {
+          pageInfo: { hasNextPage: false },
+          nodes: [
+            {
+              number: 19,
+              title: "open",
+              url: "https://github.com/acme/repo/pull/19",
+              state: "OPEN",
+              headRepository: { nameWithOwner: "acme/repo" },
+              latestOpinionatedReviews: {
+                nodes: [
+                  {
+                    state: "CHANGES_REQUESTED",
+                    submittedAt: "2026-10-12T18:05:23Z",
+                    author: { __typename: "Bot", login: "cl-percy" },
+                  },
+                  {
+                    state: "CHANGES_REQUESTED",
+                    submittedAt: "2026-10-12T18:06:00Z",
+                    // A PERSON is never an app, whatever the login says.
+                    author: { __typename: "User", login: "github-actions" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        c0: {
+          statusCheckRollup: {
+            contexts: {
+              totalCount: 2,
+              nodes: [
+                {
+                  __typename: "CheckRun",
+                  status: "COMPLETED",
+                  conclusion: "FAILURE",
+                  url: "https://github.com/acme/repo/runs/1",
+                  checkSuite: { app: { slug: "cl-percy" } },
+                },
+                {
+                  __typename: "CheckRun",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  url: "https://github.com/acme/repo/runs/2",
+                  checkSuite: { app: { slug: "github-actions" } },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  }));
+  const [status] = await githubProvider(ref, config).branchStatuses!([
+    { branch: "feature", headSha: sha("e") },
+  ]);
+  assert.match(calls[0]!.body?.query ?? "", /checkSuite \{ app \{ slug \} \}/);
+  assert.match(calls[0]!.body?.query ?? "", /author \{ __typename login \}/);
+  assert.deepEqual(status!.review, {
+    changesRequested: true,
+    changesRequestedByApps: ["cl-percy"],
+  });
+  assert.deepEqual(status!.ci?.failedApps, ["cl-percy"]);
+  assert.deepEqual(status!.ci?.besideFailures, {
+    state: "success",
+    url: "https://github.com/acme/repo/runs/2",
+  });
 });
 
 test("a GraphQL error answers no row at all", async () => {
