@@ -15,7 +15,15 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { BookOpen, Bot, GitBranch, Plus, ScanSearch, X } from "lucide-react";
+import {
+  BookOpen,
+  Bot,
+  ClipboardList,
+  GitBranch,
+  Plus,
+  ScanSearch,
+  X,
+} from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useSessionStorageState } from "../../hooks/useSessionStorageState.ts";
 import { IconButton } from "../common/IconButton.tsx";
@@ -36,7 +44,7 @@ import { PersonalAssistantPanel } from "./PersonalAssistantPanel.tsx";
  * sidebar.
  */
 export type PanelId =
-  "inspector" | "personal-assistant" | "knowledge" | "worktree";
+  "inspector" | "personal-assistant" | "knowledge" | "worktree" | "status";
 
 interface PanelDefinition {
   id: PanelId;
@@ -65,6 +73,7 @@ const PANEL_IDS: PanelId[] = [
   "personal-assistant",
   "knowledge",
   "worktree",
+  "status",
 ];
 
 function panelDefinition(id: PanelId): PanelDefinition {
@@ -109,6 +118,7 @@ const PANEL_DEFINITIONS: PanelDefinition[] = [
   },
   { id: "knowledge", label: "Knowledge", icon: <BookOpen /> },
   { id: "worktree", label: "Worktree", icon: <GitBranch /> },
+  { id: "status", label: "Status", icon: <ClipboardList /> },
 ];
 
 /** One open panel's tab: drag it to reorder, or close it from its own X. */
@@ -164,6 +174,7 @@ export function RightPanelTabs({
   inspector,
   knowledge,
   worktree,
+  status,
   visible = true,
   openRequest,
   onActivePanelChange,
@@ -172,6 +183,8 @@ export function RightPanelTabs({
   /** Absent while the app offers no Knowledge Base: the tab is not offered. */
   knowledge?: ReactNode;
   worktree: ReactNode;
+  /** The open session's status card (`docs/session-status.md`). */
+  status: ReactNode;
   /**
    * The right panel is open, so its active tab is actually on screen. The host
    * stays mounted while the panel is shut (the Inspector publishes from here),
@@ -292,6 +305,7 @@ export function RightPanelTabs({
     "personal-assistant": <PersonalAssistantPanel />,
     knowledge,
     worktree,
+    status,
   };
   return (
     <div className="flex h-full min-h-0 flex-col surface-sidebar border-l border-border">

@@ -11,7 +11,8 @@ import { EmptyBox } from "../../../src/components/common/load.tsx";
 const noop = () => {};
 const TAB_STORAGE_KEY = "assistant.right-panel-tabs.v1";
 
-type PanelId = "inspector" | "personal-assistant" | "knowledge" | "worktree";
+type PanelId =
+  "inspector" | "personal-assistant" | "knowledge" | "worktree" | "status";
 
 /**
  * The desktop right panel's tab host. Its open tabs are `sessionStorage` state,
@@ -77,6 +78,7 @@ function RightPanelTabsStory({
         }
         knowledge={<EmptyBox>The Knowledge Base panel.</EmptyBox>}
         worktree={<EmptyBox>The worktree panel.</EmptyBox>}
+        status={<EmptyBox>The status panel.</EmptyBox>}
       />
     </div>
   );

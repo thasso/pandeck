@@ -8,6 +8,7 @@ import {
   Brain,
   Building2,
   Cable,
+  ClipboardList,
   Clock,
   Cloud,
   Cpu,
@@ -101,6 +102,11 @@ export const SETTINGS_GROUPS: SettingsSectionGroup[] = [
         icon: <BookOpen size={15} />,
       },
       { id: "naming", label: "Session naming", icon: <Brain size={15} /> },
+      {
+        id: "session-status",
+        label: "Session status",
+        icon: <ClipboardList size={15} />,
+      },
       {
         id: "refinement",
         label: "Prompt refinement",

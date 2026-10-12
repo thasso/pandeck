@@ -518,6 +518,11 @@ const ProjectDetailPage = lazy(() =>
     default: module.ProjectDetailPage,
   })),
 );
+const SessionStatusPanel = lazy(() =>
+  import("./components/sessionStatus/SessionStatusPanel.tsx").then(
+    (module) => ({ default: module.SessionStatusPanel }),
+  ),
+);
 const KnowledgePanel = lazy(() =>
   import("./components/shell/KnowledgePanel.tsx").then((module) => ({
     default: module.KnowledgePanel,
@@ -6809,6 +6814,14 @@ function AppContent() {
                 setWorktreeSubmission({ worktreeId, commentIds })
               }
               onNavigate={navigate}
+            />
+          </Suspense>
+        }
+        status={
+          <Suspense fallback={<PaneLoading label="Loading status…" />}>
+            <SessionStatusPanel
+              sessionId={routeSessionItem?.id}
+              sessionUpdatedAt={routeSessionItem?.updatedAt}
             />
           </Suspense>
         }

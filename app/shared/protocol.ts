@@ -560,6 +560,46 @@ export interface PrAgentSettings extends CredentialProfilePin {
 }
 
 /**
+ * Settings for the no-tool agent that writes a session's status card
+ * (`docs/session-status.md`).
+ */
+export interface SessionStatusSettings extends CredentialProfilePin {
+  provider: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+/**
+ * A session's status card: a short Markdown summary of what the session is
+ * for, what happened in it, and what is still open, written on request by the
+ * status agent (`docs/session-status.md`).
+ */
+export interface SessionStatusCard {
+  sessionId: string;
+  /** The card body, Markdown. */
+  markdown: string;
+  /** When the card was written. */
+  createdAt: number;
+  /** The session's last activity the card covers (its `updatedAt` then). */
+  sessionUpdatedAt: number;
+  /** The model that wrote it. */
+  model: { provider: string; modelId: string; thinkingLevel: ThinkingLevel };
+}
+
+/** GET `/api/session-status?sessionId=…`. */
+export interface SessionStatusResponse {
+  /** The last card written for the session, or null when there is none. */
+  card: SessionStatusCard | null;
+  /** A refresh for this session is running now. */
+  refreshing: boolean;
+}
+
+/** POST `/api/session-status/refresh`. Answers with the new card. */
+export interface SessionStatusRefreshRequest {
+  sessionId: string;
+}
+
+/**
  * Settings for the `convert_pdf` tool's Claude fallback (scanned/image PDFs
  * transcribed via a document block). The offline pdf2md path needs no settings;
  * only the Claude fallback has a controllable model/thinking level. Document
@@ -1375,6 +1415,7 @@ export interface AppSettings {
   sessionNaming: SessionNamingSettings;
   commitAgent: CommitAgentSettings;
   prAgent: PrAgentSettings;
+  sessionStatus: SessionStatusSettings;
   pdfConversion: PdfConversionSettings;
   promptRefinement: PromptRefinementSettings;
   speechToText: SpeechToTextSettings;

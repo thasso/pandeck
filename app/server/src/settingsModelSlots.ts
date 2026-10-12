@@ -56,6 +56,12 @@ export function listSettingsModelSlots(
       slot: settings.sessionNaming,
     },
     {
+      key: "sessionStatus",
+      label: "Session status",
+      section: "session-status",
+      slot: settings.sessionStatus,
+    },
+    {
       key: "promptRefinement",
       label: "Prompt refinement",
       section: "refinement",

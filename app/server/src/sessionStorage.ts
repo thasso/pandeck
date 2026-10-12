@@ -12,6 +12,11 @@ export function canonicalSessionLogPath(sessionId: string): string {
   return join(canonicalSessionDir(sessionId), "log.jsonl");
 }
 
+/** The session's last status card (`docs/session-status.md`). */
+export function sessionStatusCardPath(sessionId: string): string {
+  return join(canonicalSessionDir(sessionId), "status-card.json");
+}
+
 /** Where the Claude SDK store keeps its session records (`<id>.json` and log). */
 export const CLAUDE_SDK_STORE_DIR = join(DATA_DIR, "claude-sdk");
 

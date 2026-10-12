@@ -13,6 +13,7 @@ import type {
   PeerSpawnRuntime,
   PermanentAssistantSettings,
   PrAgentSettings,
+  SessionStatusSettings,
   PromptRefinementSettings,
   SessionNamingSettings,
   SkillToggles,
@@ -117,6 +118,16 @@ const DEFAULT_COMMIT_AGENT_SETTINGS: CommitAgentSettings = {
 
 const DEFAULT_PR_AGENT_SETTINGS: PrAgentSettings = {
   ...DEFAULT_COMMIT_AGENT_SETTINGS,
+};
+
+/**
+ * Luna with high thinking: in the status-card experiment it was the cheapest
+ * model that read long sessions without inventing state
+ * (`docs/session-status.md`).
+ */
+const DEFAULT_SESSION_STATUS_SETTINGS: SessionStatusSettings = {
+  ...DEFAULT_HELPER_MODEL,
+  thinkingLevel: "high",
 };
 
 const DEFAULT_PROMPT_REFINEMENT_SETTINGS: PromptRefinementSettings = {
@@ -496,6 +507,10 @@ export function getSettings(publicBaseUrl?: string): AppSettings {
       ...DEFAULT_PR_AGENT_SETTINGS,
       ...(stored.prAgent ?? {}),
     },
+    sessionStatus: {
+      ...DEFAULT_SESSION_STATUS_SETTINGS,
+      ...(stored.sessionStatus ?? {}),
+    },
     pdfConversion: {
       ...DEFAULT_PDF_CONVERSION_SETTINGS,
       ...(stored.pdfConversion ?? {}),
@@ -565,6 +580,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
     ...(patch.sessionNaming ? { sessionNaming: patch.sessionNaming } : {}),
     ...(patch.commitAgent ? { commitAgent: patch.commitAgent } : {}),
     ...(patch.prAgent ? { prAgent: patch.prAgent } : {}),
+    ...(patch.sessionStatus ? { sessionStatus: patch.sessionStatus } : {}),
     ...(patch.pdfConversion
       ? {
           pdfConversion: {

@@ -336,6 +336,13 @@ export function SettingsPage({
               onUpdate={onUpdate}
             />
           )}
+          {section === "session-status" && (
+            <SessionStatusSection
+              models={agentModels}
+              settings={settings}
+              onUpdate={onUpdate}
+            />
+          )}
           {section === "pull-request" && (
             <PrAgentSection
               models={agentModels}
@@ -1492,6 +1499,45 @@ function PrAgentSection({ models, settings, onUpdate }: AgentSectionProps) {
           thinkingLevel={prAgent.thinkingLevel}
           credentialProfileId={prAgent.credentialProfileId}
           modelLabel="Pull request model"
+          onChange={save}
+        />
+
+        {models.length === 0 && <NoModelsNote />}
+      </SettingsCard>
+    </div>
+  );
+}
+
+function SessionStatusSection({
+  models,
+  settings,
+  onUpdate,
+}: AgentSectionProps) {
+  const sessionStatus = settings.sessionStatus;
+  const save = (patch: Partial<typeof sessionStatus>) =>
+    onUpdate({ sessionStatus: { ...sessionStatus, ...patch } });
+
+  return (
+    <div className="mx-auto max-w-2xl px-6 py-6">
+      <h2 className="text-sm font-semibold">Session status</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        The Status panel beside a session summarizes what the session is for,
+        what happened in it, and what is still open. A no-tool agent writes it
+        when you refresh the panel.
+      </p>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Long sessions make a long read: a model with more thinking writes a
+        better summary of them, a smaller one a faster summary.
+      </p>
+
+      <SettingsCard className="mt-6">
+        <AgentModelFields
+          models={models}
+          provider={sessionStatus.provider}
+          modelId={sessionStatus.modelId}
+          thinkingLevel={sessionStatus.thinkingLevel}
+          credentialProfileId={sessionStatus.credentialProfileId}
+          modelLabel="Status model"
           onChange={save}
         />
 

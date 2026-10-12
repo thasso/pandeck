@@ -42,6 +42,11 @@ only binding rules; everything else lives here.
 - `session-naming.md` — how a session gets its title: automatic first naming and
   `/rename`, which reruns the naming agent over the recent conversation with the
   user's guidance first, mid-turn and without a harness.
+- `session-status.md` — the Status tab's card: what a session is for, what
+  happened and what is still open, written on request by a no-tool agent from a
+  digest of the session and the current state of the Tasks, PRs and sessions it
+  touched; where the card is stored, how the digest fits its budget, and why the
+  default model is what it is.
 - `settings.md` — the settings registry (one descriptor per setting the Settings
   page shows, with value/readonly/secret/oauth access), the tests that keep it
   complete, and the one write path: `saveSettings`, its per-section side

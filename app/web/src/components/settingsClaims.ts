@@ -101,6 +101,11 @@ export const RENDERED_SETTING_PATHS: readonly string[] = [
   "commitAgent.modelId",
   "commitAgent.thinkingLevel",
   "commitAgent.credentialProfileId",
+  // session-status
+  "sessionStatus.provider",
+  "sessionStatus.modelId",
+  "sessionStatus.thinkingLevel",
+  "sessionStatus.credentialProfileId",
   // pull-request
   "prAgent.provider",
   "prAgent.modelId",
