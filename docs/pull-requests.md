@@ -69,6 +69,12 @@ holds changes the caller did not make; `worktree_push` still requires the whole
 tree clean, so the leftover changes have to be committed or moved before
 publication.
 
+The safety review judges secrets only by what the commit records: the patch,
+untracked file content and paths. Session prompts, Tasks and caller context are
+review context, never committed, so a credential pasted there (temporary AWS
+keys, tokens) is masked before the commit-message agent sees it and is not a
+blocker.
+
 ## Checked tag publication
 
 `git_publish_tag` is a deferred coding-persona tool for ordinary repositories

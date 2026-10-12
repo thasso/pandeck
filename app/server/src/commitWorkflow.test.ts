@@ -176,6 +176,60 @@ test("tool callers contribute session prompts, touched paths, context and a chec
   assert.equal(appended.at(-1)?.type, "workshop.commit");
 });
 
+test("credentials in session prompts and caller context are redacted, not blocked", async () => {
+  const cwd = repo();
+  writeFileSync(join(cwd, "file.txt"), "changed\n");
+  const accessKey = "ASIA" + "ABCDEFGHIJKLMNOP";
+  const secretKey = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+  const sessionToken = "IQoJb3JpZ2luX2VjEXAMPLETOKENVALUE";
+  const sessionManager = {
+    getBranch: () => [
+      {
+        type: "message",
+        id: "prompt-1",
+        message: {
+          role: "user",
+          content: [
+            `export AWS_ACCESS_KEY_ID=${accessKey}`,
+            `export AWS_SECRET_ACCESS_KEY=${secretKey}`,
+            `{ "SessionToken": "${sessionToken}" }`,
+          ].join("\n"),
+        },
+      },
+    ],
+    appendCustomEntry: () => "checkpoint-1",
+  };
+  let prompt = "";
+  setCommitMessageGeneratorForTests(async (text) => {
+    prompt = text;
+    return generated;
+  });
+  const result = await runCommitWorkflow({
+    source: "tool",
+    cwd,
+    sessionManager,
+    additionalContext: `aws_session_token = ${sessionToken}`,
+  });
+  assert.equal(result.status, "committed");
+  for (const value of [accessKey, secretKey, sessionToken])
+    assert.ok(!prompt.includes(value), `prompt leaks ${value}`);
+  assert.match(prompt, /AWS_SECRET_ACCESS_KEY=\[redacted\]/);
+  assert.match(prompt, /"SessionToken": "\[redacted\]"/);
+  assert.match(prompt, /aws_session_token = \[redacted\]/);
+});
+
+test("a temporary AWS access key in the diff still blocks", async () => {
+  const cwd = repo();
+  writeFileSync(
+    join(cwd, "file.txt"),
+    `key = ${"ASIA" + "ABCDEFGHIJKLMNOP"}\n`,
+  );
+  setCommitMessageGeneratorForTests(async () => generated);
+  const result = await runCommitWorkflow({ source: "tool", cwd });
+  assert.equal(result.status, "blocked");
+  assert.ok(result.blockers.some((item) => item.kind === "secret"));
+});
+
 test("same-sized content drift after generation blocks before staging", async () => {
   const cwd = repo();
   writeFileSync(join(cwd, "file.txt"), "first\n");

@@ -561,20 +561,42 @@ function collectSessionContextSinceLastCommit(
   };
 }
 
+const CREDENTIAL_TOKEN_PATTERNS = [
+  /\bxox[pbar]-[A-Za-z0-9-]{20,}/,
+  /\bghp_[A-Za-z0-9_]{20,}/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}/,
+  /\bsk-ant-[A-Za-z0-9_-]{20,}/,
+  /\bsk-proj-[A-Za-z0-9_-]{20,}/,
+  /\bA(?:KIA|SIA)[0-9A-Z]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{20,}/,
+];
+
 function lineLooksAddedSecret(line: string): boolean {
   if (!/^\+(?!\+)/.test(line)) return false;
   const value = line.slice(1);
   return [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-    /\bxox[pbar]-[A-Za-z0-9-]{20,}/,
-    /\bghp_[A-Za-z0-9_]{20,}/,
-    /\bgithub_pat_[A-Za-z0-9_]{20,}/,
-    /\bsk-ant-[A-Za-z0-9_-]{20,}/,
-    /\bsk-proj-[A-Za-z0-9_-]{20,}/,
-    /\bAKIA[0-9A-Z]{16}\b/,
-    /\bAIza[0-9A-Za-z_-]{20,}/,
+    ...CREDENTIAL_TOKEN_PATTERNS,
     /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|secret|password)\b\s*[:=]\s*["'][^"']{12,}["']/i,
   ].some((re) => re.test(value));
+}
+
+/**
+ * Session prompts and caller context are review context, never committed
+ * content: credentials pasted there (e.g. temporary AWS keys) are masked so
+ * the commit agent neither receives nor blocks on them.
+ */
+function redactCredentials(text: string): string {
+  let out = text.replace(
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+    "[redacted private key]",
+  );
+  for (const re of CREDENTIAL_TOKEN_PATTERNS)
+    out = out.replace(new RegExp(re.source, "g"), "[redacted]");
+  return out.replace(
+    /\b([\w.-]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*)(["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
+    "$1$2[redacted]",
+  );
 }
 
 function suspiciousPath(path: string): string | undefined {
@@ -688,7 +710,10 @@ function renderPrompts(prompts: Array<{ id: string; text: string }>): string {
   if (prompts.length === 0)
     return "(No new user prompts since the previous commit checkpoint.)";
   return prompts
-    .map((p, i) => `Prompt ${i + 1} [${p.id}]:\n<<<\n${p.text}\n>>>`)
+    .map(
+      (p, i) =>
+        `Prompt ${i + 1} [${p.id}]:\n<<<\n${redactCredentials(p.text)}\n>>>`,
+    )
     .join("\n\n");
 }
 
@@ -1062,7 +1087,7 @@ function composeAgentPrompt(args: {
     `User requested force: ${args.force ? "yes" : "no"}. Your safety status should still be objective; the caller decides whether force overrides blockers.`,
     "",
     "Additional context from the /commit command or tool caller:",
-    args.additionalContext.trim() || "(none)",
+    redactCredentials(args.additionalContext.trim()) || "(none)",
     "",
     "Relevant user prompts since the previous successful commit in this session:",
     renderPrompts(args.prompts),
