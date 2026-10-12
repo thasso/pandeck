@@ -17,6 +17,7 @@ import {
   ready,
   type LoadState,
 } from "../lib/loadState.ts";
+import { perfSnapshot, setPerfStatsEnabled } from "../lib/perfStats.ts";
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -360,20 +361,91 @@ describe("ProjectDetailPage worktree rows", () => {
       const axes = () =>
         container.querySelector<HTMLElement>("[data-worktree-axes]");
       expect(axes()?.classList.contains("opacity-60")).toBe(false);
+      // A minute tick that leaves the row fresh redraws no row: the memo folds
+      // the clock down to the stale/fresh bit the row renders.
+      setPerfStatsEnabled(true);
       await act(async () => vi.advanceTimersByTime(60_000));
+      expect(worktreeRowRenders()).toBe(0);
       expect(axes()?.classList.contains("opacity-60")).toBe(false);
+      // The tick that flips it stale redraws that row, once.
       await act(async () => vi.advanceTimersByTime(15 * 60_000));
       expect(axes()?.classList.contains("opacity-60")).toBe(true);
+      expect(worktreeRowRenders()).toBe(1);
       expect(
         axes()?.querySelector("[data-worktree-axis]")?.getAttribute("title"),
       ).toContain("remote refs may be out of date");
     } finally {
+      setPerfStatsEnabled(false);
       await act(async () => root.unmount());
       container.remove();
       vi.useRealTimers();
     }
   });
+
+  it("re-renders only the changed memoized row on a status broadcast", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const rows = [worktree({ id: "one" }), worktree({ id: "two" })];
+    const two = git("two", {
+      upstream: { ahead: 0, behind: 0, name: "fork/two" },
+    });
+    const page = (one: WorktreeGitStatus) => (
+      <ProjectDetailPage
+        projects={[WORKTREE_PROJECT]}
+        loaded
+        selectedId={WORKTREE_PROJECT.id}
+        detailState={ready(WORKTREE_PROJECT)}
+        worktreeState={ready(rows)}
+        worktreeStatuses={{ one, two }}
+        onBackToList={() => {}}
+        onSave={() => {}}
+        onCloneRepo={() => {}}
+        onRemoveClone={() => {}}
+      />
+    );
+    try {
+      await act(async () =>
+        root.render(
+          page(
+            git("one", {
+              upstream: { ahead: 0, behind: 0, name: "fork/one" },
+            }),
+          ),
+        ),
+      );
+      setPerfStatsEnabled(true);
+      // A new status for "one" only: "two" keeps its status object, so its
+      // memoized row stays as it was.
+      await act(async () =>
+        root.render(
+          page(
+            git("one", {
+              upstream: { ahead: 0, behind: 2, name: "fork/one" },
+            }),
+          ),
+        ),
+      );
+      expect(worktreeRowRenders()).toBe(1);
+      expect(
+        container.querySelector('[data-list-row-id="worktree:one"]')
+          ?.textContent,
+      ).toContain("↓2");
+    } finally {
+      setPerfStatsEnabled(false);
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
 });
+
+/** How many times a worktree row (`WorktreeRow`) rendered while the HUD was on. */
+function worktreeRowRenders(): number {
+  return (
+    perfSnapshot().renders.find((render) => render.name === "WorktreeRow")
+      ?.count ?? 0
+  );
+}
 
 async function typeInto(
   el: HTMLInputElement | HTMLTextAreaElement,

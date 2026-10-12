@@ -8,6 +8,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { GitBranch, House, MessageSquarePlus } from "lucide-react";
 import type { WorktreeGitStatus, WorktreeRecord } from "@assistant/shared";
 import { worktreeAxes, type WorktreeAxes } from "../lib/worktreeAxes.ts";
+import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Tree } from "./common/Tree.tsx";
@@ -298,6 +299,7 @@ function WorktreeRowImpl({
   selected,
   onStartSession,
 }: WorktreeRowProps) {
+  usePerfRenderCount("WorktreeRow");
   const branch = status?.branch ?? worktree.branch;
   return (
     // `py-0.5`: a worktree row is two lines and a little taller than the
