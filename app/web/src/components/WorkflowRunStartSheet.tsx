@@ -1441,7 +1441,9 @@ export function WorkflowRunStartSheet({
   };
   // A full-screen flow on a phone, per the screens model: one pane fills the
   // viewport, with the safe-area insets owned here since no shell chrome is
-  // behind it.
+  // behind it. The height is pinned by min/max: the sheet's bottom-side
+  // `h-auto` outranks a plain `h-dvh`, and the sheet then grows past the
+  // screen and its body never scrolls.
   if (mobile)
     return (
       <Sheet open onOpenChange={onOpenChange}>
@@ -1449,7 +1451,7 @@ export function WorkflowRunStartSheet({
           side="bottom"
           showCloseButton={false}
           aria-label="Run workflow"
-          className="h-dvh gap-0"
+          className="max-h-dvh min-h-dvh gap-0"
           style={{
             paddingTop: "var(--app-safe-area-top, 0px)",
             paddingBottom: "var(--app-safe-area-bottom, 0px)",

@@ -143,6 +143,21 @@ function button(match: string): HTMLButtonElement {
 }
 
 describe("workflow role-set start interaction", () => {
+  it("pins the phone sheet to the viewport so its body scrolls", () => {
+    const desktopMatchMedia = window.matchMedia.bind(window);
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      ...desktopMatchMedia(query),
+      matches: true,
+    }));
+    renderSheet();
+    const sheet = document.querySelector('[data-slot="sheet-content"]');
+    expect(sheet, "phone layout did not render the sheet").toBeTruthy();
+    // The primitive's bottom-side `h-auto` outranks a plain `h-dvh`; min and
+    // max height pin it anyway.
+    const classes = sheet?.className.split(/\s+/) ?? [];
+    expect(classes).toEqual(expect.arrayContaining(["min-h-dvh", "max-h-dvh"]));
+  });
+
   it("starts with required sets and empty fallback sets", () => {
     vi.stubGlobal("crypto", { randomUUID: () => "req-1" });
     const harness = renderSheet();
