@@ -131,6 +131,7 @@ import { forgetPlanHintState } from "./session/planHint.ts";
 import { resolveReadableWorktreeRow } from "./worktrees/knowledgeCheckout.ts";
 import { sessionStore } from "./db/sessionStore.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
+import { delegationFailureNoticeStore } from "./db/delegationFailureNoticeStore.ts";
 import { getRun as getWorkflowRun } from "./db/workflowStore.ts";
 import { subagentStore } from "./db/subagentStore.ts";
 import {
@@ -4703,6 +4704,8 @@ export class Connection implements Viewer {
       deleteAutomaticTurnHold,
       (sessionId: string) =>
         backgroundDeliveryOutboxStore.deleteSession(sessionId),
+      (sessionId: string) =>
+        delegationFailureNoticeStore.dropForSession(sessionId, "deleted"),
       deleteToolGroupSessionData,
       (sessionId: string) => projectStore.forgetSessionProject(sessionId),
     ]) {

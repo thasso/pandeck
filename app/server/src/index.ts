@@ -194,6 +194,7 @@ import {
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
   drainRecipient,
+  installDelegationFailureNotices,
   recoverPeerPromptsOnBoot,
   RETRY_SWEEP_INTERVAL_MS,
   runPeerPromptRetention,
@@ -1837,6 +1838,9 @@ server.listen(PORT, HOST, () => {
   // Turns runtime events into the Sessions inbox's run-start / failure /
   // settlement-reactivation facts for every harness at once.
   installSessionActivityTracking();
+  // A delegated child's failed turn becomes a durable notice for the
+  // coordinator waiting on it, recorded before the run's closing marker.
+  installDelegationFailureNotices();
   // Publishes proxy/CA env vars to `childProcessEnv()` (never process.env), so
   // every later-spawned agent, host command and build tool gets them while the
   // server's own traffic stays direct. Best-effort: a failure here must

@@ -49,6 +49,7 @@ import {
 import {
   analyzeProviderError,
   providerErrorDisplayText,
+  runFailureFacts,
   shouldSuppressProviderRetry,
 } from "../providerErrors.ts";
 import {
@@ -917,6 +918,9 @@ export class PiLiveSession implements LiveSession {
             ...(model ? { model } : {}),
             ...(usage ? { usage } : {}),
             ...(error ? { errorMessage: error } : {}),
+            ...(error && errorInfo
+              ? { failure: runFailureFacts(errorInfo) }
+              : {}),
             ...(aborted ? { aborted: true } : {}),
           });
         } else if (retryEndedBetweenAttempts) {

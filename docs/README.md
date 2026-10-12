@@ -81,6 +81,13 @@ only binding rules; everything else lives here.
   and their own older queued work), its generations and resume authority, and
   the outbox that keeps background facts a Stop touched across a restart until
   they are delivered.
+- `delegation-failure-notices.md` — what a coordinator is told when work it
+  delegated stops on a failure: which failures count (and which never do: a
+  retry, an abort, a Stop, a stand-down), the spawn/request/delivery routes to
+  the immediate coordinator only, the durable write before the run's closing
+  marker, delivery under the Stop hold and busy rules, dedup per run, the loop
+  guards, the safe category vocabulary and when a reset time is stated, and the
+  limitations.
 - `child-processes.md` — why the server never forks itself for per-request work
   (fork cost grows with the server), the spawn broker that starts git instead
   and its fallback contract, the caches that avoid spawns altogether, what the

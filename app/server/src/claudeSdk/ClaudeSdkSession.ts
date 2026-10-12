@@ -196,7 +196,7 @@ import {
   backgroundWorkDescription,
   backgroundWorkTitle,
 } from "../backgroundWork/title.ts";
-import { analyzeProviderError } from "../providerErrors.ts";
+import { analyzeProviderError, runFailureFacts } from "../providerErrors.ts";
 import {
   claudeBackgroundWorkBackend,
   registerClaudeBackgroundWorkBackend,
@@ -2699,6 +2699,7 @@ export class ClaudeSdkSession implements LiveSession {
         model: this.modelId,
         ...(usage ? { usage } : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(errorInfo ? { failure: runFailureFacts(errorInfo) } : {}),
         ...(aborted ? { aborted: true } : {}),
         ...(this.pendingNativeMessageId
           ? { providerMessageId: this.pendingNativeMessageId }

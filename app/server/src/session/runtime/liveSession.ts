@@ -27,6 +27,7 @@ import type {
   PromptableAdapter,
   PromptOptions,
   ProviderRunId,
+  RunFailureFacts,
 } from "../adapters/contract.ts";
 import { isDetachedAdapter } from "../adapters/detached.ts";
 import { contextInfoFromSnapshot, type StatsOptions } from "./stats.ts";
@@ -110,6 +111,35 @@ export function setSessionIdleHook(
   fn: ((sessionId: string) => void) | undefined,
 ): void {
   idleHook = fn;
+}
+
+/** One turn that ended in failure, as {@link setRunFailureHook} receives it. */
+export interface RunFailureReport {
+  sessionId: string;
+  /**
+   * The failed turn's durable run id (`run.started`) — the identity a consumer
+   * deduplicates on, so a repeated report of one turn is recognizable.
+   */
+  runId: string;
+  origin: PromptOrigin | undefined;
+  /** The harness's wording. In-memory only: a consumer must not persist it. */
+  errorMessage: string | undefined;
+  failure: RunFailureFacts | undefined;
+}
+
+/**
+ * Notified once per failed turn, synchronously and BEFORE anything else learns
+ * of it: before the run's closing marker reaches the log, before `runStatus`,
+ * and before {@link subscribeSessionRunCompleted}. A consumer that persists a
+ * consequence here therefore never loses it to a crash between the failure and
+ * a listener. An aborted turn is not a failure and never reaches it. Kept as a
+ * seam so the runtime layer does not depend on the peer-prompt engine.
+ */
+let runFailureHook: ((report: RunFailureReport) => void) | undefined;
+export function setRunFailureHook(
+  fn: ((report: RunFailureReport) => void) | undefined,
+): void {
+  runFailureHook = fn;
 }
 
 /**
@@ -231,6 +261,8 @@ export class LiveRuntimeSession {
   private turnPromptEntryIds = new Set<string>();
   /** Identity of the open turn's durable run bracket, while one is open. */
   private turnRunId: string | undefined;
+  /** The run whose failure was last reported, so one turn reports once. */
+  private reportedFailureRunId: string | undefined;
   /**
    * Why the open turn is running. A visible human steer takes precedence over
    * its earlier trigger: once the user joins a turn, its result is theirs.
@@ -343,6 +375,32 @@ export class LiveRuntimeSession {
         type: outcome === "aborted" ? "run.aborted" : "run.ended",
         runId,
       });
+  }
+
+  /**
+   * Report the open turn's failure to {@link runFailureHook}, at most once per
+   * run. Every turn opens before its provider can fail it (a prompt, or an
+   * out-of-band message start), so a failure arriving with no turn open is a
+   * repeat or a straggler of one already closed, and reports nothing.
+   */
+  private reportRunFailure(
+    errorMessage: string | undefined,
+    failure: RunFailureFacts | undefined,
+  ): void {
+    const runId = this.turnOpen ? this.turnRunId : undefined;
+    if (runId === undefined || this.reportedFailureRunId === runId) return;
+    this.reportedFailureRunId = runId;
+    try {
+      runFailureHook?.({
+        sessionId: this.sessionId,
+        runId,
+        origin: this.turnOrigin,
+        errorMessage,
+        failure,
+      });
+    } catch {
+      /* best-effort: the run's own completion must still be recorded */
+    }
   }
 
   /* ------------------------------ run state ------------------------------ */
@@ -549,11 +607,24 @@ export class LiveRuntimeSession {
     this.turnPromptEntryIds.add(entryId);
     this.setRunning(true);
     try {
-      const result = await this.adapter.prompt(modelText, {
-        ...(clientRequestId !== undefined ? { clientRequestId } : {}),
-        ...adapterOpts,
-      });
+      let result: AgentRunResult;
+      try {
+        result = await this.adapter.prompt(modelText, {
+          ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+          ...adapterOpts,
+        });
+      } catch (error) {
+        // The prompt is already in the log, so a harness that throws instead
+        // of answering ended this turn as surely as a failed run does.
+        this.reportRunFailure(
+          error instanceof Error ? error.message : String(error),
+          undefined,
+        );
+        throw error;
+      }
       if (result.stopReason === "error") {
+        // An adapter that resolves without emitting its completion event.
+        this.reportRunFailure(result.errorMessage, undefined);
         throw new RunFailedError(
           result.errorMessage ?? "Unknown provider error",
           result.code,
@@ -805,6 +876,9 @@ export class LiveRuntimeSession {
         return;
       }
       case "runCompleted": {
+        // Ahead of everything this completion writes or tells anyone.
+        if (event.stopReason === "error")
+          this.reportRunFailure(event.errorMessage, event.failure);
         // Clear any streams the provider left dangling on a failed/aborted run.
         if (event.stopReason !== "end") {
           this.streaming.clear();

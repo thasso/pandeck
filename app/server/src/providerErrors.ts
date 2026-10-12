@@ -1,4 +1,5 @@
 import type { ProviderErrorInfo, ProviderErrorKind } from "@assistant/shared";
+import type { RunFailureFacts } from "./session/adapters/contract.ts";
 
 export interface ProviderErrorContext {
   provider?: string;
@@ -56,6 +57,26 @@ export function analyzeProviderError(
     authMode: context.authMode ?? "unknown",
     detail: classification.detail,
     ...codex,
+  };
+}
+
+/**
+ * The structured part of a classified failure, for consumers that must not
+ * read the provider's prose (`delegationFailureNotice.ts`). The reset time is
+ * passed on only for a usage or rate limit whose provider stated it as a field
+ * (`resetAt`), never derived from a relative duration or from wording.
+ */
+export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
+  const resetAt = info.resetAt;
+  const limited = info.kind === "quota" || info.kind === "rate_limit";
+  return {
+    kind: info.kind,
+    ...(limited &&
+    typeof resetAt === "number" &&
+    Number.isFinite(resetAt) &&
+    resetAt > 0
+      ? { resetAtMs: resetAt * 1000 }
+      : {}),
   };
 }
 

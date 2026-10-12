@@ -5,9 +5,22 @@ import type {
   AdapterEvent,
   ProviderActivityKind,
   ProviderRunId,
+  RunFailureFacts,
 } from "./contract.ts";
 
 export type AdapterEventListener = (event: AdapterEvent) => void;
+
+/** A failed run's message and, when the harness classified it, its facts. */
+function runFailureFields(options: {
+  errorMessage?: string;
+  failure?: RunFailureFacts;
+}): { errorMessage?: string; failure?: RunFailureFacts } {
+  if (!options.errorMessage) return {};
+  return {
+    errorMessage: options.errorMessage,
+    ...(options.failure ? { failure: options.failure } : {}),
+  };
+}
 
 /**
  * Small event source used by in-process harnesses to emit the runtime adapter
@@ -192,6 +205,7 @@ export class NativeAdapterEventSource {
   runCompleted(
     stopReason: "end" | "error" | "aborted",
     errorMessage?: string,
+    failure?: RunFailureFacts,
   ): void {
     this.flushToolCompletions();
     this.closeRun();
@@ -199,6 +213,7 @@ export class NativeAdapterEventSource {
       type: "runCompleted",
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
+      ...(errorMessage && failure ? { failure } : {}),
     });
     this.resetTurn();
   }
@@ -209,6 +224,8 @@ export class NativeAdapterEventSource {
       model?: string;
       usage?: AgentUsage;
       errorMessage?: string;
+      /** Structured facts about `errorMessage`, when the harness has them. */
+      failure?: RunFailureFacts;
       aborted?: boolean;
       /** Native id of the message this turn ended on — the fork/resume anchor. */
       providerMessageId?: string;
@@ -224,7 +241,7 @@ export class NativeAdapterEventSource {
       this.emit({
         type: "runCompleted",
         stopReason: options.errorMessage ? "error" : "aborted",
-        ...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+        ...runFailureFields(options),
       });
       this.resetTurn();
       return;
@@ -248,7 +265,7 @@ export class NativeAdapterEventSource {
     this.emit({
       type: "runCompleted",
       stopReason: options.errorMessage ? "error" : "end",
-      ...(options.errorMessage ? { errorMessage: options.errorMessage } : {}),
+      ...runFailureFields(options),
     });
     this.resetTurn();
   }

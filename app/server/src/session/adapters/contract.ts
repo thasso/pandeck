@@ -18,7 +18,11 @@ import type {
   PromptDelivery,
   SessionConfigModel,
 } from "@assistant/shared/session";
-import type { PromptAttachment, ServerMessage } from "@assistant/shared";
+import type {
+  PromptAttachment,
+  ProviderErrorKind,
+  ServerMessage,
+} from "@assistant/shared";
 import type { ProviderBinding } from "../log/identity.ts";
 import type { HostCommandCard } from "../log/rawEntry.ts";
 import type { MessageDelta } from "@assistant/shared/runtime";
@@ -176,6 +180,8 @@ export type AdapterEvent =
       type: "runCompleted";
       stopReason: "end" | "error" | "aborted";
       errorMessage?: string;
+      /** What the harness knew about an `error` as structured fields. */
+      failure?: RunFailureFacts;
     }
   /** Model/reasoning selection changed (e.g. provider applied a setModel). */
   | {
@@ -183,6 +189,17 @@ export type AdapterEvent =
       model?: SessionConfigModel;
       reasoning?: string;
     };
+
+/**
+ * A failed run's classification as the harness determined it, carried beside
+ * the human-readable message so a consumer never has to re-read that prose.
+ * `resetAtMs` is present only when the provider reported the limit's reset as
+ * a structured field; it is never derived from wording.
+ */
+export interface RunFailureFacts {
+  kind: ProviderErrorKind;
+  resetAtMs?: number;
+}
 
 /**
  * A provider run as its harness numbers it: opened when the harness starts

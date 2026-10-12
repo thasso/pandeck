@@ -847,14 +847,37 @@ const markRetryable = (
     },
     now,
   );
-const markFailed = (id: string, reason: string, now = Date.now()) =>
-  transition(
-    id,
-    ["queued", "dispatching", "retryable_failed"],
-    "failed",
-    { failureReason: reason, leaseOwner: null, leaseExpiresAt: null },
-    now,
-  );
+/**
+ * Give up on a delivery for good. `onFailed` runs inside the same transaction
+ * once the row is `failed`, so a consequence it records (the sender's failure
+ * notice) commits with the transition or not at all.
+ */
+function markFailed(
+  id: string,
+  reason: string,
+  now = Date.now(),
+  onFailed?: (failed: PeerPromptRecord) => void,
+): PeerPromptRecord | undefined {
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const ok = transitionInTxn(
+      db,
+      id,
+      ["queued", "dispatching", "retryable_failed"],
+      "failed",
+      { failureReason: reason, leaseOwner: null, leaseExpiresAt: null },
+      now,
+    );
+    const failed = ok ? map(getRow(id)!) : undefined;
+    if (failed && onFailed) onFailed(failed);
+    db.exec("COMMIT");
+    return failed;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
 const markExpired = (id: string, now = Date.now()) =>
   transition(id, ["awaiting_response"], "expired", {}, now);
 
@@ -1043,6 +1066,45 @@ function interruptedOwingSenderNotice(
         )
         .all() as unknown as Row[]);
   return rows.map(map);
+}
+
+/**
+ * Rows addressed to a recipient that a failure there leaves unanswered: in its
+ * current turn (`admitted`/`acknowledged`) or answered by no reply yet
+ * (`awaiting_response`). Served by the recipient FIFO index.
+ */
+function openForRecipient(recipientSessionId: string): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM peer_prompts
+          WHERE recipient_session_id = ?
+            AND status IN ('admitted', 'acknowledged', 'awaiting_response')
+          ORDER BY queue_seq`,
+      )
+      .all(recipientSessionId) as unknown as Row[]
+  ).map(map);
+}
+
+/** The newest row exchanged between two sessions, in either direction. */
+function latestBetween(
+  aSessionId: string,
+  bSessionId: string,
+): PeerPromptRecord | undefined {
+  const stmt = getDb().prepare(
+    `SELECT * FROM peer_prompts
+      WHERE recipient_session_id = ? AND sender_session_id = ?
+      ORDER BY queue_seq DESC LIMIT 1`,
+  );
+  const rows = [
+    stmt.get(aSessionId, bSessionId) as Row | undefined,
+    stmt.get(bSessionId, aSessionId) as Row | undefined,
+  ].filter((r): r is Row => r !== undefined);
+  const newest = rows.reduce<Row | undefined>(
+    (a, b) => (a === undefined || b.queue_seq > a.queue_seq ? b : a),
+    undefined,
+  );
+  return newest ? map(newest) : undefined;
 }
 
 /** Every sender with at least one row owing a notice, so boot can reach cold ones. */
@@ -1690,6 +1752,8 @@ export const peerPromptStore = {
   queuedRecipientIds,
   pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
+  openForRecipient,
+  latestBetween,
   senderIdsOwingNotice,
   listPendingForRecipient,
   listUndeliveredForRecipient,
