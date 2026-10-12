@@ -969,59 +969,96 @@ async function deliverOwedNotices(
   driver: RuntimePromptDriver,
   sessionId: string,
 ): Promise<void> {
-  if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
-    return;
-  const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
-  const delegated = deliverableNotices(sessionId);
-  if (owed.length === 0 && delegated.length === 0) return;
-  try {
-    // The notice turn continues the causal chain it reports on, so a sender
-    // that re-asks or forwards in response spends the same hop budget. A
-    // failure that persists then ends at the hop limit instead of cycling
-    // failure, notice, re-ask on a fresh chain each time.
-    const context = noticeContext(sessionId, owed, delegated);
-    if (context) activeContexts.set(sessionId, context);
-    // Deliberately NO `clientRequestId`. An ordinary prompt claims that dedup key
-    // BEFORE reaching the provider and keeps it when the provider then fails
-    // (only the steer-only path releases it), so a stable key would answer the
-    // next attempt "already handled" without sending anything — and the mark
-    // below would then record a delivery that never happened, leaving the sender
-    // waiting exactly as it was. Idempotence here is `sender_notified_at_ms`,
-    // which is written only from an accepted turn, and a delegation notice's
-    // `delivered_at_ms`, written as the turn is appended; concurrent drains for
-    // one session already coalesce on `drainLocks`.
-    await promptRuntimeSession(driver, buildNotice(owed, delegated), {
-      origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
-      // A delegation notice is a fact the coordinator now holds: retired as
-      // its turn reaches the log, so a failure of that turn — often the same
-      // limit the child hit — does not deliver it again and again.
-      onUserEntry: () => {
-        try {
-          delegationFailureNoticeStore.markDelivered(
-            delegated.map((n) => n.id),
-          );
-        } catch (err) {
-          console.warn("[peer] could not retire failure notices:", err);
-        }
-      },
-    });
-    // Only an accepted turn consumes the interruption notice.
-    peerPromptStore.markSenderNotified(owed.map((m) => m.id));
-    clearInterruptionNoticeRetry(sessionId);
-  } catch (err) {
-    // A Stop landed first: the rows stay owed and Resume comes back for them,
-    // so no retry is spent.
-    if (err instanceof AutomaticTurnsHeldError) return;
-    // The rows stay owed. Nothing else will come back for them on its own, so
-    // this schedules the only retry that exists.
-    console.warn(
-      `[peer] notice for ${sessionId} failed:`,
-      err instanceof Error ? err.message : String(err),
-    );
-    if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
-  } finally {
-    activeContexts.delete(sessionId);
+  // A notice whose delegation the user ended while the turn was being
+  // admitted is rebuilt without it; this bounds how often that can repeat.
+  for (let attempt = 0; attempt < NOTICE_ADMISSION_ATTEMPTS; attempt += 1) {
+    if (deliveryStopped || driver.isRunning || automaticTurnsHeld(sessionId))
+      return;
+    const owed = peerPromptStore.interruptedOwingSenderNotice(sessionId);
+    const delegated = deliverableNotices(sessionId);
+    if (owed.length === 0 && delegated.length === 0) return;
+    const ids = delegated.map((n) => n.id).join();
+    try {
+      // The notice turn continues the causal chain it reports on, so a sender
+      // that re-asks or forwards in response spends the same hop budget. A
+      // failure that persists then ends at the hop limit instead of cycling
+      // failure, notice, re-ask on a fresh chain each time.
+      const context = noticeContext(sessionId, owed, delegated);
+      if (context) activeContexts.set(sessionId, context);
+      // Deliberately NO `clientRequestId`. An ordinary prompt claims that dedup
+      // key BEFORE reaching the provider and keeps it when the provider then
+      // fails (only the steer-only path releases it), so a stable key would
+      // answer the next attempt "already handled" without sending anything —
+      // and the mark below would then record a delivery that never happened,
+      // leaving the sender waiting exactly as it was. Idempotence here is
+      // `sender_notified_at_ms`, which is written only from an accepted turn,
+      // and a delegation notice's `delivered_at_ms`, written as the turn is
+      // appended; concurrent drains for one session coalesce on `drainLocks`.
+      await promptRuntimeSession(driver, buildNotice(owed, delegated), {
+        origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
+        // Asked once more after the last await: the user may have taken the
+        // child over, settled it or answered for it since the text was built.
+        admit: () => {
+          if (
+            deliverableNotices(sessionId)
+              .map((n) => n.id)
+              .join() !== ids
+          )
+            throw new NoticeSetChangedError();
+        },
+        // A delegation notice is a fact the coordinator now holds: retired as
+        // its turn reaches the log, so a failure of that turn — often the same
+        // limit the child hit — does not deliver it again and again.
+        onUserEntry: () => {
+          try {
+            delegationFailureNoticeStore.markDelivered(
+              delegated.map((n) => n.id),
+            );
+          } catch (err) {
+            console.warn(
+              `[peer] could not retire failure notices for ${sessionId} (${errorName(err)})`,
+            );
+          }
+        },
+      });
+      // Only an accepted turn consumes the interruption notice.
+      peerPromptStore.markSenderNotified(owed.map((m) => m.id));
+      clearInterruptionNoticeRetry(sessionId);
+      return;
+    } catch (err) {
+      if (err instanceof NoticeSetChangedError) continue;
+      // A Stop landed first: the rows stay owed and Resume comes back for them,
+      // so no retry is spent.
+      if (err instanceof AutomaticTurnsHeldError) return;
+      // The rows stay owed. Nothing else will come back for them on its own,
+      // so this schedules the only retry that exists. Never the error's text:
+      // a provider failure of the notice turn carries the provider's words.
+      console.warn(
+        `[peer] notice for ${sessionId} was not delivered (${errorName(err)}); retrying later`,
+      );
+      if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
+      return;
+    } finally {
+      activeContexts.delete(sessionId);
+    }
   }
+  if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
+}
+
+/** How many times a notice is rebuilt when its delegations change mid-admission. */
+const NOTICE_ADMISSION_ATTEMPTS = 3;
+
+/** The notices a turn was built from changed before it was appended. */
+class NoticeSetChangedError extends Error {
+  constructor() {
+    super("The owed notices changed before the notice turn was appended.");
+    this.name = "NoticeSetChangedError";
+  }
+}
+
+/** An error's class name: safe to log where its message may not be. */
+function errorName(err: unknown): string {
+  return err instanceof Error ? err.name : "unknown error";
 }
 
 /**

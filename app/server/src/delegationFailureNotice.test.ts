@@ -7,8 +7,17 @@
  * `DATA_DIR` (`test/setup.ts`); no credential, provider or network is touched.
  */
 import assert from "node:assert/strict";
-import { readFileSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
 import type { AgentType, Harness } from "@assistant/shared";
 import type { PromptOrigin } from "@assistant/shared/session";
@@ -20,30 +29,40 @@ import { closeDb, getDb } from "./db/index.ts";
 import { canonicalSessionLogPath } from "./sessionStorage.ts";
 import { FakeRuntimeDriver } from "./test/fakeRuntimeDriver.ts";
 import type {
+  AdapterEvent,
+  AgentRunResult,
   PromptableAdapter,
   RunFailureFacts,
 } from "./session/adapters/contract.ts";
+import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
+import { runFailureFacts } from "./providerErrors.ts";
 import type { PiDriver } from "./session/adapters/pi.ts";
 import type { ClaudeSdkMessage, ClaudeSdkSeam } from "./claudeSdk/sdkSeam.ts";
 
-const { fakeDrivers, deadIds, acquired, fakeHub } = vi.hoisted(() => {
-  const fakeDrivers = new Map<string, unknown>();
-  const deadIds = new Set<string>();
-  /** Every session the drain had to cold-acquire, in order. */
-  const acquired: string[] = [];
-  const fakeHub = {
-    getLiveById: (id: string) => fakeDrivers.get(id),
-    acquireById: async (id: string) => {
-      acquired.push(id);
-      if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
-      return fakeDrivers.get(id);
-    },
-    broadcastSessions: () => {},
-    broadcastPeerPromptCardUpdate: () => {},
-    broadcastPeerPromptQueue: () => {},
-  };
-  return { fakeDrivers, deadIds, acquired, fakeHub };
-});
+const { fakeDrivers, deadIds, acquired, duringAcquire, fakeHub } = vi.hoisted(
+  () => {
+    const fakeDrivers = new Map<string, unknown>();
+    const deadIds = new Set<string>();
+    /** Every session the drain had to cold-acquire, in order. */
+    const acquired: string[] = [];
+    /** Runs inside an acquisition, as other work may while it is awaited. */
+    const duringAcquire: { run?: (id: string) => void } = {};
+    const fakeHub = {
+      getLiveById: (id: string) => fakeDrivers.get(id),
+      acquireById: async (id: string) => {
+        acquired.push(id);
+        await Promise.resolve();
+        duringAcquire.run?.(id);
+        if (deadIds.has(id)) throw new Error("no on-disk state to resume from");
+        return fakeDrivers.get(id);
+      },
+      broadcastSessions: () => {},
+      broadcastPeerPromptCardUpdate: () => {},
+      broadcastPeerPromptQueue: () => {},
+    };
+    return { fakeDrivers, deadIds, acquired, duringAcquire, fakeHub };
+  },
+);
 
 vi.mock("./hub.ts", () => ({ hub: fakeHub }));
 
@@ -61,14 +80,19 @@ const {
 } = await import("./peerPrompt.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
-const { setSessionIdleHook, subscribeSessionRunCompleted } =
+const { setRunFailureHook, setSessionIdleHook, subscribeSessionRunCompleted } =
   await import("./session/runtime/liveSession.ts");
 const { createPiAdapter } = await import("./session/adapters/pi.ts");
 const { NativeAdapterEventSource } =
   await import("./session/adapters/nativeEvents.ts");
 const { ClaudeSdkSession } = await import("./claudeSdk/ClaudeSdkSession.ts");
 const { holdAutomaticTurns } = await import("./automaticTurnHold.ts");
-const { PEER_NOTICE_AGENT_ID } = await import("./delegationFailureNotice.ts");
+const {
+  PEER_NOTICE_AGENT_ID,
+  delegationFailureNoticeLines,
+  recordRunFailureNotices,
+  recoverRunFailureNoticesOnBoot,
+} = await import("./delegationFailureNotice.ts");
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
 
@@ -85,6 +109,10 @@ type Step =
       failure?: RunFailureFacts;
       /** Report the completion twice, as a duplicated provider event would. */
       duplicate?: boolean;
+      /** End it as aborted, as pi does when its run was stopped. */
+      aborted?: boolean;
+      /** That abort was asked for (pi's `explicitAbortRequested`). */
+      abortRequested?: boolean;
     }
   | { kind: "retryThenOk" }
   | { kind: "aborted" }
@@ -171,6 +199,8 @@ class PiChild {
       this.events.messageCompleted(id, {
         errorMessage: step.message,
         ...(step.failure ? { failure: step.failure } : {}),
+        ...(step.aborted ? { aborted: true } : {}),
+        ...(step.abortRequested ? { abortRequested: true } : {}),
       });
       if (step.duplicate)
         this.events.runCompleted("error", step.message, step.failure);
@@ -374,6 +404,7 @@ afterEach(async () => {
     });
   }
   acquired.length = 0;
+  delete duringAcquire.run;
 });
 
 const QUOTA =
@@ -469,7 +500,7 @@ describe("a failed child turn notifies its immediate coordinator", () => {
     assert.match(row, /"route":"spawn"/);
   });
 
-  it("leaves a requested reply that failed in its own turn to the one interruption notice", async () => {
+  it("tells a sender whose requested reply failed in its own turn once, with the row taken over in the same write", async () => {
     const { id: coord } = coordinator();
     const child = piChild(coord);
     child.steps.push({
@@ -487,18 +518,15 @@ describe("a failed child turn notifies its immediate coordinator", () => {
     await until(() => noticesIn(coord).length === 1, "the notice");
     await quiesce();
 
-    assert.equal(peerPromptStore.getById(message.id)?.status, "interrupted");
+    const row = peerPromptStore.getById(message.id)!;
+    assert.equal(row.status, "interrupted");
+    assert.equal(row.interruptionKind, "failure");
+    assert.notEqual(row.senderNotifiedAt, undefined, "told by this notice");
+    assert.doesNotMatch(row.failureReason ?? "", /monthly spend limit/);
     assert.equal(noticesIn(coord).length, 1, "one failure, one notice");
     assert.match(noticesIn(coord)[0]!, /usage, spend or billing limit/);
+    assert.match(noticesIn(coord)[0]!, /Left unanswered: your message sent/);
     assert.doesNotMatch(noticesIn(coord)[0]!, /monthly spend limit/);
-    assert.equal(
-      getDb()
-        .prepare(
-          "SELECT COUNT(*) AS n FROM delegation_failure_notices WHERE child_session_id = ?",
-        )
-        .get(child.sessionId)!.n,
-      0,
-    );
   });
 
   it("tells only the immediate coordinator in a nested tree", async () => {
@@ -886,7 +914,7 @@ describe("one incident, one notice, and nothing that loops", () => {
   it("states a reset time only when the harness reported one as a field", async () => {
     const { id: coord } = coordinator();
     const child = piChild(coord);
-    const resetAtMs = Date.UTC(2031, 0, 2, 3, 4, 5);
+    const resetAtMs = Math.floor(Date.now() / 1000) * 1000 + 3 * 60 * 60_000;
     child.steps.push({
       kind: "error",
       message: "usage limit reached; resets in 3 hours",
@@ -894,7 +922,11 @@ describe("one incident, one notice, and nothing that loops", () => {
     });
     await turn(child, "fails");
     await until(() => noticesIn(coord).length === 1, "the notice");
-    assert.match(noticesIn(coord)[0]!, /resets at 2031-01-02T03:04:05\.000Z/);
+    assert.ok(
+      noticesIn(coord)[0]!.includes(
+        `resets at ${new Date(resetAtMs).toISOString()}`,
+      ),
+    );
 
     const { id: other } = coordinator("Other");
     const prose = piChild(other);
@@ -949,5 +981,791 @@ describe("one incident, one notice, and nothing that loops", () => {
     assert.equal(noticesIn(root).length, 1);
     assert.equal(noticesIn(leaf.sessionId).length, 0, "nothing flows down");
     assert.match(noticesIn(root)[0]!, new RegExp(`session \`${mid}\``));
+  });
+});
+
+/* ------------------------- runs and their stragglers ------------------------ */
+
+/**
+ * A child whose adapter is driven event by event, with run ids, and whose
+ * prompts resolve only when the test says — so an earlier run's late answer
+ * can arrive while a newer run is open.
+ */
+class ScriptedChild {
+  readonly id: string;
+  readonly key: string;
+  readonly harness: Harness = "pi";
+  readonly agentType: AgentType = "assistant";
+  readonly sessionFile = undefined;
+  readonly canSteer = false;
+  readonly pending: Array<{
+    resolve: (r: AgentRunResult) => void;
+    reject: (e: Error) => void;
+  }> = [];
+  private readonly listeners = new Set<(event: AdapterEvent) => void>();
+  constructor(readonly sessionId: string) {
+    this.id = sessionId;
+    this.key = sessionId;
+  }
+  get isRunning(): boolean {
+    return sessionRuntime.isRunning(this.sessionId);
+  }
+  contextInfo() {
+    return new FakeRuntimeDriver(this.sessionId).contextInfo();
+  }
+  broadcastState(): void {}
+  emit(event: AdapterEvent): void {
+    for (const listener of this.listeners) listener(event);
+  }
+  createRuntimeAdapter(): PromptableAdapter {
+    return {
+      provider: "scripted",
+      capabilities: { fork: "none", compact: false, attachments: false },
+      subscribe: (listener: (event: AdapterEvent) => void) => {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+      },
+      getBinding: () => ({ provider: "scripted" }),
+      prompt: () =>
+        new Promise<AgentRunResult>((resolve, reject) =>
+          this.pending.push({ resolve, reject }),
+        ),
+      abort: () => {},
+      setModel: () => {},
+      setReasoning: () => {},
+      dispose: () => {},
+    } as unknown as PromptableAdapter;
+  }
+}
+
+function scriptedChild(parentId: string): ScriptedChild {
+  const id = seed("Scripted child");
+  sessionStore.linkSpawned(parentId, id);
+  const child = new ScriptedChild(id);
+  fakeDrivers.set(id, child);
+  return child;
+}
+
+const BACKGROUND: PromptOrigin = { kind: "system", source: "background-work" };
+
+describe("a straggler of an earlier run implicates nothing newer", () => {
+  it("an old run's failed completion neither fails nor ends a healthy newer run", async () => {
+    const { id: coord } = coordinator();
+    const child = scriptedChild(coord);
+    const first = promptRuntimeSession(child as never, "first", {
+      origin: BACKGROUND,
+    });
+    await until(() => child.pending.length === 1, "the first prompt");
+    child.emit({ type: "messageStarted", streamId: "a", run: 1 });
+    child.emit({
+      type: "messageCompleted",
+      streamId: "a",
+      content: [],
+      run: 1,
+    });
+    child.emit({ type: "runCompleted", stopReason: "end", run: 1 });
+    child.pending.shift()!.resolve({ stopReason: "end" });
+    await first;
+
+    const second = promptRuntimeSession(child as never, "second", {
+      origin: BACKGROUND,
+    });
+    await until(() => child.pending.length === 1, "the second prompt");
+    child.emit({ type: "messageStarted", streamId: "b", run: 2 });
+    // Run 1's end, reported again with an error, after run 2 opened.
+    child.emit({
+      type: "messageCompleted",
+      streamId: "a",
+      content: [],
+      stopReason: "error",
+      error: "OLD 401 Unauthorized",
+      run: 1,
+    });
+    child.emit({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "OLD 401 Unauthorized",
+      run: 1,
+    });
+    assert.equal(child.isRunning, true, "run 2 keeps running");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+
+    child.emit({
+      type: "messageCompleted",
+      streamId: "b",
+      content: [],
+      run: 2,
+    });
+    child.emit({ type: "runCompleted", stopReason: "end", run: 2 });
+    child.pending.shift()!.resolve({ stopReason: "end" });
+    await second;
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("an old prompt's late failed result or throw neither fails nor idles a newer run", async () => {
+    const { id: coord } = coordinator();
+    const child = scriptedChild(coord);
+    for (const late of ["result", "throw"] as const) {
+      const old: Promise<unknown> = promptRuntimeSession(
+        child as never,
+        `old ${late}`,
+        {
+          origin: BACKGROUND,
+        },
+      ).catch(() => "failed");
+      await until(() => child.pending.length === 1, "the old prompt");
+      const oldRun = child.pending.shift()!;
+      const r = late === "result" ? 10 : 20;
+      child.emit({ type: "messageStarted", streamId: `o${r}`, run: r });
+      child.emit({
+        type: "messageCompleted",
+        streamId: `o${r}`,
+        content: [],
+        run: r,
+      });
+      child.emit({ type: "runCompleted", stopReason: "end", run: r });
+
+      const newer = promptRuntimeSession(child as never, `new ${late}`, {
+        origin: BACKGROUND,
+      });
+      await until(() => child.pending.length === 1, "the newer prompt");
+      child.emit({ type: "messageStarted", streamId: `n${r}`, run: r + 1 });
+      if (late === "result")
+        oldRun.resolve({ stopReason: "error", errorMessage: "OLD late 401" });
+      else oldRun.reject(new Error("OLD late 401"));
+      assert.equal(await old, "failed");
+      assert.equal(
+        child.isRunning,
+        true,
+        `the newer run survives a late ${late}`,
+      );
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+
+      child.emit({
+        type: "messageCompleted",
+        streamId: `n${r}`,
+        content: [],
+        run: r + 1,
+      });
+      child.emit({ type: "runCompleted", stopReason: "end", run: r + 1 });
+      child.pending.shift()!.resolve({ stopReason: "end" });
+      await newer;
+    }
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("the real pi adapter drops an earlier run's completion instead of failing the pending one", async () => {
+    let listener: ((event: AdapterEvent) => void) | undefined;
+    const adapter = createPiAdapter("pi-stale", {
+      sessionFile: undefined,
+      subscribeAdapterEvents: (l) => {
+        listener = l;
+        return () => {};
+      },
+      prompt: () => "started",
+      abort: () => {},
+      setModel: () => {},
+      setThinkingLevel: () => {},
+    });
+    const first = adapter.prompt("first");
+    listener!({ type: "messageStarted", streamId: "a", run: 1 });
+    listener!({ type: "runCompleted", stopReason: "end", run: 1 });
+    assert.equal((await first).stopReason, "end");
+    let settled = false;
+    const second = adapter.prompt("second").then((r) => {
+      settled = true;
+      return r;
+    });
+    listener!({ type: "messageStarted", streamId: "b", run: 2 });
+    listener!({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "OLD",
+      run: 1,
+    });
+    await quiesce();
+    assert.equal(settled, false, "run 2's prompt is not answered by run 1");
+    listener!({ type: "runCompleted", stopReason: "end", run: 2 });
+    assert.equal((await second).stopReason, "end");
+  });
+});
+
+/* -------------------------- the durable boundary --------------------------- */
+
+describe("the failure is durable before anyone hears of it", () => {
+  it("the notice exists before the error entry is appended or announced", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    const seen: number[] = [];
+    const stream = sessionRuntime.openSessionStream(child.sessionId, (e) => {
+      if (e.type === "entryAppended" && e.entry.role === "assistant")
+        seen.push(delegationFailureNoticeStore.pendingFor(coord).length);
+    });
+    child.steps.push({ kind: "error", message: QUOTA });
+    await turn(child, "fails");
+    stream.unsubscribe();
+    assert.deepEqual(seen, [1], "the earliest observer already sees the row");
+  });
+
+  it("a failed write is kept, retried, named on the run markers, and logs no provider text", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let failing = true;
+    setRunFailureHook((report) => {
+      if (failing)
+        throw new Error("SQLITE_FULL disk full near sk-ant-api03-LEAKED");
+      recordRunFailureNotices(report);
+    });
+    try {
+      child.steps.push({
+        kind: "error",
+        message: "401 https://auth.example.invalid/?code=LEAKCODE",
+      });
+      await turn(child, "fails");
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+      assert.equal(
+        sessionRuntime.runsToRecheck(child.sessionId).length,
+        1,
+        "the newest marker names the unrecorded run",
+      );
+      const logged = errors.mock.calls.flat().join(" ");
+      assert.match(logged, /could not record the failure/);
+      for (const secret of ["sk-ant", "LEAKED", "auth.example", "LEAKCODE"])
+        assert.equal(logged.includes(secret), false, secret);
+
+      // The database recovers; the next turn boundary records it.
+      failing = false;
+      await turn(child, "next");
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+      assert.deepEqual(
+        sessionRuntime.runsToRecheck(child.sessionId),
+        [],
+        "once recorded, newer markers no longer name it",
+      );
+    } finally {
+      errors.mockRestore();
+      uninstall();
+      uninstall = installDelegationFailureNotices();
+    }
+  });
+
+  it("a write that keeps failing past newer turns is still recovered at boot, once", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    setRunFailureHook(() => {
+      throw new Error("SQLITE_FULL");
+    });
+    try {
+      child.steps.push({ kind: "error", message: QUOTA });
+      await turn(child, "fails");
+      // Newer runs open and close while the database still refuses.
+      await turn(child, "later 1");
+      await turn(child, "later 2");
+    } finally {
+      errors.mockRestore();
+      uninstall();
+      uninstall = installDelegationFailureNotices();
+    }
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+
+    // A new process: same database, the same logs, nothing in memory.
+    closeDb();
+    getDb();
+    assert.equal(recoverRunFailureNoticesOnBoot(), 1);
+    assert.equal(
+      recoverRunFailureNoticesOnBoot(),
+      0,
+      "a second boot adds nothing",
+    );
+    drainAllQueuedOnBoot();
+    await until(() => noticesIn(coord).length === 1, "the recovered notice");
+    assert.match(noticesIn(coord)[0]!, /usage, spend or billing limit/);
+  });
+
+  it("a write that failed without a crash leaves the sender to the interruption notice, and boot adds nothing", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    // The coordinator's request is answered in the failing turn.
+    const asked = await sendPeerPrompt({
+      senderSessionId: coord,
+      targetSessionId: child.sessionId,
+      prompt: "answer me",
+      responseRequested: true,
+    });
+    setRunFailureHook(() => {
+      throw new Error("SQLITE_IOERR");
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      child.steps.push({
+        kind: "error",
+        message: QUOTA,
+        failure: { kind: "quota" },
+      });
+      await drainRecipient(child.sessionId);
+    } finally {
+      errors.mockRestore();
+      uninstall();
+      uninstall = installDelegationFailureNotices();
+    }
+    // The process lived on: the peer path saw the failed turn and told the
+    // sender itself.
+    await until(() => noticesIn(coord).length === 1, "the interruption notice");
+    assert.equal(
+      peerPromptStore.getById(asked.message.id)?.status,
+      "interrupted",
+    );
+
+    // A new process: same database, the same logs, nothing in memory.
+    closeDb();
+    getDb();
+    assert.equal(recoverRunFailureNoticesOnBoot(), 0, "told already");
+    drainAllQueuedOnBoot();
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 1, "one failure, one notice");
+  });
+});
+
+/* ------------------------------- real deaths ------------------------------- */
+
+/**
+ * One scenario in a separate OS process that dies (exit 73) at a chosen point,
+ * then another that boots on what it left. Every path the child processes see
+ * is disposable and asserted before the app is imported; `fetch` fails closed.
+ */
+describe("a process that dies mid-failure", () => {
+  const src = new URL("./", import.meta.url).href;
+  const tsxLoader = fileURLToPath(
+    new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url),
+  );
+  const script = `
+const assert = (await import("node:assert/strict")).default;
+const root = process.env.DFN_ROOT;
+assert.ok(root && root.startsWith(${JSON.stringify(tmpdir())}));
+for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR", "data"], ["ASSISTANT_LEGACY_PI_AGENT_DIR", "legacy"]])
+  assert.equal(process.env[key], root + "/" + dir);
+assert.equal(process.env.ASSISTANT_CONFIG, root + "/app.json");
+globalThis.fetch = async () => { throw new Error("external fetch denied"); };
+const src = process.env.DFN_SRC;
+const { DATA_DIR } = await import(src + "config.ts");
+assert.equal(DATA_DIR, root + "/data");
+const { sessionStore } = await import(src + "db/sessionStore.ts");
+const { peerPromptStore } = await import(src + "db/peerPromptStore.ts");
+const { delegationFailureNoticeStore: notices } = await import(src + "db/delegationFailureNoticeStore.ts");
+const { closeDb } = await import(src + "db/index.ts");
+const { sessionRuntime } = await import(src + "session/runtimeInstance.ts");
+const { setRunFailureHook } = await import(src + "session/runtime/liveSession.ts");
+const { NativeAdapterEventSource } = await import(src + "session/adapters/nativeEvents.ts");
+const failures = await import(src + "delegationFailureNotice.ts");
+const [mode, scenario] = process.argv.slice(1);
+if (mode === "crash") {
+  for (const id of ["Coordinator", "Child"])
+    sessionStore.upsert({ id, harness: "pi", agentType: "assistant", scope: "user", title: id });
+  sessionStore.linkSpawned("Coordinator", "Child");
+  if (scenario === "requested") {
+    const chainId = peerPromptStore.createChain();
+    const m = peerPromptStore.enqueue({ conversationId: "c", chainId, hop: peerPromptStore.reserveHop(chainId), senderSessionId: "Coordinator", recipientSessionId: "Child", prompt: "answer me", responseRequested: true });
+    peerPromptStore.claimNext("Child", "d", 60000);
+    peerPromptStore.markAdmitted(m.id);
+    peerPromptStore.markAcknowledged(m.id);
+  }
+  const events = new NativeAdapterEventSource();
+  sessionRuntime.createSession("Child", { provider: "scripted", capabilities: { fork: "none", compact: false }, subscribe: (l) => events.subscribe(l), getBinding: () => ({ provider: "scripted" }), prompt: async () => ({ stopReason: "end" }), abort() {}, setModel() {}, setReasoning() {}, dispose() {} });
+  setRunFailureHook(scenario === "write-fails" || scenario === "requested"
+    ? () => { throw new Error("SQLITE_FULL"); }
+    : (report) => { failures.recordRunFailureNotices(report); });
+  sessionRuntime.openSessionStream("Child", (e) => {
+    if (scenario === "before" && e.type === "messageStarted") process.exit(73);
+    if (e.type === "entryAppended" && e.entry.role === "assistant") process.exit(73);
+  });
+  events.messageStarted("m");
+  events.messageCompleted("m", { errorMessage: "401 Unauthorized", failure: { kind: "auth" } });
+  throw new Error("the crash point was not reached");
+} else {
+  const before = notices.pendingFor("Coordinator").length;
+  const recovered = failures.recoverRunFailureNoticesOnBoot();
+  const again = failures.recoverRunFailureNoticesOnBoot();
+  const after = notices.pendingFor("Coordinator").map((n) => n.category);
+  const rows = peerPromptStore.listByParticipant("Child", 10).map((m) => ({ status: m.status, told: m.senderNotifiedAt !== undefined }));
+  console.log(JSON.stringify({ before, recovered, again, after, rows }));
+  closeDb();
+}
+`;
+
+  function run(root: string, ...args: string[]) {
+    return spawnSync(
+      process.execPath,
+      ["--import", tsxLoader, "--input-type=module", "-e", script, ...args],
+      {
+        cwd: join(root, "cwd"),
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          PATH: process.env.PATH ?? "",
+          NODE_ENV: "test",
+          DFN_ROOT: root,
+          DFN_SRC: src,
+          HOME: join(root, "home"),
+          ASSISTANT_CWD: join(root, "cwd"),
+          DATA_DIR: join(root, "data"),
+          ASSISTANT_CONFIG: join(root, "app.json"),
+          ASSISTANT_LEGACY_PI_AGENT_DIR: join(root, "legacy"),
+        },
+      },
+    );
+  }
+
+  function scenario(name: string) {
+    const root = mkdtempSync(join(tmpdir(), "dfn-death-"));
+    try {
+      for (const dir of ["home", "cwd", "data", "legacy"])
+        mkdirSync(join(root, dir));
+      writeFileSync(
+        join(root, "app.json"),
+        JSON.stringify({ dataDir: join(root, "data") }),
+      );
+      const crash = run(root, "crash", name);
+      assert.equal(crash.status, 73, crash.stderr);
+      const boot = run(root, "boot");
+      assert.equal(boot.status, 0, boot.stderr);
+      return JSON.parse(boot.stdout.trim().split("\n").at(-1)!) as {
+        before: number;
+        recovered: number;
+        again: number;
+        after: string[];
+        rows: Array<{ status: string; told: boolean }>;
+      };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("dying at the first fanout of the failure leaves the notice already committed", () => {
+    const out = scenario("recorded");
+    assert.equal(out.before, 1);
+    assert.equal(out.recovered, 0, "nothing to recover: it was written first");
+    assert.deepEqual(out.after, ["auth"]);
+  }, 120_000);
+
+  it("dying after a failed write recovers the notice from the run's log at boot, once", () => {
+    const out = scenario("write-fails");
+    assert.equal(out.before, 0);
+    assert.equal(out.recovered, 1);
+    assert.equal(out.again, 0);
+    assert.deepEqual(out.after, ["auth"]);
+  }, 120_000);
+
+  it("recovers a requested reply's failure as one notice, the row interrupted and told", () => {
+    const out = scenario("requested");
+    assert.equal(out.recovered, 1);
+    assert.deepEqual(out.rows, [{ status: "interrupted", told: true }]);
+  }, 120_000);
+
+  it("dying before any failure was seen announces nothing", () => {
+    const out = scenario("before");
+    assert.equal(out.before, 0);
+    assert.equal(out.recovered, 0);
+    assert.deepEqual(out.after, []);
+  }, 120_000);
+});
+
+/* ---------------------------------- aborts --------------------------------- */
+
+describe("an abort someone asked for is no failure", () => {
+  it("is silent when the abort was asked for, even with an error retained", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    // pi's agent_settled after a Stop: aborted, with an earlier attempt's error.
+    child.steps.push({
+      kind: "error",
+      message: "401 Unauthorized",
+      failure: { kind: "auth" },
+      aborted: true,
+      abortRequested: true,
+    });
+    await turn(child, "stopped while retrying");
+    // The runtime's own abort during a turn that then reports an error.
+    child.steps.push({ kind: "hold", then: { kind: "error", message: QUOTA } });
+    const running = turn(child, "stopped by the runtime");
+    await until(() => child.isRunning, "the turn");
+    await sessionRuntime.abort(child.sessionId);
+    child.release();
+    await running;
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+  });
+
+  it("still reports a provider-side abort and a plain error", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    child.steps.push({
+      kind: "error",
+      message: "Request was aborted",
+      aborted: true,
+    });
+    await turn(child, "transport dropped");
+    await until(() => noticesIn(coord).length === 1, "the notice");
+  });
+});
+
+/* ------------------------- eligibility at delivery ------------------------- */
+
+describe("a delegation the user ended after the failure is not announced", () => {
+  async function recordedBehindHold(): Promise<{
+    coord: string;
+    driver: FakeRuntimeDriver;
+    child: PiChild;
+  }> {
+    const { id: coord, driver } = coordinator();
+    const child = piChild(coord);
+    holdAutomaticTurns(coord);
+    child.steps.push({ kind: "error", message: QUOTA });
+    await turn(child, "fails");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+    return { coord, driver, child };
+  }
+
+  async function restartAndResume(coord: string): Promise<void> {
+    closeDb();
+    getDb();
+    automaticTurnHoldStore.release(coord);
+    drainAllQueuedOnBoot();
+    await quiesce();
+  }
+
+  it("drops it when the child was taken over or deleted, or both sides settled", async () => {
+    const cases: Array<[string, (c: string, k: string) => void]> = [
+      [
+        "taken over",
+        (_c, k) => sessionStore.setSpawnedOwnership(k, "taken-over"),
+      ],
+      [
+        "settled",
+        (c, k) => {
+          sessionStore.setSettled(c, true);
+          sessionStore.setSettled(k, true);
+        },
+      ],
+      ["deleted", (_c, k) => void backgroundWorkStore.deleteOwnerSession(k)],
+    ];
+    for (const [what, end] of cases) {
+      const { coord, child } = await recordedBehindHold();
+      end(coord, child.sessionId);
+      await restartAndResume(coord);
+      assert.equal(noticesIn(coord).length, 0, what);
+      assert.equal(
+        delegationFailureNoticeStore.pendingFor(coord).length,
+        0,
+        what,
+      );
+    }
+  });
+
+  it("keeps it for a settled delegation whose request is still unanswered", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    holdAutomaticTurns(coord);
+    child.steps.push({ kind: "error", message: QUOTA });
+    await sendPeerPrompt({
+      senderSessionId: coord,
+      targetSessionId: child.sessionId,
+      prompt: "answer me",
+      responseRequested: true,
+    });
+    await drainRecipient(child.sessionId);
+    sessionStore.setSettled(coord, true);
+    sessionStore.setSettled(child.sessionId, true);
+    await restartAndResume(coord);
+    await until(() => noticesIn(coord).length === 1, "the notice");
+  });
+
+  it("drops a request notice once the request is answered", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(undefined, "Asked, not spawned");
+    awaitingRow(coord, child.sessionId);
+    holdAutomaticTurns(coord);
+    child.steps.push({ kind: "error", message: QUOTA });
+    await turn(child, "fails");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+    await sendPeerPrompt({
+      senderSessionId: child.sessionId,
+      targetSessionId: coord,
+      prompt: "here is the answer after all",
+      responseRequested: false,
+    });
+    await restartAndResume(coord);
+    assert.equal(
+      noticesIn(coord).filter((t) => /stopped on a failure/.test(t)).length,
+      0,
+    );
+  });
+
+  it("drops it when the delegation ends while a busy coordinator finishes its turn", async () => {
+    const { id: coord, driver } = coordinator();
+    setSessionIdleHook((id) => void drainRecipient(id));
+    const child = piChild(coord);
+    const release = driver.holdTurns();
+    const busy = promptRuntimeSession(driver, "busy", {
+      origin: { kind: "human" },
+    });
+    child.steps.push({ kind: "error", message: QUOTA });
+    await turn(child, "fails");
+    sessionStore.setSpawnedOwnership(child.sessionId, "taken-over");
+    release();
+    await busy;
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("drops it when the delegation ends while the coordinator is being acquired", async () => {
+    const { id: coord, driver } = coordinator();
+    const child = piChild(coord);
+    fakeDrivers.delete(coord);
+    holdAutomaticTurns(coord);
+    child.steps.push({ kind: "error", message: QUOTA });
+    await turn(child, "fails");
+    fakeDrivers.set(coord, driver);
+    // Cold, so the drain acquires it; the user takes the child over meanwhile.
+    const cold = fakeDrivers.get(coord);
+    fakeDrivers.delete(coord);
+    duringAcquire.run = (id) => {
+      if (id !== coord) return;
+      sessionStore.setSpawnedOwnership(child.sessionId, "taken-over");
+      fakeDrivers.set(coord, cold);
+    };
+    automaticTurnHoldStore.release(coord);
+    await drainRecipient(coord);
+    await quiesce();
+    assert.ok(acquired.includes(coord));
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("refuses a turn whose admission check fails, appending nothing", async () => {
+    const { id: coord, driver } = coordinator();
+    await assert.rejects(
+      promptRuntimeSession(driver, "must not land", {
+        origin: { kind: "agent", agentId: PEER_NOTICE_AGENT_ID },
+        admit: () => {
+          throw new Error("changed");
+        },
+      }),
+      /changed/,
+    );
+    assert.equal(driver.promptOptions.length, 0);
+    assert.equal(noticesIn(coord).length, 0);
+  });
+});
+
+/* ------------------------------- reset times ------------------------------- */
+
+describe("a reset time is stated only when it is a real, plausible date", () => {
+  it("drops non-finite, overflowing and out-of-range resets at the source", () => {
+    const quota = (resetAt: number) =>
+      runFailureFacts({
+        kind: "quota",
+        title: "",
+        summary: "",
+        rawMessage: "",
+        resetAt,
+      });
+    for (const bad of [NaN, Infinity, -Infinity, 1e20, 1e13, -5, 0])
+      assert.equal(quota(bad).resetAtMs, undefined, String(bad));
+    assert.equal(quota(2_000_000_000).resetAtMs, 2_000_000_000_000);
+  });
+
+  it("delivers the notice without a reset that is not a date it can state", () => {
+    const { id: coord } = coordinator();
+    const now = Date.now();
+    for (const resetAtMs of [
+      1e20,
+      NaN,
+      Infinity,
+      8.64e15 + 1,
+      now - 24 * 60 * 60_000,
+      now + 2 * 366 * 24 * 60 * 60_000,
+    ]) {
+      const child = piChild(coord);
+      const rows = recordRunFailureNotices(
+        {
+          sessionId: child.sessionId,
+          runId: `run-${resetAtMs}`,
+          origin: BACKGROUND,
+          errorMessage: "quota",
+          failure: { kind: "quota", resetAtMs },
+          at: now,
+        },
+        now,
+      );
+      assert.equal(rows.length, 1, String(resetAtMs));
+      assert.equal(rows[0]!.resetAt, undefined, String(resetAtMs));
+      const text = delegationFailureNoticeLines(rows).join("\n");
+      assert.match(text, /usage, spend or billing limit/);
+      assert.doesNotMatch(text, /resets at/);
+    }
+    const child = piChild(coord);
+    const good = now + 60 * 60_000;
+    const [row] = recordRunFailureNotices(
+      {
+        sessionId: child.sessionId,
+        runId: "run-good",
+        origin: BACKGROUND,
+        errorMessage: "quota",
+        failure: { kind: "quota", resetAtMs: good },
+        at: now,
+      },
+      now,
+    );
+    assert.match(
+      delegationFailureNoticeLines([row!]).join("\n"),
+      new RegExp(
+        `resets at ${new Date(good).toISOString().replace(/\./g, "\\.")}`,
+      ),
+    );
+  });
+});
+
+/* --------------------------------- privacy --------------------------------- */
+
+describe("nothing the provider said reaches a log line", () => {
+  it("logs no provider text when a child fails and the coordinator's notice turn fails too", async () => {
+    const { id: coord, driver } = coordinator();
+    const child = piChild(coord);
+    const hostile =
+      'Authorization: Bearer sk-ant-api03-LEAKED https://auth.example.invalid/oauth?code=LEAKCODE {"body":"PRIVATE BODY"}';
+    driver.behavior = { mode: "error", message: hostile };
+    const spies = (["log", "warn", "error", "info", "debug"] as const).map(
+      (m) => vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    try {
+      child.steps.push({ kind: "error", message: hostile });
+      await turn(child, "fails");
+      await until(() => noticesIn(coord).length === 1, "the notice");
+      await quiesce();
+      const logged = spies
+        .flatMap((s) => s.mock.calls.flat())
+        .map(String)
+        .join(" ");
+      assert.match(logged, /was not delivered \(RunFailedError\)/);
+      for (const secret of [
+        "sk-ant",
+        "LEAKED",
+        "auth.example",
+        "LEAKCODE",
+        "PRIVATE BODY",
+      ])
+        assert.equal(logged.includes(secret), false, secret);
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
   });
 });

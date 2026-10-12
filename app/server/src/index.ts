@@ -190,6 +190,7 @@ import {
   sweepBackgroundTaskOutputTemps,
   tombstoneDeletedOwnersOnBoot,
 } from "./backgroundWorkBoot.ts";
+import { recoverRunFailureNoticesOnBoot } from "./delegationFailureNotice.ts";
 import {
   closeChainsForHumanPrompt,
   drainAllQueuedOnBoot,
@@ -1901,6 +1902,16 @@ server.listen(PORT, HOST, () => {
     if (interrupted > 0)
       console.log(
         `[assistant] ${interrupted} session(s) hold a turn cut off by the previous exit`,
+      );
+  });
+  bootStep("delegation-failure recovery", () => {
+    // Before peer recovery reclassifies the rows of runs the restart cut off:
+    // a run that had failed, and whose failure never got recorded, still owes
+    // its coordinator the notice — read back from the run's own log.
+    const recovered = recoverRunFailureNoticesOnBoot();
+    if (recovered > 0)
+      console.log(
+        `[assistant] recovered ${recovered} delegation failure notice(s) from runs the previous exit cut off`,
       );
   });
   bootStep("peer-prompt recovery", () => {

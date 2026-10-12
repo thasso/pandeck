@@ -12,7 +12,7 @@
  * (projections/retention). Full routing/audit data stays server-side.
  */
 import { randomUUID } from "node:crypto";
-import { getDb } from "./index.ts";
+import { getDb, inDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 
 export type PeerPromptStatus =
@@ -828,6 +828,42 @@ const markInterrupted = (
     },
     now,
   );
+/**
+ * Interrupt delivered rows whose turn failed, as rows whose sender has already
+ * been told: the caller records the notice that tells it in the same
+ * transaction (`delegationFailureNotice.ts`), so the interruption notice must
+ * not repeat it. A row already past `admitted`/`acknowledged` is left alone.
+ */
+function interruptAsTold(
+  ids: readonly string[],
+  reason: string,
+  now = Date.now(),
+): void {
+  if (ids.length === 0) return;
+  inDbTransaction(() => {
+    const db = getDb();
+    const told = db.prepare(
+      "UPDATE peer_prompts SET sender_notified_at_ms = ? WHERE id = ?",
+    );
+    for (const id of ids)
+      if (
+        transitionInTxn(
+          db,
+          id,
+          ["admitted", "acknowledged"],
+          "interrupted",
+          {
+            failureReason: reason,
+            interruptionKind: "failure",
+            leaseOwner: null,
+            leaseExpiresAt: null,
+          },
+          now,
+        )
+      )
+        told.run(now, id);
+  });
+}
 /** Mark retryable with a scheduled due time; `sweepDueRetries` requeues it once due. */
 const markRetryable = (
   id: string,
@@ -1083,6 +1119,26 @@ function openForRecipient(recipientSessionId: string): PeerPromptRecord[] {
           ORDER BY queue_seq`,
       )
       .all(recipientSessionId) as unknown as Row[]
+  ).map(map);
+}
+
+/**
+ * Rows addressed to a recipient that a provider failure interrupted at or
+ * after `sinceMs` — the ones the peer interruption notice tells their sender
+ * about. Served by the recipient FIFO index.
+ */
+function failedForRecipientSince(
+  recipientSessionId: string,
+  sinceMs: number,
+): PeerPromptRecord[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT * FROM peer_prompts
+          WHERE recipient_session_id = ? AND status = 'interrupted'
+            AND interruption_kind = 'failure' AND updated_at_ms >= ?`,
+      )
+      .all(recipientSessionId, sinceMs) as unknown as Row[]
   ).map(map);
 }
 
@@ -1741,6 +1797,7 @@ export const peerPromptStore = {
   markCompleted,
   markReplied,
   markInterrupted,
+  interruptAsTold,
   markRetryable,
   markFailed,
   markExpired,
@@ -1753,6 +1810,7 @@ export const peerPromptStore = {
   pendingDeliveryRecipientIds,
   interruptedOwingSenderNotice,
   openForRecipient,
+  failedForRecipientSince,
   latestBetween,
   senderIdsOwingNotice,
   listPendingForRecipient,

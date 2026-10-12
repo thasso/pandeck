@@ -2453,11 +2453,14 @@ APIs, agent/tool integrations, settings, tasks and persistence.
   completion) unconditionally become `interrupted` via `recoverStrandedAdmitted`
   — never re-queued, since admission already happened and re-queuing would
   re-inject a second visible prompt. Every row a RESTART interrupts is stamped
-  `interruption_kind = 'restart'`, which is what the sender notice keys on:
+  `interruption_kind = 'restart'`, every row a provider or harness failure
+  interrupts `'failure'`; both are what the sender notice keys on:
   `drainRecipient` flushes the FIFO queue first and then calls
-  `deliverInterruptionNotice`, waking the SENDER of any `restart`-class row that
-  asked for a reply with one turn naming the recipient session ids. A
-  `failure`-class row never produces one. `sender_notified_at_ms` is written
+  `deliverOwedNotices`, waking the SENDER of any such row that asked for a reply
+  with one turn naming the recipient session ids, a failure by its category only
+  (`docs/delegation-failure-notices.md`). The same turn carries any delegation
+  failure notice the session is owed; a row that notice already covers is
+  interrupted as told and owes nothing here. `sender_notified_at_ms` is written
   only after that turn is accepted, and a crash mid-notice re-notifies rather
   than losing the only warning. A REFUSED notice schedules its own bounded
   backoff retry (`NOTICE_RETRY_MAX_ATTEMPTS`, cleared on delivery and by

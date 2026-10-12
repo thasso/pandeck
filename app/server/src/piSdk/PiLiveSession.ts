@@ -891,6 +891,7 @@ export class PiLiveSession implements LiveSession {
         const errorInfo = this.currentAssistantErrorInfo;
         const aborted =
           this.currentAssistantAborted || this.explicitAbortRequested;
+        const abortRequested = this.explicitAbortRequested;
         this.running = false;
         this.currentAssistantId = undefined;
         this.currentAssistantError = undefined;
@@ -922,6 +923,7 @@ export class PiLiveSession implements LiveSession {
               ? { failure: runFailureFacts(errorInfo) }
               : {}),
             ...(aborted ? { aborted: true } : {}),
+            ...(abortRequested ? { abortRequested: true } : {}),
           });
         } else if (retryEndedBetweenAttempts) {
           // A Stop or retry-preparation failure can settle without another

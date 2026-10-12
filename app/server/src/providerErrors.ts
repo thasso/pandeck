@@ -67,18 +67,26 @@ export function analyzeProviderError(
  * (`resetAt`), never derived from a relative duration or from wording.
  */
 export function runFailureFacts(info: ProviderErrorInfo): RunFailureFacts {
-  const resetAt = info.resetAt;
   const limited = info.kind === "quota" || info.kind === "rate_limit";
+  const resetAtMs =
+    limited && typeof info.resetAt === "number"
+      ? info.resetAt * 1000
+      : undefined;
   return {
     kind: info.kind,
-    ...(limited &&
-    typeof resetAt === "number" &&
-    Number.isFinite(resetAt) &&
-    resetAt > 0
-      ? { resetAtMs: resetAt * 1000 }
+    // Checked after the conversion: seconds that look fine can still overflow
+    // into a number no `Date` represents.
+    ...(resetAtMs !== undefined &&
+    Number.isFinite(resetAtMs) &&
+    resetAtMs > 0 &&
+    resetAtMs <= MAX_DATE_MS
+      ? { resetAtMs }
       : {}),
   };
 }
+
+/** The largest instant a JavaScript `Date` represents. */
+const MAX_DATE_MS = 8.64e15;
 
 const RAW_DISPLAY_LIMIT = 400;
 

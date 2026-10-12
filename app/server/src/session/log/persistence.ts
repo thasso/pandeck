@@ -62,6 +62,8 @@ export interface LastRunMarker {
   type: "run.started" | "run.ended" | "run.aborted";
   runId: string;
   at: number;
+  /** Failed runs still unrecorded when the marker was written. */
+  unrecordedFailures?: string[];
 }
 
 export interface LogPersistence {
@@ -77,6 +79,13 @@ export interface LogPersistence {
    * is not a boot step.
    */
   lastRunMarker(): LastRunMarker | undefined;
+  /**
+   * The entries run `runId` wrote: those after its `run.started` up to the next
+   * run marker, read from the END of the log and bounded
+   * ({@link RUN_TAIL_MAX_BYTES}). Undefined when that marker is not within the
+   * bound or the log cannot be read.
+   */
+  runEntries(runId: string): SessionLogEntry[] | undefined;
   /** The on-disk path (for diagnostics / deletion). */
   readonly path: string;
 }
@@ -114,6 +123,7 @@ export function createFileLogPersistence(
     path,
     exists: () => existsSync(path),
     lastRunMarker: () => readLastRunMarker(path),
+    runEntries: (runId) => readRunEntries(path, runId),
     append(entry: SessionLogEntry): void {
       ensureFile();
       appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf8");
@@ -158,6 +168,13 @@ export function createMemoryLogPersistence(): LogPersistence {
       }
       return undefined;
     },
+    runEntries: (runId) => {
+      const start = entries.findLastIndex((entry) => {
+        const marker = asRunMarker(entry);
+        return marker?.type === "run.started" && marker.runId === runId;
+      });
+      return start < 0 ? undefined : untilNextMarker(entries.slice(start + 1));
+    },
     append: (entry) => {
       entries.push(entry);
     },
@@ -177,10 +194,14 @@ function asRunMarker(entry: unknown): LastRunMarker | undefined {
   if (typeof e.runId !== "string" || typeof e.createdAt !== "string")
     return undefined;
   const at = new Date(e.createdAt).getTime();
+  const unrecorded = Array.isArray(e.unrecordedFailures)
+    ? e.unrecordedFailures.filter((id): id is string => typeof id === "string")
+    : [];
   return {
     type: e.type,
     runId: e.runId,
     at: Number.isFinite(at) ? at : 0,
+    ...(unrecorded.length > 0 ? { unrecordedFailures: unrecorded } : {}),
   };
 }
 
@@ -243,6 +264,66 @@ function readLastRunMarker(path: string): LastRunMarker | undefined {
       end = start;
     }
     return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // nothing actionable; the read already answered
+    }
+  }
+}
+
+/**
+ * How far back from the end of a log {@link readRunEntries} looks for its run's
+ * opening marker. A run further back than this is not read at all rather than
+ * read without bound.
+ */
+const RUN_TAIL_MAX_BYTES = 8 * 1024 * 1024;
+
+/** The entries up to (not including) the first run marker among them. */
+function untilNextMarker(entries: SessionLogEntry[]): SessionLogEntry[] {
+  const end = entries.findIndex((entry) => asRunMarker(entry) !== undefined);
+  return end < 0 ? entries : entries.slice(0, end);
+}
+
+/**
+ * The complete entries run `runId` wrote, from one bounded read of the end of
+ * the file. Never throws.
+ */
+function readRunEntries(
+  path: string,
+  runId: string,
+): SessionLogEntry[] | undefined {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, RUN_TAIL_MAX_BYTES);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, size - length);
+    const lines = buffer.toString("utf8").split("\n");
+    // The last piece is a torn write or empty; the first may be cut short.
+    lines.pop();
+    const start = lines.findLastIndex((line) => {
+      const marker = parseRunMarkerLine(line);
+      return marker?.type === "run.started" && marker.runId === runId;
+    });
+    if (start < 0) return undefined;
+    const tail: SessionLogEntry[] = [];
+    for (const line of lines.slice(start + 1)) {
+      try {
+        tail.push(JSON.parse(line) as SessionLogEntry);
+      } catch {
+        // a corrupt line is skipped, as a full load would
+      }
+    }
+    return untilNextMarker(tail);
   } catch {
     return undefined;
   } finally {

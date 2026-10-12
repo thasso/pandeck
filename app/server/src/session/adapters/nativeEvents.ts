@@ -208,12 +208,13 @@ export class NativeAdapterEventSource {
     failure?: RunFailureFacts,
   ): void {
     this.flushToolCompletions();
-    this.closeRun();
+    const run = this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
       ...(errorMessage && failure ? { failure } : {}),
+      ...(run !== undefined ? { run } : {}),
     });
     this.resetTurn();
   }
@@ -227,6 +228,8 @@ export class NativeAdapterEventSource {
       /** Structured facts about `errorMessage`, when the harness has them. */
       failure?: RunFailureFacts;
       aborted?: boolean;
+      /** The abort was asked for, not the provider's own (see the contract). */
+      abortRequested?: boolean;
       /** Native id of the message this turn ended on — the fork/resume anchor. */
       providerMessageId?: string;
     } = {},
@@ -237,11 +240,13 @@ export class NativeAdapterEventSource {
         stopReason: "aborted",
       });
       this.flushToolCompletions();
-      this.closeRun();
+      const run = this.closeRun();
       this.emit({
         type: "runCompleted",
         stopReason: options.errorMessage ? "error" : "aborted",
         ...runFailureFields(options),
+        ...(options.abortRequested ? { abortRequested: true as const } : {}),
+        ...(run !== undefined ? { run } : {}),
       });
       this.resetTurn();
       return;
@@ -261,11 +266,12 @@ export class NativeAdapterEventSource {
       ...(stopReason ? { stopReason } : {}),
     });
     this.flushToolCompletions();
-    this.closeRun();
+    const run = this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason: options.errorMessage ? "error" : "end",
       ...runFailureFields(options),
+      ...(run !== undefined ? { run } : {}),
     });
     this.resetTurn();
   }
@@ -276,10 +282,12 @@ export class NativeAdapterEventSource {
       model?: string;
       usage?: AgentUsage;
       errorMessage?: string;
+      failure?: RunFailureFacts;
       stopReason?: "aborted" | "error";
       providerMessageId?: string;
     },
   ): void {
+    const run = this.currentRun();
     this.emit({
       type: "messageCompleted",
       streamId,
@@ -300,12 +308,23 @@ export class NativeAdapterEventSource {
       // durably on the assistant entry and rendered inline in that session's chat
       // (not only as a transient banner that a later broadcast can clear).
       ...(options.errorMessage ? { error: options.errorMessage } : {}),
+      ...(options.errorMessage && options.failure
+        ? { failure: options.failure }
+        : {}),
+      // The run it belongs to, so the runtime can tell a straggler of an
+      // earlier run from the open one before acting on a failure in it.
+      ...(run !== undefined ? { run } : {}),
     });
   }
 
-  /** The turn is over: nothing the harness emits from here belongs to its run. */
-  private closeRun(): void {
+  /**
+   * The turn is over: nothing the harness emits from here belongs to its run.
+   * Returns the run it closed, which the closing event still names.
+   */
+  private closeRun(): ProviderRunId | undefined {
+    const run = this.currentRun();
     this.openRun = undefined;
+    return run;
   }
 
   private flushToolCompletions(): void {

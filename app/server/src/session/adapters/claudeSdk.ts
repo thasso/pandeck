@@ -91,6 +91,8 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   private boundProviderSessionId: string | undefined;
   private lastError: string | undefined;
   private lastStopReason: AgentRunResult["stopReason"] | undefined;
+  /** The newest provider run that completed; an older one's end is a straggler. */
+  private lastCompletedRun = 0;
 
   constructor(
     readonly sessionId: string,
@@ -204,6 +206,12 @@ class ClaudeSdkAdapter implements PromptableAdapter {
   }
 
   private onAdapterEvent(event: AdapterEvent): void {
+    // A completion naming a run that already ended belongs to no prompt now
+    // pending: taking its error would fail a healthy newer run.
+    if (event.type === "runCompleted" && event.run !== undefined) {
+      if (event.run <= this.lastCompletedRun) return;
+      this.lastCompletedRun = event.run;
+    }
     if (event.type === "runCompleted") {
       this.lastStopReason = event.stopReason;
       this.lastError = event.errorMessage;

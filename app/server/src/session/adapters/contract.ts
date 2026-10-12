@@ -57,9 +57,12 @@ export type AdapterEvent =
       stopReason?: AgentStopReason;
       /** Human-readable provider error, present when the turn ended in `error`. */
       error?: string;
+      /** Structured facts about `error`, when the harness classified it. */
+      failure?: RunFailureFacts;
       providerMessageId?: string;
       startedAt?: string;
       completedAt?: string;
+      run?: ProviderRunId;
     }
   | {
       type: "toolStarted";
@@ -182,6 +185,18 @@ export type AdapterEvent =
       errorMessage?: string;
       /** What the harness knew about an `error` as structured fields. */
       failure?: RunFailureFacts;
+      /**
+       * The run ended on an abort someone ASKED for (a Stop, a stand-down). An
+       * `error` beside it is context the run retained — an earlier failed
+       * attempt — not why it stopped. A provider-side abort never sets it.
+       */
+      abortRequested?: true;
+      /**
+       * The provider run this completion closes. A consumer compares it with
+       * the run its open turn belongs to, so a straggler of an earlier run can
+       * neither fail nor end a newer one.
+       */
+      run?: ProviderRunId;
     }
   /** Model/reasoning selection changed (e.g. provider applied a setModel). */
   | {

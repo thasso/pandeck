@@ -185,6 +185,13 @@ export class SessionRuntime {
     return this.logStore.interruptedRunAt(sessionId);
   }
 
+  /** Runs whose failure may still be unrecorded, and what each wrote. Boot only. */
+  runsToRecheck(
+    sessionId: string,
+  ): Array<{ runId: string; entries: SessionLogEntry[] }> {
+    return this.logStore.runsToRecheck(sessionId);
+  }
+
   isRunning(sessionId: string): boolean {
     return this.live.get(sessionId)?.isRunning ?? false;
   }

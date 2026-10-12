@@ -97,6 +97,8 @@ class PiAdapter implements PromptableAdapter {
   private fallbackContent: AgentContentBlock[] = [];
   private readonly suppressedLateCompletions = new Set<string>();
   private suppressLateEventsUntilRunCompleted = false;
+  /** The newest provider run that completed; an older one's end is a straggler. */
+  private lastCompletedRun = 0;
 
   constructor(
     readonly sessionId: string,
@@ -264,6 +266,12 @@ class PiAdapter implements PromptableAdapter {
   }
 
   private onAdapterEvent(event: AdapterEvent): void {
+    // A completion naming a run that already ended belongs to no prompt now
+    // pending: resolving one with it would fail a healthy newer run.
+    if (event.type === "runCompleted" && event.run !== undefined) {
+      if (event.run <= this.lastCompletedRun) return;
+      this.lastCompletedRun = event.run;
+    }
     if (
       event.type === "messageCompleted" &&
       this.suppressedLateCompletions.delete(event.streamId)
