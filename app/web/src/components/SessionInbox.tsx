@@ -1258,6 +1258,13 @@ function ShelfTrigger({
  * of the layout, so the two fed each other. That was the inbox's scroll flicker
  * (Task 338).
  *
+ * They are measured from the LIST's own top, not the page's. Whatever sits
+ * above the list can move it as a whole without any card having moved: the
+ * host-drawn counts bar appears only after the first pass has measured (the
+ * list publishes its counts later in that same commit), and on a phone that
+ * first pass runs on every return from a chat. Measured from the page, the
+ * next tick then slid every card down from one bar height above its place.
+ *
  * `version` is a digest of what the cards render, so the pass runs on the
  * commits that could have moved something rather than on all ~5 a second.
  * Measuring is then one layout read per card, in a batch that writes nothing,
@@ -1286,6 +1293,7 @@ function useCardReorder(
 
     // Measure every card BEFORE animating any of them: a read after a write
     // would be a forced reflow per card rather than one for the batch.
+    const origin = layoutTop(container);
     const nodes = new Map<string, HTMLElement>();
     const measured: Array<{ id: string; top: number }> = [];
     for (const node of container.querySelectorAll<HTMLElement>(
@@ -1294,7 +1302,7 @@ function useCardReorder(
       const id = node.dataset.inboxCard;
       if (!id) continue;
       nodes.set(id, node);
-      measured.push({ id, top: layoutTop(node) });
+      measured.push({ id, top: layoutTop(node) - origin });
     }
 
     const { moves, next } = planCardReorder(previous.current, measured);
