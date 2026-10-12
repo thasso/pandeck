@@ -22,6 +22,7 @@ Schema:
 Rules:
 - Use status "commit" only when the supplied change set looks safe and coherent to commit.
 - Use status "block" if the diff appears to contain secrets, credentials, private keys, tokens, generated/binary artifacts that should not be committed, unrelated changes, unresolved/conflicting content, or changes too broad to summarize safely.
+- Judge secrets only by what the commit records: the patch, untracked file content, and file paths. User prompts, Tasks, and caller context are never committed; a credential that appears only there is not a blocker or warning. Never repeat one in the commit message.
 - If deterministic preflight blockers are supplied, include them or an equivalent explanation in blockers unless the diff clearly disproves them.
 - Always provide a useful subject, even when status is "block", so a human may force the commit if appropriate.
 - Subject must be imperative, focused on the primary change, no trailing period, ideally 50 characters or fewer and at most 72 characters.
