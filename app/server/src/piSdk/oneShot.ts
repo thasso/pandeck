@@ -105,10 +105,30 @@ export interface PiOneShotResult {
   text: string;
   /** Normalized session usage, read from the session stats after the prompt completes. */
   usage: AgentUsage;
-  /** Set when the assistant turn ended with stopReason "error" or "aborted". */
-  stopReason?: "error" | "aborted";
+  /**
+   * Set when the assistant turn did not end with a complete answer: an error,
+   * an abort, or the output limit (`length`).
+   */
+  stopReason?: PiIncompleteStop;
   /** The assistant's error message when {@link stopReason} is set (may be empty). */
   errorMessage?: string;
+}
+
+type PiIncompleteStop = "error" | "aborted" | "length";
+
+/**
+ * A pi turn's stop reason when the turn did NOT end with a complete answer.
+ * `length` is the output limit: the text so far is cut off, and a caller that
+ * kept it would keep a truncated answer as if it were whole.
+ */
+export function piIncompleteStop(
+  stopReason: string | undefined,
+): PiIncompleteStop | undefined {
+  return stopReason === "error" ||
+    stopReason === "aborted" ||
+    stopReason === "length"
+    ? stopReason
+    : undefined;
 }
 
 /**
@@ -200,11 +220,7 @@ export async function runPiOneShot(
         ? { contextWindowTokens: stats.contextUsage?.contextWindow }
         : {}),
     };
-    const stopReason =
-      finalAssistant?.stopReason === "error" ||
-      finalAssistant?.stopReason === "aborted"
-        ? finalAssistant.stopReason
-        : undefined;
+    const stopReason = piIncompleteStop(finalAssistant?.stopReason);
     return {
       text,
       usage,

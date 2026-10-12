@@ -62,6 +62,9 @@ const ALL_NATIVE_TOOLS = [
   "NotebookEdit",
 ];
 
+/** The failure of a run that reached the model's output limit mid-answer. */
+export const OUTPUT_LIMIT_FAILURE =
+  "The model reached its output limit before finishing.";
 export interface RunClaudeSdkOneShotInput {
   /** Model alias/id (opus/sonnet/haiku, or anything resolvable to one). */
   modelId: string;
@@ -88,8 +91,9 @@ export interface ClaudeSdkOneShotResult {
   text: string;
   usage: ClaudeUsage;
   /**
-   * Set when the run's result was not a success (an `error*` subtype). The
-   * text is whatever the model wrote before that, possibly nothing.
+   * Set when the run's result was not a success (an `error*` subtype) or the
+   * model reached its output limit. The text is whatever the model wrote
+   * before that, possibly nothing.
    */
   failure?: string;
 }
@@ -248,6 +252,9 @@ export async function runClaudeSdkOneShot(
         for (const block of mapAssistantBlocks(message) as AssistantBlock[]) {
           if (block.type === "text") text += block.text;
         }
+        // Cut off at the output limit: the text so far is not the answer.
+        if (message.message.stop_reason === "max_tokens")
+          resultError ??= OUTPUT_LIMIT_FAILURE;
       } else if (message.type === "result") {
         // A one-shot query runs once, so the epoch running total IS this run.
         usage = mapResultEpochUsage(message);

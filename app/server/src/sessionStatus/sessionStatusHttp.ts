@@ -10,6 +10,7 @@ import type {
   SessionStatusResponse,
 } from "@assistant/shared";
 import { errorText } from "../errors.ts";
+import { NoHelperModelError } from "../harnesses/oneShot.ts";
 import {
   readJsonBody,
   sendJson as json,
@@ -20,6 +21,7 @@ import {
   SessionInspectionError,
 } from "../tools/sessions/sessionInspection.ts";
 import {
+  joinSessionStatus,
   readSessionStatus,
   refreshSessionStatus,
   SessionStatusUnavailableError,
@@ -49,22 +51,23 @@ export async function handleSessionStatusApi(
       return;
     }
     let sessionId: string;
+    let joinOnly: boolean;
     try {
       const body = (await readJsonBody(
         req,
         MAX_BODY_BYTES,
       )) as Partial<SessionStatusRefreshRequest>;
       sessionId = cleanSessionId(body.sessionId);
+      joinOnly = body.joinOnly === true;
     } catch (err) {
       json(req, res, headers, 400, { error: errorText(err) });
       return;
     }
     try {
-      const card = await refreshSessionStatus(sessionId);
-      json(req, res, headers, 200, {
-        card,
-        refreshing: false,
-      } satisfies SessionStatusResponse);
+      const response: SessionStatusResponse = joinOnly
+        ? await joinSessionStatus(sessionId)
+        : { card: await refreshSessionStatus(sessionId), refreshing: false };
+      json(req, res, headers, 200, response);
     } catch (err) {
       json(req, res, headers, statusFor(err), { error: errorText(err) });
     }
@@ -89,5 +92,7 @@ function answer(
 function statusFor(err: unknown): number {
   if (err instanceof SessionStatusUnavailableError) return 404;
   if (err instanceof SessionInspectionError) return 400;
+  // The configured model is not offered by its account: a setting to fix.
+  if (err instanceof NoHelperModelError) return 409;
   return 500;
 }

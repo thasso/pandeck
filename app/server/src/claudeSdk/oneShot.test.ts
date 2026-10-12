@@ -20,7 +20,11 @@ import type {
   ClaudeSdkSeam,
 } from "./sdkSeam.ts";
 import { CLAUDE_SDK_HARNESS_SETTINGS } from "./modelSettings.ts";
-import { runClaudeSdkOneShot, setClaudeSdkOneShotSeam } from "./oneShot.ts";
+import {
+  OUTPUT_LIMIT_FAILURE,
+  runClaudeSdkOneShot,
+  setClaudeSdkOneShotSeam,
+} from "./oneShot.ts";
 
 function fakeSeam(
   messages: ClaudeSdkMessage[],
@@ -273,4 +277,39 @@ test("an API failure is reported as the failure, never as model text", async () 
   ]);
   assert.equal(rateLimited.text, "");
   assert.equal(rateLimited.failure, "Claude SDK run ended with: HTTP 429");
+});
+
+test("a reply cut off at the output limit is reported as a failure", async () => {
+  setClaudeSdkOneShotSeam(() =>
+    Promise.resolve(
+      fakeSeam([
+        {
+          type: "assistant",
+          uuid: "a1",
+          session_id: "s1",
+          message: {
+            id: "m1",
+            model: "claude-haiku",
+            stop_reason: "max_tokens",
+            content: [{ type: "text", text: "**Half a card" }],
+          },
+        } as unknown as ClaudeSdkMessage,
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "s1",
+        } as unknown as ClaudeSdkMessage,
+      ]),
+    ),
+  );
+
+  const cut = await runClaudeSdkOneShot({
+    modelId: "haiku",
+    thinkingLevel: "off",
+    systemPrompt: "x",
+    prompt: "y",
+  });
+
+  assert.equal(cut.text, "**Half a card");
+  assert.equal(cut.failure, OUTPUT_LIMIT_FAILURE);
 });

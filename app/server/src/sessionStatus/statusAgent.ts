@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
@@ -19,6 +20,7 @@ import type {
   SessionStatusCard,
   SessionStatusResponse,
 } from "@assistant/shared";
+import { redactCredentials } from "../credentialRedaction.ts";
 import { sessionStore, type SessionMeta } from "../db/sessionStore.ts";
 import { runOneShot } from "../harnesses/oneShot.ts";
 import { getSettings } from "../settings.ts";
@@ -152,6 +154,14 @@ function cardMarkdown(raw: string): string {
   return (fence?.[1] ?? text).trim();
 }
 
+/**
+ * Delete a session's card: part of deleting the session, whichever harness
+ * held it (`connection.ts`).
+ */
+export function deleteSessionStatusCard(sessionId: string): void {
+  rmSync(sessionStatusCardPath(sessionId), { force: true });
+}
+
 /** The last card for a session, and whether a refresh is running. */
 export function readSessionStatus(sessionId: string): SessionStatusResponse {
   statusSession(sessionId);
@@ -165,7 +175,11 @@ async function writeStatusCard(meta: SessionMeta): Promise<SessionStatusCard> {
     model: settings,
     thinkingLevel: settings.thinkingLevel,
     credentialProfileId: accountForSlot(settings),
-    noModelMessage: "No model is available for session status.",
+    // The card names the model that wrote it, so a silent fallback to another
+    // one would misreport it: an unavailable model is an error the user fixes
+    // in Settings.
+    modelFallback: "none",
+    noModelMessage: `The session status model (${settings.modelId}) is not available on its account.`,
     systemPrompt: STATUS_SYSTEM_PROMPT,
     prompt: digest,
     timeoutMs: STATUS_TIMEOUT_MS,
@@ -178,7 +192,9 @@ async function writeStatusCard(meta: SessionMeta): Promise<SessionStatusCard> {
   });
   // A card cut off mid-way would read as complete; better none than that.
   if (failure !== undefined) throw new Error(failure);
-  const markdown = cardMarkdown(text);
+  // The digest is redacted; the card is too, in case a model reconstructs or
+  // repeats something the redactor's patterns missed in the digest.
+  const markdown = redactCredentials(cardMarkdown(text));
   if (!markdown) throw new Error("The status agent returned an empty card.");
   const card: SessionStatusCard = {
     sessionId: meta.id,
@@ -191,8 +207,23 @@ async function writeStatusCard(meta: SessionMeta): Promise<SessionStatusCard> {
       thinkingLevel: settings.thinkingLevel,
     },
   };
+  // Deleted while the agent was writing: a card written now would outlive it.
+  if (!sessionStore.get(meta.id))
+    throw new SessionStatusUnavailableError(`Session ${meta.id} was deleted.`);
   writeCard(card);
   return card;
+}
+
+/**
+ * Wait for the refresh already running for a session, or answer the current
+ * card when none is. Never starts a run.
+ */
+export async function joinSessionStatus(
+  sessionId: string,
+): Promise<SessionStatusResponse> {
+  const running = inFlight.get(sessionId);
+  if (!running) return readSessionStatus(sessionId);
+  return { card: await running, refreshing: false };
 }
 
 /**

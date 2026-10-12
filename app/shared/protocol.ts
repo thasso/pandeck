@@ -597,6 +597,12 @@ export interface SessionStatusResponse {
 /** POST `/api/session-status/refresh`. Answers with the new card. */
 export interface SessionStatusRefreshRequest {
   sessionId: string;
+  /**
+   * Only wait for a refresh that is already running, and answer the current
+   * card when none is: never start a (paid) run. A client that found one
+   * running on load joins it this way.
+   */
+  joinOnly?: boolean;
 }
 
 /**

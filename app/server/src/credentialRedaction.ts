@@ -16,9 +16,10 @@ export const CREDENTIAL_TOKEN_PATTERNS = [
 ];
 
 /**
- * Mask private keys, known token shapes, and the value of any
- * `secret=`/`token:`/`password=`-style assignment (e.g. pasted temporary AWS
- * keys), keeping the surrounding text readable.
+ * Mask private keys, known token shapes, HTTP credentials (`Authorization:
+ * Bearer …`, a bare `Bearer …`), and the value of any `secret=`/`token:`/
+ * `password=`-style assignment however short (e.g. pasted temporary AWS keys),
+ * keeping the surrounding text readable.
  */
 export function redactCredentials(text: string): string {
   let out = text.replace(
@@ -27,8 +28,14 @@ export function redactCredentials(text: string): string {
   );
   for (const re of CREDENTIAL_TOKEN_PATTERNS)
     out = out.replace(new RegExp(re.source, "g"), "[redacted]");
+  out = out
+    .replace(
+      /\b(Authorization["']?\s*[:=]\s*["']?(?:Bearer|Basic|Token|Digest)\s+)[^\s"',;]+/gi,
+      "$1[redacted]",
+    )
+    .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/-]{8,}=*/g, "$1[redacted]");
   return out.replace(
-    /\b([\w.-]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*)(["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
+    /\b([\w.-]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*)(["']?\s*[:=]\s*["']?)(?!\[redacted\])[^\s"',;]*[^\s"',;.!?:)\]]/gi,
     "$1$2[redacted]",
   );
 }

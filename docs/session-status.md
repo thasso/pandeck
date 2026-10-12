@@ -49,7 +49,9 @@ session has moved on since.
    under the session it describes.
 3. The card is stored as `DATA_DIR/sessions/<id>/status-card.json`, beside the
    session's log: it summarizes conversation content, which never enters SQLite.
-   Deleting the session deletes it.
+   Deleting the session deletes it (a cleanup step of the delete, whichever
+   harness held the session), and a refresh that finishes after the delete
+   writes nothing.
 
 The header is there because work moves on in a Task's own session after the
 session that planned it goes quiet. Without it the agent reports that session's
@@ -65,9 +67,12 @@ milestone collapse into one line. The timeline then shrinks in stages to fit
 short reply: "yes, do that" is not a decision without the question it answered.
 
 Every quoted string passes `redactCredentials` (`credentialRedaction.ts`, shared
-with the commit agent). The log is read as untyped JSON lines, the way
-`session_read` reads it, and other sessions' latest replies come from the tail
-of their logs only.
+with the commit agent): private keys, known token shapes, `Authorization:` and
+bare `Bearer` credentials, and the value of any `password=`/`token:`-style
+assignment, however short. The card is redacted again on the way out, in case
+the model repeats something the patterns missed. The log is read as untyped JSON
+lines, the way `session_read` reads it, and other sessions' latest replies come
+from the tail of their logs only.
 
 ## Refreshing
 
@@ -76,10 +81,18 @@ of their logs only.
 - `POST /api/session-status/refresh` writes a new card and answers with it. A
   refresh already running for the session is joined, not repeated, so a second
   tab gets the same card. A run that fails, or stops part-way, keeps the old
-  card.
+  card. A run cut off at the model's output limit counts as stopped part-way:
+  `runOneShot` reports it as a failure on both harnesses (pi's `length`,
+  Claude's `max_tokens`).
+- With `joinOnly`, the POST only waits for a refresh already running and never
+  starts one. A panel that finds a refresh running when it opens joins it this
+  way: if that run ends before the join arrives, the answer is the card it
+  wrote, not a new paid run nobody asked for.
 
 The model is the **Session status** setting (`sessionStatus`, a model slot like
-the PR agent's). The default is Luna with high thinking.
+the PR agent's). The default is Luna with high thinking. The run never falls
+back to another model (`modelFallback: "none"`): the card names the model that
+wrote it, and an unavailable one is an error to fix in Settings (HTTP 409).
 
 ## Why these choices
 

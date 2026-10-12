@@ -68,7 +68,14 @@ describe("buildSessionDigest", () => {
     };
     writeLog(id, [
       run("run.started", 1),
-      human('Deploy test. export AWS_ACCESS_KEY_ID="ASIA2UC3BAT77R2S3DGM"', 1),
+      human(
+        [
+          'Deploy test. export AWS_ACCESS_KEY_ID="ASIA2UC3BAT77R2S3DGM"',
+          "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+          "password=shortpw",
+        ].join("\n"),
+        1,
+      ),
       assistant(
         2,
         {
@@ -107,7 +114,12 @@ describe("buildSessionDigest", () => {
     assert.match(digest, /^# Session digest: STAR-1461: Deploy to test/);
     assert.match(digest, /- Activity: 2 runs on 1 day\(s\)/);
     assert.match(digest, /Credentials pasted by the user: 1 prompt\(s\)/);
-    assert.ok(!digest.includes("ASIA2UC3BAT77R2S3DGM"), "key redacted");
+    for (const secret of [
+      "ASIA2UC3BAT77R2S3DGM",
+      "eyJhbGciOiJIUzI1NiJ9",
+      "shortpw",
+    ])
+      assert.ok(!digest.includes(secret), `${secret} redacted`);
     assert.match(
       digest,
       /\*\*User answered questions:\*\* “Check 5 needs arm64 builds” → Skip check 5 for now/,

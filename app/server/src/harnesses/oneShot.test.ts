@@ -14,7 +14,10 @@ import {
   type OneShotRequest,
 } from "./oneShot.ts";
 
-vi.mock("../claudeSdk/oneShot.ts", () => ({ runClaudeSdkOneShot: vi.fn() }));
+vi.mock("../claudeSdk/oneShot.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../claudeSdk/oneShot.ts")>()),
+  runClaudeSdkOneShot: vi.fn(),
+}));
 vi.mock("../piSdk/oneShot.ts", () => ({
   findPiModelExact: vi.fn(),
   runPiOneShot: vi.fn(),
@@ -152,6 +155,23 @@ test("a failed run that wrote text returns it with the failure", async () => {
 
   assert.equal(result.text, "partial");
   assert.equal(result.failure, "The model stopped with aborted.");
+});
+
+test("a pi run cut off at its output limit fails with the text it wrote", async () => {
+  vi.mocked(runPiOneShot).mockResolvedValue({
+    text: "**Half a card",
+    usage: { outputTokens: 4096 },
+    stopReason: "length",
+    errorMessage: "",
+  });
+
+  const result = await runOneShot(request());
+
+  assert.equal(result.text, "**Half a card");
+  assert.equal(
+    result.failure,
+    "The model reached its output limit before finishing.",
+  );
 });
 
 test("documents need a Claude model", async () => {

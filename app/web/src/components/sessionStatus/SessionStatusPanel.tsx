@@ -90,28 +90,37 @@ function SessionStatusBody({
     };
   }, []);
 
-  const refresh = useCallback(() => {
-    setState((current) => ({ ...current, refreshing: true, error: null }));
-    refreshSessionStatus(sessionId).then(
-      (response) => {
-        if (!mounted.current) return;
-        setState((current) => ({
-          ...current,
-          loaded: true,
-          card: response.card,
-          refreshing: false,
-        }));
-      },
-      (err: unknown) => {
-        if (!mounted.current) return;
-        setState((current) => ({
-          ...current,
-          refreshing: false,
-          error: errorText(err),
-        }));
-      },
-    );
-  }, [sessionId]);
+  /**
+   * `join` only waits for a refresh another tab already started, never
+   * starting a paid run nobody clicked for: if that run ended before this
+   * request arrived, the answer is just the card it wrote.
+   */
+  const run = useCallback(
+    (join: boolean) => {
+      setState((current) => ({ ...current, refreshing: true, error: null }));
+      refreshSessionStatus(sessionId, { joinOnly: join }).then(
+        (response) => {
+          if (!mounted.current) return;
+          setState((current) => ({
+            ...current,
+            loaded: true,
+            card: response.card,
+            refreshing: false,
+          }));
+        },
+        (err: unknown) => {
+          if (!mounted.current) return;
+          setState((current) => ({
+            ...current,
+            refreshing: false,
+            error: errorText(err),
+          }));
+        },
+      );
+    },
+    [sessionId],
+  );
+  const refresh = useCallback(() => run(false), [run]);
 
   useEffect(() => {
     if (initialState) return;
@@ -124,7 +133,7 @@ function SessionStatusBody({
           card: response.card,
         }));
         // A refresh another tab started is joined: the server answers both.
-        if (response.refreshing) refresh();
+        if (response.refreshing) run(true);
       },
       (err: unknown) => {
         if (abort.signal.aborted) return;
@@ -136,7 +145,7 @@ function SessionStatusBody({
       },
     );
     return () => abort.abort();
-  }, [sessionId, initialState, refresh]);
+  }, [sessionId, initialState, run]);
 
   if (!state.loaded) return <PaneLoading label="Loading status…" />;
 

@@ -23,15 +23,24 @@ export async function fetchSessionStatus(
   );
 }
 
-/** Write a new card. Resolves once the agent has finished, which takes a while. */
+/**
+ * Write a new card. Resolves once the agent has finished, which takes a while.
+ * With `joinOnly` it only waits for a refresh already running and never starts
+ * one: the answer is then the current card.
+ */
 export async function refreshSessionStatus(
   sessionId: string,
+  options: { joinOnly?: boolean } = {},
 ): Promise<SessionStatusResponse> {
+  const request: SessionStatusRefreshRequest = {
+    sessionId,
+    ...(options.joinOnly ? { joinOnly: true } : {}),
+  };
   return json(
     await fetch(`${serverHttpOrigin()}/api/session-status/refresh`, {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ sessionId } satisfies SessionStatusRefreshRequest),
+      body: JSON.stringify(request),
     }),
   );
 }
