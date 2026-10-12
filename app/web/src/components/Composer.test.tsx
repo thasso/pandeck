@@ -17,12 +17,7 @@ import {
   it,
   vi,
 } from "vitest";
-import type {
-  ModelOption,
-  PromptAttachment,
-  SessionState,
-  SlashCommandInfo,
-} from "@assistant/shared";
+import type { PromptAttachment, SlashCommandInfo } from "@assistant/shared";
 import type { AssistantActions, ForkDraft } from "../hooks/useAssistant.ts";
 import type {
   NewPendingChatComment,
@@ -169,7 +164,7 @@ describe("Composer busy mode", () => {
     window.localStorage.clear();
   });
 
-  function renderComposer(canSteer: boolean) {
+  function renderComposer(canSteer: boolean, { queue = true } = {}) {
     const onSend = vi.fn();
     const onQueue = vi.fn();
     const runSlashCommand = vi.fn();
@@ -178,7 +173,7 @@ describe("Composer busy mode", () => {
       root!.render(
         <Composer
           onSend={onSend}
-          onQueue={onQueue}
+          {...(queue ? { onQueue } : {})}
           onAbort={() => {}}
           streaming
           disabled={false}
@@ -213,36 +208,27 @@ describe("Composer busy mode", () => {
     });
   }
 
-  function choose(label: "Steer" | "Queue") {
-    const radio = [
-      ...container!.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
-    ].find((el) => el.textContent === label);
-    act(() => radio!.click());
-  }
-
-  it("steers on Enter and queues on Alt+Enter by default", () => {
+  it("queues on Enter, and queues to steer in at once on Alt+Enter", () => {
     const { textarea, onSend, onQueue } = renderComposer(true);
-    type(textarea, "turn left");
-    press(textarea);
-    expect(onSend).toHaveBeenCalledWith("turn left", []);
+    // No mode to choose: the queue strip is where a message is steered in.
+    expect(container!.querySelector('[role="radiogroup"]')).toBeNull();
     type(textarea, "then this");
+    press(textarea);
+    expect(onQueue).toHaveBeenLastCalledWith({ text: "then this" });
+    type(textarea, "turn left");
     press(textarea, true);
-    expect(onQueue).toHaveBeenCalledWith({ text: "then this" });
+    expect(onQueue).toHaveBeenLastCalledWith({
+      text: "turn left",
+      steerNow: true,
+    });
+    expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("remembers Queue on this device and swaps what Alt+Enter does", () => {
-    const first = renderComposer(true);
-    choose("Queue");
-    type(first.textarea, "after");
-    press(first.textarea);
-    expect(first.onQueue).toHaveBeenCalledWith({ text: "after" });
-    act(() => root?.unmount());
-    container?.remove();
-
-    const second = renderComposer(true);
-    type(second.textarea, "now");
-    press(second.textarea, true);
-    expect(second.onSend).toHaveBeenCalledWith("now", []);
+  it("steers directly on a surface with no queue", () => {
+    const { textarea, onSend } = renderComposer(true, { queue: false });
+    type(textarea, "now");
+    press(textarea);
+    expect(onSend).toHaveBeenCalledWith("now", []);
   });
 
   it("only queues behind a provider that cannot steer", () => {
@@ -444,28 +430,29 @@ describe("Composer client commands", () => {
   });
 
   describe("ModeSelector", () => {
-    it("selects Plan from an icon-labelled dropdown", () => {
+    it("switches between Build and Plan with one switch labelled Plan", () => {
       const onChange = vi.fn();
       ({ container, root } = mount());
       act(() =>
         root!.render(<ModeSelector mode="build" onChange={onChange} />),
       );
 
-      const trigger = container.querySelector('button[title="Session mode"]');
-      expect(trigger?.textContent).toContain("Build");
-      act(() => {
-        trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
+      // Build is the default it works in; the switch names the exception.
+      expect(container.textContent?.trim()).toBe("Plan");
+      expect(
+        container.querySelector('[title="Session mode: Build"]'),
+      ).not.toBeNull();
+      const toggle = () =>
+        container!.querySelector<HTMLElement>('[aria-label="Plan mode"]')!;
+      act(() => toggle().click());
+      expect(onChange).toHaveBeenLastCalledWith("plan");
 
-      const plan = [
-        ...document.body.querySelectorAll('[role="menuitem"]'),
-      ].find((button) => button.textContent?.trim() === "Plan");
-      expect(plan).toBeDefined();
-      act(() => {
-        plan?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-
-      expect(onChange).toHaveBeenCalledWith("plan");
+      act(() => root!.render(<ModeSelector mode="plan" onChange={onChange} />));
+      expect(
+        container.querySelector('[title="Session mode: Plan"]'),
+      ).not.toBeNull();
+      act(() => toggle().click());
+      expect(onChange).toHaveBeenLastCalledWith("build");
     });
   });
 });
@@ -550,24 +537,11 @@ describe("Composer comment mode", () => {
             chatComments={chatComments}
             commentDraft={draft}
             onCommentDraftChange={setDraft}
-            onAddComment={() => {}}
           />
         </>
       );
     }
     act(() => root!.render(<Harness />));
-    const addComment = [...container.querySelectorAll("button")].find(
-      (button) => button.getAttribute("aria-label") === "Add comment",
-    )!;
-    expect(addComment.getAttribute("data-comment-actuation")).toBe("true");
-    const down = new MouseEvent("pointerdown", {
-      bubbles: true,
-      cancelable: true,
-    });
-    act(() => {
-      addComment.dispatchEvent(down);
-    });
-    expect(down.defaultPrevented).toBe(true);
     const textarea = container.querySelector("textarea")!;
     type(textarea, "  keep every byte  ");
     act(() => container!.querySelector("button")!.click());
@@ -728,12 +702,7 @@ describe("Composer comment mode", () => {
         blockIndex: 0,
       },
     };
-    act(() =>
-      root!.render(
-        composer({ chatComments: controller(), onAddComment: () => {} }),
-      ),
-    );
-    expect(labelled("Add comment")).toBeTruthy();
+    act(() => root!.render(composer({ chatComments: controller() })));
     expect(
       container.querySelector('[title="Attach files or images"]'),
     ).toBeTruthy();
@@ -742,7 +711,6 @@ describe("Composer comment mode", () => {
       root!.render(
         composer({
           chatComments: controller(),
-          onAddComment: () => {},
           commentDraft: draft,
         }),
       ),
@@ -750,7 +718,6 @@ describe("Composer comment mode", () => {
     expect(
       container.querySelector('[title="Attach files or images"]'),
     ).toBeNull();
-    expect(labelled("Add comment")).toBeUndefined();
     expect(labelled("Conversation branches")).toBeUndefined();
     // And nothing repeats the passage back: the user selected it one gesture ago
     // and it is highlighted in the transcript above.
@@ -1506,187 +1473,5 @@ describe("Composer staged drafts", () => {
     act(() => root!.render(<Host mounted={false} />));
     act(() => root!.render(<Host />));
     expect(textarea().value).toBe("my own prompt");
-  });
-});
-
-/**
- * The bottom row folds its runtime pickers by MEASUREMENT, and jsdom measures
- * everything as 0. These stubs give the four marked boxes
- * (`data-composer-fit`) a width, so the fold can be exercised the way a
- * squeezed desktop composer exercises it: same DOM, different budget.
- */
-describe("Composer runtime fold", () => {
-  const widths = { row: 900, lead: 32, trail: 160, runtime: 320 };
-
-  function markedWidth(element: HTMLElement): number | null {
-    const mark = element.dataset.composerFit;
-    if (!mark || !(mark in widths)) return null;
-    return widths[mark as keyof typeof widths];
-  }
-
-  /**
-   * The pills draw narrower below Tailwind's `sm` (a tighter model cap, the short
-   * thinking label), so the media query is a width input like any other. jsdom
-   * has no media-query engine: this stub is one the test can flip and notify.
-   */
-  const WIDE_LABEL_MEDIA = "(min-width: 40rem)";
-  let wideLabels = true;
-  let mediaChanged: (query: string) => void = () => {};
-
-  function setLabelPresentation(wide: boolean, stripWidth: number) {
-    wideLabels = wide;
-    widths.runtime = stripWidth;
-    act(() => mediaChanged(WIDE_LABEL_MEDIA));
-  }
-
-  const measured = ["clientWidth", "offsetWidth"] as const;
-  const unmeasured = measured.map((property) =>
-    Object.getOwnPropertyDescriptor(HTMLElement.prototype, property),
-  );
-
-  beforeAll(() => {
-    for (const property of measured) {
-      Object.defineProperty(HTMLElement.prototype, property, {
-        configurable: true,
-        get(this: HTMLElement) {
-          return markedWidth(this) ?? 0;
-        },
-      });
-    }
-    mediaChanged = stubMatchMedia((query) =>
-      query === WIDE_LABEL_MEDIA ? wideLabels : false,
-    );
-  });
-
-  afterAll(() => {
-    measured.forEach((property, index) => {
-      const descriptor = unmeasured[index];
-      if (descriptor)
-        Object.defineProperty(HTMLElement.prototype, property, descriptor);
-      else delete (HTMLElement.prototype as Partial<HTMLElement>)[property];
-    });
-    stubMatchMedia();
-  });
-
-  const model: ModelOption = {
-    provider: "anthropic",
-    id: "claude-opus-5",
-    name: "Opus 5",
-  } as ModelOption;
-
-  const session = {
-    id: "s-1",
-    harness: "pi",
-    agentType: "developer",
-    model,
-    thinkingLevel: "high",
-    mode: "build",
-  } as unknown as SessionState;
-
-  const actions = {
-    setModel: () => {},
-    setThinkingLevel: () => {},
-    setSessionMode: () => {},
-  } as unknown as AssistantActions;
-
-  let root: Root | null = null;
-  let container: HTMLDivElement | null = null;
-
-  afterEach(() => {
-    act(() => root?.unmount());
-    root = null;
-    container = null;
-    widths.row = 900;
-    widths.runtime = 320;
-    wideLabels = true;
-    window.localStorage.clear();
-  });
-
-  function render() {
-    if (!container) {
-      ({ container, root } = mount());
-    }
-    act(() =>
-      root!.render(
-        <Composer
-          onSend={() => {}}
-          onAbort={() => {}}
-          streaming={false}
-          disabled={false}
-          contextInfo={null}
-          session={session}
-          models={[model]}
-          slashCommands={[]}
-          actions={actions}
-        />,
-      ),
-    );
-  }
-
-  /** Re-render the mounted composer so it re-measures against the new widths. */
-  const relayout = render;
-
-  const strip = () =>
-    container?.querySelector('[data-composer-fit="runtime"]') ?? null;
-  const sheetTrigger = () =>
-    container?.querySelector<HTMLButtonElement>(
-      'button[aria-label^="Runtime settings"]',
-    ) ?? null;
-
-  it("keeps the pickers inline while the row can hold them", () => {
-    render();
-
-    expect(strip()).not.toBeNull();
-    expect(strip()?.textContent).toContain("Build");
-    expect(strip()?.textContent).toContain("Opus 5");
-    expect(sheetTrigger()).toBeNull();
-  });
-
-  it("folds them into the Runtime trigger once the row cannot", () => {
-    widths.row = 400;
-    render();
-
-    expect(strip()).toBeNull();
-    expect(sheetTrigger()?.textContent).toContain("Opus 5");
-  });
-
-  it("brings them back inline when the room returns", () => {
-    widths.row = 400;
-    render();
-    expect(strip()).toBeNull();
-
-    widths.row = 900;
-    relayout();
-
-    expect(strip()).not.toBeNull();
-    expect(sheetTrigger()).toBeNull();
-  });
-
-  it("re-measures when the pills change presentation while folded", () => {
-    // Folded at the wide presentation: 32 + 4 + 320 + 8 + 160 is past 420.
-    widths.row = 420;
-    render();
-    expect(strip()).toBeNull();
-
-    // Below `sm` the same pickers draw narrower and now fit — but the strip is
-    // gone, so nothing can re-measure it unless the mode invalidates the width
-    // the fold remembered.
-    setLabelPresentation(false, 200);
-
-    expect(strip()).not.toBeNull();
-    expect(sheetTrigger()).toBeNull();
-  });
-
-  it("folds again when the pills widen back while inline", () => {
-    widths.row = 420;
-    widths.runtime = 200;
-    wideLabels = false;
-    render();
-    expect(strip()).not.toBeNull();
-
-    setLabelPresentation(true, 320);
-
-    expect(strip()).toBeNull();
-    expect(sheetTrigger()).not.toBeNull();
   });
 });

@@ -3,15 +3,14 @@ import { Badge } from "./ui/badge.tsx";
 import {
   CalendarCheck,
   Flag,
+  FolderKanban,
   GitBranch,
   GitPullRequest,
   MessageSquare,
   Workflow,
 } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
-import { ProjectBadge } from "./ProjectBadge.tsx";
 import { TaskIdBadge } from "./TaskIdBadge.tsx";
-import { TASK_STATUS_LABEL } from "./TaskStatusIcon.tsx";
 import { Spinner } from "./common/load.tsx";
 import {
   projectPath,
@@ -27,6 +26,14 @@ import {
   type TaskRowMeta,
 } from "../lib/taskRowMeta.ts";
 import type { HostingAttention } from "../lib/worktreeHosting.ts";
+import { projectColor, resolveProjectDisplay } from "../lib/projectDisplay.ts";
+
+/**
+ * A neutral fact on line 2, as plain muted text rather than a pill — the
+ * session cards' meta line. Only what needs the user keeps a badge's chrome.
+ */
+const PLAIN_META =
+  "h-auto rounded-none border-0 bg-transparent px-0 py-0 font-normal text-muted-foreground";
 
 /** Priority is shown only when it is NOT the default — a row that says
  *  "normal" spends its second line restating the absence of information. */
@@ -127,7 +134,6 @@ function deliveryTitle(delivery: TaskRowDelivery): string {
 export function TaskRowBody({
   task,
   meta,
-  whenMetaEmpty = "id-only",
   sessionShownElsewhere = false,
   projectsById,
   selected,
@@ -139,13 +145,6 @@ export function TaskRowBody({
   task: Task;
   /** Line 2's content, or `null` for a single-line row. */
   meta: TaskRowMeta | null;
-  /**
-   * What else line 2 says when the meta states nothing. The id is always there,
-   * so the line never goes blank; a row whose HEIGHT is a thumb target takes the
-   * `fallback` — the facts a Task always has — so the list cannot alternate
-   * between a one- and a two-chip line.
-   */
-  whenMetaEmpty?: "id-only" | "fallback";
   /**
    * The row states the Task's session somewhere ELSE — the tree's gutter action,
    * which both says it exists and leads to it. Line 2 then drops its own Session
@@ -190,7 +189,10 @@ export function TaskRowBody({
     meta && sessionShownElsewhere && !meta.working
       ? { ...meta, session: null }
       : meta;
-  const empty = !line2 || taskRowMetaEmpty(line2);
+  // The Project leads line 2 on its own, so it does not count as something
+  // else to say: a Task with only a Project still gets the fallback.
+  const empty = !line2 || taskRowMetaEmpty({ ...line2, projectId: null });
+  const project = line2?.projectId ? projectPath(line2.projectId) : null;
   const titleClass = `min-w-0 flex-1 truncate text-sm ${done ? "text-muted-foreground line-through" : dimmed ? "text-muted-foreground" : selected ? "font-medium text-foreground" : "text-foreground"}`;
   return (
     <>
@@ -223,27 +225,28 @@ export function TaskRowBody({
         {line2 ? null : <TaskIdBadge id={task.id} onNavigate={onNavigate} />}
       </span>
       {line2 ? (
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs">
-          {/* The id OPENS line 2, in every two-line view: a left-hand column the
-              eye scans down, and the one item on a clipping line that must never
-              be the thing that clips. */}
-          <TaskIdBadge id={task.id} onNavigate={onNavigate} />
-          {!empty ? (
-            <TaskMetaItems
-              meta={line2}
+        // One line that drops what does not fit WHOLE, never half an item: it
+        // wraps, but is one line tall, so a wrapped item goes below the clip
+        // (the session cards' signal row does the same).
+        <span className="mt-0.5 flex h-5 min-w-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden whitespace-nowrap text-xs">
+          {/* The Project OPENS line 2, then the id, in every two-line view: a
+              left-hand column the eye scans down, and the items on a clipping
+              line that must never be the ones that clip (the Project's name
+              shortens before it goes). */}
+          {line2.projectId ? (
+            <TaskProjectMeta
+              projectId={line2.projectId}
               projectsById={projectsById}
+              href={project}
               onNavigate={onNavigate}
             />
-          ) : whenMetaEmpty === "fallback" ? (
-            /* Nothing else to report. A row whose height is a thumb target says
-               the two facts a Task always has — where it stands, and how long it
-               has stood there — rather than leaving the line to the id alone. */
-            <span
-              className="shrink-0 text-muted-foreground"
-              title={`Updated ${line2.age}`}
-            >
-              {TASK_STATUS_LABEL[task.status]} · {line2.age}
-            </span>
+          ) : null}
+          <TaskIdBadge id={task.id} onNavigate={onNavigate} />
+          {/* Nothing else to say leaves the line to the Project and the id:
+              the status is the glyph beside the title, and how long ago the
+              Task changed is not worth the space. */}
+          {!empty ? (
+            <TaskMetaItems meta={line2} onNavigate={onNavigate} />
           ) : null}
         </span>
       ) : null}
@@ -303,16 +306,14 @@ function MetaLink({
 }
 
 /**
- * The chips, in the order they survive a narrow row: what is true THIS SECOND
- * first, then what was decided about the Task, then where it belongs.
+ * The chips after the Project and the id, in the order they survive a narrow
+ * row: what is true THIS SECOND first, then what was decided about the Task.
  */
 function TaskMetaItems({
   meta,
-  projectsById,
   onNavigate,
 }: {
   meta: TaskRowMeta;
-  projectsById: Map<string, ProjectRecord>;
   onNavigate?: ((path: string) => void) | undefined;
 }) {
   // The routes the chips lead to, resolved once. `working` is OBSERVED on a
@@ -323,7 +324,6 @@ function TaskMetaItems({
   const worktreeChanges = meta.worktreeId
     ? worktreePath(meta.worktreeId, "changes")
     : null;
-  const project = meta.projectId ? projectPath(meta.projectId) : null;
   return (
     <>
       {/* WHAT the agent suggested, since the two kinds ask different questions
@@ -464,6 +464,7 @@ function TaskMetaItems({
       {meta.planned ? (
         <Badge
           variant="secondary"
+          className={PLAIN_META}
           title={`Planned for ${meta.planned.toLowerCase()}`}
         >
           <CalendarCheck aria-hidden="true" />
@@ -473,6 +474,7 @@ function TaskMetaItems({
       {meta.due ? (
         <Badge
           variant={meta.overdue ? "destructive" : "secondary"}
+          className={meta.overdue ? undefined : PLAIN_META}
           title={`Due ${meta.due.toLowerCase()}`}
         >
           <Flag aria-hidden="true" />
@@ -488,36 +490,53 @@ function TaskMetaItems({
                 ? "warning"
                 : "secondary"
           }
+          className={
+            meta.priority === "urgent" || meta.priority === "high"
+              ? undefined
+              : PLAIN_META
+          }
         >
           {meta.priority}
         </Badge>
       ) : null}
-      {/* The chip keeps its own tooltip (the Project's full name), so the link
-          around it carries none and adds no underline: it is a badge, and a
-          dotted line under a coloured pill reads as damage rather than as an
-          affordance. */}
-      {meta.projectId ? (
-        project && onNavigate ? (
-          <a
-            href={project}
-            draggable={false}
-            className="flex min-w-0 shrink-0"
-            onClick={(event) => followRowLink(event, project, onNavigate)}
-          >
-            <ProjectBadge
-              projectId={meta.projectId}
-              projectsById={projectsById}
-              size="sm"
-            />
-          </a>
-        ) : (
-          <ProjectBadge
-            projectId={meta.projectId}
-            projectsById={projectsById}
-            size="sm"
-          />
-        )
-      ) : null}
     </>
+  );
+}
+
+/** A Task's Project on a row's meta line: its icon in its colour and its short
+ *  name, muted, leading to the Project when there is somewhere to go. */
+export function TaskProjectMeta({
+  projectId,
+  projectsById,
+  href,
+  onNavigate,
+}: {
+  projectId: string;
+  projectsById: Map<string, ProjectRecord>;
+  href: string | null;
+  onNavigate?: ((path: string) => void) | undefined;
+}) {
+  const project = projectsById.get(projectId);
+  const { label, shortLabel, known } = resolveProjectDisplay(
+    projectId,
+    projectsById,
+  );
+  return (
+    <MetaLink
+      href={href ?? ""}
+      title={known ? label : `Unknown project: ${projectId}`}
+      className="inline-flex max-w-1/2 min-w-0 shrink-0 items-center gap-1 text-muted-foreground hover:text-foreground"
+      onNavigate={href ? onNavigate : undefined}
+    >
+      <FolderKanban
+        size={11}
+        className="shrink-0"
+        style={
+          known ? { color: projectColor(project ?? projectId).dot } : undefined
+        }
+        aria-hidden
+      />
+      <span className="truncate">{shortLabel}</span>
+    </MetaLink>
   );
 }

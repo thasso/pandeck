@@ -15,6 +15,11 @@ export interface CommentActuation {
   canComment?: boolean;
   /** Opens the surface-owned composer for its current target. */
   onComment?: () => void;
+  /**
+   * What the comment control adds right now ("Comment on the selected
+   * passage", "Comment on the whole document"), where that differs by state.
+   */
+  commentLabel?: string;
   /** Number of comments waiting to be submitted as one review. */
   pendingCount?: number;
   /** Opens the surface-owned review submission flow. */
@@ -103,6 +108,7 @@ export function usePublishCommentActuation(value: CommentActuation | null) {
   const pendingCount = value?.pendingCount;
   const composerOpen = value?.composerOpen;
   const submitLabel = value?.submitLabel;
+  const commentLabel = value?.commentLabel;
   // Keep callback identity out of the channel: surfaces often close over their
   // current selection, and publishing a fresh closure must not make the route
   // provider and its surface re-render one another forever.
@@ -116,6 +122,7 @@ export function usePublishCommentActuation(value: CommentActuation | null) {
             ...(hasSubmitReview ? { onSubmitReview: runSubmitReview } : {}),
             ...(composerOpen !== undefined ? { composerOpen } : {}),
             ...(submitLabel !== undefined ? { submitLabel } : {}),
+            ...(commentLabel !== undefined ? { commentLabel } : {}),
           }
         : null,
     [
@@ -127,6 +134,7 @@ export function usePublishCommentActuation(value: CommentActuation | null) {
       pendingCount,
       composerOpen,
       submitLabel,
+      commentLabel,
       hasValue,
     ],
   );

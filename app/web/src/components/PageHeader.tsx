@@ -4,7 +4,7 @@ import {
   ClipboardList,
   MessageSquare,
   MessageSquareQuote,
-  MoreHorizontal,
+  EllipsisVertical,
   SendHorizontal,
   Terminal,
   Wrench,
@@ -213,12 +213,15 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
     return null;
 
   const canComment = actuation?.canComment === true;
+  const commentLabel = canComment
+    ? (actuation?.commentLabel ?? "Add comment")
+    : "Select text to comment";
   return (
     <div className="hidden shrink-0 items-center gap-1 md:flex">
       {showComment ? (
         // The title sits on a wrapper: a disabled button takes no pointer
         // events, and its tooltip is the one place the gesture is named.
-        <span title={canComment ? "Add comment" : "Select text to comment"}>
+        <span title={commentLabel}>
           <Button
             variant="ghost"
             size="icon"
@@ -226,7 +229,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
             onPointerDown={(event) => event.preventDefault()}
             onClick={actuation?.onComment}
             disabled={!canComment}
-            aria-label="Add comment"
+            aria-label={commentLabel}
           >
             <MessageSquareQuote />
           </Button>
@@ -261,7 +264,7 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
               />
             }
           >
-            <MoreHorizontal />
+            <EllipsisVertical />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-48">
             {secondary.map((action) => (

@@ -1,37 +1,45 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Clipboard,
-  ExternalLink,
+  Activity,
+  Download,
+  FileText,
+  Film,
   Image as ImageIcon,
-  MessageSquare,
   MonitorPlay,
+  Lock,
+  Shield,
   ShieldCheck,
+  ShieldOff,
   Sparkles,
   Wrench,
+  type LucideIcon,
 } from "lucide-react";
-import { approvalGrantLabel } from "@assistant/shared";
+import { approvalGrantLabel, GRANTABLE_OPERATIONS } from "@assistant/shared";
+import { useDialogs } from "./common/dialogs.tsx";
 import type {
   ApprovalGrant,
   BrowserRuntimeInfo,
-  PeerPromptState,
-  PeerPromptThreadMessage,
-  PeerPromptThreadsProjection,
   PendingPostReloadContinuation,
   SessionArtifact,
   SessionSkillInvocation,
   SessionToolExposure,
   SkillLibraryList,
 } from "@assistant/shared";
-import { copyWithToast } from "../lib/clipboard.ts";
 import { relativeTime } from "../lib/sessionRows.ts";
-import { sessionPath } from "../lib/sessionRoutes.ts";
 import { artifactHttpUrl } from "../lib/serverOrigin.ts";
-import { showToast } from "../lib/toast.ts";
+import { formatFileSize } from "../lib/servedFiles.ts";
+import { parseDocumentTarget } from "@assistant/shared/documentTargets";
+import { ArtifactOverlay } from "./ArtifactOverlay.tsx";
+import { DisclosureRow } from "./common/DisclosureRow.tsx";
+import { relativeAge } from "../lib/relativeTime.ts";
+import { useElapsedNow } from "./useElapsedNow.ts";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { InspectorSection } from "./shell/Inspector.tsx";
-import { ImageLightbox } from "./common/ImageLightbox.tsx";
 import { ErrorNote, PaneLoading, RefreshIndicator } from "./common/load.tsx";
-import { IconButton } from "./common/IconButton.tsx";
-import { LinkButton } from "./common/LinkButton.tsx";
 import {
   Accordion,
   AccordionContent,
@@ -47,23 +55,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Item,
   ItemActions,
   ItemContent,
   ItemDescription,
-  ItemGroup,
-  ItemHeader,
   ItemTitle,
 } from "@/components/ui/item";
-import { useFetchState } from "../hooks/useFetchState.ts";
 import {
   dataOf,
   errorOf,
@@ -74,7 +71,7 @@ import {
 /**
  * @component SessionContextSections
  * @purpose The session inspector's feature content: queued post-reload
- * continuation, durable peer-prompt history, library skills (loaded /
+ * continuation, library skills (loaded /
  * available / not mounted),
  * deferred-tool exposure (the "Tools" section: loaded/available/unavailable
  * per catalog group + load trail, including the browser tool groups), the
@@ -97,17 +94,12 @@ interface SessionContextSectionsProps {
   artifacts?: SessionArtifact[];
   pendingPostReloadContinuation?: PendingPostReloadContinuation | undefined;
   browserRuntimes?: BrowserRuntimeInfo[];
-  peerPrompts?: PeerPromptThreadsProjection | undefined;
-  onExpandPeerPromptHistory?: (limit?: number) => void;
-  onOpenSession?: (id: string) => void;
-  /** Jump to the other party's copy of one peer-prompt message. */
-  onRevealPeerPromptMessage?: (messageKey: string) => void;
-  /** The message whose jump is still being resolved, if any. */
-  peerPromptRevealPendingKey?: string;
   onCancelPostReloadContinuation?: () => void;
   /** Operations the user approved for the rest of this session. */
   approvalGrants?: readonly ApprovalGrant[] | undefined;
   onRevokeApprovalGrant?: (sessionId: string, key: string) => void;
+  /** Grant one operation for the rest of this session, before a card asks. */
+  onGrantApproval?: (sessionId: string, key: string) => void;
 }
 
 export function SessionContextSections({
@@ -119,14 +111,10 @@ export function SessionContextSections({
   artifacts = [],
   pendingPostReloadContinuation,
   browserRuntimes = [],
-  peerPrompts,
-  onExpandPeerPromptHistory,
-  onOpenSession,
-  onRevealPeerPromptMessage,
-  peerPromptRevealPendingKey,
   onCancelPostReloadContinuation,
   approvalGrants = [],
   onRevokeApprovalGrant,
+  onGrantApproval,
 }: SessionContextSectionsProps) {
   // A fragment, not a box: these sections are siblings of the panel's other
   // sections, which is what gives them the shared separator and spacing.
@@ -136,19 +124,6 @@ export function SessionContextSections({
         <PostReloadContinuationCard
           continuation={pendingPostReloadContinuation}
           onCancel={onCancelPostReloadContinuation}
-        />
-      )}
-
-      {peerPrompts && peerPrompts.threads.length > 0 && (
-        <PeerPromptsSection
-          sessionId={sessionId}
-          projection={peerPrompts}
-          onExpand={onExpandPeerPromptHistory}
-          onOpenSession={onOpenSession}
-          onRevealMessage={onRevealPeerPromptMessage}
-          {...(peerPromptRevealPendingKey
-            ? { revealPendingKey: peerPromptRevealPendingKey }
-            : {})}
         />
       )}
 
@@ -165,13 +140,14 @@ export function SessionContextSections({
         <ToolsSection sessionId={sessionId} exposure={toolExposure} />
       )}
 
-      {approvalGrants.length > 0 && (
+      {approvalGrants.length > 0 || onGrantApproval ? (
         <ApprovalGrantsSection
           sessionId={sessionId}
           grants={approvalGrants}
           onRevoke={onRevokeApprovalGrant}
+          onGrant={onGrantApproval}
         />
-      )}
+      ) : null}
 
       <BrowserRuntimesSection
         sessionId={sessionId}
@@ -182,182 +158,6 @@ export function SessionContextSections({
         <ArtifactsSection sessionId={sessionId} artifacts={artifacts} />
       )}
     </>
-  );
-}
-
-const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
-  queued: "Queued",
-  delivered: "Delivered",
-  acknowledged: "Acknowledged",
-  completed: "Completed",
-  awaiting_response: "Awaiting response",
-  replied: "Replied",
-  retrying: "Retrying",
-  interrupted: "Interrupted",
-  cancelled: "Cancelled",
-  expired: "Expired",
-  failed: "Failed",
-};
-
-/**
- * One message, as a chat bubble: the reader's own side on the right, the peer's
- * on the left, so nothing has to say "sent" or "received". The whole bubble is
- * the link to the OTHER party's copy of that message, which is the only place
- * the full text is worth reading — a real `<a href>` at the peer session, so the
- * ordinary browser gestures still work, with the precise jump on a plain click.
- */
-function PeerPromptBubble({
-  message,
-  peerSessionId,
-  busy,
-  onReveal,
-}: {
-  message: PeerPromptThreadMessage;
-  peerSessionId: string;
-  busy: boolean;
-  onReveal?: ((messageKey: string) => void) | undefined;
-}) {
-  const sent = message.direction === "sent";
-  return (
-    <div className={`flex ${sent ? "justify-end" : "justify-start"}`}>
-      <a
-        href={sessionPath(peerSessionId)}
-        aria-busy={busy || undefined}
-        className={`block min-w-0 max-w-5/6 rounded-xl px-2 py-1 transition-colors ${
-          sent
-            ? "bg-accent hover:bg-primary/15"
-            : "border border-border bg-card/60 hover:bg-background"
-        } ${busy ? "opacity-60" : ""}`}
-        onClick={(event) => {
-          if (
-            !onReveal ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          )
-            return;
-          event.preventDefault();
-          onReveal(message.id);
-        }}
-      >
-        {/* Already an excerpt when it arrives (`peerPromptExcerpt`): the full
-            message is never on the wire, and truncating again here would only
-            add a second ellipsis. */}
-        <p className="line-clamp-2 break-words text-sm text-foreground">
-          {message.message}
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {PEER_PROMPT_STATE_LABEL[message.state]} ·{" "}
-          {relativeTime(message.createdAt)}
-        </p>
-        {message.failureReason ? (
-          // The only detail kept: a failed message whose reason lived nowhere
-          // else in the UI would show a state word and no way to understand it.
-          <p className="mt-0.5 line-clamp-2 break-words text-xs text-destructive">
-            {message.failureReason}
-          </p>
-        ) : null}
-      </a>
-    </div>
-  );
-}
-
-/**
- * Durable peer-prompt history, read as conversations rather than as records:
- * one flat thread per peer, its name linking to that session and each bubble to
- * the message itself over there. Collapsed by default — it is reference
- * material about work that already happened, not something to scan every visit.
- */
-export function PeerPromptsSection({
-  sessionId,
-  projection,
-  onExpand,
-  onOpenSession,
-  onRevealMessage,
-  revealPendingKey,
-}: {
-  sessionId: string;
-  projection: PeerPromptThreadsProjection;
-  onExpand?: ((limit?: number) => void) | undefined;
-  onOpenSession?: ((id: string) => void) | undefined;
-  onRevealMessage?: ((messageKey: string) => void) | undefined;
-  revealPendingKey?: string;
-}) {
-  const messageCount = projection.threads.reduce(
-    (n, t) => n + t.messages.length,
-    0,
-  );
-  return (
-    <InspectorSection
-      id="peer-prompts"
-      storageScope={`session:${sessionId}`}
-      title="Peer prompts"
-      icon={<MessageSquare size={13} />}
-      defaultOpen={false}
-      summary={`${projection.threads.length} thread${projection.threads.length === 1 ? "" : "s"} · ${messageCount} message${messageCount === 1 ? "" : "s"}`}
-    >
-      <div className="space-y-3">
-        {projection.threads.map((thread) => (
-          <div
-            key={thread.conversationId}
-            className="space-y-1 border-t border-border pt-2.5 first:border-t-0 first:pt-0"
-          >
-            <div className="flex items-baseline gap-2">
-              <a
-                href={sessionPath(thread.peerSessionId)}
-                title={thread.otherPartyTitle}
-                className="min-w-0 truncate text-sm font-medium text-foreground underline decoration-dotted underline-offset-2 hover:decoration-solid"
-                onClick={(event) => {
-                  if (
-                    !onOpenSession ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey
-                  )
-                    return;
-                  event.preventDefault();
-                  onOpenSession(thread.peerSessionId);
-                }}
-              >
-                {thread.otherPartyTitle}
-              </a>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {relativeTime(
-                  thread.messages[thread.messages.length - 1]?.createdAt ?? 0,
-                )}
-              </span>
-            </div>
-            {thread.messages.map((message) => (
-              <PeerPromptBubble
-                key={message.id}
-                message={message}
-                peerSessionId={thread.peerSessionId}
-                busy={revealPendingKey === message.id}
-                onReveal={onRevealMessage}
-              />
-            ))}
-          </div>
-        ))}
-        {projection.truncated ? (
-          onExpand ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onExpand()}
-              className="w-full"
-            >
-              Load more history
-            </Button>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Older peer prompts are not shown.
-            </p>
-          )
-        ) : null}
-      </div>
-    </InspectorSection>
   );
 }
 
@@ -475,41 +275,58 @@ export function ActiveSkillsSection({
         <RefreshIndicator label="Refreshing skills" />
       ) : null}
       {skills.length > 0 ? (
-        <ItemGroup className="gap-1" aria-label="Session skills">
+        // Plain rows, as the panel's other lists: the state is the small
+        // circle in front of the name, not a chip — filled once the body is
+        // loaded, an outline while only its name and description are in
+        // context, dashed when it is not mounted at all. Only a loaded skill
+        // says more on its line (how often, when); the rest is the tooltip.
+        <ul className="flex flex-col" aria-label="Session skills">
           {skills.map((name) => {
             const load = loads.get(name);
-            const state = load
+            const state: SkillState = load
               ? "Loaded"
               : mounted.has(name)
                 ? "Available"
                 : "Not mounted";
-            const detail = load
-              ? `${load.count > 1 ? `×${load.count} · ` : ""}${SKILL_LOAD_VIA[load.last.via]} ${new Date(load.last.at).toLocaleTimeString()}`
-              : undefined;
+            const title = load
+              ? `${SKILL_STATE_TITLE[state]} — ${load.count > 1 ? `${load.count} times, last ` : ""}via ${SKILL_LOAD_VIA[load.last.via]} at ${new Date(load.last.at).toLocaleTimeString()}`
+              : SKILL_STATE_TITLE[state];
             return (
-              <Item
+              <li
                 key={name}
-                variant="outline"
-                size="xs"
-                render={<li />}
                 aria-label={`${name}: ${state}`}
-                className="flex-nowrap"
+                title={title}
+                className="flex min-h-7 min-w-0 items-center gap-2 px-1 text-sm"
               >
-                <ItemContent className="min-w-0">
-                  <ItemTitle className="w-full">
-                    <span className="truncate">{name}</span>
-                  </ItemTitle>
-                </ItemContent>
-                <Badge
-                  variant={SKILL_STATE_BADGE[state]}
-                  title={SKILL_STATE_TITLE[state]}
+                {/* An 8px dot in the 14px glyph column: filled once loaded,
+                    a ring while only available, a faint ring when not
+                    mounted. */}
+                <span
+                  aria-hidden
+                  className="flex size-3.5 shrink-0 items-center justify-center"
                 >
-                  {detail ?? state}
-                </Badge>
-              </Item>
+                  <span
+                    className={`size-2 rounded-full ${SKILL_STATE_DOT[state]}`}
+                  />
+                </span>
+                <span
+                  className={`min-w-0 flex-1 truncate ${state === "Not mounted" ? "text-muted-foreground" : "text-foreground"}`}
+                >
+                  {name}
+                </span>
+                {load ? (
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {load.count > 1 ? `×${load.count} · ` : ""}
+                    {new Date(load.last.at).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                ) : null}
+              </li>
             );
           })}
-        </ItemGroup>
+        </ul>
       ) : !libraryPending && !libraryError ? (
         <p className="text-sm text-muted-foreground">
           No library skills were available when this session started.
@@ -525,11 +342,13 @@ const SKILL_STATE_TITLE = {
   "Not mounted": "Not mounted for this session",
 } as const;
 
-const SKILL_STATE_BADGE = {
-  Loaded: "success",
-  Available: "outline",
-  "Not mounted": "secondary",
-} as const;
+type SkillState = keyof typeof SKILL_STATE_TITLE;
+
+const SKILL_STATE_DOT: Record<SkillState, string> = {
+  Loaded: "bg-success",
+  Available: "border border-muted-foreground",
+  "Not mounted": "border border-muted-foreground/40",
+};
 
 const SKILL_LOAD_VIA: Record<SessionSkillInvocation["via"], string> = {
   skill_tool: "Skill tool",
@@ -663,49 +482,148 @@ function ToolsSection({
   );
 }
 
-/** Operations that run without a click for the rest of this session. */
+/**
+ * Every operation an approval card can ask for, in ONE list of the panel's
+ * rows: the ones this session allows without a click first (with when), then
+ * the ones that still ask, then those only ever approved on their own card.
+ * A row opens to what the operation covers and its status, with Revoke or
+ * Allow… under that; allowing ahead of a card asks for confirmation.
+ */
 function ApprovalGrantsSection({
   sessionId,
   grants,
   onRevoke,
+  onGrant,
 }: {
   sessionId: string;
   grants: readonly ApprovalGrant[];
   onRevoke?: ((sessionId: string, key: string) => void) | undefined;
+  onGrant?: ((sessionId: string, key: string) => void) | undefined;
 }) {
+  const dialogs = useDialogs();
+  const byKey = new Map(grants.map((grant) => [grant.key, grant]));
+  const listed = new Set(
+    GRANTABLE_OPERATIONS.map((operation) => operation.key),
+  );
+  // A grant the list does not name (one tag, from its card) still shows.
+  const rows = [
+    ...grants
+      .filter((grant) => !listed.has(grant.key))
+      .map((grant) => ({
+        key: grant.key,
+        label: approvalGrantLabel(grant.key),
+        covers: "Exactly what its card approved.",
+        cardOnly: true,
+      })),
+    ...GRANTABLE_OPERATIONS,
+  ].sort(
+    (a, b) =>
+      Number(byKey.has(b.key)) - Number(byKey.has(a.key)) ||
+      Number(a.cardOnly) - Number(b.cardOnly),
+  );
+  const allow = async (key: string) => {
+    if (!onGrant) return;
+    const confirmed = await dialogs.confirm({
+      title: `Allow “${approvalGrantLabel(key)}” without asking?`,
+      body: "For the rest of this session, cards for this operation run without waiting for your click. You can revoke it here at any time.",
+      confirmLabel: "Allow for this session",
+    });
+    if (confirmed) onGrant(sessionId, key);
+  };
   return (
     <InspectorSection
       id="approval-grants"
       storageScope={`session:${sessionId}`}
-      title="Approved for session"
+      title="Approvals"
       icon={<ShieldCheck size={13} />}
-      summary={`${grants.length} operation${grants.length === 1 ? "" : "s"}`}
-      defaultOpen
+      summary={grants.length ? `${grants.length} allowed` : "All ask first"}
+      defaultOpen={grants.length > 0}
     >
-      <ul className="space-y-1">
-        {grants.map((grant) => (
-          <li
-            key={grant.key}
-            className="flex items-center gap-2 text-sm text-foreground"
-          >
-            <span className="min-w-0 flex-1 truncate">
-              {approvalGrantLabel(grant.key)}
-            </span>
-            <span className="shrink-0 text-xs text-muted-foreground">
-              {relativeTime(grant.grantedAt)}
-            </span>
-            {onRevoke && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => onRevoke(sessionId, grant.key)}
-              >
-                Revoke
-              </Button>
-            )}
-          </li>
-        ))}
+      <ul className="-mx-3 divide-y" aria-label="Approvals for this session">
+        {rows.map((operation) => {
+          const grant = byKey.get(operation.key);
+          return (
+            <DisclosureRow
+              key={operation.key}
+              rowId={operation.key}
+              inset={0.3125}
+              head={
+                <>
+                  <span
+                    className={`flex size-4 shrink-0 items-center justify-center ${grant ? "text-success" : "text-muted-foreground"}`}
+                  >
+                    {grant ? (
+                      <ShieldCheck size={13} aria-label="Allowed" />
+                    ) : operation.cardOnly ? (
+                      <Lock size={12} aria-label="Card only" />
+                    ) : (
+                      <Shield size={13} aria-label="Asks first" />
+                    )}
+                  </span>
+                  <span
+                    className={`min-w-0 flex-1 truncate text-left text-sm ${grant ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {operation.label}
+                  </span>
+                </>
+              }
+              age={grant ? relativeTime(grant.grantedAt) : ""}
+              {...(grant
+                ? { ageTitle: new Date(grant.grantedAt).toLocaleString() }
+                : {})}
+            >
+              <PropertyList size="sm" align="start">
+                <PropertyLabel>Status</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {grant
+                    ? `Allowed since ${new Date(grant.grantedAt).toLocaleString()}`
+                    : operation.cardOnly
+                      ? "Approved on its card, every time"
+                      : "Asks first"}
+                </PropertyText>
+                <PropertyLabel>Covers</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {operation.covers}
+                </PropertyText>
+                <PropertyLabel>Key</PropertyLabel>
+                <PropertyText className="truncate font-mono text-foreground">
+                  {operation.key}
+                </PropertyText>
+              </PropertyList>
+              {grant && onRevoke ? (
+                <div className="mt-1.5 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => onRevoke(sessionId, operation.key)}
+                  >
+                    <ShieldOff />
+                    Revoke — ask again next time
+                  </Button>
+                </div>
+              ) : !grant && !operation.cardOnly && onGrant ? (
+                <div className="mt-1.5 flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    onClick={() => void allow(operation.key)}
+                  >
+                    <ShieldCheck />
+                    Allow for this session…
+                  </Button>
+                </div>
+              ) : null}
+            </DisclosureRow>
+          );
+        })}
       </ul>
+      {/* What the list cannot show: the steps that never raise a card. */}
+      <p className="mt-2 px-1 text-xs text-muted-foreground">
+        Never asks: a managed worktree&rsquo;s own commit, push, pull request
+        and merge into a non-default branch.
+      </p>
     </InspectorSection>
   );
 }
@@ -764,6 +682,12 @@ function BrowserRuntimesSection({
   );
 }
 
+/**
+ * The session's artifacts as a plain list, newest first: a thumbnail where the
+ * artifact is an image (its kind's glyph otherwise), the label, and the file
+ * name, age and size. A row opens the artifact full screen over the app
+ * (`ArtifactOverlay`), in the same viewer the artifact route uses.
+ */
 function ArtifactsSection({
   sessionId,
   artifacts,
@@ -771,40 +695,17 @@ function ArtifactsSection({
   sessionId: string;
   artifacts: SessionArtifact[];
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(
-    artifacts[0]?.id ?? null,
+  const [opened, setOpened] = useState<{
+    sessionId: string;
+    path: string;
+    label: string;
+  } | null>(null);
+  const newestFirst = useMemo(
+    () => [...artifacts].sort((a, b) => b.createdAt - a.createdAt),
+    [artifacts],
   );
-  const selected = useMemo(
-    () =>
-      artifacts.find((artifact) => artifact.id === selectedId) ?? artifacts[0],
-    [artifacts, selectedId],
-  );
-  const copy = async (text: string) => {
-    await copyWithToast(text, { successMessage: "Copied URL to clipboard" });
-  };
-  const copyImage = async (artifact: SessionArtifact) => {
-    const url = artifactHttpUrl(artifact.url);
-    if (window.isSecureContext && navigator.clipboard?.write) {
-      try {
-        const blob = await fetch(url).then((r) => r.blob());
-        await navigator.clipboard.write([
-          new ClipboardItem({ [blob.type]: blob }),
-        ]);
-        showToast("Copied image to clipboard", { tone: "success" });
-        return;
-      } catch {
-        // Fall back to copying the URL below.
-      }
-    }
-    await copy(url);
-  };
-
-  useEffect(() => {
-    if (selected && artifacts.some((artifact) => artifact.id === selected.id))
-      return;
-    setSelectedId(artifacts[0]?.id ?? null);
-  }, [artifacts, selected]);
-
+  // The "x ago" labels drift; nothing here is running, so a slow tick.
+  const now = useElapsedNow(false);
   return (
     <InspectorSection
       id="artifacts"
@@ -814,175 +715,112 @@ function ArtifactsSection({
       summary={`${artifacts.length}`}
       defaultOpen={false}
     >
-      <div className="grid grid-cols-2 gap-2">
-        {artifacts.slice(0, 12).map((artifact) => {
-          const url = artifactHttpUrl(artifact.url);
-          const active = artifact.id === selected?.id;
+      {/* The panel's session rows (`DisclosureRow`): edge to edge, one line
+          each — the artifact's thumbnail or kind glyph and its label, its age,
+          and Open (↗) for the full-screen viewer; the line unfolds a larger
+          preview and the file's facts. */}
+      <ul className="-mx-3 divide-y" aria-label="Session artifacts">
+        {newestFirst.map((artifact) => {
+          const target = parseDocumentTarget(artifact.url);
+          const path =
+            target?.kind === "sessionArtifact" ? target.path : undefined;
+          const KindIcon = ARTIFACT_KIND_ICON[artifact.kind];
+          const image = artifact.mimeType.startsWith("image/");
+          const open = () => {
+            if (path)
+              setOpened({
+                sessionId: artifact.sessionId,
+                path,
+                label: artifact.label,
+              });
+          };
           return (
-            <Item
+            <DisclosureRow
               key={artifact.id}
-              variant={active ? "muted" : "outline"}
-              size="xs"
-              render={<button type="button" />}
-              aria-pressed={active}
-              onClick={() => setSelectedId(artifact.id)}
-              className="flex-col items-stretch text-left"
+              rowId={artifact.id}
+              // The Details labels' line, as the session rows above.
+              inset={0.3125}
+              head={
+                <>
+                  <span className="flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-sm">
+                    {image ? (
+                      <img
+                        src={artifactHttpUrl(artifact.url)}
+                        alt=""
+                        loading="lazy"
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <KindIcon size={13} aria-hidden />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                    {artifact.label}
+                  </span>
+                </>
+              }
+              age={relativeAge(artifact.createdAt, now)}
+              ageTitle={new Date(artifact.createdAt).toLocaleString()}
+              openLabel={`Open ${artifact.label}`}
+              onOpen={open}
             >
-              <ItemHeader className="h-24 justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
-                {artifact.mimeType.startsWith("image/") ? (
+              {image ? (
+                <Button
+                  variant="ghost"
+                  className="mb-2 h-auto w-full justify-start p-0"
+                  title="Open full screen"
+                  onClick={open}
+                >
                   <img
-                    src={url}
+                    src={artifactHttpUrl(artifact.url)}
                     alt={artifact.label}
-                    className="size-full object-cover"
+                    loading="lazy"
+                    className="max-h-40 max-w-full rounded-md border object-contain"
                   />
-                ) : (
-                  <ImageIcon />
-                )}
-              </ItemHeader>
-              <ItemContent className="min-w-0">
-                <ItemTitle className="w-full" title={artifact.label}>
-                  <span className="truncate">{artifact.label}</span>
-                </ItemTitle>
-                <ItemDescription className="truncate">
+                </Button>
+              ) : null}
+              <PropertyList size="sm">
+                <PropertyLabel>File</PropertyLabel>
+                <PropertyText className="truncate font-mono text-foreground">
                   {artifact.name}
-                </ItemDescription>
-              </ItemContent>
-            </Item>
+                </PropertyText>
+                <PropertyLabel>Type</PropertyLabel>
+                <PropertyText className="truncate text-foreground">
+                  {artifact.mimeType}
+                </PropertyText>
+                <PropertyLabel>Size</PropertyLabel>
+                <PropertyText className="text-foreground">
+                  {formatFileSize(artifact.size)}
+                </PropertyText>
+                {artifact.sourceTool ? (
+                  <>
+                    <PropertyLabel>Captured by</PropertyLabel>
+                    <PropertyText className="truncate font-mono text-foreground">
+                      {artifact.sourceTool}
+                    </PropertyText>
+                  </>
+                ) : null}
+              </PropertyList>
+            </DisclosureRow>
           );
         })}
-      </div>
-
-      {selected && (
-        <ArtifactPreview
-          artifact={selected}
-          onCopyUrl={() => void copy(artifactHttpUrl(selected.url))}
-          onCopyImage={() => void copyImage(selected)}
+      </ul>
+      {opened ? (
+        <ArtifactOverlay
+          sessionId={opened.sessionId}
+          path={opened.path}
+          label={opened.label}
+          onClose={() => setOpened(null)}
         />
-      )}
+      ) : null}
     </InspectorSection>
   );
 }
 
-function ArtifactPreview({
-  artifact,
-  onCopyUrl,
-  onCopyImage,
-}: {
-  artifact: SessionArtifact;
-  onCopyUrl: () => void;
-  onCopyImage: () => void;
-}) {
-  const url = artifactHttpUrl(artifact.url);
-  const textLike = isTextLikeArtifact(artifact);
-  const [enlarged, setEnlarged] = useState(false);
-  // Keyed by the artifact's URL: selecting another artifact is a different
-  // object, so its body may never appear under this one's header (R3).
-  const { state, reload } = useFetchState(url, fetchArtifactText, {
-    enabled: textLike,
-  });
-  const text = dataOf(state);
-  const error = errorOf(state);
-
-  return (
-    <Card size="sm" className="mt-3">
-      <CardHeader className="border-b">
-        <CardTitle className="truncate" title={artifact.label}>
-          {artifact.label}
-        </CardTitle>
-        <CardDescription className="truncate" title={artifact.name}>
-          {artifact.name}
-        </CardDescription>
-        <CardAction className="flex gap-1">
-          <IconButton
-            label="Copy artifact URL"
-            size="icon-xs"
-            onClick={onCopyUrl}
-          >
-            <Clipboard />
-          </IconButton>
-          {artifact.mimeType.startsWith("image/") && (
-            <IconButton label="Copy image" size="icon-xs" onClick={onCopyImage}>
-              <ImageIcon />
-            </IconButton>
-          )}
-          <LinkButton
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            label="Open artifact"
-            variant="ghost"
-            size="icon-xs"
-          >
-            <ExternalLink />
-          </LinkButton>
-        </CardAction>
-      </CardHeader>
-      {artifact.mimeType.startsWith("image/") ? (
-        <>
-          <Button
-            variant="ghost"
-            onClick={() => setEnlarged(true)}
-            title="Click to enlarge"
-            aria-label={`Enlarge ${artifact.label}`}
-            className="h-auto w-full cursor-zoom-in"
-          >
-            <img
-              src={url}
-              alt={artifact.label}
-              className="max-h-72 w-full object-contain"
-            />
-          </Button>
-          {enlarged ? (
-            <ImageLightbox
-              src={url}
-              alt={artifact.label}
-              caption={artifact.name}
-              onClose={() => setEnlarged(false)}
-            />
-          ) : null}
-        </>
-      ) : textLike ? (
-        // The three states this preview can be in, said out loud: it used to
-        // render an empty box until the body landed, which reads as an empty
-        // artifact rather than as a fetch.
-        error !== undefined ? (
-          <ErrorNote
-            className="mx-3"
-            message={`Could not load this artifact: ${error}`}
-            onRetry={reload}
-          />
-        ) : text === undefined ? (
-          <PaneLoading className="py-8" label="Loading preview…" />
-        ) : (
-          <CardContent>
-            <pre className="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">
-              {text}
-            </pre>
-          </CardContent>
-        )
-      ) : (
-        <CardContent className="text-muted-foreground">
-          No inline preview for this artifact type. Open it in a new tab to
-          inspect it.
-        </CardContent>
-      )}
-    </Card>
-  );
-}
-
-async function fetchArtifactText(
-  url: string,
-  signal: AbortSignal,
-): Promise<string> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = await response.text();
-  return body.length > 8000 ? `${body.slice(0, 8000)}\n… truncated …` : body;
-}
-
-function isTextLikeArtifact(artifact: SessionArtifact): boolean {
-  return (
-    /^(text\/|application\/(json|xml|yaml|x-yaml))/i.test(artifact.mimeType) ||
-    /\.(txt|log|json|jsonl|ya?ml|md)$/i.test(artifact.name)
-  );
-}
+const ARTIFACT_KIND_ICON: Record<SessionArtifact["kind"], LucideIcon> = {
+  screenshot: ImageIcon,
+  trace: Activity,
+  video: Film,
+  download: Download,
+  file: FileText,
+};

@@ -180,8 +180,12 @@ it("opens a host file at a far anchor and marks only the bounded range", async (
     "only lines 12000–12499 of the requested L12000–L900000 are shown",
   );
   // Real file line numbers, and the reveal is still two-directional.
-  expect(container!.textContent).toContain("lines 12000–12499 of 20000");
-  expect(container!.textContent).toContain("earlier lines");
+  expect(container!.textContent).toContain("Lines 12000–12499 of 20000");
+  const reveals = [...container!.querySelectorAll("button")].map((button) =>
+    button.textContent?.trim(),
+  );
+  expect(reveals).toContain("Show 500 earlier");
+  expect(reveals).toContain("Show 500 more");
 });
 
 it("shows a small host range whole, with no notice", async () => {
@@ -325,8 +329,8 @@ it("reveals more of the file, not more of the mark, past a capped range", async 
   expect(linesWithClass("cb-anchored-start")).toEqual([1]);
   expect(linesWithClass("cb-anchored-end")).toEqual([500]);
 
-  const more = [...container!.querySelectorAll("button")].find((button) =>
-    button.textContent?.includes("500 more lines"),
+  const more = [...container!.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === "Show 500 more",
   );
   act(() => more!.click());
   await settle();

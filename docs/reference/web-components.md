@@ -29,9 +29,7 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   are not rendered: no attachments, staged context, runtime strip, branches,
   context meter or Add comment, because a comment carries none of them. The
   trailing cluster then reads cancel, delete (an existing comment only) and
-  save, and Enter/Shift+Enter behave as they do for a prompt. The measured
-  `data-composer-fit` boxes stay mounted through it so the runtime fold does not
-  re-decide itself on the way in and out.
+  save, and Enter/Shift+Enter behave as they do for a prompt.
 - `ComposerLedge.tsx` is the composer's RESTING strip: a shelf on the card's top
   edge for session state that stays put while the conversation goes on, where
   `ChatDockPanel` is for a control opened on demand and dismissed. Inset like
@@ -1980,37 +1978,20 @@ settings, backlog/tasks, project pages, rich tool cards, and reusable widgets.
   every interactive persona on both harnesses; only the server-owned workflow
   coordinator is excluded). It reads `session.mode` — the staged optimistic
   record before the first send, the server record after, so a live session's
-  badge and control track the server's answer over a stale client pick. Staged,
-  the pick is client state: `App.tsx` keeps it on `pendingStart` (restaging one
-  axis preserves it; switching to an assistant persona drops it) and the first
-  send carries it via `lib/newSessionRuntime.firstPromptRuntimeSelection` →
-  `harnessSend.mode`; live, it goes through `actions.setSessionMode`. While a
-  session is in Plan, the session header title carries the `PlanModeBadge` and
-  the folded runtime button label appends "· Plan". The labelling is a binding
-  epic decision (Task 305): the control and badge say "Plan" and NOTHING more —
-  no "read-only", no "safe", no lock iconography — because v1 Plan keeps the
-  shell and is a convention, not an enforced boundary.
-- The bottom row's runtime strip (mode, agent type, model, thinking) folds into
-  the single Runtime sheet trigger by MEASUREMENT, not by a viewport breakpoint
-  — `composerRuntimeFit.ts` owns the arithmetic, `Composer` measures the four
-  `data-composer-fit` boxes (`row`, `lead`, `runtime`, `trail`) in a layout
-  effect and re-measures under a `ResizeObserver` on the row. A breakpoint was
-  wrong in both directions: a phone-width media query left a desktop composer
-  squeezed between an open sidebar and inspector overlapping its own send
-  cluster, while the strip's width is data-driven (model name, agent label) and
-  follows `--text-scale`, so no constant predicts it. The trailing cluster keeps
-  priority and never folds. Only the ROW is observed — its width comes from the
-  layout above it, never from the fold — and the strip's natural width is
-  remembered per signature, so folding cannot change any input to the decision
-  and the fold cannot oscillate. While the strip is folded there is nothing left
-  to measure, so that signature must carry EVERY width-bearing input, not just
-  the content: it keys on the pills' presentation mode too
-  (`RUNTIME_LABEL_MEDIA`, Tailwind's `sm`, where `common/ModelThinkingSelect`
-  widens the model cap and swaps in the full thinking label) and the root
-  `data-text-scale` invalidates it outright. A signature change renders the
-  strip again to be re-measured, inside the same pre-paint commit, so the probe
-  is never seen. An unmeasured row (a hidden or never-laid-out composer) means
-  "unknown" and keeps the standing decision rather than folding on a zero.
+  control tracks the server's answer over a stale client pick. Staged, the pick
+  is client state: `App.tsx` keeps it on `pendingStart` (restaging one axis
+  preserves it; switching to an assistant persona drops it) and the first send
+  carries it via `lib/newSessionRuntime.firstPromptRuntimeSelection` →
+  `harnessSend.mode`; live, it goes through `actions.setSessionMode`. The
+  control is a switch labelled "Plan" (off is Build); the session header carries
+  no mode badge, and the folded runtime button label appends "· Plan". The
+  labelling is a binding epic decision (Task 305): the control says "Plan" and
+  NOTHING more — no "read-only", no "safe", no lock iconography — because v1
+  Plan keeps the shell and is a convention, not an enforced boundary.
+- The bottom row's runtime strip holds only the Plan switch. The account, model
+  and thinking level are not pickers on the composer: they are set on the
+  new-session landing and in the Runtime panel, so nothing on the row has to
+  fold by width.
 - Dictation records in a one-row surface, never in the expanded composer and
   never in an overlay. That is the one composer state which does not involve the
   textarea, so it is the one state that does not raise the virtual keyboard:

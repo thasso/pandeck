@@ -140,9 +140,13 @@ describe("SessionInbox bar", () => {
   it("owns the Needs you count, leaving the block its label alone", () => {
     render([session("a", { attention: "question" })]);
     expect(chip("1 session is waiting for you")).toBeTruthy();
-    expect(
-      view!.container.querySelector("#session-inbox-needs-you")?.textContent,
-    ).toBe("Needs you");
+    // The block is named for the bar to scroll to, but draws no heading: the
+    // cards say it themselves.
+    const block = view!.container.querySelector(
+      'section[aria-label="Needs you"]',
+    );
+    expect(block?.querySelector('[data-list-row-id="a"]')).toBeTruthy();
+    expect(block?.textContent).not.toContain("Needs you");
   });
 
   it("counts a running turn once, under the state that outranks it", () => {
@@ -1273,7 +1277,8 @@ describe("SessionInbox Workflow Run items", () => {
 
   it("keeps every session a card of its own when the run has no projection", () => {
     render(roleSessions, [run], {});
-    expect(rowIds()).toEqual(["run:r1", "impl", "coord", "rev-1"]);
+    // Created at the same moment, so the ids order them.
+    expect(rowIds()).toEqual(["coord", "impl", "rev-1", "run:r1"]);
     expect(view!.container.querySelectorAll("[data-inbox-card]")).toHaveLength(
       4,
     );
@@ -1321,8 +1326,10 @@ describe("SessionInbox Workflow Run items", () => {
       { onSettleWorkflowRun: (runId) => settled.push(runId) },
     );
     expect(
-      view!.container.querySelector("#session-inbox-needs-you")?.textContent,
-    ).toBe("Needs you");
+      view!.container.querySelector(
+        'section[aria-label="Needs you"] [data-list-row-id="run:r1"]',
+      ),
+    ).toBeTruthy();
     expect(rowIds()).toEqual(["run:r1"]);
     expect(runLabel("r1")).toContain("Run complete.");
 
@@ -1428,8 +1435,11 @@ describe("SessionInbox Workflow Run items", () => {
       ],
       { r1: card },
     );
-    const heading = view!.container.querySelector("#session-inbox-needs-you");
-    expect(heading?.textContent).toBe("Needs you");
+    expect(
+      view!.container.querySelector(
+        'section[aria-label="Needs you"] [data-list-row-id="run:r1"]',
+      ),
+    ).toBeTruthy();
     expect(runLabel("r1")).toContain("Waiting for your merge decision.");
   });
 });

@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { runtimeLabel } from "./common/runtimeLabel.ts";
+import { Fragment, memo, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Archive,
@@ -49,15 +50,13 @@ import { sessionDelivery } from "../lib/sessionDelivery.ts";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { useInertOverflow } from "../hooks/useInertOverflow.ts";
 import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
-import { SessionTitleText } from "./SessionTitleText.tsx";
-import {
-  SessionStatusBadge,
-  SessionStatusIcon,
-} from "./SessionStatusBadge.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
+import { SessionStatusIcon } from "./SessionStatusBadge.tsx";
 import { identityLabel } from "./SessionRow.tsx";
 import { UnreadDot } from "./UnreadDot.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Spinner } from "./common/load.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { TONE_BADGE } from "./common/statusBadge.ts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -75,6 +74,10 @@ const INLINE_ACTION_SIZE = {
   tight: "icon-xs",
   comfortable: "icon",
 } as const satisfies Record<RowDensity, string>;
+
+/** Hidden at rest under a fine pointer, shown on the card's hover or focus. */
+const CARD_ACTION_REVEAL =
+  "pointer-fine:opacity-0 pointer-fine:group-hover/item:opacity-100 pointer-fine:group-focus-within/item:opacity-100 focus-visible:opacity-100";
 
 /**
  * What the session's worktree holds that its base does not: uncommitted lines
@@ -248,7 +251,9 @@ function ActiveSessionCardImpl({
   // the card's label says the same.
   const changesText = delivery ? undefined : worktreeChangesText(relations);
   const metaRowRef = useInertOverflow<HTMLDivElement>();
-  const signalRowRef = useInertOverflow<HTMLDivElement>();
+  const signalRowRef = useInertOverflow<HTMLDivElement>({
+    compact: true,
+  });
   const settleLabel = card.settleBlocked
     ? `Cannot settle: ${card.settleBlocked}`
     : "Settle — move out of the working set";
@@ -256,6 +261,29 @@ function ActiveSessionCardImpl({
     AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
     AGENT_TYPE_DISPLAY.assistant;
   const AgentIcon = agent.Icon;
+  // Who the session is, for a context row with no linked object to name:
+  // always true, so the row never holds the age alone.
+  const identity = [
+    agent.label,
+    runtimeLabel({
+      model: session.model
+        ? (session.model.name ?? session.model.id)
+        : undefined,
+      thinkingLevel: session.thinkingLevel,
+    }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  // The status line's fallback: with no signal to show, it says the state in
+  // words (the title's glyph says it as an icon), so the row is not just the
+  // row's buttons.
+  const hasSignals = Boolean(
+    cluster || backgroundChip || delivery || (status === "quiet" && detail),
+  );
+  const stateWords =
+    status === "quiet"
+      ? "Idle"
+      : (badge?.label ?? sessionStatusText(session, status, now));
 
   const endTurn = () => {
     window.clearTimeout(turnTimer.current);
@@ -342,7 +370,12 @@ function ActiveSessionCardImpl({
           onDelete(session.id);
         }
       }}
-      className={`cursor-pointer select-none overflow-hidden text-left hover:bg-muted ${
+      // Square: the list's rows are divided by hairlines, and a rounded hover
+      // or selected fill would pull away from them at the corners.
+      // Less above than below: the top row's small text sits centred in its
+      // line box, with air over it, while the bottom row's pills and buttons
+      // fill theirs to the edge — equal padding read as a taller top.
+      className={`cursor-pointer select-none overflow-hidden rounded-none pt-1.5 pb-2.5 text-left hover:bg-muted ${
         flipped ? "[perspective:900px]" : ""
       }`}
     >
@@ -388,17 +421,34 @@ function ActiveSessionCardImpl({
                 className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-4 overflow-hidden"
               >
                 {meta.length === 0 ? (
-                  // Keep the first row's line box when this session has no linked
-                  // objects. Stable means three rows even in the empty case.
-                  <span aria-hidden>{"\u00a0"}</span>
+                  // No linked object: the row names who the session is, so
+                  // the card keeps three filled rows.
+                  <span className="flex min-w-0 items-center gap-1">
+                    {session.model ? (
+                      <ProviderIcon
+                        provider={session.model.provider}
+                        size={11}
+                      />
+                    ) : (
+                      <AgentIcon size={11} className="shrink-0" aria-hidden />
+                    )}
+                    <span className="min-w-0 truncate">{identity}</span>
+                  </span>
                 ) : (
                   meta.map((item, index) => (
-                    <MetaItem
-                      key={`${item.kind}:${item.label}`}
-                      item={item}
-                      first={index === 0}
-                      onOpen={openMetaItem(item)}
-                    />
+                    <Fragment key={`${item.kind}:${item.label}`}>
+                      <MetaItem
+                        item={item}
+                        first={index === 0}
+                        onOpen={openMetaItem(item)}
+                      />
+                      {/* The worktree's own changes stand beside it — what it
+                          holds that its base does not — unless a pull request
+                          speaks for them on the status row. */}
+                      {item.kind === "worktree" && !delivery ? (
+                        <WorktreeChanges relations={relations} />
+                      ) : null}
+                    </Fragment>
                   ))
                 )}
               </div>
@@ -406,33 +456,10 @@ function ActiveSessionCardImpl({
                 {age.label}
               </span>
             </div>
-            <div className="flex min-w-0 items-center gap-1.5">
-              {/* One leading slot: an Idle session shows what it IS, any
-                  other state shows what it needs. Fixed width, so every
-                  title starts at the same x. */}
-              <span className="flex size-4 shrink-0 items-center justify-center">
-                {status === "quiet" || !badge ? (
-                  <AgentIcon
-                    size={13}
-                    className={`shrink-0 ${agent.activeColor}`}
-                    aria-hidden
-                  />
-                ) : (
-                  <SessionStatusBadge
-                    badge={badge}
-                    status={status}
-                    display="slot"
-                  />
-                )}
-              </span>
-              <span
-                className={`min-w-0 flex-1 truncate text-sm text-foreground ${status === "unread" ? "font-semibold" : "font-medium"}`}
-              >
-                <SessionTitleText
-                  title={title}
-                  pending={session.titleGenerationPending}
-                />
-              </span>
+            {/* A little air above and below: the title is the card's line, and
+                the two small rows around it read as its context. */}
+            <div className="flex min-w-0 items-center gap-1.5 py-1">
+              <SessionTitleRow session={session} status={status} />
             </div>
 
             {/* Badges lead and time closes the row at the right edge; time
@@ -449,14 +476,14 @@ function ActiveSessionCardImpl({
                   dismiss, a stalled tree — never wraps: it sits after them,
                   takes its width first and only truncates its own label. The
                   row's controls sit outside both and never do. */}
-              <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5">
+              <div className="session-card-status-line flex h-5 min-w-0 flex-1 items-center gap-x-1.5 text-muted-foreground">
                 <div
                   ref={signalRowRef}
-                  className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-1.5 gap-y-4 overflow-hidden"
+                  className="flex h-5 min-w-0 flex-1 basis-0 flex-wrap items-center gap-x-2.5 gap-y-4 overflow-hidden"
                 >
                   {cluster ? (
                     <Badge
-                      variant={clusterWorking ? "secondary" : "outline"}
+                      variant="ghost"
                       render={<button type="button" />}
                       title={clusterSummary}
                       aria-expanded={clusterExpanded}
@@ -467,7 +494,10 @@ function ActiveSessionCardImpl({
                         e.stopPropagation();
                         onToggleCluster?.(session.id);
                       }}
-                      className="cursor-pointer"
+                      // Plain, muted text like the context row above: a
+                      // neutral fact, not a pill. Only what needs the user
+                      // keeps a badge's chrome.
+                      className={`cursor-pointer gap-1 rounded-none border-0 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
                     >
                       {clusterWorking ? (
                         <Spinner size="xs" />
@@ -511,32 +541,35 @@ function ActiveSessionCardImpl({
                     </Badge>
                   ) : null}
                   {backgroundChip ? (
-                    <Badge
-                      variant="outline"
+                    // The count stays when the line compacts, as the cluster's
+                    // does: an icon alone said "something", not how much.
+                    <span
                       role="img"
                       aria-label={backgroundText}
-                      className="session-status-responsive-badge"
                       title={backgroundText}
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap"
                     >
-                      <Activity aria-hidden="true" />
-                      <span className="session-status-badge-label">
-                        {backgroundChip}
+                      <Activity aria-hidden="true" className="size-3" />
+                      <span>
+                        {backgroundChip.count}
+                        <span className="session-status-badge-label">
+                          {" running"}
+                          {backgroundChip.age ? ` · ${backgroundChip.age}` : ""}
+                        </span>
                       </span>
-                    </Badge>
+                    </span>
                   ) : null}
-                  {/* What the work has produced: its pull request when there is
-                  one, otherwise the worktree's own changes. */}
-                  <span className="flex shrink-0 items-center">
-                    {delivery ? (
+                  {/* What the work has produced, once it is a pull request;
+                  until then the worktree's changes sit beside it above. */}
+                  {delivery ? (
+                    <span className="flex shrink-0 items-center">
                       <SessionDeliveryMark
                         session={session}
                         variant="responsive"
                         showNumber
                       />
-                    ) : (
-                      <WorktreeChanges relations={relations} />
-                    )}
-                  </span>
+                    </span>
+                  ) : null}
                   {/* The badge already names the state; the one sentence it
                   cannot say is an Idle card's queued work. */}
                   {status === "quiet" && detail ? (
@@ -544,6 +577,11 @@ function ActiveSessionCardImpl({
                       {detail}
                     </span>
                   ) : null}
+                  {hasSignals ? null : (
+                    <span className="min-w-0 flex-1 basis-0 truncate">
+                      {stateWords}
+                    </span>
+                  )}
                 </div>
                 <div className="flex min-w-0 items-center gap-x-1.5">
                   {bubbled ? (
@@ -623,7 +661,10 @@ function ActiveSessionCardImpl({
               <IconButton
                 label="Session actions"
                 size={INLINE_ACTION_SIZE[density]}
-                className="-my-0.5"
+                // With a mouse the row's buttons wait for a hover or focus
+                // (or the open card), so resting cards stay calm; a phone,
+                // with no hover, keeps them.
+                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
                 aria-expanded={showActions}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -635,7 +676,7 @@ function ActiveSessionCardImpl({
               <IconButton
                 label={settleLabel}
                 size={INLINE_ACTION_SIZE[density]}
-                className="-my-0.5"
+                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
                 disabled={Boolean(card.settleBlocked)}
                 onClick={(e) => {
                   e.stopPropagation();
@@ -758,16 +799,17 @@ function MetaItem({
   onOpen?: (() => void) | undefined;
 }) {
   const Icon = META_ICON[item.kind];
+  const icon = Icon ? (
+    <Icon
+      size={11}
+      className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
+      style={item.color ? { color: item.color } : undefined}
+      aria-hidden
+    />
+  ) : null;
   const body = (
     <>
-      {Icon ? (
-        <Icon
-          size={11}
-          className={`shrink-0 ${item.missing ? "text-warning" : ""}`}
-          style={item.color ? { color: item.color } : undefined}
-          aria-hidden
-        />
-      ) : null}
+      {icon}
       <span
         className={`min-w-0 truncate ${item.missing ? "text-warning" : ""}`}
       >
@@ -796,7 +838,12 @@ function MetaItem({
     <Badge
       variant="ghost"
       render={<button type="button" />}
-      className={`${shape} cursor-pointer`}
+      // No pill padding or fill: an openable item starts where a plain one
+      // does, flush with the title and status rows below, and says it opens
+      // by its colour on hover.
+      // One text line tall like the plain items: a 20px badge in the row's
+      // one-line box pushed every item 2px below the age beside them.
+      className={`${shape} h-auto cursor-pointer border-0 px-0 py-0 hover:bg-transparent hover:text-foreground dark:hover:bg-transparent`}
       title={`Open ${item.title ?? item.label}`}
       onClick={(e) => {
         e.stopPropagation();

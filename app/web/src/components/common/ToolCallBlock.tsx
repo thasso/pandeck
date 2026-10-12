@@ -6,7 +6,6 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from "react";
-import { Badge } from "../ui/badge.tsx";
 import { Button } from "../ui/button.tsx";
 import {
   Collapsible,
@@ -174,9 +173,15 @@ export function ToolCallBlock({
       <CollapsibleTrigger
         render={
           <Button
-            variant={isError ? "destructive" : "outline"}
+            variant="ghost"
             size="sm"
-            className="w-full min-w-0 justify-start"
+            // A borderless activity row, as peer messages and thinking: the
+            // whole row takes the hover, open is not a hover state, and its
+            // icon stands where theirs does: flush with the chat's text edge.
+            className={cx(
+              "w-full min-w-0 justify-start gap-2.5 pr-2 pl-0 font-normal text-muted-foreground aria-expanded:bg-transparent aria-expanded:text-muted-foreground aria-expanded:hover:bg-muted dark:aria-expanded:hover:bg-muted/50",
+              isError && "text-destructive aria-expanded:text-destructive",
+            )}
           />
         }
         aria-controls={bodyId}
@@ -206,9 +211,10 @@ export function ToolCallBlock({
           </span>
         )}
         {lineCount != null && (
-          <Badge variant="secondary" className="ml-auto shrink-0">
+          // Plain status text, as an activity row's: no chrome on the row.
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
             {lineCount} {lineCount === 1 ? "line" : "lines"}
-          </Badge>
+          </span>
         )}
         {durationSec != null && status !== "running" && (
           <span className="shrink-0 text-xs text-muted-foreground">
@@ -232,9 +238,20 @@ export function ToolCallBlock({
         <CollapsibleContent
           id={bodyId}
           aria-busy={!everNear || undefined}
+          // The body is the only surface: code shells drop their own frame
+          // inside it (`index.css`), and plain output reads in the same colour
+          // as highlighted output rather than muted beside it.
+          data-tool-body=""
           className={cx(
-            "rounded-b-lg border border-t-0 bg-muted/30 p-3 text-sm",
-            isError && "border-destructive/30",
+            // Hung under the row on a hairline from its icon, as an opened
+            // activity row (`ChatActivityRow`): no box of its own.
+            // It ends short of the row's chevron (its `px-2` plus the icon), so
+            // it never reads wider than the row it belongs to.
+            "mr-6 mb-2 ml-1.5 min-w-0 border-l pt-1 pb-1 pl-3 text-sm [&_pre]:text-foreground",
+            // An output's line count and reveal (`CollapsibleOutput`) are a
+            // row of their own under it, at the tool row's height.
+            "[&_[data-output-footer]]:mt-1 [&_[data-output-footer]]:min-h-7",
+            isError && "border-destructive/40",
           )}
         >
           {!isOpen || !everNear ? (

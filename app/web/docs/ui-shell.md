@@ -85,6 +85,19 @@ object dock's action row and the sheet's **Actions** list. Add comment stays
 visible but disabled until the surface owns a selection or named structural
 target, with “Select text to comment” naming the enabling gesture.
 
+A chat session is the first surface on the unified model, on EVERY layout: its
+header carries exactly two actions — **Add comment** on the transcript
+selection, then **⋮** (`ChatHeaderMenu`: transcript view options and the
+session's actions, a top sheet on a phone). The session header publishes those
+actions itself (`sessionInspectorActions`), because on a phone the inspector
+only mounts while its sheet is open; the inspector panel therefore lists no
+Actions and no View section on any layout — it holds the session's relations and
+sections. Neither the composer nor the dock row offers Comment any more, and the
+session header has no separate worktree button: in a worktree its title block
+(title, branch, uncommitted counts) is the link to the worktree's changes.
+Documents and worktree changes still follow the split above until they move to
+the same model.
+
 Until every bottom-edge surface has migrated into shell furniture, the shell
 keeps `--app-bottom-chrome-inset` equal to the resting bottom card plus the safe
 area inset, or only the safe area when there is no card. The chat and Knowledge
@@ -811,15 +824,16 @@ staging** mode: staged references are visible and removable. The first send
 commits the initial context envelope; later attachments are recorded as
 turn-level context events, not merged into the initial envelope.
 
-The draft header says **New Session** only until that first send. From
-acceptance until the dedicated naming agent settles, every surface uses the
-stable **Unlabeled Session** placeholder; it never derives an interim title from
-the prompt or a provider default. While generation is actually running, the
-title uses the shared reduced-motion-safe working-text treatment. A successful
-answer replaces it directly with the final title. A failed naming run settles on
-an informative deterministic first-prompt fallback only AFTER the working state
-ends, so it does not reintroduce an interim-title flicker; disabled naming skips
-the working treatment and uses that fallback as soon as the session row lands.
+The draft has no header on any layout — it is visibly a new session, and the
+header would only say so — until that first send. From acceptance until the
+dedicated naming agent settles, every surface uses the stable **Unlabeled
+Session** placeholder; it never derives an interim title from the prompt or a
+provider default. While generation is actually running, the title uses the
+shared reduced-motion-safe working-text treatment. A successful answer replaces
+it directly with the final title. A failed naming run settles on an informative
+deterministic first-prompt fallback only AFTER the working state ends, so it
+does not reintroduce an interim-title flicker; disabled naming skips the working
+treatment and uses that fallback as soon as the session row lands.
 
 ## Small Screens
 
@@ -1134,17 +1148,14 @@ safe-area inset in its place, so an installed PWA still clears the notch.
     composer to press the same button again; Send is enabled exactly while there
     is a prompt to send, and a send the composer is refusing opens it on the
     hint that says why instead of doing nothing.
-  - Both right slots keep their place in every state: a captured transcript
-    selection is the fourth interior — its quote takes the field and Comment
-    takes Send's slot; deselecting restores the draft and Send. A turn puts Stop
-    in Send's slot (the same primary action the composer swaps in place, drawn
-    as the composer draws it — a filled box, not one more ghost glyph), greys
-    the mic beside it and makes the face state that turn, inert, because the
-    composer can neither steer nor queue yet; a recording puts the live trace in
-    the field with its discard and Stop in the mic's slot, leaving Send inert
-    until the sentence lands. Recording wins a collision with a selection: it
-    never displaces Stop, and the selection remains once recording ends. One
-    row, one geometry, four interiors.
+  - Both right slots keep their place in every state. A transcript selection
+    does not change the row: Comment lives in the session header. A turn puts
+    Stop in Send's slot (the same primary action the composer swaps in place,
+    drawn as the composer draws it — a filled box, not one more ghost glyph),
+    greys the mic beside it and makes the face state that turn, inert, because
+    the composer can neither steer nor queue yet; a recording puts the live
+    trace in the field with its discard and Stop in the mic's slot, leaving Send
+    inert until the sentence lands. One row, one geometry, three interiors.
   - A phone session screen has no nav bar, so New Session is reached from the
     browser screen's nav bar rather than from this row: the bottom edge of a
     chat is worth more to the chat than to the next one.

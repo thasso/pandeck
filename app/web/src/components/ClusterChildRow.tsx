@@ -10,17 +10,10 @@ import {
 } from "../lib/sessionInbox.ts";
 import { relativeAge } from "../lib/relativeTime.ts";
 import type { RowDensity } from "../lib/rowDensity.ts";
-import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
 import { SessionStatusBadge } from "./SessionStatusBadge.tsx";
 import { SessionTitleText } from "./SessionTitleText.tsx";
 import { identityLabel } from "./SessionRow.tsx";
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+import { Item, ItemActions } from "@/components/ui/item";
 
 export interface ClusterChildRowProps {
   card: SessionInboxCard;
@@ -28,8 +21,8 @@ export interface ClusterChildRowProps {
   now: number;
   active: boolean;
   /**
-   * The host's row density. The row is one compact `Item` at both, since it
-   * sits inside the parent's fold; hosts pass it like every other row.
+   * The host's row density: one compact line at the rail's `tight`, a thumb's
+   * height at a phone's `comfortable`.
    */
   density?: RowDensity;
   /**
@@ -92,6 +85,7 @@ export interface ClusterChildRowProps {
 function ClusterChildRowImpl({
   card,
   now,
+  density = "tight",
   active,
   relation = "coordinated",
   tabbable = false,
@@ -105,10 +99,6 @@ function ClusterChildRowImpl({
   const { session, status } = card;
   const title = session.title.trim() || "Untitled session";
   const badge = sessionStatusBadge(session, status, now);
-  const agent =
-    AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
-    AGENT_TYPE_DISPLAY.assistant;
-  const AgentIcon = agent.Icon;
   // The badge counts every process; the words keep the fold's split between
   // jobs somebody waits on and services nobody does.
   const jobs = Math.max(0, session.backgroundActivity?.activeCount ?? 0);
@@ -175,11 +165,11 @@ function ClusterChildRowImpl({
       // The parent fold and slight indent carry the relationship in both the
       // inbox cluster and composer ledge; a vertical rail adds a needless edge.
       style={{ paddingLeft: `${0.75 * (indent + 1)}rem` }}
-      className="cursor-pointer select-none flex-nowrap text-left hover:bg-muted"
+      // The composer strip's session row (`SpawnedSessionsLedge`): one
+      // compact line under a hairline, its fill square and across the whole
+      // row — a phone gets a thumb's height.
+      className={`cursor-pointer select-none flex-nowrap gap-1.5 rounded-none border-0 border-t border-border/60 py-0 pr-2.5 text-left hover:bg-muted dark:hover:bg-muted/50 ${density === "comfortable" ? "h-10" : "h-7"}`}
     >
-      <ItemMedia variant="icon" className={agent.activeColor} aria-hidden>
-        <AgentIcon />
-      </ItemMedia>
       {/* The state reads before the title; a quiet row keeps the slot empty
           so every sibling's title starts at the same x. */}
       {badge ? (
@@ -187,18 +177,16 @@ function ClusterChildRowImpl({
       ) : (
         <span aria-hidden className="size-5 shrink-0" />
       )}
-      <ItemContent className="min-w-0">
-        <ItemTitle className="w-full">
-          <span
-            className={`truncate ${status === "unread" ? "font-semibold" : ""}`}
-          >
-            <SessionTitleText
-              title={title}
-              pending={session.titleGenerationPending}
-            />
-          </span>
-        </ItemTitle>
-      </ItemContent>
+      <span
+        // As the card's title: bright only when unread or needing the user,
+        // muted once read.
+        className={`min-w-0 flex-1 truncate text-sm ${status === "unread" ? "font-semibold" : ""} ${status === "unread" || card.tier === "needs-you" ? "text-foreground" : "text-muted-foreground"}`}
+      >
+        <SessionTitleText
+          title={title}
+          pending={session.titleGenerationPending}
+        />
+      </span>
       <ItemActions className="gap-1.5">
         <span className="flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
           {jobs > 0 ? (

@@ -68,6 +68,12 @@ export interface CommitWorkflowOptions {
   source: "slash" | "tool";
   dryRun?: boolean;
   force?: boolean;
+  /**
+   * With `force`: a `secret` blocker still blocks. Force overrides the check's
+   * judgement, never a credential it found — the Workflow Run's "Commit anyway"
+   * sets this, because the check runs again and may find one the user never saw.
+   */
+  forceRefusesSecrets?: boolean;
   additionalContext?: string;
   commandText?: string;
   /** Session context is optional for worktree-page auto-commit; slash commands provide it. */
@@ -1351,10 +1357,15 @@ export async function runCommitWorkflow(
     }
     const warnings = [...diffContext.warnings, ...agent.warnings];
     const blocked = blockers.length > 0 || agent.status === "block";
+    const secretVeto =
+      forced &&
+      options.forceRefusesSecrets === true &&
+      blockers.some((item) => item.kind === "secret");
+    const overridden = forced && !secretVeto;
 
     if (dryRun) {
       const result = baseResult({
-        status: blocked && !forced ? "blocked" : "dry-run",
+        status: blocked && !overridden ? "blocked" : "dry-run",
         repoRoot,
         headBefore,
         commitMessage,
@@ -1366,7 +1377,7 @@ export async function runCommitWorkflow(
       return result;
     }
 
-    if (blocked && !forced) {
+    if (blocked && !overridden) {
       const result = baseResult({
         status: "blocked",
         repoRoot,

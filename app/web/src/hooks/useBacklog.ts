@@ -29,10 +29,6 @@ import {
   type BacklogViewMode,
 } from "../lib/backlogTreeModel.ts";
 import { buildProjectsById } from "../lib/projectDisplay.ts";
-import {
-  buildBacklogProjectFilterOptions,
-  type BacklogProjectFilterOption,
-} from "../components/BacklogFilters.tsx";
 import type { ProjectAssignTarget } from "../components/BacklogTreePane.tsx";
 import { useDialogs } from "../components/common/dialogs.tsx";
 import {
@@ -110,7 +106,6 @@ export interface BacklogController {
   projectFilterActive: boolean;
   statuses: Set<TaskStatus>;
   setStatusFilter: (next: TaskStatus[]) => void;
-  projectFilterOptions: BacklogProjectFilterOption[];
   projectsLoaded: boolean;
   projectsById: Map<string, ProjectRecord>;
   activeProjects: ProjectRecord[];
@@ -286,11 +281,6 @@ export function useBacklog(
     [projects],
   );
   const projectsById = useMemo(() => buildProjectsById(projects), [projects]);
-  const projectFilterOptions = useMemo(
-    () =>
-      buildBacklogProjectFilterOptions(ordered, activeProjects, projectsById),
-    [ordered, activeProjects, projectsById],
-  );
   const sessionById = useMemo(() => {
     const map = new Map<string, SessionListItem>();
     for (const session of state.sessions) map.set(session.id, session);
@@ -469,7 +459,6 @@ export function useBacklog(
     projectFilterActive,
     statuses,
     setStatusFilter,
-    projectFilterOptions,
     projectsLoaded,
     projectsById,
     activeProjects,

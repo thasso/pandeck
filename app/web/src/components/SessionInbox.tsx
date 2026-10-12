@@ -23,6 +23,8 @@ import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
+import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
+import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
 import { EmptyBox, PaneLoading } from "./common/load.tsx";
@@ -100,7 +102,7 @@ function sessionTitle(session: SessionListItem): string {
  * durations written as literal classes on the wrapper (Tailwind only sees class
  * names it can read in the source, so those cannot be interpolated from here).
  */
-const SETTLE_EXIT_MS = 350;
+const SETTLE_EXIT_MS = EXIT_STAGE_MS;
 
 /** How long a card takes to travel to its new place when the order changes. */
 const REORDER_MS = 220;
@@ -109,6 +111,12 @@ const REORDER_MS = 220;
 const NO_RELATIONS: SessionCardRelations = {};
 
 interface Props {
+  /**
+   * Where the counts bar's facts go when the HOST draws the bar, above its
+   * scroll container, so it stays put without being a sticky row the scrollbar
+   * runs through (`Sidebar.tsx`). Absent, the bar is the list's first row.
+   */
+  barStore?: SessionInboxBarStore | undefined;
   sessions: SessionListItem[];
   archivedSessionCount: number;
   archivedSessionsLoaded: boolean;
@@ -179,6 +187,7 @@ interface Props {
  * @related ActiveSessionCard, InboxShelfRow, sessionInbox (lib), Sidebar
  */
 export function SessionInbox({
+  barStore,
   sessions,
   archivedSessionCount,
   archivedSessionsLoaded,
@@ -637,6 +646,32 @@ export function SessionInbox({
       ?.focus({ preventScroll: false });
   }, []);
 
+  // A host-drawn bar hears the counts before paint, so it never shows the
+  // previous list's numbers; it hears nothing once this list is gone. Only a
+  // changed count reaches it (the store drops an equal answer).
+  const needsYouCount = view.needsYou.length;
+  const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
+    backgroundActive;
+  useLayoutEffect(() => {
+    barStore?.set({
+      needsYou: needsYouCount,
+      working: workingCount,
+      background: {
+        activeCount: backgroundCount,
+        ownerCount: backgroundOwners,
+      },
+      onNeedsYou: focusNeedsYou,
+    });
+  }, [
+    barStore,
+    needsYouCount,
+    workingCount,
+    backgroundCount,
+    backgroundOwners,
+    focusNeedsYou,
+  ]);
+  useLayoutEffect(() => () => barStore?.set(null), [barStore]);
+
   const archivedSessions = useMemo(
     () =>
       sessions
@@ -760,7 +795,11 @@ export function SessionInbox({
           {/* The separator belongs to the WHOLE fold, not its header. When
               roles open, it travels below their rows instead of cutting the
               run away from the sessions it contains. */}
-          <div className="border-b border-border/60">
+          <div
+            // An open fold ends with a little air, so its last row reads as
+            // part of it rather than as the start of the next item.
+            className={`border-b border-border/60 ${childRows(item).length > 0 ? "pb-2" : ""}`}
+          >
             <WorkflowRunInboxCard
               item={item}
               now={now}
@@ -797,7 +836,17 @@ export function SessionInbox({
             {/* The separator wraps the card AND its disclosed peers. It stays
                 at the bottom of the cluster as rows open and close, making the
                 expansion part of the card rather than loose rows beneath it. */}
-            <div className="border-b border-border/60">
+            <div
+              // An open fold ends with a little air, so its last row reads as
+              // part of it rather than as the start of the next card.
+              className={`border-b border-border/60 ${
+                rows.length > 0 ||
+                (expandedClusters.has(id) &&
+                  (card.cluster?.settledCount ?? 0) > 0)
+                  ? "pb-2"
+                  : ""
+              }`}
+            >
               {/* The swipe wraps the CARD, inside both exit stages: a card
                   leaving by keyboard is animated by the stages above, and one
                   leaving by thumb is animated by `SwipeRow` — whose height
@@ -845,7 +894,7 @@ export function SessionInbox({
                   size="sm"
                   aria-expanded={settledHistory.includes(id)}
                   onClick={() => toggleSettledHistory(id)}
-                  className="w-full justify-start"
+                  className="w-full justify-start rounded-none bg-clip-border"
                 >
                   <ChevronRight
                     data-icon="inline-start"
@@ -877,18 +926,23 @@ export function SessionInbox({
     view.active.length === 0;
 
   return (
-    <div ref={containerRef} className="flex flex-col gap-px">
+    <div
+      ref={containerRef}
+      className={`flex flex-col ${barStore ? "pt-1" : ""}`}
+    >
       {/* Background work runs outside any turn and often outside the session you
           are looking at, so the browser states the global count where every
           session list is read, and links to the registry. Derived from the
           session summaries alone — this surface holds no registry subscription. */}
-      <SessionInboxBar
-        needsYou={view.needsYou.length}
-        working={workingCount}
-        background={backgroundActive}
-        onNeedsYou={focusNeedsYou}
-        onOpenBackgroundTasks={onOpenBackgroundTasks}
-      />
+      {barStore ? null : (
+        <SessionInboxBar
+          needsYou={view.needsYou.length}
+          working={workingCount}
+          background={backgroundActive}
+          onNeedsYou={focusNeedsYou}
+          onOpenBackgroundTasks={onOpenBackgroundTasks}
+        />
+      )}
 
       {coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>
@@ -897,19 +951,14 @@ export function SessionInbox({
       ) : null}
 
       {view.needsYou.length > 0 ? (
+        // No heading: the cards say it themselves (their status icon and a
+        // bright title), and the bar above counts them. The section stays the
+        // block "Needs you" in the bar scrolls to.
         <section
-          aria-labelledby="session-inbox-needs-you"
+          aria-label="Needs you"
           data-inbox-needs-you
-          className="mb-1 flex flex-col gap-px"
+          className="flex flex-col"
         >
-          {/* The label without the count: the count is the bar's, where it is
-              stated whether or not this block exists. */}
-          <h2
-            id="session-inbox-needs-you"
-            className="px-2 pb-0.5 text-xs font-semibold uppercase tracking-wide text-primary"
-          >
-            Needs you
-          </h2>
           {renderCardList(view.needsYou)}
         </section>
       ) : null}
@@ -921,7 +970,7 @@ export function SessionInbox({
           render={<section aria-labelledby="session-inbox-settled" />}
           open={settledExpanded}
           onOpenChange={() => setSettledOpen((value) => !value)}
-          className="mt-1 flex flex-col gap-px"
+          className="mt-1 flex flex-col"
         >
           <ShelfTrigger
             id="session-inbox-settled"
@@ -933,7 +982,7 @@ export function SessionInbox({
                 how much more there is once it is open. */}
             Settled
           </ShelfTrigger>
-          <CollapsibleContent className="flex flex-col gap-px">
+          <CollapsibleContent className="flex flex-col">
             {view.settled.map((session) => (
               <InboxShelfRow
                 key={session.id}
@@ -974,7 +1023,7 @@ export function SessionInbox({
           render={<section aria-labelledby="session-inbox-archived" />}
           open={showArchived}
           onOpenChange={setShowArchived}
-          className="mt-1 flex flex-col gap-px"
+          className="mt-1 flex flex-col"
         >
           <ShelfTrigger
             id="session-inbox-archived"
@@ -985,7 +1034,7 @@ export function SessionInbox({
           </ShelfTrigger>
           <CollapsibleContent>
             {archivedSessionsLoaded ? (
-              <div className="flex flex-col gap-px">
+              <div className="flex flex-col">
                 {archivedSessions.map((session) => (
                   <InboxShelfRow
                     key={session.id}
@@ -1044,46 +1093,6 @@ function ShelfTrigger({
       />
       {children}
     </CollapsibleTrigger>
-  );
-}
-
-/**
- * The two nested stages a row leaves through, so the row leaves BEFORE the list
- * closes behind it: the inner box slides out to the left, then the grid row
- * collapses from 1fr to 0fr and everything below travels up. A row that is not
- * leaving carries no transition at all, so an ordinary list update (a new
- * session, a rename) still lands instantly.
- *
- * `data-session-leaving` is what keeps a row that has left out of keyboard
- * traversal while it is still mounted.
- */
-function ExitStage({
-  leaving,
-  children,
-}: {
-  leaving: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      data-session-leaving={leaving ? "true" : undefined}
-      inert={leaving}
-      className={`grid ${
-        leaving
-          ? "grid-rows-[0fr] motion-safe:transition-all motion-safe:delay-200 motion-safe:duration-150 motion-safe:ease-out"
-          : "grid-rows-[1fr]"
-      }`}
-    >
-      <div
-        className={`min-h-0 overflow-hidden ${
-          leaving
-            ? "-translate-x-full opacity-0 motion-safe:transition motion-safe:duration-200 motion-safe:ease-in"
-            : ""
-        }`}
-      >
-        {children}
-      </div>
-    </div>
   );
 }
 

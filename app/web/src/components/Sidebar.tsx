@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FileDiff, FolderOpen } from "lucide-react";
+import { FileDiff } from "lucide-react";
 import type {
   ProjectRecord,
   PullRequestInventoryItem,
@@ -31,6 +31,10 @@ import type { PullRequestTarget } from "../lib/pullRequestInbox.ts";
 import { SessionInbox } from "./SessionInbox.tsx";
 import { BacklogList } from "./BacklogList.tsx";
 import { ProjectTreePane } from "./ProjectTreePane.tsx";
+import {
+  WorktreeFileTree,
+  useWorktreeFileTree,
+} from "./worktree/WorktreeFileTree.tsx";
 import { navigableSettingsGroups } from "./settingsSections.tsx";
 import { PRIMARY_NAV_SLOTS } from "./primaryNavSections.tsx";
 import {
@@ -41,7 +45,10 @@ import {
 import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
 import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
-import { SIDEBAR_BACKLOG_DENSITY } from "../lib/backlogTreeModel.ts";
+import {
+  SIDEBAR_BACKLOG_DENSITY,
+  type BacklogDensity,
+} from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -53,6 +60,9 @@ import type { WorkflowIndicators } from "../lib/workflowIndicator.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { useWorktreeWatches } from "../hooks/useWorktreeWatches.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
+import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
+import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
+import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import type { SettingsSection } from "../hooks/useSessionRouting.ts";
 import {
@@ -205,6 +215,12 @@ interface Props {
   knowledgeUncommitted?: number;
   /** Open the Knowledge Base's files or its uncommitted changes. */
   onOpenKnowledge: (view: KnowledgeView) => void;
+  /** The Knowledge Base file open in the route, for highlighting. */
+  knowledgeFilePath?: string | null | undefined;
+  /** The KB checkout status's `updatedAt`: a watcher push re-reads the tree. */
+  knowledgeRefreshToken?: number;
+  /** Open one Knowledge Base file in the main pane. */
+  onOpenKnowledgeFile: (path: string) => void;
   /** Fetch the worktree list (called when a section that joins worktrees is shown). */
   onLoadWorktrees: () => void;
   /** Open a worktree's detail route. */
@@ -269,39 +285,47 @@ function BrowserRow({
 type KnowledgeView = "files" | "changes";
 
 /**
- * The Knowledge Base section: the folder is one object, browsed by the page's
- * own file tree, so the section offers its two views — the files, and the
- * edits not yet committed (with their count, live while the section shows).
+ * The Knowledge Base section: the folder's own file tree, so the KB is browsed
+ * right here and a file opens in the main pane. The edits not yet committed
+ * sit above it as one row, only while there are any (or while it is open).
  */
 function KnowledgeBrowser({
   active,
+  filePath,
+  refreshToken,
   uncommitted,
   onOpen,
+  onOpenFile,
 }: {
   active: KnowledgeView | null;
+  filePath: string | undefined;
+  refreshToken: number;
   uncommitted: number;
   onOpen: (view: KnowledgeView) => void;
+  onOpenFile: (path: string) => void;
 }) {
-  const views = [
-    { id: "files" as const, label: "Files", icon: <FolderOpen /> },
-    {
-      id: "changes" as const,
-      label: "Uncommitted changes",
-      icon: <FileDiff />,
-    },
-  ];
+  const tree = useWorktreeFileTree({
+    worktreeId: KNOWLEDGE_WORKTREE_ID,
+    filePath,
+    refreshToken,
+  });
   return (
-    <div className="flex flex-col gap-0.5">
-      {views.map((view) => (
+    <div className="flex flex-col gap-1">
+      {uncommitted > 0 || active === "changes" ? (
         <BrowserRow
-          key={view.id}
-          icon={view.icon}
-          label={view.label}
-          current={active === view.id}
-          count={view.id === "changes" ? uncommitted : 0}
-          onClick={() => onOpen(view.id)}
+          icon={<FileDiff />}
+          label="Uncommitted changes"
+          current={active === "changes"}
+          count={uncommitted}
+          onClick={() => onOpen("changes")}
         />
-      ))}
+      ) : null}
+      <WorktreeFileTree
+        tree={tree}
+        selectedPath={active === "files" ? filePath : undefined}
+        onSelectFile={(entry) => onOpenFile(entry.path)}
+        ariaLabel="Knowledge Base files"
+      />
     </div>
   );
 }
@@ -447,6 +471,9 @@ function SidebarImpl({
   knowledgeView,
   knowledgeUncommitted = 0,
   onOpenKnowledge,
+  knowledgeFilePath,
+  knowledgeRefreshToken = 0,
+  onOpenKnowledgeFile,
   onLoadWorktrees,
   onOpenWorktree,
   onStartSessionInWorktree,
@@ -464,6 +491,16 @@ function SidebarImpl({
   // at the offset the last one was left at, and on a phone the whole sidebar is
   // unmounted the moment an object screen opens.
   const browserScrollRef = useListScroll({ listKey: `sidebar:${section}` });
+  // The counts the attention list publishes for its bar, which this column
+  // draws above the scroll container (`SessionInboxBarSlot`). One store for the
+  // sidebar's life, so the prop the list gets never changes.
+  const [inboxBarStore] = useState(createSessionInboxBarStore);
+  // The Backlog's filters are a row of chips, so what they are short of is
+  // WIDTH: on the rail they wrap into four lines at page sizing and two at the
+  // rail's own, above rows that are two-line either way.
+  const backlogToolbarDensity: BacklogDensity = mobile
+    ? "comfortable"
+    : "tight";
 
   // Fetch Backlog Tasks, Projects, or Worktrees the first time the matching
   // section is shown. The Projects browser also embeds worktrees, so it needs
@@ -656,17 +693,40 @@ function SidebarImpl({
       ref={containerRef}
       className="relative flex h-full w-full shrink-0 flex-col overflow-hidden border-border bg-card sm:border-r"
     >
-      {/* The shared inset every browser reads its first row in — except at the
-          TOP for a browser that draws a header bar there. That bar owns the
-          panel's top edge: it is sticky, and a sticky box cannot claim an edge
-          this container has padded away (Chromium clamps `top-0` to the content
-          box, and a negative margin on the bar does not move it). The padding
-          would then be an 8px strip above a pinned bar for rows to scroll
-          through, and a band the bar's own contents sit low in. */}
+      {/* The attention list's counts bar (or the Tasks toolbar), above the
+          scroll container: it stays put without the scrollbar running through
+          it. */}
+      {section === "sessions" ? (
+        <div className="shrink-0">
+          <SessionInboxBarSlot
+            store={inboxBarStore}
+            onOpenBackgroundTasks={onOpenBackgroundTasks}
+          />
+        </div>
+      ) : section === "tasks" ? (
+        <div className="shrink-0">
+          <BacklogListToolbar
+            state={state}
+            prefs={prefs}
+            onUpdatePrefs={onUpdatePrefs}
+            density={backlogToolbarDensity}
+            bar
+          />
+        </div>
+      ) : null}
       <div
         ref={browserScrollRef}
-        className={`min-h-0 flex-1 overflow-y-auto px-1 pb-2 sm:px-2 ${
-          section === "sessions" ? "" : "pt-2"
+        // The shared inset every browser reads its first row in — except the
+        // attention list and the Tasks and Projects trees, which run edge to
+        // edge: their
+        // rows are divided by hairlines, which a side inset would leave
+        // hanging in empty space.
+        className={`min-h-0 flex-1 overflow-y-auto pb-2 ${
+          section === "sessions"
+            ? ""
+            : section === "tasks" || section === "projects"
+              ? "pt-1"
+              : "px-1 pt-2 sm:px-2"
         }`}
         style={mobile ? { paddingBottom: NAV_CARD_INSET } : undefined}
       >
@@ -696,10 +756,8 @@ function SidebarImpl({
             // same predicate (`taskRowsHaveMeta`) before polling or watching
             // for what those rows state.
             density={SIDEBAR_BACKLOG_DENSITY}
-            // The filters are a row of chips, so what they are short of is
-            // WIDTH: on the rail they wrap into four lines at page sizing and
-            // two at the rail's own, above rows that are two-line either way.
-            toolbarDensity={mobile ? "comfortable" : "tight"}
+            flush
+            externalToolbar
           />
         ) : section === "projects" ? (
           <ProjectTreePane
@@ -721,6 +779,7 @@ function SidebarImpl({
             onStartSession={onStartSessionForProject}
             onStartSessionInWorktree={onStartSessionInWorktree}
             onVisibleWorktreeIdsChange={onVisibleProjectWorktreeIds}
+            flush
           />
         ) : section === "pull-requests" ? (
           <PullRequestBrowser
@@ -740,11 +799,15 @@ function SidebarImpl({
         ) : section === "knowledge" ? (
           <KnowledgeBrowser
             active={knowledgeView ?? null}
+            filePath={knowledgeFilePath ?? undefined}
+            refreshToken={knowledgeRefreshToken}
             uncommitted={knowledgeUncommitted}
             onOpen={onOpenKnowledge}
+            onOpenFile={onOpenKnowledgeFile}
           />
         ) : (
           <SessionInbox
+            barStore={inboxBarStore}
             sessions={sessions}
             archivedSessionCount={archivedSessionCount}
             archivedSessionsLoaded={archivedSessionsLoaded}

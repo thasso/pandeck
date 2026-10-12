@@ -1,14 +1,7 @@
 import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import { IconButton } from "./common/IconButton.tsx";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 import { TableCell, TableRow } from "@/components/ui/table";
 
 type ChatWideCardProps = {
@@ -19,6 +12,8 @@ type ChatWideCardProps = {
   description?: ReactNode;
   /** Counts or totals, right-aligned in the header. */
   meta?: ReactNode;
+  /** A quiet note under the table (what the results do and do not hold). */
+  footerNote?: ReactNode;
 };
 
 /**
@@ -33,10 +28,15 @@ export function ChatWideCard({
   title,
   description,
   meta,
+  footerNote,
 }: ChatWideCardProps) {
   return (
-    <Card
-      size="sm"
+    <AppCard
+      icon={icon}
+      label={title}
+      status={meta}
+      footerStart={footerNote}
+      flush
       style={
         {
           width: `min(${maxWidth}px, calc(var(--shell-main-width, 100vw) - 2rem))`,
@@ -46,26 +46,16 @@ export function ChatWideCard({
           transform: "translateX(-50%)",
         } as CSSProperties
       }
-      className="relative left-1/2 my-3 max-w-none"
+      className="relative left-1/2 max-w-none"
+      contentClassName="gap-0"
     >
-      <CardHeader className="border-b">
-        <CardTitle className="flex min-w-0 items-center gap-2">
-          {icon}
-          {title}
-        </CardTitle>
-        {description ? (
-          <CardDescription className="min-w-0 truncate">
-            {description}
-          </CardDescription>
-        ) : null}
-        {meta ? (
-          <CardAction className="text-right text-sm text-muted-foreground">
-            {meta}
-          </CardAction>
-        ) : null}
-      </CardHeader>
+      {description ? (
+        <div className="min-w-0 border-b px-3 py-1.5 text-xs text-muted-foreground">
+          {description}
+        </div>
+      ) : null}
       {children}
-    </Card>
+    </AppCard>
   );
 }
 
@@ -192,16 +182,8 @@ export function Panel({
   children: ReactNode;
 }) {
   return (
-    <Card size="sm" className="min-w-0">
-      <CardContent>
-        {title ? (
-          <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-            <p className="font-medium">{title}</p>
-            {meta}
-          </div>
-        ) : null}
-        {children}
-      </CardContent>
-    </Card>
+    <AppCard className="my-0 min-w-0" label={title ?? ""} status={meta}>
+      {children}
+    </AppCard>
   );
 }

@@ -319,34 +319,6 @@ export function backgroundWorkDeadlineLabel(
 }
 
 /**
- * The retained Claude host epoch beside an item, when it has one. `Closing`
- * is a Stop-all the supervisor recorded but has not completed — a wait, not a
- * finished close.
- */
-export function backgroundWorkHostLabel(
-  item: BackgroundWorkItemSummary,
-): string | undefined {
-  const host = item.host;
-  if (!host) return undefined;
-  if (host.stopAllRequestedAt !== undefined && host.state !== "closed")
-    return "Retained host: closing";
-  switch (host.state) {
-    case "creating":
-      return "Retained host: starting";
-    case "live":
-      return "Retained host: live";
-    case "draining":
-      return "Retained host: draining";
-    case "closed":
-      return "Retained host: closed";
-    case "stopped":
-      return "Retained host: stopped";
-    case "lost":
-      return "Retained host: lost";
-  }
-}
-
-/**
  * What is durably known about an item's outcome, as a short fact list. Bounded
  * METADATA only: an artifact id is never rendered, output bodies and host paths
  * never reach the wire, and a declined capture states its bounded reason with
@@ -388,37 +360,33 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * The session card's chip, e.g. `Background 2 · 8m`.
+ * The session card's chip: how many background items run, and how long the
+ * oldest has — `2` always, `running · 8m` beside it while the card has room.
  *
  * Deliberately its OWN label, separate from the card's provider status: a
  * session with background work is not streaming, so nothing here may be read as
- * a turn. A retained host with no children left still shows, because the epoch
- * outlives its last item by design and letting it go silent would hide a live
- * provider query.
+ * a turn. Only running items count: a retained provider host with nothing left
+ * in it is the runtime's bookkeeping, not work the user is waiting on.
  */
 export function backgroundActivityChip(
   activity: SessionBackgroundActivity | undefined,
   now: number,
-): string | undefined {
-  if (!activity) return undefined;
-  if (activity.activeCount <= 0)
-    return activity.retainedHost ? "Background host" : undefined;
-  const age =
-    activity.oldestStartedAt > 0
-      ? ` · ${elapsedLabel(now - activity.oldestStartedAt)}`
-      : "";
-  return `Background ${activity.activeCount}${age}`;
+): { count: number; age: string | undefined } | undefined {
+  if (!activity || activity.activeCount <= 0) return undefined;
+  return {
+    count: activity.activeCount,
+    age:
+      activity.oldestStartedAt > 0
+        ? elapsedLabel(now - activity.oldestStartedAt)
+        : undefined,
+  };
 }
 
 /** The chip's assistive-technology sentence; the visual label is an abbreviation. */
 export function backgroundActivityText(
   activity: SessionBackgroundActivity | undefined,
 ): string | undefined {
-  if (!activity) return undefined;
-  if (activity.activeCount <= 0)
-    return activity.retainedHost
-      ? "Holds a retained background host"
-      : undefined;
+  if (!activity || activity.activeCount <= 0) return undefined;
   const parts = [
     activity.activeCount === 1
       ? "1 background process running"
@@ -441,6 +409,30 @@ export function backgroundActivityText(
 }
 
 /**
+ * The same facts as {@link backgroundActivityText} as counts for a line that
+ * must fit a phone: `2 services`, `1 job · 2 services`, `1 job · 1 starting`.
+ * Jobs are the active items the owner waits on, services the ones it declared
+ * it does not (`SessionBackgroundActivity.serviceCount`); a zero count is left
+ * out. The sentence stays the accessible name and tooltip.
+ */
+export function backgroundActivityCounts(
+  activity: SessionBackgroundActivity | undefined,
+): string | undefined {
+  if (!activity || activity.activeCount <= 0) return undefined;
+  const services = activity.serviceCount ?? 0;
+  const jobs = Math.max(0, activity.activeCount - services);
+  const parts: string[] = [];
+  if (jobs > 0) parts.push(`${jobs} job${jobs === 1 ? "" : "s"}`);
+  if (services > 0)
+    parts.push(`${services} service${services === 1 ? "" : "s"}`);
+  if (activity.startingCount > 0)
+    parts.push(`${activity.startingCount} starting`);
+  if (activity.stoppingCount > 0)
+    parts.push(`${activity.stoppingCount} stopping`);
+  return parts.join(" · ");
+}
+
+/**
  * The chip's content key. Same contract (and the same silent failure) as
  * `sessionInbox.ts`: a memoized card that reads a field this key omits stops
  * updating, and the session list is rebroadcast several times a second.
@@ -450,8 +442,9 @@ export function backgroundActivityKey(
   now: number,
 ): string {
   if (!activity) return "";
+  const chip = backgroundActivityChip(activity, now);
   return [
-    backgroundActivityChip(activity, now) ?? "",
+    chip ? `${chip.count}:${chip.age ?? ""}` : "",
     backgroundActivityText(activity) ?? "",
   ].join("\u0000");
 }
@@ -459,8 +452,8 @@ export function backgroundActivityKey(
 /**
  * How much background work is running across every session, from the SESSION
  * summaries — no registry subscription, so ongoing work stays visible on
- * surfaces that never open the registry. A retained host with no items left
- * counts as an owner, not as an item.
+ * surfaces that never open the registry. Only sessions with running items
+ * count as owners.
  */
 export function globalBackgroundActivity(
   sessions: readonly SessionListItem[],
@@ -470,7 +463,7 @@ export function globalBackgroundActivity(
   for (const session of sessions) {
     const activity = session.backgroundActivity;
     if (!activity) continue;
-    if (activity.activeCount > 0 || activity.retainedHost) ownerCount += 1;
+    if (activity.activeCount > 0) ownerCount += 1;
     activeCount += Math.max(0, activity.activeCount);
   }
   return { activeCount, ownerCount };
@@ -504,7 +497,6 @@ export function backgroundWorkRowKey(
     `${badge.tone}:${badge.label}`,
     backgroundWorkAgeLabel(item, now),
     backgroundWorkDeadlineLabel(item, now),
-    backgroundWorkHostLabel(item) ?? "",
     item.providerBound ? "1" : "",
     backgroundWorkEvidenceFacts(item)
       .map((fact) => `${fact.label}\u0000${fact.value}`)

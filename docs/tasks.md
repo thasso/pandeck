@@ -48,6 +48,16 @@ suffix, so model failure or noncompliance cannot drop them. The choice is frozen
 when each object is created; changing Task links never renames an existing
 session, branch, or folder.
 
+The inspector treats these as ONE ticket per Task: a Details row showing the
+first Jira key (else the first GitHub ref) with its live title, and a search
+popover to set, change or remove it. Picking writes exactly one ref and clears
+the rest; the stored fields stay lists, so a Task an agent gave several still
+reads. The search is `GET /api/tickets/search?q=&jiraProjects=&repos=`
+(`ticketSearch.ts`): Jira and GitHub in parallel, each skipped when not
+configured, scoped to the Task's Project's Jira projects and GitHub repository,
+else to the user's own work. An exact key, ref or pasted link resolves to that
+ticket; an empty query lists recent ones.
+
 The two dates are not interchangeable and an agent choosing wrongly is the
 failure mode, so keep them apart:
 

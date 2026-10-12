@@ -10,7 +10,6 @@ import {
 } from "react";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import {
   DropdownMenu,
@@ -28,7 +27,6 @@ import {
   FolderKanban,
   Ellipsis,
   GitFork,
-  Image as ImageIcon,
   MessageSquarePlus,
   RotateCcw,
 } from "lucide-react";
@@ -90,6 +88,8 @@ import type { PromptQueueState } from "../hooks/useAssistant.ts";
 import { useTranscriptScroll } from "../hooks/useTranscriptScroll.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { serverHttpOrigin, withToken } from "../lib/serverOrigin.ts";
+import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
+import { attachmentPreviewSrc } from "../lib/attachmentPreviews.ts";
 import { bundleFromOffsets, describeAnchor } from "../lib/describeAnchor.ts";
 import {
   useSelectionAnchor,
@@ -284,53 +284,36 @@ export function reuseStableTurnEnds(
   return next;
 }
 
-function formatBytes(value: number): string {
-  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
-  return `${value} B`;
-}
+/** `useAssistant`'s optimistic prompt echo (`optimisticEchoId`): still sending. */
+const OPTIMISTIC_PROMPT_ID_PREFIX = "creq-";
 
 /**
- * Where an image attachment's picture comes from: inline bytes, a served
- * history URL, or — for a saved prompt whose durable entry keeps the image by
- * attachment id only — the session's attachment store.
+ * Where an attachment's picture comes from: its inline bytes, a served history
+ * URL, the preview this browser remembered for the prompt it is still sending
+ * (`lib/attachmentPreviews.ts`, by that image's own id), or — for a saved image prompt whose durable
+ * entry keeps the image by attachment id only — the session's attachment store.
  */
 function attachmentImageSrc(
   attachment: DisplayAttachment,
   sessionId: string | undefined,
 ): string | undefined {
-  if (!attachment.mimeType.startsWith("image/")) return undefined;
   if (attachment.data)
     return `data:${attachment.mimeType};base64,${attachment.data}`;
   if (attachment.url)
     return withToken(`${serverHttpOrigin()}${attachment.url}`);
-  if (!sessionId) return undefined;
+  const remembered = attachmentPreviewSrc(attachment.id);
+  if (remembered) return remembered;
+  if (!attachment.mimeType.startsWith("image/") || !sessionId) return undefined;
   return withToken(
     `${serverHttpOrigin()}/api/session-attachment/${encodeURIComponent(sessionId)}/${encodeURIComponent(attachment.id)}`,
   );
 }
 
-/** The picture of an image attachment; a load failure leaves just the chip row. */
-function AttachmentImage({ src, alt }: { src: string; alt: string }) {
-  const [failedSrc, setFailedSrc] = useState<string>();
-  if (failedSrc === src) return null;
-  return (
-    <img
-      src={src}
-      alt={alt}
-      onError={() => setFailedSrc(src)}
-      className="max-h-72 max-w-full object-contain"
-    />
-  );
-}
-
 function AttachmentChip({
   attachment,
-  sessionId,
   onOpenTask,
 }: {
   attachment: DisplayAttachment;
-  sessionId: string | undefined;
   onOpenTask?: ((taskId: string) => void) | undefined;
 }) {
   // A Task attached to the session's first prompt renders as a compact, navigable
@@ -386,30 +369,40 @@ function AttachmentChip({
       </Badge>
     );
   }
-  const imageSrc = attachmentImageSrc(attachment, sessionId);
+  return null;
+}
+
+/**
+ * A prompt's FILE attachments as one row of thumbnails. The picture comes from
+ * the block's own bytes or URL when it carries them, else from the preview this
+ * browser remembered when it sent the prompt (`lib/attachmentPreviews.ts`) —
+ * the durable echo carries neither. While the prompt is still the optimistic
+ * echo its bytes are uploading, and the tiles say so.
+ */
+function AttachmentThumbnails({
+  attachments,
+  uploading,
+  sessionId,
+}: {
+  attachments: readonly DisplayAttachment[];
+  uploading: boolean;
+  /** The session the prompt belongs to, for images kept by attachment id. */
+  sessionId: string | undefined;
+}) {
+  if (attachments.length === 0) return null;
   return (
-    <Item
-      variant="muted"
-      size="sm"
-      className="mt-2 flex-col items-stretch overflow-hidden"
-    >
-      {imageSrc ? (
-        <AttachmentImage src={imageSrc} alt={attachment.name} />
-      ) : null}
-      <div className="flex items-center gap-2">
-        {attachment.mimeType.startsWith("image/") ? (
-          <ImageIcon size={14} className="text-primary" />
-        ) : (
-          <FileText size={14} className="text-primary" />
-        )}
-        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
-          {attachment.name}
-        </span>
-        <span className="shrink-0 text-muted-foreground">
-          {formatBytes(attachment.size)}
-        </span>
-      </div>
-    </Item>
+    <div className="mt-2 flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <AttachmentThumbnail
+          key={attachment.id}
+          name={attachment.name}
+          mimeType={attachment.mimeType}
+          size={attachment.size}
+          src={attachmentImageSrc(attachment, sessionId)}
+          uploading={uploading}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -516,9 +509,9 @@ function MessageActionsBar({
     <div
       className={`mt-1 flex ${align === "right" ? "justify-end" : "justify-start"}`}
     >
-      {/* Revealed on hover or focus; a coarse pointer has no hover, so the row
-          is shown there rather than left as an invisible tap target. */}
-      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground opacity-0 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+      {/* Always shown: a row revealed only on hover hides what a turn offers
+          and is no tap target at all on a device without hover. */}
+      <div className="flex items-center gap-0.5 rounded-lg text-muted-foreground">
         {canCopy && (
           <IconButton
             label={copied ? "Copied" : "Copy message text"}
@@ -675,17 +668,29 @@ const UserMessage = memo(function UserMessage({
           />
         </div>
       );
-    if (block.kind === "attachment")
+    if (block.kind === "attachment" && block.attachment.role)
       return (
         <AttachmentChip
           key={block.attachment.id}
           attachment={block.attachment}
-          sessionId={message.inheritedFrom?.sessionId ?? sessionId}
           onOpenTask={onOpenTask}
         />
       );
     return null;
   });
+  const fileAttachments = (
+    <AttachmentThumbnails
+      attachments={message.blocks.flatMap((block) =>
+        block.kind === "attachment" && !block.attachment.role
+          ? [block.attachment]
+          : [],
+      )}
+      uploading={message.id.startsWith(OPTIMISTIC_PROMPT_ID_PREFIX)}
+      // A message carried over from a fork keeps its images in the session it
+      // was first sent in.
+      sessionId={message.inheritedFrom?.sessionId ?? sessionId}
+    />
+  );
   const actions = (
     <MessageActionsBar
       message={message}
@@ -711,6 +716,7 @@ const UserMessage = memo(function UserMessage({
             <PromptDeliveryNote delivery={message.promptDelivery} />
           ) : null}
           {body}
+          {fileAttachments}
           {actions}
         </ChatActivityRow>
         {promptQueueState ? (
@@ -726,6 +732,7 @@ const UserMessage = memo(function UserMessage({
       ) : null}
       <div className="min-w-0 max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm text-foreground">
         {body}
+        {fileAttachments}
       </div>
       {promptQueueState ? (
         <PromptQueueCondition state={promptQueueState} />
@@ -927,7 +934,7 @@ interface Props {
    * the host drops a focus naming another one, since a jump across sessions
    * resolves against the transcript that is about to be shown, not this one.
    */
-  focusEntry?: { entryId: string; token: number } | null;
+  focusEntry?: { entryId: string; token: number; align?: "top" } | null;
   /** Fired once the jump has actually landed on its row, so the host can retire it. */
   onFocusEntryApplied?: (token: number) => void;
   /**
@@ -1798,6 +1805,7 @@ export function MessageList({
   // on every render, and these are the whole of what both effects read.
   const focusToken = focusEntry?.token ?? null;
   const focusEntryId = focusEntry?.entryId ?? null;
+  const focusAlignTop = focusEntry?.align === "top";
   useLayoutEffect(() => {
     if (focusToken === null || focusEntryId === null) return;
     if (focusHandled.current === focusToken) return;
@@ -1808,8 +1816,13 @@ export function MessageList({
     const row = index < 0 ? undefined : rows[index];
     if (!row) return;
     focusHandled.current = focusToken;
-    holdRow(row.message.id, { rowsFromEnd: rows.length - index, center: true });
-  }, [focusToken, focusEntryId, allRows.length, holdRow]);
+    holdRow(
+      row.message.id,
+      focusAlignTop
+        ? { rowsFromEnd: rows.length - index, offset: 16 }
+        : { rowsFromEnd: rows.length - index, center: true },
+    );
+  }, [focusToken, focusEntryId, focusAlignTop, allRows.length, holdRow]);
 
   // The flash follows the row rather than the jump: widening the window is what
   // mounts it, so this re-runs when the window grows. Landing on the row is also
@@ -2025,6 +2038,19 @@ export function MessageList({
             <ProgressIndicator label="Thinking" />
           </div>
         )}
+        {/* Room for the composer floating over the transcript's foot
+            (`FloatingComposerDock`), so the last row scrolls clear of it — and,
+            on a phone, of the keyboard the dock is lifted above too. Inside the
+            content so the scroll controller's ResizeObserver sees it grow with
+            the dock and keeps a pinned reader at the bottom. */}
+        <div
+          aria-hidden
+          className="mt-0! shrink-0"
+          style={{
+            height:
+              "calc(var(--chat-dock-height, 0px) + var(--app-keyboard-inset-bottom, 0px))",
+          }}
+        />
       </div>
     </div>
   );

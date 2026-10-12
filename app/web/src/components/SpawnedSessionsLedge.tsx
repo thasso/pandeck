@@ -1,4 +1,20 @@
-import { ChevronDown, ChevronUp, Hourglass, Users, X } from "lucide-react";
+import { runtimeLabel } from "./common/runtimeLabel.ts";
+import {
+  createContext,
+  Fragment,
+  memo,
+  useContext,
+  type ReactNode,
+} from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  Hourglass,
+  Users,
+  X,
+} from "lucide-react";
+import type { SessionListItem } from "@assistant/shared";
 import {
   clusterBubbleDismissible,
   sessionClusterBubbleLabel,
@@ -9,16 +25,60 @@ import {
   stallTarget,
   stallTitle,
   sessionStatusBadge,
+  type SessionInboxCard,
   type SpawnedSessionsView,
 } from "../lib/sessionInbox.ts";
-import { ClusterChildRow } from "./ClusterChildRow.tsx";
+import { relativeAge } from "../lib/relativeTime.ts";
+import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
+import { SessionTitleRow } from "./SessionTitleRow.tsx";
 import { Spinner } from "./common/load.tsx";
 import { useElapsedNow } from "./useElapsedNow.ts";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "./common/IconButton.tsx";
+import { DisclosureRow } from "./common/DisclosureRow.tsx";
+import { useInspectorAct } from "./shell/Inspector.tsx";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
+
+/** What the host can resolve about a peer beyond its list row. */
+export interface SpawnedSessionDetails {
+  /** The account (credential profile) name it runs on. */
+  account?: string | undefined;
+  /** Its worktree's branch, when it has one and the host knows it. */
+  branch?: string | undefined;
+  /**
+   * It names a worktree the host's (loaded) list no longer has: removed or
+   * retired — said, rather than leaving the row silent about where it ran.
+   */
+  worktreeGone?: boolean | undefined;
+}
+
+/**
+ * What a session row's details can resolve and open beyond the row itself,
+ * provided once by the app for every row under it (the inspectors), so no
+ * host has to thread it through its own props. A row's `describeSession` prop
+ * wins over it.
+ */
+export interface SessionRowDetailsSource {
+  describe: (session: SessionListItem) => SpawnedSessionDetails;
+  onOpenWorktree?: ((worktreeId: string) => void) | undefined;
+}
+
+export const SessionRowDetailsContext =
+  createContext<SessionRowDetailsSource | null>(null);
 
 export interface SpawnedSessionsLedgeProps {
   sessionId: string;
+  /**
+   * Account and branch for a peer's expanded details. Must be referentially
+   * stable while its answers are: the rows are memoized on it.
+   */
+  describeSession?:
+    ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
   /** The peers of this session; the ledge exists only while it has some. */
   view: SpawnedSessionsView;
   open: boolean;
@@ -73,6 +133,7 @@ export function SpawnedSessionsLedge({
   onOpenSession,
   onToggleSettled,
   onSettleSession,
+  describeSession,
 }: SpawnedSessionsLedgeProps) {
   const working = view.counts.working > 0;
   const now = useElapsedNow(working);
@@ -85,7 +146,7 @@ export function SpawnedSessionsLedge({
     ? bubbled.session.title.trim() || "Untitled session"
     : "";
   const dismissBubble = bubbled ? clusterBubbleDismissible(bubbled) : false;
-  const Chevron = open ? ChevronDown : ChevronUp;
+  const Chevron = open ? ChevronDown : ChevronRight;
   // The tree has stopped and a peer still owes this chat a reply: on a line
   // of its own, like the bubble, naming the peer to poke.
   const stallLine = view.stall ? (
@@ -125,9 +186,9 @@ export function SpawnedSessionsLedge({
       <Button
         variant="ghost"
         size="sm"
-        className={
-          working ? "w-full justify-start text-primary" : "w-full justify-start"
-        }
+        // Square, and filled under Button's transparent 1px border
+        // (`bg-clip-padding`), so the header fills the strip edge to edge.
+        className="w-full justify-start rounded-none bg-clip-border text-sm text-muted-foreground"
         onClick={onToggle}
         aria-expanded={open}
         aria-controls={`spawned-sessions-ledge-${sessionId}`}
@@ -140,11 +201,17 @@ export function SpawnedSessionsLedge({
         aria-label={`${open ? "Hide" : "Show"} the sessions this chat spawned — ${summary}`}
       >
         {/* Same treatment as the cluster card's fold: while a peer runs, the
-            spinner REPLACES the peer glyph and the line runs in the accent. The
+            spinner REPLACES the peer glyph, in the accent; the line itself
+            stays muted like every strip on the composer, so only the motion
+            draws the eye. The
             session you are typing into is often quiet while its peers work, so
             this strip is the only place that run is visible, and a static count
             reads as a stalled cluster. */}
-        {working ? <Spinner size="xs" /> : <Users aria-hidden="true" />}
+        {working ? (
+          <Spinner size="xs" className="text-primary" />
+        ) : (
+          <Users aria-hidden="true" />
+        )}
         <span className="min-w-0 flex-1 truncate text-left">{summary}</span>
         <Chevron aria-hidden="true" />
       </Button>
@@ -181,27 +248,30 @@ export function SpawnedSessionsLedge({
       ) : null}
       {stallLine}
       {open ? (
-        <div id={`spawned-sessions-ledge-${sessionId}`} className="border-t">
+        // `divide-y`, not a border on the rows: the line under them exists
+        // only while the settled toggle follows, so an open strip never ends
+        // in a line that doubles the next strip's divider.
+        <div
+          id={`spawned-sessions-ledge-${sessionId}`}
+          className="divide-y border-t"
+        >
           {/* The rows scroll in a box of bounded height, so listing every
               peer changes what is in the box and never how tall the
               composer's shelf is. The settled toggle below is OUTSIDE it: at
               the foot of the scroll box it would sit past the fold, and a
               control the user has to know to scroll for is not offered. */}
-          <div
-            data-spawned-sessions-rows
-            className="max-h-72 overflow-y-auto border-b py-1"
-          >
-            {view.rows.map((card) => (
-              <ClusterChildRow
-                key={card.session.id}
-                card={card}
-                now={now}
-                active={false}
-                relation="spawned"
-                tabbable
-                onOpen={onOpenSession}
-              />
-            ))}
+          <div data-spawned-sessions-rows className="max-h-72 overflow-y-auto">
+            <ul className="divide-y">
+              {view.rows.map((card) => (
+                <SpawnedSessionLedgeRow
+                  key={card.session.id}
+                  card={card}
+                  now={now}
+                  onOpen={onOpenSession}
+                  describeSession={describeSession}
+                />
+              ))}
+            </ul>
           </div>
           {/* Under the list, always in view: the rows above are what is
               going on now, and this is where what already ended is. */}
@@ -209,13 +279,14 @@ export function SpawnedSessionsLedge({
             <Button
               variant="ghost"
               size="sm"
-              className="w-full justify-start"
+              // Edge to edge like the strip's header (see above).
+              className="w-full justify-start rounded-none bg-clip-border text-sm text-muted-foreground"
               aria-expanded={view.settledShown}
               onClick={onToggleSettled}
             >
               <ChevronDown
                 aria-hidden="true"
-                className={view.settledShown ? "rotate-180" : ""}
+                className={view.settledShown ? "" : "-rotate-90"}
               />
               <span className="min-w-0 truncate">
                 {view.settledShown
@@ -227,5 +298,203 @@ export function SpawnedSessionsLedge({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One peer in the composer strip, styled like the background-work rows: a
+ * chevron and the title (with its state glyph) that unfold the peer's runtime
+ * and worktree, how long ago it moved, and Open. Indented by its depth in the
+ * spawn tree, so the strip still reads as a tree. Also the inspector's session
+ * rows (`InspectorSessionRows`), so a session reads the same in both.
+ */
+export const SpawnedSessionLedgeRow = memo(function SpawnedSessionLedgeRow({
+  card,
+  now,
+  onOpen,
+  describeSession,
+  facts,
+  inset = 0,
+}: {
+  card: SessionInboxCard;
+  now: number;
+  onOpen: (sessionId: string) => void;
+  /**
+   * Extra left inset in rem, on top of the tree depth: a host whose section
+   * header sits in from the edge (the inspector) lines the rows up under it
+   * while the hairlines still run edge to edge.
+   */
+  inset?: number;
+  describeSession?:
+    ((session: SessionListItem) => SpawnedSessionDetails) | undefined;
+  /**
+   * What the HOST knows about this session that the row does not — how it is
+   * tied to the inspected object ("Started here", "Via task …"). Listed first
+   * in the details.
+   */
+  facts?: readonly SessionRowFact[] | undefined;
+}) {
+  const { session, status } = card;
+  const title = session.title.trim() || "Untitled session";
+  const source = useContext(SessionRowDetailsContext);
+  const onAct = useInspectorAct();
+  const details =
+    (describeSession ?? source?.describe)?.(session) ??
+    ({} as SpawnedSessionDetails);
+  const worktreeId = session.worktreeId;
+  const model = session.model;
+  const runtime = runtimeLabel({
+    model: model ? (model.name ?? model.id) : undefined,
+    thinkingLevel: session.thinkingLevel,
+    account: details.account,
+  });
+  const agent =
+    AGENT_TYPE_DISPLAY[session.agentType ?? "assistant"] ??
+    AGENT_TYPE_DISPLAY.assistant;
+  const AgentIcon = agent.Icon;
+  const depth = Math.min(Math.max((card.depth ?? 1) - 1, 0), 5);
+  return (
+    <DisclosureRow
+      rowId={session.id}
+      inset={inset}
+      depth={depth}
+      // The attention cards' title line, so a session reads the same in the
+      // strip, the inspector and the Projects tree.
+      head={<SessionTitleRow session={session} status={status} />}
+      age={relativeAge(session.updatedAt, now)}
+      openLabel={`Open ${title}`}
+      onOpen={() => onOpen(session.id)}
+    >
+      <PropertyList size="sm">
+        {facts?.map((fact) => (
+          <Fragment key={fact.label}>
+            <PropertyLabel>{fact.label}</PropertyLabel>
+            <PropertyText
+              className={`truncate ${fact.tone === "danger" ? "text-destructive" : "text-foreground"}`}
+              title={fact.value}
+            >
+              {fact.onOpen ? (
+                <DetailLink
+                  onClick={() => {
+                    fact.onOpen?.();
+                    onAct?.();
+                  }}
+                >
+                  {fact.value}
+                </DetailLink>
+              ) : (
+                fact.value
+              )}
+            </PropertyText>
+          </Fragment>
+        ))}
+        <PropertyLabel>Agent</PropertyLabel>
+        <DetailValue icon={<AgentIcon className="size-3" aria-hidden />}>
+          {agent.label}
+        </DetailValue>
+        {runtime ? (
+          <>
+            <PropertyLabel>Model</PropertyLabel>
+            <DetailValue
+              icon={
+                model ? (
+                  <ProviderIcon provider={model.provider} size={12} />
+                ) : null
+              }
+            >
+              {runtime}
+            </DetailValue>
+          </>
+        ) : null}
+        {/* Always said: where it runs, that it ran in one that is gone,
+            or that it has none. Unresolved yet (the list still loading)
+            is the only silence. */}
+        {details.branch || details.worktreeGone || !worktreeId ? (
+          <>
+            <PropertyLabel>Worktree</PropertyLabel>
+            {details.branch && worktreeId ? (
+              <DetailValue icon={<GitBranch className="size-3" aria-hidden />}>
+                {source?.onOpenWorktree ? (
+                  <DetailLink
+                    className="font-mono"
+                    onClick={() => {
+                      source.onOpenWorktree?.(worktreeId);
+                      onAct?.();
+                    }}
+                  >
+                    {details.branch}
+                  </DetailLink>
+                ) : (
+                  <span className="font-mono">{details.branch}</span>
+                )}
+              </DetailValue>
+            ) : details.worktreeGone ? (
+              <PropertyText
+                className="text-muted-foreground"
+                title={worktreeId}
+              >
+                Removed
+              </PropertyText>
+            ) : (
+              <PropertyText className="text-muted-foreground">
+                None
+              </PropertyText>
+            )}
+          </>
+        ) : null}
+      </PropertyList>
+    </DisclosureRow>
+  );
+});
+
+/** One fact a host adds to a session row's details. */
+export interface SessionRowFact {
+  label: string;
+  value: string;
+  /** The value names an object: it becomes a link that opens it. */
+  onOpen?: (() => void) | undefined;
+  /** `danger` for a failure the reader should not miss. */
+  tone?: "danger" | undefined;
+}
+
+/** A detail value that opens the object it names: a real, underlined link. */
+function DetailLink({
+  className = "",
+  onClick,
+  children,
+}: {
+  className?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant="link"
+      size="xs"
+      onClick={onClick}
+      className={`h-auto max-w-full justify-start truncate p-0 text-xs font-normal text-foreground underline underline-offset-3 hover:text-primary ${className}`}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** A detail value with its glyph, in the details' small property list. */
+function DetailValue({
+  icon,
+  children,
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <PropertyText className="flex items-center gap-1 text-foreground">
+      {icon ? (
+        <span className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+          {icon}
+        </span>
+      ) : null}
+      <span className="min-w-0 truncate">{children}</span>
+    </PropertyText>
   );
 }

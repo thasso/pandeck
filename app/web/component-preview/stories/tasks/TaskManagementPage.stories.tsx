@@ -18,13 +18,30 @@ const prefs = {
 } as Prefs;
 const actions = new Proxy({}, { get: () => () => {} }) as AssistantActions;
 
-function renderPage(state: "loading" | "empty" | "tasks") {
+/**
+ * The open Task as an agent left it: still in the Inbox (never triaged) and
+ * carrying a status suggestion — so the detail leads with both notice cards.
+ */
+const noticedTask: TaskItem = {
+  ...(taskAreaTask as TaskItem),
+  source: { createdBy: "agent", agentType: "developer" },
+  statusSuggestion: {
+    to: "done",
+    at: Date.now() - 20 * 60_000,
+    reason:
+      "The backlog and project pages now use the shared property list, and the review found nothing left to change.",
+  },
+};
+
+function renderPage(state: "loading" | "empty" | "tasks" | "notices") {
   const items =
     state === "loading"
       ? null
       : state === "empty"
         ? []
-        : [taskAreaTask as TaskItem];
+        : state === "notices"
+          ? [noticedTask]
+          : [taskAreaTask as TaskItem];
   const backlogState = {
     connected: true,
     taskList: items === null ? null : { items, updatedAt: Date.now() },
@@ -43,12 +60,13 @@ function renderPage(state: "loading" | "empty" | "tasks") {
       connected
       workflowRuns={[]}
       workflowCards={{}}
+      accountNames={{}}
       sessions={[]}
       taskMutations={{}}
       actions={actions}
       prefs={prefs}
       onUpdatePrefs={() => {}}
-      selectedId={null}
+      selectedId={state === "notices" ? noticedTask.id : null}
       onSelect={() => {}}
       onCloseDetail={() => {}}
       onClose={() => {}}
@@ -65,6 +83,7 @@ const meta = {
     connected: true,
     workflowRuns: [],
     workflowCards: {},
+    accountNames: {},
     sessions: [],
     taskMutations: {},
     actions,
@@ -85,3 +104,5 @@ type Story = StoryObj<typeof meta>;
 export const Loading: Story = { render: () => renderPage("loading") };
 export const Empty: Story = { render: () => renderPage("empty") };
 export const WithTasks: Story = { render: () => renderPage("tasks") };
+/** A Task opened with its notice cards: an agent's suggestion and the Inbox. */
+export const TaskNotices: Story = { render: () => renderPage("notices") };

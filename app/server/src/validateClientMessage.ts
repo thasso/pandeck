@@ -674,6 +674,17 @@ const validateAnswerWorkflowCeiling: Validator = (msg) => {
     : "raise.amounts";
 };
 
+const validateAnswerWorkflowCommitCheck: Validator = (msg) => {
+  const required = checkRequiredFields(msg, {
+    runId: STRING,
+    choice: STRING,
+  });
+  if (required) return required;
+  return msg.choice === "send-to-implementer" || msg.choice === "commit-anyway"
+    ? null
+    : "choice";
+};
+
 // The start handler re-validates semantics (known thinking level, prompt
 // override bound); this guards the shape the handler dereferences.
 const validateStartWorkflowRun: Validator = (msg) => {
@@ -934,7 +945,6 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
     { limit: NUMBER },
   ),
   memoryStatus: fields({ requestId: STRING }),
-  requestPeerPromptHistory: fields({}, { limit: NUMBER }),
   resolveTimelineAnchor: validateTimelineAnchorTarget,
   updateSettings: validateUpdateSettings,
   updateJiraSettings: PATCH_OBJECT,
@@ -1036,6 +1046,8 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   resolveApproval: validateResolveApproval,
   revokeApprovalGrant: (msg) =>
     checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
+  grantApprovalForSession: (msg) =>
+    checkRequiredFields(msg, { sessionId: STRING, key: STRING }),
   resolvePullRequestCardTask: (msg) => {
     if (!hasOwn(msg, "cardId") || !isString(msg.cardId))
       return "cardId is required and must be a string";
@@ -1091,6 +1103,7 @@ const REGISTRY: Record<ClientMessage["type"], Validator> = {
   ),
   startWorkflowRun: validateStartWorkflowRun,
   answerWorkflowCeiling: validateAnswerWorkflowCeiling,
+  answerWorkflowCommitCheck: validateAnswerWorkflowCommitCheck,
   pauseWorkflowRun: fields({ runId: STRING }, { reason: STRING }),
   resumeWorkflowRun: fields({ runId: STRING }),
   cancelWorkflowRun: fields({ runId: STRING }),

@@ -124,6 +124,7 @@ function render(runs: WorkflowRunSummary[] | null) {
         workflowRuns={runs}
         workflowCards={{}}
         sessions={[]}
+        accountNames={{}}
         taskMutations={{}}
         actions={actions}
         prefs={prefs}

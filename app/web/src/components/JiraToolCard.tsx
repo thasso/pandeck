@@ -171,7 +171,7 @@ function JiraIssueSearchCard({ payload }: { payload: JiraSearchPayload }) {
   return (
     <ChatWideCard
       maxWidth={1500}
-      icon={<FolderKanban className="size-4 shrink-0 text-primary" />}
+      icon={<FolderKanban />}
       title="Jira issue search"
       description={
         payload.jiraSearchUrl ? (
@@ -337,7 +337,7 @@ function JiraProjectsCard({ payload }: { payload: JiraProjectsPayload }) {
   const projects = payload.projects ?? [];
   return (
     <ChatWideCard
-      icon={<FolderKanban className="size-4 text-primary" />}
+      icon={<FolderKanban />}
       title="Jira projects"
       description={payload.query || "Visible projects"}
       meta={
@@ -443,7 +443,7 @@ function JiraUsersCard({ payload }: { payload: JiraUsersPayload }) {
   return (
     <ChatWideCard
       maxWidth={1050}
-      icon={<Users className="size-4 text-primary" />}
+      icon={<Users />}
       title="Jira users"
       description={
         payload.assignableOnly

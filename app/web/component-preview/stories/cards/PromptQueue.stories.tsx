@@ -118,11 +118,8 @@ export function PromptQueueStory({
               peers={peersFor(scenario)}
               running={running}
               canSteer
-              onEdit={() => {}}
               onRemove={() => {}}
-              onMove={() => {}}
               onSendNow={() => {}}
-              onClear={() => {}}
               onResume={() => {}}
               onSendPeerNow={() => {}}
               onWithdrawPeer={() => {}}

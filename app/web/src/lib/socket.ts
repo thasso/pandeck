@@ -3,7 +3,7 @@ import type {
   ServerMessage,
   TimelineCacheDescriptor,
 } from "@assistant/shared";
-import { withToken } from "./serverOrigin.ts";
+import { devServerHost, withToken } from "./serverOrigin.ts";
 import { sessionIdFromPathname } from "./sessionRoutes.ts";
 import {
   perfStatsEnabled,
@@ -166,12 +166,11 @@ export function defaultSocketUrl(
   // In dev the page is served by Vite (e.g. :5173) and `/ws` is proxied to the
   // server. Connect straight to the server instead, so a Vite restart or crash
   // can't sever the live agent connection — the server keeps running and the
-  // socket just reconnects to it. Override the port/host with VITE_SERVER_ORIGIN.
+  // socket just reconnects to it. Override the port/host with VITE_SERVER_ORIGIN,
+  // or opt into the proxy with VITE_SERVER_PROXY (see `devServerHost`).
   // In prod the server serves the page itself, so the same origin is correct.
   if (import.meta.env.DEV) {
-    const origin =
-      import.meta.env.VITE_SERVER_ORIGIN ?? `${location.hostname}:8787`;
-    return withToken(`${proto}://${origin}/ws${route}`);
+    return withToken(`${proto}://${devServerHost()}/ws${route}`);
   }
   return withToken(`${proto}://${location.host}/ws${route}`);
 }

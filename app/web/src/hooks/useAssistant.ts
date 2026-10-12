@@ -60,7 +60,6 @@ import type {
   GoogleSettingsPatch,
   ModelOption,
   MessageTarget,
-  PeerPromptThreadsProjection,
   ProjectListRequest,
   ProjectListResponse,
   ProjectRecord,
@@ -108,6 +107,7 @@ import type {
   WorkflowRunCard,
   WorkflowRunDelivery,
   WorkflowCeilingRaise,
+  WorkflowCommitCheckChoice,
   WorkflowRunLimits,
   WorkflowRunStartPhase,
   WorkflowRunSummary,
@@ -174,6 +174,10 @@ import {
   worktreeSilhouetteKey,
 } from "../lib/worktreeRowStatuses.ts";
 import type { CredentialProfileProjection } from "../lib/credentialProfiles.ts";
+import {
+  optimisticAttachmentRef,
+  rememberAttachmentPreview,
+} from "../lib/attachmentPreviews.ts";
 import {
   beginLoad,
   dataOf,
@@ -675,8 +679,6 @@ export interface UIState {
    * rendered card in place instead of freezing its creation-time snapshot).
    */
   peerPromptCardOverrides: PeerPromptCardOverrides;
-  /** Explicitly requested expanded Peer prompts history for the current session, if any. */
-  peerPromptHistoryExpanded: PeerPromptThreadsProjection | null;
   /**
    * The viewed session's "Approve for session" grants, keyed by the session
    * they belong to so a list for the session just left never shows here.
@@ -865,7 +867,6 @@ const emptyInitial: UIState = {
   approvals: [],
   pullRequestCards: [],
   peerPromptCardOverrides: {},
-  peerPromptHistoryExpanded: null,
   approvalGrants: null,
   runState: "idle",
   streaming: false,
@@ -1797,6 +1798,8 @@ type Action =
       kind: "optimisticUserMessage";
       clientRequestId: string;
       text: string;
+      /** File attachments, by reference: their previews are remembered apart. */
+      images?: { name: string; mimeType: string; size: number; ref: string }[];
       sessionId?: string;
       canMoveSession?: boolean;
     }
@@ -1897,8 +1900,10 @@ function compactFrameMessages(messages: ServerMessage[]): ServerMessage[] {
 /**
  * Optimistically show the user's prompt the instant it's sent (a transient user
  * timeline entry id `creq-<clientRequestId>`); the server's durable user
- * `timelineDelta` echoes the same clientRequestId and reconciles it. No-op for an
- * empty prompt (attachments-only) — the server entry carries the chips.
+ * `timelineDelta` echoes the same clientRequestId and reconciles it. File
+ * attachments ride along as image blocks — their bytes are still uploading, and
+ * this echo is what shows the user they are attached (an attachments-only
+ * prompt echoes too). No-op only for a prompt with neither.
  */
 function optimisticUserEcho(
   dispatch: (action: Action) => void,
@@ -1906,13 +1911,23 @@ function optimisticUserEcho(
   text: string,
   sessionId?: string,
   canMoveSession = false,
+  attachments: readonly PromptAttachment[] = [],
 ): void {
   const trimmed = text.trim();
-  if (!trimmed) return;
+  const images = attachments
+    .filter((a) => !a.role)
+    .map(({ name, mimeType, size, data }, index) => {
+      const ref = optimisticAttachmentRef(clientRequestId, index);
+      if (mimeType.startsWith("image/") && data)
+        rememberAttachmentPreview(ref, mimeType, data);
+      return { name, mimeType, size, ref };
+    });
+  if (!trimmed && images.length === 0) return;
   dispatch({
     kind: "optimisticUserMessage",
     clientRequestId,
     text: trimmed,
+    ...(images.length ? { images } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     canMoveSession,
   });
@@ -4697,7 +4712,16 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       type: "message",
       role: "user",
       origin: { kind: "human" },
-      content: [{ type: "text", text: action.text }],
+      content: [
+        ...(action.text ? [{ type: "text" as const, text: action.text }] : []),
+        ...(action.images ?? []).map((image) => ({
+          type: "image" as const,
+          mimeType: image.mimeType,
+          name: image.name,
+          size: image.size,
+          ref: image.ref,
+        })),
+      ],
       ...(action.sessionId ? { optimisticSessionId: action.sessionId } : {}),
       ...(action.canMoveSession ? { optimisticCanMoveSession: true } : {}),
     };
@@ -5013,7 +5037,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           peerPromptCardOverrides: seedPeerPromptCardOverridesFromHistory(
             msg.state.peerPrompts,
           ),
-          peerPromptHistoryExpanded: null,
         },
         {
           timeline: snap.timeline,
@@ -5074,7 +5097,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           turnStatsSeed: EMPTY_TURN_STATS_SEED,
           timelineRangePending: null,
           peerPromptCardOverrides: {},
-          peerPromptHistoryExpanded: null,
           error: null,
         },
         {
@@ -5836,20 +5858,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
           },
         },
       };
-    case "peerPromptHistoryExpanded":
-      if (msg.sessionId !== state.session?.sessionId) return state;
-      // The expanded projection can carry states for messages older than the
-      // default bounded snapshot; merge it into the overlay too (not just the
-      // separate Peer prompts section list), so explicitly loading more
-      // history also reconciles any stale, already-rendered transcript cards.
-      return {
-        ...state,
-        peerPromptHistoryExpanded: msg.projection,
-        peerPromptCardOverrides: {
-          ...state.peerPromptCardOverrides,
-          ...seedPeerPromptCardOverridesFromHistory(msg.projection),
-        },
-      };
     case "timelineAnchor": {
       // Only the jump still being waited on: an answer to a superseded request
       // would send the reader somewhere they already navigated away from.
@@ -6186,8 +6194,6 @@ export interface AssistantActions {
     placements?: { id: string; parentId?: string | null }[],
   ) => void;
   cancelPostReloadContinuation: () => void;
-  /** Explicit expansion of the current session's bounded Peer prompts history. */
-  requestPeerPromptHistory: (limit?: number) => void;
   /**
    * Jump to the OTHER party's copy of one peer-prompt message, addressed by the
    * key its card carries here. Answered as a {@link MessageReveal}: where the
@@ -6246,6 +6252,8 @@ export interface AssistantActions {
   ) => void;
   /** Withdraw one of a session's "Approve for session" grants. */
   revokeApprovalGrant: (sessionId: string, key: string) => void;
+  /** Grant one operation for the rest of a session, from the inspector. */
+  grantApprovalForSession: (sessionId: string, key: string) => void;
   /** Answer a `choosing-task` pull-request card's Task-disambiguation prompt. */
   choosePullRequestTask: (cardId: string, taskId: string | null) => void;
   /**
@@ -6338,6 +6346,10 @@ export interface AssistantActions {
     runId: string,
     choice: "raise" | "deliver" | "re-evaluate" | "cancel",
     raise?: WorkflowCeilingRaise,
+  ) => void;
+  answerWorkflowCommitCheck: (
+    runId: string,
+    choice: WorkflowCommitCheckChoice,
   ) => void;
   rebaseAndReviewWorkflowRun: (runId: string) => void;
   /**
@@ -7785,7 +7797,14 @@ export function useAssistant({
         const target = stateRef.current.session?.sessionId;
         if (target)
           dispatch({ kind: "clearSessionFailure", sessionId: target });
-        optimisticUserEcho(dispatch, clientRequestId, text, target);
+        optimisticUserEcho(
+          dispatch,
+          clientRequestId,
+          text,
+          target,
+          false,
+          attachments,
+        );
         send({
           type: "prompt",
           text,
@@ -7924,6 +7943,7 @@ export function useAssistant({
           input.text,
           input.id,
           true,
+          input.attachments,
         );
         send({ type: "harnessSend", ...input, clientRequestId });
         return clientRequestId;
@@ -8447,8 +8467,6 @@ export function useAssistant({
       },
       cancelPostReloadContinuation: () =>
         send({ type: "cancelPostReloadContinuation" }),
-      requestPeerPromptHistory: (limit) =>
-        send({ type: "requestPeerPromptHistory", ...(limit ? { limit } : {}) }),
       clearChatError: (sessionId?: string) =>
         dispatch({
           kind: "clearChatError",
@@ -8466,6 +8484,8 @@ export function useAssistant({
         }),
       revokeApprovalGrant: (sessionId, key) =>
         send({ type: "revokeApprovalGrant", sessionId, key }),
+      grantApprovalForSession: (sessionId, key) =>
+        send({ type: "grantApprovalForSession", sessionId, key }),
       choosePullRequestTask: (cardId, taskId) =>
         send({ type: "resolvePullRequestCardTask", cardId, taskId }),
       runPullRequestCardAction: (cardId, action, options) => {
@@ -8673,6 +8693,8 @@ export function useAssistant({
           choice,
           ...(raise ? { raise } : {}),
         }),
+      answerWorkflowCommitCheck: (runId, choice) =>
+        send({ type: "answerWorkflowCommitCheck", runId, choice }),
       rebaseAndReviewWorkflowRun: (runId) =>
         send({ type: "rebaseAndReviewWorkflowRun", runId }),
       mergeWorkflowRun: (runId, { mergeMethod, deleteBranch }) => {

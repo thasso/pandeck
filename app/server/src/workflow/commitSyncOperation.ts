@@ -221,7 +221,12 @@ async function executeOperation(
       commitResult = await dependencies.commit({
         source: "tool",
         cwd: worktree.path,
-        force: false,
+        // Only the user's "Commit anyway" at a refused commit writes this: it
+        // is the one way past the commit check, and a human's call.
+        force: record(context.step.payload).force === true,
+        // ...and even then never over a secret the check finds THIS time: the
+        // user decided on the problems they were shown, not on new ones.
+        forceRefusesSecrets: true,
         additionalContext: `Workflow Run ${run.id} for Task-${run.taskId}.`,
       });
     } catch (err) {
@@ -233,10 +238,25 @@ async function executeOperation(
       commitResult.status !== "committed" &&
       !isNoChangesCommitResult(commitResult)
     ) {
-      if (commitResult.status === "blocked")
-        return blocked(
-          `commit phase blocked: ${commitFailureReason(commitResult)}`,
-        );
+      if (commitResult.status === "blocked") {
+        // The commit check's own problems travel structured, so the recipe can
+        // hand code problems back to the implementer and the card can say
+        // which file and why, instead of one flattened sentence.
+        const blockers = commitCheckBlockersOf(commitResult);
+        return blockers.length > 0
+          ? blocked(
+              `the commit check refused this change: ${commitFailureReason(commitResult)}`,
+              {
+                commitCheck: {
+                  blockers,
+                  kinds: commitCheckKindsOf(commitResult),
+                },
+              },
+            )
+          : blocked(
+              `commit phase blocked: ${commitFailureReason(commitResult)}`,
+            );
+      }
       return failed(
         `commit phase failed: ${commitFailureReason(commitResult)}`,
       );
@@ -646,6 +666,34 @@ async function fullCommitOid(
   label: string,
 ): Promise<string> {
   return requireFullOid(await dependencies.commitOid(cwd, ref), label);
+}
+
+/**
+ * Every kind the commit check reported, unbounded: whether a refusal is a
+ * human's call (and whether "Commit anyway" may be offered) must not depend on
+ * which problems survived the display bound below.
+ */
+function commitCheckKindsOf(result: CommitWorkflowResult): string[] {
+  return [...new Set(result.blockers.map((item) => item.kind))];
+}
+
+/** The commit check's problems, bounded, in the shape the recipe reads back. */
+function commitCheckBlockersOf(
+  result: CommitWorkflowResult,
+): WorkflowJsonValue[] {
+  // Human-call problems first, so the bounded list shows the ones that decide
+  // the gate when there are more than it keeps.
+  const humanCall = (kind: string) =>
+    kind === "secret" || kind === "unrelated" || kind === "too_broad";
+  return [...result.blockers]
+    .filter((item) => item.reason.trim())
+    .sort((a, b) => Number(humanCall(b.kind)) - Number(humanCall(a.kind)))
+    .slice(0, 20)
+    .map((item) => ({
+      kind: item.kind,
+      ...(item.file ? { file: item.file } : {}),
+      reason: boundedSummary(item.reason).slice(0, 600),
+    }));
 }
 
 function commitFailureReason(result: CommitWorkflowResult): string {

@@ -16,13 +16,13 @@ import {
   type BacklogDensity,
   type BacklogProjectFilter,
 } from "../lib/backlogTreeModel.ts";
-import { FOCUS_STATUS_OPTIONS, BacklogToolbar } from "./BacklogToolbar.tsx";
+import { FOCUS_STATUS_OPTIONS } from "./BacklogToolbar.tsx";
+import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import { todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { BacklogTreePane } from "./BacklogTreePane.tsx";
 import { BacklogFocusList } from "./BacklogFocusList.tsx";
 import { BacklogInboxList } from "./BacklogInboxList.tsx";
-import { hasInboxWork } from "../lib/backlogInbox.ts";
 import { ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, idle, isPending } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -69,6 +69,8 @@ function BacklogListImpl({
   density,
   toolbarDensity,
   showAddTask = false,
+  flush = false,
+  externalToolbar = false,
 }: {
   state: BacklogState;
   actions: AssistantActions;
@@ -122,6 +124,17 @@ function BacklogListImpl({
    */
   toolbarDensity?: BacklogDensity;
   showAddTask?: boolean;
+  /**
+   * The list runs to its container's sides (the sidebar): square rows divided
+   * by hairlines, and the notes above it keep their own inset.
+   */
+  flush?: boolean;
+  /**
+   * The host draws the toolbar (`BacklogListToolbar`) itself, above its scroll
+   * container, so the filters stay put and the scrollbar does not run through
+   * them (the sidebar, as its Sessions bar); the list then starts at its rows.
+   */
+  externalToolbar?: boolean;
 }) {
   usePerfRenderCount("BacklogList");
   const c = useBacklog(state, actions, prefs, onUpdatePrefs);
@@ -202,9 +215,6 @@ function BacklogListImpl({
   // enough for a list you read, not a clock you watch.
   const timeZone = useUserTimeZone();
   const today = todayIso(timeZone);
-  // The dot on the Inbox chip reads the WHOLE list, not the filtered one: work
-  // waiting under a project filter you happen to have on is still waiting.
-  const inboxWaiting = useMemo(() => hasInboxWork(c.ordered), [c.ordered]);
 
   const addTask = () => {
     const title = newTitle.trim();
@@ -223,7 +233,11 @@ function BacklogListImpl({
   };
 
   return (
-    <div className="flex flex-col gap-2">
+    // Flush, the rows run edge to edge and everything else (notes, the
+    // skeleton, an empty state) keeps the sidebar's inset.
+    <div
+      className={`flex flex-col gap-2 ${flush ? "[&>:not([role=tree],[data-flush-list])]:mx-2" : ""}`}
+    >
       {showAddTask ? (
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
@@ -253,22 +267,15 @@ function BacklogListImpl({
         </div>
       ) : null}
 
-      <BacklogToolbar
-        density={toolbarDensity ?? density}
-        view={view}
-        onViewChange={c.setView}
-        viewMode={viewMode}
-        onViewModeChange={c.setViewMode}
-        projectFilter={projectFilter}
-        projectFilterOptions={c.projectFilterOptions}
-        projectsById={c.projectsById}
-        projectsLoaded={c.projectsLoaded}
-        onProjectFilterChange={c.setProjectFilter}
-        statuses={c.statuses}
-        onStatusFilterChange={c.setStatusFilter}
-        inboxWaiting={inboxWaiting}
-        hideProjectControls={Boolean(fixedFilter)}
-      />
+      {externalToolbar ? null : (
+        <BacklogListToolbar
+          state={state}
+          prefs={prefs}
+          onUpdatePrefs={onUpdatePrefs}
+          density={toolbarDensity ?? density}
+          fixedProjectId={fixedProjectId}
+        />
+      )}
 
       {/* The list could not be read: a condition on the COLLECTION, so it is
           here whenever the user is, and the retained rows stay readable below
@@ -280,14 +287,6 @@ function BacklogListImpl({
         />
       ) : null}
       {reorderError ? <ErrorNote message={reorderError} /> : null}
-      {density === "comfortable" &&
-      view === "backlog" &&
-      c.viewMode === "project" ? (
-        <p className="px-1 text-sm text-muted-foreground">
-          Drag a Task onto another Project to reassign it, or within a Project
-          to reorder. Collapse a Project to fold it away.
-        </p>
-      ) : null}
 
       {!c.loaded ? (
         // The Task subscription has not answered yet. Every view below draws an
@@ -304,6 +303,7 @@ function BacklogListImpl({
           onCycle={c.cycleStatus}
           onDismiss={c.dismissFromInbox}
           density={density}
+          flush={flush}
         />
       ) : view === "focus" ? (
         <BacklogFocusList
@@ -322,11 +322,13 @@ function BacklogListImpl({
           onDismissSuggestion={c.dismissSuggestion}
           onNavigate={onNavigate}
           density={density}
+          flush={flush}
         />
       ) : (
         <BacklogTreePane
           tasks={c.ordered}
           density={density}
+          flush={flush}
           viewMode={viewMode}
           statuses={c.statuses}
           projectFilter={projectFilter}

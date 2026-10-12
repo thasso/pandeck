@@ -28,7 +28,11 @@
  */
 import { randomUUID } from "node:crypto";
 import { notifySessionBlocked } from "./webPush.ts";
-import { applyPatch, approvalGrantKeys } from "@assistant/shared";
+import {
+  applyPatch,
+  approvalGrantKeys,
+  grantableAheadOfTime,
+} from "@assistant/shared";
 import {
   approvalMessageId,
   formatPaObjectLink,
@@ -642,6 +646,22 @@ function grantOperations(card: ApprovalCard): void {
       });
   });
   void broadcastGrants(card.sessionId);
+}
+
+/**
+ * Grant one operation from the inspector, before any card asked. Only a key
+ * `grantableAheadOfTime` allows is accepted — never a card-only operation,
+ * a tag, or settings input — and a key the session already holds keeps its
+ * original grant. It covers cards proposed from now on.
+ */
+export function grantApprovalForSession(sessionId: string, key: string): void {
+  if (!grantableAheadOfTime(key)) return;
+  approvalStore.insertGrant(sessionId, {
+    key,
+    grantedAt: Date.now(),
+    sourceApprovalId: "",
+  });
+  void broadcastGrants(sessionId);
 }
 
 /**

@@ -525,6 +525,37 @@ cleanup, or access outside the run worktree.
    across it, and the run card says whose words the stopped tail carries — the
    agent's diagnosis, or the operation's own error.
 
+   **When the commit check refuses.** Every commit the run makes goes through
+   the same commit check as `worktree_commit`. When it refuses, the commit
+   operation records the check's problems structured on its blocked result —
+   each a `kind` (`secret`, `unrelated`, `too_broad`, `unsafe`, `unclear`,
+   `other`), an optional `file`, and the check's `reason` — instead of only one
+   flattened sentence. The recipe then decides before any triage:
+
+   - **Code problems** (`unsafe`, `unclear`, `other`) go back to whoever wrote
+     the change as an `address-commit-check` assignment carrying the problems,
+     fenced as the check's output: the fixer's session when a fix round made it
+     (its runtime and lineage are copied onto the assignment), otherwise the
+     implementer's. When it finishes, the recipe re-issues the refused commit
+     with its payload whole, re-reserved against the fix. The run does this on
+     its own at most twice per refused commit; the walk crosses the refused
+     attempts, the fixes and any answered gate, and stops at the work that
+     produced the change. These rounds are not fix rounds: they answer the
+     check, not a reviewer, so they spend no iteration and their report is not
+     the one the next review reads.
+   - **A human's call** (`secret`, `unrelated`, `too_broad`), or problems that
+     survived both automatic fixes, open a `commit-check` user-decision gate.
+     The user sends the problems back for a fix (an `address-commit-check`
+     assignment marked `requestedBy: "user"`, which does not count toward the
+     automatic two), commits over the check, or cancels. Committing over it
+     re-issues the commit with `force: true`, the only way past the check, and
+     is never offered when a problem is a `secret`. The card shows the check's
+     problems, a link to the session that wrote the change, and these choices;
+     cancelling records `cancel` on the gate.
+
+   A commit blocked without structured problems (a git error, no changes) keeps
+   the ordinary path: pause, then Retry or triage as above.
+
 4. **Assess and fix.** One primitive does every judgment: an agent reads a
    commit range and submits an `assessment` naming the exact head it judged.
    Three mandates use it, differing only in who is asked and what they are asked

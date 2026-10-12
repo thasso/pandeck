@@ -1,5 +1,6 @@
 import type { VariantProps } from "class-variance-authority";
 import type { badgeVariants } from "@/components/ui/badge";
+import type { AppCardTone } from "./AppCard.tsx";
 
 /**
  * The semantic tone every state model in `lib/` speaks (session inbox status,
@@ -27,3 +28,12 @@ export const TONE_TEXT: Record<StatusTone, string> = {
   success: "text-success",
   muted: "text-muted-foreground",
 };
+
+/** The `AppCard` header tone for each status tone. */
+export const TONE_CARD = {
+  accent: "info",
+  warning: "warning",
+  danger: "destructive",
+  success: "success",
+  muted: "neutral",
+} as const satisfies Record<StatusTone, AppCardTone>;

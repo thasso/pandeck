@@ -64,7 +64,9 @@ export function ChatActivityRow({
       }}
       className="w-full min-w-0 text-sm text-muted-foreground"
     >
-      <div className="flex min-w-0 items-center gap-1.5">
+      {/* The whole row takes the hover, not just the toggle beside the icon
+          and title; open is not a hover state. */}
+      <div className="flex min-w-0 items-center gap-2.5 rounded-md hover:bg-muted dark:hover:bg-muted/50">
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         {prefix ? <span className="shrink-0">{prefix}</span> : null}
         {href ? (
@@ -100,7 +102,7 @@ export function ChatActivityRow({
             <Button
               variant="ghost"
               size="sm"
-              className="min-w-0 flex-1 justify-start"
+              className="min-w-0 flex-1 justify-start hover:bg-transparent aria-expanded:bg-transparent dark:hover:bg-transparent"
             />
           }
           data-activity-toggle

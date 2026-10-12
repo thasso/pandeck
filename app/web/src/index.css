@@ -4,6 +4,13 @@
 @import "@fontsource-variable/geist";
 
 @custom-variant dark (&:is(.dark *));
+/* While the phone keyboard is up (`App.tsx` sets `data-keyboard-open` on the
+   root): chrome that should step aside while the user types. */
+@custom-variant keyboard-open (:where([data-keyboard-open]) &);
+/* An InputGroup whose own control is focused or disabled, for a host that
+   restyles those states (the composer card). */
+@custom-variant field-focus-visible (&:has([data-slot=input-group-control]:focus-visible));
+@custom-variant field-disabled (&:has([data-slot=input-group-control]:disabled));
 
 /* App status colors (shadcn has no success/warning token), themed via :root / .dark. */
 @theme {
@@ -11,6 +18,11 @@
   --color-warning-soft: var(--warning-soft);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
+
+  /* The composer card's corners: deliberately rounder than the theme radius
+     and independent of it — the composer is the one object on the page meant
+     to read as such (`Composer.tsx`, `ComposerLedge.tsx`). */
+  --radius-composer: 1.25rem;
 
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
@@ -279,6 +291,22 @@ body {
   display: none;
 }
 
+@layer components {
+  /* `PropertyList`: one label column for every list, so labels and values
+     line up the same wherever a list appears; narrower at the `sm` density. */
+  .property-list {
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+  }
+  .property-list-sm {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+  }
+  /* `AppCard`'s header status: its signals separated by a middle dot. */
+  .app-card-status > * + *::before {
+    content: "·";
+    margin-right: 0.25rem;
+  }
+}
+
 /* Right-panel tabs still support horizontal wheel/trackpad scrolling, without
    claiming their scarce header height for a scrollbar. */
 .right-panel-tab-list {
@@ -309,6 +337,29 @@ body {
   .session-card-status-line .session-status-badge-label {
     display: none;
   }
+}
+/* The same compact form at ANY width where the labelled one would wrap a
+   signal off the line (`useInertOverflow`'s `compact`): icons before anything
+   disappears. Only the signals compact this way; the badges addressed to the
+   user beside them keep their words. */
+[data-signals-compact] [data-session-status-badge="responsive"],
+[data-signals-compact] .session-status-responsive-badge {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 1.25rem;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+[data-signals-compact] .session-status-badge-label {
+  display: none;
+}
+/* Badge's `transition-all` would animate the switch between the two forms, and
+   the fit measures mid-animation widths: it read a half-grown label as fitting,
+   let it grow, saw it wrap, and flickered at the edge. Colours still ease;
+   sizes change at once. */
+.session-card-status-line .group\/badge {
+  transition-property: color, background-color, border-color, box-shadow;
 }
 
 /* Slim, unobtrusive scrollbars */
@@ -712,6 +763,17 @@ body {
 .transcript-row[data-side-activity] + .transcript-row[data-side-activity] {
   margin-top: 0;
 }
+/* A message that ends in a group of activity rows (tool calls, thinking),
+   followed by one that opens with such a group, continues that group: the
+   rows keep the group's small gap (`AssistantMessage`), not the turn gap. */
+.transcript-row:has(
+    .assistant-message-content > [data-activity-group]:last-child
+  )
+  + .transcript-row:has(
+    .assistant-message-content > [data-activity-group]:first-child
+  ) {
+  margin-top: 0.125rem;
+}
 /* Paint containment clips descendants to the row's border box. Give a row that
    contains a top-level breakout table its own bounded wide box, then restore
    the ordinary prose measure inside it. The shell inset also keeps classic
@@ -745,7 +807,7 @@ body {
 
 /* Shiki output (CodeBlock + Markdown fences) is themed with
    Catppuccin Latte/Mocha as dual light/dark CSS variables (`defaultColor:
-   false`); pick the right one off the `html.dark` class. The `.cb-numbered`
+   false`); pick the right one off the nearest `.dark` ancestor. The `.cb-numbered`
    wrapper turns on a line-number gutter via CSS counters on Shiki's per-line
    `.line` spans. Ported from the v2 tailwind.config.js `codeBlocks` rules. */
 .shiki {
@@ -763,11 +825,11 @@ body {
 .shiki span {
   color: var(--shiki-light);
 }
-html.dark .shiki {
+.dark .shiki {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }
-html.dark .shiki span {
+.dark .shiki span {
   color: var(--shiki-dark);
 }
 .cb-numbered .shiki code {
@@ -834,7 +896,7 @@ html.dark .shiki span {
   line-height: var(--text-sm--line-height);
   white-space: pre;
 }
-html.dark .tool-code {
+.dark .tool-code {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg);
 }
@@ -852,9 +914,13 @@ html.dark .tool-code {
 .tool-code-row {
   display: block;
 }
+/* The same gutter as a numbered `.shiki` excerpt (`.cb-numbered`), so a diff's
+   and a read's line numbers stand in one column. */
 .tool-code-num {
   display: inline-block;
-  margin-right: 0.75rem;
+  min-width: 2rem;
+  text-align: right;
+  margin-right: 1rem;
   color: var(--muted-foreground);
 }
 .tool-code-sign {
@@ -880,6 +946,16 @@ html.dark .tool-code {
    colour, so WHAT changed reads at a glance (the @pierre/diffs `word-alt`
    behaviour the worktree surfaces use). Adjacent marks are merged upstream, so
    these are spans rather than per-token boxes. */
+/* Inside an expanded tool call the body (`ToolCallBlock`) is the one surface:
+   a code shell drops its own frame there, so a bash run, a diff, a file excerpt
+   and a JSON tree all sit at the body's inset in the same type, instead of
+   some drawing a second box inside it. After the `.dark` rules, which it must
+   outrank. */
+[data-tool-body] :is(.shiki, .tool-code) {
+  background-color: transparent;
+  border-radius: 0;
+  padding: 0;
+}
 .tool-code .tool-diff-add .tool-diff-word {
   background-color: color-mix(in oklab, var(--success) 30%, transparent);
   border-radius: 3px;

@@ -109,9 +109,11 @@ it("keeps armed comment controls in the page header, not the desktop inspector",
   const onSubmitReview = vi.fn();
   await renderChrome({ canComment: false, onComment, onSubmitReview });
 
+  // Disarmed, the control names the gesture that arms it, both as its name
+  // and as the tooltip a disabled button can only carry on a wrapper.
   const addButtons = [
     ...container.querySelectorAll<HTMLButtonElement>(
-      'button[aria-label="Add comment"]',
+      'button[aria-label="Select text to comment"]',
     ),
   ];
   expect(addButtons).toHaveLength(1);

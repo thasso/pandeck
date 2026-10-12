@@ -18,7 +18,6 @@ import {
   backgroundWorkCommandDetail,
   backgroundWorkDeadlineLabel,
   backgroundWorkEvidenceFacts,
-  backgroundWorkHostLabel,
   backgroundWorkKindLabel,
   backgroundWorkOutcomeDetail,
   backgroundWorkListView,
@@ -293,23 +292,6 @@ describe("age and the frozen deadline", () => {
   });
 });
 
-describe("the retained host epoch", () => {
-  it("shows a Stop-all it could not complete as a wait, not a close", () => {
-    const waiting = item({
-      id: "a",
-      backend: "claude-query",
-      host: { id: "h1", state: "live", stopAllRequestedAt: NOW - 5_000 },
-    });
-    expect(backgroundWorkHostLabel(waiting)).toBe("Retained host: closing");
-    expect(
-      backgroundWorkHostLabel(
-        item({ id: "b", host: { id: "h1", state: "live" } }),
-      ),
-    ).toBe("Retained host: live");
-    expect(backgroundWorkHostLabel(item({ id: "c" }))).toBeUndefined();
-  });
-});
-
 describe("evidence", () => {
   it("shows bounded capture metadata and never an artifact id or a path", () => {
     const facts = backgroundWorkEvidenceFacts(
@@ -485,23 +467,25 @@ describe("the registry list view", () => {
 
 describe("the session card's chip", () => {
   it("names the count and the age of the oldest active item", () => {
-    expect(backgroundActivityChip(activity(), NOW)).toBe("Background 2 · 8m");
+    expect(backgroundActivityChip(activity(), NOW)).toEqual({
+      count: 2,
+      age: "8m",
+    });
     expect(backgroundActivityText(activity())).toBe(
       "2 background processes running",
     );
   });
 
-  it("still shows a retained host with no items left", () => {
+  it("says nothing for a retained host with no items left", () => {
+    // The host is the runtime's bookkeeping, not work the user waits on.
     const held = activity({
       activeCount: 0,
       shellCount: 0,
       monitorCommandCount: 0,
       retainedHost: true,
     });
-    expect(backgroundActivityChip(held, NOW)).toBe("Background host");
-    expect(backgroundActivityText(held)).toBe(
-      "Holds a retained background host",
-    );
+    expect(backgroundActivityChip(held, NOW)).toBeUndefined();
+    expect(backgroundActivityText(held)).toBeUndefined();
   });
 
   it("is absent when nothing is owned", () => {
@@ -571,9 +555,10 @@ describe("the global active count", () => {
       }),
       session({ id: "d" }),
     ];
+    // A retained host with nothing running in it owns no work.
     expect(globalBackgroundActivity(sessions)).toEqual({
       activeCount: 3,
-      ownerCount: 3,
+      ownerCount: 2,
     });
     expect(globalBackgroundActivity([])).toEqual({
       activeCount: 0,
@@ -600,7 +585,8 @@ describe("the row's content key", () => {
     expect(backgroundWorkRowKey(row, NOW)).not.toBe(
       backgroundWorkRowKey({ ...row, stopState: "requested" }, NOW),
     );
-    expect(backgroundWorkRowKey(row, NOW)).not.toBe(
+    // The retained host is not on the row, so it does not move the key.
+    expect(backgroundWorkRowKey(row, NOW)).toBe(
       backgroundWorkRowKey({ ...row, host: { id: "h", state: "live" } }, NOW),
     );
   });

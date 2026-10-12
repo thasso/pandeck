@@ -143,42 +143,26 @@ describe("UsageCycleMeters", () => {
     expect(html).toContain("resets in 2h (");
   });
 
-  it("reserves the same column widths in every state", () => {
-    // The reading and reset columns are fixed, and the reason spans exactly
-    // those two: whatever a row has to say, the meter track keeps its length,
-    // so rows within a card and cards beside each other stay aligned.
+  it("lays both rows on one grid in every state", () => {
+    // One grid for both rows: the meter tracks share a column, so they start
+    // and end together whatever a row's reading or reason says, and the label
+    // column is fixed so `5h`/`wk` line up across cards.
     const columns = (html: string) =>
       [...html.matchAll(/w-\[[\d.]+em\]/g)].map((m) => m[0]);
-    expect(columns(render(indicator()))).toEqual([
-      "w-[1.5em]",
-      "w-[3.4em]",
-      "w-[4.2em]",
-      "w-[1.5em]",
-      "w-[3.4em]",
-      "w-[4.2em]",
-    ]);
-    // No countdown to print (no `resetsAt`) still reserves the reset column.
-    expect(
-      columns(
-        render(
-          indicator({
-            short: { usedPct: 62, resetsAt: null },
-            long: { usedPct: 41, resetsAt: null },
-          }),
-        ),
-      ),
-    ).toHaveLength(6);
     for (const html of [
+      render(indicator()),
+      render(
+        indicator({
+          short: { usedPct: 62, resetsAt: null },
+          long: { usedPct: 41, resetsAt: null },
+        }),
+      ),
       render(undefined),
       render(indicator({ limitsAvailable: false })),
       render(indicator({ long: null })),
     ]) {
-      const cols = columns(html);
-      expect(cols.filter((c) => c === "w-[1.5em]")).toHaveLength(2);
+      expect(html).toContain("grid-cols-[auto_minmax(0,1fr)_auto]");
+      expect(columns(html)).toEqual(["w-[1.5em]", "w-[1.5em]"]);
     }
-    // A reason cell is as wide as the two number columns plus their gap.
-    expect(render(indicator({ limitsAvailable: false }))).toContain(
-      "w-[8.1em]",
-    );
   });
 });

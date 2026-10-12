@@ -130,49 +130,6 @@ describe("SessionDockActions arrangement", () => {
   });
 });
 
-describe("SessionDockActions comment selection", () => {
-  it("uses the field and Send slot as protected Comment actuators", () => {
-    let opened = 0;
-    const host = row({
-      draft: "prompt survives",
-      commentSelection: { quote: "selected passage" },
-      onComment: () => {
-        opened += 1;
-      },
-    });
-    expect(controls(host)).toEqual([
-      "View this session's worktree changes",
-      "Comment on selected text",
-      "Start dictation",
-      "Comment",
-    ]);
-    for (const button of [
-      control(host, "Comment on selected text"),
-      control(host, "Comment"),
-    ]) {
-      expect(button.getAttribute("data-comment-actuation")).toBe("true");
-      const down = new MouseEvent("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-      });
-      act(() => {
-        button.dispatchEvent(down);
-      });
-      expect(down.defaultPrevented).toBe(true);
-      press(button);
-    }
-    expect(opened).toBe(2);
-    expect(host.textContent).toContain("selected passage");
-  });
-
-  it("keeps recording ahead of a captured selection", () => {
-    speech.phase = "recording";
-    const host = row({ commentSelection: { quote: "selected passage" } });
-    expect(controls(host)).toContain("Stop recording and transcribe");
-    expect(controls(host)).not.toContain("Comment");
-  });
-});
-
 describe("SessionDockActions Send", () => {
   it("is disabled with no prompt to send and enabled with one", () => {
     expect(control(row(), "Send message").disabled).toBe(true);

@@ -8,6 +8,16 @@ export interface ComposerLedgeProps {
    * ledge is the bottom edge itself and sits flush on the row below.
    */
   joined: boolean;
+  /**
+   * Which edge of the card the strip rests on. `top` (the default) is a shelf
+   * above it; `bottom` mirrors it under the card, tucked behind its lower edge.
+   */
+  edge?: "top" | "bottom";
+  /**
+   * A top strip that is part of typing (the slash-command menu) stays up while
+   * the phone keyboard is; the resting strips step aside for it.
+   */
+  keepWithKeyboard?: boolean;
   children: ReactNode;
 }
 
@@ -29,11 +39,26 @@ export interface ComposerLedgeProps {
  * transcript's bottom inset accounts for it.
  * @related Composer, ChatDockPanel, BackgroundWorkLedge, SpawnedSessionsLedge
  */
-export function ComposerLedge({ joined, children }: ComposerLedgeProps) {
+export function ComposerLedge({
+  joined,
+  edge = "top",
+  keepWithKeyboard = false,
+  children,
+}: ComposerLedgeProps) {
+  const edgeClass =
+    edge === "top"
+      ? // Stepped aside while the phone keyboard is up: nothing on the shelf
+        // is needed mid-sentence, and that height is the transcript's.
+        `rounded-t-xl border-b-0 ${keepWithKeyboard ? "" : "keyboard-open:hidden"} ${joined ? "-mb-4 pb-4" : ""}`
+      : `rounded-b-xl border-t-0 ${joined ? "-mt-4 pt-4" : ""}`;
   return (
     <div
       data-composer-ledge
-      className={`relative z-1 mx-9 divide-y rounded-t-xl border border-b-0 bg-card ${joined ? "-mb-4 pb-4" : ""}`}
+      // Clips the strips' edge-to-edge headers to the rounded top. The inset
+      // IS the composer's corner radius (20px, `rounded-composer`): the strip
+      // starts exactly where the curve ends. Less and the tucked-in bottom
+      // shows through the curve; change the two together.
+      className={`relative z-1 mx-5 divide-y overflow-hidden border bg-card ${edgeClass}`}
     >
       {children}
     </div>

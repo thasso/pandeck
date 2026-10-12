@@ -1,16 +1,40 @@
-import { CalendarClock, FolderTree, Inbox, ListTree } from "lucide-react";
+import {
+  CalendarClock,
+  ChevronDown,
+  FolderTree,
+  Inbox,
+  ListTree,
+  SlidersHorizontal,
+} from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import type { ProjectRecord, TaskStatus } from "@assistant/shared";
 import {
   BacklogProjectFilterControl,
+  BacklogProjectFilterPicker,
   type BacklogProjectFilterOption,
 } from "./BacklogFilters.tsx";
-import { BacklogStatusFilter } from "./BacklogStatusFilter.tsx";
-import type {
-  BacklogDensity,
-  BacklogProjectFilter,
-  BacklogView,
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+} from "./common/PropertyList.tsx";
+import {
+  BacklogStatusFilter,
+  BacklogStatusFilterPicker,
+} from "./BacklogStatusFilter.tsx";
+import {
+  statusFilterActive,
+  type BacklogDensity,
+  type BacklogProjectFilter,
+  type BacklogView,
 } from "../lib/backlogTreeModel.ts";
 import type { BacklogViewMode } from "../hooks/useBacklog.ts";
 
@@ -41,6 +65,7 @@ export function BacklogToolbar({
   onStatusFilterChange,
   inboxWaiting = false,
   hideProjectControls = false,
+  bar = false,
 }: {
   /** How much room the surface gives a row; see `BacklogDensity`. */
   density: BacklogDensity;
@@ -58,13 +83,44 @@ export function BacklogToolbar({
   /** Anything waiting in the Inbox — drives that chip's attention dot. */
   inboxWaiting?: boolean;
   hideProjectControls?: boolean;
+  /**
+   * Drawn as a header bar above the host's scroll container rather than a row
+   * inside it: hairline under, its own inset — as the Sessions bar.
+   */
+  bar?: boolean;
 }) {
   const tight = density === "tight";
   const byProject = viewMode === "project";
 
+  // The sidebar's header bar is ONE short line: the view as a dropdown on the
+  // left, every filter behind one button on the right. The chips it replaces
+  // wrapped onto two to four lines in the rail.
+  if (bar && !hideProjectControls)
+    return (
+      <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-1.5 sm:px-2">
+        <BacklogViewMenu
+          view={view}
+          onChange={onViewChange}
+          inboxWaiting={inboxWaiting}
+        />
+        <BacklogFilterPopover
+          view={view}
+          byProject={byProject}
+          onViewModeChange={onViewModeChange}
+          projectFilter={projectFilter}
+          projectFilterOptions={projectFilterOptions}
+          projectsById={projectsById}
+          projectsLoaded={projectsLoaded}
+          onProjectFilterChange={onProjectFilterChange}
+          statuses={statuses}
+          onStatusFilterChange={onStatusFilterChange}
+        />
+      </div>
+    );
+
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 px-1 ${tight ? "text-xs" : "text-sm"} text-muted-foreground`}
+      className={`flex flex-wrap items-center gap-x-2 gap-y-1.5 ${bar ? "border-b border-border bg-card px-2 py-2 sm:px-3" : "px-1"} ${tight ? "text-xs" : "text-sm"} text-muted-foreground`}
     >
       {!hideProjectControls && (
         <BacklogViewSwitcher
@@ -189,5 +245,177 @@ function BacklogViewSwitcher({
         );
       })}
     </ToggleGroup>
+  );
+}
+
+/**
+ * The view as a quiet dropdown: its icon and name on the bar, the three views
+ * in the menu, where Inbox carries its waiting dot. The trigger carries none:
+ * beside another view's name it read as a stray selection marker.
+ */
+function BacklogViewMenu({
+  view,
+  onChange,
+  inboxWaiting,
+}: {
+  view: BacklogView;
+  onChange: (view: BacklogView) => void;
+  inboxWaiting: boolean;
+}) {
+  const meta = VIEW_META[view];
+  const Icon = meta.Icon;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="min-w-0 gap-1.5 font-medium"
+            aria-label={`Backlog view: ${meta.label}`}
+          />
+        }
+      >
+        <Icon className="text-muted-foreground" />
+        <span className="truncate">{meta.label}</span>
+
+        <ChevronDown className="text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        {/* Plain items, not radio items: the trigger already names the view,
+            so no check mark beside it, and a pick closes the menu. */}
+        {(Object.keys(VIEW_META) as BacklogView[]).map((id) => {
+          const item = VIEW_META[id];
+          const ItemIcon = item.Icon;
+          return (
+            <DropdownMenuItem
+              key={id}
+              aria-current={id === view || undefined}
+              className="items-start"
+              onClick={() => onChange(id)}
+            >
+              <ItemIcon className="mt-0.5" />
+              <span className="flex min-w-0 flex-col">
+                <span
+                  className={`flex items-center gap-1.5 ${id === view ? "font-medium" : ""}`}
+                >
+                  {item.label}
+                  {id === "inbox" && inboxWaiting ? (
+                    <span
+                      className="size-1.5 rounded-full bg-primary"
+                      aria-label="Tasks waiting"
+                    />
+                  ) : null}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {item.title}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Every filter behind one button, its badge counting the active ones so a
+ * filtered list never passes for the whole Backlog. Shows only what the view
+ * honours: Inbox ignores status, and only the Backlog groups by Project.
+ */
+function BacklogFilterPopover({
+  view,
+  byProject,
+  onViewModeChange,
+  projectFilter,
+  projectFilterOptions,
+  projectsById,
+  projectsLoaded,
+  onProjectFilterChange,
+  statuses,
+  onStatusFilterChange,
+}: {
+  view: BacklogView;
+  byProject: boolean;
+  onViewModeChange: (mode: BacklogViewMode) => void;
+  projectFilter: BacklogProjectFilter;
+  projectFilterOptions: BacklogProjectFilterOption[];
+  projectsById: Map<string, ProjectRecord>;
+  projectsLoaded: boolean;
+  onProjectFilterChange: (filter: BacklogProjectFilter) => void;
+  statuses: Set<TaskStatus>;
+  onStatusFilterChange: (next: TaskStatus[]) => void;
+}) {
+  const active =
+    (projectFilter.kind !== "all" ? 1 : 0) +
+    (view !== "inbox" && statusFilterActive(statuses) ? 1 : 0);
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto gap-1 text-muted-foreground"
+            aria-label={
+              active ? `Filters (${active} active)` : "Filters and grouping"
+            }
+          />
+        }
+      >
+        <SlidersHorizontal />
+        {active ? (
+          <span className="min-w-4 rounded-full bg-primary px-1 text-xs font-medium text-primary-foreground tabular-nums">
+            {active}
+          </span>
+        ) : null}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72">
+        {/* The inspector's property list: muted labels, quiet values. */}
+        <PropertyList>
+          <PropertyLabel>Project</PropertyLabel>
+          <BacklogProjectFilterPicker
+            filter={projectFilter}
+            options={projectFilterOptions}
+            projectsById={projectsById}
+            onChange={onProjectFilterChange}
+            disabled={!projectsLoaded}
+            className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+          />
+          {view !== "inbox" ? (
+            <>
+              <PropertyLabel>Status</PropertyLabel>
+              <BacklogStatusFilterPicker
+                statuses={statuses}
+                onChange={onStatusFilterChange}
+                options={view === "focus" ? FOCUS_STATUS_OPTIONS : undefined}
+                className={`${PROPERTY_TRIGGER} min-w-0 justify-start`}
+              />
+            </>
+          ) : null}
+          {view === "backlog" ? (
+            <>
+              <PropertyLabel>Group</PropertyLabel>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`${PROPERTY_TRIGGER} justify-start`}
+                onClick={() =>
+                  onViewModeChange(byProject ? "normal" : "project")
+                }
+                disabled={!projectsLoaded}
+                aria-pressed={byProject}
+              >
+                <FolderTree className="text-muted-foreground" />
+                <span className={byProject ? "" : "text-muted-foreground"}>
+                  {byProject ? "By Project" : "None"}
+                </span>
+              </Button>
+            </>
+          ) : null}
+        </PropertyList>
+      </PopoverContent>
+    </Popover>
   );
 }

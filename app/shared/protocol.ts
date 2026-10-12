@@ -976,6 +976,45 @@ export interface GithubLinkedIssuesResponse {
   issues: GithubLinkedIssue[];
 }
 
+/**
+ * One remote ticket offered by the Task inspector's ticket search: a Jira issue
+ * or a GitHub issue / pull request. `ref` is what the Task stores — a Jira key
+ * (`ABC-123`) in `jiraIssueKeys`, a canonical `owner/repo#123` in
+ * `githubIssues`.
+ */
+export interface TicketSearchResult {
+  source: "jira" | "github";
+  ref: string;
+  title: string;
+  /** Jira's status name, or GitHub's `open` / `closed` / `merged`. */
+  status: string;
+  url: string;
+  isPullRequest?: boolean;
+}
+
+/**
+ * `GET /api/tickets/search?q=&jiraProjects=A,B&repos=owner/repo` — both
+ * sources searched in parallel. A source that is not configured is skipped
+ * silently; one that failed is named in `errors` while the other's results
+ * still arrive.
+ */
+export interface TicketSearchResponse {
+  results: TicketSearchResult[];
+  errors: { source: "jira" | "github"; message: string }[];
+}
+
+/**
+ * The Jira issue key in `value` — a bare key (any case) or a `/browse/KEY`
+ * link — upper-cased, or null.
+ */
+export function parseJiraIssueKey(value: string): string | null {
+  const text = value.trim();
+  const match =
+    /\/browse\/([A-Za-z][A-Za-z0-9_]+-\d+)(?:[/?#].*)?$/.exec(text) ??
+    /^([A-Za-z][A-Za-z0-9_]+-\d+)$/.exec(text);
+  return match ? match[1]!.toUpperCase() : null;
+}
+
 /** Patch sent by the settings UI. Secret fields are write-only and never echoed back. */
 export interface JiraSettingsPatch {
   enabled?: boolean;
@@ -2693,6 +2732,23 @@ export interface PeerPromptCard {
   state: PeerPromptState;
 }
 
+/**
+ * The peer prompts between one session and one other session, summed up: how
+ * many each way, where the latest stands, and the latest failure's reason.
+ */
+export interface PeerPromptPeerSummary {
+  /** The other session. */
+  peerSessionId: string;
+  /** Its title (or the sender label it used), for when the list lacks it. */
+  title: string;
+  sent: number;
+  received: number;
+  lastState: PeerPromptState;
+  lastAt: number;
+  /** The most recent failure's reason, if any message failed. */
+  lastFailureReason?: string;
+}
+
 /** One sanitized message inside a durable peer-prompt thread projection. */
 export interface PeerPromptThreadMessage {
   /**
@@ -4172,8 +4228,17 @@ export interface SessionState {
   pendingPostReloadContinuation?: PendingPostReloadContinuation;
   /** Running Playwright MCP/browser instances known to the server. */
   browserRuntimes?: BrowserRuntimeInfo[];
-  /** Bounded, sanitized peer-prompt history involving this session. */
+  /**
+   * Bounded, sanitized peer-prompt history involving this session: what seeds
+   * the transcript's peer-prompt cards with their current state.
+   */
   peerPrompts?: PeerPromptThreadsProjection;
+  /**
+   * The peer prompts involving this session, summed up per other session —
+   * over ALL of them, not the bounded window above. The inspector's per-peer
+   * facts.
+   */
+  peerPromptPeers?: PeerPromptPeerSummary[];
   /** The worktree this session executes in (via its `in_worktree` link), if any. */
   worktreeId?: string;
   /**
@@ -6258,14 +6323,34 @@ export type WorkflowRunPhase =
   | "review"
   | "review-decision"
   | "ceiling-decision"
+  | "commit-check-decision"
   | "delivery"
   | "observe"
   | "merge";
 
+/**
+ * Why the commit check refused a run's change, one item per problem it named.
+ * `secret`, `unrelated` and `too_broad` are a human's call; the rest are code
+ * problems the run hands back to its implementer on its own.
+ */
+export interface WorkflowCommitCheckBlocker {
+  kind: "secret" | "unrelated" | "too_broad" | "unsafe" | "unclear" | "other";
+  file?: string;
+  reason: string;
+}
+
+/** What the user may answer when the commit check refused the run's change. */
+export type WorkflowCommitCheckChoice = "send-to-implementer" | "commit-anyway";
+
 /** A coordinator-selected role config safe to show on a run card. */
 export type WorkflowRunCardRoleConfig = Pick<
   WorkflowRoleCandidate,
-  "provider" | "modelId" | "thinkingLevel" | "family" | "notes"
+  | "provider"
+  | "modelId"
+  | "thinkingLevel"
+  | "family"
+  | "notes"
+  | "credentialProfileId"
 >;
 
 /**
@@ -6448,6 +6533,22 @@ export interface WorkflowRunCard {
    * refused while this stands, so it must not be shown.
    */
   cancelRequested?: boolean;
+  /**
+   * The open gate a refused commit reached, when the run is waiting at one: the
+   * commit check's problems, and what the user may do about them. `commit-anyway`
+   * is not offered when the check found a secret.
+   */
+  commitCheckDecision?: {
+    blockers: WorkflowCommitCheckBlocker[];
+    allowedChoices: WorkflowCommitCheckChoice[];
+    /** The run already handed these problems to its implementer and they came back. */
+    autoFixSpent: boolean;
+    /**
+     * The session whose change the check refused: the implementer's, or the
+     * fixer's in a fix round. The check itself runs in no session.
+     */
+    changedBySessionId?: string;
+  };
   /**
    * The open gate an exhausted ceiling reached, when the run is waiting at one:
    * what it wanted to do, what it has spent, and whether "deliver as it stands"
@@ -6676,6 +6777,12 @@ export type ClientMessage =
   /** Withdraw one session approval grant; later cards wait for a click again. */
   | { type: "revokeApprovalGrant"; sessionId: string; key: string }
   /**
+   * Grant one operation for the rest of a session from the inspector, before
+   * any card asked — only keys `grantableAheadOfTime` allows. Covers cards
+   * proposed from now on.
+   */
+  | { type: "grantApprovalForSession"; sessionId: string; key: string }
+  /**
    * Answer a `choosing-task` pull-request card's Task-disambiguation prompt.
    * `taskId: null` means "none of these" (an agent-written title, no linked Task).
    */
@@ -6887,8 +6994,6 @@ export type ClientMessage =
     }
   /** Actionable memory processor configuration status (Task 100). */
   | { type: "memoryStatus"; requestId: string }
-  /** Expand the current session's bounded Peer prompts history beyond its default snapshot size. */
-  | { type: "requestPeerPromptHistory"; limit?: number }
   /** Where a message the reader asked to jump to lives; see {@link TimelineAnchorTarget}. */
   | {
       type: "resolveTimelineAnchor";
@@ -7180,6 +7285,17 @@ export type ClientMessage =
       runId: string;
       choice: "raise" | "deliver" | "re-evaluate" | "cancel";
       raise?: WorkflowCeilingRaise;
+    }
+  /**
+   * Answer the gate a refused commit opened: hand the commit check's problems
+   * to the implementer, or commit over them. Cancelling uses
+   * `cancelWorkflowRun` (`docs/agent-workflows.md`, "When the commit check
+   * refuses").
+   */
+  | {
+      type: "answerWorkflowCommitCheck";
+      runId: string;
+      choice: WorkflowCommitCheckChoice;
     }
   | { type: "pauseWorkflowRun"; runId: string; reason?: string }
   | { type: "resumeWorkflowRun"; runId: string }
@@ -7841,12 +7957,6 @@ export type ServerMessage =
       messageKey: string;
       state: PeerPromptState;
       failureReason?: string;
-    }
-  /** Response to `requestPeerPromptHistory`: an expanded (still bounded) projection replacing the default one for display. */
-  | {
-      type: "peerPromptHistoryExpanded";
-      sessionId: string;
-      projection: PeerPromptThreadsProjection;
     }
   /**
    * Response to `resolveTimelineAnchor`. `anchor` is absent when the target no

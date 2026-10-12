@@ -8,7 +8,6 @@ import type { UsageIndicator } from "@assistant/shared/usage";
 import { ProviderIcon } from "./ProviderIcon.tsx";
 import { UsageCycleMeters } from "./UsageCycleMeters.tsx";
 import { THINKING_LABELS } from "./ModelThinkingSelect.tsx";
-import { Item } from "../ui/item.tsx";
 import { Slider } from "../ui/slider.tsx";
 import { Toggle } from "../ui/toggle.tsx";
 import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group.tsx";
@@ -85,16 +84,13 @@ export function ProviderAccountRow({
         const selected = account.id === selectedId;
         const providerLabel = PROVIDER_LABEL[account.provider];
         return (
-          <Item
+          <QuickPill
             key={account.id}
-            render={<button type="button" disabled={disabled} />}
-            variant={selected ? "muted" : "outline"}
-            role="option"
-            aria-selected={selected}
-            data-quick-selected={selected || undefined}
+            selected={selected}
+            disabled={disabled}
             title={`Use ${account.name} (${providerLabel})`}
             onClick={() => onSelect(account.id)}
-            className="w-52 shrink-0 snap-start flex-col items-start gap-1"
+            className={`w-52 ${QUICK_CARD}`}
           >
             <span className="flex w-full min-w-0 items-center gap-1.5">
               <ProviderIcon
@@ -107,17 +103,13 @@ export function ProviderAccountRow({
                     : "shrink-0 text-muted-foreground"
                 }
               />
-              <span
-                className={`min-w-0 flex-1 truncate text-sm font-medium ${selected ? "text-primary" : "text-foreground"}`}
-              >
-                {account.name}
-              </span>
+              <span className="min-w-0 flex-1 truncate">{account.name}</span>
             </span>
             <UsageCycleMeters
               indicator={usageByProfileId.get(account.id)}
               now={now}
             />
-          </Item>
+          </QuickPill>
         );
       })}
     </QuickRow>
@@ -186,18 +178,22 @@ export function ModelQuickRow<M extends ModelOption>({
 
 /**
  * Discrete horizontal slider over the model's supported thinking levels, with
- * the selected level's label centered below.
+ * a tick per level and the selected level's label centered below (unless the
+ * host states it in its own label).
  */
 export function ThinkingSlider({
   levels,
   value,
   onChange,
   disabled = false,
+  showValue = true,
 }: {
   levels: readonly ThinkingLevel[];
   value: ThinkingLevel;
   onChange: (level: ThinkingLevel) => void;
   disabled?: boolean;
+  /** Off where the host states the level itself (the row's label). */
+  showValue?: boolean;
 }) {
   const index = Math.max(0, levels.indexOf(value));
 
@@ -216,12 +212,14 @@ export function ThinkingSlider({
         title={`Thinking: ${THINKING_LABELS[value]}`}
         disabled={disabled}
       />
-      <div
-        className="mt-0.5 text-center text-sm font-medium text-foreground"
-        aria-hidden
-      >
-        {THINKING_LABELS[value]}
-      </div>
+      {showValue ? (
+        <div
+          className="mt-0.5 text-center text-sm font-medium text-foreground"
+          aria-hidden
+        >
+          {THINKING_LABELS[value]}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -249,21 +247,44 @@ export function DiscreteSlider({
   title?: string;
   disabled?: boolean;
 }) {
+  const steps = max - min;
   return (
-    <Slider
-      min={min}
-      max={max}
-      step={1}
-      value={[value]}
-      disabled={disabled}
-      onValueChange={(values) => {
-        const next = Array.isArray(values) ? values[0] : values;
-        if (next !== undefined && next !== value) onChange(next);
-      }}
-      thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
-      title={title ?? `${ariaLabel}: ${valueText}`}
-      className="flex h-10 items-center"
-    />
+    <div className="relative">
+      <Slider
+        min={min}
+        max={max}
+        step={1}
+        value={[value]}
+        disabled={disabled}
+        onValueChange={(values) => {
+          const next = Array.isArray(values) ? values[0] : values;
+          if (next !== undefined && next !== value) onChange(next);
+        }}
+        thumbProps={{ "aria-label": ariaLabel, "aria-valuetext": valueText }}
+        title={title ?? `${ariaLabel}: ${valueText}`}
+        // The control fills the whole 40px band, so a tap anywhere on it — not
+        // only on the 4px track — picks the nearest choice; no drag needed.
+        className="flex h-10 items-center *:h-full"
+      />
+      {/* A hollow stop on the track for every choice, drawn over it (after
+          the slider) and click-through, so a tap still reaches the slider.
+          The chosen one is under the thumb and left out. The slider keeps its
+          12px thumb inside the track (`thumbAlignment="edge"`), so the stops
+          run from 6px to 6px short of either end. */}
+      {steps > 0 ? (
+        <div aria-hidden className="pointer-events-none absolute inset-0">
+          {Array.from({ length: steps + 1 }, (_, index) =>
+            min + index === value ? null : (
+              <span
+                key={index}
+                className={`absolute top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border bg-background ${min + index < value ? "border-primary" : "border-muted-foreground/60"}`}
+                style={{ left: `calc(6px + (100% - 12px) * ${index / steps})` }}
+              />
+            ),
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -321,7 +342,7 @@ export function QuickRow({
 
   return (
     <div className="w-full">
-      <div className="mb-1.5 px-4 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="mb-1.5 px-4 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       {/* The gutter lives INSIDE the scroller (padding + matching scroll-padding
@@ -343,52 +364,26 @@ export function QuickRow({
   );
 }
 
-/**
- * Two small pickers sharing ONE row, each a labelled `listbox` of its own.
- *
- * For axes that are a couple of chips wide (agent, Build/Plan): a row apiece
- * costs vertical space the landing page does not have, and pushing one of them
- * off the surface entirely — into the composer's pill strip — is how a mode
- * nobody picked goes unnoticed.
- *
- * WRAPS rather than scrolling, unlike {@link QuickRow}: these groups are short
- * enough to fit a row on any desktop, and a phone that cannot fit them gets both
- * in full on two lines instead of a horizontal scroll whose second group starts
- * off-screen — the very invisibility this row exists to fix.
- */
-export function QuickRowSplit({
-  groups,
-}: {
-  groups: readonly { label: string; children: ReactNode }[];
-}) {
-  return (
-    <div className="flex w-full flex-wrap justify-center gap-x-7 gap-y-3 px-4 pb-1.5">
-      {groups.map((group) => (
-        <div key={group.label} className="flex flex-col">
-          <div className="mb-1.5 text-center text-sm font-medium uppercase tracking-wide text-muted-foreground">
-            {group.label}
-          </div>
-          <div role="listbox" aria-label={group.label} className="flex gap-2">
-            {group.children}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
+/** A QuickPill laid out as a two-line card (worktrees, provider accounts). */
+export const QUICK_CARD = "h-auto flex-col items-start gap-1 py-2 text-left";
 
-/** One pickable chip inside a {@link QuickRow}. */
 export function QuickPill({
   selected,
   title,
   onClick,
   disabled = false,
+  className = "",
   children,
 }: {
   selected: boolean;
   title: string;
   onClick: () => void;
   disabled?: boolean;
+  /**
+   * Layout only — a two-line card (`QUICK_CARD`) is still this Toggle, so its
+   * border, hover and selected fill are the pills' own.
+   */
+  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -401,7 +396,7 @@ export function QuickPill({
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className="max-w-52 shrink-0 snap-start"
+      className={`max-w-52 shrink-0 snap-start ${className}`}
     >
       {children}
     </Toggle>

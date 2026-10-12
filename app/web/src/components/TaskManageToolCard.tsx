@@ -14,7 +14,7 @@ import { TaskIdBadge } from "./TaskIdBadge.tsx";
 import { TASK_STATUS_LABEL, TaskStatusIcon } from "./TaskStatusIcon.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -126,46 +126,39 @@ export function TaskManageToolCard({
 
   const kinds = changedOperationKinds(block.args, changed.length);
 
+  const count = changed.length + deletedIds.length;
   return (
-    <Card size="sm" className="my-2">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-1.5">
-          <ClipboardList className="size-3.5 text-primary" />
-          Tasks
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <ul className="flex flex-col gap-1">
-          {changed.map((task, index) => (
-            <TaskRow
-              key={`${task.id}-${index}`}
-              task={task}
-              summary={changeSummary(task, kinds?.[index])}
-              confirmedTo={confirmed[task.id]}
-              onOpenTask={onOpenTask}
-              onConfirm={
-                onApplyTaskStatusSuggestion
-                  ? (to) => {
-                      onApplyTaskStatusSuggestion({ id: task.id, status: to });
-                      setConfirmed((current) => ({
-                        ...current,
-                        [task.id]: to,
-                      }));
-                    }
-                  : undefined
-              }
-            />
-          ))}
-          {deletedIds.map((id) => (
-            <li key={`deleted-${id}`} className="text-muted-foreground">
-              <span className="line-through">Task-{id}</span>
-              <span className="ml-1.5 text-xs">deleted</span>
-            </li>
-          ))}
-        </ul>
-        <NoticeList items={warnings} />
-      </CardContent>
-    </Card>
+    <AppCard icon={<ClipboardList />} label="Tasks" status={`${count} changed`}>
+      <ul className="flex flex-col gap-1">
+        {changed.map((task, index) => (
+          <TaskRow
+            key={`${task.id}-${index}`}
+            task={task}
+            summary={changeSummary(task, kinds?.[index])}
+            confirmedTo={confirmed[task.id]}
+            onOpenTask={onOpenTask}
+            onConfirm={
+              onApplyTaskStatusSuggestion
+                ? (to) => {
+                    onApplyTaskStatusSuggestion({ id: task.id, status: to });
+                    setConfirmed((current) => ({
+                      ...current,
+                      [task.id]: to,
+                    }));
+                  }
+                : undefined
+            }
+          />
+        ))}
+        {deletedIds.map((id) => (
+          <li key={`deleted-${id}`} className="text-muted-foreground">
+            <span className="line-through">Task-{id}</span>
+            <span className="ml-1.5 text-xs">deleted</span>
+          </li>
+        ))}
+      </ul>
+      <NoticeList items={warnings} />
+    </AppCard>
   );
 }
 

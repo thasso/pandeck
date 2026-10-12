@@ -10,12 +10,20 @@
  * the `token=` query.
  */
 
+/**
+ * host[:port] of the API/WS server in dev. With `VITE_SERVER_PROXY` set, Vite
+ * proxies `/api` and `/ws` to that server (see vite.config.ts), so the page's
+ * own host is the server — reachable however the page itself was reached.
+ */
+export function devServerHost(): string {
+  if (import.meta.env.VITE_SERVER_PROXY) return location.host;
+  return import.meta.env.VITE_SERVER_ORIGIN ?? `${location.hostname}:8787`;
+}
+
 /** http(s) origin of the API/WS server. */
 export function serverHttpOrigin(): string {
   if (import.meta.env.DEV) {
-    const origin =
-      import.meta.env.VITE_SERVER_ORIGIN ?? `${location.hostname}:8787`;
-    return `${location.protocol}//${origin}`;
+    return `${location.protocol}//${devServerHost()}`;
   }
   return location.origin;
 }

@@ -837,9 +837,9 @@ describe("MessageList prompt delivery", () => {
     expect(rowText("u3")).toContain("Arrived after the reply");
   });
 
-  // Hover is the desktop reveal; a touch screen has no hover, so the row is
-  // shown outright there instead of being an invisible tap target.
-  it("shows message actions on coarse pointers and reveals them on hover elsewhere", () => {
+  // A row revealed only on hover hides what a turn offers, and is no tap
+  // target at all on a device without hover.
+  it("always shows message actions, whatever the pointer", () => {
     act(() =>
       root.render(
         <MessageList
@@ -852,10 +852,8 @@ describe("MessageList prompt delivery", () => {
     const bar = container
       .querySelector('[data-message-id="u1"] [aria-label="Copy message text"]')
       ?.closest("div");
-    expect(bar?.className).toContain("opacity-0");
-    expect(bar?.className).toContain("group-hover/message:opacity-100");
-    expect(bar?.className).toContain("focus-within:opacity-100");
-    expect(bar?.className).toContain("pointer-coarse:opacity-100");
+    expect(bar).toBeTruthy();
+    expect(bar?.className).not.toContain("opacity-0");
   });
 
   // A saved prompt's image is kept by attachment id only (no bytes, no URL), so
@@ -899,18 +897,32 @@ describe("MessageList prompt delivery", () => {
       '[data-message-id="u1"] img',
     );
     expect(images).toHaveLength(1);
-    expect(images[0]!.alt).toBe("shot.png");
     expect(images[0]!.getAttribute("src")).toContain(
       "/api/session-attachment/s%201/1700000000000-abc",
     );
+    // The name and size are the tile's accessible name, not text under it.
+    expect(
+      container.querySelector(
+        '[data-message-id="u1"] [aria-label="Open shot.png · 2 KB"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      container.querySelector(
+        '[data-message-id="u1"] [aria-label="report.pdf · 4 KB"]',
+      ),
+    ).not.toBeNull();
 
-    // A picture the server cannot answer leaves the name/size row, not a
-    // broken-image glyph.
+    // A picture the server cannot answer falls back to the file tile, still
+    // named, not to a broken image that opens an empty lightbox.
     act(() => {
       images[0]!.dispatchEvent(new Event("error"));
     });
     expect(container.querySelector('[data-message-id="u1"] img')).toBeNull();
-    expect(rowText("u1")).toContain("shot.png");
+    expect(
+      container.querySelector(
+        '[data-message-id="u1"] [aria-label="shot.png · 2 KB"]',
+      ),
+    ).not.toBeNull();
   });
 
   it("loads an inherited prompt image from its originating session attachment store", () => {

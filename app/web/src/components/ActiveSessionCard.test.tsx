@@ -261,22 +261,26 @@ describe("ActiveSessionCard clusters", () => {
     expect(bubble?.closest(".session-card-status-line .flex-wrap")).toBeNull();
   });
 
-  it("shows peers at work as motion in the accent, not as a count alone", () => {
+  it("shows peers at work as motion on a plain fact, not as a count alone", () => {
     const working = clusterMarkup({
       children: [child({ id: "a", isStreaming: true })],
       counts: { total: 1, working: 1, waiting: 0, failed: 0 },
     });
     // The coordinator itself is quiet — it carries no badge of its own — so the
-    // fold is where the run has to be visible.
+    // fold is where the run has to be visible: a spinner in place of the
+    // peers icon.
     expect(working).not.toContain("Working ");
     expect(working).toContain("animate-spin");
-    expect(working).toContain('data-variant="secondary"');
+    expect(working).not.toContain("lucide-users");
     const idle = clusterMarkup({
       children: [child({ id: "a" })],
       counts: { total: 1, working: 0, waiting: 0, failed: 0 },
     });
     expect(idle).not.toContain("animate-spin");
-    expect(idle).not.toContain('data-variant="secondary"');
+    expect(idle).toContain("lucide-users");
+    // A neutral fact either way: only what needs the user keeps a pill.
+    for (const html of [working, idle])
+      expect(html).not.toContain('data-variant="secondary"');
   });
 
   it("states running turns and background jobs on the line, not only in the tooltip", () => {

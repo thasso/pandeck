@@ -1,6 +1,6 @@
 import { TriangleAlert } from "lucide-react";
 import { WORKTREE_MISSING_BLOCKED_REASON } from "@assistant/shared";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AppCard } from "./common/AppCard.tsx";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -19,20 +19,25 @@ export function SessionWorktreeMissingBanner({
 }) {
   return (
     <div className="mx-auto mb-2 w-full max-w-3xl px-4">
-      <Alert variant="warning" role="status">
-        <TriangleAlert />
-        <AlertDescription>
-          <p>{WORKTREE_MISSING_BLOCKED_REASON}</p>
+      <AppCard
+        role="status"
+        tone="warning"
+        icon={<TriangleAlert />}
+        label="Worktree missing"
+        actions={
           <Button
             variant="outline"
-            size="sm"
+            size="xs"
+            // Wraps on a narrow screen rather than running past the card.
+            className="h-auto min-h-6 max-w-full py-0.5 text-left whitespace-normal"
             onClick={onAcknowledge}
-            className="mt-2"
           >
             Run in the app directory anyway
           </Button>
-        </AlertDescription>
-      </Alert>
+        }
+      >
+        <p>{WORKTREE_MISSING_BLOCKED_REASON}</p>
+      </AppCard>
     </div>
   );
 }

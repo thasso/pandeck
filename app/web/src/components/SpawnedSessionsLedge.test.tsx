@@ -120,11 +120,11 @@ describe("the composer's spawned-session ledge", () => {
     );
     // The session you are typing into is usually quiet while its peers run, so
     // this strip is the only place that run is visible.
-    expect(working).toContain("animate-spin");
-    expect(working).toMatch(/justify-start text-primary"/);
+    // The spinner carries the accent; the line itself stays muted.
+    const accentSpinner = /class="[^"]*animate-spin[^"]*text-primary[^"]*"/;
+    expect(working).toMatch(accentSpinner);
     const idle = renderToStaticMarkup(ledge([session("a")]));
     expect(idle).not.toContain("animate-spin");
-    expect(idle).not.toMatch(/justify-start text-primary"/);
   });
 
   it("offers to dismiss a bubbled peer failure, and settles that peer", () => {
@@ -179,9 +179,9 @@ describe("the composer's spawned-session ledge", () => {
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("Session a");
     expect(markup).toContain("Session b");
-    // "spawned", like the strip's own label: a row may be a peer the user
-    // took over.
-    expect(markup).toContain("Open spawned");
+    // Each row opens its own session; the title itself unfolds the details.
+    expect(markup).toContain('aria-label="Open Session a"');
+    expect(markup).toContain('aria-label="Open Session b"');
     // The strip owns no lifecycle action; those stay in the Sessions inbox.
     expect(markup).not.toContain("Settle");
     expect(markup).not.toContain("Archive");
@@ -201,41 +201,53 @@ describe("the composer's spawned-session ledge", () => {
       );
     });
     const rows = [
-      ...(container.querySelectorAll<HTMLElement>("[data-session-row]") ?? []),
+      ...(container.querySelectorAll<HTMLElement>("li[data-list-row-id]") ??
+        []),
     ];
     expect(rows).toHaveLength(2);
     // Reachable by keyboard: the ledge has no roving focus above these rows.
-    expect(rows[0]?.tabIndex).toBe(0);
+    expect(
+      rows[0]?.querySelector<HTMLButtonElement>('button[title="Open"]')
+        ?.tabIndex,
+    ).toBe(0);
     act(() => {
-      rows.find((row) => row.dataset.listRowId === "a")?.click();
+      container
+        ?.querySelector<HTMLElement>('button[aria-label="Open Session a"]')
+        ?.click();
     });
     const bubble = container.querySelector<HTMLElement>(
-      "[data-spawned-sessions-ledge] button:not([aria-expanded])",
+      '[data-spawned-sessions-ledge] button[title="Open “Session asks”"]',
     );
     act(() => bubble?.click());
     expect(opened).toEqual(["a", "asks"]);
   });
 
-  it("lists the newest peer first, whatever its state", () => {
+  it("lists the peer waiting on the user first, then the newest created", () => {
     const markup = renderToStaticMarkup(
       ledge(
         [
+          session("old", {
+            title: "Older",
+            createdAt: NOW - 7_200_000,
+            updatedAt: NOW - 5_000,
+          }),
+          session("new", { title: "Newer", createdAt: NOW - 600_000 }),
           session("old-ask", {
             title: "Old question",
             attention: "question",
+            createdAt: NOW - 9_000_000,
             updatedAt: NOW - 600_000,
           }),
-          session("fresh", { title: "Just finished", updatedAt: NOW - 5_000 }),
         ],
         { open: true },
       ),
     );
-    // The rows run by activity, not by tier: the list is a feed of what the
-    // peers last did. The question is not lost — it is named on the collapsed
-    // line above the rows.
-    expect(markup.indexOf('data-list-row-id="fresh"')).toBeLessThan(
-      markup.indexOf('data-list-row-id="old-ask"'),
+    // Activity does not move a row — the list holds still while it is read —
+    // but a question leads, and is named on the collapsed line as well.
+    const order = ["old-ask", "new", "old"].map((id) =>
+      markup.indexOf(`data-list-row-id="${id}"`),
     );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(markup).toContain("Answer in “Old question”");
   });
 
@@ -243,10 +255,15 @@ describe("the composer's spawned-session ledge", () => {
     const markup = renderToStaticMarkup(
       ledge(
         [
-          session("impl", { title: "Implementer", updatedAt: NOW - 50_000 }),
+          session("impl", {
+            title: "Implementer",
+            createdAt: NOW - 3_000_000,
+            updatedAt: NOW - 50_000,
+          }),
           session("rev", {
             title: "Reviewer",
             spawnedBySessionId: "impl",
+            createdAt: NOW - 2_000_000,
             updatedAt: NOW - 1_000,
             backgroundActivity: {
               activeCount: 2,
@@ -258,23 +275,32 @@ describe("the composer's spawned-session ledge", () => {
               oldestStartedAt: NOW - 30_000,
             },
           }),
-          session("other", { title: "Helper", updatedAt: NOW - 20_000 }),
+          session("other", {
+            title: "Helper",
+            createdAt: NOW - 1_000_000,
+            updatedAt: NOW - 20_000,
+          }),
         ],
         { open: true },
       ),
     );
     // Every depth counts, and background jobs are a fact of their own.
     expect(markup).toContain("3 sessions · 2 jobs");
-    // Depth-first, siblings newest first: the reviewer moved most recently of
-    // all, yet it sits right under the implementer that spawned it, indented
-    // one step, and the helper that moved after the implementer leads.
+    // Depth-first, siblings newest created first: the reviewer moved most
+    // recently of all, yet it sits right under the implementer that spawned
+    // it, indented one step, and the helper created after the implementer
+    // leads.
     const order = ["other", "impl", "rev"].map((id) =>
       markup.indexOf(`data-list-row-id="${id}"`),
     );
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(markup).toContain("padding-left:1.5rem");
-    expect(markup).toContain("2 background jobs running");
-    expect(markup).toContain("spawned 1 session · 2 jobs");
+    // One indent step (0.75rem) per level below the strip's own peers.
+    expect(markup).toMatch(
+      /data-list-row-id="rev"[^>]*><div[^>]*style="padding-left:0.75rem"/,
+    );
+    expect(markup).toMatch(
+      /data-list-row-id="impl"[^>]*><div[^>]*style="padding-left:0rem"/,
+    );
   });
 
   it("keeps settled peers out of the line and the list until asked", () => {
@@ -298,7 +324,7 @@ describe("the composer's spawned-session ledge", () => {
       );
     });
     expect(container.textContent).toContain("1 session · 2 settled");
-    expect(container.querySelectorAll("[data-session-row]")).toHaveLength(1);
+    expect(container.querySelectorAll("li[data-list-row-id]")).toHaveLength(1);
     const toggle = [...container.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Show 2 settled"),
     );
@@ -316,7 +342,7 @@ describe("the composer's spawned-session ledge", () => {
     act(() => {
       root?.render(ledge(peers, { open: true, includeSettled: true }));
     });
-    expect(container.querySelectorAll("[data-session-row]")).toHaveLength(3);
+    expect(container.querySelectorAll("li[data-list-row-id]")).toHaveLength(3);
     expect(container.textContent).toContain("Hide settled");
   });
 

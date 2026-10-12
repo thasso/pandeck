@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { Activity, CircleDashed, CircleHelp } from "lucide-react";
 import { Spinner } from "./common/load.tsx";
 import { Badge } from "@/components/ui/badge";
+import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 
 interface Props {
   /** Items in the `needs-you` tier — the same count the block used to state. */
@@ -49,19 +50,14 @@ export function SessionInboxBar({
 }: Props) {
   const { activeCount, ownerCount } = background;
   return (
-    // Sticky rather than a row of the list: the sidebar has ONE scroll
-    // container for every browser, and a header that scrolls away is a header
-    // the list can still push around. `-mx` bleeds it to the panel's side
-    // edges; the TOP edge is the sidebar's to give, and it does
-    // (`Sidebar.tsx`) — a sticky box cannot take it, because Chromium clamps
-    // `top-0` to the scroll container's CONTENT box, which is below its
-    // padding, and a negative margin does not move it (measured: the box
-    // stayed at 44 with `margin-top: -8px` in effect). That padding would then
-    // be a strip above a pinned bar for rows to scroll through, and at rest a
-    // band the chips are not centred in — the whole complaint this bar exists
-    // to answer. The height is a constant rather than padding around content
-    // for the same reason the counts never unmount.
-    <div className="sticky top-0 z-10 -mx-1 mb-1 flex h-9 items-center gap-1 border-b border-border bg-card px-2 sm:-mx-2 sm:px-3">
+    // Above the list's scroll container, not a row in it (`Sidebar.tsx` gives
+    // it a slot there): a header that scrolls away is a header the list can
+    // still push around, and a sticky one inside the scroller has the
+    // scrollbar running through it. The height is a constant rather than
+    // padding around content for the same reason the counts never unmount,
+    // and it is the compact `PageHeader`'s `h-11` so its border lines up with
+    // the chat title bar's.
+    <div className="flex h-11 items-center gap-1 border-b border-border bg-card px-2 sm:px-3">
       <Chip
         label={
           needsYou === 0
@@ -155,5 +151,30 @@ function Chip({
       {children}
       {number}
     </Badge>
+  );
+}
+
+/**
+ * The bar where its host draws it, above the scroll container
+ * (`Sidebar.tsx`): it reads the counts the inbox publishes into `store`, so a
+ * changed count redraws this bar alone. Nothing until the inbox has spoken.
+ */
+export function SessionInboxBarSlot({
+  store,
+  onOpenBackgroundTasks,
+}: {
+  store: SessionInboxBarStore;
+  onOpenBackgroundTasks: () => void;
+}) {
+  const facts = useSyncExternalStore(store.subscribe, store.get);
+  if (!facts) return null;
+  return (
+    <SessionInboxBar
+      needsYou={facts.needsYou}
+      working={facts.working}
+      background={facts.background}
+      onNeedsYou={facts.onNeedsYou}
+      onOpenBackgroundTasks={onOpenBackgroundTasks}
+    />
   );
 }

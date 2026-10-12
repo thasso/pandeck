@@ -56,15 +56,10 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
           worktree={worktree}
           worktreeStatus={fixture.worktreeStatuses[worktree.id]}
           openers={openers}
-          onSettle={noop}
-          onRename={noop}
-          onArchive={noop}
-          onDelete={noop}
         />
       ) : object === "task" ? (
         <TaskInspector
           task={task}
-          tasks={fixture.tasks}
           sessions={fixture.sessions}
           openers={openers}
           onStartSession={noop}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { AgentType, SessionMode, ThinkingLevel } from "@assistant/shared";
+import type { AgentType, ThinkingLevel } from "@assistant/shared";
 import { NewSessionQuickStart } from "../../../src/components/NewSessionQuickStart.tsx";
 import {
   chatAccounts,
@@ -17,7 +17,6 @@ function QuickStartPreview({
   frameWidth: number;
 }) {
   const [agent, setAgent] = useState<AgentType>("developer");
-  const [mode, setMode] = useState<SessionMode>("build");
   const [project, setProject] = useState<string | null>("pandeck");
   const [worktree, setWorktree] = useState<string | null>(null);
   const [newWorktree, setNewWorktree] = useState(false);
@@ -43,8 +42,6 @@ function QuickStartPreview({
         agentTypes={["developer", "workshop", "assistant"]}
         selectedAgentType={agent}
         onSelectAgentType={setAgent}
-        mode={mode}
-        onSelectMode={setMode}
         worktrees={state === "worktrees" ? chatWorktrees : []}
         worktreesLoaded={state !== "loading"}
         projects={chatProjects}
@@ -55,7 +52,6 @@ function QuickStartPreview({
         onSelectWorktree={setWorktree}
         newWorktreeStaged={newWorktree}
         onSelectNewWorktree={setNewWorktree}
-        onOpenPicker={noop}
         models={chatModels}
         selectedModel={model}
         onSelectModel={setModel}

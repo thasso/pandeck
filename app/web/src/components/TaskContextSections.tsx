@@ -1,13 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ArrowUpRight,
-  CircleCheck,
-  CircleDot,
   ExternalLink,
-  FolderKanban,
   GitBranch,
-  GitMerge,
-  GitPullRequest,
   Link2,
   MessageCircle,
   Plus,
@@ -17,7 +12,6 @@ import {
   X,
 } from "lucide-react";
 import type {
-  GithubLinkedIssue,
   ProjectRecord,
   TaskExternalLink,
   TaskExternalLinkSource,
@@ -25,13 +19,11 @@ import type {
 } from "@assistant/shared";
 import {
   isForgejoInstanceUrl,
-  normalizeGithubIssueRef,
   normalizeGithubIssueRefs,
   parseGithubIssueRef,
 } from "@assistant/shared";
-import { fetchGithubLinkedIssues } from "../lib/githubApi.ts";
-import { fetchJiraLinkedIssues } from "../lib/jiraApi.ts";
 import { ProjectSelector } from "./ProjectSelector.tsx";
+import { TaskTicketProperty, type TaskTicket } from "./TaskTicketProperty.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Input } from "./ui/input.tsx";
 import { Button } from "./ui/button.tsx";
@@ -41,6 +33,7 @@ import {
   TaskPlanningSection,
   type TaskPlanningPatch,
 } from "./TaskPlanningSection.tsx";
+import { PROPERTY_TRIGGER, PropertyLabel } from "./common/PropertyList.tsx";
 
 /** A partial task save issued from the inspector's context sections. */
 export interface TaskContextPatch extends TaskPlanningPatch {
@@ -85,59 +78,83 @@ export function TaskContextSections({
 }) {
   const links = task.externalLinks ?? [];
   const jiraKeys = normalizeJiraKeys(task.jiraIssueKeys ?? []);
+  const githubRefs = normalizeGithubIssueRefs(task.githubIssues ?? []);
+  const ticket: TaskTicket | null = jiraKeys[0]
+    ? { source: "jira", ref: jiraKeys[0] }
+    : githubRefs[0]
+      ? { source: "github", ref: githubRefs[0] }
+      : null;
+  const ticketScope = ticketSearchScope(
+    task.projectId ? projectsById.get(task.projectId) : undefined,
+  );
   const removeLink = (url: string) =>
     onPatch({ externalLinks: links.filter((link) => link.url !== url) });
   const addLink = (link: TaskExternalLink) =>
     onPatch({ externalLinks: [...links, link] });
 
   return (
-    <div className="space-y-4">
+    // A fragment, not a wrapper: the inspector spaces its sections and a
+    // section draws its own top divider unless it is the panel's FIRST child —
+    // inside a wrapper, Details believed it was, and lost both.
+    <>
       {/* Planning leads: it is what the Backlog's Focus view reads, and the
           fields most often changed on a Task that already exists. */}
-      <TaskPlanningSection task={task} onPatch={onPatch} />
-
-      <InspectorSection
-        id="project"
-        storageScope={`task:${task.id}`}
-        title="Project"
-        icon={<FolderKanban size={13} />}
-        summary={
-          task.projectId
-            ? (projectsById.get(task.projectId)?.key ?? task.projectId)
-            : undefined
+      <TaskPlanningSection
+        task={task}
+        onPatch={onPatch}
+        leading={
+          <>
+            <PropertyLabel>Project</PropertyLabel>
+            <div className="flex min-w-0 items-center gap-0.5">
+              <ProjectSelector
+                currentId={task.projectId ?? null}
+                projects={projects}
+                projectsById={projectsById}
+                onChange={(projectId) =>
+                  onPatch({ projectId: projectId || null })
+                }
+                label={null}
+                emptyLabel="None"
+                grow
+                className={`${PROPERTY_TRIGGER} min-w-0 flex-1 justify-start`}
+              />
+              {task.projectId && onOpenProject ? (
+                <IconButton
+                  label="Open project"
+                  size="icon-xs"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => onOpenProject(task.projectId!)}
+                >
+                  <ArrowUpRight />
+                </IconButton>
+              ) : null}
+            </div>
+            {/* One ticket per Task, picked from a search over Jira and
+                GitHub. A Task still carrying several shows its first; picking
+                replaces them all. */}
+            <PropertyLabel>Ticket</PropertyLabel>
+            <TaskTicketProperty
+              ticket={ticket}
+              fallbackUrl={
+                ticket?.source === "jira"
+                  ? jiraUrlForKey(ticket.ref, links, jiraHost)
+                  : ticket
+                    ? githubIssueUrl(ticket.ref)
+                    : undefined
+              }
+              jiraProjects={ticketScope.jiraProjects}
+              repos={ticketScope.repos}
+              onChange={(next) =>
+                onPatch({
+                  jiraIssueKeys: next?.source === "jira" ? [next.ref] : [],
+                  githubIssues: next?.source === "github" ? [next.ref] : [],
+                })
+              }
+            />
+          </>
         }
-      >
-        <div className="flex items-center gap-1 px-1">
-          <ProjectSelector
-            currentId={task.projectId ?? null}
-            projects={projects}
-            projectsById={projectsById}
-            onChange={(projectId) => onPatch({ projectId: projectId || null })}
-            label={null}
-          />
-          {task.projectId && onOpenProject ? (
-            <IconButton
-              label="Open project"
-              onClick={() => onOpenProject(task.projectId!)}
-            >
-              <ArrowUpRight />
-            </IconButton>
-          ) : null}
-        </div>
-      </InspectorSection>
+      />
 
-      <JiraTicketsSection
-        taskId={task.id}
-        keys={jiraKeys}
-        links={links}
-        jiraHost={jiraHost}
-        onChange={(keys) => onPatch({ jiraIssueKeys: keys })}
-      />
-      <GithubIssuesSection
-        taskId={task.id}
-        refs={task.githubIssues ?? []}
-        onChange={(refs) => onPatch({ githubIssues: refs })}
-      />
       <LinksSection
         taskId={task.id}
         links={links}
@@ -145,7 +162,7 @@ export function TaskContextSections({
         onAdd={addLink}
         onRemove={removeLink}
       />
-    </div>
+    </>
   );
 }
 
@@ -160,273 +177,12 @@ function addAction(title: string, adding: boolean, onToggleAdd: () => void) {
   );
 }
 
-function JiraTicketsSection({
-  taskId,
-  keys,
-  links,
-  jiraHost,
-  onChange,
-}: {
-  taskId: string;
-  keys: string[];
-  links: TaskExternalLink[];
-  jiraHost?: string | undefined;
-  onChange: (keys: string[]) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [summaries, setSummaries] = useState<Record<string, string>>({});
-  const keyQuery = keys.join(",");
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setSummaries({});
-    fetchJiraLinkedIssues(
-      keyQuery ? keyQuery.split(",") : [],
-      controller.signal,
-    )
-      .then(({ issues }) =>
-        setSummaries(
-          Object.fromEntries(issues.map((issue) => [issue.key, issue.summary])),
-        ),
-      )
-      .catch((error: unknown) => {
-        if (!(error instanceof Error && error.name === "AbortError"))
-          setSummaries({});
-      });
-    return () => controller.abort();
-  }, [keyQuery]);
-
-  const add = () => {
-    const next = normalizeJiraKeys([...keys, draft]);
-    if (next.length === keys.length) return;
-    onChange(next);
-    setDraft("");
-    setAdding(false);
-  };
-  return (
-    <InspectorSection
-      id="jira-tickets"
-      storageScope={`task:${taskId}`}
-      title="Jira tickets"
-      icon={<Tickets size={13} />}
-      summary={keys.length ? `${keys.length}` : undefined}
-      actions={addAction("Jira tickets", adding, () =>
-        setAdding((value) => !value),
-      )}
-      collapsible={keys.length > 0 || adding}
-      forceOpen={adding}
-    >
-      <div className="divide-y divide-border px-1">
-        {keys.map((key) => {
-          const url = jiraUrlForKey(key, links, jiraHost);
-          const summary = summaries[key];
-          const label = (
-            <>
-              <span className="block truncate font-mono text-sm text-primary">
-                {key}
-              </span>
-              {summary ? (
-                <span className="block truncate text-sm text-foreground">
-                  {summary}
-                </span>
-              ) : null}
-            </>
-          );
-          return (
-            <Item key={key} size="sm" className="min-w-0 items-start gap-2">
-              <Tickets size={13} className="mt-0.5 shrink-0 text-primary" />
-              {url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  className="min-w-0 flex-1 hover:[&>span]:underline"
-                  title={`Open ${key}${summary ? ` — ${summary}` : ""} in Jira`}
-                >
-                  {label}
-                </a>
-              ) : (
-                <span className="min-w-0 flex-1" title="No URL stored">
-                  {label}
-                </span>
-              )}
-              <IconButton
-                variant="destructive"
-                size="icon-xs"
-                label={`Unlink ${key}`}
-                onClick={() => onChange(keys.filter((item) => item !== key))}
-              >
-                <Trash2 />
-              </IconButton>
-            </Item>
-          );
-        })}
-        {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
-            <Tickets size={13} className="shrink-0 text-muted-foreground" />
-            <Input
-              value={draft}
-              autoFocus
-              onChange={(event) => setDraft(event.target.value.toUpperCase())}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") add();
-                if (event.key === "Escape") setAdding(false);
-              }}
-              placeholder="ABC-123"
-              aria-label="Jira issue key"
-              className="min-w-0 flex-1 font-mono"
-            />
-            <Button
-              size="sm"
-              onClick={add}
-              disabled={normalizeJiraKeys([draft]).length === 0}
-            >
-              Link
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    </InspectorSection>
-  );
-}
-
-function githubIssueUrl(ref: string): string | undefined {
+export function githubIssueUrl(ref: string): string | undefined {
   const parts = parseGithubIssueRef(ref);
   // `/issues/<n>` redirects to `/pull/<n>` when the number is a pull request.
   return parts
     ? `https://github.com/${parts.owner}/${parts.repo}/issues/${parts.number}`
     : undefined;
-}
-
-function GithubIssueIcon({ issue }: { issue: GithubLinkedIssue | undefined }) {
-  const cls = "mt-0.5 shrink-0";
-  if (issue?.state === "merged")
-    return <GitMerge size={13} className={`${cls} text-primary`} />;
-  if (issue?.isPullRequest)
-    return (
-      <GitPullRequest
-        size={13}
-        className={`${cls} ${issue.state === "closed" ? "text-muted-foreground" : "text-primary"}`}
-      />
-    );
-  if (issue?.state === "closed")
-    return <CircleCheck size={13} className={`${cls} text-muted-foreground`} />;
-  return <CircleDot size={13} className={`${cls} text-primary`} />;
-}
-
-function GithubIssuesSection({
-  taskId,
-  refs,
-  onChange,
-}: {
-  taskId: string;
-  refs: string[];
-  onChange: (refs: string[]) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [issues, setIssues] = useState<Record<string, GithubLinkedIssue>>({});
-  const refQuery = refs.join(",");
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setIssues({});
-    fetchGithubLinkedIssues(
-      refQuery ? refQuery.split(",") : [],
-      controller.signal,
-    )
-      .then(({ issues: found }) =>
-        setIssues(Object.fromEntries(found.map((issue) => [issue.ref, issue]))),
-      )
-      .catch((error: unknown) => {
-        if (!(error instanceof Error && error.name === "AbortError"))
-          setIssues({});
-      });
-    return () => controller.abort();
-  }, [refQuery]);
-
-  const add = () => {
-    const next = normalizeGithubIssueRefs([...refs, draft]);
-    if (next.length === refs.length) return;
-    onChange(next);
-    setDraft("");
-    setAdding(false);
-  };
-  return (
-    <InspectorSection
-      id="github-issues"
-      storageScope={`task:${taskId}`}
-      title="GitHub issues"
-      icon={<CircleDot size={13} />}
-      summary={refs.length ? `${refs.length}` : undefined}
-      actions={addAction("GitHub issues", adding, () =>
-        setAdding((value) => !value),
-      )}
-      collapsible={refs.length > 0 || adding}
-      forceOpen={adding}
-    >
-      <div className="divide-y divide-border px-1">
-        {refs.map((ref) => {
-          const issue = issues[ref];
-          const url = issue?.url ?? githubIssueUrl(ref);
-          return (
-            <Item key={ref} size="sm" className="min-w-0 items-start gap-2">
-              <GithubIssueIcon issue={issue} />
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="min-w-0 flex-1 hover:[&>span]:underline"
-                title={`Open ${ref}${issue ? ` — ${issue.title} (${issue.state})` : ""} on GitHub`}
-              >
-                <span className="block truncate font-mono text-sm text-primary">
-                  {ref}
-                </span>
-                {issue?.title ? (
-                  <span className="block truncate text-sm text-foreground">
-                    {issue.title}
-                  </span>
-                ) : null}
-              </a>
-              <IconButton
-                variant="destructive"
-                size="icon-xs"
-                label={`Unlink ${ref}`}
-                onClick={() => onChange(refs.filter((item) => item !== ref))}
-              >
-                <Trash2 />
-              </IconButton>
-            </Item>
-          );
-        })}
-        {adding ? (
-          <div className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2 py-1.5">
-            <CircleDot size={13} className="shrink-0 text-muted-foreground" />
-            <Input
-              value={draft}
-              autoFocus
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") add();
-                if (event.key === "Escape") setAdding(false);
-              }}
-              placeholder="owner/repo#123 or issue URL"
-              aria-label="GitHub issue"
-              className="min-w-0 flex-1 font-mono"
-            />
-            <Button
-              size="sm"
-              onClick={add}
-              disabled={!normalizeGithubIssueRef(draft)}
-            >
-              Link
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    </InspectorSection>
-  );
 }
 
 function LinksSection({
@@ -630,4 +386,25 @@ function ProviderIcon({
   return (
     <ExternalLink size={size} className="shrink-0 text-muted-foreground" />
   );
+}
+
+/**
+ * Where the ticket search looks first: the Project's Jira projects and its
+ * GitHub repository (from `repoUrl`, when it is on github.com).
+ */
+function ticketSearchScope(project: ProjectRecord | undefined): {
+  jiraProjects: string[];
+  repos: string[];
+} {
+  const jiraProjects = [
+    ...new Set(
+      (project?.jira ?? [])
+        .map((link) => link.projectKey?.trim().toUpperCase())
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+  const repo = project?.repoUrl
+    ? /github\.com[/:]([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(project.repoUrl)
+    : null;
+  return { jiraProjects, repos: repo ? [repo[1]!] : [] };
 }

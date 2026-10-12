@@ -36,15 +36,7 @@ import { ErrorNote, Skeleton } from "./common/load.tsx";
 import { LinkButton } from "./common/LinkButton.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 import {
   Item,
   ItemActions,
@@ -315,7 +307,7 @@ function CalendarCard({ payload }: { payload: CalendarPayload }) {
   const events = payload.events ?? [];
   return (
     <ChatWideCard
-      icon={<CalendarDays className="size-4 text-primary" />}
+      icon={<CalendarDays />}
       title="Calendar"
       description={payload.calendarSummary || "Primary calendar"}
       meta={
@@ -540,104 +532,101 @@ function MeetCard({ payload }: { payload: MeetPayload }) {
   const records = payload.records ?? [];
   return (
     <ChatWideCard
-      icon={<Video className="size-4 text-primary" />}
+      icon={<Video />}
       title="Google Meet records"
       description="Conference records and participant sessions"
-      meta={
-        <>
-          <div>{payload.date || rangeLabel(payload.from, payload.to)}</div>
-          <div>
-            {records.length} record{records.length === 1 ? "" : "s"}
-          </div>
-        </>
-      }
+      meta={`${payload.date || rangeLabel(payload.from, payload.to)} · ${records.length} record${records.length === 1 ? "" : "s"}`}
     >
-      <CardContent className="grid gap-3 md:grid-cols-2">
+      <div className="grid gap-3 p-3 md:grid-cols-2">
         {records.map((record, index) => (
-          <Card key={`${record.name ?? "meet"}-${index}`} size="sm">
-            <CardHeader>
-              <CardDescription className="font-mono">
+          <AppCard
+            key={`${record.name ?? "meet"}-${index}`}
+            className="my-0"
+            icon={<Video />}
+            label="Meet record"
+            status={
+              <span className="font-mono">
                 {timeRange(record.localStart, record.localEnd)}
-              </CardDescription>
-              <CardTitle>
-                <ExternalTitle
-                  title={
-                    record.calendarMatches?.[0]?.title ||
-                    record.meetingCode ||
-                    "Meet record"
-                  }
-                  href={
-                    record.calendarMatches?.[0]?.htmlLink || record.meetingUri
-                  }
-                />
-              </CardTitle>
-              {record.meetingUri && (
-                <CardAction>
-                  <LinkButton
-                    variant="outline"
-                    size="sm"
-                    href={record.meetingUri}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                  >
-                    Meet
-                  </LinkButton>
-                </CardAction>
-              )}
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary">
-                  <Users />
-                  {record.participantCount ??
-                    record.participants?.length ??
-                    0}{" "}
-                  participants
-                </Badge>
-                {record.meetingCode && (
-                  <Badge variant="secondary" className="font-mono">
-                    {record.meetingCode}
-                  </Badge>
-                )}
-                {record.calendarMatches?.[0]?.overlap && (
-                  <Badge variant="secondary">
-                    <Clock /> {record.calendarMatches[0].overlap} overlap
-                  </Badge>
-                )}
-                {(record.artifactSummary?.total ?? 0) > 0 && (
-                  <Badge variant="secondary">
-                    <FileText /> {artifactSummaryLabel(record)}
-                  </Badge>
-                )}
-              </div>
-              <ItemGroup className="gap-1.5">
-                {(record.participants ?? [])
-                  .slice(0, 6)
-                  .map((participant, pIndex) => (
-                    <ParticipantItem
-                      key={`${participant.displayName ?? "participant"}-${pIndex}`}
-                      participant={participant}
-                    />
-                  ))}
-              </ItemGroup>
-              {(record.participants?.length ?? 0) > 6 && (
-                <p className="text-muted-foreground">
-                  +{(record.participants?.length ?? 0) - 6} more participants
-                </p>
-              )}
-              <ArtifactList
-                artifacts={record.artifacts ?? []}
-                errors={record.artifactErrors ?? []}
+              </span>
+            }
+            actions={
+              record.meetingUri ? (
+                <LinkButton
+                  variant="outline"
+                  size="xs"
+                  href={record.meetingUri}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  Open in Meet
+                </LinkButton>
+              ) : null
+            }
+            contentClassName="gap-3"
+          >
+            <p className="font-medium">
+              <ExternalTitle
+                title={
+                  record.calendarMatches?.[0]?.title ||
+                  record.meetingCode ||
+                  "Meet record"
+                }
+                href={
+                  record.calendarMatches?.[0]?.htmlLink || record.meetingUri
+                }
               />
-            </CardContent>
-          </Card>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="secondary">
+                <Users />
+                {record.participantCount ??
+                  record.participants?.length ??
+                  0}{" "}
+                participants
+              </Badge>
+              {record.meetingCode && (
+                <Badge variant="secondary" className="font-mono">
+                  {record.meetingCode}
+                </Badge>
+              )}
+              {record.calendarMatches?.[0]?.overlap && (
+                <Badge variant="secondary">
+                  <Clock /> {record.calendarMatches[0].overlap} overlap
+                </Badge>
+              )}
+              {(record.artifactSummary?.total ?? 0) > 0 && (
+                <Badge variant="secondary">
+                  <FileText /> {artifactSummaryLabel(record)}
+                </Badge>
+              )}
+            </div>
+            <ItemGroup className="gap-1.5">
+              {(record.participants ?? [])
+                .slice(0, 6)
+                .map((participant, pIndex) => (
+                  <ParticipantItem
+                    key={`${participant.displayName ?? "participant"}-${pIndex}`}
+                    participant={participant}
+                  />
+                ))}
+            </ItemGroup>
+            {(record.participants?.length ?? 0) > 6 && (
+              <p className="text-muted-foreground">
+                +{(record.participants?.length ?? 0) - 6} more participants
+              </p>
+            )}
+            <ArtifactList
+              artifacts={record.artifacts ?? []}
+              errors={record.artifactErrors ?? []}
+            />
+          </AppCard>
         ))}
         {records.length === 0 && (
           <p className="p-6 text-center text-muted-foreground">
             No Meet records found.
           </p>
         )}
-      </CardContent>
+      </div>
     </ChatWideCard>
   );
 }
@@ -856,22 +845,18 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
   return (
     <ChatWideCard
       maxWidth={1180}
-      icon={<Mail className="size-4 shrink-0 text-primary" />}
+      icon={<Mail />}
       title="Gmail search"
       description={
         <span className="font-mono">{payload.query || "in:inbox"}</span>
       }
-      meta={
-        <>
-          <div>
-            {threads.length} thread{threads.length === 1 ? "" : "s"}
-          </div>
-          {payload.resultSizeEstimate !== undefined &&
-            payload.resultSizeEstimate !== null && (
-              <div>estimate {payload.resultSizeEstimate}</div>
-            )}
-        </>
-      }
+      meta={`${threads.length} thread${threads.length === 1 ? "" : "s"}${
+        payload.resultSizeEstimate !== undefined &&
+        payload.resultSizeEstimate !== null
+          ? ` · estimate ${payload.resultSizeEstimate}`
+          : ""
+      }`}
+      footerNote="Search results contain metadata and snippets only. Expanding a thread loads the email body in your browser without adding it to assistant context."
     >
       <Table className="table-fixed">
         <TableHeader>
@@ -894,11 +879,6 @@ function GmailSearchCard({ payload }: { payload: GmailSearchPayload }) {
           )}
         </TableBody>
       </Table>
-      <CardFooter className="text-xs text-muted-foreground">
-        Search results contain metadata and snippets only. Expanding a thread
-        loads the email body in your browser without adding it to assistant
-        context.
-      </CardFooter>
     </ChatWideCard>
   );
 }
@@ -1062,7 +1042,7 @@ function GmailThreadCard({
     ) : null,
   };
   const body = (
-    <CardContent className="flex max-h-155 flex-col gap-3 overflow-auto">
+    <div className="flex max-h-155 flex-col gap-3 overflow-auto p-3">
       {messages.map((message, index) => (
         <GmailMessageArticle key={message.id ?? index} message={message} />
       ))}
@@ -1071,25 +1051,23 @@ function GmailThreadCard({
           No readable messages returned.
         </p>
       )}
-    </CardContent>
+    </div>
   );
   if (embedded)
     return (
-      <Card size="sm">
-        <CardHeader className="border-b">
-          <CardTitle className="flex min-w-0 items-center gap-2">
-            {header.icon}
-            {header.title}
-          </CardTitle>
-          <CardDescription>{header.description}</CardDescription>
-          {header.meta ? (
-            <CardAction className="text-right text-muted-foreground">
-              {header.meta}
-            </CardAction>
-          ) : null}
-        </CardHeader>
+      <AppCard
+        className="my-0"
+        icon={header.icon}
+        label={header.title}
+        status={header.meta}
+        flush
+        contentClassName="gap-0"
+      >
+        <div className="border-b px-3 py-1.5 text-xs text-muted-foreground">
+          {header.description}
+        </div>
         {body}
-      </Card>
+      </AppCard>
     );
   return (
     <ChatWideCard maxWidth={980} {...header}>
@@ -1105,58 +1083,50 @@ function GmailMessageCard({
 }) {
   if (!message) return null;
   return (
-    <ChatWideCard
-      maxWidth={900}
-      icon={<Mail className="size-4 shrink-0 text-primary" />}
-      title="Email"
-    >
-      <CardContent>
+    <ChatWideCard maxWidth={900} icon={<Mail />} title="Email">
+      <div className="p-3">
         <GmailMessageArticle message={message} />
-      </CardContent>
+      </div>
     </ChatWideCard>
   );
 }
 
 function GmailMessageArticle({ message }: { message: GmailFullMessage }) {
   return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle>{messageSenderDisplay(message)}</CardTitle>
-        <CardDescription>
-          {message.localDate || ""}
-          {message.to ? ` · to ${message.to}` : ""}
-        </CardDescription>
-        <CardAction>
-          <Badge variant={message.unread ? "default" : "secondary"}>
-            {message.unread ? "Unread" : "Read"}
-          </Badge>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {message.text ? (
-          <pre className="font-sans whitespace-pre-wrap break-words">
-            {message.text}
-          </pre>
-        ) : (
-          <p className="text-muted-foreground">No readable body text.</p>
-        )}
-        {message.truncated && (
-          <p className="text-muted-foreground">Message truncated.</p>
-        )}
-        {message.attachments?.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {message.attachments.map((attachment, index) => (
-              <Badge
-                key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
-                variant="secondary"
-              >
-                <Paperclip /> {attachment.filename || "attachment"}
-              </Badge>
-            ))}
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
+    <AppCard
+      className="my-0"
+      tone={message.unread ? "info" : "neutral"}
+      icon={<Mail />}
+      label={messageSenderDisplay(message)}
+      status={message.unread ? "Unread" : "Read"}
+    >
+      <p className="text-xs text-muted-foreground">
+        {message.localDate || ""}
+        {message.to ? ` · to ${message.to}` : ""}
+      </p>
+      {message.text ? (
+        <pre className="font-sans whitespace-pre-wrap break-words">
+          {message.text}
+        </pre>
+      ) : (
+        <p className="text-muted-foreground">No readable body text.</p>
+      )}
+      {message.truncated && (
+        <p className="text-muted-foreground">Message truncated.</p>
+      )}
+      {message.attachments?.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {message.attachments.map((attachment, index) => (
+            <Badge
+              key={`${attachment.attachmentId ?? attachment.filename ?? index}`}
+              variant="secondary"
+            >
+              <Paperclip /> {attachment.filename || "attachment"}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+    </AppCard>
   );
 }
 
@@ -1396,7 +1366,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
   return (
     <ChatWideCard
       maxWidth={980}
-      icon={<FileText className="size-4 shrink-0 text-primary" />}
+      icon={<FileText />}
       title={
         <ExternalTitle
           title={file?.name || "Drive document"}
@@ -1421,7 +1391,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
           : null
       }
     >
-      <CardContent className="max-h-130 overflow-auto">
+      <div className="max-h-130 overflow-auto p-3">
         {text ? (
           <pre className="font-sans whitespace-pre-wrap break-words">
             {text}
@@ -1431,7 +1401,7 @@ function DriveDocumentCard({ payload }: { payload: DriveDocumentPayload }) {
             No readable document text was returned.
           </p>
         )}
-      </CardContent>
+      </div>
     </ChatWideCard>
   );
 }

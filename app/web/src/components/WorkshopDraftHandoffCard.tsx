@@ -2,14 +2,7 @@ import { ExternalLink, FileText, Hammer } from "lucide-react";
 import type { AgentType, DisplayBlock } from "@assistant/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 
 type ToolBlock = Extract<DisplayBlock, { kind: "tool" }>;
 
@@ -53,32 +46,14 @@ export function WorkshopDraftHandoffToolCard({
   if (!payload || payload.renderKind !== "workshopDraftHandoff") return null;
   const canOpen = Boolean(onCreateDraftSession);
   return (
-    <Card size="sm" className="my-2">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          <Hammer className="size-4 text-primary" />
-          <span className="truncate">{payload.title}</span>
-          <Badge variant="outline">{payload.category}</Badge>
-        </CardTitle>
-        <CardDescription>
-          Workshop proposal saved. Opening a draft will not submit anything.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2 text-muted-foreground">
-        <p className="flex min-w-0 items-center gap-2">
-          <FileText className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate font-mono">
-            {payload.proposalPath}
-          </span>
-        </p>
-        <p>
-          You can change the Workshop model and thinking level, edit the
-          prefilled prompt, and then submit manually.
-        </p>
-      </CardContent>
-      <CardFooter>
+    <AppCard
+      icon={<Hammer />}
+      label="Workshop proposal"
+      status={<Badge variant="outline">{payload.category}</Badge>}
+      footerStart="Opening a draft submits nothing."
+      actions={
         <Button
-          size="sm"
+          size="xs"
           disabled={!canOpen}
           onClick={() =>
             onCreateDraftSession?.(
@@ -96,8 +71,21 @@ export function WorkshopDraftHandoffToolCard({
           <ExternalLink />
           Open Workshop draft
         </Button>
-      </CardFooter>
-    </Card>
+      }
+      contentClassName="text-muted-foreground"
+    >
+      <p className="truncate font-medium text-foreground">{payload.title}</p>
+      <p className="flex min-w-0 items-center gap-2">
+        <FileText className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-mono">
+          {payload.proposalPath}
+        </span>
+      </p>
+      <p>
+        You can change the Workshop model and thinking level, edit the prefilled
+        prompt, and then submit manually.
+      </p>
+    </AppCard>
   );
 }
 

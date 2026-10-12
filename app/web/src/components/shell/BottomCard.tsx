@@ -482,9 +482,11 @@ export function BottomCard({
                   ? (blockedReason ?? openLabel)
                   : `Drag up or tap to open — ${openLabel}`
             }
-            className="h-5 w-full"
+            // Ghost fills `aria-expanded` like a hover, so an open card would
+            // show a pressed bar: the pill alone answers a hover.
+            className="group/grabber h-5 w-full hover:bg-transparent aria-expanded:bg-transparent dark:hover:bg-transparent"
           >
-            <span className="h-1 w-10 rounded-full bg-input" />
+            <span className="h-1 w-10 rounded-full bg-input transition-colors pointer-fine:group-hover/grabber:bg-muted-foreground" />
           </Button>
           {header}
         </div>

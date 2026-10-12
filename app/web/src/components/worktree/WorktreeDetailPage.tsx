@@ -24,12 +24,14 @@ import {
   type ReactNode,
 } from "react";
 import {
+  BookOpen,
   Check,
   ChevronLeft,
   Download,
   ExternalLink,
   Eye,
   File,
+  FileText,
   FolderTree,
   GitBranch,
   GitCompareArrows,
@@ -52,7 +54,6 @@ import type {
   WorktreeFileResponse,
   WorktreeGitStatus,
   WorktreeRecord,
-  WorktreeTreeEntry,
 } from "@assistant/shared";
 import { PageHeader, type PageHeaderBack } from "../PageHeader.tsx";
 import {
@@ -108,7 +109,6 @@ import {
   fetchWorktreeFile,
   fetchWorktreeFileDiff,
   fetchWorktreeStatus,
-  fetchWorktreeTree,
   hashContent,
   worktreeFileRawUrl,
 } from "../../lib/worktrees.ts";
@@ -124,13 +124,15 @@ import {
 } from "../common/ResizableSeparator.tsx";
 import {
   WorktreeFileNavigator,
-  ancestorDirectoryPaths,
   buildChangeNavigatorEntries,
-  buildLoadedTreeNavigatorEntries,
   directoryPathsFromNavigatorEntries,
-  pruneVanishedTreeDirs,
   type WorktreeNavigatorViewMode,
 } from "./WorktreeFileNavigator.tsx";
+import {
+  WorktreeFileTree,
+  splitWorktreePath,
+  useWorktreeFileTree,
+} from "./WorktreeFileTree.tsx";
 
 export interface WorktreeDetailPageProps {
   worktree: WorktreeRecord;
@@ -189,6 +191,14 @@ export interface WorktreeDetailPageProps {
    */
   markdownPreviewFirst?: boolean;
   /**
+   * The checkout is read as a folder of documents, not reviewed as a worktree
+   * (the Knowledge Base): the header names the open FILE, the Files view drops
+   * the worktree chrome (view tabs, hidden-files toggle, diff options, path
+   * bar), and on desktop it draws no tree rail, because the sidebar beside the
+   * page already browses this checkout.
+   */
+  browseAsDocuments?: boolean;
+  /**
    * Comment on files the way any document is commented on — a passage or the
    * whole file, collected in its browser-local tray and sent to a session
    * (`docs/comments.md`) — naming each file by the document this returns. For
@@ -230,12 +240,6 @@ function clampWorktreeRailWidth(width: number): number {
     WORKTREE_RAIL_MAX_WIDTH,
     Math.max(WORKTREE_RAIL_MIN_WIDTH, Math.round(width)),
   );
-}
-
-function splitWorktreePath(path: string): { dir: string; name: string } {
-  const index = path.lastIndexOf("/");
-  if (index < 0) return { dir: "", name: path };
-  return { dir: path.slice(0, index), name: path.slice(index + 1) };
 }
 
 // Keep list mode wired while the product exposes one navigator shape. Flipping
@@ -305,6 +309,7 @@ function WorktreeRailLayout({
   rail,
   narrow,
   narrowListHeader = true,
+  railHidden = false,
   detailActive = false,
   onBack,
 }: {
@@ -320,12 +325,14 @@ function WorktreeRailLayout({
   narrow: boolean;
   /** Narrow list screen: render the navigator's own title/controls header. */
   narrowListHeader?: boolean;
+  /** Desktop: no rail at all, as if collapsed (another tree browses this). */
+  railHidden?: boolean;
   /** Narrow: a detail is selected, so the content pane replaces the list. */
   detailActive?: boolean;
   /** Narrow: return from the detail pane to the list. */
   onBack?: () => void;
 }) {
-  const railCollapsed = prefs.worktreeChangesRailCollapsed;
+  const railCollapsed = railHidden || prefs.worktreeChangesRailCollapsed;
   const railWidth = clampWorktreeRailWidth(prefs.worktreeChangesRailWidth);
   const paneRef = useRef<HTMLDivElement>(null);
   const railResize = useResizeDrag({
@@ -1009,6 +1016,7 @@ function FilesView({
   pivot,
   onPivotChange,
   markdownPreviewFirst,
+  browseAsDocuments,
   documentComments,
   commentsConfigFor,
 }: {
@@ -1025,6 +1033,7 @@ function FilesView({
   pivot: FilePivot;
   onPivotChange: (pivot: FilePivot) => void;
   markdownPreviewFirst: boolean;
+  browseAsDocuments: boolean;
   documentComments: ((path: string) => CommentDocument) | undefined;
   commentsConfigFor: (
     path: string,
@@ -1032,139 +1041,12 @@ function FilesView({
     refOid?: string,
   ) => LineCommentsConfig | undefined;
 }) {
-  const [entriesByDir, setEntriesByDir] = useState<
-    Record<string, WorktreeTreeEntry[]>
-  >({});
-  const [loadingDirs, setLoadingDirs] = useState<string[]>([]);
-  const [expandedDirs, setExpandedDirs] = useState<string[]>(() =>
-    filePath ? ancestorDirectoryPaths(filePath) : [],
-  );
-  const [listDirectory, setListDirectory] = useState(() =>
-    filePath ? splitWorktreePath(filePath).dir : "",
-  );
-  const [includeIgnored, setIncludeIgnored] = useState(false);
-  const includeIgnoredRef = useRef(includeIgnored);
-  includeIgnoredRef.current = includeIgnored;
-  // The tree is a lazily filled CACHE of directories, not one query, so it keeps
-  // its own error, against the DIRECTORY that failed: a folder that fails to
-  // expand must not take the file (or the rest of the tree) down with it, and
-  // the retry has to reload that folder rather than the root.
-  const [treeError, setTreeError] = useState<{
-    dir: string;
-    message: string;
-  } | null>(null);
-
-  // Directories with a request out. Refreshing re-reads every loaded directory,
-  // so without this a run of watcher pushes would pile duplicate reads of the
-  // same folder onto the git queue; an answer that is one scan behind is close
-  // enough, and the next push re-reads anyway.
-  const inFlightDirs = useRef(new Set<string>());
-  // Bumped when the worktree or visibility mode changes, so an older read
-  // cannot land its listing in the current tree.
-  const treeGeneration = useRef(0);
-
-  const loadDirectory = useCallback(
-    (dir: string, force = false) => {
-      setEntriesByDir((current) => {
-        if (!force && current[dir]) return current;
-        if (inFlightDirs.current.has(dir)) return current;
-        inFlightDirs.current.add(dir);
-        const generation = treeGeneration.current;
-        const stillThisTree = () => treeGeneration.current === generation;
-        setLoadingDirs((loading) =>
-          loading.includes(dir) ? loading : [...loading, dir],
-        );
-        fetchWorktreeTree(worktree.id, dir, includeIgnoredRef.current)
-          .then((payload) => {
-            if (!stillThisTree()) return;
-            setTreeError((error) => (error?.dir === dir ? null : error));
-            // A fresh listing can also say a subdirectory is GONE, and its own
-            // cached children would otherwise keep showing under it.
-            setEntriesByDir((next) =>
-              pruneVanishedTreeDirs({ ...next, [dir]: payload }),
-            );
-          })
-          .catch((err) => {
-            if (!stillThisTree()) return;
-            setTreeError({
-              dir,
-              message: err instanceof Error ? err.message : String(err),
-            });
-          })
-          .finally(() => {
-            if (!stillThisTree()) return;
-            inFlightDirs.current.delete(dir);
-            setLoadingDirs((loading) => loading.filter((item) => item !== dir));
-          });
-        return current;
-      });
-    },
-    [worktree.id],
-  );
-
-  // A DIFFERENT worktree is a different object, so its tree starts empty (R3).
-  // Keyed on `loadDirectory`, which changes with the worktree id alone.
-  useEffect(() => {
-    treeGeneration.current += 1;
-    inFlightDirs.current.clear();
-    setEntriesByDir({});
-    setLoadingDirs([]);
-    setListDirectory("");
-    setTreeError(null);
-    loadDirectory("", true);
-  }, [loadDirectory]);
-
-  // Which directories the cache holds, readable from refreshes without making
-  // them re-run on every answer.
-  const loadedDirsRef = useRef<string[]>([]);
-  const previousTreeConfig = useRef({
+  const tree = useWorktreeFileTree({
     worktreeId: worktree.id,
-    includeIgnored,
+    filePath,
+    refreshToken,
   });
-
-  // A visibility change keeps the current rows and expanded directories while
-  // every loaded directory is replaced with a listing in the new mode. Bumping
-  // the generation prevents a slower answer from the previous mode landing.
-  useEffect(() => {
-    const previous = previousTreeConfig.current;
-    previousTreeConfig.current = {
-      worktreeId: worktree.id,
-      includeIgnored,
-    };
-    if (previous.worktreeId !== worktree.id) return;
-    if (previous.includeIgnored === includeIgnored) return;
-
-    const dirs = [
-      ...new Set([...loadedDirsRef.current, ...inFlightDirs.current]),
-    ];
-    treeGeneration.current += 1;
-    inFlightDirs.current.clear();
-    setLoadingDirs([]);
-    for (const dir of dirs.length > 0 ? dirs : [""]) loadDirectory(dir, true);
-  }, [includeIgnored, loadDirectory, worktree.id]);
-
-  // A watcher push invalidates the tree IN PLACE (R2): every directory already
-  // loaded is refetched and swapped in when it answers, so the rows, the
-  // expansion and the folder you are standing in all survive. Clearing the
-  // cache first — what this used to do — dropped `rootLoaded` to skeleton rows
-  // and threw list mode back to the repo root, and since `computeWorktreeStatus`
-  // stamps `updatedAt` on every scan it fired shortly after every open, not
-  // just on a real change.
-  const refreshTree = useCallback(() => {
-    const dirs = loadedDirsRef.current;
-    for (const dir of dirs.length > 0 ? dirs : [""]) loadDirectory(dir, true);
-  }, [loadDirectory]);
-  useReloadOnToken(worktree.id, refreshToken, refreshTree);
-
-  useEffect(() => {
-    if (!filePath) return;
-    const ancestors = ancestorDirectoryPaths(filePath);
-    setListDirectory(splitWorktreePath(filePath).dir);
-    setExpandedDirs((current) =>
-      [...new Set([...current, ...ancestors])].sort(),
-    );
-    for (const dir of ["", ...ancestors]) loadDirectory(dir);
-  }, [filePath, loadDirectory]);
+  const { includeIgnored, setIncludeIgnored } = tree;
 
   // The file's own path is the fetch key, so opening another file shows ITS
   // placeholder instead of the previous file's source under the new path (R3);
@@ -1233,13 +1115,6 @@ function FilesView({
   const pivotDiff = dataOf(pivotFetch.state);
   const pivotError = errorOf(pivotFetch.state);
 
-  const navigatorEntries = useMemo(
-    () => buildLoadedTreeNavigatorEntries(entriesByDir),
-    [entriesByDir],
-  );
-  const loadedDirs = useMemo(() => Object.keys(entriesByDir), [entriesByDir]);
-  loadedDirsRef.current = loadedDirs;
-  const rootLoaded = entriesByDir[""] !== undefined;
   // Raster images render as the image directly (source is meaningless); svg,
   // markdown, and html keep source as "File" and add a rendered "Preview".
   const previewKind = filePath ? previewKindForPath(filePath) : undefined;
@@ -1335,47 +1210,62 @@ function FilesView({
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
-        {navigationControls}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Toggle
-                  size="sm"
-                  aria-label={ignoredVisibilityLabel}
-                  pressed={includeIgnored}
-                  onPressedChange={setIncludeIgnored}
-                />
-              }
-            >
-              <Eye />
-            </TooltipTrigger>
-            <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
-          </Tooltip>
-          {!narrow ? pivotControls : null}
-          {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
-            <NavigatorViewToggle
-              mode={navigatorMode}
-              onChange={setNavigatorMode}
-            />
-          ) : null}
-          {!narrow ? (
-            <NavigatorVisibilityToggle
-              collapsed={prefs.worktreeChangesRailCollapsed}
-              onChange={(collapsed) =>
-                onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
-              }
-            />
-          ) : null}
-          {filePath ? viewOptionsControl : null}
+      {browseAsDocuments ? (
+        // Only the file's own pivots (Preview / File / History) remain; with
+        // no file open there is nothing to switch, so no toolbar at all.
+        filePath && (pivotControls || shownRefresh !== null) ? (
+          <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+            {shownRefresh !== null ? (
+              <RefreshIndicator label={shownRefresh} />
+            ) : null}
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {pivotControls}
+            </div>
+          </div>
+        ) : null
+      ) : (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-3 py-1.5">
+          {navigationControls}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Toggle
+                    size="sm"
+                    aria-label={ignoredVisibilityLabel}
+                    pressed={includeIgnored}
+                    onPressedChange={setIncludeIgnored}
+                  />
+                }
+              >
+                <Eye />
+              </TooltipTrigger>
+              <TooltipContent>{ignoredVisibilityLabel}</TooltipContent>
+            </Tooltip>
+            {!narrow ? pivotControls : null}
+            {NAVIGATOR_VIEW_SWITCH_ENABLED ? (
+              <NavigatorViewToggle
+                mode={navigatorMode}
+                onChange={setNavigatorMode}
+              />
+            ) : null}
+            {!narrow ? (
+              <NavigatorVisibilityToggle
+                collapsed={prefs.worktreeChangesRailCollapsed}
+                onChange={(collapsed) =>
+                  onUpdatePrefs({ worktreeChangesRailCollapsed: collapsed })
+                }
+              />
+            ) : null}
+            {filePath ? viewOptionsControl : null}
+          </div>
         </div>
-      </div>
+      )}
       <WorktreeRailLayout
         title="Files"
         subtitle={worktree.branch}
         collapsedSummary={
-          selectedParts ? (
+          selectedParts && !(browseAsDocuments && !narrow) ? (
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="min-w-0 max-w-1/2 truncate font-medium text-foreground">
                 {selectedParts.name}
@@ -1398,60 +1288,26 @@ function FilesView({
         onUpdatePrefs={onUpdatePrefs}
         narrow={narrow}
         narrowListHeader={false}
+        railHidden={browseAsDocuments}
         detailActive={Boolean(filePath)}
         {...(!filePath
           ? { onBack: () => navigate(worktreePath(worktree.id, "files")) }
           : {})}
         rail={
-          <div className="flex flex-col gap-2">
-            {treeError !== null ? (
-              <ErrorNote
-                message={
-                  treeError.dir === ""
-                    ? `Could not load the file tree: ${treeError.message}`
-                    : `Could not load “${treeError.dir}”: ${treeError.message}`
-                }
-                onRetry={() => loadDirectory(treeError.dir, true)}
-              />
-            ) : null}
-            {/* An errored, never-answered root has nothing to say: the note above
-              is the whole state, and "No files." would be a claim about the
-              worktree (R1). */}
-            {rootLoaded || treeError === null ? (
-              <WorktreeFileNavigator
-                entries={navigatorEntries}
-                selectedPath={filePath}
-                // Not "a root request is in flight": until the root has ANSWERED
-                // the rail is loading, so an empty first frame can never read as
-                // an empty worktree (R1).
-                loading={!rootLoaded}
-                expandedDirectoryPaths={expandedDirs}
-                onExpandedDirectoryPathsChange={setExpandedDirs}
-                loadedDirectoryPaths={loadedDirs}
-                loadingDirectoryPaths={loadingDirs}
-                onLoadDirectory={loadDirectory}
-                listDirectoryPath={
-                  navigatorMode === "list" ? listDirectory : undefined
-                }
-                onListDirectoryPathChange={
-                  navigatorMode === "list" ? setListDirectory : undefined
-                }
-                onSelectFile={(entry) =>
-                  navigate(
-                    worktreePath(worktree.id, "files", { path: entry.path }),
-                  )
-                }
-                emptyLabel="No files."
-                ariaLabel="Worktree file tree"
-                viewMode={navigatorMode}
-              />
-            ) : null}
-          </div>
+          <WorktreeFileTree
+            tree={tree}
+            selectedPath={filePath}
+            onSelectFile={(entry) =>
+              navigate(worktreePath(worktree.id, "files", { path: entry.path }))
+            }
+            ariaLabel="Worktree file tree"
+            viewMode={navigatorMode}
+          />
         }
       >
         {filePath ? (
           <>
-            {!narrow ? (
+            {!narrow && !browseAsDocuments ? (
               <div className="flex items-center gap-2 border-b border-border px-3 py-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
                   {filePath}
@@ -1613,7 +1469,9 @@ function FilesView({
           </>
         ) : (
           <div className="p-6 text-sm text-muted-foreground">
-            Select a file to view it.
+            {browseAsDocuments && !narrow
+              ? "Pick a file in the sidebar to read it."
+              : "Select a file to view it."}
           </div>
         )}
       </WorktreeRailLayout>
@@ -1652,6 +1510,7 @@ export default function WorktreeDetailPage({
   title,
   lineComments = true,
   markdownPreviewFirst = false,
+  browseAsDocuments = false,
   documentComments,
 }: WorktreeDetailPageProps) {
   const [fetchedStatus, setFetchedStatus] = useState<
@@ -1880,6 +1739,12 @@ export default function WorktreeDetailPage({
     </Popover>
   );
 
+  // The open file's folder in a document folder's header ("Knowledge Base" at
+  // its root); the Changes view names the folder itself.
+  const documentFolder =
+    filePath && view === "files"
+      ? splitWorktreePath(filePath).dir || (title ?? worktree.branch)
+      : (title ?? worktree.branch);
   const pendingReviewIds = pendingWorktreeReviewIds(comments);
   const documentTarget = useMemo(
     () =>
@@ -1959,37 +1824,80 @@ export default function WorktreeDetailPage({
             uselessness on a phone. The path is stated in full by the panel's
             Checkout facts, and the dirty counts the chips repeated are now the
             Delivery section's plus the changed-files header in the pane itself. */}
-          <PageHeader
-            back={back}
-            density="compact"
-            icon={
-              pathCopied ? (
-                <Check size={16} strokeWidth={2.5} />
-              ) : (
-                <GitBranch size={16} />
-              )
-            }
-            onIconClick={
-              worktree.path
-                ? () => {
-                    void copyWithToast(worktree.path, {
-                      successMessage: "Copied worktree path",
-                    });
-                    setPathCopied(true);
-                    window.setTimeout(() => setPathCopied(false), 1200);
-                  }
-                : undefined
-            }
-            iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
-            title={title ?? worktree.branch}
-            actions={
-              embedded ? (
-                headerActions
-              ) : filePath ? (
-                <DocumentNavigationActions className="hidden md:flex" />
-              ) : undefined
-            }
-          />
+          {browseAsDocuments ? (
+            // A document folder: the header is the open FILE (its name, and
+            // where in the folder it sits), the way any document page reads.
+            <PageHeader
+              back={back}
+              // The standard compact row, as a chat session's: the name, and
+              // a small second line under it inside the same height.
+              density="compact"
+              icon={filePath ? <FileText size={16} /> : <BookOpen size={16} />}
+              title={
+                <div className="flex min-w-0 flex-col">
+                  <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                    {filePath && view === "files"
+                      ? splitWorktreePath(filePath).name
+                      : view === "changes"
+                        ? "Uncommitted changes"
+                        : (title ?? worktree.branch)}
+                  </h2>
+                  {/* The folder, cut from the LEFT: its tail (the nearest
+                    folders) is what tells two files apart, not the shared
+                    root. */}
+                  <p
+                    className="truncate text-left text-xs text-muted-foreground"
+                    dir="rtl"
+                    title={documentFolder}
+                  >
+                    <span dir="ltr">{documentFolder}</span>
+                  </p>
+                </div>
+              }
+              actions={
+                embedded ? (
+                  headerActions
+                ) : filePath ? (
+                  <DocumentNavigationActions
+                    className="hidden md:flex"
+                    showClose={false}
+                  />
+                ) : undefined
+              }
+            />
+          ) : (
+            <PageHeader
+              back={back}
+              density="compact"
+              icon={
+                pathCopied ? (
+                  <Check size={16} strokeWidth={2.5} />
+                ) : (
+                  <GitBranch size={16} />
+                )
+              }
+              onIconClick={
+                worktree.path
+                  ? () => {
+                      void copyWithToast(worktree.path, {
+                        successMessage: "Copied worktree path",
+                      });
+                      setPathCopied(true);
+                      window.setTimeout(() => setPathCopied(false), 1200);
+                    }
+                  : undefined
+              }
+              iconLabel={pathCopied ? "Copied!" : "Copy worktree path"}
+              title={title ?? worktree.branch}
+              actions={
+                embedded ? (
+                  headerActions
+                ) : filePath ? (
+                  <DocumentNavigationActions className="hidden md:flex" />
+                ) : undefined
+              }
+            />
+          )}
           {view === "files" ? (
             <FilesView
               worktree={worktree}
@@ -2005,6 +1913,7 @@ export default function WorktreeDetailPage({
               pivot={filePivot}
               onPivotChange={setFilePivot}
               markdownPreviewFirst={markdownPreviewFirst}
+              browseAsDocuments={browseAsDocuments}
               documentComments={documentComments}
               commentsConfigFor={commentsConfigFor}
             />

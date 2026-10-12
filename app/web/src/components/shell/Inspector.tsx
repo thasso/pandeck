@@ -1,3 +1,9 @@
+import { useStoredOpen } from "../../hooks/useStoredOpen.ts";
+import {
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "../common/PropertyList.tsx";
 import {
   createContext,
   Fragment,
@@ -47,6 +53,11 @@ const InspectorChromeContext = createContext<{
   onAct?: () => void;
 }>({ header: true, desktopTabs: false });
 
+/** Called after a row acts, so a dock sheet can get out of the way. */
+export function useInspectorAct(): (() => void) | undefined {
+  return useContext(InspectorChromeContext).onAct;
+}
+
 export function InspectorChromeProvider({
   header,
   desktopTabs = false,
@@ -83,6 +94,8 @@ interface InspectorRelation {
   key: string;
   icon?: ReactNode;
   title: string;
+  /** The title as the object reads elsewhere (a project's key and muted name). */
+  titleContent?: ReactNode;
   /** Relation qualifier, e.g. "Parent task", "Started from this task". */
   subtitle?: string;
   /** Optional source-style change counters, rendered with the normal +/- colors. */
@@ -111,6 +124,17 @@ export interface InspectorRelationGroup {
    */
   maxVisibleItems?: number;
   items: InspectorRelation[];
+  /**
+   * The group's body when its objects have a row of their own elsewhere in the
+   * app (sessions draw the composer strip's rows), so the panel does not grow
+   * a second rendering of them. `items` still decides whether the group shows.
+   */
+  content?: ReactNode;
+  /**
+   * Shown although it has no relation rows: a group that is ONLY `content` (a
+   * session's Details), placed among the relations rather than after them.
+   */
+  alwaysShown?: boolean;
 }
 
 /** One object-aware action, e.g. "Start session", "Archive". */
@@ -162,17 +186,6 @@ function sectionIdFromTitle(title: string): string {
   );
 }
 
-function readStoredBoolean(key: string, fallback: boolean): boolean {
-  try {
-    const value = window.localStorage.getItem(key);
-    if (value === "open") return true;
-    if (value === "closed") return false;
-  } catch {
-    // Ignore storage failures and use the default state.
-  }
-  return fallback;
-}
-
 /** One label/value pair of an inspector section's facts. */
 export interface InspectorFact {
   label: string;
@@ -203,17 +216,19 @@ export interface InspectorFact {
  *   card; a section is a heading and its rows.
  */
 export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
+  // The property list every editable field uses too, so read-only facts and
+  // editable ones share one label column wherever they appear.
   return (
-    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 px-1">
+    <PropertyList>
       {facts.map((fact) => (
         <Fragment key={fact.label}>
-          <dt className="text-sm text-muted-foreground">{fact.label}</dt>
-          <dd
+          <PropertyLabel>{fact.label}</PropertyLabel>
+          <PropertyText
             // Left-trimming is the block's DIRECTION (that is what moves the
             // ellipsis to the start), with the value itself back in ltr so the
             // path still reads forwards.
-            {...(fact.truncate === "start" ? { dir: "rtl" as const } : {})}
-            className={`min-w-0 truncate text-sm ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-muted-foreground" : "text-foreground"}`}
+            dir={fact.truncate === "start" ? "rtl" : undefined}
+            className={`truncate ${fact.truncate === "start" ? "text-left" : ""} ${fact.mono ? "font-mono text-xs text-muted-foreground" : "text-foreground"}`}
             title={fact.title}
           >
             {fact.truncate === "start" ? (
@@ -221,10 +236,10 @@ export function InspectorFacts({ facts }: { facts: InspectorFact[] }) {
             ) : (
               fact.value
             )}
-          </dd>
+          </PropertyText>
         </Fragment>
       ))}
-    </dl>
+    </PropertyList>
   );
 }
 
@@ -269,30 +284,8 @@ export function InspectorSection({
   const storageKey = storageScope
     ? `inspector-section:${storageScope}:${id}`
     : undefined;
-  const [storedOpen, setStoredOpen] = useState(() =>
-    storageKey ? readStoredBoolean(storageKey, defaultOpen) : defaultOpen,
-  );
+  const [storedOpen, toggleOpen] = useStoredOpen(storageKey, defaultOpen);
   const open = forceOpen || (collapsible && storedOpen);
-
-  useEffect(() => {
-    setStoredOpen(
-      storageKey ? readStoredBoolean(storageKey, defaultOpen) : defaultOpen,
-    );
-  }, [storageKey, defaultOpen]);
-
-  const toggleOpen = () => {
-    setStoredOpen((current) => {
-      const next = !current;
-      if (storageKey) {
-        try {
-          window.localStorage.setItem(storageKey, next ? "open" : "closed");
-        } catch {
-          // Ignore storage failures; collapsing is still useful for this render.
-        }
-      }
-      return next;
-    });
-  };
 
   return (
     <Collapsible
@@ -405,7 +398,7 @@ function RelationRow({
         {item.icon ? <ItemMedia variant="icon">{item.icon}</ItemMedia> : null}
         <ItemContent className="min-w-0">
           <ItemTitle className="w-full">
-            <span className="truncate">{item.title}</span>
+            <span className="truncate">{item.titleContent ?? item.title}</span>
           </ItemTitle>
           {item.subtitle || item.counters ? (
             <ItemDescription className="truncate">
@@ -445,6 +438,12 @@ interface Props {
   sectionStorageScope?: string;
   /** Object-specific extra content rendered between relations and actions. */
   children?: ReactNode;
+  /**
+   * Whether this panel feeds the page header's actions menu (wide layouts).
+   * False where the page publishes its actions itself on every layout (the
+   * chat session header): the panel then must not overwrite or clear them.
+   */
+  ownsHeaderActions?: boolean;
 }
 
 /**
@@ -468,8 +467,11 @@ export function Inspector({
   actions: allActions,
   sectionStorageScope,
   children,
+  ownsHeaderActions = true,
 }: Props) {
-  const groups = relations.filter((group) => group.items.length > 0);
+  const groups = relations.filter(
+    (group) => group.items.length > 0 || group.alwaysShown,
+  );
   const {
     header: showHeader,
     desktopTabs,
@@ -494,7 +496,7 @@ export function Inspector({
           {
             key: "comment-actuation:add",
             icon: <MessageSquareQuote size={15} />,
-            label: "Add comment",
+            label: commentActuation.commentLabel ?? "Add comment",
             onRun: commentActuation.onComment,
             disabled: commentActuation.canComment !== true,
             ...(!(commentActuation.canComment === true)
@@ -510,23 +512,27 @@ export function Inspector({
     : allActions;
   // On wide layouts secondary object actions move to the page header's overflow
   // menu. Comment actuation already has a dedicated visible page-header control,
-  // so it never joins that menu. The dock has no overflow menu, retaining the
-  // full action section on mobile.
+  // so it never joins that menu. The dock has no overflow menu, so on mobile the
+  // panel keeps the full action section.
+  const actionsInHeader = wideChrome && hasSecondaryActionHost;
   useEffect(() => {
-    publishSecondaryActions(
-      wideChrome && hasSecondaryActionHost ? objectActions : [],
-    );
+    if (!ownsHeaderActions) return;
+    publishSecondaryActions(actionsInHeader ? objectActions : []);
   }, [
-    hasSecondaryActionHost,
+    actionsInHeader,
     objectActions,
+    ownsHeaderActions,
     publishSecondaryActions,
-    wideChrome,
   ]);
-  useEffect(() => () => publishSecondaryActions([]), [publishSecondaryActions]);
-  const inspectorActions =
-    wideChrome && hasSecondaryActionHost
-      ? []
-      : [...commentActions, ...objectActions];
+  useEffect(
+    () => () => {
+      if (ownsHeaderActions) publishSecondaryActions([]);
+    },
+    [ownsHeaderActions, publishSecondaryActions],
+  );
+  const inspectorActions = actionsInHeader
+    ? []
+    : [...commentActions, ...objectActions];
   // What the reader came to DO leads the panel on mobile; the object's references and
   // sections read below it. No count in the header: an always-open section of
   // labelled buttons already shows how many there are.
@@ -631,14 +637,18 @@ export function Inspector({
               collapsible={group.collapsible ?? true}
               defaultOpen={group.defaultOpen ?? true}
             >
-              <RelationRows
-                key={sectionStorageScope ?? "unscoped"}
-                // Remount per inspected object: the section itself is keyed by
-                // the group id, which is the SAME across objects, so without
-                // this an expanded group stays expanded for the next session.
-                items={group.items}
-                maxVisible={group.maxVisibleItems}
-              />
+              {/* Remount per inspected object: the section itself is keyed by
+                  the group id, which is the SAME across objects, so without
+                  this an expanded group ("Show N more") — the generic rows or
+                  a group's own content — stays expanded for the next one. */}
+              <Fragment key={sectionStorageScope ?? "unscoped"}>
+                {group.content ?? (
+                  <RelationRows
+                    items={group.items}
+                    maxVisible={group.maxVisibleItems}
+                  />
+                )}
+              </Fragment>
             </InspectorSection>
           ))}
 

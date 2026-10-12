@@ -5,6 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 const config: StorybookConfig = {
   stories: ["../stories/**/*.stories.@(ts|tsx)"],
   addons: ["@storybook/addon-a11y"],
+  // Reachable by hostname (e.g. Tailscale MagicDNS), like the app dev server.
+  core: { allowedHosts: true },
   framework: {
     name: "@storybook/react-vite",
     options: {

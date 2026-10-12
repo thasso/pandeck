@@ -20,13 +20,7 @@ import { ErrorNote } from "./common/load.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
@@ -159,79 +153,88 @@ export function AgentQuestionForm({
   };
 
   return (
-    <>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MessageCircleQuestion className="size-4 shrink-0 text-primary" />
-          <span className="min-w-0 truncate">{request.title}</span>
-        </CardTitle>
-        {request.intro ? (
-          <CardDescription>{request.intro}</CardDescription>
-        ) : null}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <Progress
-          value={
-            questions.length > 0
-              ? ((summary ? questions.length : index) / questions.length) * 100
-              : 0
-          }
-        >
-          <ProgressLabel>
-            {summary
-              ? "Review"
-              : `Question ${index + 1} of ${questions.length}`}
-          </ProgressLabel>
-          <span className="ml-auto text-sm text-muted-foreground">
-            {questions.length} total · review before submit
-          </span>
-        </Progress>
-        {summary ? (
-          <QuestionSummary
-            questions={questions}
-            answers={answers}
-            onEdit={(questionIndex) => setIndex(questionIndex)}
-          />
-        ) : current ? (
-          <QuestionStep
-            question={current}
-            draft={drafts[current.id] ?? initialDraft(current)}
-            onDraft={setDraft}
-          />
-        ) : null}
-        {notice ? (
-          <Alert role="note">
-            <Info />
-            <AlertDescription>{notice}</AlertDescription>
-          </Alert>
-        ) : null}
-        {error ? <ErrorNote message={error} /> : null}
-      </CardContent>
-      <CardFooter className="justify-between gap-2">
-        <Button variant="ghost" size="sm" onClick={cancel}>
-          Cancel
-        </Button>
-        <div className="flex items-center gap-2">
+    <AppCard
+      tone="warning"
+      icon={<MessageCircleQuestion />}
+      label="Question for you"
+      actions={
+        <>
+          <Button variant="ghost" size="xs" onClick={cancel}>
+            Cancel
+          </Button>
           <Button
             variant="outline"
-            size="sm"
+            size="xs"
             onClick={() => setIndex((i) => Math.max(0, i - 1))}
             disabled={index === 0}
           >
             Back
           </Button>
           {summary ? (
-            <Button size="sm" onClick={submit}>
+            <Button size="xs" onClick={submit}>
               <Check /> {discussCount ? "Submit + discuss" : "Submit"}
             </Button>
           ) : (
-            <Button size="sm" onClick={goNext}>
+            <Button size="xs" onClick={goNext}>
               {index === questions.length - 1 ? "Review" : "Next"}
             </Button>
           )}
-        </div>
-      </CardFooter>
-    </>
+        </>
+      }
+      contentClassName="gap-3"
+    >
+      <QuestionSubject title={request.title} intro={request.intro} />
+      <Progress
+        value={
+          questions.length > 0
+            ? ((summary ? questions.length : index) / questions.length) * 100
+            : 0
+        }
+      >
+        <ProgressLabel>
+          {summary ? "Review" : `Question ${index + 1} of ${questions.length}`}
+        </ProgressLabel>
+        <span className="ml-auto text-sm text-muted-foreground">
+          {questions.length} total · review before submit
+        </span>
+      </Progress>
+      {summary ? (
+        <QuestionSummary
+          questions={questions}
+          answers={answers}
+          onEdit={(questionIndex) => setIndex(questionIndex)}
+        />
+      ) : current ? (
+        <QuestionStep
+          question={current}
+          draft={drafts[current.id] ?? initialDraft(current)}
+          onDraft={setDraft}
+        />
+      ) : null}
+      {notice ? (
+        <Alert role="note">
+          <Info />
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      ) : null}
+      {error ? <ErrorNote message={error} /> : null}
+    </AppCard>
+  );
+}
+
+/** What the agent asks about: the card's subject, above the questions. */
+export function QuestionSubject({
+  title,
+  intro,
+}: {
+  title: string;
+  intro?: string | undefined;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <p className="font-medium">{title}</p>
+      {intro ? <p className="text-muted-foreground">{intro}</p> : null}
+    </div>
   );
 }
 

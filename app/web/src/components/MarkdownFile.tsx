@@ -1,12 +1,25 @@
-import { useMemo, type ComponentProps } from "react";
+import { Fragment, useMemo, type ComponentProps, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import {
+  compareFrontmatterLabels,
   splitMarkdownFrontmatter,
+  type FrontmatterField,
+  type FrontmatterRef,
   type MarkdownFrontmatter,
 } from "../lib/markdownFrontmatter.ts";
 import { Markdown } from "./Markdown.tsx";
+import { useStoredOpen } from "../hooks/useStoredOpen.ts";
+import { useMentionedPaObjectReferences } from "./PaObjectLinks.tsx";
+import { FrontmatterValue, isVocabularyField } from "./frontmatterValues.tsx";
+import {
+  DateProperty,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
+import { Card, CardContent, CardHeader } from "./ui/card.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -23,6 +36,8 @@ import {
  * @avoidWhen Chat or tool-output Markdown: use `Markdown`. Frontmatter only
  * means something at the top of a file.
  */
+type MarkdownProps = ComponentProps<typeof Markdown>;
+
 export function MarkdownFile({
   text,
   ...markdownProps
@@ -31,12 +46,27 @@ export function MarkdownFile({
     () => splitMarkdownFrontmatter(text),
     [text],
   );
+  // A file's text is fetched by its viewer, never seen by the host that
+  // resolves transcript links, so its `pa://` titles come from the app here.
+  const linked = useMentionedPaObjectReferences(text);
+  const paObjectReferences =
+    markdownProps.paObjectReferences ?? linked.references;
+  const onOpenPaObject = markdownProps.onOpenPaObject ?? linked.onOpen;
+  const linkProps = {
+    ...(paObjectReferences ? { paObjectReferences } : {}),
+    ...(onOpenPaObject ? { onOpenPaObject } : {}),
+  };
   return (
     <>
       {frontmatter ? (
-        <MarkdownFrontmatterHeader frontmatter={frontmatter} className="mb-4" />
+        <MarkdownFrontmatterHeader
+          frontmatter={frontmatter}
+          paObjectReferences={paObjectReferences}
+          onOpenPaObject={onOpenPaObject}
+          className="mb-4"
+        />
       ) : null}
-      <Markdown text={body} {...markdownProps} />
+      <Markdown text={body} {...markdownProps} {...linkProps} />
     </>
   );
 }
@@ -44,19 +74,26 @@ export function MarkdownFile({
 /**
  * @component MarkdownFrontmatterHeader
  * @purpose Compact metadata header above a rendered Markdown FILE: its
- * frontmatter title, tags as chips, and every other field as a label/value
- * row. Frontmatter outside the shared YAML subset shows as the raw block in a
+ * frontmatter title, then a `PropertyList` — the tags as chips, and every
+ * other field as a label/value row, in the same label column as everywhere else. Frontmatter outside the shared YAML subset shows as the raw block in a
  * collapsed disclosure instead of leaking into the rendered body.
  * @useWhen Through `MarkdownFile`.
  */
 function MarkdownFrontmatterHeader({
   frontmatter,
+  paObjectReferences,
+  onOpenPaObject,
   className,
 }: {
   frontmatter: MarkdownFrontmatter;
+  /** The body's own link resolution, so a `pa://` source ref reads as its title. */
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
   className?: string;
 }) {
-  const { title, tags, fields, parsed, raw } = frontmatter;
+  const { title, tags, fields, hiddenFields, source, parsed, raw } =
+    frontmatter;
+  const [open, toggleOpen] = useStoredOpen("markdown-metadata", true);
   if (!parsed) {
     return (
       <Collapsible className={className}>
@@ -81,39 +118,220 @@ function MarkdownFrontmatterHeader({
       </Collapsible>
     );
   }
-  if (!title && tags.length === 0 && fields.length === 0) return null;
+  const rows: Array<{ label: string; node: ReactNode }> = [
+    ...(title
+      ? [
+          {
+            label: "Title",
+            node: (
+              <>
+                <PropertyLabel>Title</PropertyLabel>
+                <PropertyText className="break-words">{title}</PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(tags.length > 0
+      ? [
+          {
+            label: "Tags",
+            node: (
+              <>
+                <PropertyLabel>Tags</PropertyLabel>
+                <PropertyText>
+                  <ul className="flex flex-wrap gap-1" aria-label="Tags">
+                    {tags.map((tag, index) => (
+                      <li key={`${index}:${tag}`}>
+                        <Badge variant="outline">{tag}</Badge>
+                      </li>
+                    ))}
+                  </ul>
+                </PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...(source
+      ? [
+          {
+            label: "Source",
+            node: (
+              <>
+                <PropertyLabel>Source</PropertyLabel>
+                <PropertyText className="flex flex-col items-start gap-0.5">
+                  {source.kind ? (
+                    <FrontmatterValue field="kind" value={source.kind} />
+                  ) : null}
+                  {source.refs.length > 0 ? (
+                    <RefLinks
+                      refs={source.refs}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={onOpenPaObject}
+                    />
+                  ) : null}
+                </PropertyText>
+              </>
+            ),
+          },
+        ]
+      : []),
+    ...fields.map((field) => ({
+      label: field.label,
+      node: (
+        <FieldRow
+          field={field}
+          paObjectReferences={paObjectReferences}
+          onOpenPaObject={onOpenPaObject}
+        />
+      ),
+    })),
+  ].sort((a, b) => compareFrontmatterLabels(a.label, b.label));
+  if (
+    !title &&
+    tags.length === 0 &&
+    fields.length === 0 &&
+    hiddenFields.length === 0 &&
+    !source
+  )
+    return null;
   return (
     <header aria-label="Document metadata" className={className}>
-      <Card size="sm">
-        {title ? (
+      <Collapsible open={open} onOpenChange={toggleOpen}>
+        <Card size="sm">
+          {/* A generic name, so the card reads the same on every file; the
+            document's own title is one of its rows. Folded or not is
+            remembered across files. */}
           <CardHeader>
-            <CardTitle>{title}</CardTitle>
+            <CollapsibleTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="-mx-2 w-fit justify-start font-medium"
+                />
+              }
+            >
+              <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+              Metadata
+            </CollapsibleTrigger>
           </CardHeader>
-        ) : null}
-        <CardContent className="flex flex-col gap-2">
-          {tags.length > 0 ? (
-            <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
-              {tags.map((tag, index) => (
-                <li key={`${index}:${tag}`}>
-                  <Badge variant="outline">{tag}</Badge>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {fields.length > 0 ? (
-            <dl className="flex flex-col gap-1 text-muted-foreground">
-              {fields.map((field) => (
-                <div key={field.key} className="flex min-w-0 gap-3">
-                  <dt className="w-28 shrink-0 truncate">{field.key}</dt>
-                  <dd className="min-w-0 break-words" title={field.full}>
-                    {field.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
-        </CardContent>
-      </Card>
+          <CollapsibleContent>
+            <CardContent>
+              <PropertyList align="start">
+                {rows.map((row) => (
+                  <Fragment key={row.label}>{row.node}</Fragment>
+                ))}
+              </PropertyList>
+              {hiddenFields.length > 0 ? (
+                // Bookkeeping a reader rarely needs (the schema, the entry's id):
+                // folded away under the rest, one click from view.
+                <Collapsible className="mt-1">
+                  <CollapsibleTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-muted-foreground"
+                      />
+                    }
+                  >
+                    <ChevronRight className="transition-transform in-aria-expanded:rotate-90" />
+                    {hiddenFields.length} more
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <PropertyList align="start" className="mt-1">
+                      {[...hiddenFields]
+                        .sort((a, b) =>
+                          compareFrontmatterLabels(a.label, b.label),
+                        )
+                        .map((field) => (
+                          <FieldRow
+                            key={field.key}
+                            field={field}
+                            paObjectReferences={paObjectReferences}
+                            onOpenPaObject={onOpenPaObject}
+                          />
+                        ))}
+                    </PropertyList>
+                  </CollapsibleContent>
+                </Collapsible>
+              ) : null}
+            </CardContent>
+          </CollapsibleContent>
+        </Card>
+      </Collapsible>
     </header>
+  );
+}
+
+/** One frontmatter field as a label and its value, formatted by what it holds. */
+function FieldRow({
+  field,
+  paObjectReferences,
+  onOpenPaObject,
+}: {
+  field: FrontmatterField;
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
+}) {
+  return (
+    <>
+      <PropertyLabel>
+        <span className="truncate" title={field.key}>
+          {field.label}
+        </span>
+      </PropertyLabel>
+      {field.date ? (
+        <DateProperty date={field.date} />
+      ) : isVocabularyField(field.key) && !field.links ? (
+        <PropertyText>
+          <FrontmatterValue field={field.key} value={field.value} />
+        </PropertyText>
+      ) : field.links ? (
+        <PropertyText>
+          <RefLinks
+            refs={field.links}
+            paObjectReferences={paObjectReferences}
+            onOpenPaObject={onOpenPaObject}
+          />
+        </PropertyText>
+      ) : (
+        <PropertyText className="break-words" title={field.full}>
+          {field.value}
+        </PropertyText>
+      )}
+    </>
+  );
+}
+
+/**
+ * Frontmatter links, one per line, through the Markdown renderer: a `pa://`
+ * link reads as its object's title and opens in the app, a web link shows its
+ * short name (`sourceRefLabel`) and behaves as every other link does.
+ */
+function RefLinks({
+  refs,
+  paObjectReferences,
+  onOpenPaObject,
+}: {
+  refs: readonly FrontmatterRef[];
+  paObjectReferences: MarkdownProps["paObjectReferences"];
+  onOpenPaObject: MarkdownProps["onOpenPaObject"];
+}) {
+  return (
+    <Markdown
+      density="compact"
+      text={refs
+        .map((ref) =>
+          ref.href.startsWith("pa://")
+            ? ref.href
+            : `[${ref.label.replace(/[[\]]/g, "\\$&")}](<${ref.href}>)`,
+        )
+        .join("\\\n")}
+      {...(paObjectReferences ? { paObjectReferences } : {})}
+      onOpenPaObject={onOpenPaObject}
+    />
   );
 }

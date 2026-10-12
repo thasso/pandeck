@@ -13,6 +13,8 @@ import { flushSync } from "react-dom";
 import {
   ArrowLeft,
   Check,
+  ClipboardList,
+  FolderKanban,
   GitBranch,
   GitPullRequest,
   MessageSquare,
@@ -82,6 +84,7 @@ import {
   ownsScreenEdgeGestures,
 } from "./lib/nativeShell.ts";
 import { pathFromOpenTarget } from "./lib/openTarget.ts";
+import { FloatingComposerDock } from "./components/FloatingComposerDock.tsx";
 import { PerfHud } from "./components/PerfHud.tsx";
 import { recordRender, usePerfRenderCount } from "./lib/perfStats.ts";
 import {
@@ -99,6 +102,7 @@ import {
   type NewPendingChatComment,
 } from "./hooks/usePendingChatComments.ts";
 import {
+  commentDocumentLabel,
   isDocumentComment,
   type PendingChatComment,
 } from "./lib/chatCommentPrompt.ts";
@@ -112,9 +116,20 @@ import {
 import { LoadedMemorySection } from "./components/LoadedMemorySection.tsx";
 import { BackgroundWorkSection } from "./components/BackgroundWorkSection.tsx";
 import { BackgroundWorkLedge } from "./components/BackgroundWorkLedge.tsx";
+import {
+  StagedDocumentLedge,
+  StagedTaskLedge,
+} from "./components/StagedContextLedges.tsx";
+import {
+  PendingCommentsLedge,
+  type CommentLedgeItem,
+} from "./components/PendingCommentsLedge.tsx";
 import { PromptQueueLedge } from "./components/PromptQueueLedge.tsx";
 import { PendingApprovalsLedge } from "./components/PendingApprovalsLedge.tsx";
-import { SpawnedSessionsLedge } from "./components/SpawnedSessionsLedge.tsx";
+import {
+  SessionRowDetailsContext,
+  SpawnedSessionsLedge,
+} from "./components/SpawnedSessionsLedge.tsx";
 import {
   sessionSettleCascade,
   spawnedSessionsKey,
@@ -248,11 +263,13 @@ import {
   ProjectInspector,
   PullRequestInspector,
   SessionInspector,
+  sessionInspectorActions,
   TaskInspector,
   WorktreeInspector,
   worktreeObjectTreeRefs,
   type ObjectOpeners,
   type ObjectRef,
+  type SessionActionInputs,
 } from "./components/objectInspectors.tsx";
 import type { SendCommentsTarget } from "./components/review/SendCommentsSheet.tsx";
 import {
@@ -267,7 +284,11 @@ import {
 import type { CommentActions } from "./components/diff/comments.tsx";
 import { WorktreeReviewSubmitSheet } from "./components/worktree/worktreeReview.tsx";
 import { TaskContextSections } from "./components/TaskContextSections.tsx";
-import { buildProjectsById } from "./lib/projectDisplay.ts";
+import {
+  buildProjectsById,
+  projectColor,
+  projectDisplayKey,
+} from "./lib/projectDisplay.ts";
 import { AppShell } from "./components/shell/AppShell.tsx";
 import {
   DocumentNavigationMarker,
@@ -278,6 +299,7 @@ import { DocumentZoomSection } from "./components/DocumentZoom.tsx";
 import { documentDockPeek } from "./components/DocumentDockRow.tsx";
 import {
   primarySlotShowsReview,
+  PublishRouteSecondaryActions,
   RoutePrimaryActionProvider,
   type RoutePrimaryAction,
 } from "./components/shell/RoutePrimaryAction.tsx";
@@ -302,23 +324,16 @@ import {
   type KnowledgeOpenTargets,
 } from "./components/KnowledgeOpenTargets.tsx";
 import { KnowledgeInspector } from "./components/KnowledgeInspector.tsx";
+import { PaObjectLinkSourceProvider } from "./components/PaObjectLinks.tsx";
 import { useWorktreeCommentWatch } from "./hooks/useCommentWatch.ts";
 import { useMobileLayout } from "./components/shell/useMobileLayout.ts";
 import {
   decodeBoolean,
   useSessionStorageState,
 } from "./hooks/useSessionStorageState.ts";
-import {
-  Composer,
-  PlanModeBadge,
-  type BranchPanelInfo,
-} from "./components/Composer.tsx";
+import { Composer, type BranchPanelInfo } from "./components/Composer.tsx";
 import { SessionWorktreeMissingBanner } from "./components/SessionWorktreeMissingBanner.tsx";
 import type { MarkdownPaObjectReference } from "./components/Markdown.tsx";
-import type {
-  StagedContextData,
-  StagedContextField,
-} from "./components/StagedContext.tsx";
 import {
   NewSessionQuickStart,
   orderProjectsByActivity,
@@ -336,7 +351,6 @@ import { ToastViewport } from "./components/ToastViewport.tsx";
 import { AppStatus } from "./components/AppStatus.tsx";
 import { WorkflowRunStartSheet } from "./components/WorkflowRunStartSheet.tsx";
 import { settleBackgroundWorkflowStarts } from "./lib/workflowStart.ts";
-import { UnreadDot } from "./components/UnreadDot.tsx";
 import {
   useShortcuts,
   type ShortcutGroup,
@@ -428,6 +442,17 @@ type PendingWorktreeReview = {
   worktreeId: string;
   commentIds: string[];
   commentCount: number;
+  /**
+   * What the composer's strip shows of each thread, copied when the review is
+   * staged: the worktree's comment list is only held while its page watches
+   * it, so on the new-session route it is usually gone.
+   */
+  comments: {
+    id: string;
+    body: string;
+    source?: string;
+    code?: { before: string; exact: string; after: string };
+  }[];
   draft: { sessionId: string; text: string; token: number };
 };
 
@@ -542,11 +567,6 @@ const Sidebar = lazy(() =>
     default: module.Sidebar,
   })),
 );
-const BacklogList = lazy(() =>
-  import("./components/BacklogList.tsx").then((module) => ({
-    default: module.BacklogList,
-  })),
-);
 
 if (typeof window !== "undefined") {
   const initialPath = window.location.pathname.replace(/\/$/, "") || "/";
@@ -638,9 +658,12 @@ function useMobileKeyboardInset() {
     const viewport = window.visualViewport;
     const mobileMedia = window.matchMedia("(max-width: 767px)");
 
+    // `data-keyboard-open` is the same estimate as a flag, for chrome that
+    // should step aside while the user types (the `keyboard-open:` variant).
     const reset = () => {
       root.style.removeProperty("--app-keyboard-inset-bottom");
       root.style.removeProperty("--app-composer-bottom-padding");
+      root.removeAttribute("data-keyboard-open");
     };
 
     const isTextInputFocused = () => {
@@ -674,6 +697,7 @@ function useMobileKeyboardInset() {
         `${Math.round(keyboardOverlap)}px`,
       );
       root.style.setProperty("--app-composer-bottom-padding", "0.25rem");
+      root.setAttribute("data-keyboard-open", "");
       window.scrollTo(0, 0);
     };
 
@@ -836,6 +860,14 @@ function AppContent() {
   const credentialProfileProjection = dataOf(credentialProfileFetch.state);
   const credentialProfiles =
     credentialProfileProjection?.profiles ?? NO_CREDENTIAL_PROFILES;
+  // Account names by id, for surfaces that name an account a run or role uses.
+  const accountNames = useMemo(
+    () =>
+      Object.fromEntries(
+        credentialProfiles.map((profile) => [profile.id, profile.name]),
+      ),
+    [credentialProfiles],
+  );
   const activeCredentialProfiles = useMemo(
     () => credentialProfiles.filter((profile) => profile.enabled),
     [credentialProfiles],
@@ -958,6 +990,8 @@ function AppContent() {
     sessionId: string;
     entryId: string;
     token: number;
+    /** Land the row near the top instead of centring it (a comment's passage). */
+    align?: "top";
   } | null>(null);
   /** The `#m-` address already acted on, so staying at it does not re-ask. */
   const revealedHashRef = useRef<string | null>(null);
@@ -1099,13 +1133,6 @@ function AppContent() {
     text: string;
     token: number;
   } | null>(null);
-  /** Token-driven request to open the composer's context sheet on a field (the hero's "All…" card). */
-  const [contextSheetRequest, setContextSheetRequest] = useState<{
-    token: number;
-    field?: StagedContextField;
-  } | null>(null);
-  /** The new-session Task field is the only route-local reason to subscribe to Tasks. */
-  const [taskPickerOpen, setTaskPickerOpen] = useState(false);
   const pendingPreviewSaveRef = useRef<SessionPreview | null>(null);
   const previewSaveTimerRef = useRef<number | null>(null);
   const requestedObjectLinkUris = useRef(new Set<string>());
@@ -1261,8 +1288,6 @@ function AppContent() {
         sidebarVisible: sidebarPanelOpen,
         sidebarSection,
         routeName: route.name,
-        taskPickerOpen:
-          (route.name === "new" || route.name === "sessions") && taskPickerOpen,
         // The workflow start sheet meters accounts and offers Project branches.
         workflowStartOpen: workflowStartTaskId !== null,
         projectSelected: route.name === "projects" && Boolean(route.id),
@@ -1312,7 +1337,6 @@ function AppContent() {
       sidebarPanelOpen,
       sidebarSection,
       route,
-      taskPickerOpen,
       workflowStartTaskId,
       inspectorOpen,
       mobileLayout,
@@ -2765,6 +2789,35 @@ function AppContent() {
     state.connected,
     state.objectLinks,
   ]);
+  // The same resolution for text App never sees — a document a viewer fetched
+  // itself (`useMentionedPaObjectReferences`). Read through a ref so the asking
+  // callback keeps one identity while the lookups behind it change.
+  const objectLinkLookup = useRef({
+    connected: state.connected,
+    objectLinks: state.objectLinks,
+    references: builtPaObjectReferences,
+  });
+  objectLinkLookup.current = {
+    connected: state.connected,
+    objectLinks: state.objectLinks,
+    references: builtPaObjectReferences,
+  };
+  const requestObjectLinks = useCallback(
+    (uris: string[]) => {
+      const { connected, objectLinks, references } = objectLinkLookup.current;
+      if (!connected) return;
+      const missing = uris.filter(
+        (uri) =>
+          !objectLinks[uri] &&
+          !objectLinkCoveredByReferences(uri, references) &&
+          !requestedObjectLinkUris.current.has(uri),
+      );
+      if (missing.length === 0) return;
+      for (const uri of missing) requestedObjectLinkUris.current.add(uri);
+      actions.resolveObjectLinks(createClientId(), missing);
+    },
+    [actions],
+  );
   const loadBacklog = useCallback(() => actions.listTasks({}), [actions]);
   const loadProjects = useCallback(
     () => actions.listProjects({ includeArchived: true }),
@@ -3420,10 +3473,30 @@ function AppContent() {
         state.worktreeComments[worktreeId] ?? [],
         commentIds,
       );
+      const threads = state.worktreeComments[worktreeId] ?? [];
       setPendingWorktreeReview({
         worktreeId,
         commentIds,
         commentCount: commentIds.length,
+        comments: commentIds.map((id) => {
+          const thread = threads.find((comment) => comment.id === id);
+          const at = thread?.current ?? thread?.anchor;
+          const quote = thread?.anchor?.selectors.quote;
+          return {
+            id,
+            body: thread?.body ?? "Review comment",
+            ...(at ? { source: `${at.path}:${at.line}` } : {}),
+            ...(quote?.exact
+              ? {
+                  code: {
+                    before: quote.prefix,
+                    exact: quote.exact,
+                    after: quote.suffix,
+                  },
+                }
+              : {}),
+          };
+        }),
         draft: {
           sessionId: "pending-worktree-review",
           text: reviewSetSelection
@@ -3666,13 +3739,18 @@ function AppContent() {
   const focusedSessionId = messageFocus?.sessionId;
   const focusedEntryId = messageFocus?.entryId;
   const focusToken = messageFocus?.token;
+  const focusAlign = messageFocus?.align;
   const viewedSessionId = displaySession?.sessionId;
   const transcriptFocusEntry = useMemo(
     () =>
       focusedEntryId && focusToken && focusedSessionId === viewedSessionId
-        ? { entryId: focusedEntryId, token: focusToken }
+        ? {
+            entryId: focusedEntryId,
+            token: focusToken,
+            ...(focusAlign ? { align: focusAlign } : {}),
+          }
         : null,
-    [focusedEntryId, focusToken, focusedSessionId, viewedSessionId],
+    [focusedEntryId, focusToken, focusAlign, focusedSessionId, viewedSessionId],
   );
   // A jump is spent once the transcript lands on it: keeping it would replay the
   // jump the next time this session is opened, over the reader's own position —
@@ -3720,10 +3798,13 @@ function AppContent() {
         return;
       }
       const { sessionId, entryId } = comment.anchor;
+      // Near the top, not centred: the floating composer (and its open
+      // comments strip) covers the lower part of the transcript.
       setMessageFocus((current) => ({
         sessionId,
         entryId,
         token: Math.max(Date.now(), (current?.token ?? 0) + 1),
+        align: "top",
       }));
     },
     [navigate],
@@ -3939,14 +4020,14 @@ function AppContent() {
    * either; its own Retry (the narration's) is what re-runs the handoff.
    */
   const firstSendRetryPending = firstSendFailed && stagedSend?.input != null;
-  // The new-session screen needs no header on a phone: it said "New Session" over
-  // a screen that is visibly a new session, its subtitle described a session that
-  // does not exist yet (down to a Copy session ID for a draft), and back moved to
-  // the dock's row. Once the first prompt is sent that stops being true — the
-  // screen is a session being created, and the row carries the identity the
-  // transcript never states plus the bootstrap's progress.
-  const chatHeaderHidden =
-    mobileLayout && route.name === "new" && !sessionShell.bootstrapping;
+  // The new-session screen needs no header on any layout: it said "New Session"
+  // over a screen that is visibly a new session, offered nothing to comment on,
+  // and its subtitle described a session that does not exist yet (down to a
+  // Copy session ID for a draft); on a phone back is in the dock's row. Once the
+  // first prompt is sent that stops being true — the screen is a session being
+  // created, and the row carries the identity the transcript never states plus
+  // the bootstrap's progress.
+  const chatHeaderHidden = route.name === "new" && !sessionShell.bootstrapping;
   const displaySessionTitle =
     route.name === "permanentAssistant"
       ? state.settings.permanentAssistant.name || "Personal Assistant"
@@ -3959,75 +4040,141 @@ function AppContent() {
     (isNewChatRoute
       ? sessionShell.titleGenerationPending
       : displaySessionListItem?.titleGenerationPending === true);
-  const sessionTitleHeading = (
-    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-      <SessionTitleText
-        title={displaySessionTitle}
-        pending={displaySessionTitleGenerationPending}
-      />
-    </h2>
-  );
-  const stagedContextBar: StagedContextData | undefined = showContextPicker
-    ? {
-        value: {
-          projectId: pendingProjectContext,
-          worktreeId: pendingWorktreeContext,
-          newWorktree: pendingNewWorktree,
-          task: pendingTaskAttach,
-          review: pendingWorktreeReview
-            ? { commentCount: pendingWorktreeReview.commentCount }
-            : null,
-          file: pendingFileContext,
-        },
-        projects: orderedPickerProjects,
-        worktrees: orderedWorktrees,
-        tasks: backlogTasks,
-        // Subscription answers distinguish a genuinely empty list from a cold
-        // one. Tasks stay cold until this panel reports its Task field open.
-        projectsLoaded,
-        worktreesLoaded: state.worktrees !== null,
-        tasksLoaded: backlogLoaded,
-        onChangeProject: stageProjectContext,
-        onChangeWorktree: stageWorktreeContext,
-        onChangeNewWorktree: stageNewWorktree,
-        onChangeTask: stageTaskContext,
-        onTaskPickerOpenChange: setTaskPickerOpen,
-        onChangeReview: () => setPendingWorktreeReview(null),
-        onChangeFile: () => setPendingFileContext(null),
-        // Reuse the left-panel Backlog list for the Task field: same rows,
-        // status/project filtering, and drag UI. When a project is already
-        // staged we pin it as the fixed filter (the picker already scopes to it);
-        // otherwise the list's own project filter is available.
-        renderTaskPicker: () => (
-          <Suspense
-            fallback={
-              <div className="px-1 py-2 text-sm text-muted-foreground">
-                Loading tasks…
-              </div>
-            }
-          >
-            <BacklogList
-              state={state}
-              actions={actions}
-              prefs={prefs}
-              onUpdatePrefs={update}
-              selectedId={pendingTaskAttach?.taskId ?? null}
-              onOpenTask={(id) => {
-                const task = backlogTasks.find((t) => t.id === id);
-                stageTaskContext(
-                  task ? { taskId: task.id, title: task.title } : null,
-                );
-              }}
-              fixedProjectId={pendingProjectContext ?? undefined}
-              // A picker, with no secondary affordances to hit: 28px is fine for
-              // tapping a full-width row, and the field it sits in has no room
-              // for a second line per Task.
-              density="tight"
-            />
-          </Suspense>
-        ),
-      }
+  // The header's one compact row holds a second, smaller line when the session
+  // works in a worktree: its branch and uncommitted changes, so the space
+  // beside the title says where the work lands without opening the inspector.
+  const displayWorktreeBranch = displayWorktreeId
+    ? (displayWorktreeStatus?.branch ??
+      state.worktrees?.find((worktree) => worktree.id === displayWorktreeId)
+        ?.branch)
     : undefined;
+  const sessionTitleText = (
+    <SessionTitleText
+      title={displaySessionTitle}
+      pending={displaySessionTitleGenerationPending}
+    />
+  );
+  // The project the session works for: its own, else its worktree's.
+  const displayProjectId =
+    displaySessionListItem?.projectId ??
+    (displayWorktreeId
+      ? state.worktrees?.find((worktree) => worktree.id === displayWorktreeId)
+          ?.projectId
+      : undefined);
+  const displayProject = displayProjectId
+    ? projectsById.get(displayProjectId)
+    : undefined;
+  // The Task it works on: the one it was started from, else the first it links.
+  const displayTask =
+    displaySession?.originTask ?? displaySession?.relatedGlobalTasks?.[0];
+  // The title is a heading; the line under it says where the work lives —
+  // its project and its worktree (branch and uncommitted changes) — and each
+  // of those is a link of its own.
+  const titleLink =
+    "h-auto min-w-0 cursor-pointer justify-start gap-1 p-0 text-left text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline";
+  const sessionTitleHeading =
+    displayProject || displayWorktreeBranch || displayTask ? (
+      <div className="flex min-w-0 flex-col">
+        <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+          {sessionTitleText}
+        </h2>
+        {/* Responsive by its own width (`@container`): the project gives way
+            to its key first, then the branch shortens with an ellipsis — the
+            line never runs into the header's buttons. */}
+        <div className="@container flex min-w-0 items-center justify-start gap-1.5">
+          {[
+            displayProject ? (
+              <Button
+                key="project"
+                variant="link"
+                className={`${titleLink} max-w-1/2 shrink-0`}
+                title={`Open project ${displayProject.name}`}
+                onClick={() => navigate(projectPath(displayProject.id))}
+              >
+                <FolderKanban
+                  aria-hidden
+                  className="size-3 shrink-0"
+                  style={{ color: projectColor(displayProject).dot }}
+                />
+                <span className="hidden min-w-0 truncate @[22rem]:inline">
+                  {displayProject.name}
+                </span>
+                <span className="min-w-0 truncate @[22rem]:hidden">
+                  {projectDisplayKey(displayProject)}
+                </span>
+              </Button>
+            ) : null,
+            displayWorktreeBranch && displayWorktreeId ? (
+              <Button
+                key="worktree"
+                variant="link"
+                className={`${titleLink} shrink`}
+                title="Open this session's worktree changes"
+                onClick={() =>
+                  navigate(worktreePath(displayWorktreeId, "changes"))
+                }
+              >
+                <GitBranch className="size-3 shrink-0" aria-hidden />
+                <span className="min-w-0 truncate font-mono">
+                  {displayWorktreeBranch}
+                </span>
+                {displayWorktreeStatus &&
+                (displayWorktreeStatus.additions > 0 ||
+                  displayWorktreeStatus.deletions > 0) ? (
+                  <span
+                    className="shrink-0 tabular-nums"
+                    title="Uncommitted line changes in the worktree"
+                  >
+                    <span className="text-success">
+                      +{displayWorktreeStatus.additions}
+                    </span>{" "}
+                    <span className="text-destructive">
+                      −{displayWorktreeStatus.deletions}
+                    </span>
+                  </span>
+                ) : null}
+              </Button>
+            ) : null,
+            displayTask ? (
+              <Button
+                key="task"
+                variant="link"
+                className={`${titleLink} max-w-1/3 shrink`}
+                title={`Open task: ${displayTask.title}`}
+                onClick={() => navigate(taskPath(displayTask.id))}
+              >
+                <ClipboardList aria-hidden className="size-3 shrink-0" />
+                {/* The id first: it is what a prompt or a commit names. */}
+                <span className="shrink-0 font-mono">
+                  Task-{displayTask.id}
+                </span>
+                <span className="min-w-0 truncate">{displayTask.title}</span>
+              </Button>
+            ) : null,
+          ]
+            .filter(Boolean)
+            // Project, worktree, task — left to right, a quiet dot between.
+            .flatMap((item, index) =>
+              index === 0
+                ? [item]
+                : [
+                    <span
+                      key={`separator-${index}`}
+                      aria-hidden
+                      className="shrink-0 text-xs text-muted-foreground/60"
+                    >
+                      ·
+                    </span>,
+                    item,
+                  ],
+            )}
+        </div>
+      </div>
+    ) : (
+      <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+        {sessionTitleText}
+      </h2>
+    );
   // The agentType applied to whatever harness the new chat picks (the top-left
   // agent picker drives this for ALL harnesses now).
   const agentTypeForPicker: AgentType = displayAgentType;
@@ -4187,6 +4334,15 @@ function AppContent() {
     ? locksModelAfterStart(displaySession) && runtimeHasStarted
     : false;
   const thinkingLocked = modelLocked;
+  // The account the shown session runs on: fixed at its first prompt, the
+  // staged pick before that. The inspector's Profile and the composer's
+  // runtime line both state it.
+  const displayCredentialProfileId =
+    displaySessionListItem?.credentialProfileId ??
+    (!runtimeHasStarted ? credentialProfileId : undefined);
+  const displayCredentialProfile = credentialProfiles.find(
+    (item) => item.id === displayCredentialProfileId,
+  );
   // Claude SDK models belong only to Claude-driven sessions; disable them in a
   // started pi session. Non-pi sessions are exempt from this restriction.
   const isModelDisabled = useCallback(
@@ -4221,16 +4377,6 @@ function AppContent() {
   const pendingPostReloadContinuation =
     displaySession?.pendingPostReloadContinuation;
   const browserRuntimes = displaySession?.browserRuntimes ?? [];
-  // An explicit history-expansion request replaces the default bounded snapshot
-  // for display; the reducer resets this to null whenever the session changes.
-  const peerPrompts =
-    state.peerPromptHistoryExpanded ?? displaySession?.peerPrompts;
-  // Which bubble is waiting on its jump: resolving where a message lives is a
-  // round trip, so the control that asked says it is working.
-  const peerPromptRevealPendingKey =
-    state.revealRequest?.target.kind === "peerPrompt"
-      ? state.revealRequest.target.messageKey
-      : undefined;
 
   // The inspector resolves related objects from the Backlog and Project lists;
   // make sure both are loaded when an object detail route is open.
@@ -4702,6 +4848,14 @@ function AppContent() {
     },
     [actions, navigate],
   );
+  const paObjectLinkSource = useMemo(
+    () => ({
+      references: builtPaObjectReferences,
+      request: requestObjectLinks,
+      open: openPaObject,
+    }),
+    [builtPaObjectReferences, requestObjectLinks, openPaObject],
+  );
   const openTaskById = useCallback(
     (taskId: string) => navigate(taskPath(taskId)),
     [navigate],
@@ -4774,8 +4928,11 @@ function AppContent() {
   // present), and memoized so the composer does not re-render for every
   // unrelated App render. Its rows are the registry topic's, which the open
   // flag subscribes (`activeTopics`).
+  // Only running work earns the strip: a retained provider host with nothing
+  // left in it is the runtime's bookkeeping, not the user's.
   const backgroundLedgeActivity =
-    route.name === "session"
+    route.name === "session" &&
+    (displaySessionListItem?.backgroundActivity?.activeCount ?? 0) > 0
       ? displaySessionListItem?.backgroundActivity
       : undefined;
   // The session both composer ledges speak for: the one on screen.
@@ -4791,8 +4948,6 @@ function AppContent() {
           onToggle={toggleBackgroundLedge}
           stopPending={backgroundStopPending}
           onStop={actions.stopBackgroundWork}
-          onStopAll={actions.stopAllBackgroundWork}
-          onOpenRegistry={openBackgroundWork}
         />
       ) : undefined,
     [
@@ -4803,8 +4958,6 @@ function AppContent() {
       toggleBackgroundLedge,
       backgroundStopPending,
       actions.stopBackgroundWork,
-      actions.stopAllBackgroundWork,
-      openBackgroundWork,
     ],
   );
   // The composer's spawned-session ledge: the peers THIS session started, shaped
@@ -4841,6 +4994,33 @@ function AppContent() {
       ),
     [ledgeSessionId],
   );
+  // A spawned peer's account and branch, for its expanded row in the strip. The
+  // branch comes from the worktree status cache first (held without the
+  // worktrees topic, as the Sessions inbox reads it), the list second.
+  const describeSpawnedSession = useCallback(
+    (session: SessionListItem) => {
+      const worktreeId = session.worktreeId;
+      return {
+        account: credentialProfiles.find(
+          (profile) => profile.id === session.credentialProfileId,
+        )?.name,
+        branch: worktreeId
+          ? (state.worktreeStatuses[worktreeId]?.branch ??
+            state.worktrees?.find((worktree) => worktree.id === worktreeId)
+              ?.branch)
+          : undefined,
+        // Only once the list has answered: a session whose worktree is not in
+        // it ran in one that has since been removed.
+        worktreeGone: Boolean(
+          worktreeId &&
+          state.worktrees &&
+          !state.worktreeStatuses[worktreeId] &&
+          !state.worktrees.some((worktree) => worktree.id === worktreeId),
+        ),
+      };
+    },
+    [credentialProfiles, state.worktreeStatuses, state.worktrees],
+  );
   // Gated on what the strip DRAWS (`spawnedSessionsKey`), exactly as the
   // Backlog's session slice is: the projection above is rebuilt on every
   // rebroadcast, `Composer` is memoized, and a ledge node rebuilt with it would
@@ -4861,6 +5041,7 @@ function AppContent() {
       ledgeSessionId ? (
         <SpawnedSessionsLedge
           sessionId={ledgeSessionId}
+          describeSession={describeSpawnedSession}
           view={spawnedLedgeView}
           open={spawnedLedgeOpen}
           onToggle={toggleSpawnedLedge}
@@ -4877,6 +5058,7 @@ function AppContent() {
       openSession,
       toggleSpawnedSettled,
       settleSession,
+      describeSpawnedSession,
     ],
   );
   // The composer's pending-approval strip: the cards the viewed session is
@@ -4906,6 +5088,32 @@ function AppContent() {
   const queueSessionId =
     route.name === "session" ? displaySession?.sessionId : undefined;
   const sendPromptQueue = actions.promptQueue;
+  const shownPromptQueue = queueSessionId
+    ? displaySession?.promptQueue
+    : undefined;
+  // Alt+Enter queues a message AND steers it in at once, so it is seen in the
+  // queue on its way. The server names the row, so the steer waits for the
+  // queue update that brings a new row with exactly this text.
+  const pendingSteerRef = useRef<{
+    sessionId: string;
+    text: string;
+    knownIds: ReadonlySet<string>;
+  } | null>(null);
+  const shownPromptQueueRef = useRef(shownPromptQueue);
+  shownPromptQueueRef.current = shownPromptQueue;
+  // A queued message shows in the strip the moment it is sent ("Queuing…"),
+  // not only once the server's queue update has made the round trip — which
+  // on a busy server took seconds with nothing on screen. Matched like the
+  // Alt+Enter steer: the first NEW row with exactly this text replaces it.
+  const [queuingLocally, setQueuingLocally] = useState<
+    {
+      key: string;
+      sessionId: string;
+      text: string;
+      knownIds: ReadonlySet<string>;
+      at: number;
+    }[]
+  >([]);
   const queuePrompt = useMemo(
     () =>
       queueSessionId
@@ -4913,38 +5121,106 @@ function AppContent() {
             text: string;
             attachments?: PromptAttachment[];
             command?: { name: string; rawArgs: string };
-          }) =>
+            steerNow?: boolean;
+          }) => {
+            const { steerNow, ...queued } = item;
+            const knownIds = new Set(
+              (shownPromptQueueRef.current?.items ?? []).map((row) => row.id),
+            );
+            if (steerNow && !queued.command)
+              pendingSteerRef.current = {
+                sessionId: queueSessionId,
+                text: queued.text,
+                knownIds,
+              };
+            setQueuingLocally((current) => [
+              ...current,
+              {
+                key: createClientId(),
+                sessionId: queueSessionId,
+                text: queued.text,
+                knownIds,
+                at: Date.now(),
+              },
+            ]);
             sendPromptQueue({
               type: "queuePrompt",
               sessionId: queueSessionId,
-              ...item,
-            })
+              ...queued,
+            });
+          }
         : undefined,
     [queueSessionId, sendPromptQueue],
   );
-  const shownPromptQueue = queueSessionId
-    ? displaySession?.promptQueue
-    : undefined;
+  // Retire an optimistic row once the server's queue carries it, and give up
+  // on one the server never confirmed after a while.
+  useEffect(() => {
+    setQueuingLocally((current) => {
+      if (current.length === 0) return current;
+      const items = shownPromptQueue?.items ?? [];
+      const now = Date.now();
+      const next = current.filter(
+        (local) =>
+          now - local.at < 20_000 &&
+          !items.some(
+            (item) => !local.knownIds.has(item.id) && item.text === local.text,
+          ),
+      );
+      return next.length === current.length ? current : next;
+    });
+  }, [shownPromptQueue]);
+  useEffect(() => {
+    if (queuingLocally.length === 0) return;
+    const timer = window.setTimeout(
+      () =>
+        setQueuingLocally((current) =>
+          current.filter((local) => Date.now() - local.at < 20_000),
+        ),
+      20_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [queuingLocally]);
+  const shownQueuingLocally = useMemo(
+    () =>
+      queuingLocally
+        .filter((local) => local.sessionId === queueSessionId)
+        .map(({ key, text }) => ({ key, text })),
+    [queuingLocally, queueSessionId],
+  );
+  useEffect(() => {
+    const pending = pendingSteerRef.current;
+    if (!pending || !shownPromptQueue) return;
+    if (pending.sessionId !== queueSessionId) {
+      pendingSteerRef.current = null;
+      return;
+    }
+    const row = shownPromptQueue.items.find(
+      (item) => !pending.knownIds.has(item.id) && item.text === pending.text,
+    );
+    if (!row) return;
+    pendingSteerRef.current = null;
+    sendPromptQueue({
+      type: "sendQueuedPromptNow",
+      sessionId: pending.sessionId,
+      id: row.id,
+    });
+  }, [shownPromptQueue, queueSessionId, sendPromptQueue]);
   const shownQueuedPeers = queueSessionId
     ? displaySession?.queuedPeerPrompts
     : undefined;
   const sessionCanSteer = Boolean(displaySession?.canSteer);
   const promptQueueLedge = useMemo(
     () =>
-      (shownPromptQueue || shownQueuedPeers) && queueSessionId ? (
+      (shownPromptQueue ||
+        shownQueuingLocally.length > 0 ||
+        (shownQueuedPeers?.length ?? 0) > 0) &&
+      queueSessionId ? (
         <PromptQueueLedge
           queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
+          queuing={shownQueuingLocally}
           peers={shownQueuedPeers}
           running={displayStreaming}
           canSteer={sessionCanSteer}
-          onEdit={(id, text) =>
-            sendPromptQueue({
-              type: "updateQueuedPrompt",
-              sessionId: queueSessionId,
-              id,
-              text,
-            })
-          }
           onRemove={(id) =>
             sendPromptQueue({
               type: "removeQueuedPrompt",
@@ -4952,25 +5228,11 @@ function AppContent() {
               id,
             })
           }
-          onMove={(id, toIndex) =>
-            sendPromptQueue({
-              type: "moveQueuedPrompt",
-              sessionId: queueSessionId,
-              id,
-              toIndex,
-            })
-          }
           onSendNow={(id) =>
             sendPromptQueue({
               type: "sendQueuedPromptNow",
               sessionId: queueSessionId,
               id,
-            })
-          }
-          onClear={() =>
-            sendPromptQueue({
-              type: "clearPromptQueue",
-              sessionId: queueSessionId,
             })
           }
           onResume={() =>
@@ -4998,6 +5260,7 @@ function AppContent() {
       ) : undefined,
     [
       shownPromptQueue,
+      shownQueuingLocally,
       shownQueuedPeers,
       openSession,
       queueSessionId,
@@ -5006,23 +5269,161 @@ function AppContent() {
       sendPromptQueue,
     ],
   );
-  // One shelf, up to four strips on it: what waits on the user on top, then
-  // the peers, background work, and the user's own queue on the edge nearest
-  // the field it was typed in.
+  // The comments riding with the next prompt, as a strip of their own.
+  const pendingComments = chatComments.comments;
+  const pendingCommentItems = useMemo<CommentLedgeItem[]>(
+    () =>
+      pendingComments.map((comment) => ({
+        id: comment.id,
+        body: comment.body,
+        source:
+          comment.anchor.kind === "document"
+            ? commentDocumentLabel(comment.anchor.document)
+            : undefined,
+        quote: comment.quote,
+        wholeDocument: comment.quote === undefined,
+      })),
+    [pendingComments],
+  );
+  const revealPendingComment = useCallback(
+    (id: string) => {
+      const comment = pendingComments.find((item) => item.id === id);
+      if (comment) revealChatComment(comment);
+    },
+    [pendingComments, revealChatComment],
+  );
+  const pendingCommentsLedge = useMemo(
+    () =>
+      pendingCommentItems.length > 0 ? (
+        <PendingCommentsLedge
+          items={pendingCommentItems}
+          activeCommentId={chatComments.activeCommentId}
+          onSelect={chatComments.select}
+          onRemove={chatComments.remove}
+          onClear={chatComments.clear}
+          onReveal={revealPendingComment}
+        />
+      ) : undefined,
+    [
+      pendingCommentItems,
+      chatComments.activeCommentId,
+      chatComments.select,
+      chatComments.remove,
+      chatComments.clear,
+      revealPendingComment,
+    ],
+  );
+  // A worktree review staged for a new session rides the same strip as chat
+  // comments: its threads, by file and line, each removable from the handoff.
+  const stagedReview = isNewChatRoute ? pendingWorktreeReview : null;
+  const reviewCommentItems = useMemo<CommentLedgeItem[]>(
+    () =>
+      stagedReview
+        ? stagedReview.comments.filter((comment) =>
+            stagedReview.commentIds.includes(comment.id),
+          )
+        : [],
+    [stagedReview],
+  );
+  const removeReviewComment = useCallback((id: string) => {
+    setPendingWorktreeReview((review) => {
+      if (!review) return review;
+      const commentIds = review.commentIds.filter((value) => value !== id);
+      return commentIds.length > 0
+        ? { ...review, commentIds, commentCount: commentIds.length }
+        : null;
+    });
+  }, []);
+  const clearReviewComments = useCallback(
+    () => setPendingWorktreeReview(null),
+    [],
+  );
+  const reviewCommentsLedge = useMemo(
+    () =>
+      reviewCommentItems.length > 0 ? (
+        <PendingCommentsLedge
+          items={reviewCommentItems}
+          noun="review comment"
+          onRemove={removeReviewComment}
+          onClear={clearReviewComments}
+        />
+      ) : undefined,
+    [reviewCommentItems, removeReviewComment, clearReviewComments],
+  );
+  // A session started from a document says so on the shelf until it is sent:
+  // the composer carries no context chips.
+  const stagedDocument = isNewChatRoute ? pendingFileContext : null;
+  const stagedDocumentLedge = useMemo(
+    () =>
+      stagedDocument ? (
+        <StagedDocumentLedge
+          document={stagedDocument}
+          onOpen={() => navigate(stagedDocument.href)}
+          onRemove={() => setPendingFileContext(null)}
+        />
+      ) : undefined,
+    [stagedDocument, navigate],
+  );
+  // The Task a new session will work on, stated the same way as a document.
+  const stagedTask = isNewChatRoute ? pendingTaskAttach : null;
+  const stagedTaskDetail = stagedTask
+    ? state.taskDetails[stagedTask.taskId]
+    : undefined;
+  const requestTaskDetail = actions.requestTaskDetail;
+  const stagedTaskLedge = useMemo(
+    () =>
+      stagedTask ? (
+        <StagedTaskLedge
+          task={stagedTask}
+          detail={stagedTaskDetail}
+          onRequestDetail={() => requestTaskDetail(stagedTask.taskId)}
+          onOpen={() => navigate(taskPath(stagedTask.taskId))}
+          onRemove={() => stageTaskContext(null)}
+        />
+      ) : undefined,
+    [
+      stagedTask,
+      stagedTaskDetail,
+      requestTaskDetail,
+      navigate,
+      stageTaskContext,
+    ],
+  );
+  // One shelf, up to five strips on it: what waits on the user on top, then
+  // the peers, background work, and on the edge nearest the field what the
+  // user wrote that is still to go — the queue, then the comments that ride
+  // with the next prompt.
   const composerLedge = useMemo(
     () =>
       pendingApprovalsLedge ||
       spawnedLedge ||
       backgroundLedge ||
-      promptQueueLedge ? (
+      promptQueueLedge ||
+      stagedTaskLedge ||
+      stagedDocumentLedge ||
+      reviewCommentsLedge ||
+      pendingCommentsLedge ? (
         <>
           {pendingApprovalsLedge}
           {spawnedLedge}
           {backgroundLedge}
           {promptQueueLedge}
+          {stagedTaskLedge}
+          {stagedDocumentLedge}
+          {reviewCommentsLedge}
+          {pendingCommentsLedge}
         </>
       ) : undefined,
-    [pendingApprovalsLedge, spawnedLedge, backgroundLedge, promptQueueLedge],
+    [
+      pendingApprovalsLedge,
+      spawnedLedge,
+      backgroundLedge,
+      promptQueueLedge,
+      stagedTaskLedge,
+      stagedDocumentLedge,
+      reviewCommentsLedge,
+      pendingCommentsLedge,
+    ],
   );
 
   const runNavAction = useCallback(
@@ -5071,25 +5472,20 @@ function AppContent() {
     submitComposerRef.current?.();
   }, [mobileLayout, setInspectorOpen]);
 
-  // The dock row's comment press, when a transcript selection has taken over its
-  // Send slot. Capturing the anchor alone leaves nothing on screen on a phone: the
-  // comment box lives in the composer, which is HIDDEN there until something opens
-  // it. So the composer is opened inside this tap — synchronously, like compose and
-  // the paperclip, or iOS keeps the keyboard down — and the anchor is captured after,
+  // The session header's Comment press, on a captured transcript selection.
+  // Capturing the anchor alone leaves nothing on screen on a phone: the comment
+  // box lives in the composer, which is HIDDEN there until something opens it. So
+  // the composer is opened inside this tap — synchronously, like compose and the
+  // paperclip, or iOS keeps the keyboard down — and the anchor is captured after,
   // since opening focuses the textarea and comment mode wants that caret.
-  const commentFromDock = useCallback(() => {
+  // On desktop the composer is always on screen, so the press only captures the
+  // anchor and comment mode focuses its own field: focusing it here first would
+  // hand the caret to the transcript's `removeAllRanges` and lose it.
+  const commentOnSelection = useCallback(() => {
     if (mobileLayout) setInspectorOpen(false);
-    openComposerRef.current?.();
+    if (mobileLayout) openComposerRef.current?.();
     chatCommentSelection?.onComment();
   }, [chatCommentSelection, mobileLayout, setInspectorOpen]);
-
-  // The dock row's staged-context control on the new-session screen: the same sheet the
-  // composer's own `+` opens, requested from outside (the composer knows not to grab
-  // focus for an external open — nobody was typing).
-  const openContextFromDock = useCallback(() => {
-    if (mobileLayout) setInspectorOpen(false);
-    setContextSheetRequest((current) => ({ token: (current?.token ?? 0) + 1 }));
-  }, [mobileLayout, setInspectorOpen]);
 
   // The expanded composer's mic hands over to the dock's row: it has already
   // remembered its caret and dropped focus, so closing it reveals the row and this
@@ -5328,20 +5724,14 @@ function AppContent() {
               draft={composerDraft}
               onCompose={openComposer}
               onSubmit={submitFromDock}
-              commentSelection={chatCommentSelection}
-              onComment={chatCommentSelection ? commentFromDock : undefined}
-              // Beside back: what this conversation is about. A session that has not
-              // been sent yet is about nothing yet, so there the slot carries the same
-              // staged-context picker the composer's `+` opens (exactly while that
-              // sheet exists), and a session that hangs off nothing at all falls back
-              // to the composer's paperclip.
+              // Beside back: what this conversation is about; a session that
+              // hangs off nothing (including one not sent yet) falls back to the
+              // composer's paperclip.
               contextSlot={
-                showContextPicker
-                  ? { kind: "add-context", onRun: openContextFromDock }
-                  : (dockSessionContext ?? {
-                      kind: "attach",
-                      onRun: attachFromDock,
-                    })
+                dockSessionContext ?? {
+                  kind: "attach",
+                  onRun: attachFromDock,
+                }
               }
               dictation={{
                 enabled: state.settings.speechToText.enabled,
@@ -5417,12 +5807,8 @@ function AppContent() {
     composerDraft,
     openComposer,
     submitFromDock,
-    chatCommentSelection,
-    commentFromDock,
     actions,
     dockSessionContext,
-    showContextPicker,
-    openContextFromDock,
     attachFromDock,
     state.connected,
     routeSessionPending,
@@ -5445,6 +5831,17 @@ function AppContent() {
       navigate(path);
     },
     [mobileLayout, navigate, setInspectorOpen],
+  );
+
+  // Session rows in the object panel resolve their account and worktree the
+  // way the composer strip's do, and open the worktree as the panel opens
+  // anything (`SessionRowDetailsContext`).
+  const sessionRowDetails = useMemo(
+    () => ({
+      describe: describeSpawnedSession,
+      onOpenWorktree: (id: string) => navigateFromInspector(worktreePath(id)),
+    }),
+    [describeSpawnedSession, navigateFromInspector],
   );
 
   // Every hook the Project page needs is derived HERE, above the loading
@@ -5512,54 +5909,6 @@ function AppContent() {
     (link: MarkdownPaObjectReference) => navigate(link.href),
     [navigate],
   );
-  const renderProjectTasks = useCallback(
-    (projectId: string) => (
-      <Suspense
-        fallback={
-          <div
-            role="status"
-            aria-label="Loading Project tasks"
-            className="flex flex-col gap-2 px-1 py-2"
-          >
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-16 w-full" />
-          </div>
-        }
-      >
-        <BacklogList
-          state={backlogState}
-          actions={actions}
-          prefs={prefs}
-          onUpdatePrefs={update}
-          selectedId={null}
-          onOpenTask={openTaskById}
-          onOpenSession={openSession}
-          onStartSessionForTask={startSessionForTask}
-          onNavigate={openBacklogRowLink}
-          hosting={worktreeHosting.hosting}
-          dirtyWorktrees={dirtyWorktrees}
-          workflowIndicators={workflowIndicators}
-          fixedProjectId={projectId}
-          density="comfortable"
-          showAddTask
-        />
-      </Suspense>
-    ),
-    [
-      actions,
-      backlogState,
-      dirtyWorktrees,
-      openBacklogRowLink,
-      openSession,
-      openTaskById,
-      prefs,
-      startSessionForTask,
-      update,
-      workflowIndicators,
-      worktreeHosting.hosting,
-    ],
-  );
-
   if (showLoadingShell) {
     return (
       <LoadingShell
@@ -5614,8 +5963,6 @@ function AppContent() {
           chatComments={chatComments}
           commentDraft={chatCommentDraft}
           onCommentDraftChange={setChatCommentDraft}
-          onAddComment={chatCommentSelection?.onComment}
-          onRevealComment={revealChatComment}
           draft={
             pendingWorktreeReview?.draft ??
             sessionReviewDraft ??
@@ -5626,8 +5973,7 @@ function AppContent() {
           // would open the keyboard over the quick-start rows before anything is picked.
           draftAutoFocus={!mobileLayout}
           branchInfo={branchInfo}
-          contextBar={stagedContextBar}
-          contextOpenRequest={contextSheetRequest}
+          reserveHintSlot={showContextPicker}
           sendBlockedReason={
             newSessionNeedsWorktree
               ? "Developer sessions run in a worktree — pick one to continue."
@@ -5653,6 +5999,7 @@ function AppContent() {
           isModelDisabled={isModelDisabled}
           modelLocked={modelLocked}
           thinkingLocked={thinkingLocked}
+          accountName={displayCredentialProfile?.name}
           hideRuntimeControls={route.name === "permanentAssistant"}
           ledge={composerLedge}
           selectedAgentType={
@@ -5704,79 +6051,77 @@ function AppContent() {
 
     if (displayHasMessages || transcriptOnlyHasOlderMessages) {
       return (
-        <>
-          {/* Commit DURATION of the transcript subtree, for the dev HUD: the
-              render counts say how often it redraws, this says what one redraw
-              costs (a no-op outside profiling builds). */}
-          <Profiler id="Transcript" onRender={recordTranscriptRender}>
-            <Suspense fallback={<TranscriptChunkFallback />}>
-              <MessageList
-                sessionId={displayCurrentId}
-                messages={displayMessagesWithPeerPromptOverrides}
-                timeline={state.timeline}
-                chatComments={chatComments}
-                commentDraft={chatCommentDraft}
-                onCommentDraftChange={setChatCommentDraft}
-                onCommentSelectionChange={onChatCommentSelectionChange}
-                sessionStreaming={displayStreaming}
-                promptQueueStates={state.promptQueueStates}
-                appearance={state.settings.appearance}
-                sessionCanSteer={Boolean(displaySession?.canSteer)}
-                sessions={state.sessions}
-                changedFiles={workspaceChangedFiles}
-                paObjectReferences={paObjectReferences}
-                onOpenPaObject={openPaObject}
-                view={transcriptView}
-                onAcceptCommitDryRun={actions.acceptCommitDryRun}
-                onCreateDraftSession={actions.createDraftSession}
-                models={messageModels}
-                defaultModel={displaySession?.model}
-                defaultThinkingLevel={displaySession?.thinkingLevel}
-                onForkMessage={forkMessage}
-                onResendPrompt={resendPrompt}
-                onOpenSession={openSession}
-                onOpenChangedFile={openWorkspaceFile}
-                onOpenTask={openTaskById}
-                onOpenBackgroundWork={openBackgroundWork}
-                onOpenWorktree={openWorktree}
-                onRetryWorktreeProvision={onRetryWorktreeProvision}
-                onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
-                onResolveApproval={actions.resolveApproval}
-                approvalGrants={approvalGrants}
-                onRevokeApprovalGrant={actions.revokeApprovalGrant}
-                accountModels={settingsAccountModels}
-                onChoosePullRequestTask={actions.choosePullRequestTask}
-                onPullRequestCardAction={runPullRequestCardAction}
-                pendingQuestion={displaySession?.pendingQuestion}
-                answeredQuestions={displaySession?.answeredQuestions}
-                onRespondToQuestion={respondToQuestion}
-                onLoadTimelineBlock={actions.loadTimelineBlock}
-                onLiveBodyDemand={actions.setLiveBodyDemand}
-                turnStatsSeed={transcriptTurnStatsSeed}
-                hasOlderMessages={hasOlderTimelineEntries}
-                loadingOlderMessages={state.timelineRangePending !== null}
-                onLoadOlderMessages={actions.loadOlderTimeline}
-                focusEntry={transcriptFocusEntry}
-                onFocusEntryApplied={retireMessageFocus}
-                forkBoundary={transcriptForkBoundary}
-                pinToBottomToken={transcriptPinToken}
-                onRegisterViewHold={registerTranscriptViewHold}
-                loadingPreview={usePreview}
-                onPreviewInteraction={markPreviewInteracted}
-              />
-            </Suspense>
-          </Profiler>
-          {bootstrapNarrationEl}
-          <div
-            className="relative z-10 shrink-0 bg-transparent transition-transform duration-150 ease-out"
-            style={{
-              transform:
-                "translateY(calc(-1 * var(--app-keyboard-inset-bottom, 0px)))",
-            }}
-          >
-            {composerEl}
-          </div>
-        </>
+        <FloatingComposerDock
+          transcript={
+            // Commit DURATION of the transcript subtree, for the dev HUD: the
+            // render counts say how often it redraws, this says what one redraw
+            // costs (a no-op outside profiling builds).
+            <Profiler id="Transcript" onRender={recordTranscriptRender}>
+              <Suspense fallback={<TranscriptChunkFallback />}>
+                <MessageList
+                  sessionId={displayCurrentId}
+                  messages={displayMessagesWithPeerPromptOverrides}
+                  timeline={state.timeline}
+                  chatComments={chatComments}
+                  commentDraft={chatCommentDraft}
+                  onCommentDraftChange={setChatCommentDraft}
+                  onCommentSelectionChange={onChatCommentSelectionChange}
+                  sessionStreaming={displayStreaming}
+                  promptQueueStates={state.promptQueueStates}
+                  appearance={state.settings.appearance}
+                  sessionCanSteer={Boolean(displaySession?.canSteer)}
+                  sessions={state.sessions}
+                  changedFiles={workspaceChangedFiles}
+                  paObjectReferences={paObjectReferences}
+                  onOpenPaObject={openPaObject}
+                  view={transcriptView}
+                  onAcceptCommitDryRun={actions.acceptCommitDryRun}
+                  onCreateDraftSession={actions.createDraftSession}
+                  models={messageModels}
+                  defaultModel={displaySession?.model}
+                  defaultThinkingLevel={displaySession?.thinkingLevel}
+                  onForkMessage={forkMessage}
+                  onResendPrompt={resendPrompt}
+                  onOpenSession={openSession}
+                  onOpenChangedFile={openWorkspaceFile}
+                  onOpenTask={openTaskById}
+                  onOpenBackgroundWork={openBackgroundWork}
+                  onOpenWorktree={openWorktree}
+                  onRetryWorktreeProvision={onRetryWorktreeProvision}
+                  onApplyTaskStatusSuggestion={applyTaskStatusSuggestion}
+                  onResolveApproval={actions.resolveApproval}
+                  approvalGrants={approvalGrants}
+                  onRevokeApprovalGrant={actions.revokeApprovalGrant}
+                  accountModels={settingsAccountModels}
+                  onChoosePullRequestTask={actions.choosePullRequestTask}
+                  onPullRequestCardAction={runPullRequestCardAction}
+                  pendingQuestion={displaySession?.pendingQuestion}
+                  answeredQuestions={displaySession?.answeredQuestions}
+                  onRespondToQuestion={respondToQuestion}
+                  onLoadTimelineBlock={actions.loadTimelineBlock}
+                  onLiveBodyDemand={actions.setLiveBodyDemand}
+                  turnStatsSeed={transcriptTurnStatsSeed}
+                  hasOlderMessages={hasOlderTimelineEntries}
+                  loadingOlderMessages={state.timelineRangePending !== null}
+                  onLoadOlderMessages={actions.loadOlderTimeline}
+                  focusEntry={transcriptFocusEntry}
+                  onFocusEntryApplied={retireMessageFocus}
+                  forkBoundary={transcriptForkBoundary}
+                  pinToBottomToken={transcriptPinToken}
+                  onRegisterViewHold={registerTranscriptViewHold}
+                  loadingPreview={usePreview}
+                  onPreviewInteraction={markPreviewInteracted}
+                />
+              </Suspense>
+            </Profiler>
+          }
+          dock={
+            <>
+              {bootstrapNarrationEl}
+              {composerEl}
+            </>
+          }
+        />
       );
     }
 
@@ -5839,14 +6184,6 @@ function AppContent() {
               agentTypes={availableAgentTypes}
               selectedAgentType={agentTypeForPicker}
               onSelectAgentType={switchStagedAgentType}
-              // The hero states Build/Plan next to the persona that has the
-              // axis; the composer's pill stays the in-conversation control.
-              mode={
-                hasModeAxis({ agentType: agentTypeForPicker })
-                  ? (displaySession?.mode ?? "build")
-                  : undefined
-              }
-              onSelectMode={(next) => runtimeActions.setSessionMode(next)}
               worktrees={orderedWorktrees}
               worktreesLoaded={state.worktrees !== null}
               projects={orderedPickerProjects}
@@ -5857,12 +6194,6 @@ function AppContent() {
               onSelectWorktree={stageWorktreeContext}
               newWorktreeStaged={pendingNewWorktree}
               onSelectNewWorktree={stageNewWorktree}
-              onOpenPicker={() =>
-                setContextSheetRequest({
-                  token: Date.now(),
-                  field: "worktree",
-                })
-              }
               models={pickerModels}
               selectedModel={displaySession?.model}
               onSelectModel={(m) => runtimeActions.setModel(m.provider, m.id)}
@@ -5961,6 +6292,11 @@ function AppContent() {
           state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
         )}
         onOpenKnowledge={openKnowledge}
+        knowledgeFilePath={route.name === "knowledge" ? route.path : null}
+        knowledgeRefreshToken={
+          state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]?.updatedAt ?? 0
+        }
+        onOpenKnowledgeFile={openKnowledgeFile}
         onLoadWorktrees={actions.listWorktrees}
         onOpenWorktree={openWorktree}
         onStartSessionInWorktree={startSessionInWorktree}
@@ -6039,11 +6375,67 @@ function AppContent() {
     route.name === "tasks" && route.id
       ? backlogTasks.find((t) => t.id === route.id)
       : undefined;
+  // The session's actions (`sessionInspectorActions`): published by the
+  // session header into its ⋮ on every layout, since on a phone the inspector
+  // only mounts while its sheet is open.
+  const sessionActionInputs: SessionActionInputs = {
+    sessionId: displayCurrentId,
+    sessions: state.sessions,
+    // Settling is the same command the inbox card sends, guarded by the same
+    // shared reason — the CLUSTER's, since the command shelves the peers this
+    // session coordinates along with it.
+    onSettle: displaySessionListItem
+      ? () =>
+          settleSession(
+            displaySessionListItem.id,
+            displaySessionListItem.settledAt === undefined,
+          )
+      : undefined,
+    settled: displaySessionListItem?.settledAt !== undefined,
+    ...(displaySessionListItem
+      ? (() => {
+          const { blocked } = sessionSettleCascade(
+            displaySessionListItem.id,
+            state.sessions,
+            state.workflowRuns,
+            state.workflowCards,
+          );
+          return blocked ? { settleBlockedReason: blocked } : {};
+        })()
+      : {}),
+    onRename: displaySessionListItem
+      ? () => promptRenameSession(displaySessionListItem.id)
+      : undefined,
+    onArchive: displaySessionListItem
+      ? () => archiveSession(displaySessionListItem.id)
+      : undefined,
+    onDelete: displaySessionListItem
+      ? () => confirmDeleteSession(displaySessionListItem.id)
+      : undefined,
+    onOpenWorktreeChanges: displayWorktreeId
+      ? () => navigate(worktreePath(displayWorktreeId, "changes"))
+      : undefined,
+    // Mirrors the composer's /review guards: something to review, and never
+    // while the agent is streaming (a second agent on a live working tree).
+    onReviewWork:
+      displayHasUserPrompt && !displayStreaming
+        ? () => {
+            const error = startReviewSessionForSession();
+            if (error) showToast(error);
+          }
+        : undefined,
+    // Taking a spawned peer over is explicit: messaging it is a poke and
+    // leaves its coordinator in charge.
+    onSetSpawnOwnership: displaySessionListItem?.spawnedBySessionId
+      ? (ownership: SettableSpawnOwnership) =>
+          actions.setSpawnOwnership(displaySessionListItem.id, ownership)
+      : undefined,
+  };
   const rightPanelContent =
     route.name === "tasks" && route.id ? (
       <TaskInspector
         task={inspectedTask}
-        tasks={backlogTasks}
+
         sessions={state.sessions}
         openers={inspectorOpeners}
         onStartSession={startSessionForTask}
@@ -6178,6 +6570,7 @@ function AppContent() {
           state={pullRequestDetail}
           projects={projects}
           joins={pullRequestJoins}
+          worktreeStatuses={state.worktreeStatuses}
           openers={inspectorOpeners}
           onStartSession={startSessionInWorktree}
           onReview={startPullRequestReviewDraft}
@@ -6204,17 +6597,14 @@ function AppContent() {
         relatedTasks={relatedGlobalTasks}
         sessionTasks={sessionTasks}
         forkOrigin={displaySession?.forkOrigin}
-        credentialProfile={(() => {
-          const profileId =
-            displaySessionListItem?.credentialProfileId ??
-            (!runtimeHasStarted ? credentialProfileId : undefined);
-          const profile = credentialProfiles.find(
-            (item) => item.id === profileId,
-          );
-          return profile
-            ? { name: profile.name, provider: profile.provider }
-            : undefined;
-        })()}
+        credentialProfile={
+          displayCredentialProfile
+            ? {
+                name: displayCredentialProfile.name,
+                provider: displayCredentialProfile.provider,
+              }
+            : undefined
+        }
         // Before the first prompt the runtime is still the staged selection, the
         // same one the composer's pickers show.
         model={
@@ -6238,78 +6628,9 @@ function AppContent() {
           );
         })()}
         worktreeStatus={displayWorktreeStatus}
+        peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}
-        // Settling from the panel is the same command the inbox card sends,
-        // guarded by the same shared reason — the CLUSTER's, since the command
-        // shelves the peers this session coordinates along with it.
-        onSettle={
-          displaySessionListItem
-            ? () =>
-                settleSession(
-                  displaySessionListItem.id,
-                  displaySessionListItem.settledAt === undefined,
-                )
-            : undefined
-        }
-        settled={displaySessionListItem?.settledAt !== undefined}
-        {...(displaySessionListItem
-          ? (() => {
-              const { blocked } = sessionSettleCascade(
-                displaySessionListItem.id,
-                state.sessions,
-                state.workflowRuns,
-                state.workflowCards,
-              );
-              return blocked ? { settleBlockedReason: blocked } : {};
-            })()
-          : {})}
-        onRename={
-          displaySessionListItem
-            ? () => promptRenameSession(displaySessionListItem.id)
-            : undefined
-        }
-        onArchive={
-          displaySessionListItem
-            ? () => archiveSession(displaySessionListItem.id)
-            : undefined
-        }
-        onDelete={
-          displaySessionListItem
-            ? () => confirmDeleteSession(displaySessionListItem.id)
-            : undefined
-        }
-        // On mobile the dock is the session's action home, so the chat header's two
-        // controls fold in here: the worktree-diff button as an action and the
-        // transcript toggles as the View section. Desktop keeps its `⋯` menu.
-        onOpenWorktreeChanges={
-          mobileLayout && displayWorktreeId
-            ? () => navigate(worktreePath(displayWorktreeId, "changes"))
-            : undefined
-        }
-        // Mirrors the composer's /review guards: something to review, and never
-        // while the agent is streaming (a second agent on a live working tree).
-        onReviewWork={
-          displayHasUserPrompt && !displayStreaming
-            ? () => {
-                const error = startReviewSessionForSession();
-                if (error) showToast(error);
-              }
-            : undefined
-        }
-        // Taking a spawned peer over is explicit: messaging it is a poke and
-        // leaves its coordinator in charge.
-        onSetSpawnOwnership={
-          displaySessionListItem?.spawnedBySessionId
-            ? (ownership: SettableSpawnOwnership) =>
-                actions.setSpawnOwnership(displaySessionListItem.id, ownership)
-            : undefined
-        }
-        view={
-          mobileLayout && displayHasMessages
-            ? { ...transcriptView, onChange: updateTranscriptView }
-            : undefined
-        }
       >
         <SessionContextSections
           sessionId={displaySession?.sessionId}
@@ -6320,16 +6641,10 @@ function AppContent() {
           artifacts={sessionArtifacts}
           pendingPostReloadContinuation={pendingPostReloadContinuation}
           browserRuntimes={browserRuntimes}
-          peerPrompts={peerPrompts}
-          onExpandPeerPromptHistory={actions.requestPeerPromptHistory}
-          onOpenSession={openSession}
-          onRevealPeerPromptMessage={actions.revealPeerPromptMessage}
-          {...(peerPromptRevealPendingKey
-            ? { peerPromptRevealPendingKey }
-            : {})}
           onCancelPostReloadContinuation={actions.cancelPostReloadContinuation}
           approvalGrants={approvalGrants}
           onRevokeApprovalGrant={actions.revokeApprovalGrant}
+          onGrantApproval={actions.grantApprovalForSession}
         />
         <BackgroundWorkSection
           sessionId={displaySessionListItem?.id}
@@ -6339,7 +6654,9 @@ function AppContent() {
           stopPending={backgroundStopPending}
           onStop={actions.stopBackgroundWork}
           onStopAll={actions.stopAllBackgroundWork}
-          onOpenRegistry={() => navigateFromInspector(backgroundTasksPath())}
+          onOpenRegistry={(itemId) =>
+            navigateFromInspector(backgroundTasksPath(itemId))
+          }
           protectedTurnWait={
             displaySessionListItem
               ? state.backgroundHostCloseWaiting.includes(
@@ -6393,7 +6710,11 @@ function AppContent() {
   const desktopRightPanelContent = (
     <InspectorChromeProvider header={false} desktopTabs>
       <RightPanelTabs
-        inspector={rightPanelContent}
+        inspector={
+          <SessionRowDetailsContext.Provider value={sessionRowDetails}>
+            {rightPanelContent}
+          </SessionRowDetailsContext.Provider>
+        }
         knowledge={
           knowledgeEnabled ? (
             <Suspense fallback={<PaneLoading label="Opening Knowledge…" />}>
@@ -6452,474 +6773,487 @@ function AppContent() {
           rendered by both chat surfaces — the main pane and the Personal
           Assistant panel — so the two targets are published, not threaded. */}
           <KnowledgeOpenTargetsProvider targets={knowledgeOpenTargets}>
-            {import.meta.env.DEV ? <PerfHud /> : null}
-            <AppShell
-              mobile={mobileLayout}
-              // No app header on small screens: its actions are nav-bar slots now and its
-              // panel toggles never existed there, so the bar had nothing left to hold
-              // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
-              // the two pane toggles, which have nowhere better yet.
-              header={
-                mobileLayout ? undefined : (
-                  <Topbar
-                    prefs={prefs}
-                    updatePrefs={update}
-                    sidebarOpen={sidebarPanelOpen}
-                    inspectorOpen={inspectorOpen}
-                    onToggleSidebar={toggleSidebarPanel}
-                    onToggleInspector={() => setInspectorOpen((open) => !open)}
-                    connected={state.connected}
-                    reloading={state.reloading}
-                    hydrationSource={state.hydrationSource}
+            <PaObjectLinkSourceProvider value={paObjectLinkSource}>
+              {import.meta.env.DEV ? <PerfHud /> : null}
+              <AppShell
+                mobile={mobileLayout}
+                // No app header on small screens: its actions are nav-bar slots now and its
+                // panel toggles never existed there, so the bar had nothing left to hold
+                // (ui-shell.md, Small Screens). On wide layouts it survives as the home of
+                // the two pane toggles, which have nowhere better yet.
+                header={
+                  mobileLayout ? undefined : (
+                    <Topbar
+                      prefs={prefs}
+                      updatePrefs={update}
+                      sidebarOpen={sidebarPanelOpen}
+                      inspectorOpen={inspectorOpen}
+                      onToggleSidebar={toggleSidebarPanel}
+                      onToggleInspector={() =>
+                        setInspectorOpen((open) => !open)
+                      }
+                      connected={state.connected}
+                      reloading={state.reloading}
+                      hydrationSource={state.hydrationSource}
+                    />
+                  )
+                }
+                left={{
+                  open: sidebarPanelOpen,
+                  width: prefs.sidebarWidth,
+                  minWidth: SIDEBAR_MIN_WIDTH,
+                  onResize: (width) => update({ sidebarWidth: width }),
+                  animate: prefs.animateLeftSidebar,
+                  // On mobile the browser is a route-driven screen, so it has no dismiss.
+                  mobilePresentation: "screen",
+                  onDismiss: () => setSidebarOpen(false),
+                  label: "sidebar",
+                  content: sidebarContent,
+                }}
+                right={{
+                  open: inspectorOpen,
+                  width: prefs.taskDrawerWidth,
+                  minWidth: TASK_DRAWER_MIN_WIDTH,
+                  onResize: (width) => update({ taskDrawerWidth: width }),
+                  animate: prefs.animateRightDrawer,
+                  // On mobile the object panel is a bottom dock: peek at rest, sheet when
+                  // expanded. `open` therefore means expanded there.
+                  mobilePresentation: "dock",
+                  ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
+                  mobileDockSuppressed:
+                    dockSuppressed || composerOwnsBottomEdge,
+                  onExpand: () => setInspectorOpen(true),
+                  onDismiss: () => setInspectorOpen(false),
+                  label: "inspector",
+                  // The page header owns the inspector's overflow actions on wide layouts,
+                  // so keep their publisher alive even when the panel itself is closed.
+                  keepMountedWhenClosed: true,
+                  // The expanded sheet is where a document's detailed zoom controls
+                  // live on a phone; the desktop keeps them in the viewer's header.
+                  content: mobileLayout ? (
+                    <>
+                      {documentRoute && documentNavigation?.zoom ? (
+                        <DocumentZoomSection zoom={documentNavigation.zoom} />
+                      ) : null}
+                      <SessionRowDetailsContext.Provider
+                        value={sessionRowDetails}
+                      >
+                        {rightPanelContent}
+                      </SessionRowDetailsContext.Provider>
+                    </>
+                  ) : (
+                    desktopRightPanelContent
+                  ),
+                }}
+                edgeBack={edgeBack}
+              >
+                {routeDocumentTarget ? (
+                  <DocumentNavigationMarker
+                    target={routeDocumentTarget}
+                    title={
+                      routeDocumentTarget.path.split("/").pop() ??
+                      routeDocumentTarget.path
+                    }
                   />
-                )
-              }
-              left={{
-                open: sidebarPanelOpen,
-                width: prefs.sidebarWidth,
-                minWidth: SIDEBAR_MIN_WIDTH,
-                onResize: (width) => update({ sidebarWidth: width }),
-                animate: prefs.animateLeftSidebar,
-                // On mobile the browser is a route-driven screen, so it has no dismiss.
-                mobilePresentation: "screen",
-                onDismiss: () => setSidebarOpen(false),
-                label: "sidebar",
-                content: sidebarContent,
-              }}
-              right={{
-                open: inspectorOpen,
-                width: prefs.taskDrawerWidth,
-                minWidth: TASK_DRAWER_MIN_WIDTH,
-                onResize: (width) => update({ taskDrawerWidth: width }),
-                animate: prefs.animateRightDrawer,
-                // On mobile the object panel is a bottom dock: peek at rest, sheet when
-                // expanded. `open` therefore means expanded there.
-                mobilePresentation: "dock",
-                ...(dockPeek !== undefined ? { peek: dockPeek } : {}),
-                mobileDockSuppressed: dockSuppressed || composerOwnsBottomEdge,
-                onExpand: () => setInspectorOpen(true),
-                onDismiss: () => setInspectorOpen(false),
-                label: "inspector",
-                // The page header owns the inspector's overflow actions on wide layouts,
-                // so keep their publisher alive even when the panel itself is closed.
-                keepMountedWhenClosed: true,
-                // The expanded sheet is where a document's detailed zoom controls
-                // live on a phone; the desktop keeps them in the viewer's header.
-                content: mobileLayout ? (
-                  <>
-                    {documentRoute && documentNavigation?.zoom ? (
-                      <DocumentZoomSection zoom={documentNavigation.zoom} />
-                    ) : null}
-                    {rightPanelContent}
-                  </>
-                ) : (
-                  desktopRightPanelContent
-                ),
-              }}
-              edgeBack={edgeBack}
-            >
-              {routeDocumentTarget ? (
-                <DocumentNavigationMarker
-                  target={routeDocumentTarget}
-                  title={
-                    routeDocumentTarget.path.split("/").pop() ??
-                    routeDocumentTarget.path
-                  }
-                />
-              ) : null}
-              {route.name === "tasks" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Task…" />}
-                >
-                  <TaskManagementPage
-                    backlogState={backlogState}
-                    connected={state.connected}
-                    detailState={selectedTaskDetailState}
-                    failure={
-                      selectedTaskId
-                        ? state.objectFailures.task[selectedTaskId]
-                        : undefined
-                    }
-                    onDismissFailure={() =>
-                      selectedTaskId &&
-                      actions.dismissObjectFailure("task", selectedTaskId)
-                    }
-                    workflowRuns={selectedTaskWorkflowRuns}
-                    workflowCards={selectedTaskWorkflowCards}
-                    sessions={backlogSessions}
-                    taskMutations={selectedTaskMutations}
-                    actions={actions}
-                    prefs={prefs}
-                    onUpdatePrefs={update}
-                    selectedId={route.id ?? null}
-                    detailOnly
-                    back={screenBack}
-                    mobile={mobileLayout}
-                    onSelect={(id) => navigate(taskPath(id))}
-                    onNavigate={openBacklogRowLink}
-                    onCloseDetail={() => openSidebarSection("tasks")}
-                    onClose={closeSettings}
-                    paObjectReferences={paObjectReferences}
-                    onOpenPaObject={(link) => navigate(link.href)}
-                    onOpenSession={openSession}
-                    workflowIndicators={workflowIndicators}
-                  />
-                </Suspense>
-              ) : route.name === "projects" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Projects…" />}
-                >
-                  <ProjectDetailPage
-                    key={selectedProjectId ?? "projects-index"}
-                    back={screenBack}
-                    projects={projects}
-                    loaded={projectsLoaded}
-                    listError={state.projectListError}
-                    // The failure this project is CARRYING, for the writes no control
-                    // on the page tracks. Retired by its own dismiss, or by this
-                    // project's next write (`docs/messaging.md`).
-                    failure={
-                      selectedProjectId
-                        ? state.objectFailures.project[selectedProjectId]
-                        : undefined
-                    }
-                    onDismissFailure={() =>
-                      selectedProjectId &&
-                      actions.dismissObjectFailure("project", selectedProjectId)
-                    }
-                    selectedId={selectedProjectId}
-                    onLoad={loadProjects}
-                    detailState={selectedProjectDetailState}
-                    onLoadDetail={actions.requestProjectDetail}
-                    onOpenProjection={actions.setOpenProjectProjection}
-                    mutationStates={projectPageMutationCache.current.value}
-                    onBackToList={projectBackToList}
-                    onSave={saveProject}
-                    onCloneRepo={cloneProjectRepo}
-                    onRemoveClone={removeProjectRepo}
-                    worktreeState={selectedProjectWorktreeState}
-                    onLoadWorktrees={reloadWorktrees}
-                    worktreeStatuses={projectPageStatusCache.current.value}
-                    onOpenWorktree={openWorktree}
-                    onCreateWorktree={createWorktreeForProject}
-                    onStartSessionInWorktree={startSessionInWorktree}
-                    // The project's Tasks are a section of its page, not of the object
-                    // panel: the panel is for what the page cannot show.
-                    renderTasks={renderProjectTasks}
-                    paObjectReferences={paObjectReferences}
-                    onOpenPaObject={openProjectPaObject}
-                  />
-                </Suspense>
-              ) : route.name === "pullRequests" ? (
-                <Suspense
-                  fallback={
-                    <LazySurfaceFallback label="Opening Pull Requests…" />
-                  }
-                >
-                  {pullRequestTarget ? (
-                    <PullRequestDetailPage
-                      // R3: the page is keyed by what it addresses, so switching pull
-                      // requests mounts the new one's own loading state rather than
-                      // leaving the previous body under a new number.
-                      key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
-                      back={screenBack}
-                      target={pullRequestTarget}
-                      state={pullRequestDetail}
-                      onReload={pullRequestInventory.reload}
-                      projects={projects}
-                      // ONE mapping, in a tested pure function: the lists AND what is
-                      // known about their currency travel together, so a later tidy
-                      // cannot quietly turn "not answered yet" into "there are none"
-                      // (`lib/pullRequestInbox.ts`).
-                      joins={pullRequestJoins}
-                      status={
-                        pullRequestWorktreeId
-                          ? state.worktreeStatuses[pullRequestWorktreeId]
+                ) : null}
+                {route.name === "tasks" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening Task…" />}
+                  >
+                    <TaskManagementPage
+                      backlogState={backlogState}
+                      connected={state.connected}
+                      detailState={selectedTaskDetailState}
+                      failure={
+                        selectedTaskId
+                          ? state.objectFailures.task[selectedTaskId]
                           : undefined
                       }
-                      onOpenWorktree={(id) =>
-                        navigate(worktreePath(id, "changes"))
+                      onDismissFailure={() =>
+                        selectedTaskId &&
+                        actions.dismissObjectFailure("task", selectedTaskId)
                       }
+                      workflowRuns={selectedTaskWorkflowRuns}
+                      workflowCards={selectedTaskWorkflowCards}
+                      accountNames={accountNames}
+                      sessions={backlogSessions}
+                      taskMutations={selectedTaskMutations}
+                      actions={actions}
+                      prefs={prefs}
+                      onUpdatePrefs={update}
+                      selectedId={route.id ?? null}
+                      detailOnly
+                      back={screenBack}
+                      mobile={mobileLayout}
+                      onSelect={(id) => navigate(taskPath(id))}
+                      onNavigate={openBacklogRowLink}
+                      onCloseDetail={() => openSidebarSection("tasks")}
+                      onClose={closeSettings}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={(link) => navigate(link.href)}
                       onOpenSession={openSession}
-                      onOpenTask={openTaskById}
+                      workflowIndicators={workflowIndicators}
                     />
-                  ) : (
-                    <PullRequestIndexPlaceholder back={screenBack} />
-                  )}
-                </Suspense>
-              ) : route.name === "worktrees" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Worktree…" />}
-                >
-                  {(() => {
-                    const worktree = state.worktrees?.find(
-                      (item) => item.id === route.id,
-                    );
-                    if (!worktree) {
+                  </Suspense>
+                ) : route.name === "projects" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening Projects…" />}
+                  >
+                    <ProjectDetailPage
+                      key={selectedProjectId ?? "projects-index"}
+                      back={screenBack}
+                      projects={projects}
+                      loaded={projectsLoaded}
+                      listError={state.projectListError}
+                      // The failure this project is CARRYING, for the writes no control
+                      // on the page tracks. Retired by its own dismiss, or by this
+                      // project's next write (`docs/messaging.md`).
+                      failure={
+                        selectedProjectId
+                          ? state.objectFailures.project[selectedProjectId]
+                          : undefined
+                      }
+                      onDismissFailure={() =>
+                        selectedProjectId &&
+                        actions.dismissObjectFailure(
+                          "project",
+                          selectedProjectId,
+                        )
+                      }
+                      selectedId={selectedProjectId}
+                      onLoad={loadProjects}
+                      detailState={selectedProjectDetailState}
+                      onLoadDetail={actions.requestProjectDetail}
+                      onOpenProjection={actions.setOpenProjectProjection}
+                      mutationStates={projectPageMutationCache.current.value}
+                      onBackToList={projectBackToList}
+                      onSave={saveProject}
+                      onCloneRepo={cloneProjectRepo}
+                      onRemoveClone={removeProjectRepo}
+                      worktreeState={selectedProjectWorktreeState}
+                      onLoadWorktrees={reloadWorktrees}
+                      worktreeStatuses={projectPageStatusCache.current.value}
+                      onOpenWorktree={openWorktree}
+                      onCreateWorktree={createWorktreeForProject}
+                      onStartSessionInWorktree={startSessionInWorktree}
+                      onOpenProject={openProject}
+                      sessions={state.sessions}
+                      currentSessionId={displayCurrentId}
+                      onOpenSession={openSession}
+                      onArchiveSession={archiveSession}
+                      paObjectReferences={paObjectReferences}
+                      onOpenPaObject={openProjectPaObject}
+                    />
+                  </Suspense>
+                ) : route.name === "pullRequests" ? (
+                  <Suspense
+                    fallback={
+                      <LazySurfaceFallback label="Opening Pull Requests…" />
+                    }
+                  >
+                    {pullRequestTarget ? (
+                      <PullRequestDetailPage
+                        // R3: the page is keyed by what it addresses, so switching pull
+                        // requests mounts the new one's own loading state rather than
+                        // leaving the previous body under a new number.
+                        key={`${pullRequestTarget.projectId}#${pullRequestTarget.provider}#${pullRequestTarget.repositoryKey}#${pullRequestTarget.number}`}
+                        back={screenBack}
+                        target={pullRequestTarget}
+                        state={pullRequestDetail}
+                        onReload={pullRequestInventory.reload}
+                        projects={projects}
+                        // ONE mapping, in a tested pure function: the lists AND what is
+                        // known about their currency travel together, so a later tidy
+                        // cannot quietly turn "not answered yet" into "there are none"
+                        // (`lib/pullRequestInbox.ts`).
+                        joins={pullRequestJoins}
+                        status={
+                          pullRequestWorktreeId
+                            ? state.worktreeStatuses[pullRequestWorktreeId]
+                            : undefined
+                        }
+                        onOpenWorktree={(id) =>
+                          navigate(worktreePath(id, "changes"))
+                        }
+                        onOpenSession={openSession}
+                        onOpenTask={openTaskById}
+                      />
+                    ) : (
+                      <PullRequestIndexPlaceholder back={screenBack} />
+                    )}
+                  </Suspense>
+                ) : route.name === "worktrees" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening Worktree…" />}
+                  >
+                    {(() => {
+                      const worktree = state.worktrees?.find(
+                        (item) => item.id === route.id,
+                      );
+                      if (!worktree) {
+                        return (
+                          <WorktreePlaceholder
+                            back={screenBack}
+                            detail={
+                              state.worktrees === null
+                                ? "Loading worktrees…"
+                                : "This worktree no longer exists."
+                            }
+                          />
+                        );
+                      }
                       return (
-                        <WorktreePlaceholder
+                        <WorktreeDetailPage
                           back={screenBack}
-                          detail={
-                            state.worktrees === null
-                              ? "Loading worktrees…"
-                              : "This worktree no longer exists."
+                          worktree={worktree}
+                          status={state.worktreeStatuses[worktree.id]}
+                          narrow={mobileLayout}
+                          view={route.view ?? "changes"}
+                          filePath={route.path}
+                          from={route.from}
+                          to={route.to}
+                          anchor={route.anchor}
+                          navigate={navigate}
+                          prefs={prefs}
+                          onUpdatePrefs={update}
+                          comments={
+                            state.worktreeComments[worktree.id] ??
+                            NO_WORKTREE_COMMENTS
+                          }
+                          onLoadComments={() =>
+                            worktreeCommentWatch.list(worktree.id)
+                          }
+                          onUnloadComments={() =>
+                            worktreeCommentWatch.unwatch(worktree.id)
+                          }
+                          onSubmitReview={(commentIds) =>
+                            setWorktreeSubmission({
+                              worktreeId: worktree.id,
+                              commentIds,
+                            })
+                          }
+                          commentActions={worktreeCommentActionsFor(
+                            worktree.id,
+                          )}
+                          openComment={
+                            worktreeCommentToOpen &&
+                            worktreeCommentToOpen.worktreeId === worktree.id
+                              ? {
+                                  commentId: worktreeCommentToOpen.commentId,
+                                  nonce: worktreeCommentToOpen.nonce,
+                                }
+                              : undefined
                           }
                         />
                       );
+                    })()}
+                  </Suspense>
+                ) : route.name === "knowledge" && !knowledgeEnabled ? (
+                  <EmptyBox
+                    className="m-6"
+                    action={
+                      <Button
+                        variant="outline"
+                        onClick={() => openSettingsSection("knowledge-base")}
+                      >
+                        Open Knowledge Base settings
+                      </Button>
                     }
-                    return (
-                      <WorktreeDetailPage
-                        back={screenBack}
-                        worktree={worktree}
-                        status={state.worktreeStatuses[worktree.id]}
-                        narrow={mobileLayout}
-                        view={route.view ?? "changes"}
-                        filePath={route.path}
-                        from={route.from}
-                        to={route.to}
-                        anchor={route.anchor}
-                        navigate={navigate}
-                        prefs={prefs}
-                        onUpdatePrefs={update}
-                        comments={
-                          state.worktreeComments[worktree.id] ??
-                          NO_WORKTREE_COMMENTS
-                        }
-                        onLoadComments={() =>
-                          worktreeCommentWatch.list(worktree.id)
-                        }
-                        onUnloadComments={() =>
-                          worktreeCommentWatch.unwatch(worktree.id)
-                        }
-                        onSubmitReview={(commentIds) =>
-                          setWorktreeSubmission({
-                            worktreeId: worktree.id,
-                            commentIds,
-                          })
-                        }
-                        commentActions={worktreeCommentActionsFor(worktree.id)}
-                        openComment={
-                          worktreeCommentToOpen &&
-                          worktreeCommentToOpen.worktreeId === worktree.id
-                            ? {
-                                commentId: worktreeCommentToOpen.commentId,
-                                nonce: worktreeCommentToOpen.nonce,
-                              }
-                            : undefined
-                        }
-                      />
-                    );
-                  })()}
-                </Suspense>
-              ) : route.name === "knowledge" && !knowledgeEnabled ? (
-                <EmptyBox
-                  className="m-6"
-                  action={
-                    <Button
-                      variant="outline"
-                      onClick={() => openSettingsSection("knowledge-base")}
-                    >
-                      Open Knowledge Base settings
-                    </Button>
-                  }
-                >
-                  The Knowledge Base is turned off.
-                </EmptyBox>
-              ) : route.name === "knowledge" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Knowledge…" />}
-                >
-                  <WorktreeDetailPage
-                    back={screenBack}
-                    worktree={knowledgeCheckoutRecord(
-                      state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
-                    )}
-                    status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
-                    title="Knowledge Base"
-                    lineComments={false}
-                    markdownPreviewFirst
-                    documentComments={knowledgeCommentDocument}
-                    narrow={mobileLayout}
-                    view={route.view ?? "files"}
-                    filePath={route.path}
-                    from={route.from}
-                    to={route.to}
-                    anchor={route.anchor}
-                    navigate={navigate}
-                    prefs={prefs}
-                    onUpdatePrefs={update}
-                    comments={NO_WORKTREE_COMMENTS}
-                    onLoadComments={noopKnowledgeComments}
-                    onUnloadComments={noopKnowledgeComments}
-                    commentActions={NO_KNOWLEDGE_COMMENT_ACTIONS}
-                    onSubmitReview={noopKnowledgeComments}
-                  />
-                </Suspense>
-              ) : route.name === "settings" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Settings…" />}
-                >
-                  <SettingsPage
-                    back={screenBack}
-                    models={state.models}
-                    accountModels={settingsAccountModels}
-                    credentialProfiles={credentialProfiles}
-                    onOpenSection={(section) => navigate(settingsPath(section))}
-                    projects={projects}
-                    settings={state.settings}
-                    memory={memory}
-                    skills={state.skillLibrary}
-                    prefs={prefs}
-                    speechToText={state.speechToText}
-                    serverBuild={state.serverBuild}
-                    onUpdate={actions.updateSettings}
-                    onToggleSkill={actions.setSkillEnabled}
-                    onUpdatePrefs={update}
-                    onRefreshModels={actions.refreshModels}
-                    modelsRefreshing={state.modelsRefreshRequestId !== null}
-                    section={route.section}
-                    onSaveAndTestJira={actions.saveAndTestJiraSettings}
-                    onTestJira={actions.testJiraSettings}
-                    jiraStatus={state.jiraStatus}
-                    onSaveAndTestConfluence={
-                      actions.saveAndTestConfluenceSettings
+                  >
+                    The Knowledge Base is turned off.
+                  </EmptyBox>
+                ) : route.name === "knowledge" ? (
+                  <Suspense
+                    fallback={
+                      <LazySurfaceFallback label="Opening Knowledge…" />
                     }
-                    onTestConfluence={actions.testConfluenceSettings}
-                    confluenceStatus={state.confluenceStatus}
-                    onUpdateTempo={actions.updateTempoSettings}
-                    onSaveAndTestTempo={actions.saveAndTestTempoSettings}
-                    onTestTempo={actions.testTempoSettings}
-                    tempoStatus={state.tempoStatus}
-                    onUpdateGoogle={actions.updateGoogleSettings}
-                    onSaveAndTestGoogle={actions.saveAndTestGoogleSettings}
-                    onTestGoogle={actions.testGoogleSettings}
-                    googleStatus={state.googleStatus}
-                    onSaveAndTestSlack={actions.saveAndTestSlackSettings}
-                    onTestSlack={actions.testSlackSettings}
-                    slackStatus={state.slackStatus}
-                    onSaveAndTestOpenAiCompatible={
-                      actions.saveAndTestOpenAiCompatibleSettings
-                    }
-                    onTestOpenAiCompatible={
-                      actions.testOpenAiCompatibleSettings
-                    }
-                    openAiCompatibleStatus={state.openAiCompatibleStatus}
-                    onSaveAndTestBrave={actions.saveAndTestBraveSettings}
-                    onTestBrave={actions.testBraveSettings}
-                    braveStatus={state.braveStatus}
-                    onSaveAndTestContext7={actions.saveAndTestContext7Settings}
-                    onTestContext7={actions.testContext7Settings}
-                    context7Status={state.context7Status}
-                    onSaveAndTestGithub={actions.saveAndTestGithubSettings}
-                    onTestGithub={actions.testGithubSettings}
-                    githubStatus={state.githubStatus}
-                    onSaveAndTestForgejo={actions.saveAndTestForgejoSettings}
-                    onTestForgejo={actions.testForgejoSettings}
-                    forgejoStatus={state.forgejoStatus}
-                  />
-                </Suspense>
-              ) : route.name === "usage" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening Usage…" />}
-                >
-                  <UsagePage back={screenBack} />
-                </Suspense>
-              ) : route.name === "files" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening file…" />}
-                >
-                  <FileViewerPage path={route.path} anchor={route.anchor} />
-                </Suspense>
-              ) : route.name === "artifacts" ? (
-                <Suspense
-                  fallback={<LazySurfaceFallback label="Opening artifact…" />}
-                >
-                  <SessionArtifactViewer
-                    sessionId={route.sessionId}
-                    path={route.path}
-                    anchor={route.anchor}
-                  />
-                </Suspense>
-              ) : route.name === "backgroundTasks" ? (
-                <Suspense
-                  fallback={
-                    <LazySurfaceFallback label="Opening background work…" />
-                  }
-                >
-                  <BackgroundTasksPage
-                    back={screenBack}
-                    items={state.backgroundWorkItems}
-                    truncated={state.backgroundWorkTruncated}
-                    sessions={state.sessions}
-                    anchoredId={route.taskId}
-                    stopPending={backgroundStopPending}
-                    onStop={actions.stopBackgroundWork}
-                    onStopAllForOwner={actions.stopAllBackgroundWork}
-                    onOpenSession={openSession}
-                  />
-                </Suspense>
-              ) : (
-                <>
-                  {chatHeaderHidden ? null : (
-                    <PageHeader
+                  >
+                    <WorktreeDetailPage
                       back={screenBack}
-                      {...sessionHeaderIcon("session", {
-                        harness: displayHarness,
-                        agentType: displayAgentType,
-                      })}
-                      // The session header is always one compact identity row. Counts have a
-                      // richer home in the right panel's Tasks and Tools sections; the glyph
-                      // carries the session-id copy action on every viewport.
-                      density="compact"
-                      icon={
-                        sessionIdCopied ? (
-                          <Check size={16} strokeWidth={2.5} />
-                        ) : (
-                          chatHeaderGlyph
-                        )
+                      worktree={knowledgeCheckoutRecord(
+                        state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID],
+                      )}
+                      status={state.worktreeStatuses[KNOWLEDGE_WORKTREE_ID]}
+                      title="Knowledge Base"
+                      lineComments={false}
+                      markdownPreviewFirst
+                      // The sidebar's Knowledge section is the file tree.
+                      browseAsDocuments
+                      documentComments={knowledgeCommentDocument}
+                      narrow={mobileLayout}
+                      view={route.view ?? "files"}
+                      filePath={route.path}
+                      from={route.from}
+                      to={route.to}
+                      anchor={route.anchor}
+                      navigate={navigate}
+                      prefs={prefs}
+                      onUpdatePrefs={update}
+                      comments={NO_WORKTREE_COMMENTS}
+                      onLoadComments={noopKnowledgeComments}
+                      onUnloadComments={noopKnowledgeComments}
+                      commentActions={NO_KNOWLEDGE_COMMENT_ACTIONS}
+                      onSubmitReview={noopKnowledgeComments}
+                    />
+                  </Suspense>
+                ) : route.name === "settings" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening Settings…" />}
+                  >
+                    <SettingsPage
+                      back={screenBack}
+                      models={state.models}
+                      accountModels={settingsAccountModels}
+                      credentialProfiles={credentialProfiles}
+                      onOpenSection={(section) =>
+                        navigate(settingsPath(section))
                       }
-                      onIconClick={copySessionId}
-                      iconLabel={
-                        sessionIdCopied ? "Copied!" : "Copy session ID"
+                      projects={projects}
+                      settings={state.settings}
+                      memory={memory}
+                      skills={state.skillLibrary}
+                      prefs={prefs}
+                      speechToText={state.speechToText}
+                      serverBuild={state.serverBuild}
+                      onUpdate={actions.updateSettings}
+                      onToggleSkill={actions.setSkillEnabled}
+                      onUpdatePrefs={update}
+                      onRefreshModels={actions.refreshModels}
+                      modelsRefreshing={state.modelsRefreshRequestId !== null}
+                      section={route.section}
+                      onSaveAndTestJira={actions.saveAndTestJiraSettings}
+                      onTestJira={actions.testJiraSettings}
+                      jiraStatus={state.jiraStatus}
+                      onSaveAndTestConfluence={
+                        actions.saveAndTestConfluenceSettings
                       }
-                      objectOverflow={false}
-                      // The Plan badge rides the identity row so the mode is visible
-                      // wherever the session is, tracking the server record (the
-                      // optimistic staged session only until adoption).
-                      title={
-                        displaySession?.mode === "plan" ? (
-                          <div className="flex min-w-0 items-center gap-2">
-                            {sessionTitleHeading}
-                            <PlanModeBadge />
-                          </div>
-                        ) : (
-                          sessionTitleHeading
-                        )
+                      onTestConfluence={actions.testConfluenceSettings}
+                      confluenceStatus={state.confluenceStatus}
+                      onUpdateTempo={actions.updateTempoSettings}
+                      onSaveAndTestTempo={actions.saveAndTestTempoSettings}
+                      onTestTempo={actions.testTempoSettings}
+                      tempoStatus={state.tempoStatus}
+                      onUpdateGoogle={actions.updateGoogleSettings}
+                      onSaveAndTestGoogle={actions.saveAndTestGoogleSettings}
+                      onTestGoogle={actions.testGoogleSettings}
+                      googleStatus={state.googleStatus}
+                      onSaveAndTestSlack={actions.saveAndTestSlackSettings}
+                      onTestSlack={actions.testSlackSettings}
+                      slackStatus={state.slackStatus}
+                      onSaveAndTestOpenAiCompatible={
+                        actions.saveAndTestOpenAiCompatibleSettings
                       }
-                      // Mobile folds both of these into the object dock (ui-shell.md, Small
-                      // Screens), leaving this row to identity alone.
-                      actions={
-                        mobileLayout ? undefined : (
+                      onTestOpenAiCompatible={
+                        actions.testOpenAiCompatibleSettings
+                      }
+                      openAiCompatibleStatus={state.openAiCompatibleStatus}
+                      onSaveAndTestBrave={actions.saveAndTestBraveSettings}
+                      onTestBrave={actions.testBraveSettings}
+                      braveStatus={state.braveStatus}
+                      onSaveAndTestContext7={
+                        actions.saveAndTestContext7Settings
+                      }
+                      onTestContext7={actions.testContext7Settings}
+                      context7Status={state.context7Status}
+                      onSaveAndTestGithub={actions.saveAndTestGithubSettings}
+                      onTestGithub={actions.testGithubSettings}
+                      githubStatus={state.githubStatus}
+                      onSaveAndTestForgejo={actions.saveAndTestForgejoSettings}
+                      onTestForgejo={actions.testForgejoSettings}
+                      forgejoStatus={state.forgejoStatus}
+                    />
+                  </Suspense>
+                ) : route.name === "usage" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening Usage…" />}
+                  >
+                    <UsagePage back={screenBack} />
+                  </Suspense>
+                ) : route.name === "files" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening file…" />}
+                  >
+                    <FileViewerPage path={route.path} anchor={route.anchor} />
+                  </Suspense>
+                ) : route.name === "artifacts" ? (
+                  <Suspense
+                    fallback={<LazySurfaceFallback label="Opening artifact…" />}
+                  >
+                    <SessionArtifactViewer
+                      sessionId={route.sessionId}
+                      path={route.path}
+                      anchor={route.anchor}
+                    />
+                  </Suspense>
+                ) : route.name === "backgroundTasks" ? (
+                  <Suspense
+                    fallback={
+                      <LazySurfaceFallback label="Opening background work…" />
+                    }
+                  >
+                    <BackgroundTasksPage
+                      back={screenBack}
+                      items={state.backgroundWorkItems}
+                      truncated={state.backgroundWorkTruncated}
+                      sessions={state.sessions}
+                      anchoredId={route.taskId}
+                      stopPending={backgroundStopPending}
+                      onStop={actions.stopBackgroundWork}
+                      onStopAllForOwner={actions.stopAllBackgroundWork}
+                      onOpenSession={openSession}
+                    />
+                  </Suspense>
+                ) : (
+                  <>
+                    {chatHeaderHidden ? null : (
+                      <PageHeader
+                        back={screenBack}
+                        {...sessionHeaderIcon("session", {
+                          harness: displayHarness,
+                          agentType: displayAgentType,
+                        })}
+                        // The session header is always one compact identity row. Counts have a
+                        // richer home in the right panel's Tasks and Tools sections; the glyph
+                        // carries the session-id copy action on every viewport.
+                        density="compact"
+                        icon={
+                          sessionIdCopied ? (
+                            <Check size={16} strokeWidth={2.5} />
+                          ) : (
+                            chatHeaderGlyph
+                          )
+                        }
+                        onIconClick={copySessionId}
+                        iconLabel={
+                          sessionIdCopied ? "Copied!" : "Copy session ID"
+                        }
+                        objectOverflow={false}
+                        title={sessionTitleHeading}
+                        // Exactly two actions, on every layout: Comment on the
+                        // transcript selection, and ⋮ for the rest. The worktree
+                        // is reached through the title block itself.
+                        actions={
                           <div className="flex items-center gap-1">
-                            {displayWorktreeId && (
-                              <IconButton
-                                label="View this session's worktree changes"
-                                size="icon"
-                                onClick={() =>
-                                  navigate(
-                                    worktreePath(displayWorktreeId, "changes"),
-                                  )
-                                }
-                                className="relative"
-                              >
-                                {/* Same rule as the dock's row and the inspector's action: the
-                      glyph is the worktree this leaves for, not the diff it opens on. */}
-                                <GitBranch />
-                                {displayWorktreeStatus?.dirty && (
-                                  <UnreadDot title="Worktree has uncommitted changes" />
-                                )}
-                              </IconButton>
-                            )}
+                            <IconButton
+                              label="Add comment"
+                              title={
+                                chatCommentSelection
+                                  ? "Add comment"
+                                  : "Select text to comment"
+                              }
+                              // Keep the transcript selection the comment anchors to.
+                              onPointerDown={(event) => event.preventDefault()}
+                              onClick={commentOnSelection}
+                              data-comment-actuation
+                              disabled={!chatCommentSelection}
+                            >
+                              <MessageSquareQuote />
+                            </IconButton>
+                            <PublishRouteSecondaryActions
+                              actions={sessionInspectorActions(
+                                sessionActionInputs,
+                              )}
+                            />
                             <ChatHeaderMenu
                               mobile={mobileLayout}
                               view={
@@ -6932,110 +7266,110 @@ function AppContent() {
                               }
                             />
                           </div>
-                        )
-                      }
-                    />
-                  )}
+                        }
+                      />
+                    )}
 
-                  {/* A cached boot paint is the one case where the stage shows a
+                    {/* A cached boot paint is the one case where the stage shows a
                 transcript nobody has revalidated yet; a streaming row narrates
                 that itself, and two narrations for one source is exactly what
                 the model forbids. */}
-                  {usePreview && !previewHasStreamingMessage && (
-                    <SessionRefreshMark />
-                  )}
+                    {usePreview && !previewHasStreamingMessage && (
+                      <SessionRefreshMark />
+                    )}
 
-                  {chatSurface}
-                </>
-              )}
-            </AppShell>
-            {worktreeOverlay.createForProjectId ||
-            worktreeOverlay.mergeWorktreeId ||
-            worktreeOverlay.removeWorktreeId ? (
-              <Suspense
-                fallback={
-                  <LazySurfaceFallback label="Opening worktree tools…" />
-                }
-              >
-                <WorktreeOverlays
-                  overlay={worktreeOverlay}
-                  onChange={setWorktreeOverlay}
-                  state={state}
-                  projects={projects}
-                  actions={actions}
-                  onOpenSession={(id) => navigate(sessionPath(id))}
-                />
-              </Suspense>
-            ) : null}
-            {worktreeSubmission
-              ? (() => {
-                  const worktree = (state.worktrees ?? []).find(
-                    (candidate) =>
-                      candidate.id === worktreeSubmission.worktreeId,
-                  );
-                  if (!worktree) return null;
-                  return (
-                    <WorktreeReviewSubmitSheet
-                      worktree={worktree}
-                      commentIds={worktreeSubmission.commentIds}
-                      sessions={state.sessions}
-                      onClose={() => setWorktreeSubmission(null)}
-                      onSubmit={(commentIds, target) => {
-                        submitWorktreeReview(worktree.id, commentIds, target);
-                        setWorktreeSubmission(null);
-                      }}
-                    />
-                  );
-                })()
-              : null}
-            {workflowStartTaskId
-              ? (() => {
-                  const task = backlogTasks.find(
-                    (candidate) => candidate.id === workflowStartTaskId,
-                  );
-                  if (!task) return null;
-                  return (
-                    <WorkflowRunStartSheet
-                      task={task}
-                      tasks={backlogTasks}
-                      models={settingsAccountModels}
-                      worktrees={state.worktrees ?? []}
-                      usageIndicators={state.usageIndicators}
-                      storedRuntimes={prefs.workflowRoleRuntimes}
-                      storedLimits={prefs.workflowRunLimits}
-                      startStates={state.workflowRunStarts}
-                      onStart={actions.startWorkflowRun}
-                      onRemember={({ runtimes, limits }) =>
-                        update({
-                          workflowRoleRuntimes: runtimes,
-                          workflowRunLimits: limits,
-                        })
-                      }
-                      onContinueInBackground={(requestId) =>
-                        setBackgroundWorkflowStarts((current) =>
-                          current.includes(requestId)
-                            ? current
-                            : [...current, requestId],
-                        )
-                      }
-                      onClearStart={actions.clearWorkflowRunStart}
-                      onClose={() => setWorkflowStartTaskId(null)}
-                    />
-                  );
-                })()
-              : null}
-            {/* The app status slot's narrow-layout placement; the wide one lives in
+                    {chatSurface}
+                  </>
+                )}
+              </AppShell>
+              {worktreeOverlay.createForProjectId ||
+              worktreeOverlay.mergeWorktreeId ||
+              worktreeOverlay.removeWorktreeId ? (
+                <Suspense
+                  fallback={
+                    <LazySurfaceFallback label="Opening worktree tools…" />
+                  }
+                >
+                  <WorktreeOverlays
+                    overlay={worktreeOverlay}
+                    onChange={setWorktreeOverlay}
+                    state={state}
+                    projects={projects}
+                    actions={actions}
+                    onOpenSession={(id) => navigate(sessionPath(id))}
+                  />
+                </Suspense>
+              ) : null}
+              {worktreeSubmission
+                ? (() => {
+                    const worktree = (state.worktrees ?? []).find(
+                      (candidate) =>
+                        candidate.id === worktreeSubmission.worktreeId,
+                    );
+                    if (!worktree) return null;
+                    return (
+                      <WorktreeReviewSubmitSheet
+                        worktree={worktree}
+                        commentIds={worktreeSubmission.commentIds}
+                        sessions={state.sessions}
+                        onClose={() => setWorktreeSubmission(null)}
+                        onSubmit={(commentIds, target) => {
+                          submitWorktreeReview(worktree.id, commentIds, target);
+                          setWorktreeSubmission(null);
+                        }}
+                      />
+                    );
+                  })()
+                : null}
+              {workflowStartTaskId
+                ? (() => {
+                    const task = backlogTasks.find(
+                      (candidate) => candidate.id === workflowStartTaskId,
+                    );
+                    if (!task) return null;
+                    return (
+                      <WorkflowRunStartSheet
+                        task={task}
+                        tasks={backlogTasks}
+                        models={settingsAccountModels}
+                        worktrees={state.worktrees ?? []}
+                        usageIndicators={state.usageIndicators}
+                        storedRuntimes={prefs.workflowRoleRuntimes}
+                        storedLimits={prefs.workflowRunLimits}
+                        startStates={state.workflowRunStarts}
+                        onStart={actions.startWorkflowRun}
+                        onRemember={({ runtimes, limits }) =>
+                          update({
+                            workflowRoleRuntimes: runtimes,
+                            workflowRunLimits: limits,
+                          })
+                        }
+                        onContinueInBackground={(requestId) =>
+                          setBackgroundWorkflowStarts((current) =>
+                            current.includes(requestId)
+                              ? current
+                              : [...current, requestId],
+                          )
+                        }
+                        onClearStart={actions.clearWorkflowRunStart}
+                        onClose={() => setWorkflowStartTaskId(null)}
+                      />
+                    );
+                  })()
+                : null}
+              {/* The app status slot's narrow-layout placement; the wide one lives in
           `Topbar`. Mounted unconditionally and gating itself: it owns the grace
           period before a dropped socket is worth saying out loud, so the
           decision has to survive the state changing. Its hooks are its own —
           the `App` hook rule in `CLAUDE.md` is not in play. */}
-            <AppStatus
-              connected={state.connected}
-              reloading={state.reloading}
-              hydrationSource={state.hydrationSource}
-              placement="floating"
-            />
-            <ToastViewport />
+              <AppStatus
+                connected={state.connected}
+                reloading={state.reloading}
+                hydrationSource={state.hydrationSource}
+                placement="floating"
+              />
+              <ToastViewport />
+            </PaObjectLinkSourceProvider>
           </KnowledgeOpenTargetsProvider>
         </DocumentCommentHostProvider>
       </RoutePrimaryActionProvider>

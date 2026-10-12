@@ -14,11 +14,26 @@ import {
   turnTotals,
 } from "@assistant/shared/turnStats";
 
-/** Compact token count: 340, 5.1k, 1.2M. */
+const LARGE_TOKEN_UNITS = [
+  [1e12, "T"],
+  [1e9, "B"],
+  [1e6, "M"],
+] as const;
+
+/**
+ * Compact token count: 340, 5.1k, 52k, 1.2M, 340M, 4.7B, 1.3T. From a hundred
+ * of a unit up the decimal carries nothing a reader uses and only widens the
+ * line, so it goes.
+ */
 function fmtTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
+  for (const [unit, suffix] of LARGE_TOKEN_UNITS) {
+    if (n < unit) continue;
+    const value = n / unit;
+    return `${value.toFixed(value < 100 ? 1 : 0)}${suffix}`;
+  }
+  return String(n);
 }
 
 /** Signed delta, e.g. +14.2k / −5.0k / +0. */
@@ -33,12 +48,14 @@ function fmtCost(usd: number): string {
 
 /**
  * Two-decimal cost for the collapsed lines, which must fit a phone; sub-cent
- * amounts say so rather than rounding to a misleading `$0.00`. The precise
- * figure stays one tap away in the expanded breakdown's cost row, and in the
- * collapsed span's own `title`.
+ * amounts say so rather than rounding to a misleading `$0.00`, and from $100
+ * up the cents go (`$1,234`). The precise figure stays one tap away in the
+ * expanded breakdown's cost row, and in the collapsed span's own `title`.
  */
 function fmtCostCompact(usd: number): string {
-  return usd < 0.01 ? "<$0.01" : `$${usd.toFixed(2)}`;
+  if (usd < 0.01) return "<$0.01";
+  if (usd >= 100) return `$${Math.round(usd).toLocaleString("en-US")}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 function fmtPct(ratio: number): string {
@@ -197,7 +214,10 @@ export const TurnStatsRow = memo(function TurnStatsRow({
           <Button
             variant="ghost"
             size="sm"
-            className="h-auto w-full flex-col items-start gap-0.5"
+            // Like the session title link: no fill or colour change on hover
+            // or while open (ghost styles both), just the pointer cursor —
+            // the chevron already says it unfolds.
+            className="h-auto w-full cursor-pointer flex-col items-start gap-0.5 hover:bg-transparent hover:text-inherit aria-expanded:bg-transparent aria-expanded:text-inherit dark:hover:bg-transparent"
           />
         }
       >
@@ -290,8 +310,10 @@ export const TurnStatsRow = memo(function TurnStatsRow({
         </div>
       </CollapsibleTrigger>
 
+      {/* The trigger's own `px-2.5` plus its rows' `pl-4`, so the detail
+          lines up with the Session and Context lines above it. */}
       {expanded && (
-        <CollapsibleContent className="mt-0.5 flex flex-col gap-0.5 pl-4">
+        <CollapsibleContent className="mt-0.5 flex flex-col gap-0.5 pr-2.5 pl-6.5">
           <SectionLabel>Turn</SectionLabel>
           <Detail
             label="billed input"

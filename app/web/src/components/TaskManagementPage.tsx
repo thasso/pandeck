@@ -8,25 +8,40 @@ import {
 } from "react";
 import {
   ArrowLeft,
-  Check,
+  ArrowUpRight,
+  Bot,
   ChevronRight,
+  Inbox,
+  Lightbulb,
+  CornerLeftUp,
+  CalendarCheck,
+  Check,
   ClipboardList,
+  Flag,
   Pencil,
+  Ticket,
+  Undo2,
 } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "./ui/collapsible.tsx";
 import { Button } from "./ui/button.tsx";
+import { sessionPath } from "../lib/sessionRoutes.ts";
+import { followRowLink } from "../lib/rowLink.ts";
+import { belongsInInbox, taskOrigin } from "../lib/backlogInbox.ts";
+import { AppCard } from "./common/AppCard.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import { EditableText } from "./common/EditableText.tsx";
+import { ActionRow } from "./common/ActionRow.tsx";
+import { TaskLinkList } from "./TaskLinkList.tsx";
+import {
+  TitleDescriptionEditor,
+  type TitleDescriptionChanges,
+} from "./common/TitleDescriptionEditor.tsx";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
+  ProjectRecord,
   PullRequestMergeMethod,
   SessionListItem,
   TaskItem,
   WorkflowCeilingRaise,
+  WorkflowCommitCheckChoice,
   WorkflowRunSummary,
 } from "@assistant/shared";
 import {
@@ -60,8 +75,30 @@ import {
   isPending,
   type LoadState,
 } from "../lib/loadState.ts";
-import { flattenTasks, nextStatus, type Task } from "../lib/backlogTree.ts";
+import {
+  acceptStatusSuggestionSave,
+  flattenTasks,
+  pendingStatusSuggestion,
+  type Task,
+} from "../lib/backlogTree.ts";
 import { BacklogList } from "./BacklogList.tsx";
+import { dueLabel, scheduledLabel } from "../lib/backlogFocus.ts";
+import { todayIso } from "../lib/taskDates.ts";
+import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
+import { ProjectSelector } from "./ProjectSelector.tsx";
+import { useTicketDetails, type TaskTicket } from "./TaskTicketProperty.tsx";
+import { githubIssueUrl } from "./TaskContextSections.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./ui/dropdown-menu.tsx";
+
+/** The statuses in the order a Task moves through them. */
+const TASK_STATUSES: Task["status"][] = ["todo", "doing", "done"];
+import { buildProjectsById } from "../lib/projectDisplay.ts";
+import { projectPath } from "../hooks/useSessionRouting.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { WorkflowRunCard } from "./WorkflowRunCard.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
@@ -110,6 +147,7 @@ export function TaskManagementPage({
   onDismissFailure,
   workflowRuns,
   workflowCards,
+  accountNames,
   sessions,
   taskMutations,
   actions,
@@ -141,6 +179,8 @@ export function TaskManagementPage({
   onDismissFailure?: () => void;
   workflowRuns: WorkflowRunSummary[] | null;
   workflowCards: Record<string, ClientWorkflowRunCard>;
+  /** Account names by credential profile id, for the run card's roles. */
+  accountNames: Readonly<Record<string, string>>;
   sessions: SessionListItem[];
   taskMutations: UIState["taskMutations"];
   actions: AssistantActions;
@@ -227,6 +267,12 @@ export function TaskManagementPage({
   // the detail pane has to: an unfound Task with the list still on its way is
   // loading, not "nothing selected" (R1).
   const tasksLoaded = backlogState.taskList !== null;
+  const projectsById = useMemo(
+    () => buildProjectsById(backlogState.projectList?.projects ?? []),
+    [backlogState.projectList],
+  );
+  // "Today" for planning an Inbox arrival, in the user's own time zone.
+  const timeZone = useUserTimeZone();
 
   // The Backlog is the one list this page browses, so it remembers where the
   // reader was across opening a Task and coming back.
@@ -234,29 +280,70 @@ export function TaskManagementPage({
     listKey: detailOnly ? null : "page:tasks",
   });
 
-  const cycleStatus = (item: Task) => {
+  const setTaskProject = (item: Task, projectId: string | null) => {
+    actions.saveTask({ id: item.id, status: item.status, projectId }, "edit");
+  };
+
+  // An agent's status suggestion, answered here as in the Focus view: accept
+  // is an ordinary save that also clears the claim, dismiss clears only it.
+  const acceptSuggestion = (item: Task) => {
+    const to = item.statusSuggestion?.to;
+    if (to)
+      actions.saveTask(
+        acceptStatusSuggestionSave({ id: item.id, to }),
+        "status",
+      );
+  };
+  const dismissSuggestion = (item: Task) => {
     actions.saveTask(
-      {
-        id: item.id,
-        status: nextStatus(item.status),
-      },
+      { id: item.id, status: item.status, clearStatusSuggestion: true },
       "status",
     );
   };
 
-  const renameTask = (item: Task, title: string) => {
-    actions.saveTask({ id: item.id, title, status: item.status }, "rename");
+  // The Inbox's two answers, as its list row gives them: let it into the
+  // Backlog as is, or plan it for today (which triages it too).
+  const dismissFromInbox = (item: Task) => {
+    actions.saveTask(
+      { id: item.id, status: item.status, triaged: true },
+      "edit",
+    );
+  };
+  const planToday = (item: Task) => {
+    actions.saveTask(
+      { id: item.id, status: item.status, scheduledFor: todayIso(timeZone) },
+      "edit",
+    );
   };
 
-  const saveDescription = (item: Task, description: string) => {
-    actions.saveTask(
-      {
-        id: item.id,
-        status: item.status,
-        description,
-      },
-      "description",
-    );
+  const setTaskStatus = (item: Task, status: Task["status"]) => {
+    if (status === item.status) return;
+    actions.saveTask({ id: item.id, status }, "status");
+  };
+
+  // Title and description are edited together, so they save together: one
+  // request carrying only the fields that changed (an unchanged title is
+  // omitted, never echoed back).
+  const editTask = (item: Task, changes: TitleDescriptionChanges) => {
+    const description =
+      changes.description !== undefined
+        ? { description: changes.description }
+        : {};
+    if (changes.title !== undefined)
+      actions.saveTask(
+        {
+          id: item.id,
+          title: changes.title,
+          status: item.status,
+          ...description,
+        },
+        "edit",
+      );
+    else
+      actions.saveTask(
+        { id: item.id, status: item.status, ...description },
+        "edit",
+      );
   };
 
   // Progress rollups for every task (order-independent) so the detail panel can
@@ -397,14 +484,26 @@ export function TaskManagementPage({
           {selectedTask && !detailUnavailable ? (
             <TaskDetailPanel
               key={selectedTask.id}
+              projectsById={projectsById}
+              onNavigate={onNavigate}
               back={back}
               mobile={mobile}
               item={selectedTask}
               detailState={detailState}
               progress={progressById.get(selectedTask.id)}
+              parentTask={
+                selectedTask.parentId
+                  ? items.find((task) => task.id === selectedTask.parentId)
+                  : undefined
+              }
+              subtasks={items.filter(
+                (task) => task.parentId === selectedTask.id,
+              )}
+              onOpenTask={onSelect}
               runs={selectedRuns}
               runsLoaded={workflowRuns !== null}
               workflowCards={workflowCards}
+              accountNames={accountNames}
               sessions={sessions}
               onOpenSession={onOpenSession}
               onPauseRun={actions.pauseWorkflowRun}
@@ -413,22 +512,24 @@ export function TaskManagementPage({
               onDeleteRun={actions.deleteWorkflowRun}
               onRetryRun={actions.retryWorkflowRun}
               onAnswerCeiling={actions.answerWorkflowCeiling}
+              onAnswerCommitCheck={actions.answerWorkflowCommitCheck}
               onRebaseAndReviewRun={actions.rebaseAndReviewWorkflowRun}
               onMergeRun={actions.mergeWorkflowRun}
               onCleanUpRun={actions.cleanUpWorkflowRun}
-              onCycle={() => cycleStatus(selectedTask)}
-              onRename={(title) => renameTask(selectedTask, title)}
-              onSaveDescription={(description) =>
-                saveDescription(selectedTask, description)
+              onSetStatus={(status) => setTaskStatus(selectedTask, status)}
+              onAcceptSuggestion={() => acceptSuggestion(selectedTask)}
+              onDismissSuggestion={() => dismissSuggestion(selectedTask)}
+              onDismissFromInbox={() => dismissFromInbox(selectedTask)}
+              onPlanToday={() => planToday(selectedTask)}
+              onEdit={(changes) => editTask(selectedTask, changes)}
+              onSetProject={(projectId) =>
+                setTaskProject(selectedTask, projectId)
               }
               statusMutation={
                 taskMutations[taskMutationKey(selectedTask.id, "status")]
               }
-              renameMutation={
-                taskMutations[taskMutationKey(selectedTask.id, "rename")]
-              }
-              descriptionMutation={
-                taskMutations[taskMutationKey(selectedTask.id, "description")]
+              editMutation={
+                taskMutations[taskMutationKey(selectedTask.id, "edit")]
               }
               onRetryDetail={() => actions.requestTaskDetail(selectedTask.id)}
               paObjectReferences={paObjectReferences}
@@ -521,14 +622,20 @@ function useWorkflowRunAnchor(
  * Low-risk title and description edits use the shared shadcn inputs in place.
  */
 function TaskDetailPanel({
+  projectsById,
+  onNavigate,
   back,
   mobile,
   item,
   detailState,
   progress,
+  parentTask,
+  subtasks,
+  onOpenTask,
   runs,
   runsLoaded,
   workflowCards,
+  accountNames,
   sessions,
   onOpenSession,
   onPauseRun,
@@ -537,19 +644,25 @@ function TaskDetailPanel({
   onDeleteRun,
   onRetryRun,
   onAnswerCeiling,
+  onAnswerCommitCheck,
   onRebaseAndReviewRun,
   onMergeRun,
   onCleanUpRun,
-  onCycle,
-  onRename,
-  onSaveDescription,
+  onSetStatus,
+  onAcceptSuggestion,
+  onDismissSuggestion,
+  onDismissFromInbox,
+  onPlanToday,
+  onEdit,
+  onSetProject,
   statusMutation,
-  renameMutation,
-  descriptionMutation,
+  editMutation,
   onRetryDetail,
   paObjectReferences,
   onOpenPaObject,
 }: {
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
   back?: PageHeaderBack | undefined;
   mobile?: boolean;
   item: Task;
@@ -560,9 +673,15 @@ function TaskDetailPanel({
    */
   detailState: LoadState<TaskItem | null>;
   progress?: { done: number; total: number } | undefined;
+  /** The Task this one is a subtask of, when the Backlog holds it. */
+  parentTask?: Task | undefined;
+  /** Its direct subtasks, in Backlog order. */
+  subtasks: Task[];
+  onOpenTask: (id: string) => void;
   runs: WorkflowRunSummary[];
   runsLoaded: boolean;
   workflowCards: UIState["workflowCards"];
+  accountNames: Readonly<Record<string, string>>;
   sessions: UIState["sessions"];
   onOpenSession: (id: string) => void;
   onPauseRun: (id: string) => void;
@@ -578,18 +697,25 @@ function TaskDetailPanel({
     choice: "raise" | "deliver" | "re-evaluate" | "cancel",
     raise?: WorkflowCeilingRaise,
   ) => void;
+  onAnswerCommitCheck: (
+    runId: string,
+    choice: WorkflowCommitCheckChoice,
+  ) => void;
   onRebaseAndReviewRun: (id: string) => void;
   onMergeRun: (
     id: string,
     options: { mergeMethod: PullRequestMergeMethod; deleteBranch: boolean },
   ) => void;
   onCleanUpRun: (id: string) => void;
-  onCycle: () => void;
-  onRename: (title: string) => void;
-  onSaveDescription: (description: string) => void;
+  onSetStatus: (status: Task["status"]) => void;
+  onAcceptSuggestion: () => void;
+  onDismissSuggestion: () => void;
+  onDismissFromInbox: () => void;
+  onPlanToday: () => void;
+  onEdit: (changes: TitleDescriptionChanges) => void;
+  onSetProject: (projectId: string | null) => void;
   statusMutation?: LoadState<true> | undefined;
-  renameMutation?: LoadState<true> | undefined;
-  descriptionMutation?: LoadState<true> | undefined;
+  editMutation?: LoadState<true> | undefined;
   onRetryDetail: () => void;
   paObjectReferences: MarkdownPaObjectReference[];
   onOpenPaObject?: ((link: MarkdownPaObjectReference) => void) | undefined;
@@ -607,7 +733,7 @@ function TaskDetailPanel({
   const detailError = errorOf(detailState);
 
   // The prose is not clickable; the section action owns edit mode.
-  const [editingDescription, setEditingDescription] = useState(false);
+  const [editing, setEditing] = useState(false);
   // Brief confirmation on the header glyph after it copies the task id.
   const [idCopied, setIdCopied] = useState(false);
   useWorkflowRunAnchor(runs, runsLoaded);
@@ -652,13 +778,36 @@ function TaskDetailPanel({
             <TaskTitleBlock
               item={item}
               progress={progress}
-              onRename={onRename}
-              renameMutation={renameMutation}
+              parentTask={parentTask}
+              subtasks={subtasks}
+              onOpenTask={onOpenTask}
+              onAcceptSuggestion={onAcceptSuggestion}
+              onDismissSuggestion={onDismissSuggestion}
+              onDismissFromInbox={onDismissFromInbox}
+              onPlanToday={onPlanToday}
+              onOpenSession={onOpenSession}
+              sessions={sessions}
+              projectsById={projectsById}
+              onNavigate={onNavigate}
+              onSetProject={onSetProject}
+              editor={
+                editing ? (
+                  <TitleDescriptionEditor
+                    title={item.title}
+                    description={descriptionText}
+                    titleLabel="Task title"
+                    descriptionLabel="Task description"
+                    onSave={onEdit}
+                    submitState={editMutation}
+                    onClose={() => setEditing(false)}
+                  />
+                ) : null
+              }
               statusMutation={statusMutation}
               // The status control lives HERE on a wide layout and in the object
               // dock's action row on a phone — the dock is the object's action home
               // there, so this block shows the state and does not offer to change it.
-              onCycle={mobile ? undefined : onCycle}
+              onSetStatus={mobile ? undefined : onSetStatus}
             />
 
             {!runsLoaded ? (
@@ -671,7 +820,7 @@ function TaskDetailPanel({
               </div>
             ) : runs.length ? (
               <div className="mb-6 flex flex-col gap-3">
-                {runs.map((run) => (
+                {runs.map((run, index) => (
                   // The run's durable ADDRESS on this page: what
                   // `/tasks/:taskId#workflow-run-:runId` resolves to, and the
                   // element {@link useWorkflowRunAnchor} scrolls to and focuses
@@ -687,6 +836,7 @@ function TaskDetailPanel({
                     <WorkflowRunCard
                       run={run}
                       card={workflowCards[run.id]}
+                      accountNames={accountNames}
                       sessions={sessions}
                       onOpenSession={onOpenSession}
                       onPause={onPauseRun}
@@ -695,50 +845,31 @@ function TaskDetailPanel({
                       onDelete={onDeleteRun}
                       onRetry={onRetryRun}
                       onAnswerCeiling={onAnswerCeiling}
+                      onAnswerCommitCheck={onAnswerCommitCheck}
                       onRebaseAndReview={onRebaseAndReviewRun}
                       onMerge={onMergeRun}
                       onCleanUp={onCleanUpRun}
+                      // The newest run leads; an older one that has finished
+                      // starts as one line under it.
+                      defaultCollapsed={
+                        index > 0 &&
+                        (run.lifecycle === "completed" ||
+                          run.lifecycle === "cancelled")
+                      }
                     />
                   </div>
                 ))}
               </div>
             ) : null}
 
-            <TaskCollapsibleSection
-              title="Description"
-              storageKey={`wf.collapse.${item.id}.description`}
-              trailing={
-                <div className="flex items-center gap-2">
-                  {detailRefreshing ? (
-                    <RefreshIndicator label="Refreshing description" />
-                  ) : null}
-                  {descriptionLoaded ? (
-                    <IconButton
-                      label="Edit description"
-                      onClick={() => setEditingDescription(true)}
-                      busy={isPending(descriptionMutation ?? idle())}
-                    >
-                      <Pencil />
-                    </IconButton>
-                  ) : null}
-                </div>
-              }
-            >
-              {detailError ? (
-                <ErrorNote message={detailError} onRetry={onRetryDetail} />
-              ) : null}
-              <EditableText
-                value={descriptionText}
-                onSubmit={onSaveDescription}
-                submitState={descriptionMutation}
-                editing={editingDescription}
-                onEditingChange={setEditingDescription}
-                multiline
-                allowEmpty
-                label="Task description"
-                placeholder="Add a description…"
-                className="min-h-32 resize-y"
-              >
+            {/* The description IS the page's body, under the title: no heading
+                and no fold. While editing it is part of the editor above. Under
+                it, a small action row: Edit (title and description together). */}
+            {editing ? null : (
+              <section aria-label="Description" className="mb-4">
+                {detailError ? (
+                  <ErrorNote message={detailError} onRetry={onRetryDetail} />
+                ) : null}
                 <div className="min-h-16 w-full py-1">
                   {descriptionText.trim() ? (
                     <Markdown
@@ -779,12 +910,30 @@ function TaskDetailPanel({
                     )
                   ) : (
                     <span className="text-sm text-muted-foreground">
-                      No description yet. Use the edit button to add one.
+                      No description yet.
                     </span>
                   )}
                 </div>
-              </EditableText>
-            </TaskCollapsibleSection>
+                <ActionRow>
+                  {detailRefreshing ? (
+                    <RefreshIndicator label="Refreshing description" />
+                  ) : null}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-muted-foreground"
+                    // The body must be loaded to edit it: saving a draft made
+                    // from the preview would cut the description short.
+                    disabled={!descriptionLoaded}
+                    busy={isPending(editMutation ?? idle())}
+                    onClick={() => setEditing(true)}
+                  >
+                    <Pencil />
+                    Edit
+                  </Button>
+                </ActionRow>
+              </section>
+            )}
           </div>
         </div>
       </div>
@@ -801,7 +950,7 @@ function TaskDetailPanel({
  * target instead of a hover-only pencil — which on a touch device was an invisible
  * button you had to know about.
  *
- * `onCycle` present means this block owns the status control (wide layouts, which
+ * `onSetStatus` present means this block owns the status control (wide layouts, which
  * have no dock row). Absent, the status is not shown here AT ALL: the dock's action
  * row shows the state in the glyph you press to change it, and a chip above the
  * title would be the third place to read the same word. A done Task still reads as
@@ -810,123 +959,411 @@ function TaskDetailPanel({
 function TaskTitleBlock({
   item,
   progress,
-  onRename,
-  onCycle,
-  renameMutation,
+  parentTask,
+  subtasks,
+  onOpenTask,
+  onAcceptSuggestion,
+  onDismissSuggestion,
+  onDismissFromInbox,
+  onPlanToday,
+  onOpenSession,
+  sessions,
+  projectsById,
+  onNavigate,
+  onSetProject,
+  editor,
+  onSetStatus,
   statusMutation,
 }: {
   item: Task;
   progress?: { done: number; total: number } | undefined;
-  onRename: (title: string) => void;
-  onCycle?: (() => void) | undefined;
-  renameMutation?: LoadState<true> | undefined;
+  parentTask?: Task | undefined;
+  subtasks: Task[];
+  onOpenTask: (id: string) => void;
+  onAcceptSuggestion: () => void;
+  onDismissSuggestion: () => void;
+  onDismissFromInbox: () => void;
+  onPlanToday: () => void;
+  onOpenSession: (id: string) => void;
+  /** The session list, to name the agent session behind a suggestion. */
+  sessions: UIState["sessions"];
+  projectsById: Map<string, ProjectRecord>;
+  onNavigate?: ((path: string) => void) | undefined;
+  /** Assign, change or clear the Task's Project from the facts line. */
+  onSetProject: (projectId: string | null) => void;
+  /** The title and description editor, shown in the title's place while open. */
+  editor: ReactNode;
+  onSetStatus?: ((status: Task["status"]) => void) | undefined;
   statusMutation?: LoadState<true> | undefined;
 }) {
   const isDone = item.status === "done";
-  const meta = onCycle || progress;
-  const [editing, setEditing] = useState(false);
+  const statusError = errorOf(statusMutation ?? idle());
+  const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const suggestion = pendingStatusSuggestion(item);
+  const inInbox = belongsInInbox(item);
+  const originSession = item.source?.sessionId
+    ? sessions.find((session) => session.id === item.source?.sessionId)
+    : undefined;
+  const suggestionSession = suggestion?.sessionId
+    ? sessions.find((session) => session.id === suggestion.sessionId)
+    : undefined;
+  // The picker offers the active Projects; an archived one still names itself
+  // when it is the current value (`ProjectSelector`).
+  const activeProjects = useMemo(
+    () =>
+      [...projectsById.values()].filter(
+        (project) => project.status !== "archived",
+      ),
+    [projectsById],
+  );
+  const today = todayIso(useUserTimeZone());
+  const planned = scheduledLabel(item, today);
+  const due = dueLabel(item, today);
+  const overdue = Boolean(item.dueDate && item.dueDate < today);
+  // The Task's ticket (the inspector's Ticket row picks one; a Task an agent
+  // gave several shows its first and counts the rest), linked to where it lives.
+  const tickets = [...(item.jiraIssueKeys ?? []), ...(item.githubIssues ?? [])];
+  const ticket: TaskTicket | null = item.jiraIssueKeys?.[0]
+    ? { source: "jira", ref: item.jiraIssueKeys[0] }
+    : item.githubIssues?.[0]
+      ? { source: "github", ref: item.githubIssues[0] }
+      : null;
+  const ticketDetails = useTicketDetails(ticket);
+  const ticketUrl =
+    ticketDetails?.url ??
+    (ticket?.source === "github" ? githubIssueUrl(ticket.ref) : undefined);
   return (
-    <div className="mb-6 space-y-2">
-      {meta ? (
-        <div className="flex items-center gap-2">
-          {onCycle ? (
-            <Button
-              variant="outline"
-              busy={isPending(statusMutation ?? idle())}
-              onClick={onCycle}
-              title={`Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-              aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Mark as ${TASK_STATUS_LABEL[nextStatus(item.status)].toLowerCase()}`}
-            >
-              <TaskStatusIcon status={item.status} size={15} />
-              {TASK_STATUS_LABEL[item.status]}
-            </Button>
-          ) : null}
-          {progress ? (
-            <span className="shrink-0 rounded-full bg-card px-2 py-0.5 text-sm text-muted-foreground">
-              {progress.done}/{progress.total} subtasks
+    <div className="mb-6 flex flex-col gap-1.5">
+      {editor ?? (
+        <h1
+          className={`text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
+        >
+          {item.title}
+        </h1>
+      )}
+      {suggestion ? (
+        // An agent's claim about this Task's status, answered on the Task
+        // itself as well as in the Focus view's review bucket: a card with a
+        // warning-toned header naming what it is, who said what (the agent
+        // leads to its session) with the reason quoted, and the answers in
+        // its footer.
+        <TaskNoticeCard
+          tone="warning"
+          icon={<Lightbulb />}
+          title="Suggestion"
+          actions={
+            <>
+              <Button variant="ghost" size="xs" onClick={onDismissSuggestion}>
+                {suggestion.to === "done" ? "Not done yet" : "Keep it done"}
+              </Button>
+              <Button
+                size="xs"
+                busy={isPending(statusMutation ?? idle())}
+                onClick={onAcceptSuggestion}
+              >
+                {suggestion.to === "done" ? <Check /> : <Undo2 />}
+                {suggestion.to === "done" ? "Mark done" : "Move to To do"}
+              </Button>
+            </>
+          }
+        >
+          <p className="flex flex-wrap items-center gap-x-1">
+            {suggestionSession ? (
+              // A real link to the session: underlined, and a modifier
+              // click opens it in a tab.
+              <a
+                href={sessionPath(suggestionSession.id)}
+                className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-3 hover:text-primary"
+                onClick={(event) =>
+                  followRowLink(event, sessionPath(suggestionSession.id), () =>
+                    onOpenSession(suggestionSession.id),
+                  )
+                }
+              >
+                <Bot className="size-3.5" aria-hidden />
+                {suggestionSession.title.trim() || "An agent session"}
+              </a>
+            ) : (
+              <span>An agent</span>
+            )}
+            <span>
+              {suggestion.to === "done"
+                ? "says this is done."
+                : "handed this back unfinished."}
             </span>
+          </p>
+          {suggestion.reason ? (
+            <blockquote className="border-l-2 pl-3 text-muted-foreground italic wrap-anywhere">
+              {suggestion.reason}
+            </blockquote>
           ) : null}
+        </TaskNoticeCard>
+      ) : null}
+      {inInbox ? (
+        // Still in the Inbox: it arrived on its own and nobody has decided
+        // about it yet. Said here as well as in the Inbox list, with the two
+        // answers that list's row gives — plan it, or just let it into the
+        // Backlog.
+        <TaskNoticeCard
+          tone="info"
+          icon={<Inbox />}
+          title="Inbox"
+          actions={
+            <>
+              <Button variant="ghost" size="xs" onClick={onPlanToday}>
+                <CalendarCheck />
+                Plan for today
+              </Button>
+              <Button size="xs" onClick={onDismissFromInbox}>
+                <Check />
+                Move to Backlog
+              </Button>
+            </>
+          }
+        >
+          <p className="flex flex-wrap items-center gap-x-1">
+            <span>{taskOrigin(item)}</span>
+            {originSession ? (
+              <>
+                <span>·</span>
+                <a
+                  href={sessionPath(originSession.id)}
+                  className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-3 hover:text-primary"
+                  onClick={(event) =>
+                    followRowLink(event, sessionPath(originSession.id), () =>
+                      onOpenSession(originSession.id),
+                    )
+                  }
+                >
+                  <Bot className="size-3.5" aria-hidden />
+                  {originSession.title.trim() || "Agent session"}
+                </a>
+              </>
+            ) : null}
+          </p>
+          <p className="text-muted-foreground">
+            It arrived on its own and is waiting for a decision.
+          </p>
+        </TaskNoticeCard>
+      ) : null}
+      {/* Under the title, as the chat title bar's subtitle: where the Task
+          stands, where it belongs, and how far its subtree is — plain muted
+          facts, not chips. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+        {onSetStatus ? (
+          // A menu of the three statuses rather than a click that cycles:
+          // which one comes next is not something to have to remember.
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  // Pulled out by its own padding so the glyph lines up with
+                  // the title's first letter.
+                  className="-ml-2 text-sm font-normal text-muted-foreground hover:text-foreground"
+                  busy={isPending(statusMutation ?? idle())}
+                  aria-label={`Status: ${TASK_STATUS_LABEL[item.status]}. Change status`}
+                />
+              }
+            >
+              <TaskStatusIcon
+                status={item.status}
+                size={14}
+                claimed={Boolean(suggestion)}
+              />
+              {TASK_STATUS_LABEL[item.status]}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-40">
+              {TASK_STATUSES.map((status) => (
+                <DropdownMenuItem
+                  key={status}
+                  aria-current={status === item.status || undefined}
+                  onClick={() => onSetStatus(status)}
+                >
+                  <TaskStatusIcon status={status} size={14} />
+                  <span className={status === item.status ? "font-medium" : ""}>
+                    {TASK_STATUS_LABEL[status]}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          // On a phone the dock's action row changes the status; here it is
+          // only read.
+          <span className="inline-flex items-center gap-1.5">
+            <TaskStatusIcon
+              status={item.status}
+              size={14}
+              claimed={Boolean(suggestion)}
+            />
+            {TASK_STATUS_LABEL[item.status]}
+          </span>
+        )}
+        {/* Always present, a picker either way: a Task with no Project says
+            so, and setting one is a click away rather than in the inspector. */}
+        <span className="inline-flex min-w-0 items-center gap-0.5">
+          <ProjectSelector
+            currentId={item.projectId ?? null}
+            projects={activeProjects}
+            projectsById={projectsById}
+            onChange={(projectId) => onSetProject(projectId || null)}
+            label={null}
+            emptyLabel="No project"
+            // `pr-1`: the open-project arrow follows the name closely.
+            className="-ml-2 h-auto min-w-0 py-0.5 pr-1 text-sm font-normal text-muted-foreground hover:text-foreground"
+          />
+          {item.projectId && onNavigate ? (
+            <IconButton
+              label="Open project"
+              size="icon-xs"
+              className="size-5 text-muted-foreground hover:text-foreground"
+              onClick={() => onNavigate(projectPath(item.projectId!))}
+            >
+              <ArrowUpRight />
+            </IconButton>
+          ) : null}
+        </span>
+        {subtasks.length ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-sm font-normal text-muted-foreground hover:text-foreground"
+            aria-expanded={subtasksOpen}
+            title={
+              progress
+                ? `${progress.done} of ${progress.total} done, nested subtasks included`
+                : undefined
+            }
+            onClick={() => setSubtasksOpen((value) => !value)}
+          >
+            <ChevronRight
+              className={`transition-transform ${subtasksOpen ? "rotate-90" : ""}`}
+            />
+            {subtasks.filter((task) => task.status === "done").length}/
+            {subtasks.length} subtasks
+          </Button>
+        ) : null}
+        {/* The planning and tickets the inspector edits, read here too. */}
+        {planned ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5"
+            title={`Planned for ${planned.toLowerCase()}`}
+          >
+            <CalendarCheck size={14} aria-hidden />
+            {planned}
+          </span>
+        ) : null}
+        {due ? (
+          <span
+            className={`inline-flex shrink-0 items-center gap-1.5 ${overdue ? "text-destructive" : ""}`}
+            title={`Due ${due.toLowerCase()}`}
+          >
+            <Flag size={14} aria-hidden />
+            {due}
+          </span>
+        ) : null}
+        {item.priority && item.priority !== "normal" ? (
+          <span
+            className={`shrink-0 ${item.priority === "urgent" ? "text-destructive" : item.priority === "high" ? "text-warning" : ""}`}
+          >
+            {item.priority} priority
+          </span>
+        ) : null}
+        {ticket ? (
+          <span className="inline-flex min-w-0 items-center gap-1.5">
+            <Ticket size={14} aria-hidden className="shrink-0" />
+            {ticketUrl ? (
+              <a
+                href={ticketUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={
+                  ticketDetails?.title
+                    ? `${ticket.ref} — ${ticketDetails.title}`
+                    : `Open ${ticket.ref}`
+                }
+                className="truncate font-mono text-xs text-foreground underline underline-offset-3 hover:text-primary"
+              >
+                {ticket.ref}
+              </a>
+            ) : (
+              <span className="truncate font-mono text-xs">{ticket.ref}</span>
+            )}
+            {tickets.length > 1 ? (
+              <span
+                className="shrink-0 text-xs"
+                title={tickets.slice(1).join(", ")}
+              >
+                +{tickets.length - 1}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      {statusError ? <ErrorNote message={statusError} /> : null}
+      {/* Where it sits in the Backlog: the Task it belongs to, and — unfolded
+          from the facts line — the ones that belong to it. */}
+      {parentTask ? (
+        // Wraps rather than overflowing: a parent's title can be as long as
+        // this Task's own. The glyphs sit on the first line.
+        <div className="flex min-w-0 items-start gap-1.5 text-sm text-muted-foreground">
+          {/* Each glyph in a box one text line tall, so it centres on the
+              first line however far the title wraps. */}
+          <span className="flex h-5 shrink-0 items-center">
+            <CornerLeftUp className="size-3.5" aria-hidden />
+          </span>
+          <span className="shrink-0">Part of</span>
+          <Button
+            variant="link"
+            size="xs"
+            className="h-auto min-w-0 shrink items-start px-0 py-0 text-left text-sm font-normal whitespace-normal text-foreground"
+            onClick={() => onOpenTask(parentTask.id)}
+          >
+            <span className="flex h-5 shrink-0 items-center">
+              <TaskStatusIcon status={parentTask.status} size={14} />
+            </span>
+            <span className="min-w-0 wrap-anywhere">{parentTask.title}</span>
+          </Button>
         </div>
       ) : null}
-      {errorOf(statusMutation ?? idle()) ? (
-        <ErrorNote message={errorOf(statusMutation ?? idle())!} />
-      ) : null}
-      <EditableText
-        value={item.title}
-        onSubmit={onRename}
-        submitState={renameMutation}
-        editing={editing}
-        onEditingChange={setEditing}
-        label="Task title"
-      >
-        <div className="flex items-start gap-2">
-          <h1
-            className={`min-w-0 flex-1 text-lg font-semibold ${isDone ? "text-muted-foreground line-through" : "text-foreground"}`}
-          >
-            {item.title}
-          </h1>
-          <IconButton
-            label="Rename task"
-            className="mt-1"
-            onClick={() => setEditing(true)}
-          >
-            <Pencil />
-          </IconButton>
+      {subtasksOpen && subtasks.length ? (
+        <div className="ml-1 border-l pl-2">
+          <TaskLinkList items={subtasks} onOpen={onOpenTask} />
         </div>
-      </EditableText>
+      ) : null}
     </div>
   );
 }
 
-function TaskCollapsibleSection({
+/**
+ * A notice about the Task that asks for a decision — an agent's suggestion,
+ * an Inbox arrival: a 32px tinted header naming it, the explanation, and a
+ * 32px footer with the answers.
+ */
+function TaskNoticeCard({
+  tone,
+  icon,
   title,
-  storageKey,
-  defaultOpen = true,
-  trailing,
+  actions,
   children,
 }: {
+  tone: "warning" | "info";
+  icon: ReactNode;
   title: string;
-  storageKey: string;
-  defaultOpen?: boolean;
-  trailing?: ReactNode;
+  actions: ReactNode;
   children: ReactNode;
 }) {
-  const [open, setOpen] = useState(() => {
-    try {
-      const value = localStorage.getItem(storageKey);
-      return value === null ? defaultOpen : value === "1";
-    } catch {
-      return defaultOpen;
-    }
-  });
-  const changeOpen = (next: boolean) => {
-    setOpen(next);
-    try {
-      localStorage.setItem(storageKey, next ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  };
   return (
-    <section className="mb-4">
-      <Collapsible open={open} onOpenChange={changeOpen}>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <CollapsibleTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="min-w-0 justify-start uppercase tracking-wide text-muted-foreground"
-              />
-            }
-          >
-            <ChevronRight className={`shrink-0 ${open ? "rotate-90" : ""}`} />
-            <span className="truncate">{title}</span>
-          </CollapsibleTrigger>
-          {trailing ? <div className="shrink-0">{trailing}</div> : null}
-        </div>
-        <CollapsibleContent>{children}</CollapsibleContent>
-      </Collapsible>
-    </section>
+    <AppCard
+      role="status"
+      tone={tone}
+      icon={icon}
+      label={title}
+      actions={actions}
+    >
+      {children}
+    </AppCard>
   );
 }

@@ -17,17 +17,6 @@ interface SessionCaps {
 }
 
 /**
- * Workspace-aware sessions edit files, so they share the git-status / changed
- * file / review-changes treatment. These are the code-editing personas
- * (Workshop and Developer) — independent of harness: a Claude-SDK *assistant*
- * has no file/shell tools and is NOT workspace aware, while a Claude-SDK
- * coding persona (workshop or developer) is (same as the pi coding agents).
- */
-export function isWorkspaceAware(s: SessionCaps): boolean {
-  return s.agentType === "workshop" || s.agentType === "developer";
-}
-
-/**
  * Whether the session has the Build/Plan mode axis. Every interactive persona
  * gets it on both harnesses: coding sessions lose file writers and every
  * persona loses side-effecting app tools. The server-owned workflow coordinator

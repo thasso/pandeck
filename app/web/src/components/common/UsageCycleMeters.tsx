@@ -53,7 +53,10 @@ export function UsageCycleMeters({
   return (
     // `text-xs` sits here, not on the cells: the column widths below are in
     // `em`, so they scale with the user's text size instead of clipping.
-    <span className="flex w-full flex-col gap-0.5 text-xs tabular-nums">
+    // One grid for both rows: the meters share a column, so they start and end
+    // together, and the value column is as wide as this card's longest value —
+    // the text sits right after the meter with nothing left over on the right.
+    <span className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-[0.5em] gap-y-0.5 text-xs tabular-nums">
       <UsageCycleRow
         label="5h"
         title="Rolling 5-hour window"
@@ -83,21 +86,8 @@ export function UsageCycleMeters({
   );
 }
 
-/**
- * The row's fixed column widths, in `em` of the micro role. Every row of every
- * card uses exactly these, so meters start and end on the same x across the
- * whole provider strip and nothing moves when a state changes: the reading
- * column holds `⟳100%` and the reset column the widest countdown
- * `formatUsageReset` can produce (`9d 23h`). The reason cell spans both plus
- * the gap between them, which is why these are one shared constant.
- */
-const COL = {
-  label: "w-[1.5em]",
-  reading: "w-[3.4em]",
-  reset: "w-[4.2em]",
-  reason: "w-[8.1em]",
-  gap: "gap-x-[0.5em]",
-};
+/** The label column, fixed so `5h`/`wk` line up across cards. */
+const LABEL_COL = "w-[1.5em]";
 
 function UsageCycleRow({
   label,
@@ -158,21 +148,21 @@ function UsageCycleRow({
   const clock = resetLabel
     ? formatResetClock(window?.resetsAt ?? null, reset)
     : "";
+  const rowTitle = `${title}: ${reading}${
+    resetLabel ? ` · resets in ${resetLabel}${clock ? ` (${clock})` : ""}` : ""
+  }`;
 
   return (
-    <span
-      className={`flex w-full min-w-0 items-center ${COL.gap}`}
-      title={`${title}: ${reading}${
-        resetLabel
-          ? ` · resets in ${resetLabel}${clock ? ` (${clock})` : ""}`
-          : ""
-      }`}
-    >
-      {/* Fixed label column so the rows line up across cards. */}
-      <span className={`${COL.label} shrink-0 text-muted-foreground`}>
+    // `contents`: the row's three cells are the card grid's cells, so every
+    // cell carries the row's title itself.
+    <span className="contents">
+      <span className={`${LABEL_COL} text-muted-foreground`} title={rowTitle}>
         {label}
       </span>
-      <span className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-border">
+      <span
+        className="h-1 min-w-0 overflow-hidden rounded-full bg-border"
+        title={rowTitle}
+      >
         {kind === "meter" ? (
           <span
             className={`block h-full rounded-full ${meterFill(pct as number)} ${stale ? "opacity-50" : ""}`}
@@ -186,32 +176,23 @@ function UsageCycleRow({
           <Skeleton as="span" className="block h-full w-full rounded-full" />
         ) : null}
       </span>
-      {kind === "reason" ? (
-        // One cell as wide as the reading and reset columns together: a reason
-        // is prose, and splitting it across the number columns would either
-        // truncate it or push the meter around.
-        <span
-          className={`${COL.reason} shrink-0 truncate text-right text-muted-foreground`}
-        >
-          {reasonInTitleOnly ? "" : reading}
-        </span>
-      ) : (
-        <>
-          <span
-            className={`${COL.reading} shrink-0 text-right text-muted-foreground`}
-          >
-            {stale ? <span className="text-muted-foreground">⟳</span> : null}
+      {/* The reading and its countdown read as one phrase beside the meter;
+          a reason is prose in the same cell. */}
+      <span className="min-w-0 truncate text-muted-foreground" title={rowTitle}>
+        {kind === "reason" ? (
+          reasonInTitleOnly ? (
+            ""
+          ) : (
+            reading
+          )
+        ) : (
+          <>
+            {stale ? <span>⟳</span> : null}
             {reading}
-          </span>
-          {/* Reserved even when empty: a row without a countdown must not let
-              the meter grow into the space the row beside it uses. */}
-          <span
-            className={`${COL.reset} shrink-0 text-right text-muted-foreground`}
-          >
-            {resetLabel}
-          </span>
-        </>
-      )}
+            {resetLabel ? ` · ${resetLabel}` : ""}
+          </>
+        )}
+      </span>
     </span>
   );
 }

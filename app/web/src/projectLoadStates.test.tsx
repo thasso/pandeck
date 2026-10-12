@@ -81,14 +81,16 @@ describe("Project list/detail dependent-source load states", () => {
     expect(render()).not.toContain("Failed to clone project repo");
   });
 
+  /** The Remove clone button, rendered disabled (`aria-disabled`, still focusable). */
+  const REMOVE_CLONE_DISABLED =
+    /<button[^>]*aria-disabled="true"[^>]*>(?:(?!<\/button>)[\s\S])*Remove clone<\/button>/;
+
   it("does not claim empty or enable clone removal before Worktrees answer", () => {
     const html = render(ready(project), null);
     expect(html).toContain("Loading Project worktrees");
     expect(html).toContain("Checking dependent worktrees");
-    expect(html).toContain(
-      'aria-label="Checking worktrees before clone removal"',
-    );
-    expect(html).toContain("disabled");
+    // Disabled but focusable: why it cannot be pressed is its tooltip.
+    expect(html).toMatch(REMOVE_CLONE_DISABLED);
     expect(html).not.toContain("No worktrees yet");
   });
 
@@ -118,8 +120,7 @@ describe("Project list/detail dependent-source load states", () => {
     );
     expect(html).toContain("main");
     expect(html).toContain("Checking dependent worktrees");
-    expect(html).toContain('aria-label="Checking worktrees');
-    expect(html).toContain("disabled");
+    expect(html).toMatch(REMOVE_CLONE_DISABLED);
   });
 
   it("narrates a failed Worktree refresh beside retained rows with retry", () => {

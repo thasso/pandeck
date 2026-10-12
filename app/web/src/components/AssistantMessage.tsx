@@ -9,7 +9,8 @@ import {
 } from "react";
 import { Bot, PackageCheck, Scissors } from "lucide-react";
 import { Badge } from "./ui/badge.tsx";
-import { Card, CardContent } from "./ui/card.tsx";
+import { AppCard } from "./common/AppCard.tsx";
+import { peerPromptCardOf } from "@assistant/shared/toolCards";
 import { ErrorNote, PaneLoading } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import type {
@@ -183,6 +184,66 @@ function LazyCardFallback({ label = "Opening card…" }: { label?: string }) {
   return <PaneLoading label={label} />;
 }
 
+/**
+ * A block that renders as a one-line activity row — a tool call (not a card),
+ * a peer message, thinking — rather than prose or a card.
+ */
+function isActivityRowBlock(block: DisplayBlock): boolean {
+  if (block.kind === "thinking") return true;
+  if (block.kind !== "tool") return false;
+  return peerPromptCardOf(block) !== null || !toolBlockIsVisible(block, false);
+}
+
+/**
+ * The message's blocks with each run of consecutive activity rows wrapped in
+ * one group: rows in a group sit close together, while the message's own gap
+ * keeps separating prose, cards and groups. A group is keyed by its first
+ * block, so a streaming row joining it does not remount the rows above.
+ */
+function groupActivityRows(
+  items: {
+    key: number;
+    node: ReactNode;
+    activity: boolean;
+    separatorBefore: boolean;
+  }[],
+): ReactNode[] {
+  const out: ReactNode[] = [];
+  let group: { key: number; nodes: ReactNode[] } | null = null;
+  const flush = () => {
+    if (!group) return;
+    out.push(
+      <div
+        key={`activity-${group.key}`}
+        data-activity-group=""
+        className="flex flex-col gap-0.5"
+      >
+        {group.nodes}
+      </div>,
+    );
+    group = null;
+  };
+  for (const item of items) {
+    if (!item.node) continue;
+    if (item.separatorBefore) {
+      flush();
+      out.push(
+        <hr key={`separator-${item.key}`} className="border-border/60" />,
+      );
+    }
+    const node = <Fragment key={item.key}>{item.node}</Fragment>;
+    if (item.activity) {
+      group ??= { key: item.key, nodes: [] };
+      group.nodes.push(node);
+    } else {
+      flush();
+      out.push(node);
+    }
+  }
+  flush();
+  return out;
+}
+
 function ToolGroupNoticeCard({
   title,
   summary,
@@ -194,29 +255,24 @@ function ToolGroupNoticeCard({
 }) {
   const shownTools = tools.slice(0, 6);
   return (
-    <Card className="my-2">
-      <CardContent className="flex min-w-0 items-start gap-2">
-        <PackageCheck size={15} className="mt-0.5 shrink-0" />
-        <div className="min-w-0">
-          <div className="font-medium text-foreground">{title}</div>
-          {summary && <div className="mt-0.5">{summary}</div>}
-          {shownTools.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {shownTools.map((tool) => (
-                <Badge key={tool} variant="secondary">
-                  {tool}
-                </Badge>
-              ))}
-              {tools.length > shownTools.length && (
-                <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
-                  +{tools.length - shownTools.length} more
-                </span>
-              )}
-            </div>
+    <AppCard icon={<PackageCheck />} label="Tools">
+      <p className="font-medium">{title}</p>
+      {summary && <p className="text-muted-foreground">{summary}</p>}
+      {shownTools.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {shownTools.map((tool) => (
+            <Badge key={tool} variant="secondary">
+              {tool}
+            </Badge>
+          ))}
+          {tools.length > shownTools.length && (
+            <span className="px-1.5 py-0.5 text-xs text-muted-foreground">
+              +{tools.length - shownTools.length} more
+            </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </AppCard>
   );
 }
 
@@ -525,6 +581,7 @@ export const AssistantMessage = memo(function AssistantMessage({
           <LazyCommitCard
             commit={block.commit}
             onAccept={onAcceptCommitDryRun}
+            onOpenTask={onOpenTask}
           />
         </Suspense>
       );
@@ -623,20 +680,17 @@ export const AssistantMessage = memo(function AssistantMessage({
             <span className="min-w-0 truncate">{originLabel}</span>
           </Badge>
         ) : null}
-        {blocks.map((block, i) => {
-          // The "before final response" separator: marks where the tool loop
-          // ended and the final answer begins. `renderBlock` returns null for a
-          // hidden block, so only draw the rule when the boundary block renders.
-          const content = renderBlock(block, i);
-          if (i !== finalResponseSeparatorBeforeBlock || !content)
-            return content;
-          return (
-            <Fragment key={i}>
-              <hr className="border-border/60" />
-              {content}
-            </Fragment>
-          );
-        })}
+        {groupActivityRows(
+          blocks.map((block, i) => ({
+            key: i,
+            node: renderBlock(block, i),
+            activity: isActivityRowBlock(block),
+            // The "before final response" separator: marks where the tool loop
+            // ended and the final answer begins. Only drawn when the boundary
+            // block renders (`renderBlock` returns null for a hidden one).
+            separatorBefore: i === finalResponseSeparatorBeforeBlock,
+          })),
+        )}
 
         {progress && <ProgressIndicator label={progress} />}
 

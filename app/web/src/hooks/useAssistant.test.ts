@@ -2176,7 +2176,7 @@ describe("useAssistant peer-prompt card update / history expansion reducer", () 
     ]);
   });
 
-  it("resets peerPromptCardOverrides and peerPromptHistoryExpanded when a new session snapshot loads", () => {
+  it("resets peerPromptCardOverrides when a new session snapshot loads", () => {
     let state = apply({
       type: "snapshot",
       state: session(),
@@ -2199,16 +2199,7 @@ describe("useAssistant peer-prompt card update / history expansion reducer", () 
       },
       state,
     );
-    state = apply(
-      {
-        type: "peerPromptHistoryExpanded",
-        sessionId: "s1",
-        projection: { threads: [], truncated: false },
-      },
-      state,
-    );
     expect(state.peerPromptCardOverrides).not.toEqual({});
-    expect(state.peerPromptHistoryExpanded).not.toBeNull();
 
     state = apply(
       {
@@ -2227,108 +2218,6 @@ describe("useAssistant peer-prompt card update / history expansion reducer", () 
       state,
     );
     expect(state.peerPromptCardOverrides).toEqual({});
-    expect(state.peerPromptHistoryExpanded).toBeNull();
-  });
-
-  it("applies an expanded history projection only for the currently viewed session", () => {
-    let state = apply({
-      type: "snapshot",
-      state: session(),
-      contextInfo: contextInfo(),
-      snapshot: {
-        sessionId: "s1",
-        runState: "idle",
-        timeline: [],
-        timelineStart: 0,
-        totalEntryCount: 0,
-        streaming: [],
-      },
-    });
-    const projection = {
-      threads: [
-        {
-          conversationId: "c1",
-          otherPartyTitle: "Other",
-          peerSessionId: "peer-1",
-          messages: [],
-        },
-      ],
-      truncated: false,
-    };
-    state = apply(
-      {
-        type: "peerPromptHistoryExpanded",
-        sessionId: "wrong-session",
-        projection,
-      },
-      state,
-    );
-    expect(state.peerPromptHistoryExpanded).toBeNull();
-
-    state = apply(
-      { type: "peerPromptHistoryExpanded", sessionId: "s1", projection },
-      state,
-    );
-    expect(state.peerPromptHistoryExpanded).toEqual(projection);
-  });
-
-  it("merges an expanded history projection into peerPromptCardOverrides too, so explicitly loading more history also reconciles stale rendered cards", () => {
-    let state = apply({
-      type: "snapshot",
-      state: session(),
-      contextInfo: contextInfo(),
-      snapshot: {
-        sessionId: "s1",
-        runState: "idle",
-        timeline: [],
-        timelineStart: 0,
-        totalEntryCount: 0,
-        streaming: [],
-      },
-    });
-    // A live broadcast already landed for one message not in the expanded page.
-    state = apply(
-      {
-        type: "peerPromptCardUpdate",
-        sessionId: "s1",
-        messageKey: "live-only",
-        state: "delivered",
-      },
-      state,
-    );
-    const projection = {
-      truncated: true,
-      threads: [
-        {
-          conversationId: "c1",
-          otherPartyTitle: "Other",
-          peerSessionId: "peer-1",
-          messages: [
-            {
-              id: "old-1",
-              direction: "received" as const,
-              message: "old",
-              state: "failed" as const,
-              responseRequested: false,
-              failureReason: "boom",
-              createdAt: 1,
-            },
-          ],
-        },
-      ],
-    };
-    state = apply(
-      { type: "peerPromptHistoryExpanded", sessionId: "s1", projection },
-      state,
-    );
-    expect(state.peerPromptCardOverrides["live-only"]).toEqual({
-      state: "delivered",
-      failureReason: undefined,
-    });
-    expect(state.peerPromptCardOverrides["old-1"]).toEqual({
-      state: "failed",
-      failureReason: "boom",
-    });
   });
 
   it("seeds peerPromptCardOverrides from SessionState.peerPrompts on snapshot, so a navigation/reconnect shows durable card state without waiting for a new live broadcast", () => {

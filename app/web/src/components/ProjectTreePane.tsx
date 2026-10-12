@@ -1,6 +1,6 @@
 import { applyPatch } from "@assistant/shared";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { GitBranch, House, MessageSquarePlus } from "lucide-react";
+import { FolderKanban, MessageSquarePlus } from "lucide-react";
 import type {
   ProjectRecord,
   SessionListItem,
@@ -19,14 +19,13 @@ import {
 } from "../lib/backlogTreeModel.ts";
 import { samePlacements, type Task } from "../lib/backlogTree.ts";
 import { projectColor } from "../lib/projectDisplay.ts";
-import { worktreeAxes } from "../lib/worktreeAxes.ts";
 import { SessionRowContent } from "./SessionRow.tsx";
 import {
-  AxesSummary,
   INITIAL_SESSION_LIMIT,
+  ROW_ACTION_REVEAL,
   SESSION_LIMIT_STEP,
-  WorktreeLineDelta,
-  WorktreeMergedBadge,
+  WorktreeRow,
+  compareWorktrees,
   loadExpandedWorktreeIds,
   persistExpandedWorktreeIds,
 } from "./worktreeRowParts.tsx";
@@ -70,6 +69,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   onStartSession,
   onStartSessionInWorktree,
   onVisibleWorktreeIdsChange,
+  flush = false,
+  rootProjectId,
 }: {
   projects: ProjectRecord[];
   loading: boolean;
@@ -81,17 +82,30 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   worktrees?: WorktreeRecord[] | null;
   worktreeStatuses?: Record<string, WorktreeGitStatus>;
   selectedWorktreeId?: string | null | undefined;
-  onReorder: (
+  /** Absent under `rootProjectId`, which has no project rows to move or open. */
+  onReorder?: (
     orderedIds: string[],
     placements: { id: string; parentId?: string | null }[],
   ) => void;
-  onOpenProject: (id: string) => void;
-  onOpenSession?: (id: string) => void;
-  onArchiveSession?: (id: string, archived: boolean) => void;
-  onOpenWorktree?: (id: string) => void;
+  onOpenProject?: (id: string) => void;
+  onOpenSession?: ((id: string) => void) | undefined;
+  onArchiveSession?: ((id: string, archived: boolean) => void) | undefined;
+  onOpenWorktree?: ((id: string) => void) | undefined;
   onStartSession?: (id: string) => void;
-  onStartSessionInWorktree?: (id: string) => void;
+  onStartSessionInWorktree?: ((id: string) => void) | undefined;
   onVisibleWorktreeIdsChange?: (ids: string[]) => void;
+  /**
+   * Edge-to-edge, hairline-divided rows (the sidebar), as the Tasks tree: the
+   * notes and placeholders around the tree keep their own inset.
+   */
+  flush?: boolean;
+  /**
+   * Show only what is UNDER this project — its worktrees with their sessions,
+   * and its sessions outside any worktree — as the top level, without the
+   * project row and without drag: the Project page's tree, the same rows,
+   * paging and remembered expansion as the sidebar's.
+   */
+  rootProjectId?: string | undefined;
 }) {
   const ordered = projects;
   const lastReorder = useRef<{
@@ -146,6 +160,17 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     sessionLimits,
   ]);
 
+  // One project's contents (not its subprojects), or the whole registry.
+  const shownNodes = useMemo(
+    () =>
+      rootProjectId
+        ? (findNode(nodes, rootProjectId)?.children ?? []).filter(
+            (node) => node.data.kind !== "project",
+          )
+        : nodes,
+    [nodes, rootProjectId],
+  );
+
   const expandableProjects = useMemo(
     () => collectExpandableProjectIds(nodes),
     [nodes],
@@ -170,8 +195,8 @@ export const ProjectTreePane = memo(function ProjectTreePane({
   );
 
   const visibleWorktreeIds = useMemo(
-    () => collectVisibleWorktreeIds(nodes, new Set(expandedIds)),
-    [nodes, expandedIds],
+    () => collectVisibleWorktreeIds(shownNodes, new Set(expandedIds)),
+    [shownNodes, expandedIds],
   );
   useEffect(() => {
     onVisibleWorktreeIdsChange?.(visibleWorktreeIds);
@@ -197,8 +222,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         .filter((id) => expanded.has(id))
         .map(worktreeIdFromNodeId),
     );
-    setCollapsedProjects(nextCollapsed);
-    persistCollapsedIds(nextCollapsed);
+    // Under one project the project rows are not in the tree, so its answer
+    // says nothing about them: leave the sidebar's collapsed set alone.
+    if (!rootProjectId) {
+      setCollapsedProjects(nextCollapsed);
+      persistCollapsedIds(nextCollapsed);
+    }
     setExpandedWorktreeIds(nextWorktrees);
     persistExpandedWorktreeIds(nextWorktrees);
   };
@@ -208,7 +237,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     if (samePlacements(placements, projectPlacementsFromNodes(nodes))) return;
     const orderedIds = placements.map((placement) => placement.id);
     lastReorder.current = { orderedIds, placements };
-    onReorder(orderedIds, placements);
+    onReorder?.(orderedIds, placements);
   };
 
   const dataForId = useMemo(() => {
@@ -228,7 +257,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
       <div
         role="status"
         aria-label="Loading projects"
-        className="flex flex-col gap-1.5 px-1 py-1"
+        className={`flex flex-col gap-1.5 py-1 ${flush ? "px-2" : "px-1"}`}
       >
         {[0, 1, 2, 3].map((row) => (
           <Skeleton
@@ -241,7 +270,11 @@ export const ProjectTreePane = memo(function ProjectTreePane({
     );
   }
   if (projects.length === 0) {
-    return <EmptyBox>No projects in the registry yet.</EmptyBox>;
+    return (
+      <div className={flush ? "mx-2" : undefined}>
+        <EmptyBox>No projects in the registry yet.</EmptyBox>
+      </div>
+    );
   }
   return (
     <>
@@ -252,9 +285,9 @@ export const ProjectTreePane = memo(function ProjectTreePane({
           onRetry={() => {
             const attempted = lastReorder.current;
             if (attempted)
-              onReorder(attempted.orderedIds, attempted.placements);
+              onReorder?.(attempted.orderedIds, attempted.placements);
           }}
-          className="mb-2"
+          className={flush ? "mx-2 mb-2" : "mb-2"}
         />
       ) : null}
       {relationsLoading ? (
@@ -268,11 +301,12 @@ export const ProjectTreePane = memo(function ProjectTreePane({
         </div>
       ) : null}
       <Tree
-        items={nodes}
+        items={shownNodes}
         indentWidth={INDENT_WIDTH}
         compact
+        flush={flush}
         showGuides
-        aria-label="Projects"
+        aria-label={rootProjectId ? "Worktrees and sessions" : "Projects"}
         expandedIds={expandedIds}
         onExpandedChange={onExpandedChange}
         selectedIds={selectedIds}
@@ -283,9 +317,15 @@ export const ProjectTreePane = memo(function ProjectTreePane({
             onOpenWorktree?.(worktreeIdFromNodeId(id));
           else if (id.startsWith(SESSION_NODE_PREFIX))
             onOpenSession?.(sessionIdFromNodeId(id));
-          else if (!id.startsWith(MORE_NODE_PREFIX)) onOpenProject(id);
+          else if (!id.startsWith(MORE_NODE_PREFIX)) onOpenProject?.(id);
         }}
-        onMove={(result) => handleMove(result.items)}
+        // Projects are reordered in the registry tree, never under one.
+        {...(rootProjectId
+          ? {}
+          : {
+              onMove: (result: { items: ProjectBrowserNode[] }) =>
+                handleMove(result.items),
+            })}
         canDrag={(node) => !reorderBusy && node.data.kind === "project"}
         canDrop={({ parentId }) =>
           !parentId || dataForId.get(parentId)?.kind === "project"
@@ -303,7 +343,7 @@ export const ProjectTreePane = memo(function ProjectTreePane({
               );
             case "worktree":
               return (
-                <WorktreeRowContent
+                <WorktreeRow
                   worktree={data.worktree}
                   status={data.status}
                   now={now}
@@ -373,29 +413,28 @@ const ProjectRowContent = memo(function ProjectRowContent({
   const color = projectColor(project);
   return (
     <div
-      className="group/row flex min-w-0 items-center gap-1"
+      className="group/row flex min-w-0 items-center gap-1.5"
       title={`${project.key} · ${project.name}`}
     >
-      <span
-        className="flex size-5 shrink-0 items-center justify-center"
+      {/* The Project glyph every surface uses: its folder, in its colour. */}
+      <FolderKanban
+        size={14}
+        className="shrink-0"
+        style={{ color: color.dot }}
         aria-hidden
-      >
+      />
+      <span className="min-w-0 flex-1 truncate text-sm">
         <span
-          className="size-2 rounded-full"
-          style={{ backgroundColor: color.dot }}
-        />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        <span className="font-bold tracking-wide">{project.key}</span>
-        <span className="mx-1 text-muted-foreground">·</span>
-        <span className={selected ? "font-medium" : undefined}>
-          {project.name}
+          className={`text-foreground ${selected ? "font-semibold" : "font-medium"}`}
+        >
+          {project.key}
         </span>
+        <span className="text-muted-foreground"> · {project.name}</span>
       </span>
       {onStartSession ? (
         <IconButton
           size="icon-xs"
-          className="shrink-0"
+          className={`shrink-0 ${ROW_ACTION_REVEAL}`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
@@ -409,73 +448,6 @@ const ProjectRowContent = memo(function ProjectRowContent({
     </div>
   );
 });
-
-interface WorktreeRowContentProps {
-  worktree: WorktreeRecord;
-  status?: WorktreeGitStatus | undefined;
-  now: number;
-  selected: boolean;
-  onStartSession?: ((id: string) => void) | undefined;
-}
-
-function WorktreeRowContentImpl({
-  worktree,
-  status,
-  now,
-  selected,
-  onStartSession,
-}: WorktreeRowContentProps) {
-  const branch = status?.branch ?? worktree.branch;
-  const axes = worktreeAxes(worktree, status, now);
-  return (
-    <div
-      className="group/row flex min-w-0 items-start gap-2"
-      title={`${branch}\n${worktree.path}`}
-    >
-      <span
-        className={`flex size-5 shrink-0 items-center justify-center rounded-md ${selected ? "bg-background text-primary" : "bg-muted text-muted-foreground"}`}
-        aria-hidden
-      >
-        {worktree.isMain ? <House size={12} /> : <GitBranch size={12} />}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-hidden">
-        <span className="flex min-w-0 items-center gap-1">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {branch}
-          </span>
-          <WorktreeLineDelta status={status} />
-          <WorktreeMergedBadge status={status} />
-        </span>
-        <AxesSummary axes={axes} baseLabel={worktree.baseBranch} />
-      </span>
-      {onStartSession ? (
-        <IconButton
-          size="icon-xs"
-          className="shrink-0"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStartSession(worktree.id);
-          }}
-          label={`Start session in worktree: ${branch}`}
-        >
-          <MessageSquarePlus />
-        </IconButton>
-      ) : null}
-    </div>
-  );
-}
-
-const WorktreeRowContent = memo(
-  WorktreeRowContentImpl,
-  (previous, next) =>
-    previous.worktree === next.worktree &&
-    previous.status === next.status &&
-    previous.selected === next.selected &&
-    previous.onStartSession === next.onStartSession &&
-    worktreeAxes(previous.worktree, previous.status, previous.now).stale ===
-      worktreeAxes(next.worktree, next.status, next.now).stale,
-);
 
 function projectNodesFromBacklogNodes(
   nodes: BacklogNode[],
@@ -589,6 +561,18 @@ function withRelatedChildren(
   });
 }
 
+function findNode(
+  nodes: ProjectBrowserNode[],
+  id: string,
+): ProjectBrowserNode | undefined {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = findNode(node.children ?? [], id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 function groupByProject(
   worktrees: WorktreeRecord[],
 ): Map<string, WorktreeRecord[]> {
@@ -599,12 +583,7 @@ function groupByProject(
     grouped.set(worktree.projectId, list);
   }
   for (const list of grouped.values()) {
-    list.sort(
-      (a, b) =>
-        Number(Boolean(b.isMain)) - Number(Boolean(a.isMain)) ||
-        b.updatedAt - a.updatedAt ||
-        a.branch.localeCompare(b.branch),
-    );
+    list.sort(compareWorktrees);
   }
   return grouped;
 }

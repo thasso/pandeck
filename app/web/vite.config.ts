@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolveAuthToken } from "../server/src/authToken.ts";
@@ -72,6 +72,30 @@ function forceDevNodeEnvForServe(command: string): void {
   if (command === "serve" && process.env.NODE_ENV === "production") {
     process.env.NODE_ENV = "development";
   }
+}
+
+// Opt-in dev proxy (`VITE_SERVER_PROXY=http://127.0.0.1:8787`): the page talks
+// to its own origin and Vite forwards `/api` and `/ws` to that server — e.g. a
+// running production instance bound to loopback, viewed over Tailscale or a
+// port forward. Requests reach the server as a loopback client: the Origin is
+// rewritten to the target, which the server's origin check always allows (the
+// token stays the real gate; set ASSISTANT_TOKEN to that server's token).
+function serverProxy(): Record<string, ProxyOptions> {
+  const target = process.env.VITE_SERVER_PROXY;
+  if (!target) return {};
+  const asLoopbackClient: ProxyOptions["configure"] = (proxy) => {
+    proxy.on("proxyReq", (req) => req.setHeader("origin", target));
+    proxy.on("proxyReqWs", (req) => req.setHeader("origin", target));
+  };
+  return {
+    "/api": { target, changeOrigin: true, configure: asLoopbackClient },
+    "/ws": {
+      target,
+      changeOrigin: true,
+      ws: true,
+      configure: asLoopbackClient,
+    },
+  };
 }
 
 export default defineConfig(({ command }) => {
@@ -157,9 +181,10 @@ export default defineConfig(({ command }) => {
         ),
       },
     },
-    // No proxy: the client talks to the server directly (see socket.ts
-    // `defaultSocketUrl`). This keeps the Vite dev server a pure asset/HMR server
-    // with zero coupling to the API server, so server reloads never disturb it.
+    // No proxy by default: the client talks to the server directly (see
+    // socket.ts `defaultSocketUrl`). This keeps the Vite dev server a pure
+    // asset/HMR server with zero coupling to the API server, so server reloads
+    // never disturb it. `serverProxy()` is the opt-in exception.
     server: {
       // Bind to all interfaces in dev so the UI is reachable from a phone on the
       // same network via http://<this-machine-ip>:5173.
@@ -168,6 +193,7 @@ export default defineConfig(({ command }) => {
       // Do not carry this over to production hosting.
       allowedHosts: true,
       port: 5173,
+      proxy: serverProxy(),
     },
   };
 });

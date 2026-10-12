@@ -1,23 +1,31 @@
-import { useRef, useState, type ReactNode } from "react";
-import { Palette } from "lucide-react";
+import { useRef, useState } from "react";
+import { FolderInput, KeyRound } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
 import { Input } from "./ui/input.tsx";
 import { Button } from "./ui/button.tsx";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
 import { ErrorNote } from "./common/load.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+  TextProperty,
+} from "./common/PropertyList.tsx";
 import { errorOf, isPending, type LoadState } from "../lib/loadState.ts";
 
 /**
  * @component ProjectSettingsFields
  * @purpose The Project's rarely-changed settings — key, color, worktree root —
- *   as inspector-density rows.
+ *   as a property list in the object panel.
  * @useWhen Composing the Project object panel (`objectInspectors.tsx`).
  * @avoidWhen On the Project page itself: these fields used to sit above the
  *   content (key/color as a chips row, the worktree root under the worktree
  *   list), where they were the first thing every visit and change about twice in
  *   a project's life. The panel is where an object's settings and actions live.
- * @intent Labelled rows, one save callback. The palette expands IN PLACE rather
- *   than in a popover: this renders inside a scrolling panel that is a bottom
- *   sheet on a phone, where an absolutely positioned menu gets clipped.
+ * @intent The Task inspector's Details shape: a muted label, the value as a
+ *   quiet trigger, and its editor in a popover — the text fields share
+ *   `TextProperty`, the color opens a swatch grid. Popovers portal to the body,
+ *   so the phone's bottom-sheet panel does not clip them.
  */
 export function ProjectSettingsFields({
   project,
@@ -30,137 +38,49 @@ export function ProjectSettingsFields({
 }) {
   const mutation = (field: string) =>
     mutationStates[`${project.id}:field:${field}`];
-  const keyMutation = mutation("key");
-  const rootMutation = mutation("worktreeRoot");
-  const [editingKey, setEditingKey] = useState(false);
-  const [keyDraft, setKeyDraft] = useState(project.key);
-  const [editingRoot, setEditingRoot] = useState(false);
-  const [rootDraft, setRootDraft] = useState(project.worktreeRoot ?? "");
-  const saveRoot = () => {
-    const value = rootDraft.trim();
-    onSave(value ? { worktreeRoot: value } : {});
-    setEditingRoot(false);
-  };
   return (
-    <div className="flex flex-col gap-1 px-1">
-      <FieldRow label="Key">
-        {editingKey ? (
-          <div className="flex items-center gap-1">
-            <Input
-              className="w-24 uppercase"
-              value={keyDraft}
-              aria-label="Project Key"
-              placeholder="KEY"
-              onChange={(event) => setKeyDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  onSave({ key: normalizeProjectKey(keyDraft) });
-                  setEditingKey(false);
-                }
-                if (event.key === "Escape") setEditingKey(false);
-              }}
-            />
-            <Button
-              size="sm"
-              busy={keyMutation ? isPending(keyMutation) : false}
-              onClick={() => {
-                onSave({ key: normalizeProjectKey(keyDraft) });
-                setEditingKey(false);
-              }}
-            >
-              Save
-            </Button>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="font-mono"
-            title="Click to edit key"
-            onClick={() => {
-              setKeyDraft(project.key);
-              setEditingKey(true);
-            }}
-          >
-            {project.key || "KEY"}
-          </Button>
-        )}
-        {keyMutation && errorOf(keyMutation) ? (
-          <ErrorNote message={errorOf(keyMutation)!} />
-        ) : null}
-      </FieldRow>
-      <ProjectColorRow
+    <PropertyList>
+      <PropertyLabel>Key</PropertyLabel>
+      <TextProperty
+        label="Project key"
+        value={project.key}
+        placeholder="KEY"
+        hint="Up to 10 letters and digits. It prefixes the project everywhere it is named."
+        icon={<KeyRound />}
+        mono
+        normalize={normalizeProjectKey}
+        submitState={mutation("key")}
+        onSave={(key) => onSave({ key })}
+      />
+      <PropertyLabel>Color</PropertyLabel>
+      <ColorProperty
         project={project}
         mutationState={mutation("color")}
         onChange={(color) => onSave({ color })}
       />
-      {/* Full width rather than a value-on-the-right row: this is an absolute
-          path, and the panel is ~320px wide. Empty means the global default, so
-          the placeholder names it instead of an explainer paragraph. */}
-      <div className="pt-0.5">
-        <span className="text-sm text-muted-foreground">Worktree root</span>
-        {editingRoot ? (
-          <div className="mt-0.5 flex flex-col gap-1">
-            <Input
-              className="font-mono"
-              value={rootDraft}
-              aria-label="Worktree root override"
-              placeholder="Settings → Worktrees root"
-              onChange={(event) => setRootDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") saveRoot();
-                if (event.key === "Escape") setEditingRoot(false);
-              }}
-            />
-            <div className="flex justify-end gap-1">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setEditingRoot(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                busy={rootMutation ? isPending(rootMutation) : false}
-                onClick={saveRoot}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`mt-0.5 h-auto w-full justify-start break-all px-1 py-0.5 text-left font-mono ${project.worktreeRoot ? "" : "text-muted-foreground"}`}
-            title="Where new worktrees for this project are created (empty = the global Worktrees root)"
-            onClick={() => {
-              setRootDraft(project.worktreeRoot ?? "");
-              setEditingRoot(true);
-            }}
-          >
-            {project.worktreeRoot || "Settings → Worktrees root"}
-          </Button>
-        )}
-        {rootMutation && errorOf(rootMutation) ? (
-          <ErrorNote message={errorOf(rootMutation)!} />
-        ) : null}
-      </div>
-    </div>
+      <PropertyLabel>Worktrees</PropertyLabel>
+      {/* Empty means the global root, which is what the trigger then says. An
+          empty string clears the override (the server drops it). */}
+      <TextProperty
+        label="Worktree root"
+        value={project.worktreeRoot ?? ""}
+        placeholder="Default root"
+        hint="Where new worktrees for this project are created. Empty uses Settings → Worktrees."
+        icon={<FolderInput />}
+        mono
+        allowEmpty
+        submitState={mutation("worktreeRoot")}
+        onSave={(worktreeRoot) => onSave({ worktreeRoot })}
+      />
+    </PropertyList>
   );
 }
 
-function FieldRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex min-h-7 items-center justify-between gap-2">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      {children}
-    </div>
-  );
-}
-
-function ProjectColorRow({
+/**
+ * The color as a property: a swatch and its hex on the line, and the palette
+ * in a popover — a pick saves and closes; Custom opens the system picker.
+ */
+function ColorProperty({
   project,
   onChange,
   mutationState,
@@ -179,28 +99,31 @@ function ProjectColorRow({
   };
   const mutationError = mutationState ? errorOf(mutationState) : undefined;
   return (
-    <div>
-      <FieldRow label="Color">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={pending}
-          busy={pending}
-          onClick={() => setOpen((previous) => !previous)}
-          title="Change Project color"
-          aria-label="Change Project color"
-          aria-expanded={open}
+    <div className="flex min-w-0 flex-col gap-1">
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="sm"
+              busy={pending}
+              aria-label={`Project color: ${value}. Change`}
+              className={`${PROPERTY_TRIGGER} justify-start`}
+            />
+          }
         >
           <span
-            className="size-2.5 rounded-full"
+            className="size-3.5 shrink-0 rounded-full"
             style={{ backgroundColor: value }}
             aria-hidden
           />
-          <Palette size={12} className="text-muted-foreground" />
-        </Button>
-      </FieldRow>
-      {open ? (
-        <div className="mt-1 rounded-lg border border-border bg-background p-2">
+          <span
+            className={`font-mono text-xs ${project.color ? "" : "text-muted-foreground"}`}
+          >
+            {project.color ? value : "Automatic"}
+          </span>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-auto gap-2">
           <div
             className="grid grid-cols-5 gap-1.5"
             aria-label="Project color palette"
@@ -217,16 +140,16 @@ function ProjectColorRow({
                     submit(color);
                     setOpen(false);
                   }}
-                  className={`rounded-full ${selected ? "ring-2 ring-ring" : ""}`}
+                  className={`rounded-full ${selected ? "ring-2 ring-ring ring-offset-2 ring-offset-popover" : ""}`}
                   style={{ backgroundColor: color }}
-                  title={`Use ${color}`}
+                  title={color}
                   aria-label={`Use Project color ${color}`}
                   aria-pressed={selected}
                 />
               );
             })}
           </div>
-          <label className="mt-2 flex items-center justify-between gap-2 text-sm text-muted-foreground">
+          <label className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
             <span>Custom</span>
             <Input
               type="color"
@@ -235,13 +158,13 @@ function ProjectColorRow({
               onChange={(event) =>
                 submit(event.currentTarget.value.toUpperCase())
               }
-              className="size-8 p-0"
+              className="h-7 w-10 p-0.5"
               aria-label="Advanced Project color picker"
               title="Advanced color picker"
             />
           </label>
-        </div>
-      ) : null}
+        </PopoverContent>
+      </Popover>
       {mutationError ? (
         <ErrorNote
           message={mutationError}

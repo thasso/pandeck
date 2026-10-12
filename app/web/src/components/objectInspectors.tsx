@@ -1,3 +1,4 @@
+import { runtimeLabel } from "./common/runtimeLabel.ts";
 import { useMemo, type ReactNode } from "react";
 import {
   Archive,
@@ -15,7 +16,7 @@ import {
   GitBranchPlus,
   GitFork,
   GitMerge,
-  IdCard,
+  House,
   ListChecks,
   MessageSquare,
   MessageSquarePlus,
@@ -35,6 +36,8 @@ import {
   type ProjectStatus,
   type PullRequestInventoryItem,
   type SessionForkOrigin,
+  type PeerPromptPeerSummary,
+  type PeerPromptState,
   type SessionListItem,
   type SettableSpawnOwnership,
   type TaskBackRef,
@@ -52,12 +55,20 @@ import {
   Inspector,
   InspectorFacts,
   InspectorSection,
+  useInspectorAct,
   type InspectorAction,
-  type InspectorFact,
   type InspectorRelationGroup,
 } from "./shell/Inspector.tsx";
 import { TranscriptViewRows, type ChatViewPrefs } from "./ChatHeaderMenu.tsx";
 import { THINKING_LABELS } from "./common/ModelThinkingSelect.tsx";
+import { ProviderIcon } from "./common/ProviderIcon.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  PROPERTY_TRIGGER,
+  PropertyLabel,
+  PropertyList,
+  PropertyText,
+} from "./common/PropertyList.tsx";
 import { EmptyBox, ErrorNote, Spinner } from "./common/load.tsx";
 import {
   dataOf,
@@ -99,6 +110,20 @@ import {
   type JoinSource,
   type PullRequestJoinSources,
 } from "../lib/pullRequestInbox.ts";
+import {
+  classifySessionStatus,
+  tierForStatus,
+  type SessionInboxCard,
+} from "../lib/sessionInbox.ts";
+import {
+  SpawnedSessionLedgeRow,
+  type SessionRowFact,
+} from "./SpawnedSessionsLedge.tsx";
+import { WorktreeLineDelta, WorktreeList } from "./worktreeRowParts.tsx";
+import { TaskLinkList, type TaskLinkItem } from "./TaskLinkList.tsx";
+import { projectColor } from "../lib/projectDisplay.ts";
+import { relativeTime } from "../lib/sessionRows.ts";
+import { useElapsedNow } from "./useElapsedNow.ts";
 
 /** A resolved reference to another work-graph object. */
 export interface ObjectRef {
@@ -111,7 +136,32 @@ export interface ObjectRef {
   taskStatus?: TaskStatus;
   /** True when a linked session is currently running. */
   running?: boolean;
+  /**
+   * How a SESSION is tied to the inspected object, for its row's details
+   * (`SpawnedSessionLedgeRow`), which carry no subtitle.
+   */
+  facts?: ObjectRefFact[];
+  /** A project's identity, so its row reads as it does everywhere else. */
+  project?: Pick<ProjectRecord, "id" | "key" | "name" | "color">;
+  /** A worktree's full record, so a group of them is drawn as `WorktreeList`. */
+  worktree?: { record: WorktreeRecord; status?: WorktreeGitStatus | undefined };
   children?: ObjectRef[];
+}
+
+/** A session row fact; one naming a Task (`taskId`) links to it. */
+type ObjectRefFact = Omit<SessionRowFact, "onOpen"> & { taskId?: string };
+
+function projectObjectRef(
+  project: Pick<ProjectRecord, "id" | "key" | "name" | "color">,
+  subtitle?: string,
+): ObjectRef {
+  return {
+    kind: "project",
+    id: project.id,
+    title: `${project.key} · ${project.name}`,
+    ...(subtitle !== undefined ? { subtitle } : {}),
+    project,
+  };
 }
 
 export type WorktreeRelationSource = Pick<WorktreeRecord, "id" | "branch"> &
@@ -175,7 +225,17 @@ function worktreeObjectRef(
     title: worktreeDisplayName(worktree, status),
     subtitle,
     ...(countersValue !== undefined ? { counters: countersValue } : {}),
+    ...(isWorktreeRecord(worktree)
+      ? { worktree: { record: worktree, status } }
+      : {}),
   };
+}
+
+/** Whether a relation source is the full record (not a stand-in by id). */
+function isWorktreeRecord(
+  worktree: WorktreeRelationSource,
+): worktree is WorktreeRecord {
+  return "baseBranch" in worktree && "updatedAt" in worktree;
 }
 
 export function worktreeObjectTreeRefs(
@@ -188,14 +248,7 @@ export function worktreeObjectTreeRefs(
     ? projects.find((candidate) => candidate.id === worktree.projectId)
     : undefined;
   if (!project) return [worktreeRef];
-  return [
-    {
-      kind: "project",
-      id: project.id,
-      title: `${project.key} · ${project.name}`,
-      children: [worktreeRef],
-    },
-  ];
+  return [{ ...projectObjectRef(project), children: [worktreeRef] }];
 }
 
 export interface ObjectRefGroup {
@@ -218,10 +271,11 @@ function sessionRuntimeSubtitle(session: SessionListItem): string | undefined {
   const model = session.model;
   const parts = [
     session.isStreaming ? "Running" : undefined,
-    model
-      ? `${providerLabel(model.provider)} · ${model.name ?? model.id}`
-      : undefined,
-    session.thinkingLevel ? `thinking ${session.thinkingLevel}` : undefined,
+    model ? providerLabel(model.provider) : undefined,
+    runtimeLabel({
+      model: model ? (model.name ?? model.id) : undefined,
+      thinkingLevel: session.thinkingLevel,
+    }),
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : undefined;
 }
@@ -243,6 +297,7 @@ function sessionObjectRef(
     id,
     title: session?.title ?? fallbackTitle,
     ...(subtitle !== undefined ? { subtitle } : {}),
+    ...(marker ? { facts: [{ label: "Control", value: marker }] } : {}),
     ...(session?.isStreaming ? { running: true } : {}),
   };
 }
@@ -342,24 +397,16 @@ function mergeSessionTasks(
 }
 
 /**
- * Resolve a Task's references into inspector groups: parent task and subtasks,
- * and the sessions linked to it.
- * The project is NOT a relation row here — the task inspector's
- * TaskContextSections owns project display and assignment.
+ * Resolve a Task's references into inspector groups: the sessions linked to it.
+ * Neither its PROJECT (TaskContextSections owns that) nor its parent and
+ * subtasks (the Task page's "Part of" line and subtasks list) are relation rows
+ * here: the panel does not repeat what the page beside it shows.
  * Pure so the shape is unit-testable.
  */
 export function taskRelationGroups(
   task: Task,
-  allTasks: Task[],
   sessions: SessionListItem[],
 ): ObjectRefGroup[] {
-  const parent = task.parentId
-    ? allTasks.find((candidate) => candidate.id === task.parentId)
-    : undefined;
-  const subtasks = allTasks.filter(
-    (candidate) => candidate.parentId === task.id,
-  );
-
   const sessionRefs = new Map<string, ObjectRef>();
   for (const ref of task.sessionRefs ?? []) {
     sessionRefs.set(ref.sessionId, {
@@ -368,23 +415,18 @@ export function taskRelationGroups(
       title: sessionTitle(sessions, ref.sessionId),
       subtitle:
         ref.origin === "task-start" ? "Started from this task" : "Referenced",
+      facts: [
+        {
+          label: "Link",
+          value:
+            ref.origin === "task-start"
+              ? "Started from this task"
+              : "Referenced",
+        },
+      ],
     });
   }
-  const summaryValue = taskStatusSummary([
-    ...(parent ? [parent] : []),
-    ...subtasks,
-  ]);
   return [
-    {
-      id: "related-tasks",
-      label: "Related tasks",
-      icon: <ListChecks size={13} />,
-      ...(summaryValue !== undefined ? { summary: summaryValue } : {}),
-      refs: [
-        ...(parent ? [taskObjectRef(parent, "Parent task")] : []),
-        ...subtasks.map((subtask) => taskObjectRef(subtask, "Subtask")),
-      ],
-    },
     {
       id: "sessions",
       label: "Sessions",
@@ -392,6 +434,136 @@ export function taskRelationGroups(
       refs: [...sessionRefs.values()],
     },
   ];
+}
+
+/**
+ * A group's refs as task links when they are all Tasks (their subtrees too),
+ * else `null` and the group keeps the generic relation rows.
+ */
+function taskLinkItems(refs: ObjectRef[]): TaskLinkItem[] | null {
+  if (refs.length === 0) return null;
+  const items: TaskLinkItem[] = [];
+  for (const ref of refs) {
+    if (ref.kind !== "task" || !ref.taskStatus) return null;
+    const children = ref.children ? taskLinkItems(ref.children) : undefined;
+    if (children === null) return null;
+    items.push({
+      id: ref.id,
+      title: ref.title,
+      status: ref.taskStatus,
+      ...(children ? { children } : {}),
+    });
+  }
+  return items;
+}
+
+/** A Task group's body in every inspector: `TaskLinkList`, the page's rows. */
+function InspectorTaskRows({
+  items,
+  maxVisible,
+  onOpenTask,
+}: {
+  items: TaskLinkItem[];
+  maxVisible?: number | undefined;
+  onOpenTask: (id: string) => void;
+}) {
+  const onAct = useInspectorAct();
+  return (
+    <TaskLinkList
+      items={items}
+      maxVisible={maxVisible}
+      onOpen={(id) => {
+        onOpenTask(id);
+        onAct?.();
+      }}
+    />
+  );
+}
+
+/**
+ * A worktree group's body in every inspector: `WorktreeList`, the rows of the
+ * sidebar and the Project page, run out to the panel's edges.
+ */
+function InspectorWorktreeRows({
+  rows,
+  onOpenWorktree,
+}: {
+  rows: Array<{
+    record: WorktreeRecord;
+    status?: WorktreeGitStatus | undefined;
+  }>;
+  onOpenWorktree: (id: string) => void;
+}) {
+  const onAct = useInspectorAct();
+  const statuses: Record<string, WorktreeGitStatus> = {};
+  for (const row of rows) if (row.status) statuses[row.record.id] = row.status;
+  return (
+    <div className="-mx-3">
+      <WorktreeList
+        worktrees={rows.map((row) => row.record)}
+        statuses={statuses}
+        onOpen={(id) => {
+          onOpenWorktree(id);
+          onAct?.();
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A session group's body in every inspector, drawn with the composer strip's
+ * session rows (`SpawnedSessionLedgeRow`): edge to edge, hairline-divided, each
+ * row unfolding the session's agent, model and worktree, with its age and
+ * Open. Newest activity first. ONE rendering of a session in the panel —
+ * `toInspectorGroups` routes every all-session group here.
+ */
+function InspectorSessionRows({
+  rows,
+  onOpenSession,
+}: {
+  rows: Array<{ session: SessionListItem; facts?: SessionRowFact[] }>;
+  onOpenSession: (id: string) => void;
+}) {
+  const cards = useMemo(
+    () =>
+      [...rows]
+        .sort((a, b) => b.session.updatedAt - a.session.updatedAt)
+        .map(({ session, facts }) => {
+          const status = classifySessionStatus(session);
+          const card: SessionInboxCard = {
+            session,
+            status,
+            tier: tierForStatus(status),
+          };
+          return { card, facts };
+        }),
+    [rows],
+  );
+  const working = cards.some(({ card }) => card.status === "running");
+  const now = useElapsedNow(working);
+  const onAct = useInspectorAct();
+  return (
+    // Out to the panel's edges, as the strip runs to the shelf's.
+    <ul className="-mx-3 divide-y">
+      {cards.map(({ card, facts }) => (
+        <SpawnedSessionLedgeRow
+          key={card.session.id}
+          card={card}
+          facts={facts}
+          now={now}
+          // The chevron on the Details labels' line: the panel's 0.75rem and
+          // the property list's 0.25rem, less the toggle's own 1px border and
+          // 0.625rem padding.
+          inset={0.3125}
+          onOpen={(id) => {
+            onOpenSession(id);
+            onAct?.();
+          }}
+        />
+      ))}
+    </ul>
+  );
 }
 
 /**
@@ -425,6 +597,7 @@ export function projectRelationGroups(
         id: ref.sessionId,
         title: sessionTitle(sessions, ref.sessionId),
         subtitle: `Via task: ${task.title}`,
+        facts: [{ label: "Via task", value: task.title, taskId: task.id }],
       });
     }
   }
@@ -435,22 +608,8 @@ export function projectRelationGroups(
       label: "Related projects",
       icon: <FolderKanban size={13} />,
       refs: [
-        ...(parent
-          ? [
-              {
-                kind: "project" as const,
-                id: parent.id,
-                title: `${parent.key} · ${parent.name}`,
-                subtitle: "Parent project",
-              },
-            ]
-          : []),
-        ...subprojects.map((sub) => ({
-          kind: "project" as const,
-          id: sub.id,
-          title: `${sub.key} · ${sub.name}`,
-          subtitle: "Subproject",
-        })),
+        ...(parent ? [projectObjectRef(parent, "Parent project")] : []),
+        ...subprojects.map((sub) => projectObjectRef(sub, "Subproject")),
       ],
     },
     {
@@ -493,9 +652,6 @@ export function sessionRelationGroups(args: {
     sessionTasks = [],
     forkOrigin,
     sessions,
-    worktree,
-    projects = [],
-    worktreeStatus,
   } = args;
   const current = sessionId
     ? sessions.find((session) => session.id === sessionId)
@@ -519,14 +675,8 @@ export function sessionRelationGroups(args: {
   const tasks = mergeSessionTasks(originTask, relatedTasks, sessionTasks);
   const summaryValue = taskStatusSummary(tasks);
   return [
-    {
-      id: "workspace",
-      label: "Workspace",
-      icon: <FolderKanban size={13} />,
-      refs: worktree
-        ? worktreeObjectTreeRefs(worktree, projects, worktreeStatus)
-        : [],
-    },
+    // Where it runs (project, worktree) is not a relation group: it is the
+    // first rows of the inspector's Details (`SessionDetails`).
     {
       id: "tasks",
       label: "Tasks",
@@ -565,28 +715,32 @@ export function sessionRelationGroups(args: {
         ),
       ),
     },
+    // Two groups, not one "lineage": a group of sessions is drawn with the
+    // session rows, which carry no per-row "forked from" / "fork of" note.
     {
-      id: "fork-lineage",
-      label: "Fork lineage",
+      id: "forked-from",
+      label: "Forked from",
       icon: <GitFork size={13} />,
-      refs: [
-        ...(parentId
-          ? [
-              {
-                kind: "session" as const,
-                id: parentId,
-                title: parent?.title ?? "Parent session",
-                subtitle: "Forked from",
-              },
-            ]
-          : []),
-        ...forks.map((fork) => ({
-          kind: "session" as const,
-          id: fork.id,
-          title: fork.title,
-          subtitle: "Fork of this session",
-        })),
-      ],
+      refs: parentId
+        ? [
+            {
+              kind: "session" as const,
+              id: parentId,
+              title: parent?.title ?? "Parent session",
+            },
+          ]
+        : [],
+    },
+    {
+      id: "forks",
+      label: "Forks",
+      icon: <GitFork size={13} />,
+      ...(forks.length > 0 ? { summary: `${forks.length}` } : {}),
+      refs: forks.map((fork) => ({
+        kind: "session" as const,
+        id: fork.id,
+        title: fork.title,
+      })),
     },
   ];
 }
@@ -611,6 +765,8 @@ export interface ObjectOpeners {
 function toInspectorGroups(
   groups: ObjectRefGroup[],
   open: ObjectOpeners,
+  /** The session list, to draw a group of sessions with their own rows. */
+  sessions: SessionListItem[],
 ): InspectorRelationGroup[] {
   const opener = (ref: ObjectRef) =>
     ref.kind === "task"
@@ -633,26 +789,110 @@ function toInspectorGroups(
           <Spinner size="sm" />
         ) : ref.kind === "task" && ref.taskStatus ? (
           taskStatusIcon(ref.taskStatus)
+        ) : ref.project ? (
+          // The project's own coloured folder, as in every project picker.
+          <FolderKanban
+            size={14}
+            style={{ color: projectColor(ref.project).dot }}
+          />
         ) : (
           REF_ICONS[ref.kind]
         ),
       title: ref.title,
+      ...(ref.project
+        ? {
+            titleContent: (
+              <>
+                <span className="font-mono text-xs">{ref.project.key}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  · {ref.project.name}
+                </span>
+              </>
+            ),
+          }
+        : {}),
       ...(ref.subtitle !== undefined ? { subtitle: ref.subtitle } : {}),
       ...(ref.counters !== undefined ? { counters: ref.counters } : {}),
       onOpen: opener(ref),
       ...(childrenValue !== undefined ? { children: childrenValue } : {}),
     };
   };
-  return groups.map((group) => ({
-    ...(group.id !== undefined ? { id: group.id } : {}),
-    label: group.label,
-    icon: group.icon,
-    ...(group.summary !== undefined ? { summary: group.summary } : {}),
-    ...(group.maxVisibleItems !== undefined
-      ? { maxVisibleItems: group.maxVisibleItems }
-      : {}),
-    items: group.refs.map(toRelation),
-  }));
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  return groups.map((group) => {
+    const base = {
+      ...(group.id !== undefined ? { id: group.id } : {}),
+      label: group.label,
+      icon: group.icon,
+      ...(group.summary !== undefined ? { summary: group.summary } : {}),
+      ...(group.maxVisibleItems !== undefined
+        ? { maxVisibleItems: group.maxVisibleItems }
+        : {}),
+    };
+    const worktreeRows = group.refs.flatMap((ref) =>
+      ref.kind === "worktree" && ref.worktree && !ref.children
+        ? [ref.worktree]
+        : [],
+    );
+    if (group.refs.length > 0 && worktreeRows.length === group.refs.length)
+      // A group of worktrees is drawn with the app's worktree list.
+      return {
+        ...base,
+        items: group.refs.map(toRelation),
+        content: (
+          <InspectorWorktreeRows
+            rows={worktreeRows}
+            onOpenWorktree={open.onOpenWorktree}
+          />
+        ),
+      };
+    const taskItems = taskLinkItems(group.refs);
+    if (taskItems)
+      // A group of Tasks is drawn with the app's task links.
+      return {
+        ...base,
+        items: group.refs.map(toRelation),
+        content: (
+          <InspectorTaskRows
+            items={taskItems}
+            maxVisible={group.maxVisibleItems}
+            onOpenTask={open.onOpenTask}
+          />
+        ),
+      };
+    const sessionGroup =
+      group.refs.length > 0 &&
+      group.refs.every((ref) => ref.kind === "session" && !ref.children);
+    if (!sessionGroup) return { ...base, items: group.refs.map(toRelation) };
+    // A group of sessions is drawn with the session rows, not relation rows.
+    // Sessions this browser does not hold yet are left out rather than drawn
+    // as an id.
+    const known = group.refs.filter((ref) => byId.has(ref.id));
+    return {
+      ...base,
+      items: known.map(toRelation),
+      content: (
+        <InspectorSessionRows
+          rows={known.map((ref) => ({
+            session: byId.get(ref.id)!,
+            ...(ref.facts
+              ? {
+                  facts: ref.facts.map(
+                    ({ taskId, ...fact }): SessionRowFact => ({
+                      ...fact,
+                      ...(taskId
+                        ? { onOpen: () => open.onOpenTask(taskId) }
+                        : {}),
+                    }),
+                  ),
+                }
+              : {}),
+          }))}
+          onOpenSession={open.onOpenSession}
+        />
+      ),
+    };
+  });
 }
 
 /**
@@ -665,7 +905,6 @@ function toInspectorGroups(
  */
 export function TaskInspector({
   task,
-  tasks,
   sessions,
   openers,
   onStartSession,
@@ -675,7 +914,6 @@ export function TaskInspector({
   children,
 }: {
   task: Task | undefined;
-  tasks: Task[];
   sessions: SessionListItem[];
   openers: ObjectOpeners;
   onStartSession: (taskId: string, title: string) => void;
@@ -735,8 +973,9 @@ export function TaskInspector({
       relations={
         task
           ? toInspectorGroups(
-              taskRelationGroups(task, tasks, sessions),
+              taskRelationGroups(task, sessions),
               openers,
+              sessions,
             )
           : []
       }
@@ -792,65 +1031,10 @@ function spawnOwnershipAction(
       ];
 }
 
-/**
- * @component SessionInspector
- * @purpose Right-sidebar inspector for the Session open in the main pane:
- * summary, related objects (workspace, a unified task tree, durable spawn and
- * fork lineage, staged draft context), session actions, and feature content via children
- * (SessionContextSections).
- * @useWhen The main pane shows a session or the new-session landing.
- * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
- */
-export function SessionInspector({
-  sessionId,
-  originTask,
-  relatedTasks,
-  sessionTasks,
-  forkOrigin,
-  credentialProfile,
-  model,
-  thinkingLevel,
-  sessions,
-  projects,
-  worktree,
-  worktreeStatus,
-  stagedRefs = [],
-  openers,
-  onSettle,
-  settled = false,
-  settleBlockedReason,
-  onRename,
-  onArchive,
-  onDelete,
-  onOpenWorktreeChanges,
-  onReviewWork,
-  onSetSpawnOwnership,
-  view,
-  children,
-}: {
+/** What the session's actions need: the session and the handlers its host offers. */
+export interface SessionActionInputs {
   sessionId: string | undefined;
-  originTask?: TaskBackRef | undefined;
-  relatedTasks: TaskSummary[];
-  /** Session-scoped task progress merged into the inspector's single Tasks section. */
-  sessionTasks?: TaskSummary[];
-  forkOrigin?: SessionForkOrigin | undefined;
-  /** Immutable credential profile selected before the first prompt. */
-  credentialProfile?:
-    { name: string; provider: "openai-codex" | "claude" } | undefined;
-  /** The model this session runs on (staged selection while it is still a draft). */
-  model?: { id: string; name?: string; provider: string } | undefined;
-  /** The session's thinking level, alongside the model it applies to. */
-  thinkingLevel?: ThinkingLevel | undefined;
   sessions: SessionListItem[];
-  /** Projects used to render worktree ownership hierarchy. */
-  projects: ProjectRecord[];
-  /** The worktree this session executes in, if any. */
-  worktree?: WorktreeRelationSource | undefined;
-  /** Live git status for the session worktree, when subscribed. */
-  worktreeStatus?: WorktreeGitStatus | undefined;
-  /** Draft-session staged context (task/project/worktree refs before the first send). */
-  stagedRefs?: ObjectRef[];
-  openers: ObjectOpeners;
   /**
    * Settle this session out of the Sessions inbox working set, or bring it
    * back. The panel's lead action: it is what you do with a session you are
@@ -868,10 +1052,8 @@ export function SessionInspector({
   onArchive?: (() => void) | undefined;
   onDelete?: (() => void) | undefined;
   /**
-   * Open the session worktree's changes. Passed where the object dock is the
-   * session's action home (mobile); the desktop chat header keeps its own button,
-   * which carries a dirty-worktree indicator worth seeing without opening
-   * anything.
+   * Open the session worktree's changes. Also reachable from the header's
+   * title block, which states the branch and its uncommitted counts.
    */
   onOpenWorktreeChanges?: (() => void) | undefined;
   /**
@@ -888,39 +1070,29 @@ export function SessionInspector({
    */
   onSetSpawnOwnership?:
     ((ownership: SettableSpawnOwnership) => void) | undefined;
-  /**
-   * Transcript view toggles, rendered as a **View** section. Passed only where
-   * this inspector is the session's control centre (the mobile object dock);
-   * on desktop they live in the chat header's `⋯` menu.
-   */
-  view?:
-    | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
-    | undefined;
-  children?: ReactNode;
-}) {
-  const groups: ObjectRefGroup[] = [
-    {
-      id: "staged-context",
-      label: "Staged context",
-      icon: <ClipboardList size={13} />,
-      ...(stagedRefs.length > 0 ? { summary: `${stagedRefs.length}` } : {}),
-      refs: stagedRefs,
-    },
-    ...sessionRelationGroups({
-      sessionId,
-      ...(originTask !== undefined ? { originTask } : {}),
-      relatedTasks,
-      ...(sessionTasks !== undefined ? { sessionTasks } : {}),
-      ...(forkOrigin !== undefined ? { forkOrigin } : {}),
-      sessions,
-      projects,
-      ...(worktree !== undefined ? { worktree } : {}),
-      ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
-    }),
-  ];
+}
+
+/**
+ * The session's actions, in the order the ⋮ menu lists them. Built apart from
+ * `SessionInspector` because the session header publishes them on every layout
+ * — on a phone the inspector only mounts while its sheet is open.
+ */
+export function sessionInspectorActions({
+  sessionId,
+  sessions,
+  onSettle,
+  settled = false,
+  settleBlockedReason,
+  onRename,
+  onArchive,
+  onDelete,
+  onOpenWorktreeChanges,
+  onReviewWork,
+  onSetSpawnOwnership,
+}: SessionActionInputs): InspectorAction[] {
   // Every label is the bare verb: the panel already says which session this is,
   // so "Archive session" only repeated its own heading.
-  const actions: InspectorAction[] = [
+  return [
     // Settling is what you do with the session you just finished reading, so it
     // leads; reviewing its work is the next thing you reach for.
     ...(onSettle
@@ -994,46 +1166,133 @@ export function SessionInspector({
         ]
       : []),
   ];
-  // Who runs this session, on what: the account is fixed at the first prompt,
-  // the model and thinking level are what it runs on right now.
-  // Only the account NAME: the provider is already implied by the model beside
-  // it, and it was the half of the value that pushed the row into truncation.
-  const profileFacts: InspectorFact[] = [
-    ...(credentialProfile
-      ? [{ label: "Account", value: credentialProfile.name }]
-      : []),
-    ...(model ? [{ label: "Model", value: model.name ?? model.id }] : []),
-    ...(thinkingLevel
-      ? [{ label: "Thinking", value: THINKING_LABELS[thinkingLevel] }]
-      : []),
+}
+
+/**
+ * @component SessionInspector
+ * @purpose Right-sidebar inspector for the Session open in the main pane:
+ * summary, related objects (workspace, a unified task tree, durable spawn and
+ * fork lineage, staged draft context), and feature content via children
+ * (SessionContextSections).
+ * @useWhen The main pane shows a session or the new-session landing.
+ * @related Inspector, SessionContextSections, TaskInspector, ProjectInspector.
+ */
+export function SessionInspector({
+  sessionId,
+  originTask,
+  relatedTasks,
+  sessionTasks,
+  forkOrigin,
+  credentialProfile,
+  model,
+  thinkingLevel,
+  sessions,
+  projects,
+  worktree,
+  worktreeStatus,
+  peerPromptPeers,
+  stagedRefs = [],
+  openers,
+  view,
+  children,
+}: {
+  sessionId: string | undefined;
+  originTask?: TaskBackRef | undefined;
+  relatedTasks: TaskSummary[];
+  /** Session-scoped task progress merged into the inspector's single Tasks section. */
+  sessionTasks?: TaskSummary[];
+  forkOrigin?: SessionForkOrigin | undefined;
+  /** Immutable credential profile selected before the first prompt. */
+  credentialProfile?:
+    { name: string; provider: "openai-codex" | "claude" } | undefined;
+  /** The model this session runs on (staged selection while it is still a draft). */
+  model?: { id: string; name?: string; provider: string } | undefined;
+  /** The session's thinking level, alongside the model it applies to. */
+  thinkingLevel?: ThinkingLevel | undefined;
+  sessions: SessionListItem[];
+  /** Projects used to render worktree ownership hierarchy. */
+  projects: ProjectRecord[];
+  /** The worktree this session executes in, if any. */
+  worktree?: WorktreeRelationSource | undefined;
+  /** Live git status for the session worktree, when subscribed. */
+  worktreeStatus?: WorktreeGitStatus | undefined;
+  /**
+   * The peer prompts this session sent and received, summed up per peer over
+   * the whole history: facts on that peer's session row (`peerPromptFacts`).
+   */
+  peerPromptPeers?: PeerPromptPeerSummary[] | undefined;
+  /** Draft-session staged context (task/project/worktree refs before the first send). */
+  stagedRefs?: ObjectRef[];
+  openers: ObjectOpeners;
+  /**
+   * Transcript view toggles, rendered as a **View** section. Passed only where
+   * this inspector is the session's control centre (the mobile object dock);
+   * on desktop they live in the chat header's `⋯` menu.
+   */
+  view?:
+    | (ChatViewPrefs & { onChange: (patch: Partial<ChatViewPrefs>) => void })
+    | undefined;
+  children?: ReactNode;
+}) {
+  const relationGroups: ObjectRefGroup[] = [
+    {
+      id: "staged-context",
+      label: "Staged context",
+      icon: <ClipboardList size={13} />,
+      ...(stagedRefs.length > 0 ? { summary: `${stagedRefs.length}` } : {}),
+      refs: stagedRefs,
+    },
+    ...sessionRelationGroups({
+      sessionId,
+      ...(originTask !== undefined ? { originTask } : {}),
+      relatedTasks,
+      ...(sessionTasks !== undefined ? { sessionTasks } : {}),
+      ...(forkOrigin !== undefined ? { forkOrigin } : {}),
+      sessions,
+      projects,
+      ...(worktree !== undefined ? { worktree } : {}),
+      ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
+    }),
   ];
-  // The section is collapsed by default, so its summary carries the same three
-  // facts on one line — the panel still answers "who, on what" at a glance.
-  const profileSummary = [
-    credentialProfile?.name,
-    model?.name ?? model?.id,
-    thinkingLevel ? THINKING_LABELS[thinkingLevel] : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);
   return (
     <Inspector
-      relations={toInspectorGroups(groups, openers)}
-      actions={actions}
+      relations={[
+        // What the session IS, first: where it runs and on what, as one
+        // property list — the Task inspector's Details shape.
+        {
+          id: "details",
+          label: "Details",
+          icon: <SlidersHorizontal size={13} />,
+          items: [],
+          alwaysShown: true,
+          content: (
+            <SessionDetails
+              project={
+                worktree?.projectId
+                  ? projects.find(
+                      (candidate) => candidate.id === worktree.projectId,
+                    )
+                  : undefined
+              }
+              worktree={worktree}
+              worktreeStatus={worktreeStatus}
+              credentialProfile={credentialProfile}
+              model={model}
+              thinkingLevel={thinkingLevel}
+              openers={openers}
+            />
+          ),
+        },
+        ...toInspectorGroups(groups, openers, sessions),
+      ]}
+      // The session header's ⋮ holds the session's actions on every layout
+      // (`sessionInspectorActions`, published by the header itself), so this
+      // panel neither lists nor publishes any.
+      actions={[]}
+      ownsHeaderActions={false}
       sectionStorageScope={`session:${sessionId ?? "draft"}`}
     >
-      {profileFacts.length > 0 ? (
-        <InspectorSection
-          id="credential-profile"
-          storageScope={`session:${sessionId ?? "draft"}`}
-          title="Profile"
-          icon={<IdCard size={13} />}
-          summary={profileSummary}
-          defaultOpen={false}
-        >
-          <InspectorFacts facts={profileFacts} />
-        </InspectorSection>
-      ) : null}
       {children}
       {view ? (
         <InspectorSection
@@ -1047,6 +1306,193 @@ export function SessionInspector({
         </InspectorSection>
       ) : null}
     </Inspector>
+  );
+}
+
+const PEER_PROMPT_STATE_LABEL: Record<PeerPromptState, string> = {
+  queued: "Queued",
+  delivered: "Delivered",
+  acknowledged: "Acknowledged",
+  completed: "Completed",
+  awaiting_response: "Awaiting response",
+  replied: "Replied",
+  retrying: "Retrying",
+  interrupted: "Interrupted",
+  cancelled: "Cancelled",
+  expired: "Expired",
+  failed: "Failed",
+};
+
+/**
+ * One peer's summary as its session row's details: how many each way, where
+ * the latest one stands, and the latest failure's reason (in red). The
+ * messages themselves are cards in the transcripts.
+ */
+function peerPromptFacts(peer: PeerPromptPeerSummary): ObjectRefFact[] {
+  return [
+    {
+      label: "Prompts",
+      value: [
+        peer.sent ? `${peer.sent} sent` : undefined,
+        peer.received ? `${peer.received} received` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    },
+    {
+      label: "Last",
+      value: `${PEER_PROMPT_STATE_LABEL[peer.lastState]} · ${relativeTime(peer.lastAt)}`,
+    },
+    ...(peer.lastFailureReason
+      ? [
+          {
+            label: "Failed",
+            value: peer.lastFailureReason,
+            tone: "danger" as const,
+          },
+        ]
+      : []),
+  ];
+}
+
+/**
+ * The peer-prompt summary on every session row it concerns, and a "Peers"
+ * group for the sessions it talked to that no other group lists (neither its
+ * coordinator nor one it spawned), most recent first.
+ */
+function withPeerPrompts(
+  groups: ObjectRefGroup[],
+  peers: PeerPromptPeerSummary[] | undefined,
+  sessions: SessionListItem[],
+): ObjectRefGroup[] {
+  if (!peers?.length) return groups;
+  const byPeer = new Map(peers.map((peer) => [peer.peerSessionId, peer]));
+  const listed = new Set<string>();
+  const withFacts = groups.map((group) => ({
+    ...group,
+    refs: group.refs.map((ref) => {
+      if (ref.kind !== "session") return ref;
+      listed.add(ref.id);
+      const peer = byPeer.get(ref.id);
+      return peer
+        ? { ...ref, facts: [...(ref.facts ?? []), ...peerPromptFacts(peer)] }
+        : ref;
+    }),
+  }));
+  const others = peers.filter((peer) => !listed.has(peer.peerSessionId));
+  return [
+    ...withFacts,
+    {
+      id: "peers",
+      label: "Peers",
+      icon: <MessageSquare size={13} />,
+      ...(others.length ? { summary: `${others.length}` } : {}),
+      refs: others.map((peer) => ({
+        ...sessionObjectRef(
+          peer.peerSessionId,
+          sessions.find((session) => session.id === peer.peerSessionId),
+          peer.title,
+        ),
+        facts: peerPromptFacts(peer),
+      })),
+    },
+  ];
+}
+
+/**
+ * A session's Details: where it runs (its project and worktree, each opening
+ * its object) and on what (the account fixed at the first prompt, the model
+ * and thinking level it runs on now), as the Task inspector's property list.
+ */
+function SessionDetails({
+  project,
+  worktree,
+  worktreeStatus,
+  credentialProfile,
+  model,
+  thinkingLevel,
+  openers,
+}: {
+  project: ProjectRecord | undefined;
+  worktree: WorktreeRelationSource | undefined;
+  worktreeStatus: WorktreeGitStatus | undefined;
+  credentialProfile: { name: string } | undefined;
+  model: { id: string; name?: string; provider: string } | undefined;
+  thinkingLevel: ThinkingLevel | undefined;
+  openers: ObjectOpeners;
+}) {
+  const onAct = useInspectorAct();
+  const open = (run: () => void) => () => {
+    run();
+    onAct?.();
+  };
+  const branch = worktreeStatus?.branch ?? worktree?.branch;
+  return (
+    <PropertyList>
+      <PropertyLabel>Project</PropertyLabel>
+      {project ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`${PROPERTY_TRIGGER} justify-start`}
+          onClick={open(() => openers.onOpenProject(project.id))}
+        >
+          <FolderKanban
+            style={{ color: projectColor(project).dot }}
+            aria-hidden
+          />
+          <span className="min-w-0 truncate">
+            <span className="font-mono text-xs">{project.key}</span>
+            <span className="text-muted-foreground"> · {project.name}</span>
+          </span>
+        </Button>
+      ) : (
+        <PropertyText className="text-muted-foreground">None</PropertyText>
+      )}
+      <PropertyLabel>Worktree</PropertyLabel>
+      {worktree ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className={`${PROPERTY_TRIGGER} justify-start`}
+          title={worktree.path}
+          onClick={open(() => openers.onOpenWorktree(worktree.id))}
+        >
+          {worktree.isMain ? (
+            <House className="text-muted-foreground" aria-hidden />
+          ) : (
+            <GitBranch className="text-muted-foreground" aria-hidden />
+          )}
+          <span className="min-w-0 truncate font-mono text-xs">{branch}</span>
+          <WorktreeLineDelta status={worktreeStatus} />
+        </Button>
+      ) : (
+        <PropertyText className="text-muted-foreground">None</PropertyText>
+      )}
+      {credentialProfile ? (
+        <>
+          <PropertyLabel>Account</PropertyLabel>
+          <PropertyText className="truncate">
+            {credentialProfile.name}
+          </PropertyText>
+        </>
+      ) : null}
+      {model ? (
+        <>
+          <PropertyLabel>Model</PropertyLabel>
+          <PropertyText className="flex items-center gap-2">
+            <ProviderIcon provider={model.provider} size={14} />
+            <span className="min-w-0 truncate">{model.name ?? model.id}</span>
+          </PropertyText>
+        </>
+      ) : null}
+      {thinkingLevel ? (
+        <>
+          <PropertyLabel>Thinking</PropertyLabel>
+          <PropertyText>{THINKING_LABELS[thinkingLevel]}</PropertyText>
+        </>
+      ) : null}
+    </PropertyList>
   );
 }
 
@@ -1171,6 +1617,7 @@ export function ProjectInspector({
           ? toInspectorGroups(
               projectRelationGroups(project, projects, tasks, sessions),
               openers,
+              sessions,
             )
           : []
       }
@@ -1268,15 +1715,7 @@ export function worktreeRelationGroups(
       id: "project",
       label: "Project",
       icon: <FolderKanban size={13} />,
-      refs: project
-        ? [
-            {
-              kind: "project" as const,
-              id: project.id,
-              title: `${project.key} · ${project.name}`,
-            },
-          ]
-        : [],
+      refs: project ? [projectObjectRef(project)] : [],
     },
     {
       id: "sessions",
@@ -1517,6 +1956,7 @@ export function WorktreeInspector({
           ? toInspectorGroups(
               worktreeRelationGroups(worktree, projects, sessions),
               openers,
+              sessions,
             )
           : []
       }
@@ -1611,6 +2051,8 @@ export function pullRequestRelationGroups(
   item: PullRequestInventoryItem,
   projects: ProjectRecord[],
   joins: PullRequestJoinSources,
+  /** Live git status per worktree, for the joined checkout's row. */
+  worktreeStatuses: Record<string, WorktreeGitStatus> = {},
 ): ObjectRefGroup[] {
   const project = projects.find((candidate) => candidate.id === item.projectId);
   const worktrees = resolvedJoinRows(
@@ -1629,21 +2071,15 @@ export function pullRequestRelationGroups(
       id: "project",
       label: "Project",
       icon: <FolderKanban size={13} />,
-      refs: project
-        ? [
-            {
-              kind: "project" as const,
-              id: project.id,
-              title: `${project.key} · ${project.name}`,
-            },
-          ]
-        : [],
+      refs: project ? [projectObjectRef(project)] : [],
     },
     {
       id: "worktree",
       label: "Worktree",
       icon: <GitBranch size={13} />,
-      refs: worktrees.map((worktree) => worktreeObjectRef(worktree, projects)),
+      refs: worktrees.map((worktree) =>
+        worktreeObjectRef(worktree, projects, worktreeStatuses[worktree.id]),
+      ),
     },
     {
       id: "sessions",
@@ -1803,6 +2239,7 @@ export function PullRequestInspector({
   state,
   projects,
   joins,
+  worktreeStatuses,
   openers,
   onStartSession,
   onReview,
@@ -1817,6 +2254,7 @@ export function PullRequestInspector({
   state: LoadState<PullRequestInventoryItem | null>;
   projects: ProjectRecord[];
   joins: PullRequestJoinSources;
+  worktreeStatuses?: Record<string, WorktreeGitStatus>;
   openers: ObjectOpeners;
   onStartSession: (worktreeId: string) => void;
   /** The checkout exists — hand the review off to the staged composer. */
@@ -1855,8 +2293,18 @@ export function PullRequestInspector({
       relations={
         item
           ? toInspectorGroups(
-              pullRequestRelationGroups(item, projects, joins),
+              pullRequestRelationGroups(
+                item,
+                projects,
+                joins,
+                worktreeStatuses,
+              ),
               openers,
+              resolvedJoinRows(
+                item.sessionIds,
+                joins.sessions,
+                (row) => row.id,
+              ),
             )
           : []
       }

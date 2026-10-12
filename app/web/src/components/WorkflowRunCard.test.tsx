@@ -109,6 +109,40 @@ function click(label: string, scope: ParentNode = container!): void {
   });
 }
 
+/** The "…" menu's actions, read by opening it. */
+function menuLabels(): string[] {
+  const trigger = container!.querySelector<HTMLButtonElement>(
+    'button[aria-label="More run actions"]',
+  );
+  if (!trigger) return [];
+  act(() => trigger.click());
+  const labels = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].map((item) => (item.textContent ?? "").trim());
+  act(() => {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+  });
+  return labels;
+}
+
+/** Run one of the "…" menu's actions. */
+function clickMenuItem(label: string): void {
+  act(() =>
+    container!
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="More run actions"]',
+      )!
+      .click(),
+  );
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((node) => (node.textContent ?? "").trim() === label);
+  expect(item, `no “${label}” menu item`).toBeDefined();
+  act(() => item!.click());
+}
+
 /** Answer the confirmation the control just raised, not the control again. */
 function clickInDialog(label: string): void {
   const dialog = document.querySelector('[role="dialog"]');
@@ -123,6 +157,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.localStorage.clear();
   act(() => root?.unmount());
   root = null;
   container?.remove();
@@ -149,33 +184,46 @@ it("keeps pause reason and stale reviewed commit visible and wires controls", as
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
-  expect(document.body.textContent).toContain("review needs a decision");
+  expect(document.body.textContent).toContain("Review needs a decision");
   expect(
-    document.body.textContent!.split("review needs a decision").length - 1,
+    document.body.textContent!.toLowerCase().split("review needs a decision")
+      .length - 1,
   ).toBe(1);
-  expect(document.body.textContent).toContain("abcdef12");
-  expect(document.body.textContent).toContain("outdated — workspace moved");
+  // The last review in one line: verdict, reviewed commit, and that it is old.
+  expect(document.body.textContent).toContain(
+    "revise · abcdef12 · 1 finding · outdated",
+  );
+  expect(document.body.textContent).toContain("Fix round 2 of 3");
+  // The evidence is folded until the reader opens it.
+  expect(document.body.textContent).not.toContain(
+    "retry path is still unguarded",
+  );
+  click("Review");
+  click("Why this plan");
   // The reviewer's own words, which used to reach nothing but its transcript.
   expect(document.body.textContent).toContain("retry path is still unguarded");
   expect(document.body.textContent).toContain(
-    "[major] src/retry.ts:22 — guard the retry path",
+    "major src/retry.ts:22 — guard the retry path",
   );
   // Where the findings live durably, and what the fix round left on them.
-  expect(document.body.textContent).toContain("2 anchored findings");
-  expect(document.body.textContent).toContain("1 answered and left open");
+  expect(document.body.textContent).toContain(
+    "Review threads on the worktree: 1 resolved, 1 answered, 0 open.",
+  );
   expect(document.body.textContent).toContain("the helper name reads oddly");
-  expect(document.body.textContent).toContain("iteration 2 of 3");
   expect(document.body.textContent).toContain("Protocol and UI changes");
   // The coordinator's post-review call, which the user would otherwise have to
   // open its session to read.
-  expect(document.body.textContent).toContain("another review pass");
+  expect(document.body.textContent).toContain("took another review pass");
   expect(document.body.textContent).toContain("deserves a second reader");
   expect(document.body.textContent).toContain("the migration");
+  // Opening a section is remembered for the next run's card.
+  expect(window.localStorage.getItem("workflow-run-review")).toBe("open");
   click("Resume");
   click("Retry");
   expect(resume).toHaveBeenCalledWith("7");
@@ -183,12 +231,12 @@ it("keeps pause reason and stale reviewed commit visible and wires controls", as
   expect(retry).toHaveBeenCalledWith("7");
   // Cancelling a run is guarded, and the guard is the app's own dialog: it has
   // to be answered, and declining runs nothing.
-  click("Cancel");
+  clickMenuItem("Cancel run…");
   await settled();
   clickInDialog("Keep running");
   await settled();
   expect(cancel).not.toHaveBeenCalled();
-  click("Cancel");
+  clickMenuItem("Cancel run…");
   await settled();
   clickInDialog("Cancel run");
   await settled();
@@ -211,6 +259,7 @@ it("defaults late-bound worktree cleanup on and keeps cleanup choices independen
         onDelete={remove}
         onRebaseAndReview={() => {}}
         onAnswerCeiling={() => {}}
+        onAnswerCommitCheck={() => {}}
       />
     </DialogProvider>
   );
@@ -277,16 +326,61 @@ it("shows the stopped step's own reason beside the generic pause banner", () => 
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
-  expect(document.body.textContent).toContain("Commit and sync blocked");
-  expect(document.body.textContent).toContain("the rebase conflicted");
+  // The headline only says the run waits; the box says why and what now.
+  expect(document.body.textContent).toContain(
+    "Paused. Retry once the cause is fixed, or cancel the run.",
+  );
+  expect(document.body.textContent).toContain("Rebase conflict");
   expect(document.body.textContent).toContain("docs/reference/web-diff.md");
   expect(document.body.textContent).toContain("run branch was restored");
   expect(document.body.textContent).toContain("then Retry");
+
+  // Without a conflict to list, the box is the stopped step's own words.
+  act(() => {
+    root!.render(
+      <DialogProvider>
+        <WorkflowRunCard
+          run={{
+            ...run,
+            lifecycleReason: "commit-sync step 168 ended as blocked",
+          }}
+          card={applyPatch(card, {
+            phase: "commit-sync",
+            latestAssessment: undefined,
+            nextAction: "commit-sync step 168 ended as blocked",
+            blockedReason: {
+              phase: "commit-sync",
+              status: "blocked",
+              summary:
+                "commit-sync phase blocked: the pre-commit hook rejected the change",
+            },
+          })}
+          sessions={[]}
+          onOpenSession={() => {}}
+          onPause={() => {}}
+          onResume={() => {}}
+          onRetry={() => {}}
+          onCancel={() => {}}
+          onDelete={() => {}}
+          onRebaseAndReview={() => {}}
+          onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
+        />
+      </DialogProvider>,
+    );
+  });
+  expect(document.body.textContent).toContain("Commit and sync blocked");
+  // The box names the step, so its summary drops the step's own prefix.
+  expect(document.body.textContent).toContain(
+    "The pre-commit hook rejected the change",
+  );
+  expect(document.body.textContent).not.toContain("phase blocked");
 });
 
 it("says what another retry would do, without repeating the banner's count", async () => {
@@ -321,27 +415,33 @@ it("says what another retry would do, without repeating the banner's count", asy
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
-  // The count is the banner's; this line carries only what the banner cannot.
-  expect(document.body.textContent!.split("attempt 3").length - 1).toBe(1);
+  // The count is said once, in the box; the headline only says the run waits.
+  expect(document.body.textContent).not.toContain("attempt 3");
   expect(document.body.textContent).toContain(
-    "Retry re-runs the same assignment",
+    "The last 3 attempts ended the same way.",
   );
-  // Never a promise that the outcome is fixed — but also never a false reason
-  // for it: the executor REUSES the role's session whenever it is still
-  // resolvable, so a retry does not get fresh eyes, only another attempt.
-  expect(document.body.textContent).toContain("repaired outside the run");
-  expect(document.body.textContent).not.toContain("fresh session");
   // Discouraged, never refused: a declined confirmation runs nothing, and the
   // user who repaired the condition outside the run can still say yes.
   click("Retry again");
   await settled();
   expect(document.body.textContent).toContain("Retry anyway?");
   expect(document.body.textContent).toContain("ended with the same result");
+  expect(document.body.textContent).toContain(
+    "Retry re-runs the same assignment",
+  );
+  // Never a promise that the outcome is fixed — but also never a false reason
+  // for it: the executor REUSES the role's session whenever it is still
+  // resolvable, so a retry does not get fresh eyes, only another attempt.
+  expect(document.body.textContent).toContain(
+    "remembers the attempt that stopped",
+  );
+  expect(document.body.textContent).not.toContain("fresh session");
   clickInDialog("Cancel");
   await settled();
   expect(retry).not.toHaveBeenCalled();
@@ -376,14 +476,16 @@ it("never repeats the pause sentence the banner or next action already shows", (
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
   expect(
-    document.body.textContent!.split("the reviewer rejected this head").length -
-      1,
+    document.body
+      .textContent!.toLowerCase()
+      .split("the reviewer rejected this head").length - 1,
   ).toBe(1);
   expect(document.body.textContent).not.toContain("Review failed");
 });
@@ -418,15 +520,17 @@ it("links the provider PR and opens the existing live PR card", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
+  expect(document.body.textContent).toContain("Pull request#12");
   const link = container!.querySelector("a");
-  expect(link?.textContent).toContain("Pull request #12");
+  expect(link?.textContent).toBe("#12");
   expect(link?.getAttribute("href")).toBe("https://example.test/pull/12");
-  click("Open live PR card");
+  clickMenuItem("Open live PR card");
   expect(open).toHaveBeenCalledWith("impl");
 });
 
@@ -461,20 +565,19 @@ it("keeps a completed run inspectable with its separate follow-ups", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
-  expect(document.body.textContent).toContain("completed");
-  expect(document.body.textContent).toContain("Pull request merged");
+  expect(document.body.textContent).toContain("Merged pull request #12.");
   // No delivery state on the card — an older server, or a card the run cannot
   // read — offers no control rather than one whose refusal it cannot predict.
   expect(document.body.textContent).not.toContain("Clean up");
-  // Answering the Task is still the user's own, separate choice.
-  expect(document.body.textContent).toContain("Task's own status");
-  expect(document.body.textContent).toContain("Pull request #12");
-  expect(document.body.textContent).not.toContain("Cancel");
+  expect(container!.querySelector("a")?.textContent).toBe("#12");
+  // A finished run can still be followed to its PR card, and nothing else.
+  expect(menuLabels()).toEqual(["Open live PR card"]);
 });
 
 it("offers user-authorized rebase and re-review for an observed conflict", async () => {
@@ -506,6 +609,7 @@ it("offers user-authorized rebase and re-review for an observed conflict", async
           onDelete={() => {}}
           onRebaseAndReview={rebase}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
@@ -514,7 +618,7 @@ it("offers user-authorized rebase and re-review for an observed conflict", async
   expect(document.body.textContent).not.toContain("Resume");
   // Authorized by the user, through the app's own dialog: the confirming button
   // repeats the control's name, so the answer says what it starts.
-  click("Rebase and re-review");
+  clickMenuItem("Rebase and re-review");
   await settled();
   expect(document.body.textContent).toContain("send through review again?");
   clickInDialog("Rebase and re-review");
@@ -558,10 +662,16 @@ it("opens live role sessions through screen navigation", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
+  // Where the run is working right now, named by its role.
+  click("Implementer session");
+  expect(open).toHaveBeenCalledWith("impl");
+  open.mockClear();
+  click("Sessions (1)");
   click("ImplementerImplement it");
   expect(open).toHaveBeenCalledWith("impl");
   expect(container!.querySelector("a[href]")).toBeNull();
@@ -594,11 +704,13 @@ it("links every mandatory review pass, not only the newest one", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
+  click("Sessions (2)");
   click("Reviewer 1review-1");
   expect(open).toHaveBeenCalledWith("review-1");
   click("Reviewer 2review-2");
@@ -630,12 +742,16 @@ it("says when the card shortened the review instead of hiding it", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
 
-  expect(document.body.textContent).toContain("Shortened for this card");
+  click("Review");
+  expect(document.body.textContent).toContain(
+    "Shortened here — the reviewer session has the full review.",
+  );
 });
 
 it("uses a slider to raise by N even at the start-form maximum", async () => {
@@ -671,6 +787,7 @@ it("uses a slider to raise by N even at the start-form maximum", async () => {
             onAnswerCeiling={(runId, choice, limits) =>
               answers.push([runId, choice, limits])
             }
+            onAnswerCommitCheck={() => {}}
           />
         </DialogProvider>,
       );
@@ -680,8 +797,10 @@ it("uses a slider to raise by N even at the start-form maximum", async () => {
   // number.
   await render(gate(2));
   const text = () => document.body.textContent ?? "";
-  expect(text()).toMatch(/reached its review-pass ceiling/);
-  expect(text()).toMatch(/would ship work no review pass has accepted/);
+  expect(text()).toContain("Review-pass limit reached");
+  expect(text()).toContain(
+    "Delivering as it stands ships work no review pass has accepted.",
+  );
   const raise = () =>
     [...container!.querySelectorAll("button")].find((button) =>
       button.textContent?.startsWith("Allow "),
@@ -759,6 +878,7 @@ function renderPaused(
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={(_runId, choice) => calls.ceiling.push(choice)}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
@@ -777,7 +897,7 @@ it("offers Resume only when the server says it would move the run", () => {
   // back the instant Resume is pressed. The server decides; the card obeys.
   renderPaused({ ...card, canResume: false, canRetry: false });
   expect(hasButton("Resume"), "no Resume on a settled pause").toBe(false);
-  expect(hasButton("Cancel"), "cancel is still the way out").toBe(true);
+  expect(menuLabels(), "cancel is still the way out").toContain("Cancel run…");
 
   const calls = renderPaused({ ...card, canResume: true, canRetry: false });
   expect(hasButton("Resume")).toBe(true);
@@ -828,9 +948,9 @@ it("offers Look again where the workspace is what refused", () => {
   expect(calls.ceiling).toEqual(["re-evaluate"]);
 });
 
-it("asks before cancelling from the ceiling gate, like the footer does", async () => {
-  // Same irreversible action as the footer's Cancel, so it asks the same
-  // question first rather than ending the run on one tap.
+it("asks before cancelling a run waiting at the ceiling gate", async () => {
+  // The gate offers no Cancel of its own: the menu's is the one way out, and
+  // it asks first rather than ending the run on one tap.
   const calls = renderPaused({
     ...card,
     phase: "ceiling-decision",
@@ -845,14 +965,17 @@ it("asks before cancelling from the ceiling gate, like the footer does", async (
       suggestedRaise: 2,
     },
   });
-  click("Cancel run");
+  expect(hasButton("Cancel run")).toBe(false);
+  clickMenuItem("Cancel run…");
+  await settled();
   expect(
-    calls.ceiling,
+    calls.cancel,
     "nothing happens until the question is answered",
   ).toEqual([]);
   clickInDialog("Cancel run");
-  await act(async () => {});
-  expect(calls.ceiling).toEqual(["cancel"]);
+  await settled();
+  expect(calls.cancel).toEqual(["7"]);
+  expect(calls.ceiling).toEqual([]);
 });
 
 it("does not advise Look again on a gate that has no such choice", () => {
@@ -896,12 +1019,15 @@ it("counts no iteration when the run may spend no fix rounds", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
         />
       </DialogProvider>,
     );
   });
-  expect(document.body.textContent).toContain("no fix rounds");
-  expect(document.body.textContent).not.toContain("iteration 0 of 0");
+  expect(document.body.textContent).toContain(
+    "No fix rounds · 0 of 2 review passes",
+  );
+  expect(document.body.textContent).not.toContain("Fix round");
 });
 
 it("merges the run's pull request from the Task, with the click's own choices", () => {
@@ -939,6 +1065,7 @@ it("merges the run's pull request from the Task, with the click's own choices", 
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
           onMerge={merge}
           onCleanUp={() => {}}
         />
@@ -947,16 +1074,31 @@ it("merges the run's pull request from the Task, with the click's own choices", 
   });
 
   // The user never has to leave the Task for the decision the run stopped for.
-  expect(document.body.textContent).toContain("Merge below");
-  // Only the methods the repository allows.
-  expect(document.body.textContent).not.toContain("Rebase");
+  expect(document.body.textContent).toContain("Ready to merge");
   // Deleting the remote branch is the default, and the card says so before the
   // click rather than after it.
   expect(document.body.textContent).toContain(
-    "deletes the remote branch t370-card",
+    "Completes the run and deletes the remote branch.",
   );
 
-  click("Merge commit");
+  // Only the methods the repository allows.
+  act(() =>
+    container!
+      .querySelector<HTMLButtonElement>('[aria-label="Merge method"]')!
+      .click(),
+  );
+  const options = () => [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ];
+  expect(options().map((option) => option.textContent?.trim())).toEqual([
+    "Squash",
+    "Merge commit",
+  ]);
+  act(() =>
+    options()
+      .find((option) => option.textContent?.trim() === "Merge commit")!
+      .click(),
+  );
   click("Merge");
   expect(merge).toHaveBeenCalledWith("7", {
     mergeMethod: "merge",
@@ -967,6 +1109,9 @@ it("merges the run's pull request from the Task, with the click's own choices", 
     ...container!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
   ][0]!;
   act(() => keepBranch.click());
+  expect(document.body.textContent).toContain(
+    "Completes the run and keeps the remote branch.",
+  );
   click("Merge");
   expect(merge).toHaveBeenLastCalledWith("7", {
     mergeMethod: "merge",
@@ -1008,6 +1153,7 @@ it("finishes a completed run with one cleanup that also settles it", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
           onMerge={() => {}}
           onCleanUp={cleanUp}
         />
@@ -1017,8 +1163,9 @@ it("finishes a completed run with one cleanup that also settles it", () => {
 
   // What the one click does, in full: this is the click that ends the run's
   // presence in the Sessions inbox, so it may not be a surprise.
-  expect(document.body.textContent).toContain("settles every session");
-  expect(document.body.textContent).toContain("settles the run itself");
+  expect(document.body.textContent).toContain(
+    "Removes the worktree and local branch, and settles the run.",
+  );
   click("Clean up");
   expect(cleanUp).toHaveBeenCalledWith("7");
 
@@ -1053,6 +1200,7 @@ it("finishes a completed run with one cleanup that also settles it", () => {
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
           onMerge={() => {}}
           onCleanUp={cleanUp}
         />
@@ -1108,6 +1256,7 @@ it("states an unsettled run after cleanup, and nothing once it is settled", () =
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
           onMerge={() => {}}
           onCleanUp={() => {}}
         />
@@ -1116,7 +1265,7 @@ it("states an unsettled run after cleanup, and nothing once it is settled", () =
   });
 
   expect(document.body.textContent).toContain(
-    "still waiting for its Settle in the Sessions inbox",
+    "this run still waits for its Settle in the Sessions inbox",
   );
   expect(
     [...container!.querySelectorAll("button")].some(
@@ -1141,12 +1290,127 @@ it("states an unsettled run after cleanup, and nothing once it is settled", () =
           onDelete={() => {}}
           onRebaseAndReview={() => {}}
           onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
           onMerge={() => {}}
           onCleanUp={() => {}}
         />
       </DialogProvider>,
     );
   });
-  expect(document.body.textContent).not.toContain("waiting for its Settle");
+  expect(document.body.textContent).not.toContain("waits for its Settle");
   expect(document.body.textContent).toContain("The checkout was cleaned up.");
+});
+
+it("puts a refused commit to the user, and asks before committing over it", async () => {
+  const answers: [string, string][] = [];
+  const renderCheck = (blockers: CardProjection["commitCheckDecision"]) =>
+    act(() => {
+      root!.render(
+        <DialogProvider>
+          <WorkflowRunCard
+            run={{ ...run, lifecycleReason: "the commit check refused" }}
+            card={applyPatch(card, {
+              phase: "commit-sync",
+              canResume: false,
+              canRetry: false,
+              implementerSessionId: "impl",
+              commitCheckDecision: blockers,
+            })}
+            sessions={[]}
+            onOpenSession={() => {}}
+            onPause={() => {}}
+            onResume={() => {}}
+            onRetry={() => {}}
+            onCancel={() => {}}
+            onDelete={() => {}}
+            onRebaseAndReview={() => {}}
+            onAnswerCeiling={() => {}}
+            onAnswerCommitCheck={(runId, choice) =>
+              answers.push([runId, choice])
+            }
+          />
+        </DialogProvider>,
+      );
+    });
+
+  renderCheck({
+    blockers: [
+      { kind: "unrelated", file: "notes.txt", reason: "not part of the task" },
+    ],
+    allowedChoices: ["send-to-implementer", "commit-anyway"],
+    autoFixSpent: false,
+    changedBySessionId: "impl",
+  });
+  expect(document.body.textContent).toContain(
+    "Paused until you decide what happens to the refused commit.",
+  );
+  expect(document.body.textContent).toContain("Commit refused");
+  expect(document.body.textContent).toContain("Unrelated change · notes.txt");
+  expect(document.body.textContent).toContain("not part of the task");
+  expect(document.body.textContent).toContain("implementer's session");
+
+  click("Send back for a fix");
+  expect(answers).toEqual([["7", "send-to-implementer"]]);
+
+  // Committing over the check cannot be taken back, so it asks first.
+  answers.length = 0;
+  click("Commit anyway");
+  await settled();
+  clickInDialog("Cancel");
+  await settled();
+  expect(answers).toEqual([]);
+  click("Commit anyway");
+  await settled();
+  clickInDialog("Commit anyway");
+  await settled();
+  expect(answers).toEqual([["7", "commit-anyway"]]);
+
+  // A secret is never committed over: the server withholds the choice and the
+  // card says why.
+  renderCheck({
+    blockers: [{ kind: "secret", file: ".env", reason: "an API key" }],
+    allowedChoices: ["send-to-implementer"],
+    autoFixSpent: true,
+  });
+  expect(document.body.textContent).toContain("Commit refused again");
+  expect(document.body.textContent).toContain("A secret must not be committed");
+  expect(hasButton("Commit anyway")).toBe(false);
+  expect(hasButton("Send back for a fix")).toBe(true);
+});
+
+it("names each role's model, thinking level and account", () => {
+  act(() => {
+    root!.render(
+      <DialogProvider>
+        <WorkflowRunCard
+          run={run}
+          card={applyPatch(card, {
+            workPlan: {
+              ...card.workPlan!,
+              implementer: {
+                ...card.workPlan!.implementer,
+                credentialProfileId: "cp-work",
+              },
+            },
+          })}
+          sessions={[]}
+          accountNames={{ "cp-work": "Work account" }}
+          onOpenSession={() => {}}
+          onPause={() => {}}
+          onResume={() => {}}
+          onRetry={() => {}}
+          onCancel={() => {}}
+          onDelete={() => {}}
+          onRebaseAndReview={() => {}}
+          onAnswerCeiling={() => {}}
+          onAnswerCommitCheck={() => {}}
+        />
+      </DialogProvider>,
+    );
+  });
+  expect(document.body.textContent).toContain(
+    "Implementergpt-5.6 · High · Work account",
+  );
+  // A role without a stored account names none.
+  expect(document.body.textContent).toContain("Reviewersonnet · Medium");
 });

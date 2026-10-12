@@ -7,17 +7,9 @@ import type {
   AnsweredAgentQuestion,
   DisplayBlock,
 } from "@assistant/shared";
-import type { ReactNode } from "react";
-import { AgentQuestionForm } from "./AgentQuestionForm.tsx";
+import { AgentQuestionForm, QuestionSubject } from "./AgentQuestionForm.tsx";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { AppCard } from "./common/AppCard.tsx";
 import {
   Item,
   ItemContent,
@@ -59,41 +51,16 @@ export function AgentQuestionToolCard({
       ? pendingQuestion
       : undefined;
 
-  return (
-    <Card size="sm" className="my-2">
-      {pending && onRespond ? (
-        <AgentQuestionForm
-          request={pending}
-          onRespond={onRespond}
-          {...(notice !== undefined ? { notice } : {})}
-        />
-      ) : answered ? (
-        <AnsweredView answered={answered} />
-      ) : (
-        <FallbackView block={block} />
-      )}
-    </Card>
-  );
-}
-
-function QuestionHeader({
-  title,
-  intro,
-  status,
-}: {
-  title: string;
-  intro?: string | undefined;
-  status?: ReactNode;
-}) {
-  return (
-    <CardHeader>
-      <CardTitle className="flex items-center gap-2">
-        <MessageCircleQuestion className="size-4 shrink-0 text-primary" />
-        <span className="min-w-0 truncate">{title}</span>
-      </CardTitle>
-      {intro ? <CardDescription>{intro}</CardDescription> : null}
-      {status ? <CardAction>{status}</CardAction> : null}
-    </CardHeader>
+  return pending && onRespond ? (
+    <AgentQuestionForm
+      request={pending}
+      onRespond={onRespond}
+      {...(notice !== undefined ? { notice } : {})}
+    />
+  ) : answered ? (
+    <AnsweredView answered={answered} />
+  ) : (
+    <FallbackView block={block} />
   );
 }
 
@@ -101,43 +68,29 @@ function AnsweredView({ answered }: { answered: AnsweredAgentQuestion }) {
   const cancelled = answered.response.status === "cancelled";
   const byId = new Map(answered.response.answers.map((a) => [a.questionId, a]));
   return (
-    <>
-      <QuestionHeader
-        title={answered.title}
-        intro={answered.intro}
-        status={
-          cancelled ? (
-            <Badge variant="outline">
-              <CircleSlash />
-              Cancelled
-            </Badge>
-          ) : (
-            <Badge variant="success">
-              <Check />
-              Answered
-            </Badge>
-          )
-        }
-      />
-      <CardContent>
-        {cancelled ? (
-          <p className="text-muted-foreground">
-            You cancelled this question flow.
-          </p>
-        ) : (
-          <ItemGroup className="gap-2">
-            {answered.questions.map((q) => (
-              <Item key={q.id} variant="outline" size="sm">
-                <ItemContent>
-                  <ItemTitle>{q.title}</ItemTitle>
-                  <AnswerLine question={q} answer={byId.get(q.id)} />
-                </ItemContent>
-              </Item>
-            ))}
-          </ItemGroup>
-        )}
-      </CardContent>
-    </>
+    <AppCard
+      tone={cancelled ? "neutral" : "success"}
+      icon={cancelled ? <CircleSlash /> : <Check />}
+      label={cancelled ? "Question cancelled" : "Question answered"}
+    >
+      <QuestionSubject title={answered.title} intro={answered.intro} />
+      {cancelled ? (
+        <p className="text-muted-foreground">
+          You cancelled this question flow.
+        </p>
+      ) : (
+        <ItemGroup className="gap-2">
+          {answered.questions.map((q) => (
+            <Item key={q.id} variant="outline" size="sm">
+              <ItemContent>
+                <ItemTitle>{q.title}</ItemTitle>
+                <AnswerLine question={q} answer={byId.get(q.id)} />
+              </ItemContent>
+            </Item>
+          ))}
+        </ItemGroup>
+      )}
+    </AppCard>
   );
 }
 
@@ -273,27 +226,25 @@ function FallbackView({ block }: { block: ToolBlock }) {
   const intro = typeof args?.intro === "string" ? args.intro : undefined;
   const questions = Array.isArray(args?.questions) ? args!.questions : [];
   return (
-    <>
-      <QuestionHeader title={title} intro={intro} />
-      <CardContent>
-        <ItemGroup className="gap-1.5">
-          {questions.map((q, i) => {
-            const qt =
-              q && typeof q === "object"
-                ? (q as { title?: unknown }).title
-                : undefined;
-            return (
-              <Item key={i} variant="outline" size="xs">
-                <ItemContent>
-                  <ItemTitle className="font-normal text-muted-foreground">
-                    {typeof qt === "string" ? qt : `Question ${i + 1}`}
-                  </ItemTitle>
-                </ItemContent>
-              </Item>
-            );
-          })}
-        </ItemGroup>
-      </CardContent>
-    </>
+    <AppCard icon={<MessageCircleQuestion />} label="Question">
+      <QuestionSubject title={title} intro={intro} />
+      <ItemGroup className="gap-1.5">
+        {questions.map((q, i) => {
+          const qt =
+            q && typeof q === "object"
+              ? (q as { title?: unknown }).title
+              : undefined;
+          return (
+            <Item key={i} variant="outline" size="xs">
+              <ItemContent>
+                <ItemTitle className="font-normal text-muted-foreground">
+                  {typeof qt === "string" ? qt : `Question ${i + 1}`}
+                </ItemTitle>
+              </ItemContent>
+            </Item>
+          );
+        })}
+      </ItemGroup>
+    </AppCard>
   );
 }

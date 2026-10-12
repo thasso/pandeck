@@ -175,13 +175,20 @@ function ArtifactImage({ rawUrl, name }: { rawUrl: string; name: string }) {
       </div>
     );
   return (
-    <div className="document-visual-content flex min-h-full items-center justify-center bg-card p-4">
+    // Visual zoom scales this box, so a cap of 100% would shrink the image
+    // straight back: the cap grows with the zoom instead, and `m-auto` (not
+    // flex centring) keeps a zoomed image scrollable to every edge.
+    <div className="document-visual-content flex min-h-full bg-card p-4">
       <img
         key={generation}
         src={rawUrl}
         alt={`Captured artifact: ${name}`}
         onError={() => setFailure("Could not load the captured image.")}
-        className="max-h-full max-w-full"
+        className="m-auto"
+        style={{
+          maxWidth: "calc(100% * var(--document-zoom, 1))",
+          maxHeight: "calc(100% * var(--document-zoom, 1))",
+        }}
       />
     </div>
   );

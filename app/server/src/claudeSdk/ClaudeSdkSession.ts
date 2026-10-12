@@ -173,6 +173,7 @@ import {
 import { sessionRunStartedAt } from "../sessionActivity.ts";
 import {
   drainRecipient,
+  peerPromptPeersFor,
   peerPromptQueueField,
   peerPromptThreadsFor,
 } from "../peerPrompt.ts";
@@ -1025,6 +1026,7 @@ export class ClaudeSdkSession implements LiveSession {
         ? { browserRuntimes: this.browserRuntimesFor(this.id) }
         : {}),
       peerPrompts: peerPromptThreadsFor(this.id),
+      peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),

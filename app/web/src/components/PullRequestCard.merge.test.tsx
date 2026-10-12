@@ -86,6 +86,28 @@ function click(element: Element): void {
   });
 }
 
+/** The methods the picker's dropdown lists, read by opening it. */
+function offeredMethods(): string[] {
+  act(() =>
+    container!
+      .querySelector<HTMLButtonElement>('[aria-label="Merge method"]')!
+      .click(),
+  );
+  return [...document.querySelectorAll<HTMLElement>('[role="option"]')].map(
+    (option) => (option.textContent ?? "").trim(),
+  );
+}
+
+/** Choose a merge method from the picker's dropdown. */
+function pickMethod(label: string): void {
+  offeredMethods();
+  const option = [
+    ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+  ].find((element) => (element.textContent ?? "").trim() === label);
+  expect(option, `no ${label} merge method`).toBeDefined();
+  act(() => option!.click());
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
 });
@@ -99,7 +121,7 @@ afterEach(() => {
 
 it("merges with the chosen method and deletes the remote branch by default", () => {
   const clicks = render();
-  click(find("button", "Merge commit"));
+  pickMethod("Merge commit");
   click(find("button", "Merge"));
   expect(clicks).toEqual([
     { action: "merge", options: { mergeMethod: "merge", deleteBranch: true } },
@@ -140,9 +162,7 @@ it("offers only the repository's supported merge methods", () => {
       mergeMethods: ["merge", "rebase"],
     },
   });
-  const labels = [...container!.querySelectorAll("button")].map((button) =>
-    (button.textContent ?? "").trim(),
-  );
+  const labels = offeredMethods();
   expect(labels).toContain("Merge commit");
   expect(labels).toContain("Rebase");
   expect(labels).not.toContain("Squash");
@@ -164,7 +184,7 @@ it("offers no method and no merge while the capabilities are unknown", () => {
 // as a stale selection.
 it("invalidates a selected method the repository no longer allows", () => {
   const clicks = render();
-  click(find("button", "Rebase"));
+  pickMethod("Rebase");
   act(() => {
     root!.render(
       <PullRequestCard

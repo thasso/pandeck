@@ -123,6 +123,22 @@ function renderWorktrees(
   );
 }
 
+/**
+ * One worktree's row in the page's tree, split into its two lines: the branch
+ * with its line delta and merged badge, and under it the axes or the calm fact.
+ */
+function worktreeLines(root: ParentNode, id: string) {
+  const row = root.querySelector(`[data-list-row-id="worktree:${id}"]`);
+  // The row body carries the branch/path tooltip; its second child holds the
+  // two lines (the first is the glyph).
+  const body = row?.querySelector("[title]")?.children[1];
+  return {
+    row,
+    primary: body?.children[0] ?? null,
+    second: body?.children[1] ?? null,
+  };
+}
+
 describe("ProjectDetailPage load states", () => {
   it("loads rather than claiming the registry is empty", () => {
     const html = render({ loaded: false, selectedId: "proj" });
@@ -176,10 +192,10 @@ describe("ProjectDetailPage load states", () => {
     );
     try {
       await act(async () => root.render(page("alpha", ready(alpha))));
-      const rename = container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Rename Project"]',
+      const edit = [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Edit",
       );
-      await act(async () => rename?.click());
+      await act(async () => edit?.click());
       const input = container.querySelector<HTMLInputElement>(
         'input[aria-label="Project name"]',
       );
@@ -221,18 +237,13 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    const renderedRow = document.querySelector(
-      '[data-project-worktree-row="one"]',
-    );
-    expect(
-      renderedRow?.querySelector("[data-worktree-primary]")?.textContent,
-    ).toContain("+14−3");
-    expect(
-      renderedRow?.querySelector("[data-worktree-axes]")?.textContent,
-    ).toContain("main ↑2");
+    const { primary, second } = worktreeLines(document, "one");
+    expect(primary?.textContent).toContain("+14−3");
+    expect(second?.hasAttribute("data-worktree-axes")).toBe(true);
+    expect(second?.textContent).toContain("main ↑2");
   });
 
-  it("collapses to one line when every axis is in sync", () => {
+  it("states the calm fact on the second line when every axis is in sync", () => {
     const row = worktree({ id: "calm" });
     const html = renderWorktrees([row], {
       calm: git("calm", {
@@ -240,13 +251,13 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    const renderedRow = document.querySelector(
-      '[data-project-worktree-row="calm"]',
-    );
-    expect(
-      renderedRow?.querySelector("[data-worktree-primary]"),
-    ).not.toBeNull();
-    expect(renderedRow?.querySelector("[data-worktree-axes]")).toBeNull();
+    const lines = worktreeLines(document, "calm");
+    const { primary, second } = lines;
+    expect(primary?.textContent).toContain("live/calm");
+    // Every worktree row keeps two lines, so the rows are one height: with
+    // nothing to say on an axis, the second line says there is nothing to do.
+    expect(lines.row?.querySelector("[data-worktree-axes]")).toBeNull();
+    expect(second?.textContent).toBe("level with main");
   });
 
   it("renders the live branch rather than the recorded branch", () => {
@@ -273,11 +284,11 @@ describe("ProjectDetailPage worktree rows", () => {
     });
     const document = new DOMParser().parseFromString(html, "text/html");
     const axes = document.querySelectorAll(
-      '[data-project-worktree-row="axes"] [data-worktree-axis]',
+      '[data-list-row-id="worktree:axes"] [data-worktree-axis]',
     );
     expect(axes).toHaveLength(3);
     const axisSummary = document.querySelector(
-      '[data-project-worktree-row="axes"] [data-worktree-axes]',
+      '[data-list-row-id="worktree:axes"] [data-worktree-axes]',
     );
     expect(axisSummary?.querySelectorAll(".sr-only")).toHaveLength(2);
     expect(axisSummary?.textContent).toContain("↓2\u00a0backup/main");
@@ -285,7 +296,7 @@ describe("ProjectDetailPage worktree rows", () => {
     expect(
       document
         .querySelector(
-          '[data-project-worktree-row="axes"] [data-worktree-axes]',
+          '[data-list-row-id="worktree:axes"] [data-worktree-axes]',
         )
         ?.classList.contains("truncate"),
     ).toBe(true);
@@ -311,9 +322,10 @@ describe("ProjectDetailPage worktree rows", () => {
       }),
     });
     const document = new DOMParser().parseFromString(html, "text/html");
-    expect(
-      document.querySelector("[data-worktree-primary]")?.textContent,
-    ).toContain("merged");
+    const { primary } = worktreeLines(document, "merged");
+    expect(primary?.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      "merged",
+    );
   });
 
   it("ages remote refs against wall clock time", async () => {
@@ -349,20 +361,16 @@ describe("ProjectDetailPage worktree rows", () => {
       const axes = () =>
         container.querySelector<HTMLElement>("[data-worktree-axes]");
       expect(axes()?.classList.contains("opacity-60")).toBe(false);
+      // A minute tick that leaves the row fresh redraws no row: the memo folds
+      // the clock down to the stale/fresh bit the row renders.
       setPerfStatsEnabled(true);
       await act(async () => vi.advanceTimersByTime(60_000));
-      expect(
-        perfSnapshot().renders.find(
-          (render) => render.name === "ProjectWorktreeRow",
-        )?.count ?? 0,
-      ).toBe(0);
+      expect(worktreeRowRenders()).toBe(0);
+      expect(axes()?.classList.contains("opacity-60")).toBe(false);
+      // The tick that flips it stale redraws that row, once.
       await act(async () => vi.advanceTimersByTime(15 * 60_000));
       expect(axes()?.classList.contains("opacity-60")).toBe(true);
-      expect(
-        perfSnapshot().renders.find(
-          (render) => render.name === "ProjectWorktreeRow",
-        )?.count,
-      ).toBe(1);
+      expect(worktreeRowRenders()).toBe(1);
       expect(
         axes()?.querySelector("[data-worktree-axis]")?.getAttribute("title"),
       ).toContain("remote refs may be out of date");
@@ -407,6 +415,8 @@ describe("ProjectDetailPage worktree rows", () => {
         ),
       );
       setPerfStatsEnabled(true);
+      // A new status for "one" only: "two" keeps its status object, so its
+      // memoized row stays as it was.
       await act(async () =>
         root.render(
           page(
@@ -416,11 +426,11 @@ describe("ProjectDetailPage worktree rows", () => {
           ),
         ),
       );
+      expect(worktreeRowRenders()).toBe(1);
       expect(
-        perfSnapshot().renders.find(
-          (render) => render.name === "ProjectWorktreeRow",
-        )?.count,
-      ).toBe(1);
+        container.querySelector('[data-list-row-id="worktree:one"]')
+          ?.textContent,
+      ).toContain("↓2");
     } finally {
       setPerfStatsEnabled(false);
       await act(async () => root.unmount());
@@ -428,6 +438,14 @@ describe("ProjectDetailPage worktree rows", () => {
     }
   });
 });
+
+/** How many times a worktree row (`WorktreeRow`) rendered while the HUD was on. */
+function worktreeRowRenders(): number {
+  return (
+    perfSnapshot().renders.find((render) => render.name === "WorktreeRow")
+      ?.count ?? 0
+  );
+}
 
 async function typeInto(
   el: HTMLInputElement | HTMLTextAreaElement,
@@ -456,8 +474,9 @@ async function keyDown(el: Element, init: KeyboardEventInit) {
 }
 
 /**
- * The name, description and repository URL editors keep their draft until the
- * correlated `saveProject` succeeds, and show a refusal with a retry.
+ * The name and description editor (one, opened by Edit) and the repository URL
+ * editor keep their draft until the correlated `saveProject` succeeds, and
+ * show a refusal with a retry.
  */
 describe("ProjectDetailPage edits", () => {
   const project: ProjectRecord = {
@@ -517,15 +536,16 @@ describe("ProjectDetailPage edits", () => {
         'input[aria-label="Project name"]',
       );
     try {
-      await act(async () => view.button("Rename Project").click());
+      await act(async () => view.button("Edit").click());
       expect(document.activeElement).toBe(input());
       await typeInto(input()!, " Alpha two ");
       await act(async () => view.button("Save").click());
+      // Only the field this edit changed is sent.
       expect(onSave).toHaveBeenLastCalledWith("alpha", { name: "Alpha two" });
 
       await view.rerender({ "alpha:name": loading() });
       expect(view.button("Save").getAttribute("aria-busy")).toBe("true");
-      await keyDown(input()!, { key: "Enter" });
+      await keyDown(input()!, { key: "Enter", metaKey: true });
       expect(onSave).toHaveBeenCalledTimes(1);
 
       await view.rerender({ "alpha:name": failed("Name taken") });
@@ -550,13 +570,13 @@ describe("ProjectDetailPage edits", () => {
         'textarea[aria-label="Project description"]',
       );
     try {
-      await act(async () => view.button("Edit description").click());
-      expect(document.activeElement).toBe(textarea());
+      await act(async () => view.button("Edit").click());
       await typeInto(textarea()!, "Discarded");
       await keyDown(textarea()!, { key: "Escape" });
       expect(textarea()).toBeNull();
+      expect(view.container.textContent).toContain("Alpha body");
 
-      await act(async () => view.button("Edit description").click());
+      await act(async () => view.button("Edit").click());
       await typeInto(textarea()!, "New body\n");
       await keyDown(textarea()!, { key: "Enter", metaKey: true });
       expect(onSave).toHaveBeenCalledTimes(1);

@@ -1,7 +1,11 @@
 import { useState } from "react";
-import { Check, FolderKanban } from "lucide-react";
+import { Check, FolderKanban, X } from "lucide-react";
 import type { ProjectRecord } from "@assistant/shared";
-import { projectColor, projectDisplayKey } from "../lib/projectDisplay.ts";
+import {
+  projectColor,
+  projectDisplayKey,
+  resolveProjectDisplay,
+} from "../lib/projectDisplay.ts";
 import { Button } from "./ui/button.tsx";
 import {
   Command,
@@ -13,7 +17,6 @@ import {
   CommandSeparator,
 } from "./ui/command.tsx";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover.tsx";
-import { ProjectBadge } from "./ProjectBadge.tsx";
 
 /**
  * @component ProjectSelector
@@ -21,7 +24,7 @@ import { ProjectBadge } from "./ProjectBadge.tsx";
  * @useWhen A surface needs to assign or stage one primary Project id.
  * @avoidWhen Browsing all Projects as a destination; use the Projects surfaces.
  * @intent Controlled selector. Offers active Projects and preserves stale/archived selections for display.
- * @related ProjectBadge, projectDisplay helpers, TaskManagementPage, Composer
+ * @related projectDisplay helpers, TaskManagementPage, Composer
  */
 export function ProjectSelector({
   currentId,
@@ -36,6 +39,7 @@ export function ProjectSelector({
   placement = "auto",
   defaultOpen = false,
   className,
+  grow = false,
 }: {
   currentId: string | null | undefined;
   projects: ProjectRecord[];
@@ -49,6 +53,8 @@ export function ProjectSelector({
   placement?: "top" | "bottom" | "auto";
   defaultOpen?: boolean;
   className?: string;
+  /** Fill the row it sits in (a property list's value column). */
+  grow?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const selectedId = currentId?.trim() || null;
@@ -61,7 +67,7 @@ export function ProjectSelector({
     triggerTitle ?? (selectedId ? "Change project" : "Assign project");
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className={`flex min-w-0 items-center gap-2 ${grow ? "flex-1" : ""}`}>
       {label ? (
         <span className="text-sm font-medium text-muted-foreground">
           {label}
@@ -80,15 +86,11 @@ export function ProjectSelector({
           }
         >
           {selectedId ? (
-            <ProjectBadge
-              projectId={selectedId}
-              projectsById={projectsById}
-              size="md"
-            />
+            <ProjectValue projectId={selectedId} projectsById={projectsById} />
           ) : (
             <>
-              <FolderKanban />
-              {emptyLabel}
+              <FolderKanban className="text-muted-foreground" />
+              <span className="text-muted-foreground">{emptyLabel}</span>
             </>
           )}
         </PopoverTrigger>
@@ -111,10 +113,9 @@ export function ProjectSelector({
                     value={`${selectedId} ${projectsById.get(selectedId)?.name ?? ""}`}
                     disabled
                   >
-                    <ProjectBadge
+                    <ProjectValue
                       projectId={selectedId}
                       projectsById={projectsById}
-                      size="sm"
                     />
                   </CommandItem>
                 </CommandGroup>
@@ -129,16 +130,15 @@ export function ProjectSelector({
                       setOpen(false);
                     }}
                   >
-                    <span
-                      className="size-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: projectColor(project).dot }}
+                    <FolderKanban
+                      style={{ color: projectColor(project).dot }}
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1 truncate">
                       {project.name}
                     </span>
                     {projectDisplayKey(project) ? (
-                      <span className="text-xs text-muted-foreground">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {projectDisplayKey(project)}
                       </span>
                     ) : null}
@@ -159,6 +159,7 @@ export function ProjectSelector({
                         setOpen(false);
                       }}
                     >
+                      <X aria-hidden="true" />
                       {clearLabel}
                     </CommandItem>
                   </CommandGroup>
@@ -169,5 +170,40 @@ export function ProjectSelector({
         </PopoverContent>
       </Popover>
     </div>
+  );
+}
+
+/**
+ * The assigned Project as the task page names it: its icon in its colour, the
+ * key, and the full name after it, muted, shortening first.
+ */
+export function ProjectValue({
+  projectId,
+  projectsById,
+}: {
+  projectId: string;
+  projectsById: Map<string, ProjectRecord>;
+}) {
+  const project = projectsById.get(projectId);
+  const { label, shortLabel, known } = resolveProjectDisplay(
+    projectId,
+    projectsById,
+  );
+  return (
+    <>
+      <FolderKanban
+        style={
+          known ? { color: projectColor(project ?? projectId).dot } : undefined
+        }
+        className={known ? undefined : "text-muted-foreground"}
+        aria-hidden="true"
+      />
+      <span className="min-w-0 truncate">
+        {shortLabel}
+        {known && label !== shortLabel ? (
+          <span className="text-muted-foreground"> · {label}</span>
+        ) : null}
+      </span>
+    </>
   );
 }

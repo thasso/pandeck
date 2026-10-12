@@ -139,12 +139,20 @@ card, which the commands address it by.
 
 ### Composer
 
-While a turn runs the composer offers Steer or Queue. On a phone the resting
-dock row stays live for such a turn: its field opens the composer and the mic
-records into it, while Stop keeps Send's slot. Enter does what this device last
-chose (`lib/busySendMode.ts`, `localStorage`) and Alt+Enter the other. A
-provider that cannot steer only queues. Stop keeps its own button while a
-message is being typed. The queue renders as `PromptQueueLedge` on the
-composer's ledge, nearest the field it was typed in: the user's rows, then the
-waiting peer prompts, each marked with its sender and offering send-now and
-withdraw but no edit or move.
+While a turn runs, a message is QUEUED. The composer's one primary button is
+Stop while the field is empty and Queue once something is typed; Enter queues.
+Alt+Enter queues it and steers it in at once where the provider takes a steer —
+it still passes through the queue, so it is seen there on its way (the web app
+matches the new row by its text and sends `sendQueuedPromptNow` for it). On a
+phone the resting dock row stays live for such a turn: its field opens the
+composer and the mic records into it, while Stop keeps Send's slot. A surface
+with no queue (the permanent Assistant) still steers directly.
+
+The queue renders as `PromptQueueLedge` on the composer's ledge, nearest the
+field it was typed in, OPEN by default and reopening for every new message. Each
+row offers **Steer** (or **Send next** when no running turn takes a steer, and
+always for a command) and **Remove**, and shows its send while it is under way;
+a held queue (a Stop, a failed send) offers **Resume**. Editing and reordering
+stay server operations but are not offered in the strip. Below the user's rows
+come the waiting peer prompts, each marked with its sender and offering send-now
+and withdraw, but no edit or move.

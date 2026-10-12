@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -125,6 +126,25 @@ export function usePublishRouteSecondaryActions(): (
   actions: RouteSecondaryAction[],
 ) => void {
   return useContext(RouteSecondaryActionsContext).publish;
+}
+
+/**
+ * Publish a page's secondary actions from its own header, on every layout —
+ * for an object whose header menu exists on phones too (the chat session's
+ * ⋮), where the inspector is not mounted to publish them. Renders nothing.
+ */
+export function PublishRouteSecondaryActions({
+  actions,
+}: {
+  actions: RouteSecondaryAction[];
+}) {
+  const publish = usePublishRouteSecondaryActions();
+  // Signature-gated in the provider, so publishing every render is cheap.
+  useEffect(() => {
+    publish(actions);
+  });
+  useEffect(() => () => publish([]), [publish]);
+  return null;
 }
 
 /** Read the active object's secondary actions for a wide page-header menu. */

@@ -4,7 +4,6 @@ import {
   FileText,
   FolderKanban,
   GitBranch,
-  MessageSquareQuote,
   Paperclip,
   Plus,
   SendHorizontal,
@@ -98,8 +97,6 @@ export function SessionDockActions({
   draft,
   onCompose,
   onSubmit,
-  commentSelection,
-  onComment,
   contextSlot,
   dictation,
   startRequest,
@@ -130,9 +127,6 @@ export function SessionDockActions({
    * — see its `submitRef`, which also handles a send the composer is refusing.
    */
   onSubmit: () => void;
-  /** A live transcript selection owns the resting field until it is commented on. */
-  commentSelection?: { quote: string } | null;
-  onComment?: (() => void) | undefined;
   /**
    * The left pair's second control, beside back. Which one it is belongs to the
    * ROUTE and the session, so the host resolves it and this row owns the glyph.
@@ -321,25 +315,13 @@ export function SessionDockActions({
       <DockComposerField>
         <DockComposerFace
           text={
-            commentSelection
-              ? {
-                  value: `Comment on “${commentSelection.quote}”`,
-                  placeholder: false,
-                }
-              : draft
-                ? { value: draft, placeholder: false }
-                : { value: COMPOSER_PLACEHOLDER, placeholder: true }
+            draft
+              ? { value: draft, placeholder: false }
+              : { value: COMPOSER_PLACEHOLDER, placeholder: true }
           }
-          label={
-            commentSelection
-              ? "Comment on selected text"
-              : draft
-                ? "Continue your message"
-                : "Write a message"
-          }
+          label={draft ? "Continue your message" : "Write a message"}
           disabled={disabled}
-          commentActuation={Boolean(commentSelection)}
-          onRun={commentSelection ? (onComment ?? onCompose) : onCompose}
+          onRun={onCompose}
         />
       </DockComposerField>
       {available ? (
@@ -354,13 +336,9 @@ export function SessionDockActions({
           composer's own trimmed preview, so its emptiness IS "nothing to send" —
           attachments never reach this row, since staging one opens the composer. */}
       <DockPrimaryAction
-        action={commentSelection ? "comment" : "send"}
-        disabled={
-          commentSelection
-            ? disabled || !onComment
-            : disabled || draft.length === 0
-        }
-        onRun={commentSelection ? (onComment ?? onCompose) : onSubmit}
+        action="send"
+        disabled={disabled || draft.length === 0}
+        onRun={onSubmit}
       />
       <DictationLiveRegion phase={speech.phase} />
     </>
@@ -419,42 +397,21 @@ function DockPrimaryAction({
   disabled = false,
   onRun,
 }: {
-  action: "send" | "stop" | "comment";
+  action: "send" | "stop";
   disabled?: boolean;
   onRun: () => void;
 }) {
-  const label =
-    action === "stop"
-      ? "Stop response"
-      : action === "comment"
-        ? "Comment"
-        : "Send message";
+  const stop = action === "stop";
   return (
     <Button
-      variant={action === "stop" ? "secondary" : "default"}
+      variant={stop ? "secondary" : "default"}
       size="icon-lg"
-      onPointerDown={
-        action === "comment" ? (event) => event.preventDefault() : undefined
-      }
       onClick={onRun}
-      data-comment-actuation={action === "comment" || undefined}
       disabled={disabled}
-      title={
-        action === "stop"
-          ? "Stop"
-          : action === "comment"
-            ? "Comment"
-            : "Send message"
-      }
-      aria-label={label}
+      title={stop ? "Stop" : "Send message"}
+      aria-label={stop ? "Stop response" : "Send message"}
     >
-      {action === "stop" ? (
-        <Square className="fill-current" />
-      ) : action === "comment" ? (
-        <MessageSquareQuote />
-      ) : (
-        <SendHorizontal />
-      )}
+      {stop ? <Square className="fill-current" /> : <SendHorizontal />}
     </Button>
   );
 }

@@ -56,8 +56,5 @@ test("every command that resumes/starts a run is covered", () => {
     );
   }
   // A read-only command must not be gated by the drain.
-  assert.equal(
-    isRunStartingMessage({ type: "requestPeerPromptHistory" } as ClientMessage),
-    false,
-  );
+  assert.equal(isRunStartingMessage({ type: "listSessions" }), false);
 });

@@ -173,6 +173,12 @@ export interface TreeProps<T> {
    * chevron, matching the sidebar session rows. Defaults to `false`. */
   compact?: boolean;
   /**
+   * Edge-to-edge rows for a list that runs to its container's sides: square
+   * fills divided by hairlines, as the sidebar's session list. Defaults to
+   * `false` (rounded rows on an inset).
+   */
+  flush?: boolean;
+  /**
    * How a row's chrome sits against a `renderNode` body of more than one line.
    * `center` (the default) centres the chevron on a single-line row; `stretch`
    * turns it into a full-height gutter beside the whole block, with the GLYPH on
@@ -182,6 +188,11 @@ export interface TreeProps<T> {
    * body's business.
    */
   rowAlign?: "center" | "stretch";
+  /**
+   * Per-row override of `rowAlign`, for a tree mixing shapes: the Backlog's
+   * single-line Project headers centre their chevron among two-line Task rows.
+   */
+  getRowAlign?: ((node: TreeNode<T>) => "center" | "stretch") | undefined;
   /** Extra classes on a row, by node + state. */
   getRowClassName?: (node: TreeNode<T>, state: TreeNodeState) => string;
   /** Extra classes on the tree container. */
@@ -258,7 +269,9 @@ export function Tree<T>({
   indentWidth = 24,
   showGuides = true,
   compact = false,
+  flush = false,
   rowAlign = "center",
+  getRowAlign,
   getRowClassName,
   className,
   "aria-label": ariaLabel,
@@ -549,7 +562,8 @@ export function Tree<T>({
       indentWidth,
       showGuides,
       compact,
-      rowAlign,
+      flush,
+      rowAlign: getRowAlign?.(toNode(node)) ?? rowAlign,
       hasChildren,
       isExpanded,
       isFocused: (focusedId ?? flattened[0]?.id) === node.id,
@@ -635,6 +649,7 @@ interface RowProps<T> {
   indentWidth: number;
   showGuides: boolean;
   compact: boolean;
+  flush: boolean;
   rowAlign: "center" | "stretch";
   hasChildren: boolean;
   isExpanded: boolean;
@@ -656,6 +671,7 @@ function RowBody<T>({
   indentWidth,
   showGuides,
   compact,
+  flush,
   rowAlign,
   hasChildren,
   isExpanded,
@@ -670,6 +686,7 @@ function RowBody<T>({
   | "indentWidth"
   | "showGuides"
   | "compact"
+  | "flush"
   | "rowAlign"
   | "hasChildren"
   | "isExpanded"
@@ -678,10 +695,13 @@ function RowBody<T>({
   | "onToggle"
 > & { badge?: number | undefined; elevated?: boolean }) {
   const stretch = rowAlign === "stretch";
+  // A flush row has no container inset to sit in, so it keeps its own.
+  const inset = flush ? 4 : 0;
   return (
     <div
       className={cx(
-        "relative z-10 flex gap-1 rounded-md text-foreground transition-colors",
+        "relative z-10 flex gap-1 text-foreground transition-colors",
+        flush ? "rounded-none border-b border-border/60" : "rounded-md",
         stretch ? "items-stretch" : "items-center",
         // The indent animates (`index.css`) so a row promoted out of a vanished
         // parent moves to its new depth rather than appearing at it.
@@ -692,10 +712,12 @@ function RowBody<T>({
         elevated
           ? "border border-border bg-card shadow-lg"
           : selected
-            ? "bg-accent/60"
+            ? flush
+              ? "bg-muted"
+              : "bg-accent/60"
             : "hover:bg-muted",
       )}
-      style={{ paddingLeft: depth * indentWidth }}
+      style={{ paddingLeft: inset + depth * indentWidth }}
     >
       {showGuides &&
         Array.from({ length: depth }).map((_, i) => (
@@ -703,7 +725,7 @@ function RowBody<T>({
             key={i}
             aria-hidden="true"
             className="absolute inset-y-0 w-px bg-border"
-            style={{ left: i * indentWidth + indentWidth / 2 }}
+            style={{ left: inset + i * indentWidth + indentWidth / 2 }}
           />
         ))}
       {hasChildren ? (
@@ -722,14 +744,15 @@ function RowBody<T>({
             // dead area out of the row (it stops `pointerdown`), and at depth ≥ 1
             // that strip is live area `SWIPE_EDGE_GUARD_PX` does not already take.
             // The TARGET is the full height; the glyph is pinned to the first
-            // line. `pt-2` is the sum of the two paddings above the body's own
-            // first line — this row's content wrapper (`py-1`, below) and the
-            // control the body starts with (`BacklogTreePane`'s status button
-            // adds `pt-1`) — so a change to either leaves the chevron a few
-            // pixels off rather than breaking anything. Eyeball it against the
-            // status glyph.
+            // line, its centre on the status glyph's: `pt-3` is this button's
+            // own border away from that centre — the content wrapper's `py-1`
+            // (below), and `BacklogTreePane`'s 28px status button with its
+            // `pt-1` — so a change to either leaves the chevron a few pixels
+            // off rather than breaking anything. Eyeball it against the
+            // status glyph. `w-5`: the 14px glyph and no more, so the row
+            // spends its width on the title.
             stretch
-              ? "h-auto w-7 items-start pt-2"
+              ? "h-auto w-5 items-start pt-3"
               : compact
                 ? "size-4"
                 : "size-5",
@@ -744,7 +767,7 @@ function RowBody<T>({
         <span
           className={cx(
             "shrink-0",
-            stretch ? "w-7" : compact ? "w-4" : "size-5",
+            stretch ? "w-5" : compact ? "w-4" : "size-5",
           )}
         />
       )}

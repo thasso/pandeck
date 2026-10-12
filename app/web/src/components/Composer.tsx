@@ -14,27 +14,16 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
-  readBusySendMode,
-  writeBusySendMode,
-  type BusySendMode,
-} from "../lib/busySendMode.ts";
-import {
   Check,
   ChevronDown,
-  ClipboardList,
   CornerDownRight,
   Cpu,
-  FileText,
   GitFork,
-  Hammer,
-  Image,
   ListPlus,
   Mic,
   Paperclip,
-  Plus,
   SendHorizontal,
   Square,
-  MessageSquareQuote,
   Trash2,
   WandSparkles,
   X,
@@ -81,11 +70,6 @@ import {
   type DictationControlsData,
 } from "./DictationControls.tsx";
 import { AGENT_TYPE_DISPLAY } from "./agentTypeDisplay.ts";
-import {
-  type ComposerRuntimeFit,
-  runtimeControlsFit,
-  sameComposerRuntimeFit,
-} from "./composerRuntimeFit.ts";
 import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
 import {
@@ -98,6 +82,8 @@ import { Badge } from "./ui/badge.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { Item } from "./ui/item.tsx";
 import { IconButton } from "./common/IconButton.tsx";
+import { AttachmentThumbnail } from "./common/AttachmentThumbnail.tsx";
+import { Switch } from "./ui/switch.tsx";
 import { Command, CommandItem, CommandList } from "./ui/command.tsx";
 import {
   DropdownMenu,
@@ -105,8 +91,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
-import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx";
-import { ModelSelect, ThinkingSelect } from "./common/ModelThinkingSelect.tsx";
+import {
+  ModelSelect,
+  THINKING_LABELS,
+  ThinkingSelect,
+} from "./common/ModelThinkingSelect.tsx";
 import {
   COMPOSER_ACTION_CLUSTER_CLASS,
   COMPOSER_ACTION_ROW_CLASS,
@@ -123,14 +112,7 @@ import { ProviderIcon } from "./common/ProviderIcon.tsx";
 import { EmptyBox } from "./common/load.tsx";
 import { ChatDockPanel } from "./ChatDockPanel.tsx";
 import { ComposerLedge } from "./ComposerLedge.tsx";
-import { ChatCommentChip } from "./ChatCommentChip.tsx";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
-import {
-  StagedContextBar,
-  StagedContextPanel,
-  type StagedContextData,
-  type StagedContextField,
-} from "./StagedContext.tsx";
 
 interface BranchNavItem {
   id?: string;
@@ -157,6 +139,8 @@ interface Props {
     text: string;
     attachments?: PromptAttachment[];
     command?: { name: string; rawArgs: string };
+    /** Steer it into the running turn as soon as it is queued (Alt+Enter). */
+    steerNow?: boolean;
   }) => void;
   onAbort: () => void;
   streaming: boolean;
@@ -187,21 +171,14 @@ interface Props {
   draftAutoFocus?: boolean;
   branchInfo?: BranchPanelInfo | null;
   /**
-   * Composable pre-session context (Project + Worktree + Task) staged for a new
-   * Session's first prompt. When provided, the composer renders the staged-context
-   * chip bar and its docked picker sheet. Omitted for surfaces that don't stage
-   * new-session context (e.g. the permanent Assistant).
+   * Keep the fixed hint slot above the card, where a send-blocking hint can
+   * appear (the new-session surface), so a hint coming and going never shifts
+   * the layout.
    */
-  contextBar?: StagedContextData | undefined;
+  reserveHintSlot?: boolean | undefined;
   /**
-   * External request to open the staged-context dock sheet on a specific field
-   * (bump the token to re-trigger). Used when selecting the Developer agent
-   * without a staged worktree: the sheet auto-opens on the Worktree picker.
-   */
-  contextOpenRequest?: { token: number; field?: StagedContextField } | null;
-  /**
-   * When set, sending is blocked and this reason renders as a tappable hint
-   * under the composer (tapping opens the worktree picker). Used while a
+   * When set, sending is blocked and this reason renders as a hint above the
+   * composer (the new-session landing's Worktree row is where it is answered). Used while a
    * Developer session is staged without the worktree it requires.
    */
   sendBlockedReason?: string | undefined;
@@ -210,6 +187,11 @@ interface Props {
   isModelDisabled?: (model: ModelOption) => boolean;
   modelLocked?: boolean;
   thinkingLocked?: boolean;
+  /**
+   * The account the session runs on, for the runtime line under the card once
+   * model and thinking are locked (a started session).
+   */
+  accountName?: string | undefined;
   /** Hide runtime model/thinking controls for server-configured special sessions. */
   hideRuntimeControls?: boolean;
   /**
@@ -289,12 +271,6 @@ interface Props {
   onCommentDraftChange?: (
     draft: Omit<NewPendingChatComment, "body"> | null,
   ) => void;
-  /** Opens comment mode from the currently captured transcript selection. */
-  onAddComment?: (() => void) | undefined;
-  /** Take the reader to the passage a pending comment annotates. */
-  onRevealComment?: (comment: PendingChatComment) => void;
-  /** Why Add comment is disabled while no transcript selection is captured. */
-  commentDisabledReason?: string;
   /**
    * Always use the focus-driven collapse regardless of viewport (the inspector
    * footer composer, which must stay compact on desktop too). The main chat
@@ -403,42 +379,49 @@ function fileToAttachment(file: File): Promise<AttachmentDraft> {
 }
 
 /**
- * Tailwind's `sm`, the one media query the runtime pills draw differently on:
- * `common/ModelThinkingSelect` widens the model cap (`max-w-[170px] sm:max-w-[220px]`)
- * and swaps the short thinking label for the full one. So the same content has
- * two natural widths, and the fold has to treat the mode as part of what it
- * measured — see `runtimeSignature`.
+ * How full the session's context window is, as text in the runtime strip under
+ * the card. It grows with the strip (container queries) so it never crowds out
+ * the model and effort: `42%` on a phone, `42% context` from 24rem, plus
+ * `181k / 1.00M` from 28rem. Turns the warning colour from 80% on. The full
+ * breakdown is its tooltip.
  */
-const RUNTIME_LABEL_MEDIA = "(min-width: 40rem)";
-
-function ContextMeter({ info }: { info: ContextInfo | null }) {
-  const usage = info?.context;
+function ContextStatus({ info }: { info: ContextInfo }) {
+  const usage = info.context;
   const percent = usage?.percent ?? null;
-  const clamped = Math.max(0, Math.min(100, percent ?? 0));
-  const live = info?.currentTurn;
+  const live = info.currentTurn;
   const liveTokens = live ? live.output + live.thinking : 0;
-  const cost = info ? formatCost(info.cost) : null;
+  const cost = formatCost(info.cost);
   const tooltipId = "composer-context-tooltip";
 
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<div />}
+        render={<span />}
         role="meter"
         aria-label="Context usage"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent ?? undefined}
         aria-describedby={tooltipId}
-        className="size-5 shrink-0 rounded-full p-1"
-        style={{
-          background: `conic-gradient(var(--primary) ${clamped * 3.6}deg, var(--input) 0deg)`,
-        }}
+        className={`shrink-0 whitespace-nowrap tabular-nums ${percent !== null && percent >= 80 ? "text-warning" : ""}`}
       >
-        <div className="size-full rounded-full bg-card" />
+        {percent !== null ? `${Math.round(percent)}%` : "—"}
+        <span className="hidden @sm:inline"> context</span>
+        {usage ? (
+          <span className="hidden @md:inline">
+            {" "}
+            · {formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}
+          </span>
+        ) : null}
       </TooltipTrigger>
-      <TooltipContent id={tooltipId} side="top" className="w-72">
-        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold text-foreground">
+      {/* TooltipContent is a one-line row (`inline-flex items-center`) on an
+          inverted surface: stack this panel, and tint with `text-background`. */}
+      <TooltipContent
+        id={tooltipId}
+        side="top"
+        className="w-72 max-w-none flex-col items-stretch gap-0"
+      >
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm font-semibold">
           <span>Context</span>
           <span>{formatPercent(percent)}</span>
         </div>
@@ -451,41 +434,34 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
                 : "unknown"
             }
           />
-          {info && (
-            <>
-              <ContextRow
-                label="Tokens"
-                value={`in ${formatTokens(info.tokenUsage.input)} · out ${formatTokens(info.tokenUsage.output)}`}
-              />
-              {info.tokenUsage.cacheRead > 0 && (
-                <ContextRow
-                  label="Cached in"
-                  value={formatTokens(info.tokenUsage.cacheRead)}
-                />
-              )}
-              {info.tokenUsage.cacheWrite > 0 && (
-                <ContextRow
-                  label="Cache write"
-                  value={formatTokens(info.tokenUsage.cacheWrite)}
-                />
-              )}
-              {liveTokens > 0 && (
-                <ContextRow
-                  label="Live"
-                  value={`~${formatTokens(liveTokens)}`}
-                />
-              )}
-              {cost && <ContextRow label="Cost" value={cost} />}
-              <ContextRow
-                label="Turns"
-                value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
-              />
-              <div className="pt-1 text-xs text-muted-foreground">
-                Cached input is cumulative across internal model steps; some
-                providers report reads but not writes.
-              </div>
-            </>
+          <ContextRow
+            label="Tokens"
+            value={`in ${formatTokens(info.tokenUsage.input)} · out ${formatTokens(info.tokenUsage.output)}`}
+          />
+          {info.tokenUsage.cacheRead > 0 && (
+            <ContextRow
+              label="Cached in"
+              value={formatTokens(info.tokenUsage.cacheRead)}
+            />
           )}
+          {info.tokenUsage.cacheWrite > 0 && (
+            <ContextRow
+              label="Cache write"
+              value={formatTokens(info.tokenUsage.cacheWrite)}
+            />
+          )}
+          {liveTokens > 0 && (
+            <ContextRow label="Live" value={`~${formatTokens(liveTokens)}`} />
+          )}
+          {cost && <ContextRow label="Cost" value={cost} />}
+          <ContextRow
+            label="Turns"
+            value={`${info.messageCounts.user} turn · ${info.messageCounts.assistant} steps · ${info.messageCounts.toolCalls} tools`}
+          />
+          <div className="pt-1 text-xs text-background/70">
+            Cached input is cumulative across internal model steps; some
+            providers report reads but not writes.
+          </div>
         </div>
       </TooltipContent>
     </Tooltip>
@@ -495,78 +471,9 @@ function ContextMeter({ info }: { info: ContextInfo | null }) {
 function ContextRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-baseline justify-between gap-3">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right text-muted-foreground">
-        {value}
-      </span>
+      <span className="shrink-0 text-background/70">{label}</span>
+      <span className="min-w-0 truncate text-right">{value}</span>
     </div>
-  );
-}
-
-function ModelSelector({
-  model,
-  models,
-  actions,
-  onModelChange,
-  isModelDisabled,
-  locked = false,
-  currentThinkingLevel,
-}: {
-  model: ModelOption | undefined;
-  models: ModelOption[];
-  actions?: AssistantActions;
-  onModelChange?: (model: ModelOption) => void;
-  isModelDisabled?: ((model: ModelOption) => boolean) | undefined;
-  locked?: boolean;
-  currentThinkingLevel?: ThinkingLevel;
-}) {
-  return (
-    <ModelSelect
-      models={models}
-      value={model}
-      locked={locked}
-      isModelDisabled={isModelDisabled}
-      placement="top"
-      onChange={(m) => {
-        if (onModelChange) {
-          onModelChange(m);
-          return;
-        }
-        actions?.setModel(m.provider, m.id);
-        if (actions && currentThinkingLevel) {
-          const clamped = clampThinkingLevelForModel(m, currentThinkingLevel);
-          if (clamped !== currentThinkingLevel)
-            actions.setThinkingLevel(clamped);
-        }
-      }}
-    />
-  );
-}
-
-function ThinkingSelector({
-  model,
-  level,
-  actions,
-  onLevelChange,
-  locked = false,
-}: {
-  model: ModelOption | undefined;
-  level: ThinkingLevel;
-  actions?: AssistantActions;
-  onLevelChange?: (level: ThinkingLevel) => void;
-  locked?: boolean;
-}) {
-  return (
-    <ThinkingSelect
-      model={model}
-      value={level}
-      locked={locked}
-      placement="top"
-      onChange={(lvl) => {
-        if (onLevelChange) onLevelChange(lvl);
-        else actions?.setThinkingLevel(lvl);
-      }}
-    />
   );
 }
 
@@ -577,6 +484,11 @@ function ThinkingSelector({
  * nothing more — no "read-only", no "safe", no lock glyph — because v1 Plan
  * keeps the shell and is a convention, not an enforced boundary.
  */
+/**
+ * Build/Plan as one switch labelled "Plan" — the word and nothing more (Task
+ * 305): Build is the default a session works in and Plan the mode it opts
+ * into, so the switch names the exception and off is Build.
+ */
 export function ModeSelector({
   mode,
   onChange,
@@ -584,44 +496,22 @@ export function ModeSelector({
   mode: SessionMode;
   onChange: (mode: SessionMode) => void;
 }) {
-  const Icon = mode === "build" ? Hammer : FileText;
-  const label = mode === "build" ? "Build" : "Plan";
-
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={<Button variant="outline" size="sm" />}
-        title="Session mode"
-      >
-        <Icon />
-        <span>{label}</span>
-        <ChevronDown />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top">
-        {(["build", "plan"] as const).map((value) => {
-          const OptionIcon = value === "build" ? Hammer : FileText;
-          return (
-            <DropdownMenuItem
-              key={value}
-              aria-current={mode === value ? "true" : undefined}
-              onClick={() => onChange(value)}
-            >
-              <OptionIcon />
-              <span className="flex-1">
-                {value === "build" ? "Build" : "Plan"}
-              </span>
-              {mode === value ? <Check /> : null}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <label
+      className="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm text-muted-foreground select-none hover:text-foreground"
+      title={`Session mode: ${mode === "plan" ? "Plan" : "Build"}`}
+    >
+      <Switch
+        size="sm"
+        checked={mode === "plan"}
+        onCheckedChange={(checked) => onChange(checked ? "plan" : "build")}
+        aria-label="Plan mode"
+      />
+      <span className={mode === "plan" ? "text-foreground" : undefined}>
+        Plan
+      </span>
+    </label>
   );
-}
-
-/** The one badge shown while a session is in Plan (session header). */
-export function PlanModeBadge() {
-  return <Badge variant="secondary">Plan</Badge>;
 }
 
 function RuntimeSettingsPanel({
@@ -909,13 +799,13 @@ export const Composer = memo(function Composer({
   onDraftConsumed,
   draftAutoFocus = true,
   branchInfo,
-  contextBar,
-  contextOpenRequest,
+  reserveHintSlot = false,
   sendBlockedReason,
   sendBlocked = false,
   isModelDisabled,
   modelLocked = false,
   thinkingLocked = false,
+  accountName,
   hideRuntimeControls = false,
   ledge,
   mobile = false,
@@ -933,9 +823,6 @@ export const Composer = memo(function Composer({
   chatComments,
   commentDraft,
   onCommentDraftChange,
-  onAddComment,
-  onRevealComment,
-  commentDisabledReason = "Select text to comment",
   collapseWhenBlurred = false,
   dictation,
 }: Props) {
@@ -992,39 +879,19 @@ export const Composer = memo(function Composer({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [runtimeOpen, setRuntimeOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
   // Which accordion field the context sheet starts expanded on. Set by the
   // opener (manual opens reset it to null); the panel remounts per open.
-  const [contextInitialField, setContextInitialField] =
-    useState<StagedContextField | null>(null);
   // Whether the currently-open sheet was opened from OUTSIDE the composer (the
   // hero quick-start "All…", the Developer auto-open). Closing such a sheet must
   // not refocus the textarea — that would pop the mobile keyboard the user never
   // had open. Composer-chrome opens reset this to false.
   const [sheetOpenedExternally, setSheetOpenedExternally] = useState(false);
   const touchComposerMode = useTouchComposerMode();
-  // Which presentation the runtime pills are drawing (`RUNTIME_LABEL_MEDIA`).
-  // Rendered without a DOM (`StagedContext.test.tsx` renders to markup), assume
-  // the wide one; nothing is measured there anyway.
-  const [wideRuntimeLabels, setWideRuntimeLabels] = useState(() =>
-    typeof window === "undefined"
-      ? true
-      : (window.matchMedia?.(RUNTIME_LABEL_MEDIA).matches ?? true),
-  );
   const [isFocused, setIsFocused] = useState(false);
   const [composerPinnedOpen, setComposerPinnedOpen] = useState(false);
-  // Last measurement of the bottom row; `null` until it has been laid out once.
-  const [runtimeFit, setRuntimeFit] = useState<ComposerRuntimeFit | null>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const bottomRowRef = useRef<HTMLDivElement>(null);
-  const bottomLeadRef = useRef<HTMLDivElement>(null);
-  const bottomTrailRef = useRef<HTMLDivElement>(null);
-  const runtimeStripRef = useRef<HTMLDivElement>(null);
-  const measureRuntimeFitRef = useRef<() => void>(() => {});
-  /** Root `data-text-scale` when the strip was last measured; `null` before that. */
-  const textScaleRef = useRef<string | null>(null);
   const attachmentsRef = useRef<AttachmentDraft[]>([]);
   /** Caret at the moment dictation started; the collapse clears the live selection. */
   const caretBeforeDictationRef = useRef<number | null>(null);
@@ -1061,7 +928,15 @@ export const Composer = memo(function Composer({
     if (!commentDraft) return;
     setCommentBody("");
     selectComment?.(null);
-    requestAnimationFrame(() => ref.current?.focus({ preventScroll: true }));
+    // Twice: the transcript clears the page selection while it captures the
+    // anchor, and a focus that lands before that settles can be dropped.
+    requestAnimationFrame(() => {
+      ref.current?.focus({ preventScroll: true });
+      requestAnimationFrame(() => {
+        if (document.activeElement !== ref.current)
+          ref.current?.focus({ preventScroll: true });
+      });
+    });
   }, [commentDraft, selectComment]);
   const editingCommentId = editingComment?.id ?? null;
   useEffect(() => {
@@ -1088,18 +963,6 @@ export const Composer = memo(function Composer({
     if (disabled) return;
     ref.current?.focus({ preventScroll: true });
   }, [disabled, focusToken]);
-
-  // Track the pills' presentation mode rather than infer it from a width: the
-  // fold remembers a measured strip width, and crossing this query changes that
-  // width while the strip may be folded away with nothing left to re-measure.
-  useEffect(() => {
-    const media = window.matchMedia?.(RUNTIME_LABEL_MEDIA);
-    if (!media) return;
-    const update = () => setWideRuntimeLabels(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
 
   // A staged draft (fork, review handoff) wins over the browser-local text —
   // including the storage reload above, which runs first ONLY because it is
@@ -1382,23 +1245,12 @@ export const Composer = memo(function Composer({
     speech.toggle();
   };
 
-  // While a turn runs, a message either steers it or queues behind it. Enter
-  // does what this device last chose; Alt+Enter the other. A provider that
-  // cannot take mid-turn input only queues.
+  // While a turn runs, a message QUEUES: it lands in the queue strip, whose
+  // rows steer it in or drop it. Alt+Enter queues it and steers it in at once
+  // where the provider takes a steer. A surface with no queue (the permanent
+  // Assistant) still steers directly.
   const providerCanSteer = Boolean(session?.canSteer);
-  const [busyMode, setBusyModeState] = useState<BusySendMode>(readBusySendMode);
-  const setBusyMode = (mode: BusySendMode) => {
-    setBusyModeState(mode);
-    writeBusySendMode(mode);
-  };
-  const offerBusyModeSwitch = streaming && providerCanSteer && Boolean(onQueue);
-  const busyModeFor = (alternate: boolean): BusySendMode => {
-    if (!streaming || !onQueue) return "steer";
-    if (!providerCanSteer) return "queue";
-    if (!alternate) return busyMode;
-    return busyMode === "queue" ? "steer" : "queue";
-  };
-  const effectiveBusyMode = busyModeFor(false);
+  const queueing = streaming && Boolean(onQueue);
   const canSend = !streaming || providerCanSteer || Boolean(onQueue);
 
   /**
@@ -1473,7 +1325,7 @@ export const Composer = memo(function Composer({
 
   const submit = (alternate = false) => {
     if (disabled || !canSend || sendBlocked || sendBlockedReason) return;
-    const queueing = busyModeFor(alternate) === "queue";
+    const steerNow = alternate && providerCanSteer;
     const outgoing = attachments.map(
       ({ previewUrl: _previewUrl, ...attachment }) => attachment,
     );
@@ -1482,6 +1334,7 @@ export const Composer = memo(function Composer({
         onQueue({
           text: prompt,
           ...(outgoing.length ? { attachments: outgoing } : {}),
+          ...(steerNow ? { steerNow: true } : {}),
         });
       else onSend(prompt, outgoing);
     };
@@ -1672,6 +1525,26 @@ export const Composer = memo(function Composer({
         ? { agentType: session?.agentType }
         : {}),
     });
+  // The composer picks no runtime: a new session chooses agent, account,
+  // model and effort on its landing (`NewSessionQuickStart`), a started one
+  // has them fixed. Either way one quiet line under the card states it:
+  // account, model, effort — the same composer before and after the first
+  // message.
+  const runtimeShown = !hideRuntimeControls;
+  // Model and effort are what the reader checks; the account is what gives
+  // way, so the strip truncates only the account (`runtimeAccount`).
+  const runtimeAccount = runtimeShown ? accountName : undefined;
+  const runtimeModel = runtimeShown
+    ? [
+        model ? (model.name ?? model.id) : undefined,
+        model?.reasoning ? THINKING_LABELS[thinkingLevel] : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const runtimeLine = [runtimeAccount, runtimeModel]
+    .filter(Boolean)
+    .join(" · ");
   const branchCount =
     (branchInfo?.parent ? 1 : 0) + (branchInfo?.children.length ?? 0);
   const showBranches = Boolean(branchInfo && branchCount > 0);
@@ -1685,99 +1558,6 @@ export const Composer = memo(function Composer({
       attachments.length > 0 ||
       Boolean(chatComments?.comments.length));
   const primaryAction = streaming && (!canSend || !canSubmit) ? "stop" : "send";
-  const planSuffix = modeAxis && sessionMode === "plan" ? " · Plan" : "";
-  const runtimeLabel = `${model?.name ?? "Model"} · ${thinkingLevel}${planSuffix}`;
-  const runtimeTitle = `Runtime settings: ${model?.name ?? "Select model"} · thinking ${thinkingLevel}${planSuffix}`;
-  const showAgentTypeSelector = Boolean(
-    selectedAgentType && availableAgentTypes && onAgentTypeChange,
-  );
-  // Everything that changes how WIDE the inline runtime strip draws — its
-  // content AND its presentation (`wideRuntimeLabels`, the one media query the
-  // pills change at). A measured width belongs to its signature alone: once any
-  // of it changes the strip is rendered again — pre-paint, so it is never
-  // seen — and re-measured before it is allowed to fold. Anything width-bearing
-  // left out of here would be remembered at the wrong size while folded, with
-  // no strip left in the DOM to correct it.
-  const runtimeSignature = [
-    modeAxis ? sessionMode : "",
-    showAgentTypeSelector ? selectedAgentType : "",
-    model ? `${model.provider}:${model.name}` : "",
-    thinkingLevel,
-    modelLocked ? "model-locked" : "",
-    thinkingLocked ? "thinking-locked" : "",
-    wideRuntimeLabels ? "wide-labels" : "short-labels",
-  ].join("|");
-  // The runtime pickers fold into the single Runtime sheet trigger as soon as the
-  // row cannot hold them. That is the phone's presentation, reached by MEASURING
-  // rather than by a viewport breakpoint, so a squeezed desktop composer (sidebar
-  // and inspector both open, a long model name) gets it too. `composerRuntimeFit.ts`
-  // owns the arithmetic; every input to it is independent of the fold, so the
-  // decision cannot oscillate.
-  const runtimeCollapsed =
-    !hideRuntimeControls &&
-    runtimeFit !== null &&
-    runtimeFit.signature === runtimeSignature &&
-    !runtimeControlsFit(runtimeFit);
-
-  const measureRuntimeFit = () => {
-    if (hideRuntimeControls) return;
-    const row = bottomRowRef.current;
-    const lead = bottomLeadRef.current;
-    const trail = bottomTrailRef.current;
-    if (!row || !lead || !trail) return;
-    const rowWidth = row.clientWidth;
-    // A composer that is hidden (mobile) or not laid out yet measures 0. That
-    // means "unknown", not "nothing fits": keep the standing decision.
-    if (rowWidth <= 0) return;
-    // Type size changes the strip's width without changing its signature, and
-    // arrives as a root attribute rather than a prop. Drop the stale measurement
-    // and let the next pass take a fresh one at the new size.
-    const textScale = document.documentElement.dataset.textScale ?? "100";
-    if (textScaleRef.current !== textScale) {
-      const known = textScaleRef.current !== null;
-      textScaleRef.current = textScale;
-      if (known) {
-        setRuntimeFit(null);
-        return;
-      }
-    }
-    // Read the DOM out here, never inside the updater: React may call that
-    // during a later render pass, and a layout read belongs to this commit.
-    const leadWidth = lead.offsetWidth;
-    const trailWidth = trail.offsetWidth;
-    const stripWidth = runtimeStripRef.current?.offsetWidth ?? null;
-    setRuntimeFit((prev) => {
-      // While the strip is folded away there is nothing to measure, so its width
-      // is the one remembered for this same signature.
-      const next: ComposerRuntimeFit = {
-        signature: runtimeSignature,
-        rowWidth,
-        leadWidth,
-        trailWidth,
-        controlsWidth:
-          stripWidth ??
-          (prev?.signature === runtimeSignature ? prev.controlsWidth : 0),
-      };
-      return prev && sameComposerRuntimeFit(prev, next) ? prev : next;
-    });
-  };
-
-  // Re-measure after every render (labels, the branches button and the staged
-  // attachments all move the fold point) and on every resize of the row itself —
-  // the panel drag, the inspector opening, rotation. Only the row is observed:
-  // its width comes from the layout above it, never from what this decides.
-  useLayoutEffect(() => {
-    measureRuntimeFitRef.current = measureRuntimeFit;
-    measureRuntimeFit();
-  });
-  useLayoutEffect(() => {
-    const row = bottomRowRef.current;
-    if (!row || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measureRuntimeFitRef.current());
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
-
   // Focus-driven collapse. It applies only where a permanently-expanded composer
   // is costly — on mobile (virtual keyboard) and in the inspector footer
   // (`collapseWhenBlurred`); the desktop chat composer stays expanded. When
@@ -1800,7 +1580,7 @@ export const Composer = memo(function Composer({
   // stays EXPANDED while one is open — with the keyboard down, as on desktop. It
   // used to collapse for the height; collapsing to nothing instead would leave the
   // sheet hanging off the screen's bottom edge over the dock row.
-  const composerSheetOpen = runtimeOpen || branchesOpen || contextOpen;
+  const composerSheetOpen = runtimeOpen || branchesOpen;
   const compact =
     recording ||
     (collapsible &&
@@ -1951,46 +1731,6 @@ export const Composer = memo(function Composer({
     setIsFocused(false);
     setComposerPinnedOpen(false);
   };
-  const openContext = (
-    field: StagedContextField | null = null,
-    opts?: { external?: boolean },
-  ) => {
-    setContextInitialField(field);
-    setSheetOpenedExternally(Boolean(opts?.external));
-    setRuntimeOpen(false);
-    setBranchesOpen(false);
-    blurComposer();
-    setContextOpen(true);
-  };
-  // An external open request (e.g. Developer selected without a worktree)
-  // opens the context sheet on the requested field. Only a token CHANGE while
-  // mounted fires — the ref seeds with the mount-time token so a stale request
-  // can't re-open the sheet when the composer remounts across surfaces.
-  const lastContextRequestToken = useRef(contextOpenRequest?.token);
-  // The request, the bar and the opener are all rebuilt each render; the TOKEN
-  // is the trigger, so the rest is read when it fires. Depending on any of them
-  // would re-open the sheet under a user who had just dismissed it.
-  const contextOpenRef = useRef({
-    contextOpenRequest,
-    contextBar,
-    openContext,
-  });
-  contextOpenRef.current = { contextOpenRequest, contextBar, openContext };
-  const contextRequestToken = contextOpenRequest?.token ?? null;
-  useEffect(() => {
-    const latest = contextOpenRef.current;
-    if (
-      !contextRequestToken ||
-      contextRequestToken === lastContextRequestToken.current
-    )
-      return;
-    lastContextRequestToken.current = contextRequestToken;
-    if (!latest.contextBar) return;
-    latest.openContext(latest.contextOpenRequest?.field ?? null, {
-      external: true,
-    });
-  }, [contextRequestToken]);
-
   // Closing a dock sheet returns to composing: refocus the textarea (sync, so iOS
   // reopens the keyboard within the tap gesture) and re-expand — no extra tap.
   // EXCEPT when the sheet was opened externally (the user wasn't composing):
@@ -1998,7 +1738,6 @@ export const Composer = memo(function Composer({
   const dismissSheetsAndFocus = () => {
     setRuntimeOpen(false);
     setBranchesOpen(false);
-    setContextOpen(false);
     if (sheetOpenedExternally) {
       setSheetOpenedExternally(false);
       return;
@@ -2051,20 +1790,15 @@ export const Composer = memo(function Composer({
       {/* Fixed-height hint slot above the composer card: reserved whenever a
           send-blocking hint CAN appear (staged-context surfaces), so toggling
           the hint never shifts the layout. */}
-      {contextBar || sendBlockedReason ? (
+      {reserveHintSlot || sendBlockedReason ? (
         <div
           className="mb-1 flex h-5 items-center justify-center px-2"
           aria-live="polite"
         >
           {sendBlockedReason ? (
-            <Button
-              variant="link"
-              size="sm"
-              onClick={() => openContext("worktree")}
-              className="min-w-0 truncate"
-            >
+            <span className="min-w-0 truncate text-sm text-muted-foreground">
               {sendBlockedReason}
-            </Button>
+            </span>
           ) : null}
         </div>
       ) : null}
@@ -2107,21 +1841,59 @@ export const Composer = memo(function Composer({
             />
           ) : null}
         </ChatDockPanel>
-        {contextBar ? (
-          <ChatDockPanel
-            open={contextOpen}
-            title="Session context"
-            icon={<ClipboardList size={14} />}
-            minimizable={false}
-            onClose={dismissSheetsAndFocus}
-          >
-            <StagedContextPanel
-              {...contextBar}
-              initialField={contextInitialField}
-            />
-          </ChatDockPanel>
+        {slashMenuOpen ? (
+          // The command menu is a strip of its own on the shelf while a slash
+          // is typed, standing in for the resting strips rather than floating
+          // over them; it stays up with the phone keyboard, which it is for.
+          <ComposerLedge joined={!hidden} keepWithKeyboard>
+            <Command
+              shouldFilter={false}
+              value={slash.items[slashIndex]?.name ?? ""}
+              onValueChange={(name) => {
+                const index = slash.items.findIndex((cmd) => cmd.name === name);
+                if (index >= 0) setSlashIndex(index);
+              }}
+              className="h-auto rounded-none! bg-transparent p-0"
+            >
+              <div className="flex h-7 shrink-0 items-center border-b px-2.5 text-xs text-muted-foreground">
+                <span className="min-w-0 truncate">
+                  ↑↓ to navigate · ↵ to select · esc to dismiss ·&nbsp;
+                  <span className="font-mono">//</span>&nbsp;sends a literal
+                  slash
+                </span>
+              </div>
+              <CommandList className="max-h-64 divide-y">
+                {slash.items.map((cmd, index) => (
+                  <CommandItem
+                    key={cmd.name}
+                    value={cmd.name}
+                    onSelect={() => applySlash(cmd)}
+                    onMouseEnter={() => setSlashIndex(index)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applySlash(cmd);
+                    }}
+                    className="items-start gap-3 rounded-none px-2.5"
+                  >
+                    <span className="mt-0.5 font-mono text-sm text-primary">
+                      /{cmd.name}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm text-foreground">
+                        {cmd.description}
+                      </span>
+                      <span className="block truncate font-mono text-sm text-muted-foreground">
+                        {cmd.usage}
+                      </span>
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          </ComposerLedge>
+        ) : ledge ? (
+          <ComposerLedge joined={!hidden}>{ledge}</ComposerLedge>
         ) : null}
-        {ledge ? <ComposerLedge joined={!hidden}>{ledge}</ComposerLedge> : null}
         <InputGroup
           ref={composerRef}
           onPointerDownCapture={(e) => {
@@ -2150,7 +1922,15 @@ export const Composer = memo(function Composer({
           // Zero-height rather than unmounted when hidden: the textarea has to stay in
           // the DOM so the dock's compose control can focus it INSIDE its own gesture,
           // which is the only way iOS raises the keyboard on the first tap.
-          className={`relative z-10 h-auto flex-col items-stretch ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
+          // Opaque: InputGroup's own fill is transparent (dark: `bg-input/30`),
+          // which lets the transcript scrolling underneath show through. No
+          // focus border or ring either: the composer is the page's one text
+          // field and its caret already says where focus is. Disabled stays
+          // opaque too (InputGroup fades the whole box to 50% and tints it):
+          // the field's own disabled style dims the text. Its corners are
+          // deliberately rounder than the theme radius and do not follow it:
+          // the composer is the one object on the page meant to read as such.
+          className={`relative z-10 h-auto flex-col items-stretch rounded-composer bg-background dark:bg-card field-focus-visible:border-input field-focus-visible:ring-0 field-disabled:bg-background field-disabled:opacity-100 dark:field-disabled:bg-card ${hidden ? COMPOSER_CARD_COLLAPSED_CLASS : ""} ${dragActive ? COMPOSER_CARD_DRAG_SKIN_CLASS : ""}`}
         >
           {/* Compact single-row bar — the collapsed presentation everywhere except a
             barless mobile composer, which collapses to nothing and lets the object
@@ -2201,31 +1981,9 @@ export const Composer = memo(function Composer({
             <div
               className={`min-h-0 min-w-0 ${compact ? "overflow-hidden" : "overflow-visible"}`}
             >
-              {contextBar ? (
-                <StagedContextBar
-                  value={contextBar.value}
-                  projects={contextBar.projects}
-                  worktrees={contextBar.worktrees}
-                  onOpen={() => openContext()}
-                  onChangeProject={contextBar.onChangeProject}
-                  onChangeWorktree={contextBar.onChangeWorktree}
-                  onChangeTask={contextBar.onChangeTask}
-                  onChangeReview={contextBar.onChangeReview}
-                  onChangeFile={contextBar.onChangeFile}
-                />
-              ) : null}
-
-              {chatComments && chatComments.comments.length > 0 ? (
-                <ChatCommentChip
-                  comments={chatComments.comments}
-                  activeCommentId={chatComments.activeCommentId}
-                  onSelect={chatComments.select}
-                  onRemove={chatComments.remove}
-                  onClear={chatComments.clear}
-                  onReveal={onRevealComment}
-                  labelSources
-                />
-              ) : null}
+              {/* No context chips: the new-session landing and the title bar
+                  state the project, worktree and Task, and the shelf strips the
+                  document and a staged review. */}
 
               {/* Nothing states the passage here. It is selected and highlighted
                 in the transcript directly above, the user is the one who just
@@ -2254,7 +2012,7 @@ export const Composer = memo(function Composer({
                       ? "Edit this comment…"
                       : "Add a comment…"
                     : streaming
-                      ? effectiveBusyMode === "queue"
+                      ? queueing
                         ? "Queue a message for after this response…"
                         : providerCanSteer
                           ? "Send a message to steer…"
@@ -2264,103 +2022,25 @@ export const Composer = memo(function Composer({
                 className={COMPOSER_FIELD_CLASS}
               />
 
-              {slashMenuOpen && (
-                <Command
-                  shouldFilter={false}
-                  value={slash.items[slashIndex]?.name ?? ""}
-                  onValueChange={(name) => {
-                    const index = slash.items.findIndex(
-                      (cmd) => cmd.name === name,
-                    );
-                    if (index >= 0) setSlashIndex(index);
-                  }}
-                  className="absolute bottom-full left-3 right-3 z-40 mb-2 h-auto w-auto"
-                >
-                  <div className="text-xs text-muted-foreground">
-                    ↑↓ to navigate · ↵ to select · esc to dismiss ·{" "}
-                    <span className="font-mono">//</span> sends a literal slash
-                  </div>
-                  <CommandList>
-                    {slash.items.map((cmd, index) => (
-                      <CommandItem
-                        key={cmd.name}
-                        value={cmd.name}
-                        onSelect={() => applySlash(cmd)}
-                        onMouseEnter={() => setSlashIndex(index)}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          applySlash(cmd);
-                        }}
-                        className="items-start gap-3"
-                      >
-                        <span className="mt-0.5 font-mono text-sm text-primary">
-                          /{cmd.name}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm text-foreground">
-                            {cmd.description}
-                          </span>
-                          <span className="block truncate font-mono text-sm text-muted-foreground">
-                            {cmd.usage}
-                          </span>
-                        </span>
-                      </CommandItem>
-                    ))}
-                  </CommandList>
-                </Command>
-              )}
-
               {attachments.length > 0 && (
-                <div className="mt-2 flex max-w-full flex-wrap gap-2 overflow-hidden px-1">
-                  {attachments.map((attachment) => {
-                    const isImage = attachment.mimeType.startsWith("image/");
-                    return (
-                      <Item
-                        key={attachment.id}
-                        variant="muted"
-                        size="sm"
-                        className="max-w-full min-w-0 gap-2"
-                        title={`${attachment.name} · ${attachment.mimeType || "unknown"} · ${formatBytes(attachment.size)}`}
-                      >
-                        {isImage && attachment.previewUrl ? (
-                          <img
-                            src={attachment.previewUrl}
-                            alt=""
-                            className="size-9 rounded-lg border border-border object-cover"
-                          />
-                        ) : isImage ? (
-                          <Image size={16} className="text-primary" />
-                        ) : (
-                          <FileText size={16} className="text-primary" />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="max-w-44 truncate font-medium text-foreground">
-                            {attachment.name}
-                          </div>
-                          <div className="text-muted-foreground">
-                            {formatBytes(attachment.size)}
-                          </div>
-                        </div>
-                        <IconButton
-                          label="Remove attachment"
-                          size="icon-xs"
-                          onClick={() => removeAttachment(attachment.id)}
-                        >
-                          <X />
-                        </IconButton>
-                      </Item>
-                    );
-                  })}
+                // `pt-1.5 pr-1.5` leaves room for each tile's remove button,
+                // which sits over its top-right corner.
+                <div className="mt-2 flex max-w-full flex-wrap gap-2 px-1 pt-1.5 pr-1.5">
+                  {attachments.map((attachment) => (
+                    <AttachmentThumbnail
+                      key={attachment.id}
+                      name={attachment.name}
+                      mimeType={attachment.mimeType}
+                      size={attachment.size}
+                      src={attachment.previewUrl}
+                      onRemove={() => removeAttachment(attachment.id)}
+                    />
+                  ))}
                 </div>
               )}
 
               <InputGroupAddon
                 align="block-end"
-                ref={bottomRowRef}
-                // The four `data-composer-fit` marks are the fold's measured boxes
-                // (`composerRuntimeFit.ts`): the row that gives the budget, and the
-                // three groups that spend it.
-                data-composer-fit="row"
                 className={COMPOSER_ACTION_ROW_CLASS}
               >
                 <Input
@@ -2377,14 +2057,8 @@ export const Composer = memo(function Composer({
                 <div className="flex min-w-0 items-center gap-1">
                   {/* The prompt's controls, and only the prompt's: a comment has
                     no attachments, no session context and no runtime, so in
-                    comment mode the row keeps its geometry and empties. The
-                    measured boxes stay mounted so the runtime fold does not
-                    re-decide itself on the way in and out. */}
-                  <div
-                    ref={bottomLeadRef}
-                    data-composer-fit="lead"
-                    className="flex shrink-0 items-center gap-1"
-                  >
+                    comment mode the row keeps its geometry and empties. */}
+                  <div className="flex shrink-0 items-center gap-1">
                     {commentMode ? null : (
                       <IconButton
                         label="Attach files or images"
@@ -2395,98 +2069,20 @@ export const Composer = memo(function Composer({
                         <Paperclip />
                       </IconButton>
                     )}
-                    {contextBar && !commentMode ? (
-                      <IconButton
-                        label="Session context"
-                        onClick={() => openContext()}
-                        disabled={disabled}
-                        title="Attach a Task, worktree, or project to this new session"
-                        aria-expanded={contextOpen}
-                        data-open={contextOpen}
-                      >
-                        <Plus />
-                      </IconButton>
-                    ) : null}
                   </div>
-                  {!hideRuntimeControls && !runtimeCollapsed && !commentMode ? (
-                    <div
-                      ref={runtimeStripRef}
-                      data-composer-fit="runtime"
-                      className="flex shrink-0 items-center gap-1"
-                    >
+                  {!hideRuntimeControls && !commentMode ? (
+                    <div className="flex shrink-0 items-center gap-1">
                       {modeAxis ? (
                         <ModeSelector
                           mode={sessionMode}
                           onChange={(mode) => actions.setSessionMode(mode)}
                         />
                       ) : null}
-                      {selectedAgentType &&
-                      availableAgentTypes &&
-                      onAgentTypeChange ? (
-                        <AgentTypeSelector
-                          agentType={selectedAgentType}
-                          availableAgentTypes={availableAgentTypes}
-                          onChange={onAgentTypeChange}
-                        />
-                      ) : null}
-                      <ModelSelector
-                        model={model}
-                        models={models}
-                        actions={actions}
-                        isModelDisabled={isModelDisabled}
-                        locked={modelLocked}
-                        currentThinkingLevel={thinkingLevel}
-                      />
-                      <ThinkingSelector
-                        model={model}
-                        level={thinkingLevel}
-                        actions={actions}
-                        locked={thinkingLocked}
-                      />
                     </div>
-                  ) : null}
-                  {!hideRuntimeControls && runtimeCollapsed && !commentMode ? (
-                    <InputGroupButton
-                      size="sm"
-                      onClick={() => {
-                        if (runtimeOpen) {
-                          dismissSheetsAndFocus();
-                          return;
-                        }
-                        setBranchesOpen(false);
-                        setContextOpen(false);
-                        setSheetOpenedExternally(false);
-                        blurComposer();
-                        setRuntimeOpen(true);
-                      }}
-                      title={runtimeTitle}
-                      aria-label={runtimeTitle}
-                      aria-expanded={runtimeOpen}
-                      className="min-w-0"
-                      data-open={runtimeOpen}
-                    >
-                      {model ? (
-                        <ProviderIcon
-                          provider={model.provider}
-                          size={15}
-                          className="shrink-0 text-muted-foreground"
-                        />
-                      ) : (
-                        <Cpu
-                          size={15}
-                          className="shrink-0 text-muted-foreground"
-                        />
-                      )}
-                      <span className="min-w-0 truncate">{runtimeLabel}</span>
-                    </InputGroupButton>
                   ) : null}
                 </div>
 
-                <div
-                  ref={bottomTrailRef}
-                  data-composer-fit="trail"
-                  className={COMPOSER_ACTION_CLUSTER_CLASS}
-                >
+                <div className={COMPOSER_ACTION_CLUSTER_CLASS}>
                   {showBranches && !commentMode && (
                     <IconButton
                       label="Conversation branches"
@@ -2496,7 +2092,6 @@ export const Composer = memo(function Composer({
                           return;
                         }
                         setRuntimeOpen(false);
-                        setContextOpen(false);
                         setSheetOpenedExternally(false);
                         blurComposer();
                         setBranchesOpen(true);
@@ -2512,21 +2107,6 @@ export const Composer = memo(function Composer({
                           {branchCount}
                         </Badge>
                       )}
-                    </IconButton>
-                  )}
-                  {commentMode ? null : <ContextMeter info={contextInfo} />}
-                  {commentMode ? null : (
-                    <IconButton
-                      label="Add comment"
-                      onPointerDown={(event) => event.preventDefault()}
-                      onClick={onAddComment}
-                      data-comment-actuation
-                      disabled={disabled || !onAddComment}
-                      title={
-                        onAddComment ? "Add comment" : commentDisabledReason
-                      }
-                    >
-                      <MessageSquareQuote />
                     </IconButton>
                   )}
                   <IconButton
@@ -2583,25 +2163,8 @@ export const Composer = memo(function Composer({
                       <Trash2 />
                     </IconButton>
                   ) : null}
-                  {offerBusyModeSwitch && !commentMode ? (
-                    <BusyModeSwitch
-                      mode={busyMode}
-                      onChange={setBusyMode}
-                      showShortcut={!touchComposerMode}
-                    />
-                  ) : null}
-                  {/* Typing while a turn runs turns the primary action into
-                    Send, so Stop keeps a button of its own until it is sent. */}
-                  {streaming && primaryAction === "send" && !commentMode ? (
-                    <IconButton
-                      label="Stop response"
-                      variant="secondary"
-                      onClick={onAbort}
-                      title="Stop"
-                    >
-                      <Square className="fill-current" />
-                    </IconButton>
-                  ) : null}
+                  {/* One button: Stop while the field is empty, Queue (or,
+                    with no queue here, Steer) once something is typed. */}
                   <InputGroupButton
                     size="icon-sm"
                     variant={
@@ -2629,8 +2192,10 @@ export const Composer = memo(function Composer({
                         : primaryAction === "stop"
                           ? "Stop"
                           : streaming
-                            ? effectiveBusyMode === "queue"
-                              ? "Queue for after this response"
+                            ? queueing
+                              ? touchComposerMode || !providerCanSteer
+                                ? "Queue it"
+                                : "Queue it (Enter) · queue and steer in now (Alt+Enter)"
                               : "Steer the response"
                             : touchComposerMode
                               ? "Send message"
@@ -2644,7 +2209,7 @@ export const Composer = memo(function Composer({
                         : primaryAction === "stop"
                           ? "Stop response"
                           : streaming
-                            ? effectiveBusyMode === "queue"
+                            ? queueing
                               ? "Queue message"
                               : "Steer response"
                             : "Send message"
@@ -2654,7 +2219,7 @@ export const Composer = memo(function Composer({
                       <Check size={16} />
                     ) : primaryAction === "stop" ? (
                       <Square size={14} className="fill-current" />
-                    ) : streaming && effectiveBusyMode === "queue" ? (
+                    ) : queueing ? (
                       <ListPlus size={16} />
                     ) : streaming ? (
                       <CornerDownRight size={16} />
@@ -2667,6 +2232,71 @@ export const Composer = memo(function Composer({
             </div>
           </div>
         </InputGroup>
+        {/* The runtime as a strip under the card, the same object as the
+            ledges above it: what the session runs on, resting where the
+            composer ends. A statement, not a control — nothing to unfold. */}
+        {/* Shown in comment mode too: the card swaps its field and actions,
+            and the dock around it keeps its shape. */}
+        {(runtimeLine || contextInfo?.context) && !hidden ? (
+          <ComposerLedge joined edge="bottom">
+            {/* `@container`: the context sizes join only where they fit. */}
+            {/* Shorter and smaller than the strips on the shelf above: a
+                footnote to the card, not a row to act on. */}
+            <div className="@container relative flex h-5 min-w-0 items-center justify-center gap-1 px-2.5 text-xs text-muted-foreground">
+              {/* The strip doubles as the context gauge: a faint fill from the
+                  left as wide as the window is full, behind the text (the
+                  ledge is its stacking context), warning-tinted from 80%. */}
+              {contextInfo?.context?.percent != null ? (
+                <div
+                  aria-hidden
+                  className={`absolute inset-y-0 left-0 -z-10 transition-all duration-500 ease-out ${contextInfo.context.percent >= 80 ? "bg-warning/20" : "bg-primary/10"}`}
+                  style={{
+                    width: `${Math.max(0, Math.min(100, contextInfo.context.percent))}%`,
+                  }}
+                />
+              ) : null}
+              {runtimeLine ? (
+                <>
+                  {model ? (
+                    <ProviderIcon
+                      provider={model.provider}
+                      size={12}
+                      className="shrink-0"
+                    />
+                  ) : null}
+                  {runtimeAccount ? (
+                    <span className="min-w-0 truncate" title={runtimeLine}>
+                      {runtimeAccount}
+                    </span>
+                  ) : null}
+                  {runtimeAccount && runtimeModel ? (
+                    <span aria-hidden className="shrink-0">
+                      ·
+                    </span>
+                  ) : null}
+                  {runtimeModel ? (
+                    <span
+                      className="shrink-0 whitespace-nowrap"
+                      title={runtimeLine}
+                    >
+                      {runtimeModel}
+                    </span>
+                  ) : null}
+                </>
+              ) : null}
+              {contextInfo?.context ? (
+                <>
+                  {runtimeLine ? (
+                    <span aria-hidden className="shrink-0">
+                      ·
+                    </span>
+                  ) : null}
+                  <ContextStatus info={contextInfo} />
+                </>
+              ) : null}
+            </div>
+          </ComposerLedge>
+        ) : null}
       </div>
       {attachmentError ? (
         <div className="mt-1.5 px-2 text-sm text-destructive">
@@ -2676,47 +2306,6 @@ export const Composer = memo(function Composer({
     </div>
   );
 });
-
-/**
- * Steer or Queue: what Enter does while a turn runs. Shown only while there is
- * a choice to make, and remembered on this device.
- */
-function BusyModeSwitch({
-  mode,
-  onChange,
-  showShortcut,
-}: {
-  mode: BusySendMode;
-  onChange: (mode: BusySendMode) => void;
-  showShortcut: boolean;
-}) {
-  const option = (value: BusySendMode, label: string, hint: string) => (
-    <ToggleGroupItem
-      value={value}
-      role="radio"
-      aria-checked={mode === value}
-      title={showShortcut && mode !== value ? `${hint} (Alt+Enter)` : hint}
-    >
-      {label}
-    </ToggleGroupItem>
-  );
-  return (
-    <ToggleGroup
-      variant="outline"
-      size="sm"
-      value={[mode]}
-      onValueChange={(values) => {
-        const next = values[0] as BusySendMode | undefined;
-        if (next) onChange(next);
-      }}
-      role="radiogroup"
-      aria-label="While the response runs"
-    >
-      {option("steer", "Steer", "Hand it to the running response")}
-      {option("queue", "Queue", "Send it after this response")}
-    </ToggleGroup>
-  );
-}
 
 /**
  * The collapsed composer bar, which doubles as the dictation surface.
