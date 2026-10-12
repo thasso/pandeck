@@ -1073,7 +1073,7 @@ export interface SessionActionInputs {
 }
 
 /**
- * The session's actions, in the order the ⋮ menu lists them. Built apart from
+ * The session's actions, in the order the ⋯ menu lists them. Built apart from
  * `SessionInspector` because the session header publishes them on every layout
  * — on a phone the inspector only mounts while its sheet is open.
  */
@@ -1286,7 +1286,7 @@ export function SessionInspector({
         },
         ...toInspectorGroups(groups, openers, sessions),
       ]}
-      // The session header's ⋮ holds the session's actions on every layout
+      // The session header's ⋯ holds the session's actions on every layout
       // (`sessionInspectorActions`, published by the header itself), so this
       // panel neither lists nor publishes any.
       actions={[]}

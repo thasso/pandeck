@@ -4,11 +4,10 @@ import {
   Check,
   ChevronsDownUp,
   ChevronsUpDown,
-  EllipsisVertical,
+  Ellipsis,
   Terminal,
   WrapText,
 } from "lucide-react";
-import { Button } from "./ui/button.tsx";
 import {
   Item,
   ItemActions,
@@ -19,17 +18,15 @@ import {
 import { Separator } from "./ui/separator.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuShortcut,
-  DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { EdgeSheet } from "./common/EdgeSheet.tsx";
+import { OverflowMenu } from "./common/OverflowMenu.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
 import { useRouteSecondaryActions } from "./shell/RoutePrimaryAction.tsx";
 
@@ -150,7 +147,7 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
             setSheetOpen(true);
           }}
         >
-          <EllipsisVertical />
+          <Ellipsis />
         </IconButton>
         <EdgeSheet
           open={sheetOpen}
@@ -207,55 +204,46 @@ export function ChatHeaderMenu({ mobile, view }: Props) {
       </>
     );
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button variant="ghost" size="icon-sm" aria-label="Chat options" />
-        }
-      >
-        <EllipsisVertical />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
-        {view ? (
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Transcript</DropdownMenuLabel>
-            {viewRows(view).map((row) => (
-              <DropdownMenuCheckboxItem
-                key={row.label}
-                checked={row.checked}
-                disabled={row.disabled ?? false}
-                closeOnClick={false}
-                title={row.hint}
-                className={row.child ? "pl-7" : undefined}
-                onCheckedChange={() => view.onChange(row.patch)}
-              >
-                {row.icon}
-                {row.label}
-              </DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuGroup>
-        ) : null}
-        {view && secondary.length > 0 ? <DropdownMenuSeparator /> : null}
-        {secondary.length > 0 ? (
-          <DropdownMenuGroup>
-            <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            {secondary.map((action) => (
-              <DropdownMenuItem
-                key={action.key}
-                disabled={action.busy || action.disabled}
-                title={action.disabledReason}
-                onClick={action.onRun}
-              >
-                {action.icon}
-                {action.label}
-                {action.hint ? (
-                  <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuGroup>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <OverflowMenu label="Chat options">
+      {view ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Transcript</DropdownMenuLabel>
+          {viewRows(view).map((row) => (
+            <DropdownMenuCheckboxItem
+              key={row.label}
+              checked={row.checked}
+              disabled={row.disabled ?? false}
+              closeOnClick={false}
+              title={row.hint}
+              className={row.child ? "pl-7" : undefined}
+              onCheckedChange={() => view.onChange(row.patch)}
+            >
+              {row.icon}
+              {row.label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuGroup>
+      ) : null}
+      {view && secondary.length > 0 ? <DropdownMenuSeparator /> : null}
+      {secondary.length > 0 ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Actions</DropdownMenuLabel>
+          {secondary.map((action) => (
+            <DropdownMenuItem
+              key={action.key}
+              disabled={action.busy || action.disabled}
+              title={action.disabledReason}
+              onClick={action.onRun}
+            >
+              {action.icon}
+              {action.label}
+              {action.hint ? (
+                <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      ) : null}
+    </OverflowMenu>
   );
 }

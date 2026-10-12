@@ -26,7 +26,9 @@ const HEADER_TONE: Record<AppCardTone, string> = {
  *   the content, so every card reads the same way top to bottom. Buttons live
  *   in the footer only — the header carries state (tone, `status`) — so a
  *   reader always finds what they can do in the same place. Forms belong in the
- *   content; the footer holds the buttons that submit them.
+ *   content; the footer holds the buttons that submit them, and the few
+ *   per-click settings a button reads (a merge method) sit beside it in
+ *   `options` rather than up in the content, where they read as information.
  */
 export function AppCard({
   tone = "neutral",
@@ -35,6 +37,7 @@ export function AppCard({
   status,
   actions,
   footerStart,
+  options,
   flush = false,
   className = "",
   contentClassName = "",
@@ -47,14 +50,21 @@ export function AppCard({
   /** What kind of card this is ("Commit", "Approval needed", "Suggestion"). */
   label: ReactNode;
   /**
-   * State on the header's right: a badge, a hash, a count. Never a button.
-   * Several elements line up on the one row, separated by "·".
+   * State on the header's right: a badge, a hash, a count. Never a button,
+   * but the object's own identifier may be the link to it (a pull request
+   * number opening the pull request). Several elements line up on the one
+   * row, separated by "·".
    */
   status?: ReactNode;
   /** The footer's buttons, right-aligned. No actions, no footer. */
   actions?: ReactNode;
   /** Quiet text at the footer's left, beside the actions (a time, a hint). */
   footerStart?: ReactNode;
+  /**
+   * Controls at the footer's left that configure its buttons (a merge
+   * method, a checkbox). They wrap above the buttons on a narrow screen.
+   */
+  options?: ReactNode;
   /** Content edge to edge, for a table or a list that draws its own rows. */
   flush?: boolean;
   className?: string;
@@ -64,7 +74,7 @@ export function AppCard({
   role?: string;
   children?: ReactNode;
 }) {
-  const hasFooter = Boolean(actions || footerStart);
+  const hasFooter = Boolean(actions || footerStart || options);
   return (
     <Card
       size="sm"
@@ -94,6 +104,11 @@ export function AppCard({
       ) : null}
       {hasFooter ? (
         <CardFooter className="min-h-8 flex-wrap gap-1 py-1">
+          {options ? (
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              {options}
+            </div>
+          ) : null}
           {footerStart ? (
             <span className="min-w-0 flex-1 text-xs text-muted-foreground">
               {footerStart}

@@ -55,7 +55,7 @@ describe("PullRequestCard", () => {
     expect(reused).toContain("Pull request reused");
     expect(reused).toContain("bg-primary/10");
     expect(reused).not.toContain("bg-success-soft");
-    expect(reused).toContain(">Open<");
+    expect(reused).toContain('href="https://github.com/acme/repo/pull/42"');
     const created = renderToStaticMarkup(
       <PullRequestCard
         pullRequest={card({ status: "open", reused: false, warnings: [] })}
@@ -125,16 +125,35 @@ describe("PullRequestCard", () => {
 
   const noop = () => undefined;
 
-  it("offers merge and update on an open card, and no cleanup yet", () => {
+  // Updating a mergeable branch is upkeep, not the next step: it waits in the
+  // overflow menu, and Merge is the footer's one visible action.
+  it("offers merge, keeps update in the menu, and no cleanup yet", () => {
     const html = renderToStaticMarkup(
       <PullRequestCard
         pullRequest={card({ status: "open", warnings: [], worktreeId: "wt-1" })}
         onAction={noop}
       />,
     );
-    expect(html).toContain("Merge");
-    expect(html).toContain("Update with main");
+    expect(isDisabled(html, ">Merge<")).toBe(false);
+    expect(isDisabled(html, MORE)).toBe(false);
+    expect(html).not.toContain("Update with main");
     expect(html).not.toContain("Clean up worktree");
+  });
+
+  // The number in the header is the way to the pull request; there is no
+  // separate Open button competing with the actions.
+  it("links the header's pull request number", () => {
+    const html = renderToStaticMarkup(
+      <PullRequestCard
+        pullRequest={card({ status: "open", warnings: [] })}
+        onAction={noop}
+      />,
+    );
+    const link = /<a\b[^>]*>.*?<\/a>/s.exec(html)?.[0];
+    expect(link).toContain('href="https://github.com/acme/repo/pull/42"');
+    expect(link).toContain('target="_blank"');
+    expect(link).toContain("github #42");
+    expect(html).not.toContain(">Open<");
   });
 
   // Deleting the remote branch stays the default, and the card says what the
@@ -148,7 +167,7 @@ describe("PullRequestCard", () => {
         onAction={noop}
       />,
     );
-    expect(html).toContain("Delete remote branch");
+    expect(html).toContain("Delete branch");
     expect(html).toContain("Merging deletes the remote branch feature");
     expect(button(html, ">Merge<")).toContain(
       "delete the remote branch feature",
@@ -181,6 +200,8 @@ describe("PullRequestCard", () => {
     expect(html).not.toContain("Merging deletes the remote branch");
     expect(isDisabled(html, "Update with main")).toBe(false);
     expect(button(html, "Update with main")).toContain("bg-primary");
+    // Out of the menu: it is the only way forward, so it is in plain sight.
+    expect(html).not.toContain(MORE);
     // The reason is TEXT: a disabled button's tooltip reaches neither a
     // keyboard nor a phone.
     expect(html).toContain(
@@ -238,7 +259,8 @@ describe("PullRequestCard", () => {
       />,
     );
     expect(isDisabled(resolved, ">Merge<")).toBe(false);
-    expect(button(resolved, "Update with main")).not.toContain("bg-primary");
+    expect(resolved).not.toContain("Update with main");
+    expect(resolved).toContain(MORE);
     expect(resolved).not.toContain("so it cannot be merged");
   });
 
@@ -307,7 +329,9 @@ describe("PullRequestCard", () => {
     expect(html).not.toContain("live sessions run on this worktree");
   });
 
-  /** The rendered `<button>` whose text contains `label`. */
+  const MORE = 'aria-label="More pull request actions"';
+
+  /** The rendered `<button>` whose markup contains `label`. */
   function button(html: string, label: string): string {
     const match = [...html.matchAll(/<button\b[^>]*>.*?<\/button>/gs)].find(
       (candidate) => candidate[0].includes(label),
@@ -340,7 +364,7 @@ describe("PullRequestCard", () => {
     // Named per button: "four things are disabled" would pass with the wrong
     // four, and the claim is that no action can be started while one runs.
     expect(isDisabled(html, ">Merge<")).toBe(true);
-    expect(isDisabled(html, "Update with main")).toBe(true);
+    expect(isDisabled(html, MORE)).toBe(true);
     expect(isDisabled(html, "Squash")).toBe(true);
   });
 

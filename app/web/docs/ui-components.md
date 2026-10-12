@@ -35,6 +35,8 @@ the same parts a shadcn example would.
     thumb) and one thumb for a scalar `value`.
   - `badge.tsx`, `alert.tsx`: `success` and `warning` variants on the app's
     status tokens.
+  - `select.tsx`: an `xs` trigger size matching `Button size="xs"`, so a select
+    fits a card footer's options beside its buttons.
   - Overlays sit in the layer bands of `ui-shell.md` instead of `z-50`: dialog,
     sheet, drawer and command at `z-[70]`; alert-dialog at `z-[90]`; popover,
     dropdown-menu, context-menu, hover-card, select, combobox and tooltip at
@@ -61,6 +63,7 @@ the same parts a shadcn example would.
 | A page or settings section that groups rows                         | `Card`                                                                                |
 | Status or count                                                     | `Badge`                                                                               |
 | Menu of actions                                                     | `DropdownMenu`, `ContextMenu`                                                         |
+| Secondary actions behind a `⋯`                                      | `common/OverflowMenu` (always the horizontal ellipsis, always last in its group)      |
 | Floating panel or hint                                              | `Popover`, `HoverCard`, `Tooltip`                                                     |
 | Modal                                                               | `Dialog`; confirmations go through `useDialogs()` / `ConfirmDialog`                   |
 | Edge panel                                                          | `Sheet`, `Drawer`                                                                     |
@@ -71,6 +74,13 @@ the same parts a shadcn example would.
 | Transient notice                                                    | `showToast()` (`lib/toast.ts`), rendered by Sonner                                    |
 | Tables, separators, kbd hints, breadcrumbs                          | `Table`, `Separator`, `Kbd`, `Breadcrumb`                                             |
 | Search-and-pick lists                                               | `Command`                                                                             |
+
+An overflow is ONE control everywhere: the ghost, icon-only horizontal `⋯`
+(`Ellipsis`), named for what it holds ("More run actions"), and the LAST control
+of its action group — after a card footer's primary button, at a header's right
+end. A menu is `common/OverflowMenu`; an overflow that opens something else (a
+sheet, the inbox card's action face) is an `IconButton` with the same icon in
+the same place. An action that is the object's next step never hides in it.
 
 A clickable row is an `Item` rendered as the element it is:
 `<Item render={<button type="button" onClick={…} />}>` (or an `<a>` for a link).

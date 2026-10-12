@@ -6435,7 +6435,7 @@ function AppContent() {
       ? backlogTasks.find((t) => t.id === route.id)
       : undefined;
   // The session's actions (`sessionInspectorActions`): published by the
-  // session header into its ⋮ on every layout, since on a phone the inspector
+  // session header into its ⋯ on every layout, since on a phone the inspector
   // only mounts while its sheet is open.
   const sessionActionInputs: SessionActionInputs = {
     sessionId: displayCurrentId,
@@ -7289,7 +7289,7 @@ function AppContent() {
                         objectOverflow={false}
                         title={sessionTitleHeading}
                         // Exactly two actions, on every layout: Comment on the
-                        // transcript selection, and ⋮ for the rest. The worktree
+                        // transcript selection, and ⋯ for the rest. The worktree
                         // is reached through the title block itself.
                         actions={
                           <div className="flex items-center gap-1">

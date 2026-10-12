@@ -11,12 +11,8 @@ import {
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { IconButton } from "./common/IconButton.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "./ui/dropdown-menu.tsx";
+import { DropdownMenuItem } from "./ui/dropdown-menu.tsx";
+import { OverflowMenu } from "./common/OverflowMenu.tsx";
 import {
   Bot,
   Check,
@@ -25,7 +21,6 @@ import {
   CornerDownRight,
   FileText,
   FolderKanban,
-  Ellipsis,
   GitFork,
   MessageSquarePlus,
   RotateCcw,
@@ -543,30 +538,16 @@ function MessageActionsBar({
           </IconButton>
         )}
         {canComment ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="More message actions"
-                  title="More message actions"
-                />
-              }
-            >
-              <Ellipsis />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              side="top"
-              align={align === "right" ? "end" : "start"}
-              className="w-56"
-            >
-              <DropdownMenuItem onClick={() => onCommentMessage?.(message.id)}>
-                <MessageSquarePlus />
-                Comment on this message
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <OverflowMenu
+            label="More message actions"
+            side="top"
+            align={align === "right" ? "end" : "start"}
+          >
+            <DropdownMenuItem onClick={() => onCommentMessage?.(message.id)}>
+              <MessageSquarePlus />
+              Comment on this message
+            </DropdownMenuItem>
+          </OverflowMenu>
         ) : null}
       </div>
     </div>

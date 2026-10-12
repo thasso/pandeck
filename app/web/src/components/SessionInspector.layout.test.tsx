@@ -217,7 +217,7 @@ describe("SessionInspector layout", () => {
     expect(host.textContent).toContain("Show 2 more");
   });
 
-  // The ownership action lives in the session's actions (the header's ⋮).
+  // The ownership action lives in the session's actions (the header's ⋯).
   const peer = (
     id: string,
     title: string,

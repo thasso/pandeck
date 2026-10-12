@@ -4,7 +4,6 @@ import {
   ClipboardList,
   MessageSquare,
   MessageSquareQuote,
-  EllipsisVertical,
   SendHorizontal,
   Terminal,
   Wrench,
@@ -19,12 +18,10 @@ import {
 import { IconButton } from "./common/IconButton.tsx";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { OverflowMenu } from "./common/OverflowMenu.tsx";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuShortcut,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 /**
@@ -253,36 +250,26 @@ function PageHeaderObjectActions({ showOverflow }: { showOverflow: boolean }) {
         </IconButton>
       ) : null}
       {showOverflow && secondary.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                title="Inspector actions"
-                aria-label="Inspector actions"
-              />
-            }
-          >
-            <EllipsisVertical />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-48">
-            {secondary.map((action) => (
-              <DropdownMenuItem
-                key={action.key}
-                disabled={action.busy || action.disabled}
-                title={action.disabledReason}
-                onClick={action.onRun}
-              >
-                {action.icon}
-                <span className="min-w-0 flex-1 truncate">{action.label}</span>
-                {action.hint ? (
-                  <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <OverflowMenu
+          label="Inspector actions"
+          size="icon"
+          contentClassName="min-w-48"
+        >
+          {secondary.map((action) => (
+            <DropdownMenuItem
+              key={action.key}
+              disabled={action.busy || action.disabled}
+              title={action.disabledReason}
+              onClick={action.onRun}
+            >
+              {action.icon}
+              <span className="min-w-0 flex-1 truncate">{action.label}</span>
+              {action.hint ? (
+                <DropdownMenuShortcut>{action.hint}</DropdownMenuShortcut>
+              ) : null}
+            </DropdownMenuItem>
+          ))}
+        </OverflowMenu>
       ) : null}
     </div>
   );

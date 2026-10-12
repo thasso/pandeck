@@ -140,7 +140,12 @@ it("busies the pull request action the SERVER is running, not the card", () => {
   expect(button("Merge").getAttribute("aria-busy")).toBe("true");
   // Everything else is still there and still says what it would do — the card
   // is the reason the user can tell whether to wait or to update the branch.
-  expect(button("Update with main").getAttribute("aria-busy")).toBe(null);
+  // The update waits in the overflow menu, which is off but not busy.
+  const more = document.querySelector<HTMLButtonElement>(
+    '[aria-label="More pull request actions"]',
+  )!;
+  expect(more.disabled).toBe(true);
+  expect(more.getAttribute("aria-busy")).toBe(null);
   expect(document.body.textContent).toContain("feature");
   expect(document.body.textContent).toContain("main");
 });
@@ -156,6 +161,7 @@ it("busies a card action immediately, before the server reports it durable", () 
     />,
   );
 
+  // Out of the overflow menu while it runs, so its spinner outlives the menu.
   expect(button("Update with main").getAttribute("aria-busy")).toBe("true");
   expect(button("Merge").getAttribute("aria-busy")).toBe(null);
 });

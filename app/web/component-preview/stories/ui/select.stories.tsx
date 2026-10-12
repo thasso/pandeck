@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import * as UI from "../../../src/components/ui/select.tsx";
+import { Button } from "../../../src/components/ui/button.tsx";
 
 function Gallery() {
   return (
@@ -29,6 +30,27 @@ function Gallery() {
             <UI.SelectItem value="queued">Queued</UI.SelectItem>
           </UI.SelectContent>
         </UI.Select>
+        {/* `xs` lines up with `Button size="xs"`, as in a card footer. */}
+        <div className="flex items-center gap-1">
+          <UI.Select defaultValue="squash">
+            <UI.SelectTrigger size="xs" aria-label="Merge method">
+              <UI.SelectValue />
+            </UI.SelectTrigger>
+            <UI.SelectContent>
+              <UI.SelectItem value="squash">Squash</UI.SelectItem>
+              <UI.SelectItem value="merge">Merge commit</UI.SelectItem>
+            </UI.SelectContent>
+          </UI.Select>
+          <UI.Select defaultValue="squash" disabled>
+            <UI.SelectTrigger size="xs" aria-label="Merge method (disabled)">
+              <UI.SelectValue />
+            </UI.SelectTrigger>
+            <UI.SelectContent>
+              <UI.SelectItem value="squash">Squash</UI.SelectItem>
+            </UI.SelectContent>
+          </UI.Select>
+          <Button size="xs">Merge</Button>
+        </div>
       </div>
     </main>
   );

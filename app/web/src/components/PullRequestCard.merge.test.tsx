@@ -134,7 +134,7 @@ it("carries the opt-out into the merge click and says so first", () => {
   const clicks = render();
   const checkbox = find<HTMLLabelElement>(
     "label",
-    "Delete remote branch",
+    "Delete branch",
   ).querySelector("input")!;
   expect(checkbox.checked).toBe(true);
   click(checkbox);
@@ -206,3 +206,61 @@ it("invalidates a selected method the repository no longer allows", () => {
     { action: "merge", options: { mergeMethod: "squash", deleteBranch: true } },
   ]);
 });
+
+// Updating a mergeable branch waits in the overflow menu; it must still reach
+// the server from there.
+it("updates with main from the overflow menu", () => {
+  const clicks = render();
+  act(() =>
+    container!
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="More pull request actions"]',
+      )!
+      .click(),
+  );
+  const item = [
+    ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ].find((node) => (node.textContent ?? "").trim() === "Update with main");
+  expect(item, "no Update with main menu item").toBeDefined();
+  act(() => item!.click());
+  expect(clicks).toEqual([{ action: "update-with-main" }]);
+});
+
+// Disabling the trigger does not reach a menu that is ALREADY open: the item
+// itself has to go off when an action starts, whether the server reports it or
+// the click is still pending.
+for (const running of [
+  { busyAction: "merge" },
+  { pendingAction: "merge" },
+] as const) {
+  it(`turns the open menu's update off while ${Object.keys(running)[0]} is merge`, () => {
+    const clicks = render();
+    act(() =>
+      container!
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="More pull request actions"]',
+        )!
+        .click(),
+    );
+    act(() => {
+      root!.render(
+        <PullRequestCard
+          pullRequest={{ ...card, ...running }}
+          onAction={(_cardId, action, options) =>
+            clicks.push({
+              action,
+              ...(options !== undefined ? { options } : {}),
+            })
+          }
+        />,
+      );
+    });
+    const item = [
+      ...document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ].find((node) => (node.textContent ?? "").trim() === "Update with main");
+    expect(item, "the open menu lost its item").toBeDefined();
+    expect(item!.getAttribute("aria-disabled")).toBe("true");
+    act(() => item!.click());
+    expect(clicks).toEqual([]);
+  });
+}
