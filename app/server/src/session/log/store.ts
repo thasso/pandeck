@@ -502,11 +502,6 @@ export class SessionLog {
     return this.persistence.lastRunMarker();
   }
 
-  /** See {@link LogPersistence.runEntries}. */
-  runEntries(runId: string): SessionLogEntry[] | undefined {
-    return this.persistence.runEntries(runId);
-  }
-
   /**
    * Copy this log's prefix THROUGH `entryId` into `target` — the durable half of
    * a fork. Entries keep their `id` and `seq`, per the {@link SessionEntry}
@@ -904,27 +899,6 @@ export class SessionLogStore {
       ? resident.lastRunMarker()
       : this.persistenceFor(sessionId).lastRunMarker();
     return marker?.type === "run.started" ? marker.at : undefined;
-  }
-
-  /**
-   * The runs whose failure may still be unrecorded, with the entries each
-   * wrote — what boot reads to record them after all: every run the NEWEST
-   * marker lists as unrecorded, and the run that marker opened when the
-   * process died inside it. Read from the end of the log, bounded.
-   */
-  runsToRecheck(
-    sessionId: string,
-  ): Array<{ runId: string; entries: SessionLogEntry[] }> {
-    const resident = this.logs.get(sessionId);
-    const source = resident ?? this.persistenceFor(sessionId);
-    const marker = source.lastRunMarker();
-    if (!marker) return [];
-    const runIds = new Set(marker.unrecordedFailures ?? []);
-    if (marker.type === "run.started") runIds.add(marker.runId);
-    return [...runIds].flatMap((runId) => {
-      const entries = source.runEntries(runId);
-      return entries ? [{ runId, entries }] : [];
-    });
   }
 
   /** The on-disk path a session's log uses (for diagnostics / deletion). */

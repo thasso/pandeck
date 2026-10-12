@@ -20,6 +20,13 @@ import type { PromptOrigin } from "@assistant/shared/session";
 import { automaticTurnsHeld } from "./automaticTurnHold.ts";
 import { inDbTransaction } from "./db/index.ts";
 import {
+  compactJournal,
+  journalDone,
+  journalFailure,
+  pendingJournaledFailures,
+  type JournaledFailure,
+} from "./delegationFailureJournal.ts";
+import {
   delegationFailureNoticeStore,
   type DelegationFailureCategory,
   type DelegationFailureNotice,
@@ -33,9 +40,7 @@ import {
 import { sessionStore, type SessionMeta } from "./db/sessionStore.ts";
 import { analyzeProviderError } from "./providerErrors.ts";
 import type { RunFailureFacts } from "./session/adapters/contract.ts";
-import type { SessionLogEntry } from "./session/log/rawEntry.ts";
 import type { RunFailureReport } from "./session/runtime/liveSession.ts";
-import { sessionRuntime } from "./session/runtimeInstance.ts";
 
 /**
  * The origin of every server-generated notice turn — this one and the peer
@@ -224,10 +229,40 @@ function requestIdsFrom(
 }
 
 /**
- * The notices one failed turn of `report.sessionId` owes, recorded in ONE
- * transaction before the caller lets anything else learn of the failure. A
- * write that fails throws, and nothing is recorded: the caller keeps the
- * failure and asks again. Returns the rows written.
+ * A failed turn as safe facts — or nothing, when it owes no notice at all: its
+ * child is being stood down by its coordinator or was stopped by the user (its
+ * Stop hold). Classifies the provider's wording in memory and keeps only the
+ * category and a structured reset.
+ */
+function safeFailureOf(report: RunFailureReport): JournaledFailure | undefined {
+  if (standingDown.has(report.sessionId)) return undefined;
+  let held = false;
+  try {
+    held = automaticTurnsHeld(report.sessionId);
+  } catch {
+    // The database is what failed; a Stop also marks the turn's abort in the
+    // runtime, which never reports it, so an unreadable hold is not a Stop.
+  }
+  if (held) return undefined;
+  const { category, resetAt } = classify(
+    report.errorMessage,
+    report.failure,
+    report.at,
+  );
+  return {
+    incidentKey: `run:${report.sessionId}:${report.runId}`,
+    sessionId: report.sessionId,
+    runId: report.runId,
+    category,
+    ...(resetAt !== undefined ? { resetAt } : {}),
+    at: report.at,
+    noticeTurn: isNoticeTurn(report.origin),
+  };
+}
+
+/**
+ * The notices one failed turn owes, recorded in ONE transaction. Returns the
+ * rows written; throws when the database refuses.
  *
  * Who is told, and only them:
  * - `spawn` — the session that spawned the child and still owns it. Neither
@@ -243,19 +278,16 @@ function requestIdsFrom(
  * told: this notice is what tells its sender, so the peer interruption notice
  * does not tell it a second time.
  *
- * Nothing is recorded for a child the user stopped (its Stop hold), one its
- * coordinator is standing down, or one deleted, archived or outside the user's
+ * Nothing is recorded for a child deleted, archived or outside the user's
  * scope.
  */
-export function recordRunFailureNotices(
-  report: RunFailureReport,
+function recordSafeFailure(
+  failure: JournaledFailure,
   now = Date.now(),
 ): DelegationFailureNotice[] {
-  const failedAt = report.at;
-  const childId = report.sessionId;
+  const childId = failure.sessionId;
   const child = liveUserSession(childId);
   if (!child) return [];
-  if (standingDown.has(childId) || automaticTurnsHeld(childId)) return [];
 
   const open = peerPromptStore.openForRecipient(childId);
   const inTurn = open.filter(
@@ -276,7 +308,7 @@ export function recordRunFailureNotices(
   for (const m of inTurn)
     if (!routes.has(m.senderSessionId) && liveUserSession(m.senderSessionId))
       routes.set(m.senderSessionId, "request");
-  if (!isNoticeTurn(report.origin))
+  if (!failure.noticeTurn)
     for (const m of open)
       if (
         m.status === "awaiting_response" &&
@@ -289,28 +321,23 @@ export function recordRunFailureNotices(
   // seen by the peer path, which interrupted the failed turn's requested
   // replies and tells their senders itself. A row this function interrupted
   // belongs to an incident already recorded. Either way: told elsewhere.
-  for (const m of peerPromptStore.failedForRecipientSince(childId, failedAt))
+  for (const m of peerPromptStore.failedForRecipientSince(childId, failure.at))
     if (m.responseRequested) routes.delete(m.senderSessionId);
   if (routes.size === 0) return [];
 
-  const { category, resetAt } = classify(
-    report.errorMessage,
-    report.failure,
-    failedAt,
-  );
   const inputs: DelegationFailureNoticeInput[] = [...routes].map(
     ([coordinatorId, route]) => {
       const anchor = anchorBetween(coordinatorId, childId);
       return {
-        incidentKey: `run:${childId}:${report.runId}`,
+        incidentKey: failure.incidentKey,
         childSessionId: childId,
         coordinatorSessionId: coordinatorId,
         route,
-        category,
-        ...(resetAt !== undefined ? { resetAt } : {}),
+        category: failure.category,
+        ...(failure.resetAt !== undefined ? { resetAt: failure.resetAt } : {}),
         requestIds: requestIdsFrom(open, coordinatorId),
         ...(anchor ? { anchor } : {}),
-        failedAt,
+        failedAt: failure.at,
       };
     },
   );
@@ -318,11 +345,87 @@ export function recordRunFailureNotices(
     const written = delegationFailureNoticeStore.record(inputs, now);
     peerPromptStore.interruptAsTold(
       inTurn.filter((m) => routes.has(m.senderSessionId)).map((m) => m.id),
-      PEER_FAILURE_REASONS[category],
+      PEER_FAILURE_REASONS[failure.category],
       now,
     );
     return written;
   });
+}
+
+/**
+ * Record what one failed turn of `report.sessionId` owes — the runtime's
+ * failure hook, called before anything else learns of the failure.
+ *
+ * The safe facts go to the journal FIRST (`delegationFailureJournal.ts`), then
+ * to the database, and the journal entry is retired only once the database
+ * holds them. A database that refuses leaves the entry pending for the retry
+ * sweep and the next boot, and this returns normally: the failure is durable.
+ * Only when NEITHER store took it does this throw, so the runtime keeps it in
+ * memory and tries again. Returns the notices written now.
+ */
+export function recordRunFailureNotices(
+  report: RunFailureReport,
+  now = Date.now(),
+): DelegationFailureNotice[] {
+  const failure = safeFailureOf(report);
+  if (!failure) return [];
+  let journaled = false;
+  try {
+    journalFailure(failure);
+    journaled = true;
+  } catch {
+    console.error(
+      `[delegation-failure] could not journal the failure of run ${failure.runId} in ${failure.sessionId}`,
+    );
+  }
+  let written: DelegationFailureNotice[];
+  try {
+    written = recordSafeFailure(failure, now);
+  } catch (err) {
+    if (!journaled) throw err;
+    console.error(
+      `[delegation-failure] could not record the failure of run ${failure.runId} in ${failure.sessionId}; it stays journaled and is retried`,
+    );
+    return [];
+  }
+  if (journaled) journalDone(failure.incidentKey);
+  return written;
+}
+
+/**
+ * Record every journaled failure the database does not hold yet — at boot,
+ * before peer recovery reclassifies the rows of runs the restart cut off, and
+ * from the retry sweep. A failure already recorded is recognized by its
+ * incident key and writes nothing. One the database still refuses stays
+ * journaled. Returns the notices written.
+ */
+export function replayJournaledFailures(
+  now = Date.now(),
+): DelegationFailureNotice[] {
+  const written: DelegationFailureNotice[] = [];
+  for (const failure of pendingJournaledFailures()) {
+    try {
+      written.push(...recordSafeFailure(failure, now));
+    } catch {
+      console.error(
+        `[delegation-failure] could not record the journaled failure of run ${failure.runId} in ${failure.sessionId}; it stays journaled`,
+      );
+      continue;
+    }
+    journalDone(failure.incidentKey);
+  }
+  return written;
+}
+
+/** Boot: replay what is owed, then shrink the journal to what still is. */
+export function recoverJournaledFailuresOnBoot(): number {
+  const recorded = replayJournaledFailures().length;
+  try {
+    compactJournal();
+  } catch {
+    console.error("[delegation-failure] could not compact the failure journal");
+  }
+  return recorded;
 }
 
 /**
@@ -406,88 +509,6 @@ export function deliverableNotices(
     else deliverable.push(notice);
   }
   return deliverable;
-}
-
-/* --------------------------------- boot ---------------------------------- */
-
-/**
- * What an interrupted run's own log says about how it ended: the failure, if
- * it failed. The tail follows the run's open `run.started`; an aborted message
- * in it means the turn was stopped, not failed.
- */
-function failureInTail(
-  entries: readonly SessionLogEntry[],
-): Omit<RunFailureReport, "sessionId" | "runId"> | undefined {
-  let origin: PromptOrigin | undefined;
-  let failure: Omit<RunFailureReport, "sessionId" | "runId"> | undefined;
-  for (const raw of entries) {
-    const e = raw as unknown as Record<string, unknown>;
-    const entryOrigin = e.origin as PromptOrigin | undefined;
-    const written =
-      typeof e.createdAt === "string" ? Date.parse(e.createdAt) : NaN;
-    const at = Number.isFinite(written) ? written : Date.now();
-    if (e.type === "message" && e.role === "user" && !origin && !e.hidden)
-      origin = entryOrigin;
-    if (e.type === "message" && e.role === "assistant") {
-      origin ??= entryOrigin;
-      if (e.stopReason === "aborted") return undefined;
-      if (e.stopReason === "error")
-        failure = {
-          origin,
-          errorMessage: typeof e.error === "string" ? e.error : undefined,
-          failure: undefined,
-          at,
-        };
-    }
-    if (e.type === "provider.notice" && e.severity === "error") {
-      const info = e.providerError as
-        { kind?: unknown; resetAt?: unknown } | undefined;
-      failure = {
-        origin,
-        errorMessage: typeof e.message === "string" ? e.message : undefined,
-        failure:
-          typeof info?.kind === "string"
-            ? {
-                kind: info.kind as RunFailureFacts["kind"],
-                ...(typeof info.resetAt === "number"
-                  ? { resetAtMs: info.resetAt * 1000 }
-                  : {}),
-              }
-            : undefined,
-        at,
-      };
-    }
-  }
-  return failure ? { ...failure, origin } : undefined;
-}
-
-/**
- * Record what a failure the previous process saw but never finished recording
- * is owed. Called once at boot, before peer recovery reclassifies the rows of
- * runs the restart cut off.
- *
- * The runtime names every failed run whose notice it could not write on each
- * run marker it writes until it can, and a run the process died inside leaves
- * its bracket open. So this reads, per working-set session, the NEWEST marker
- * and only the runs it points at, each from one bounded read of the log's end.
- * A run already recorded is recognized by its incident key and writes nothing.
- */
-export function recoverRunFailureNoticesOnBoot(): number {
-  let recorded = 0;
-  for (const meta of sessionStore.list()) {
-    if (meta.archivedAt !== undefined || sessionStore.isSettled(meta.id))
-      continue;
-    for (const run of sessionRuntime.runsToRecheck(meta.id)) {
-      const failure = failureInTail(run.entries);
-      if (!failure) continue;
-      recorded += recordRunFailureNotices({
-        sessionId: meta.id,
-        runId: run.runId,
-        ...failure,
-      }).length;
-    }
-  }
-  return recorded;
 }
 
 /* -------------------------------- wording -------------------------------- */

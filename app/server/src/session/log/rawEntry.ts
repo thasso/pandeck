@@ -153,12 +153,6 @@ export type ProviderNoticeEntry = RawEntryBase & {
 type RunMarkerEntry = RawEntryBase & {
   type: "run.started" | "run.ended" | "run.aborted";
   runId: string;
-  /**
-   * Runs of this session whose failure was not yet recorded when the marker
-   * was written (`liveSession.ts`). The NEWEST marker is what boot reads, so
-   * every marker repeats the list until it is empty.
-   */
-  unrecordedFailures?: string[];
 };
 
 /** Durable host-command lifecycle marker (e.g. /commit span). */

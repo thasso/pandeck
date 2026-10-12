@@ -21,20 +21,27 @@ Code: `app/server/src/delegationFailureNotice.ts` (policy and wording),
 
 One failed **turn** of the child, as the runtime sees it:
 
+- the harness says so with `runFailing`, which both harnesses emit BEFORE they
+  tell any viewer of the failure: pi when its retries are exhausted
+  (`auto_retry_end`), when its run settles failed (`agent_settled`) and when a
+  prompt could not be sent (before its banner); Claude when its turn finishes
+  with an error (`finishTurn`);
 - the harness completes the turn's message with `error`, or reports the run
-  ended with `error` (`messageCompleted`/`runCompleted` — pi after its own
-  retries are exhausted, Claude on an error `result`);
+  ended with `error` (`messageCompleted`/`runCompleted`);
 - the adapter resolves a prompt with `error` without those events;
 - the adapter throws after the prompt was appended to the log (the harness could
   not take a turn it was given).
 
 Each is attributed to the run it belongs to, never to whichever turn is open
 when it arrives. Terminal adapter events carry the provider run they close
-(`run`), and the runtime ignores a completion of a run that is already over or
-is not the open turn's: such a straggler neither reports a failure nor ends the
-newer turn. A prompt's own late result or throw reports, and closes, only its
-own run. Both harness adapters also drop an earlier run's completion instead of
-answering a newer prompt with it.
+(`run`), and one the native event source emits with no run open is marked
+`unowned`. The runtime ignores a completion of a run that is already over, of
+another run than the open turn's, or of no run at all: such a straggler neither
+reports a failure, nor ends or idles the newer turn — not even one whose first
+message has not arrived yet. A prompt's own late result or throw reports, and
+closes, only its own run; that is also how a genuine startup failure, before any
+message, is reported. Both harness adapters drop an earlier run's or an unowned
+completion instead of answering a newer prompt with it.
 
 And one abandoned **delivery**: a peer prompt that reached `failed` because the
 recipient could not be started or would not accept it after `RETRY_MAX_ATTEMPTS`
@@ -93,30 +100,48 @@ and rebuilt.
 ## The durable boundary
 
 The runtime calls its failure hook synchronously, once per run id, BEFORE
-anything else learns of the failure: before the turn's error entry is appended
-or announced (`entryAppended`), before `runStatus`, the run's closing
-`run.ended` marker and any `subscribeSessionRunCompleted` listener. The hook
-decides eligibility and writes the notice rows (and takes over the in-turn
-requested rows) in one SQLite transaction; only then is the coordinator nudged.
-A crash after that commit leaves a pending row that boot delivers.
+anything else learns of the failure: on `runFailing` (before the harness's own
+viewer broadcasts), and in any case before the turn's error entry is appended or
+announced (`entryAppended`), before `runStatus`, the run's closing marker and
+any `subscribeSessionRunCompleted` listener.
 
-A hook that throws — the write failed — has recorded nothing, and the runtime
-does not pretend otherwise: it logs the run id and the error's class (never its
-text), keeps the failure in memory, and retries it at the run's later reporting
-points and at every turn boundary. Until it is recorded, every run marker the
-session writes (`run.started`, `run.ended`, `run.aborted`) names it in
-`unrecordedFailures`, so the NEWEST marker always lists every failure still
-owed, however many turns ran since. Boot reads it back
-(`recoverRunFailureNoticesOnBoot`, before peer recovery): for each working-set
-session it reads the newest marker and, for every run it lists — plus the run it
-opened, if the process died inside it — that run's own entries from one bounded
-read (8 MiB) of the log's end. An error entry or an error `provider.notice`
-there is recorded under the run's incident key, so a run already recorded writes
-nothing. A crash before any failure entry exists leaves no failure to find and
-announces nothing; the run is only marked interrupted, as before.
+The hook (`recordRunFailureNotices`) first decides whether the turn owes
+anything: a turn its coordinator is standing down, or one the user stopped (its
+Stop hold), owes nothing, and an abort asked of the turn never reaches the hook
+at all. Cancellation is classified here, live, never reconstructed later. The
+provider's wording is classified into a category in memory and dropped. Then:
 
-Not covered: a settled or archived child, which boot does not read; and a run
-lying further back than the bound.
+1. **Journal.** The safe facts — incident key, session, run, category,
+   structured reset, failure time, whether the failed turn was a notice turn —
+   are appended to `DATA_DIR/delegation-failure-journal.jsonl`
+   (`delegationFailureJournal.ts`), a file of its own beside the database.
+2. **Database.** Eligibility is decided and the notice rows are written (and the
+   in-turn requested rows taken over) in one SQLite transaction.
+3. **Retire.** A `done` line retires the journal entry once the database holds
+   it.
+
+Only then is the coordinator nudged. A database that refuses leaves the entry
+pending, and the hook returns: the failure is durable. The retry sweep
+(`sweepPeerPromptRetries`, every 15 s) and every boot
+(`recoverJournaledFailuresOnBoot`, before peer recovery) replay what is still
+pending through the same eligibility, so a settled child whose coordinator still
+has a request open in it is recovered too. A replay of an incident the database
+already holds writes nothing (its incident key); an entry is never retired on a
+failed write, however many restarts the database keeps refusing. Boot then
+compacts the journal to what is still pending, atomically, and a run of
+retirements compacts it in-process too, so the file stays as small as what is
+owed. Nothing is ever read back out of a transcript, so how large or how many
+the later turns are does not matter, and no historical failure is ever
+announced: the journal starts empty.
+
+Only when NEITHER the journal nor the database takes a failure does the hook
+throw. The runtime then keeps the report in memory, retries it at every turn
+boundary, and logs that it could not store it — naming the run, never the error.
+That failure is lost if the process ends first: the one case with no durable
+storage at all.
+
+A crash before the hook ran leaves no failure anyone was told of; the run is
+only marked interrupted, as before.
 
 A delivery-failure notice is written inside the same transaction that marks the
 peer row `failed` (`peerPromptStore.markFailed`'s `onFailed`); if the notice
@@ -143,8 +168,10 @@ Stop hold and the queue already guarantee applies unchanged
   (`drainAllQueuedOnBoot`), so a Resume followed by a crash before the offer
   still delivers.
 
-Logs on this route name sessions, runs and error classes only: a notice turn
-that fails, or a failed write, never logs the provider's message.
+Logs on this route are fixed words with session and run ids: a notice turn that
+fails says only which kind of failure it was (from an allowlist checked by
+class, never the error's own `name`), and a refused write says only that it was
+refused. No error message, name or stack is logged.
 
 A notice row is retired (`delivered_at_ms`) from the append of its notice turn —
 the moment the fact is in the coordinator's log — not after the turn finishes,
@@ -221,8 +248,14 @@ hours") is never turned into a time, and Claude failures carry none.
 - **Settled is all-or-nothing on the spawn route.** A delegation the user
   settled (either side) is treated as put down unless the coordinator has a
   request open in the child.
-- **The stand-down marker is in memory.** A restart between a coordinator's
-  `stop` and the stopped turn's end is a restart, which the turn does not
-  survive anyway.
+- **The stand-down marker is in memory**, and so is the runtime's mark of an
+  abort asked of a turn. Neither needs to outlive the process: they classify a
+  failure as it happens, before anything is journaled, and boot never
+  reconstructs a failure from a transcript, so a restart cannot turn a stood
+  down run into a failure.
+- **Journal writes are not fsynced**, like the session logs: they survive a
+  process death, not an operating-system crash in the same instant.
+- **A stale message of an old run** is still appended to the transcript as
+  before; only its failure is not reported.
 - **Aborted lifecycles and a supervisor for failed completions** (retrying or
   reassigning) are out of scope.

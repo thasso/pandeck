@@ -268,6 +268,7 @@ class PiAdapter implements PromptableAdapter {
   private onAdapterEvent(event: AdapterEvent): void {
     // A completion naming a run that already ended belongs to no prompt now
     // pending: resolving one with it would fail a healthy newer run.
+    if (event.type === "runCompleted" && event.unowned) return;
     if (event.type === "runCompleted" && event.run !== undefined) {
       if (event.run <= this.lastCompletedRun) return;
       this.lastCompletedRun = event.run;

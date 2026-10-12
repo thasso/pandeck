@@ -10,6 +10,16 @@ import type {
 
 export type AdapterEventListener = (event: AdapterEvent) => void;
 
+/**
+ * Who an event emitted now belongs to: the open run, or — with none open —
+ * nobody (`unowned`), which every consumer ignores.
+ */
+function ownership(
+  run: ProviderRunId | undefined,
+): { run: ProviderRunId } | { unowned: true } {
+  return run !== undefined ? { run } : { unowned: true };
+}
+
 /** A failed run's message and, when the harness classified it, its facts. */
 function runFailureFields(options: {
   errorMessage?: string;
@@ -214,7 +224,7 @@ export class NativeAdapterEventSource {
       stopReason,
       ...(errorMessage ? { errorMessage } : {}),
       ...(errorMessage && failure ? { failure } : {}),
-      ...(run !== undefined ? { run } : {}),
+      ...ownership(run),
     });
     this.resetTurn();
   }
@@ -246,7 +256,7 @@ export class NativeAdapterEventSource {
         stopReason: options.errorMessage ? "error" : "aborted",
         ...runFailureFields(options),
         ...(options.abortRequested ? { abortRequested: true as const } : {}),
-        ...(run !== undefined ? { run } : {}),
+        ...ownership(run),
       });
       this.resetTurn();
       return;
@@ -271,7 +281,7 @@ export class NativeAdapterEventSource {
       type: "runCompleted",
       stopReason: options.errorMessage ? "error" : "end",
       ...runFailureFields(options),
-      ...(run !== undefined ? { run } : {}),
+      ...ownership(run),
     });
     this.resetTurn();
   }
@@ -313,7 +323,20 @@ export class NativeAdapterEventSource {
         : {}),
       // The run it belongs to, so the runtime can tell a straggler of an
       // earlier run from the open one before acting on a failure in it.
-      ...(run !== undefined ? { run } : {}),
+      ...ownership(run),
+    });
+  }
+
+  /**
+   * The open run has failed, and the harness is about to tell its viewers:
+   * emitted BEFORE that broadcast so the runtime records the failure first.
+   */
+  runFailing(errorMessage: string, failure?: RunFailureFacts): void {
+    this.emit({
+      type: "runFailing",
+      errorMessage,
+      ...(failure ? { failure } : {}),
+      ...ownership(this.currentRun()),
     });
   }
 

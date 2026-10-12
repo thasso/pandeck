@@ -2642,6 +2642,15 @@ export class ClaudeSdkSession implements LiveSession {
     errorMessage?: string;
   }): void {
     if (!this.running && !this.liveTurn) return;
+    // A failed run is recorded before anyone hears of it: the runtime takes
+    // the fact first, then the viewers get the turn's end below.
+    if (result.stopReason === "error" && result.errorMessage)
+      this.adapterEvents.runFailing(
+        result.errorMessage,
+        runFailureFacts(
+          analyzeProviderError(result.errorMessage, { provider: "anthropic" }),
+        ),
+      );
     // A run that ends — failed, stopped or with a steer the turn never read —
     // took nothing more: whatever is still queued goes back to its sender.
     void this.withdrawPendingSteers();

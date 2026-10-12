@@ -91,8 +91,9 @@ const {
   PEER_NOTICE_AGENT_ID,
   delegationFailureNoticeLines,
   recordRunFailureNotices,
-  recoverRunFailureNoticesOnBoot,
+  recoverJournaledFailuresOnBoot,
 } = await import("./delegationFailureNotice.ts");
+const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
 
@@ -117,7 +118,13 @@ type Step =
   | { kind: "retryThenOk" }
   | { kind: "aborted" }
   /** Keep the turn running until `release()`, then end it with `then`. */
-  | { kind: "hold"; then: Step };
+  | { kind: "hold"; then: Step }
+  /** Take the prompt and emit nothing: the turn's first message is pending. */
+  | { kind: "wait" }
+  /** The harness refuses the prompt outright (a genuine startup failure). */
+  | { kind: "throw"; message: string }
+  /** The harness's own run settles failed before any message (startup). */
+  | { kind: "rejectCompletion"; message: string };
 
 /**
  * A pi session whose provider is scripted, driven through the REAL pi adapter
@@ -133,7 +140,8 @@ class PiChild {
   readonly canSteer = false;
   readonly steps: Step[] = [];
   prompts = 0;
-  private readonly events = new NativeAdapterEventSource();
+  /** The harness's native event source, for tests that drive it directly. */
+  readonly events = new NativeAdapterEventSource();
   private streams = 0;
   private releaseHeld: (() => void) | undefined;
   constructor(readonly sessionId: string) {
@@ -154,7 +162,13 @@ class PiChild {
       prompt: () => {
         this.prompts += 1;
         const step = this.steps.shift() ?? { kind: "ok" };
-        setTimeout(() => this.play(step), 0);
+        if (step.kind === "throw") throw new Error(step.message);
+        if (step.kind === "rejectCompletion")
+          return {
+            outcome: "started" as const,
+            completed: Promise.reject(new Error(step.message)),
+          };
+        if (step.kind !== "wait") setTimeout(() => this.play(step), 0);
         return "started";
       },
       abort: () => {},
@@ -170,7 +184,8 @@ class PiChild {
   release(): void {
     this.releaseHeld?.();
   }
-  private play(step: Step): void {
+  /** Run a step now, as the harness would for the turn already prompted. */
+  play(step: Step): void {
     if (step.kind === "hold") {
       const id = `m${++this.streams}`;
       this.events.messageStarted(id);
@@ -260,7 +275,7 @@ class ClaudeChild {
   readonly agentType: AgentType = "assistant";
   readonly sessionFile = undefined;
   readonly canSteer = false;
-  private readonly session: InstanceType<typeof ClaudeSdkSession>;
+  readonly session: InstanceType<typeof ClaudeSdkSession>;
   constructor(readonly sessionId: string) {
     this.id = sessionId;
     this.key = sessionId;
@@ -312,6 +327,65 @@ function piChild(parentId: string | undefined, title = "Child"): PiChild {
   const child = new PiChild(id);
   fakeDrivers.set(id, child);
   return child;
+}
+
+/**
+ * A REAL `PiLiveSession` over a scripted pi session (only the provider is
+ * fake), bound to the runtime as the harness would be.
+ */
+function realPiChild(parentId: string): {
+  id: string;
+  live: InstanceType<typeof PiLiveSession>;
+  emit: (event: Record<string, unknown>) => void;
+} {
+  const id = seed("Real pi child");
+  sessionStore.linkSpawned(parentId, id);
+  let listener: ((event: Record<string, unknown>) => void) | undefined;
+  const session = {
+    sessionId: id,
+    sessionName: "Already named",
+    isStreaming: false,
+    sessionManager: {
+      getBranch: () => [],
+      getEntries: () => [],
+      getHeader: () => undefined,
+    },
+    subscribe: (l: (event: Record<string, unknown>) => void) => {
+      listener = l;
+      return () => {};
+    },
+    getSessionStats: () => ({
+      totalMessages: 0,
+      userMessages: 0,
+      assistantMessages: 0,
+      toolCalls: 0,
+      toolResults: 0,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      cost: 0,
+    }),
+    settingsManager: {
+      getRetrySettings: () => ({ enabled: true, maxRetries: 3 }),
+      applyOverrides() {},
+    },
+    prompt: () => new Promise(() => {}),
+    abortRetry() {},
+    dispose() {},
+  };
+  const host = {
+    broadcastSessions: async () => {},
+    noteRunStarted() {},
+    checkPendingReload() {},
+    isReloadQueued: () => false,
+    browserRuntimesFor: () => [],
+  };
+  const live = new PiLiveSession(
+    "assistant",
+    session as never,
+    host as never,
+    () => {},
+  );
+  sessionRuntime.createSession(id, live.createRuntimeAdapter());
+  return { id, live, emit: (event) => listener!(event) };
 }
 
 /** The notice turns a session received, as their durable user entries' text. */
@@ -1210,100 +1284,196 @@ describe("the failure is durable before anyone hears of it", () => {
     assert.deepEqual(seen, [1], "the earliest observer already sees the row");
   });
 
-  it("a failed write is kept, retried, named on the run markers, and logs no provider text", async () => {
+  it("the real pi harness records the failure before any of its viewers hears of it", () => {
     const { id: coord } = coordinator();
-    const child = piChild(coord);
-    await turn(child, "start");
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    let failing = true;
-    setRunFailureHook((report) => {
-      if (failing)
-        throw new Error("SQLITE_FULL disk full near sk-ant-api03-LEAKED");
-      recordRunFailureNotices(report);
+    const child = realPiChild(coord);
+    const seen: string[] = [];
+    const pending = () => delegationFailureNoticeStore.pendingFor(coord).length;
+    child.live.addViewer({
+      send: (e: { type: string; error?: unknown; severity?: unknown }) => {
+        if (e.error !== undefined || e.severity === "error")
+          seen.push(`${e.type}:${pending()}`);
+      },
+    } as never);
+    const stream = sessionRuntime.openSessionStream(child.id, (e) => {
+      if (e.type === "entryAppended") seen.push(`entry:${pending()}`);
     });
-    try {
-      child.steps.push({
-        kind: "error",
-        message: "401 https://auth.example.invalid/?code=LEAKCODE",
-      });
-      await turn(child, "fails");
-      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
-      assert.equal(
-        sessionRuntime.runsToRecheck(child.sessionId).length,
-        1,
-        "the newest marker names the unrecorded run",
-      );
-      const logged = errors.mock.calls.flat().join(" ");
-      assert.match(logged, /could not record the failure/);
-      for (const secret of ["sk-ant", "LEAKED", "auth.example", "LEAKCODE"])
-        assert.equal(logged.includes(secret), false, secret);
-
-      // The database recovers; the next turn boundary records it.
-      failing = false;
-      await turn(child, "next");
-      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
-      assert.deepEqual(
-        sessionRuntime.runsToRecheck(child.sessionId),
-        [],
-        "once recorded, newer markers no longer name it",
-      );
-    } finally {
-      errors.mockRestore();
-      uninstall();
-      uninstall = installDelegationFailureNotices();
-    }
+    // Retries exhausted, then the turn settles failed.
+    child.emit({ type: "agent_start" });
+    child.emit({
+      type: "auto_retry_end",
+      success: false,
+      finalError: "429 Too Many Requests",
+    });
+    child.emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "401 Unauthorized",
+      },
+    });
+    child.emit({ type: "agent_settled" });
+    stream.unsubscribe();
+    assert.ok(seen.length >= 2, seen.join(" "));
+    assert.ok(
+      seen.every((s) => s.endsWith(":1")),
+      `every failure fanout came after the record: ${seen.join(" ")}`,
+    );
+    assert.equal(pending(), 1, "one incident, one notice");
   });
 
-  it("a write that keeps failing past newer turns is still recovered at boot, once", async () => {
+  it("the real pi harness records a prompt it could not send before its banner", () => {
+    const { id: coord } = coordinator();
+    const child = realPiChild(coord);
+    const seen: string[] = [];
+    child.live.addViewer({
+      send: (e: { type: string; error?: unknown; severity?: unknown }) => {
+        if (e.error !== undefined || e.severity === "error")
+          seen.push(
+            `${e.type}:${delegationFailureNoticeStore.pendingFor(coord).length}`,
+          );
+      },
+    } as never);
+    // The runtime opened the turn for the prompt the harness then failed.
+    void sessionRuntime
+      .prompt(child.id, "go", { origin: BACKGROUND })
+      .catch(() => {});
+    (
+      child.live as unknown as {
+        finishPromptError(err: unknown, wasRunning: boolean): void;
+      }
+    ).finishPromptError(new Error("401 Unauthorized"), false);
+    assert.deepEqual(seen, ["notice:1", "assistantEnd:1"]);
+  });
+
+  it("the real Claude session records the failure before its viewers hear of it", async () => {
+    const { id: coord } = coordinator();
+    const childId = seed("Claude child", "claude-sdk");
+    sessionStore.linkSpawned(coord, childId);
+    const child = new ClaudeChild(childId);
+    fakeDrivers.set(childId, child);
+    const seen: number[] = [];
+    child.session.addViewer({
+      send: (e: { type: string; error?: unknown }) => {
+        if (e.type === "assistantEnd" && e.error !== undefined)
+          seen.push(delegationFailureNoticeStore.pendingFor(coord).length);
+      },
+    } as never);
+    await turn(child, "go");
+    assert.deepEqual(seen, [1]);
+  });
+
+  it("a database that refuses keeps the failure journaled, and the sweep or the next boot records it once", async () => {
     const { id: coord } = coordinator();
     const child = piChild(coord);
     await turn(child, "start");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    setRunFailureHook(() => {
-      throw new Error("SQLITE_FULL");
-    });
+    const refuse = vi
+      .spyOn(delegationFailureNoticeStore, "record")
+      .mockImplementation(() => {
+        throw hostileError();
+      });
     try {
       child.steps.push({ kind: "error", message: QUOTA });
       await turn(child, "fails");
-      // Newer runs open and close while the database still refuses.
+      // Newer turns, even large ones, cannot bury it: it is not in the log.
+      child.steps.push({ kind: "ok" }, { kind: "ok" });
       await turn(child, "later 1");
       await turn(child, "later 2");
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+      // A boot while the database still refuses keeps it owed.
+      closeDb();
+      getDb();
+      assert.equal(recoverJournaledFailuresOnBoot(), 0);
+      assertNothingHostileIn(errors.mock.calls);
     } finally {
+      refuse.mockRestore();
       errors.mockRestore();
-      uninstall();
-      uninstall = installDelegationFailureNotices();
     }
-    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
-
-    // A new process: same database, the same logs, nothing in memory.
+    // A new process: same database, same journal, nothing in memory.
     closeDb();
     getDb();
-    assert.equal(recoverRunFailureNoticesOnBoot(), 1);
+    assert.equal(recoverJournaledFailuresOnBoot(), 1);
     assert.equal(
-      recoverRunFailureNoticesOnBoot(),
+      recoverJournaledFailuresOnBoot(),
       0,
       "a second boot adds nothing",
     );
     drainAllQueuedOnBoot();
     await until(() => noticesIn(coord).length === 1, "the recovered notice");
     assert.match(noticesIn(coord)[0]!, /usage, spend or billing limit/);
+    // The sweep retries what the database refused while the process lives.
+    const later = piChild(coord, "Swept");
+    const again = vi
+      .spyOn(delegationFailureNoticeStore, "record")
+      .mockImplementationOnce(() => {
+        throw new Error("SQLITE_BUSY");
+      });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      later.steps.push({ kind: "error", message: "401 Unauthorized" });
+      await turn(later, "fails");
+    } finally {
+      quiet.mockRestore();
+    }
+    again.mockRestore();
+    sweepPeerPromptRetries();
+    await until(() => noticesIn(coord).length === 2, "the swept notice");
+  });
+
+  it("only when no store takes it does the runtime hold it in memory, retry it, and say so in fixed words", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "start");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    let failing = true;
+    const hostile = new Error("disk full near sk-ant-api03-LEAKED");
+    hostile.name = "Bearer MOCK-LEAK https://mock.invalid/?token=MOCK";
+    setRunFailureHook((report) => {
+      if (failing) throw hostile;
+      recordRunFailureNotices(report);
+    });
+    try {
+      child.steps.push({ kind: "error", message: QUOTA });
+      await turn(child, "fails");
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+      const logged = errors.mock.calls.flat().map(String).join(" ");
+      assert.match(logged, /could not store the failure of run/);
+      for (const secret of [
+        "sk-ant",
+        "LEAKED",
+        "MOCK-LEAK",
+        "mock.invalid",
+        "Bearer",
+      ])
+        assert.equal(logged.includes(secret), false, secret);
+      failing = false;
+      await turn(child, "next");
+      assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 1);
+    } finally {
+      errors.mockRestore();
+      uninstall();
+      uninstall = installDelegationFailureNotices();
+    }
   });
 
   it("a write that failed without a crash leaves the sender to the interruption notice, and boot adds nothing", async () => {
     const { id: coord } = coordinator();
     const child = piChild(coord);
     await turn(child, "start");
-    // The coordinator's request is answered in the failing turn.
     const asked = await sendPeerPrompt({
       senderSessionId: coord,
       targetSessionId: child.sessionId,
       prompt: "answer me",
       responseRequested: true,
     });
-    setRunFailureHook(() => {
-      throw new Error("SQLITE_IOERR");
-    });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const refuse = vi
+      .spyOn(delegationFailureNoticeStore, "record")
+      .mockImplementation(() => {
+        throw new Error("SQLITE_IOERR");
+      });
     try {
       child.steps.push({
         kind: "error",
@@ -1312,9 +1482,8 @@ describe("the failure is durable before anyone hears of it", () => {
       });
       await drainRecipient(child.sessionId);
     } finally {
+      refuse.mockRestore();
       errors.mockRestore();
-      uninstall();
-      uninstall = installDelegationFailureNotices();
     }
     // The process lived on: the peer path saw the failed turn and told the
     // sender itself.
@@ -1323,23 +1492,108 @@ describe("the failure is durable before anyone hears of it", () => {
       peerPromptStore.getById(asked.message.id)?.status,
       "interrupted",
     );
-
-    // A new process: same database, the same logs, nothing in memory.
     closeDb();
     getDb();
-    assert.equal(recoverRunFailureNoticesOnBoot(), 0, "told already");
+    assert.equal(recoverJournaledFailuresOnBoot(), 0, "told already");
     drainAllQueuedOnBoot();
     await quiesce();
     assert.equal(noticesIn(coord).length, 1, "one failure, one notice");
   });
 });
 
+/* -------------------------------- ownership -------------------------------- */
+
+describe("a completion no run owns belongs to no turn", () => {
+  it("a native straggler with no run open neither fails, idles nor answers a new turn awaiting its first message", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    await turn(child, "first");
+    child.steps.push({ kind: "wait" });
+    let settled = false;
+    const second = promptRuntimeSession(child as never, "second", {
+      origin: BACKGROUND,
+    }).finally(() => {
+      settled = true;
+    });
+    await until(() => child.prompts === 2, "the second prompt");
+    // The first run's end, reported again by the native source.
+    child.events.runCompleted("error", "OLD 401 Unauthorized", {
+      kind: "auth",
+    });
+    await quiesce();
+    assert.equal(child.isRunning, true);
+    assert.equal(settled, false, "the pending prompt is not answered");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+    // The second run's own healthy completion still ends it.
+    child.play({ kind: "ok" });
+    await second;
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("the runtime itself ignores an unowned completion, whatever adapter forwards it", async () => {
+    const { id: coord } = coordinator();
+    const child = scriptedChild(coord);
+    const run = promptRuntimeSession(child as never, "awaiting", {
+      origin: BACKGROUND,
+    });
+    await until(() => child.pending.length === 1, "the prompt");
+    // No message yet; a forwarded straggler that belongs to no run.
+    child.emit({ type: "runFailing", errorMessage: "OLD 401", unowned: true });
+    child.emit({
+      type: "messageCompleted",
+      streamId: "old",
+      content: [],
+      stopReason: "error",
+      error: "OLD 401",
+      unowned: true,
+    });
+    child.emit({
+      type: "runCompleted",
+      stopReason: "error",
+      errorMessage: "OLD 401",
+      unowned: true,
+    });
+    assert.equal(child.isRunning, true, "the awaiting turn stays open");
+    assert.equal(delegationFailureNoticeStore.pendingFor(coord).length, 0);
+    child.emit({ type: "messageStarted", streamId: "own", run: 1 });
+    child.emit({
+      type: "messageCompleted",
+      streamId: "own",
+      content: [],
+      run: 1,
+    });
+    child.emit({ type: "runCompleted", stopReason: "end", run: 1 });
+    child.pending.shift()!.resolve({ stopReason: "end" });
+    await run;
+    await quiesce();
+    assert.equal(noticesIn(coord).length, 0);
+  });
+
+  it("a genuine startup failure still reports, through the prompt that owned it", async () => {
+    const { id: coord } = coordinator();
+    for (const step of [
+      { kind: "throw" as const, message: "401 Unauthorized" },
+      { kind: "rejectCompletion" as const, message: "401 Unauthorized" },
+    ]) {
+      const child = piChild(coord, `Starts badly (${step.kind})`);
+      child.steps.push(step);
+      await turn(child, "go");
+    }
+    await until(() => noticesIn(coord).length >= 1, "the notices");
+    await quiesce();
+    const text = noticesIn(coord).join("\n");
+    assert.equal((text.match(/rejected its credentials/g) ?? []).length, 2);
+  });
+});
+
 /* ------------------------------- real deaths ------------------------------- */
 
 /**
- * One scenario in a separate OS process that dies (exit 73) at a chosen point,
- * then another that boots on what it left. Every path the child processes see
- * is disposable and asserted before the app is imported; `fetch` fails closed.
+ * Scenarios in separate OS processes that die (exit 73) at a chosen point,
+ * then boot (and, where it matters, boot again) on what they left. Every path
+ * a child process sees is disposable and asserted before the app is imported;
+ * `fetch` fails closed; providers are scripted.
  */
 describe("a process that dies mid-failure", () => {
   const src = new URL("./", import.meta.url).href;
@@ -1366,36 +1620,84 @@ const { setRunFailureHook } = await import(src + "session/runtime/liveSession.ts
 const { NativeAdapterEventSource } = await import(src + "session/adapters/nativeEvents.ts");
 const failures = await import(src + "delegationFailureNotice.ts");
 const [mode, scenario] = process.argv.slice(1);
+const ERROR = { errorMessage: "401 Unauthorized", failure: { kind: "auth" } };
+const refuseDatabase = () => { notices.record = () => { throw new Error("SQLITE_FULL"); }; };
+function nativeChild(prompt) {
+  const events = new NativeAdapterEventSource();
+  sessionRuntime.createSession("Child", { provider: "scripted", capabilities: { fork: "none", compact: false }, subscribe: (l) => events.subscribe(l), getBinding: () => ({ provider: "scripted" }), prompt: prompt ?? (async () => ({ stopReason: "end" })), abort() {}, setModel() {}, setReasoning() {}, dispose() {} });
+  return events;
+}
+const dieAtAssistantEntry = () => sessionRuntime.openSessionStream("Child", (e) => { if (e.type === "entryAppended" && e.entry.role === "assistant") process.exit(73); });
+setRunFailureHook(failures.recordRunFailureNotices);
 if (mode === "crash") {
   for (const id of ["Coordinator", "Child"])
     sessionStore.upsert({ id, harness: "pi", agentType: "assistant", scope: "user", title: id });
   sessionStore.linkSpawned("Coordinator", "Child");
-  if (scenario === "requested") {
+  if (scenario === "requested" || scenario === "settled") {
     const chainId = peerPromptStore.createChain();
     const m = peerPromptStore.enqueue({ conversationId: "c", chainId, hop: peerPromptStore.reserveHop(chainId), senderSessionId: "Coordinator", recipientSessionId: "Child", prompt: "answer me", responseRequested: true });
     peerPromptStore.claimNext("Child", "d", 60000);
     peerPromptStore.markAdmitted(m.id);
     peerPromptStore.markAcknowledged(m.id);
+    if (scenario === "settled") { peerPromptStore.markCompleted(m.id); sessionStore.setSettled("Child", true); }
   }
-  const events = new NativeAdapterEventSource();
-  sessionRuntime.createSession("Child", { provider: "scripted", capabilities: { fork: "none", compact: false }, subscribe: (l) => events.subscribe(l), getBinding: () => ({ provider: "scripted" }), prompt: async () => ({ stopReason: "end" }), abort() {}, setModel() {}, setReasoning() {}, dispose() {} });
-  setRunFailureHook(scenario === "write-fails" || scenario === "requested"
-    ? () => { throw new Error("SQLITE_FULL"); }
-    : (report) => { failures.recordRunFailureNotices(report); });
-  sessionRuntime.openSessionStream("Child", (e) => {
-    if (scenario === "before" && e.type === "messageStarted") process.exit(73);
-    if (e.type === "entryAppended" && e.entry.role === "assistant") process.exit(73);
-  });
-  events.messageStarted("m");
-  events.messageCompleted("m", { errorMessage: "401 Unauthorized", failure: { kind: "auth" } });
+  if (!["recorded", "before", "pi-fanout", "claude-fanout", "standdown"].includes(scenario)) refuseDatabase();
+  if (scenario === "pi-fanout" || scenario === "pi-fanout-refused") {
+    const { PiLiveSession } = await import(src + "piSdk/PiLiveSession.ts");
+    let listener;
+    const session = { sessionId: "Child", sessionName: "Already named", isStreaming: false, sessionManager: { getBranch: () => [], getEntries: () => [] }, subscribe: (l) => { listener = l; return () => {}; }, getSessionStats: () => ({ totalMessages: 0, userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }), settingsManager: { getRetrySettings: () => ({ enabled: true, maxRetries: 3 }), applyOverrides() {} }, abortRetry() {}, dispose() {} };
+    const host = { broadcastSessions: async () => {}, noteRunStarted() {}, checkPendingReload() {}, isReloadQueued: () => false, browserRuntimesFor: () => [] };
+    const live = new PiLiveSession("assistant", session, host, () => {});
+    sessionRuntime.createSession("Child", live.createRuntimeAdapter());
+    live.addViewer({ send: (e) => { if (e.type === "assistantEnd" && e.error) process.exit(73); } });
+    listener({ type: "agent_start" });
+    listener({ type: "message_end", message: { role: "assistant", stopReason: "error", errorMessage: "401 Unauthorized" } });
+    listener({ type: "agent_settled" });
+  } else if (scenario === "claude-fanout") {
+    const { ClaudeSdkSession } = await import(src + "claudeSdk/ClaudeSdkSession.ts");
+    const seam = { query() { return { async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", uuid: "s1", session_id: "p", error: "rate_limit", message: { id: "m1", role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "You've hit your org's monthly spend limit" }], usage: { input_tokens: 0, output_tokens: 0 } } };
+      yield { type: "result", subtype: "success", session_id: "p", is_error: true, api_error_status: 429, result: "API Error: 429", total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} };
+    } }; } };
+    const live = new ClaudeSdkSession("Child", { seam: () => Promise.resolve(seam) });
+    sessionRuntime.createSession("Child", live.createRuntimeAdapter());
+    live.addViewer({ send: (e) => { if (e.type === "assistantEnd" && e.error) process.exit(73); } });
+    await sessionRuntime.prompt("Child", "go", { origin: { kind: "system", source: "background-work" } });
+  } else if (scenario === "no-event" || scenario === "throw") {
+    nativeChild(async () => { if (scenario === "throw") throw new Error("401 Unauthorized"); return { stopReason: "error", errorMessage: "401 Unauthorized" }; });
+    await sessionRuntime.prompt("Child", "background job finished", { origin: { kind: "system", source: "background-work" } }).catch(() => undefined);
+    process.exit(73);
+  } else {
+    const events = nativeChild();
+    if (scenario === "before") sessionRuntime.openSessionStream("Child", (e) => { if (e.type === "messageStarted") process.exit(73); });
+    if (scenario !== "large") dieAtAssistantEntry();
+    events.messageStarted("m");
+    if (scenario === "standdown") { failures.noteDelegationStandDown("Child"); await sessionRuntime.abort("Child"); }
+    if (scenario === "provider-abort") { events.runFailing("Request was aborted", { kind: "auth" }); events.messageCompleted("m", { ...ERROR, aborted: true }); }
+    else events.messageCompleted("m", ERROR);
+    if (scenario === "large") { events.messageStarted("n"); events.messageDelta("n", "text", "x".repeat(9 * 1024 * 1024)); events.messageCompleted("n"); process.exit(73); }
+  }
   throw new Error("the crash point was not reached");
+} else if (mode === "boot-refused") {
+  refuseDatabase();
+  const recovered = failures.recoverJournaledFailuresOnBoot();
+  const events = nativeChild();
+  events.messageStarted("healthy"); events.messageCompleted("healthy");
+  console.log(JSON.stringify({ recovered }));
+  process.exit(73);
 } else {
   const before = notices.pendingFor("Coordinator").length;
-  const recovered = failures.recoverRunFailureNoticesOnBoot();
-  const again = failures.recoverRunFailureNoticesOnBoot();
+  const recovered = failures.recoverJournaledFailuresOnBoot();
+  const again = failures.recoverJournaledFailuresOnBoot();
   const after = notices.pendingFor("Coordinator").map((n) => n.category);
   const rows = peerPromptStore.listByParticipant("Child", 10).map((m) => ({ status: m.status, told: m.senderNotifiedAt !== undefined }));
-  console.log(JSON.stringify({ before, recovered, again, after, rows }));
+  let next;
+  if (scenario === "standdown") {
+    const events = nativeChild();
+    events.messageStarted("next"); events.messageCompleted("next", ERROR);
+    next = notices.pendingFor("Coordinator").length;
+  }
+  console.log(JSON.stringify({ before, recovered, again, after, rows, next }));
   closeDb();
 }
 `;
@@ -1408,6 +1710,7 @@ if (mode === "crash") {
         cwd: join(root, "cwd"),
         encoding: "utf8",
         timeout: 60_000,
+        maxBuffer: 4 * 1024 * 1024,
         env: {
           PATH: process.env.PATH ?? "",
           NODE_ENV: "test",
@@ -1423,7 +1726,16 @@ if (mode === "crash") {
     );
   }
 
-  function scenario(name: string) {
+  interface Boot {
+    before: number;
+    recovered: number;
+    again: number;
+    after: string[];
+    rows: Array<{ status: string; told: boolean }>;
+    next?: number;
+  }
+
+  function scenario(name: string, rebootRefused = false): Boot {
     const root = mkdtempSync(join(tmpdir(), "dfn-death-"));
     try {
       for (const dir of ["home", "cwd", "data", "legacy"])
@@ -1434,47 +1746,71 @@ if (mode === "crash") {
       );
       const crash = run(root, "crash", name);
       assert.equal(crash.status, 73, crash.stderr);
-      const boot = run(root, "boot");
+      if (rebootRefused) {
+        const refused = run(root, "boot-refused", name);
+        assert.equal(refused.status, 73, refused.stderr);
+        assert.equal(
+          JSON.parse(refused.stdout.trim().split("\n").at(-1)!).recovered,
+          0,
+        );
+      }
+      const boot = run(root, "boot", name);
       assert.equal(boot.status, 0, boot.stderr);
-      return JSON.parse(boot.stdout.trim().split("\n").at(-1)!) as {
-        before: number;
-        recovered: number;
-        again: number;
-        after: string[];
-        rows: Array<{ status: string; told: boolean }>;
-      };
+      return JSON.parse(boot.stdout.trim().split("\n").at(-1)!) as Boot;
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }
 
-  it("dying at the first fanout of the failure leaves the notice already committed", () => {
-    const out = scenario("recorded");
-    assert.equal(out.before, 1);
-    assert.equal(out.recovered, 0, "nothing to recover: it was written first");
-    assert.deepEqual(out.after, ["auth"]);
-  }, 120_000);
+  it("dying at the first fanout leaves the notice committed: native, real pi and real Claude", () => {
+    for (const [name, category] of [
+      ["recorded", "auth"],
+      ["pi-fanout", "auth"],
+      ["claude-fanout", "usage_limit"],
+    ] as const) {
+      const out = scenario(name);
+      assert.equal(out.before, 1, name);
+      assert.equal(out.recovered, 0, name);
+      assert.deepEqual(out.after, [category], name);
+    }
+  }, 240_000);
 
-  it("dying after a failed write recovers the notice from the run's log at boot, once", () => {
-    const out = scenario("write-fails");
-    assert.equal(out.before, 0);
-    assert.equal(out.recovered, 1);
-    assert.equal(out.again, 0);
-    assert.deepEqual(out.after, ["auth"]);
-  }, 120_000);
+  it("a refused database write is recovered at boot once, whatever the failure's path", () => {
+    for (const name of [
+      "refused",
+      "pi-fanout-refused",
+      "no-event",
+      "throw",
+      "large",
+      "provider-abort",
+    ]) {
+      const out = scenario(name);
+      assert.equal(out.before, 0, name);
+      assert.equal(out.recovered, 1, name);
+      assert.equal(out.again, 0, name);
+      assert.equal(out.after.length, 1, name);
+    }
+  }, 360_000);
 
-  it("recovers a requested reply's failure as one notice, the row interrupted and told", () => {
-    const out = scenario("requested");
-    assert.equal(out.recovered, 1);
-    assert.deepEqual(out.rows, [{ status: "interrupted", told: true }]);
-  }, 120_000);
+  it("a requested reply, a settled child with an open request, and repeated refused boots are all recovered", () => {
+    const requested = scenario("requested");
+    assert.equal(requested.recovered, 1);
+    assert.deepEqual(requested.rows, [{ status: "interrupted", told: true }]);
+    const settled = scenario("settled");
+    assert.equal(settled.recovered, 1);
+    const rebooted = scenario("refused", true);
+    assert.equal(rebooted.recovered, 1);
+  }, 240_000);
 
-  it("dying before any failure was seen announces nothing", () => {
-    const out = scenario("before");
-    assert.equal(out.before, 0);
-    assert.equal(out.recovered, 0);
-    assert.deepEqual(out.after, []);
-  }, 120_000);
+  it("dying before any failure, or in a run its coordinator stood down, announces nothing; the next run still does", () => {
+    const before = scenario("before");
+    assert.equal(before.recovered, 0);
+    assert.deepEqual(before.after, []);
+    const standdown = scenario("standdown");
+    assert.equal(standdown.recovered, 0);
+    assert.deepEqual(standdown.after, []);
+    assert.equal(standdown.next, 1, "a later real failure of the child");
+  }, 240_000);
 });
 
 /* ---------------------------------- aborts --------------------------------- */
@@ -1736,7 +2072,50 @@ describe("a reset time is stated only when it is a real, plausible date", () => 
 
 /* --------------------------------- privacy --------------------------------- */
 
+const HOSTILE = ["sk-ant", "LEAKED", "MOCK-LEAK", "mock.invalid", "Bearer"];
+
+/** An error whose message AND name carry what must never be logged. */
+function hostileError(): Error {
+  const err = new Error("Authorization: Bearer sk-ant-api03-LEAKED body");
+  err.name = "Bearer MOCK-LEAK https://mock.invalid/?token=MOCK";
+  return err;
+}
+
+function assertNothingHostileIn(calls: unknown[][]): void {
+  const logged = calls.flat().map(String).join(" ");
+  for (const secret of HOSTILE)
+    assert.equal(logged.includes(secret), false, `logged: ${secret}`);
+}
+
 describe("nothing the provider said reaches a log line", () => {
+  it("logs fixed words when retiring a delivered notice fails with a hostile error", async () => {
+    const { id: coord } = coordinator();
+    const child = piChild(coord);
+    const spies = (["log", "warn", "error"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation(() => {}),
+    );
+    const retire = vi
+      .spyOn(delegationFailureNoticeStore, "markDelivered")
+      .mockImplementation(() => {
+        throw hostileError();
+      });
+    try {
+      child.steps.push({ kind: "error", message: QUOTA });
+      await turn(child, "fails");
+      await until(() => noticesIn(coord).length === 1, "the notice");
+      await quiesce();
+      const calls = spies.flatMap((s) => s.mock.calls);
+      assert.match(
+        calls.flat().map(String).join(" "),
+        /could not retire failure notices/,
+      );
+      assertNothingHostileIn(calls);
+    } finally {
+      retire.mockRestore();
+      for (const s of spies) s.mockRestore();
+    }
+  });
+
   it("logs no provider text when a child fails and the coordinator's notice turn fails too", async () => {
     const { id: coord, driver } = coordinator();
     const child = piChild(coord);
@@ -1755,7 +2134,7 @@ describe("nothing the provider said reaches a log line", () => {
         .flatMap((s) => s.mock.calls.flat())
         .map(String)
         .join(" ");
-      assert.match(logged, /was not delivered \(RunFailedError\)/);
+      assert.match(logged, /was not delivered \(provider or harness failure\)/);
       for (const secret of [
         "sk-ant",
         "LEAKED",

@@ -270,8 +270,9 @@ export class LiveRuntimeSession {
   /** The run whose failure was last recorded, so one turn records once. */
   private recordedFailureRunId: string | undefined;
   /**
-   * Failures the hook could not record (its write failed), oldest first, kept
-   * in memory and retried at every later turn boundary until they are.
+   * Failures the hook could not make durable anywhere (it threw), oldest
+   * first. Memory is all that holds them, so they are retried at every turn
+   * boundary until the hook takes them; a process exit loses them.
    */
   private unrecordedFailures: RunFailureReport[] = [];
   /** The provider run the open turn belongs to, once one announced itself. */
@@ -361,8 +362,7 @@ export class LiveRuntimeSession {
    */
   private beginTurn(origin: PromptOrigin | undefined): void {
     if (this.turnOpen) return;
-    // A failure still unrecorded gets another attempt; one that stays so is
-    // named on the new marker, which is the one the next boot reads.
+    // A failure nothing could store yet gets another attempt.
     this.retryUnrecordedFailures();
     this.turnProviderRun = undefined;
     this.abortRequested = false;
@@ -372,11 +372,7 @@ export class LiveRuntimeSession {
     this.turnOpen = true;
     this.turnRunId = randomUUID();
     emitRunStarted(this.sessionId);
-    this.log.append({
-      type: "run.started",
-      runId: this.turnRunId,
-      ...this.unrecordedFailureIds(),
-    });
+    this.log.append({ type: "run.started", runId: this.turnRunId });
   }
 
   private noteTurnOrigin(origin: PromptOrigin, hidden: boolean): void {
@@ -393,10 +389,6 @@ export class LiveRuntimeSession {
    * prompt's own settlement — because not every adapter emits both. The
    * `turnOpen` guard is what keeps the closing marker single when both fire;
    * `only` keeps a settlement from closing a turn other than its own.
-   *
-   * A run whose failure could not be recorded is named on its closing marker
-   * and on every later one until it is: the newest marker is what the next
-   * boot reads to record the failure after all (`delegationFailureNotice.ts`).
    */
   private endTurn(outcome: "ended" | "aborted" = "ended", only?: string): void {
     if (!this.turnOpen) return;
@@ -409,15 +401,7 @@ export class LiveRuntimeSession {
     this.log.append({
       type: outcome === "aborted" ? "run.aborted" : "run.ended",
       runId,
-      ...this.unrecordedFailureIds(),
     });
-  }
-
-  /** What a run marker carries while any failure is still unrecorded. */
-  private unrecordedFailureIds(): { unrecordedFailures?: string[] } {
-    return this.unrecordedFailures.length > 0
-      ? { unrecordedFailures: this.unrecordedFailures.map((r) => r.runId) }
-      : {};
   }
 
   /** The open turn's run id, if a turn is open. */
@@ -426,12 +410,17 @@ export class LiveRuntimeSession {
   }
 
   /**
-   * Whether an event of provider run `run` belongs to a run that is already
-   * over, or to another run than the open turn's. Such a straggler must not
-   * fail or end the turn open now. An event naming no run is the open turn's,
-   * as it always was.
+   * Whether an event belongs to a run that is already over, or to another run
+   * than the open turn's. Such a straggler must not fail or end the turn open
+   * now. An event its emitter marked `unowned` — a native completion with no
+   * run open — belongs to no turn at all. An event of an adapter that numbers
+   * no runs is the open turn's, as it always was.
    */
-  private isStaleRun(run: ProviderRunId | undefined): boolean {
+  private isStaleRun(
+    run: ProviderRunId | undefined,
+    unowned?: boolean,
+  ): boolean {
+    if (unowned) return true;
     if (run === undefined) return false;
     if (run <= this.lastClosedProviderRun) return true;
     return this.turnProviderRun !== undefined && run !== this.turnProviderRun;
@@ -475,8 +464,10 @@ export class LiveRuntimeSession {
     } catch (err) {
       if (!this.unrecordedFailures.some((r) => r.runId === report.runId))
         this.unrecordedFailures.push(report);
+      // Never the error itself: its name, message and stack are its thrower's.
+      void err;
       console.error(
-        `[runtime] could not record the failure of run ${report.runId} in ${this.sessionId} (${err instanceof Error ? err.name : "unknown error"}); it will be retried`,
+        `[runtime] could not store the failure of run ${report.runId} in ${this.sessionId}; it is kept in memory and retried`,
       );
       return false;
     }
@@ -862,7 +853,10 @@ export class LiveRuntimeSession {
       case "messageCompleted": {
         // A failed turn's error entry is the first anyone hears of the failure,
         // so the failure is recorded before it is appended or announced.
-        if (event.stopReason === "error" && !this.isStaleRun(event.run))
+        if (
+          event.stopReason === "error" &&
+          !this.isStaleRun(event.run, event.unowned)
+        )
           this.reportRunFailure(this.openRunId(), event.error, event.failure);
         // Remove the transient stream BEFORE broadcasting the durable replacement.
         this.streaming.delete(event.streamId);
@@ -984,10 +978,19 @@ export class LiveRuntimeSession {
         });
         return;
       }
+      case "runFailing":
+        // The harness is about to tell its viewers; the failure comes first.
+        if (!this.isStaleRun(event.run, event.unowned))
+          this.reportRunFailure(
+            this.openRunId(),
+            event.errorMessage,
+            event.failure,
+          );
+        return;
       case "runCompleted": {
         // A straggler of a run that is already over neither fails nor ends
         // the turn open now.
-        if (this.isStaleRun(event.run)) return;
+        if (this.isStaleRun(event.run, event.unowned)) return;
         if (event.run !== undefined)
           this.lastClosedProviderRun = Math.max(
             this.lastClosedProviderRun,

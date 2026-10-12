@@ -63,6 +63,8 @@ export type AdapterEvent =
       startedAt?: string;
       completedAt?: string;
       run?: ProviderRunId;
+      /** Emitted with no run open: it belongs to no turn (see `runCompleted`). */
+      unowned?: true;
     }
   | {
       type: "toolStarted";
@@ -197,6 +199,25 @@ export type AdapterEvent =
        * neither fail nor end a newer one.
        */
       run?: ProviderRunId;
+      /**
+       * The emitter had no run open: a repeat or straggler of a run it already
+       * closed. It belongs to no turn — not even one whose first message has
+       * not arrived yet — and no consumer may act on it.
+       */
+      unowned?: true;
+    }
+  /**
+   * The harness has decided the open run failed and is about to tell its own
+   * viewers. Emitted BEFORE any harness-facing broadcast of that failure, so
+   * the runtime records it first. Never emitted for an abort someone asked
+   * for. The run's completion still follows.
+   */
+  | {
+      type: "runFailing";
+      errorMessage?: string;
+      failure?: RunFailureFacts;
+      run?: ProviderRunId;
+      unowned?: true;
     }
   /** Model/reasoning selection changed (e.g. provider applied a setModel). */
   | {

@@ -50,6 +50,7 @@ import {
   PEER_NOTICE_AGENT_ID,
   recordDeliveryFailureNotice,
   recordRunFailureNotices,
+  replayJournaledFailures,
 } from "./delegationFailureNotice.ts";
 import {
   setRunFailureHook,
@@ -72,6 +73,7 @@ import {
   SessionBusyError,
   SteerWithdrawnError,
 } from "./session/runtime/index.ts";
+import { RunFailedError } from "./session/runtime/errors.ts";
 import { readTask } from "./tasks.ts";
 import {
   promptRuntimeSession,
@@ -1016,7 +1018,7 @@ async function deliverOwedNotices(
             );
           } catch (err) {
             console.warn(
-              `[peer] could not retire failure notices for ${sessionId} (${errorName(err)})`,
+              `[peer] could not retire failure notices for ${sessionId} (${failureLabel(err)})`,
             );
           }
         },
@@ -1034,7 +1036,7 @@ async function deliverOwedNotices(
       // so this schedules the only retry that exists. Never the error's text:
       // a provider failure of the notice turn carries the provider's words.
       console.warn(
-        `[peer] notice for ${sessionId} was not delivered (${errorName(err)}); retrying later`,
+        `[peer] notice for ${sessionId} was not delivered (${failureLabel(err)}); retrying later`,
       );
       if (owesNotice(sessionId)) scheduleInterruptionNoticeRetry(sessionId);
       return;
@@ -1056,9 +1058,15 @@ class NoticeSetChangedError extends Error {
   }
 }
 
-/** An error's class name: safe to log where its message may not be. */
-function errorName(err: unknown): string {
-  return err instanceof Error ? err.name : "unknown error";
+/**
+ * What kind of failure an error is, in fixed words: safe to log where nothing
+ * the error carries is — not its message, stack or even its `name`, which its
+ * thrower sets.
+ */
+function failureLabel(err: unknown): string {
+  if (err instanceof RunFailedError) return "provider or harness failure";
+  if (err instanceof SessionBusyError) return "session busy";
+  return "error";
 }
 
 /**
@@ -1254,6 +1262,11 @@ function retryOrFail(id: string, attempts: number, reason: string): void {
  * independent interval (see index.ts) and can be invoked directly by tests.
  */
 export function sweepPeerPromptRetries(now = Date.now()): void {
+  // A failure the database refused when it happened is retried here too,
+  // from the journal that kept it (`delegationFailureJournal.ts`).
+  const replayed = replayJournaledFailures(now);
+  if (replayed.length > 0)
+    wakeForNotice(new Set(replayed.map((n) => n.coordinatorSessionId)));
   const requeued = peerPromptStore.requeueDueRetries(now);
   for (const m of requeued) void broadcastCardUpdateFor(m);
   const recipients = new Set(requeued.map((m) => m.recipientSessionId));
