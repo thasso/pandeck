@@ -188,7 +188,7 @@ export function PromptQueueLedge({
           {held ? (
             <div className="flex h-7 items-center justify-end gap-1.5 pr-1.5 pl-2.5">
               <span>
-                {queue.automaticTurnsHeld && !queue.paused
+                {count === 0
                   ? "Agent messages and background updates wait until you resume."
                   : "Nothing is sent until you resume."}
               </span>

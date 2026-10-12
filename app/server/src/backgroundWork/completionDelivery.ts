@@ -61,6 +61,15 @@ type BackgroundNotice =
 
 type BackgroundCompletionOfferResult = "delivered" | "busy" | "unavailable";
 
+export interface BackgroundDeliveryOutbox {
+  save(
+    sessionId: string,
+    notice: BackgroundCompletionNotice,
+    disposition: "wake" | "defer",
+  ): void;
+  remove(sessionId: string, notice: BackgroundCompletionNotice): void;
+}
+
 /**
  * The card carries the command; the model block does not. The model issued
  * the tool call and can read it back from its own transcript, and the block is
@@ -108,6 +117,13 @@ export interface BackgroundCompletionDeliveryOptions {
   ): Promise<BackgroundCompletionOfferResult>;
   /** Removes turn-scoped activity files after delivery or discard. */
   discard?(notice: BackgroundNotice): void;
+  /**
+   * The durable record of completions owed and not yet delivered. A row is
+   * saved when a completion is queued and removed only once it is delivered
+   * or dropped — never by {@link BackgroundCompletionDelivery.stop}, so a
+   * shutdown leaves it for boot to restore (`automaticTurnHold.ts`).
+   */
+  outbox?: BackgroundDeliveryOutbox;
   maxNoticesPerSession?: number;
   maxPromptChars?: number;
 }
@@ -195,12 +211,45 @@ export class BackgroundCompletionDelivery {
   }
 
   enqueue(sessionId: string, notice: BackgroundCompletionNotice): void {
-    const entry: BackgroundNotice = { kind: "completion", notice };
-    if (this.options.disposition?.(notice) === "defer") {
-      this.defer(sessionId, entry);
+    if (this.stopped) {
+      this.options.discard?.({ kind: "completion", notice });
       return;
     }
-    this.enqueueNotice(sessionId, entry);
+    const disposition =
+      this.options.disposition?.(notice) === "defer" ? "defer" : "wake";
+    this.options.outbox?.save(sessionId, notice, disposition);
+    this.place(sessionId, notice, disposition, true);
+  }
+
+  /**
+   * Put back a completion the outbox kept across a restart, as it was decided
+   * then. Nothing is offered: a session restored this way is held, and its
+   * Resume drains it.
+   */
+  restore(
+    sessionId: string,
+    notice: BackgroundCompletionNotice,
+    disposition: "wake" | "defer",
+  ): void {
+    this.place(sessionId, notice, disposition, false);
+  }
+
+  private place(
+    sessionId: string,
+    notice: BackgroundCompletionNotice,
+    disposition: "wake" | "defer",
+    drain: boolean,
+  ): void {
+    const entry: BackgroundNotice = { kind: "completion", notice };
+    if (disposition === "defer") this.defer(sessionId, entry);
+    else this.enqueueNotice(sessionId, entry, drain);
+  }
+
+  /** A notice delivered or dropped: gone from the outbox, its file removed. */
+  private consume(sessionId: string, entry: BackgroundNotice): void {
+    if (entry.kind === "completion")
+      this.options.outbox?.remove(sessionId, entry.notice);
+    this.options.discard?.(entry);
   }
 
   /**
@@ -220,7 +269,7 @@ export class BackgroundCompletionDelivery {
       // and drops the newest instead; these are different lifetimes, not an
       // inconsistency.
       const evicted = batch.notices.shift();
-      if (evicted) this.options.discard?.(evicted);
+      if (evicted) this.consume(sessionId, evicted);
       batch.dropped += 1;
     }
     batch.notices.push(entry);
@@ -253,7 +302,7 @@ export class BackgroundCompletionDelivery {
         if (!current) return;
         const remaining = current.notices.filter((n) => !delivered.has(n));
         for (const notice of current.notices)
-          if (delivered.has(notice)) this.options.discard?.(notice);
+          if (delivered.has(notice)) this.consume(sessionId, notice);
         if (remaining.length === 0) this.deferred.delete(sessionId);
         else this.deferred.set(sessionId, { notices: remaining, dropped: 0 });
       },
@@ -264,7 +313,11 @@ export class BackgroundCompletionDelivery {
     this.enqueueNotice(sessionId, { kind: "activity", notice });
   }
 
-  private enqueueNotice(sessionId: string, notice: BackgroundNotice): void {
+  private enqueueNotice(
+    sessionId: string,
+    notice: BackgroundNotice,
+    drain = true,
+  ): void {
     if (this.stopped) {
       this.options.discard?.(notice);
       return;
@@ -273,10 +326,10 @@ export class BackgroundCompletionDelivery {
     const batch = this.pending.get(sessionId) ?? { notices: [], dropped: 0 };
     if (batch.notices.length >= this.maxNoticesPerSession) {
       batch.dropped += 1;
-      this.options.discard?.(notice);
+      this.consume(sessionId, notice);
     } else batch.notices.push(notice);
     this.pending.set(sessionId, batch);
-    void this.drain(sessionId);
+    if (drain) void this.drain(sessionId);
   }
 
   /**
@@ -336,9 +389,15 @@ export class BackgroundCompletionDelivery {
         liveBatch.dropped += offered.dropped;
         return;
       }
-      for (const notice of offered.notices) this.options.discard?.(notice);
+      // Only a delivery retires the owed fact. `unavailable` gives up this
+      // in-memory attempt, as it always has, but the outbox keeps the fact:
+      // boot restores it to a session a Stop holds and forgets it otherwise.
+      for (const notice of offered.notices)
+        if (result === "delivered") this.consume(sessionId, notice);
+        else this.options.discard?.(notice);
     } catch (error) {
-      // A failed offer degrades like `unavailable`: the durable row remains.
+      // A failed offer degrades like `unavailable`: the background-work row
+      // and the outbox row both remain.
       for (const notice of offered.notices) this.options.discard?.(notice);
       throw error;
     }

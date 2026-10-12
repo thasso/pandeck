@@ -3350,15 +3350,17 @@ describe("a Stop holds automatic delivery", () => {
     const recipient = seed("Hold claim race recipient");
     const driver = driverFor(recipient);
     const ids = await queuePeers(recipient, 2);
-    const isHeld = automaticTurnHoldStore.isHeld.bind(automaticTurnHoldStore);
+    const generation = automaticTurnHoldStore.generation.bind(
+      automaticTurnHoldStore,
+    );
     let stopped = false;
     // The Stop lands the moment the batch is claimed, before the run door.
-    vi.spyOn(automaticTurnHoldStore, "isHeld").mockImplementation((id) => {
+    vi.spyOn(automaticTurnHoldStore, "generation").mockImplementation((id) => {
       if (!stopped && id === recipient && statusOf(ids[0]!) === "dispatching") {
         stopped = true;
         automaticTurnHoldStore.hold(id);
       }
-      return isHeld(id);
+      return generation(id);
     });
     await drainRecipient(recipient);
     assert.equal(stopped, true, "the race was exercised");
@@ -3394,7 +3396,9 @@ describe("a Stop holds automatic delivery", () => {
     assert.equal(hold.automaticTurnsHeld(recipient), true);
     assert.equal(driver.promptOptions.length, 0);
 
-    await promptRuntimeSession(driver, "please continue");
+    await promptRuntimeSession(driver, "please continue", {
+      resumeHold: hold.captureHumanResume(recipient),
+    });
     assert.equal(hold.automaticTurnsHeld(recipient), false);
     await until(
       () => statusOf(ids[0]!) === "completed",
@@ -3402,6 +3406,34 @@ describe("a Stop holds automatic delivery", () => {
     );
     const keys = deliveredKeys(recipient);
     assert.equal(new Set(keys).size, keys.length, "nothing delivered twice");
+  });
+
+  it("a Stop while a send-now waits for the recipient keeps the hold and the chosen row", async () => {
+    const recipient = seed("Hold send-now race recipient");
+    const driver = driverFor(recipient);
+    await queuePeers(recipient, 1);
+    const [chosen] = await queuePeers(recipient, 1);
+    const releaseTurn = driver.holdTurns();
+    const drain = drainRecipient(recipient);
+    await until(() => driver.isRunning, "the first batch's turn");
+    const key = peerPromptQueueField(recipient).queuedPeerPrompts!.find(
+      (row) => !row.sending,
+    )!.id;
+    // Chosen while the session was running and unheld; it waits for the drain.
+    const sendNow = sendQueuedPeerPromptNow(recipient, key);
+    hold.holdAutomaticTurns(recipient);
+    releaseTurn();
+    await drain;
+    await sendNow;
+    assert.equal(driver.promptOptions.length, 1, "nothing ran after the Stop");
+    assert.equal(hold.automaticTurnsHeld(recipient), true);
+    const row = peerPromptStore.getById(chosen!)!;
+    assert.equal(row.status, "queued");
+    assert.equal(row.attempts, 0, "the refused send-now spent no attempt");
+    assert.ok(
+      row.transitions.some((t) => t.to === "dispatching"),
+      "the send-now did claim it before the run door refused",
+    );
   });
 
   it("sending a waiting peer prompt now resumes a held session", async () => {

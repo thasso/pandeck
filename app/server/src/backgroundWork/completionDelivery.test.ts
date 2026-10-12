@@ -537,3 +537,119 @@ test("a Stop racing an offer leaves the completion for Resume instead of consumi
   await delivery.requestDrain("owner-race-stop");
   assert.equal(offered.length, 2, "delivered once, then gone");
 });
+
+/** An in-memory stand-in for the durable outbox, keyed like the table. */
+function fakeOutbox() {
+  const rows = new Map<string, "wake" | "defer">();
+  const key = (sessionId: string, n: { itemId: string; revision: number }) =>
+    `${sessionId}|${n.itemId}:${n.revision}`;
+  return {
+    rows,
+    outbox: {
+      save: (
+        sessionId: string,
+        n: { itemId: string; revision: number },
+        d: "wake" | "defer",
+      ) => void rows.set(key(sessionId, n), d),
+      remove: (sessionId: string, n: { itemId: string; revision: number }) =>
+        void rows.delete(key(sessionId, n)),
+    },
+  };
+}
+
+test("the outbox keeps an owed completion until it is delivered, and a shutdown keeps it", async () => {
+  let held = true;
+  const { rows, outbox } = fakeOutbox();
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: () => held,
+    outbox,
+    disposition: (n) => (n.stopRequested ? "defer" : "wake"),
+    offer: () => Promise.resolve("delivered"),
+  });
+  delivery.enqueue("owner-outbox", notice("woken"));
+  delivery.enqueue("owner-outbox", {
+    ...notice("deferred"),
+    stopRequested: true,
+  });
+  await delivery.drain("owner-outbox");
+  assert.deepEqual(
+    [...rows],
+    [
+      ["owner-outbox|woken:1", "wake"],
+      ["owner-outbox|deferred:1", "defer"],
+    ],
+  );
+
+  held = false;
+  await delivery.requestDrain("owner-outbox");
+  assert.deepEqual([...rows.keys()], ["owner-outbox|deferred:1"]);
+  delivery.peekDeferredContext("owner-outbox")!.commit();
+  assert.deepEqual([...rows.keys()], [], "consumed facts leave the outbox");
+
+  const other = fakeOutbox();
+  const stopping = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: () => true,
+    outbox: other.outbox,
+    offer: () => Promise.resolve("delivered"),
+  });
+  stopping.enqueue("owner-shutdown", notice("kept"));
+  stopping.stop();
+  assert.deepEqual(
+    [...other.rows.keys()],
+    ["owner-shutdown|kept:1"],
+    "a shutdown leaves it for boot",
+  );
+});
+
+test("a restored completion is not offered until a drain finds the session unheld, and is not saved twice", async () => {
+  let held = true;
+  const offered: string[] = [];
+  const saved: string[] = [];
+  const delivery = new BackgroundCompletionDelivery({
+    drainPeers: () => Promise.resolve(),
+    held: () => held,
+    outbox: {
+      save: (_s, n) => void saved.push(n.itemId),
+      remove: () => {},
+    },
+    offer: (_s, _o, key) => {
+      offered.push(key);
+      return Promise.resolve("delivered");
+    },
+  });
+  delivery.restore("owner-restored", notice("from-before"), "wake");
+  delivery.restore("owner-restored", notice("deferred-before"), "defer");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(offered, [], "restore offers nothing by itself");
+  held = false;
+  await delivery.requestDrain("owner-restored");
+  assert.deepEqual(offered, ["background-completion:from-before:1"]);
+  assert.ok(delivery.peekDeferredContext("owner-restored"));
+  assert.deepEqual(saved, [], "already in the outbox");
+});
+
+test("an offer that fails or finds the session unavailable never retires the owed fact", async () => {
+  for (const outcome of ["unavailable", "throws"] as const) {
+    const { rows, outbox } = fakeOutbox();
+    const discarded: string[] = [];
+    const delivery = new BackgroundCompletionDelivery({
+      drainPeers: () => Promise.resolve(),
+      outbox,
+      discard: (entry) => discarded.push(entry.notice.itemId),
+      offer: () =>
+        outcome === "throws"
+          ? Promise.reject(new Error("provider exploded"))
+          : Promise.resolve("unavailable"),
+    });
+    delivery.enqueue("owner-failed", notice(`failed-${outcome}`));
+    await delivery.drain("owner-failed");
+    assert.deepEqual(
+      [...rows.keys()],
+      [`owner-failed|failed-${outcome}:1`],
+      `${outcome}: still owed in the outbox`,
+    );
+    assert.deepEqual(discarded, [`failed-${outcome}`], "its file is released");
+  }
+});

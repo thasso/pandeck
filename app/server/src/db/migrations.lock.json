@@ -70,5 +70,6 @@
   "0069_knowledge_legacy_links.sql": "e8244c0d8abaebf580a9a599631731d8a9a9692d3ae44a3aa11a0493472960cc",
   "0070_peer_prompt_failure_notice.sql": "27712626ecfa23a22b71845eb8f331974743e450f5dc359481c3e50c03de2480",
   "0071_task_single_ticket.sql": "b70e5deb83ffab7ffa9f70e26bf1ed4223d2b50dd0bbeccff991304454785551",
-  "0072_session_automatic_turn_hold.sql": "322a354a3a1b30c7301cc5a6258871f9628a8f1f13af6efb128d84e2e4445ffb"
+  "0072_session_automatic_turn_hold.sql": "322a354a3a1b30c7301cc5a6258871f9628a8f1f13af6efb128d84e2e4445ffb",
+  "0073_stop_hold_generation_and_delivery_outbox.sql": "1bfe06158941304a02d098d306fe12cbd4c95a80c169588334e9729a024db307"
 }

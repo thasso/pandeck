@@ -216,11 +216,12 @@ test("the Claude provider-initiated background turn is refused while held, also 
   await assert.rejects(admission, hold.AutomaticTurnsHeldError);
 });
 
-test("a human prompt lifts the hold once appended, without offering the idle edge", async () => {
+test("a message the user sends now lifts the hold once appended, without offering the idle edge", async () => {
   const s = session();
   hold.holdAutomaticTurns(s.id);
   changed = [];
-  void promptRuntimeSession(s.driver, "carry on");
+  const resumeHold = hold.captureHumanResume(s.id);
+  void promptRuntimeSession(s.driver, "carry on", { resumeHold });
   await until(() => s.sent.length === 1, "the human turn");
   assert.equal(hold.automaticTurnsHeld(s.id), false);
   assert.deepEqual(changed, [s.id], "viewers are told");
@@ -230,22 +231,115 @@ test("a human prompt lifts the hold once appended, without offering the idle edg
   await s.finish();
 });
 
-test("a refused human prompt and a human steer into the stopping turn lift nothing", async () => {
+test("older human work scheduled for later neither runs nor resumes while held", async () => {
+  const s = session();
+  hold.holdAutomaticTurns(s.id);
+  // A queued draft or intake row: human provenance, but no authority now.
+  await assert.rejects(
+    promptRuntimeSession(s.driver, "queued before the Stop", {
+      origin: { kind: "human" },
+    }),
+    hold.AutomaticTurnsHeldError,
+  );
+  assert.equal(s.sent.length, 0);
+  assert.equal(userEntries(s.id).length, 0);
+  assert.equal(hold.automaticTurnsHeld(s.id), true);
+});
+
+test("a newer Stop defeats a resume the user authorized before it", async () => {
+  const s = session();
+  hold.holdAutomaticTurns(s.id);
+  const stale = hold.captureHumanResume(s.id);
+  // Stop again before the send is admitted: a new generation.
+  hold.holdAutomaticTurns(s.id);
+  await assert.rejects(
+    promptRuntimeSession(s.driver, "sent before the second Stop", {
+      resumeHold: stale,
+    }),
+    hold.AutomaticTurnsHeldError,
+  );
+  assert.equal(hold.spendHumanResume(stale), false, "nor can it be spent");
+  assert.equal(hold.automaticTurnsHeld(s.id), true);
+
+  // Resume, then Stop again while a send authorized under the first is on its
+  // way: the generation never repeats, so the old authority is still dead.
+  hold.resumeAutomaticTurns(s.id);
+  hold.holdAutomaticTurns(s.id);
+  assert.equal(hold.spendHumanResume(stale), false);
+  assert.equal(hold.automaticTurnsHeld(s.id), true);
+
+  // A send captured while unheld, overtaken by a Stop during its admission.
+  const other = session();
+  const unheld = hold.captureHumanResume(other.id);
+  const run = promptRuntimeSession(other.driver, "typed before the Stop", {
+    resumeHold: unheld,
+  });
+  hold.holdAutomaticTurns(other.id);
+  await assert.rejects(run, hold.AutomaticTurnsHeldError);
+  assert.equal(other.sent.length, 0);
+  assert.equal(hold.automaticTurnsHeld(other.id), true);
+});
+
+test("a refused human send and a human steer into the stopping turn lift nothing", async () => {
   const s = session();
   void promptRuntimeSession(s.driver, "the running turn");
   await until(() => s.driver.isRunning, "the running turn");
   hold.holdAutomaticTurns(s.id);
+  const resumeHold = hold.captureHumanResume(s.id);
   // Busy: an ordinary prompt cannot join the turn being stopped.
   await assert.rejects(
-    promptRuntimeSession(s.driver, "second"),
+    promptRuntimeSession(s.driver, "second", { resumeHold }),
     SessionBusyError,
   );
   assert.equal(hold.automaticTurnsHeld(s.id), true);
   // A steer is aimed at the turn being stopped, not a resume.
-  await promptRuntimeSession(s.driver, "also this", { steer: true });
+  await promptRuntimeSession(s.driver, "also this", {
+    steer: true,
+    resumeHold,
+  });
   assert.equal(hold.automaticTurnsHeld(s.id), true);
   await s.finish();
   assert.equal(hold.automaticTurnsHeld(s.id), true, "the idle edge lifts none");
+});
+
+test("a queued draft past its queue check is refused when a Stop lands during its admission", async () => {
+  const s = session();
+  let stopped = false;
+  queue.setPromptQueueHost({
+    resolve: async () => s.driver as never,
+    live: () => s.driver as never,
+    reportError: () => {},
+    yieldToOthers: () => {},
+    publish: (id, state) => {
+      published[id] = state;
+      // The send has begun (the row is locked): the Stop lands while the run
+      // door awaits the session's skills.
+      if (!stopped && state.items.some((item) => item.sending)) {
+        stopped = true;
+        queueMicrotask(() => {
+          hold.holdAutomaticTurns(id);
+          queue.pausePromptQueueForStop(id);
+        });
+      }
+    },
+  });
+  queue.queuePrompt(s.id, { text: "old queued draft" });
+  await queue.drainPromptQueue(s.id);
+  await until(
+    () => stopped && !published[s.id]?.items.some((item) => item.sending),
+    "the refused send to settle",
+  );
+  assert.equal(s.sent.length, 0, "the draft never reached the provider");
+  assert.equal(hold.automaticTurnsHeld(s.id), true);
+  assert.deepEqual(
+    queue.promptQueueField(s.id).promptQueue?.items.map((item) => item.text),
+    ["old queued draft"],
+    "it waits in its place",
+  );
+  assert.equal(
+    queue.promptQueueField(s.id).promptQueue?.items[0]?.error,
+    undefined,
+  );
 });
 
 test("the hold survives a reload of every module (a server restart)", async () => {
@@ -262,7 +356,7 @@ test("a held session with nothing queued still carries its Resume, and Resume of
   assert.deepEqual(queue.promptQueueField(s.id), {});
   hold.holdAutomaticTurns(s.id);
   assert.deepEqual(queue.promptQueueField(s.id), {
-    promptQueue: { items: [], paused: false, automaticTurnsHeld: true },
+    promptQueue: { items: [], paused: true, automaticTurnsHeld: true },
   });
   assert.equal(published[s.id]?.automaticTurnsHeld, true, "viewers are told");
   // Reading the state again (a reconnect, a mount) changes nothing.
@@ -300,5 +394,34 @@ test("Stop persists the hold before anything is awaited or aborted", () => {
   assert.match(
     source,
     /case "abort": \{(?:\s*\/\/[^\n]*)*\s*const stopped = this\.viewing\?\.sessionId;\s*if \(stopped\) holdAutomaticTurns\(stopped\);(?:\s*\/\/[^\n]*)*\s*return this\.withViewedSession\(\(driver, view\) => \{\s*if \(driver\.isRunning\) pausePromptQueueForStop\(driver\.sessionId\);\s*return view\?\.abort\(\);/,
+  );
+});
+
+test("the Assistant takes Resume, and a post-reload continuation goes through the durable handoff", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "connection.ts"),
+    "utf8",
+  );
+  // Its draft queue stays refused; Resume lifts only the hold.
+  assert.match(
+    source,
+    /if \(isPermanentAssistantSession\(sessionId\)\) \{(?:\s*\/\/[^\n]*)*\s*if \(msg\.type === "resumePromptQueue"\) \{\s*resumeAutomaticTurns\(sessionId\);\s*return;\s*\}/,
+  );
+  const start = source.indexOf(
+    "private async maybeStartPostReloadContinuation",
+  );
+  const body = source.slice(start, source.indexOf("\n  }\n", start));
+  assert.match(body, /deliverPostReloadContinuation\(continuation,/);
+  assert.doesNotMatch(body, /promptRuntimeSession/);
+});
+
+test("a typed message captures its resume authority before anything is awaited", () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "connection.ts"),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const resumeHold = this\.viewing\s*\?\s*captureHumanResume\(this\.viewing\.sessionId\)\s*:\s*undefined;\s*const driver = await this\.ensureViewingDriver\(\);/,
   );
 });

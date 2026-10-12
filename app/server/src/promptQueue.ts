@@ -110,14 +110,17 @@ function queueState(sessionId: string): PromptQueueState {
 }
 
 /**
- * Nothing is sent from a held queue: one the user paused (a Stop), or one whose
- * next row carries a note — a failed send, or a steer Claude may already have
- * read. Such a row waits for the user to send it explicitly; a message of their
- * own lifts a Stop, never the row's note, since that would send it unasked.
+ * Nothing is sent from a held queue: one the user paused (a Stop), one whose
+ * session a Stop holds (`automaticTurnHold.ts` — the runtime would refuse an
+ * older draft anyway), or one whose next row carries a note — a failed send,
+ * or a steer Claude may already have read. Such a row waits for the user to
+ * send it explicitly; a message of their own lifts a Stop, never the row's
+ * note, since that would send it unasked.
  */
 function isHeld(sessionId: string): boolean {
   return (
     promptQueueStore.isPaused(sessionId) ||
+    automaticTurnsHeld(sessionId) ||
     Boolean(promptQueueStore.list(sessionId)[0]?.error)
   );
 }

@@ -118,6 +118,17 @@ export const permanentAssistantStore = {
       )
       .run(status, status, error ?? null, status, now, status, now, id);
   },
+  /**
+   * Put back an item a Stop refused before it reached the session
+   * (`automaticTurnHold.ts`): queued again in its place, its attempt returned.
+   */
+  returnToQueue(id: number): void {
+    getDb()
+      .prepare(
+        "UPDATE permanent_assistant_queue SET status='queued', attempts=MAX(attempts-1,0), error=NULL WHERE id=? AND status='working'",
+      )
+      .run(id);
+  },
   recover(): void {
     getDb()
       .prepare(

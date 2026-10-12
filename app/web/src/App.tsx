@@ -396,6 +396,14 @@ const EMPTY_PROMPT_QUEUE: import("@assistant/shared").PromptQueueState = {
   items: [],
   paused: false,
 };
+/** The permanent Assistant's ledge after a Stop: its hold, and no drafts. */
+const HELD_ASSISTANT_QUEUE: import("@assistant/shared").PromptQueueState = {
+  items: [],
+  paused: true,
+  automaticTurnsHeld: true,
+};
+/** A held Assistant's ledge has no rows to send or remove. */
+const noop = () => {};
 const DEFAULT_WORKTREE_REVIEW_PROMPT =
   "Review the selected comments, apply the appropriate changes, and reply to or resolve each thread.";
 const REVIEW_SET_CLAIMS_PROMPT = `Findings are claims, not orders. Verify each against the code before acting.
@@ -5209,12 +5217,33 @@ function AppContent() {
     ? displaySession?.queuedPeerPrompts
     : undefined;
   const sessionCanSteer = Boolean(displaySession?.canSteer);
+  // The permanent Assistant queues its intake on its own and shows no drafts,
+  // but a Stop holds it like any session: it gets the hold's Resume alone.
+  const heldAssistantSessionId =
+    route.name === "permanentAssistant" &&
+    displaySession?.promptQueue?.automaticTurnsHeld
+      ? displaySession.sessionId
+      : undefined;
   const promptQueueLedge = useMemo(
     () =>
-      (shownPromptQueue ||
-        shownQueuingLocally.length > 0 ||
-        (shownQueuedPeers?.length ?? 0) > 0) &&
-      queueSessionId ? (
+      heldAssistantSessionId ? (
+        <PromptQueueLedge
+          queue={HELD_ASSISTANT_QUEUE}
+          running={displayStreaming}
+          canSteer={false}
+          onRemove={noop}
+          onSendNow={noop}
+          onResume={() =>
+            sendPromptQueue({
+              type: "resumePromptQueue",
+              sessionId: heldAssistantSessionId,
+            })
+          }
+        />
+      ) : (shownPromptQueue ||
+          shownQueuingLocally.length > 0 ||
+          (shownQueuedPeers?.length ?? 0) > 0) &&
+        queueSessionId ? (
         <PromptQueueLedge
           queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
           queuing={shownQueuingLocally}
@@ -5259,6 +5288,7 @@ function AppContent() {
         />
       ) : undefined,
     [
+      heldAssistantSessionId,
       shownPromptQueue,
       shownQueuingLocally,
       shownQueuedPeers,

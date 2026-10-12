@@ -74,8 +74,9 @@ only binding rules; everything else lives here.
   the `delivery` marker the transcript renders; and the user's server-side
   prompt queue: ordering ahead of agent traffic, Stop and failure pauses, queued
   commands, and the composer's per-device Steer/Queue choice; and the durable
-  hold a Stop puts on every automatic turn (peer, background, handoff) until the
-  user resumes or writes.
+  hold a Stop puts on every turn the user did not just ask for (automatic work
+  and their own older queued work), its generations and resume authority, and
+  the outbox that keeps a held session's background facts across a restart.
 - `child-processes.md` — why the server never forks itself for per-request work
   (fork cost grows with the server), the spawn broker that starts git instead
   and its fallback contract, the caches that avoid spawns altogether, what the

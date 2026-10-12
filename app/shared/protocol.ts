@@ -5576,9 +5576,10 @@ export interface PromptQueueState {
   items: QueuedPrompt[];
   paused: boolean;
   /**
-   * The user stopped this session, so nothing an agent or the app queued for
-   * it (peer prompts, background updates, approval outcomes) starts a turn
-   * until they resume or send a message. Sent with an empty `items` too: a
+   * The user stopped this session, so nothing that was waiting — what agents
+   * and the app queued (peer prompts, background updates, approval outcomes)
+   * or their own older drafts — starts a turn until they resume or send a
+   * message; `paused` is then true as well. Sent with an empty `items` too: a
    * held session needs its Resume even with nothing of the user's queued.
    */
   automaticTurnsHeld?: true;

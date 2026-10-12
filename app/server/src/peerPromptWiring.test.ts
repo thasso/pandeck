@@ -90,8 +90,8 @@ test("a Stop's hold gates background delivery and Resume reruns the idle chain",
   );
   assert.match(
     source,
-    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*offerIdleEdge\(sessionId,\s*true\)/,
-    "Resume must offer the whole idle chain again, rerunning background delivery",
+    /setAutomaticTurnHoldHost\(\{[\s\S]{0,200}?resumed:\s*\(sessionId\)\s*=>\s*\{\s*offerIdleEdge\(sessionId,\s*true\);\s*resumePermanentAssistantIntake\(sessionId\);/,
+    "Resume must offer the whole idle chain again, rerunning background delivery, and the Assistant's intake",
   );
 });
 

@@ -41,6 +41,8 @@ const {
 const { promptRuntimeSession } = await import("./session/runtimePrompt.ts");
 const { setSessionIdleHook } = await import("./session/runtime/liveSession.ts");
 const hold = await import("./automaticTurnHold.ts");
+const { deliverPostReloadContinuation } =
+  await import("./postReloadContinuation.ts");
 const { reserveWorktreeForRemoval, setSessionWorktreeResolverForTests } =
   await import("./session/sessionRunLease.ts");
 
@@ -577,27 +579,151 @@ describe("agent handoffs", () => {
     }
   });
 
-  it("a handoff in the user's own words resumes a stopped session, after the decisions it held", async () => {
+  it("words of the user's own handed off now resume a stopped session once appended", async () => {
     const driver = seed();
     hold.holdAutomaticTurns(driver.sessionId);
-    await deliverAgentHandoff({
-      sessionId: driver.sessionId,
-      driver,
-      text: "[approval decision] approved",
-      origin: { kind: "system", source: "approval-decision" },
-    });
-    assert.equal(driver.promptOptions.length, 0);
-    await deliverAgentHandoff({
+    const outcome = await deliverAgentHandoff({
       sessionId: driver.sessionId,
       driver,
       text: "Please address these review comments.",
       origin: { kind: "human" },
       visible: true,
+      resume: hold.captureHumanResume(driver.sessionId),
     });
-    for (let i = 0; i < 20 && driver.promptOptions.length < 2; i += 1)
-      await tick();
+    assert.equal(outcome, "delivered");
+    assert.equal(driver.promptOptions.length, 1);
     assert.equal(hold.automaticTurnsHeld(driver.sessionId), false);
-    assert.equal(driver.promptOptions.length, 2, "both, in the order decided");
+  });
+
+  it("a human handoff that is refused, queued or carries no authority leaves a stopped session held", async () => {
+    const human = (driver: FakeRuntimeDriver, resume = true) => ({
+      sessionId: driver.sessionId,
+      driver,
+      text: "Please address these review comments.",
+      origin: { kind: "human" as const },
+      visible: true,
+      ...(resume ? { resume: hold.captureHumanResume(driver.sessionId) } : {}),
+    });
+
+    // Released from memory: refused before anything is appended.
+    const released = seed();
+    Object.defineProperty(released, "released", { value: true });
+    hold.holdAutomaticTurns(released.sessionId);
+    await assert.rejects(deliverAgentHandoff(human(released)), /released/);
+    assert.equal(hold.automaticTurnsHeld(released.sessionId), true);
+    assert.equal(released.promptOptions.length, 0);
+
+    // Its worktree is being removed: refused by the run lease.
+    const removing = seed();
+    hold.holdAutomaticTurns(removing.sessionId);
+    setSessionWorktreeResolverForTests(() => "wt-removing-held");
+    const releaseRemoval = reserveWorktreeForRemoval(
+      "wt-removing-held",
+      "Removing it.",
+    );
+    assert.ok(releaseRemoval);
+    try {
+      await assert.rejects(deliverAgentHandoff(human(removing)));
+    } finally {
+      releaseRemoval();
+      setSessionWorktreeResolverForTests(null);
+    }
+    assert.equal(hold.automaticTurnsHeld(removing.sessionId), true);
+    assert.equal(removing.promptOptions.length, 0);
+
+    // Behind a decision the Stop already held: queued in order, resumes nothing.
+    const behind = seed();
+    hold.holdAutomaticTurns(behind.sessionId);
+    await deliverAgentHandoff({
+      sessionId: behind.sessionId,
+      driver: behind,
+      text: "[approval decision] approved",
+      origin: { kind: "system", source: "approval-decision" },
+    });
+    assert.equal(await deliverAgentHandoff(human(behind)), "queued");
+    await tick();
+    assert.equal(hold.automaticTurnsHeld(behind.sessionId), true);
+    assert.equal(behind.promptOptions.length, 0);
+    assert.deepEqual(
+      agentHandoffStore
+        .listForSession(behind.sessionId)
+        .map((row) => row.origin.kind),
+      ["system", "human"],
+      "FIFO kept",
+    );
+
+    // Mid-turn behind a provider that cannot steer: queued, resumes nothing.
+    const running = seed();
+    const releaseTurn = running.holdTurns();
+    void promptRuntimeSession(running, "the running turn").catch(() => {});
+    await tick();
+    hold.holdAutomaticTurns(running.sessionId);
+    assert.equal(await deliverAgentHandoff(human(running)), "queued");
+    releaseTurn();
+    await tick();
+    await tick();
+    assert.equal(hold.automaticTurnsHeld(running.sessionId), true);
+    assert.equal(running.promptOptions.length, 1, "only the stopped turn");
+
+    // No authority at all (an older human row): queued, never delivered.
+    const stale = seed();
+    hold.holdAutomaticTurns(stale.sessionId);
+    assert.equal(await deliverAgentHandoff(human(stale, false)), "queued");
+    assert.equal(hold.automaticTurnsHeld(stale.sessionId), true);
+    assert.equal(stale.promptOptions.length, 0);
+  });
+
+  it("a post-reload continuation survives a Stop during its reopen and runs once after Resume", async () => {
+    const driver = seed();
+    let finishReopen!: () => void;
+    const reopened = new Promise<void>((resolve) => (finishReopen = resolve));
+    const run = deliverPostReloadContinuation(
+      { sessionId: driver.sessionId, message: "Verify the reload worked." },
+      () => reopened,
+    );
+    // Unheld when it was consumed; the Stop lands while the session reopens.
+    hold.holdAutomaticTurns(driver.sessionId);
+    finishReopen();
+    await run;
+    assert.equal(driver.promptOptions.length, 0, "not run while held");
+    const [row] = agentHandoffStore.listForSession(driver.sessionId);
+    assert.deepEqual(row?.origin, {
+      kind: "system",
+      source: "post-reload-continuation",
+    });
+    assert.equal(row?.hidden, false);
+    assert.equal(row?.attempts, 0);
+
+    hold.setAutomaticTurnHoldHost({
+      changed: () => {},
+      resumed: (id) => void drainAgentHandoffs(id),
+    });
+    try {
+      hold.resumeAutomaticTurns(driver.sessionId);
+      await vi.waitFor(
+        () =>
+          assert.equal(
+            agentHandoffStore.listForSession(driver.sessionId).length,
+            0,
+          ),
+        { interval: 1 },
+      );
+    } finally {
+      hold.setAutomaticTurnHoldHost(undefined);
+    }
+    await tick();
+    assert.equal(driver.promptOptions.length, 1, "run once");
+    const log = readFileSync(canonicalSessionLogPath(driver.sessionId), "utf8");
+    assert.equal(log.split("Verify the reload worked.").length - 1, 1);
+  });
+
+  it("an unheld post-reload continuation runs right after its reopen", async () => {
+    const driver = seed();
+    await deliverPostReloadContinuation(
+      { sessionId: driver.sessionId, message: "Check the new build." },
+      async () => {},
+    );
+    assert.equal(driver.promptOptions.length, 1);
     assert.equal(agentHandoffStore.listForSession(driver.sessionId).length, 0);
   });
 

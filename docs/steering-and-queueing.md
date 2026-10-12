@@ -106,7 +106,8 @@ CLI's cannot be edited or reliably withdrawn, and pi's dies with its process.
 - **Attachments** are saved to the session attachment store when queued. The row
   keeps only their metadata, and the send reads the bytes back.
 
-The permanent Assistant has its own intake queue and does not offer this one.
+The permanent Assistant has its own intake queue and does not offer this one; it
+only shares the Stop hold and its Resume.
 
 ### Peer prompts in the queue
 
@@ -141,39 +142,60 @@ card, which the commands address it by.
 
 ### Stop holds automatic turns
 
-A Stop is the user saying "stop", so nothing an agent or the app queued for the
-session may start the next turn either (`automaticTurnHold.ts`, table
-`session_automatic_turn_hold`). The hold is written before the turn is aborted,
-whether or not anything is waiting, and survives a harness release, a reload and
-a restart. Fresh sessions start unheld.
+A Stop is the user saying "stop", so nothing that was waiting may start the next
+turn either (`automaticTurnHold.ts`, table `session_automatic_turn_hold`). The
+hold is written before the turn is aborted, whether or not anything is waiting,
+and survives a harness release, a reload and a restart. Fresh sessions start
+unheld.
 
-- **What it holds.** Every turn whose origin is not the user: peer prompts and
-  interruption notices, background-work updates (including the Claude CLI waking
-  itself for its own background task), approval outcomes, question answers and
-  other card handoffs, and a post-reload continuation. Approvals still EXECUTE
-  under their grants; only the turn that would tell the agent waits. Child
-  sessions and background commands keep running, and deadline expiry is
-  unchanged.
-- **Where.** `runtimePrompt.ts` refuses a non-human origin on a held session, at
-  entry and again after its last await, so a delivery that sampled the session
-  before the Stop cannot start a turn after it. Each drain also reads the hold
-  before it claims a batch or cold-resumes a session, including a peer drain
-  already awaiting the stopped turn, which checks again before its next batch.
-- **Nothing is lost or spent.** Held work stays where it was: peer rows queued
-  (a batch refused between its claim and the append goes back with its attempt
-  refunded), handoffs in their table, background updates in their pending batch.
-  The refusal is a `SessionBusyError`, which every automatic caller already
+- **What it holds.** Every turn the user did not just ask for. That is
+  everything automatic — peer prompts and interruption notices, background-work
+  updates (including the Claude CLI waking itself for its own background task),
+  approval outcomes, question answers and other card handoffs, a post-reload
+  continuation — and the user's own OLDER work scheduled for later: drafts in
+  this queue (shown paused) and the permanent Assistant's intake. Human
+  provenance is not authority: a message typed before the Stop and queued is
+  held like an agent's. Approvals still EXECUTE under their grants; only the
+  turn that would tell the agent waits. Child sessions and background commands
+  keep running, and deadline expiry is unchanged.
+- **Where.** `runtimePrompt.ts` refuses any turn on a held session that does not
+  carry the user's resume authority for the current hold, at entry and again
+  after its last await. Each drain also reads the hold before it claims a batch
+  or cold-resumes a session, including a peer drain already awaiting the stopped
+  turn, which checks again before its next batch, and the Assistant's intake
+  loop, which checks before each item.
+- **Nothing is lost or spent.** Held work stays where it was, in its order: peer
+  rows queued (a batch refused between its claim and the append goes back with
+  its attempt refunded), handoffs in their table, drafts in this queue, intake
+  rows queued (one refused on its way goes back unspent), background updates in
+  their pending batch. The refusal is a `SessionBusyError`, which every caller
   answers by waiting for a later edge rather than retrying or dropping.
-- **What lifts it.** Resume, "Send next" on a queued row or send-now on a
-  waiting peer prompt, or a message of the user's own once it is appended as a
-  turn (a steer into the turn being stopped does not count), including a review
-  handoff carrying their words. Resume then offers the whole idle chain in its
-  usual order. Peer messages, background facts, approvals, reconnects, mounts
-  and idle edges never lift it.
+- **Background facts survive a restart.** Completions owed to a session are
+  recorded in `background_delivery_outbox` (identities only; the notice is
+  rebuilt from its background-work row) and leave it once delivered or dropped
+  by the bounded queue, never on a failed offer or a shutdown. Boot restores the
+  owed wake and deferred facts of every session still held, without offering
+  them, and forgets the rest: an unheld session's delivery queue never survived
+  a restart and still does not, so no past job is announced again. Monitor
+  activity stays the lossy in-memory stream it always was.
+- **What lifts it.** The user, and only under the Stop that stood when they
+  acted. Every Stop starts a new generation, also on a held session; the
+  authority a message captures as it is sent names that generation, so a newer
+  Stop that lands while it is admitted wins. Resume (also "Send next" on a
+  queued row) lifts the hold at once and offers the whole idle chain in its
+  usual order, the Assistant's intake included. A message the user sends now
+  lifts it once appended as a turn of its own; a refused send, a steer into the
+  turn being stopped, or a resend of an intake row already stored lifts nothing.
+  Send-now on a waiting peer prompt lifts it once it claims the row as the next
+  turn (as a steer it lifts nothing). Words of the user's own handed over with
+  review comments lift it only when delivered inline; queued behind held
+  decisions they wait with them. Peer messages, background facts, approvals,
+  reconnects, mounts and idle edges never lift it.
 - **What the user sees.** The session's `promptQueue` carries
   `automaticTurnsHeld: true`, sent even when nothing of the user's is queued, so
-  the composer ledge stays with its Resume. The permanent Assistant has no
-  ledge; its next intake message lifts the hold.
+  the composer ledge stays with its Resume ("Stopped"). The permanent Assistant
+  shows no drafts, but `/assistant` gets the same Resume alone; it is the one
+  queue command the server accepts for that session.
 
 ### Composer
 

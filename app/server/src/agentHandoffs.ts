@@ -42,7 +42,7 @@
  */
 import {
   automaticTurnsHeld,
-  releaseAutomaticTurnsForHumanPrompt,
+  type HumanResumeToken,
 } from "./automaticTurnHold.ts";
 import { errorText } from "./errors.ts";
 import {
@@ -98,6 +98,12 @@ export interface AgentHandoffInput {
    * restart too, which is the whole reason it is a ref and not a closure.
    */
   outcomeRef?: AgentHandoffOutcomeRef;
+  /**
+   * The user's resume authority, for words of their own handed over right now
+   * (`automaticTurnHold.ts`). Spent only by an inline delivery that is
+   * appended as a turn; never stored with a queued row.
+   */
+  resume?: HumanResumeToken;
 }
 
 /**
@@ -218,10 +224,6 @@ export async function deliverAgentHandoff(
   input: AgentHandoffInput,
 ): Promise<AgentHandoffOutcome> {
   const { driver } = input;
-  // The user's own words (review comments with a message of theirs) resume a
-  // stopped session like any message they send; a card outcome waits for that.
-  if (input.origin.kind === "human")
-    releaseAutomaticTurnsForHumanPrompt(input.sessionId);
   // A running session behind a provider that cannot steer has nothing to try:
   // the attempt would append nothing and throw, so it goes straight to the
   // queue rather than through a failure the caller would have to interpret.
@@ -243,6 +245,9 @@ export async function deliverAgentHandoff(
         ...(input.visible ? {} : { hidden: true }),
         origin: input.origin,
         ...(input.contextBlock ? { contextBlock: input.contextBlock } : {}),
+        // Only this inline attempt may resume a stopped session, and only once
+        // appended: a queued, steered or refused handoff resumes nothing.
+        ...(input.resume ? { resumeHold: input.resume } : {}),
         // Opportunistic: a turn that ended between the check and the call is
         // prompted ordinarily instead (`steerOnly` is what refuses that, and a
         // handoff wants the turn either way).

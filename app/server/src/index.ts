@@ -94,6 +94,7 @@ import {
   stopSlackShortcutIntake,
 } from "./slackShortcutIntake.ts";
 import {
+  resumePermanentAssistantIntake,
   startPermanentAssistant,
   stopPermanentAssistant,
 } from "./permanentAssistant.ts";
@@ -106,21 +107,23 @@ import {
   stopSlackAssistantChat,
 } from "./slackAssistantChat.ts";
 import { hub } from "./hub.ts";
-import {
-  backgroundWorkSupervisor,
-  BACKGROUND_EVENT_RATE_TERMINAL_REASON,
-} from "./backgroundWork/supervisor.ts";
-import type { BackgroundWorkItem } from "./db/backgroundWorkStore.ts";
+import { backgroundWorkSupervisor } from "./backgroundWork/supervisor.ts";
 import {
   BackgroundCompletionDelivery,
   backgroundCompletionTurns,
 } from "./backgroundWork/completionDelivery.ts";
-import { backgroundCompletionDisposition } from "./backgroundWork/deliveryPolicy.ts";
+import {
+  backgroundDeliveryOutbox,
+  backgroundNoticeCommand,
+  backgroundWorkHumanLink,
+  completionDisposition,
+  completionNoticeOf,
+  restoreHeldBackgroundDelivery,
+} from "./backgroundCompletionNotices.ts";
 import {
   removeBackgroundDeliveryOutput,
   writeBackgroundDeliveryOutput,
 } from "./backgroundWork/deliveryOutput.ts";
-import { sessionArtifactFile } from "./mcp/toolGroups/packRuntime.ts";
 import {
   promptRuntimeSession,
   setDeferredBackgroundContextProvider,
@@ -288,10 +291,6 @@ function isPromptQueueDriver(
   );
 }
 
-function backgroundWorkHumanLink(itemId: string): string {
-  return `/background-tasks?task=${encodeURIComponent(itemId)}`;
-}
-
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   drainPeers: (sessionId) => drainRecipient(sessionId),
   held: (sessionId) => automaticTurnsHeld(sessionId),
@@ -361,13 +360,8 @@ const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
     const cleanupPath = entry.notice.output?.cleanupPath;
     if (cleanupPath) removeBackgroundDeliveryOutput(cleanupPath);
   },
-  disposition: (notice) =>
-    backgroundCompletionDisposition({
-      backend: notice.backend,
-      stopRequested: notice.stopRequested,
-      ...(notice.stopOrigin ? { stopOrigin: notice.stopOrigin } : {}),
-      ownerTurnRunning: notice.ownerTurnRunning,
-    }).disposition,
+  disposition: completionDisposition,
+  outbox: backgroundDeliveryOutbox,
 });
 
 // Deferred facts ride the next turn the session takes for any other reason.
@@ -392,19 +386,6 @@ backgroundWorkSupervisor.setOrdinaryTurnActiveHandler((ownerSessionId) => {
     Boolean(driver?.isRunning),
   );
 });
-/** The card's command facts, exactly as the registry row carries them. */
-function backgroundNoticeCommand(item: BackgroundWorkItem): {
-  description?: string;
-  command?: string;
-  commandTruncated?: boolean;
-} {
-  return {
-    ...(item.description ? { description: item.description } : {}),
-    ...(item.command ? { command: item.command } : {}),
-    ...(item.commandTruncated ? { commandTruncated: true } : {}),
-  };
-}
-
 backgroundWorkSupervisor.setActivityRecordedHandler((item, activity) => {
   const output = writeBackgroundDeliveryOutput(
     activity.lines,
@@ -423,62 +404,15 @@ backgroundWorkSupervisor.setActivityRecordedHandler((item, activity) => {
   });
 });
 backgroundWorkSupervisor.setCompletionRecordedHandler((item) => {
-  if (
-    item.state !== "completed" &&
-    item.state !== "failed" &&
-    item.state !== "stopped" &&
-    item.state !== "lost"
-  )
-    return;
-  const retained = item.evidence?.artifactId
-    ? sessionArtifactFile(item.ownerSessionId, item.evidence.artifactId)
-    : undefined;
-  const output = item.evidence
-    ? {
-        ...(retained
-          ? { path: retained.path, url: retained.artifact.url }
-          : {}),
-        ...(item.evidence.capturedBytes !== undefined
-          ? { capturedBytes: item.evidence.capturedBytes }
-          : {}),
-        ...(item.evidence.originalBytes !== undefined
-          ? { originalBytes: item.evidence.originalBytes }
-          : {}),
-        ...(item.evidence.truncated !== undefined
-          ? { truncated: item.evidence.truncated }
-          : {}),
-        ...(item.evidence.text !== undefined
-          ? { text: item.evidence.text }
-          : {}),
-        ...(item.evidence.refusalReason
-          ? { refusalReason: item.evidence.refusalReason }
-          : {}),
-      }
-    : undefined;
-  backgroundCompletionDelivery.enqueue(item.ownerSessionId, {
-    itemId: item.id,
-    revision: item.revision,
-    label: item.label,
-    ...backgroundNoticeCommand(item),
-    state: item.state,
-    backend: item.backend,
-    stopRequested: item.stopState !== "none",
-    // The supervisor's own constant, compared as a symbol, so the policy learns
-    // WHO wanted the stop without either side parsing the other's prose.
-    stopOrigin:
-      item.terminalReason === BACKGROUND_EVENT_RATE_TERMINAL_REASON
-        ? "system"
-        : "requester",
-    // Sampled HERE, while the terminal fact is being recorded. Asking again at
-    // drain time would always answer "idle" — the queue only drains when the
-    // session is idle — and the whole question is whether a turn was live to
-    // receive the provider's own notification.
-    ownerTurnRunning: Boolean(hub.getLiveById(item.ownerSessionId)?.isRunning),
-    ...(item.exitCode !== undefined ? { exitCode: item.exitCode } : {}),
-    ...(item.outcomeSummary ? { outcomeSummary: item.outcomeSummary } : {}),
-    humanLink: backgroundWorkHumanLink(item.id),
-    ...(output ? { output } : {}),
-  });
+  // `ownerTurnRunning` is sampled HERE, while the terminal fact is being
+  // recorded. Asking again at drain time would always answer "idle" — the queue
+  // only drains when the session is idle — and the whole question is whether a
+  // turn was live to receive the provider's own notification.
+  const notice = completionNoticeOf(
+    item,
+    Boolean(hub.getLiveById(item.ownerSessionId)?.isRunning),
+  );
+  if (notice) backgroundCompletionDelivery.enqueue(item.ownerSessionId, notice);
 });
 
 const WEBSOCKET_COMPRESSION = {
@@ -1980,6 +1914,15 @@ server.listen(PORT, HOST, () => {
         `[background] ${deleted.blockedOwners} deleted session(s) still own live background work; left as members`,
       );
   });
+  bootStep("held background delivery", () => {
+    // After reconciliation, so a restored notice reads the row as it ended. A
+    // session a Stop holds gets back what it was owed; nothing else does.
+    const outbox = restoreHeldBackgroundDelivery(backgroundCompletionDelivery);
+    if (outbox.restored > 0 || outbox.forgotten > 0)
+      console.log(
+        `[background] restored ${outbox.restored} completion(s) owed to stopped sessions; forgot ${outbox.forgotten}`,
+      );
+  });
   setPromptQueueHost({
     resolve: async (sessionId) => {
       const live =
@@ -2050,7 +1993,10 @@ server.listen(PORT, HOST, () => {
   setSessionIdleHook((sessionId) => offerIdleEdge(sessionId));
   setAutomaticTurnHoldHost({
     changed: (sessionId) => publishPromptQueue(sessionId),
-    resumed: (sessionId) => offerIdleEdge(sessionId, true),
+    resumed: (sessionId) => {
+      offerIdleEdge(sessionId, true);
+      resumePermanentAssistantIntake(sessionId);
+    },
   });
   // Offered in the same order as the idle edge, though only offered: both
   // calls return once their per-session work is in flight, so this is a

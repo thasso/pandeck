@@ -12,7 +12,8 @@
 import {
   AutomaticTurnsHeldError,
   automaticTurnsHeld,
-  releaseAutomaticTurnsForHumanPrompt,
+  captureHumanResume,
+  spendHumanResume,
 } from "./automaticTurnHold.ts";
 import { drainPromptQueue, promptQueueHasPriority } from "./promptQueue.ts";
 import {
@@ -358,13 +359,14 @@ export async function sendQueuedPeerPromptNow(
   key: string,
 ): Promise<void> {
   if (deliveryStopped) return;
+  // The user chose this message: like "Send next" in their own queue, that
+  // resumes a stopped session — the Stop that stood as they chose, never one
+  // that lands while this waits for the recipient's authority.
+  const resume = captureHumanResume(recipientId);
   await withRecipientDrainLock(recipientId, async () => {
     if (deliveryStopped) return;
     const row = undeliveredByKey(recipientId, key);
     if (!row || row.status === "dispatching") return;
-    // The user chose this message: like "Send next" in their own queue, that
-    // resumes a stopped session. Its turn's idle edge brings the rest.
-    releaseAutomaticTurnsForHumanPrompt(recipientId);
     const hub = await getHub();
     const live =
       hub.getLiveById(recipientId) ?? (await hub.acquireById(recipientId));
@@ -384,6 +386,11 @@ export async function sendQueuedPeerPromptNow(
       steer ? "steer" : "send-now",
     );
     if (!claimed) return;
+    // Claimed as the next turn: the user's choice is accepted, and its turn's
+    // idle edge brings the rest. A steer aims at the turn running (on a held
+    // session, the one being stopped) and resumes nothing. A newer Stop keeps
+    // the hold either way; the delivery is then refused and the row put back.
+    if (!steer) spendHumanResume(resume);
     publishPeerQueue(recipientId);
     if (steer) await steerPeerPrompt(live, claimed);
     // Hold the recipient authority through the idle delivery so an automatic
