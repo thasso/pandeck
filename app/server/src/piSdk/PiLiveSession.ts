@@ -138,6 +138,7 @@ import {
   peerPromptQueueField,
   peerPromptThreadsFor,
 } from "../peerPrompt.ts";
+import { backgroundUpdateQueueField } from "../backgroundUpdateQueue.ts";
 import { promptQueueField } from "../promptQueue.ts";
 import {
   closeToolGroupSession,
@@ -630,6 +631,10 @@ export class PiLiveSession implements LiveSession {
           });
           this.adapterEvents.messageDelta(id, "thinking", ev.delta);
           this.broadcastContextInfo();
+        } else if (ev.type !== "error") {
+          // The response starting, a tool call being written, a block ending:
+          // output with no delta of its own, which the run's progress counts.
+          this.adapterEvents.modelActivity();
         }
         break;
       }
@@ -701,6 +706,14 @@ export class PiLiveSession implements LiveSession {
           );
           break;
         }
+        this.adapterEvents.providerRetry({
+          attempt: event.attempt,
+          maxAttempts: event.maxAttempts,
+          delayMs: event.delayMs,
+          ...(retryError.statusCode !== undefined
+            ? { status: retryError.statusCode }
+            : {}),
+        });
         this.providerNotice(
           "warning",
           `${providerErrorDisplayText(retryError)} Retrying ${event.attempt}/${event.maxAttempts} in ${Math.round(event.delayMs / 1000)}s…`,
@@ -1636,6 +1649,7 @@ export class PiLiveSession implements LiveSession {
       peerPromptPeers: peerPromptPeersFor(this.session.sessionId),
       ...promptQueueField(this.session.sessionId),
       ...peerPromptQueueField(this.session.sessionId),
+      ...backgroundUpdateQueueField(this.session.sessionId),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };

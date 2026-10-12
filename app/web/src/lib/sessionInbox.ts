@@ -738,8 +738,12 @@ export function sessionStatusDetail(
       return bounded(session.lastError?.message ?? "The last run failed.");
     case "interrupted":
       return "Cut off by a restart — send a prompt to continue";
+    // Only a retry the provider reported says anything: how long a run has
+    // gone without output is the conversation's to show, not a card alarm.
     case "running":
-      return undefined;
+      return session.providerRetry
+        ? `Provider is retrying a failed request (attempt ${session.providerRetry.attempt}${session.providerRetry.maxAttempts !== undefined ? ` of ${session.providerRetry.maxAttempts}` : ""})`
+        : undefined;
     case "unread":
       return "Unread response";
     case "quiet":

@@ -40,7 +40,10 @@ export function PersonalAssistantPanel() {
           sessionId={state.session.sessionId}
           messages={state.messages}
           timeline={state.timeline}
-          sessionStreaming={state.liveStreams.length > 0}
+          sessionStreaming={state.streaming}
+          runProgress={state.runProgress}
+          queuedPeerCount={state.session.queuedPeerPrompts?.length ?? 0}
+          queuedBackgroundCount={state.session.queuedBackgroundUpdates ?? 0}
           appearance={state.settings.appearance}
           sessions={state.sessions}
           view={PANEL_TRANSCRIPT_VIEW}
@@ -57,7 +60,7 @@ export function PersonalAssistantPanel() {
       <Composer
         onSend={actions.prompt}
         onAbort={actions.abort}
-        streaming={state.liveStreams.length > 0}
+        streaming={state.streaming}
         disabled={!state.connected}
         contextInfo={state.contextInfo}
         session={state.session}

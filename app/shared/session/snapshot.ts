@@ -12,6 +12,7 @@
  */
 import type { AgentContentBlock, LiveBodyRef } from "./content.ts";
 import type { SessionEntry } from "./entries.ts";
+import type { RunProgress } from "./progress.ts";
 
 export type SnapshotRunState = "idle" | "running";
 
@@ -58,4 +59,6 @@ export interface SessionSnapshot {
   runState: SnapshotRunState;
   entries: SessionEntry[];
   streaming: StreamingEntry[];
+  /** What the run in flight has been observed doing; absent when idle. */
+  progress?: RunProgress;
 }

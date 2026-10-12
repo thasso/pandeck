@@ -27,7 +27,10 @@ import { subagentStore } from "./db/subagentStore.ts";
 import { backgroundWorkStore } from "./db/backgroundWorkStore.ts";
 import { agentHandoffStore } from "./db/agentHandoffStore.ts";
 import { peerPromptStore } from "./db/peerPromptStore.ts";
-import { sessionRunStartedAt } from "./sessionActivity.ts";
+import {
+  sessionProviderRetry,
+  sessionRunStartedAt,
+} from "./sessionActivity.ts";
 import { isRetitlingSession } from "./sessionRetitlePending.ts";
 import { worktreeIdBySession } from "./db/worktreeStore.ts";
 import { worktreeMissingProbe } from "./worktrees/sessionCwd.ts";
@@ -283,10 +286,14 @@ function sessionModel(
 function runStatusFields(
   sessionId: string,
   isStreaming: boolean,
-): Pick<SessionListItem, "runStartedAt"> {
+): Pick<SessionListItem, "runStartedAt" | "providerRetry"> {
   if (!isStreaming) return {};
   const startedAt = sessionRunStartedAt(sessionId);
-  return startedAt === undefined ? {} : { runStartedAt: startedAt };
+  const retry = sessionProviderRetry(sessionId);
+  return {
+    ...(startedAt !== undefined ? { runStartedAt: startedAt } : {}),
+    ...(retry ? { providerRetry: retry } : {}),
+  };
 }
 
 /**

@@ -27,10 +27,15 @@ import {
   spawnClusterForest,
   spawnClusterMembers,
   spawnClusterSettleBlockedReason,
+  type SessionListItem,
   type SessionOutcomeKind,
   type WorkflowRunCard,
 } from "@assistant/shared";
-import type { AgentStopReason, PromptOrigin } from "@assistant/shared/session";
+import type {
+  AgentStopReason,
+  PromptOrigin,
+  RunProgress,
+} from "@assistant/shared/session";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
 import {
   subscribeSessionRunCompleted,
@@ -62,6 +67,45 @@ const runReadBaselines = new Map<
 /** When the given session's current run started, if it is running right now. */
 export function sessionRunStartedAt(sessionId: string): number | undefined {
   return runStartedAt.get(sessionId);
+}
+
+/**
+ * The provider retry each running session is in, as its row states it. Kept
+ * here rather than read from the run's progress per build so the list moves
+ * only when the retry starts, reaches another attempt or ends — never on the
+ * model output and tool transitions that move progress constantly.
+ */
+const providerRetries = new Map<
+  string,
+  NonNullable<SessionListItem["providerRetry"]>
+>();
+
+/** The provider retry the given running session is in, if any. */
+export function sessionProviderRetry(
+  sessionId: string,
+): SessionListItem["providerRetry"] {
+  return providerRetries.get(sessionId);
+}
+
+/** Track one progress publish; true when the row's retry changed. */
+function noteRetry(sessionId: string, progress: RunProgress | null): boolean {
+  const retry = progress?.retry;
+  const current = providerRetries.get(sessionId);
+  if (!retry) return providerRetries.delete(sessionId);
+  if (
+    current?.attempt === retry.attempt &&
+    current.maxAttempts === retry.maxAttempts
+  )
+    return false;
+  providerRetries.set(sessionId, {
+    attempt: retry.attempt,
+    ...(retry.maxAttempts !== undefined
+      ? { maxAttempts: retry.maxAttempts }
+      : {}),
+    // The first report of this retry streak dates it, not the latest attempt.
+    since: current?.since ?? retry.at,
+  });
+  return true;
 }
 
 /**
@@ -184,6 +228,8 @@ export function installSessionActivityTracking(): () => void {
           sessionStore.clearInterruptedRun(sessionId);
         } else {
           runStartedAt.delete(sessionId);
+          // The row's own idle broadcast carries the cleared retry.
+          noteRetry(sessionId, null);
           // Provider completion follows this idle event in the same call stack
           // and consumes the baseline. Synthetic host turns have no completion,
           // so discard theirs after that stack unwinds. A synchronously chained
@@ -195,6 +241,9 @@ export function installSessionActivityTracking(): () => void {
         }
         return;
       }
+      case "runProgress":
+        if (noteRetry(sessionId, event.progress)) broadcastSessionList();
+        return;
       case "runStatus": {
         // The failure MESSAGE the card shows. `aborted` is a user decision, not
         // a failure worth badging. Attention is NOT raised here: the run's own

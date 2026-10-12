@@ -94,6 +94,17 @@ export class NativeAdapterEventSource {
     this.emit(notice);
   }
 
+  /** Model output with no delta of its own (see the contract's `modelActivity`). */
+  modelActivity(): void {
+    this.emit({ type: "modelActivity" });
+  }
+
+  providerRetry(
+    retry: Omit<Extract<AdapterEvent, { type: "providerRetry" }>, "type">,
+  ): void {
+    this.emit({ type: "providerRetry", ...retry });
+  }
+
   /**
    * Persist one assistant attempt while keeping its logical provider run open.
    * Pi uses this before an automatic retry/compaction continuation: the next

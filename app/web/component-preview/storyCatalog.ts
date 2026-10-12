@@ -135,6 +135,22 @@ export const storyCatalog = {
     theme: "dark",
     textScale: "100",
   },
+  "run-progress--all-states": {
+    title: "Running turn progress line, every state",
+    frameWidth: 720,
+    canvasWidth: 1024,
+    canvasHeight: 360,
+    theme: "dark",
+    textScale: "100",
+  },
+  "run-progress--phone": {
+    title: "Running turn progress line, phone",
+    frameWidth: 358,
+    canvasWidth: 390,
+    canvasHeight: 400,
+    theme: "dark",
+    textScale: "100",
+  },
   "session-inbox--attention-mix": {
     title: "Attention list, default rail",
     frameWidth: 256,

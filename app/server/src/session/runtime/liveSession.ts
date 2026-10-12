@@ -15,6 +15,7 @@ import type {
   SnapshotRunState,
   PromptDelivery,
   PromptOrigin,
+  RunProgress,
   StreamingEntry,
   StreamingMessageEntry,
   StreamingToolEntry,
@@ -51,6 +52,7 @@ import {
   SteerWithdrawnError,
 } from "./errors.ts";
 import type { RuntimeEvent, RuntimeEventListener } from "./events.ts";
+import { RunProgressTracker } from "./progress.ts";
 
 export interface RuntimePromptOptions extends PromptOptions {
   /** Provenance of the prompt, recorded on the durable user entry. Defaults to human. */
@@ -235,6 +237,14 @@ export class LiveRuntimeSession {
   private turnOrigin: PromptOrigin | undefined;
   /** Provenance waiting for the next provider-initiated assistant entry. */
   private pendingAssistantOrigin: PromptOrigin | undefined;
+  /**
+   * What the running run has been observed doing. Lives and dies with the
+   * running state: started by {@link setRunning}, never by an adapter event on
+   * its own, so nothing that arrives while idle can bring it back.
+   */
+  private readonly progress = new RunProgressTracker((progress) =>
+    this.emit({ type: "runProgress", progress }),
+  );
 
   constructor(
     readonly sessionId: string,
@@ -333,7 +343,9 @@ export class LiveRuntimeSession {
     const next: SnapshotRunState = running ? "running" : "idle";
     if (this.runState === next) return;
     this.runState = next;
+    if (!running) this.progress.stop();
     this.emit({ type: "runStateChanged", runState: next });
+    if (running) this.progress.start();
     // A running→idle transition is the browser-independent trigger to drain any
     // peer prompts queued behind this turn, whatever drove it.
     if (next === "idle") {
@@ -639,6 +651,7 @@ export class LiveRuntimeSession {
         const stream = this.streaming.get(event.streamId);
         if (stream && stream.kind === "message")
           appendDelta(stream.content, event.delta.kind, event.delta.text);
+        this.progress.modelOutput();
         this.emit({
           type: "messageDelta",
           streamId: event.streamId,
@@ -688,6 +701,7 @@ export class LiveRuntimeSession {
           ...(event.input !== undefined ? { input: event.input } : {}),
         };
         this.streaming.set(event.streamId, stream);
+        this.progress.toolStarted(event.toolCallId, event.name);
         // Record the tool call in the active message stream's content IN ORDER, so
         // a mid-turn reconnect overlay renders it at its true position (the tool
         // stream above supplies live output, merged by id in the projection).
@@ -713,6 +727,7 @@ export class LiveRuntimeSession {
       case "toolUpdated": {
         const stream = this.streaming.get(event.streamId);
         if (stream && stream.kind === "tool") stream.output = event.output;
+        this.progress.activity();
         this.emit({
           type: "toolUpdated",
           streamId: event.streamId,
@@ -721,6 +736,9 @@ export class LiveRuntimeSession {
         return;
       }
       case "toolCompleted": {
+        // Usually reported live already (the `toolEnd` passthrough below);
+        // the tracker ignores a tool that is no longer running.
+        this.progress.toolEnded(event.toolCallId, event.isError === true);
         this.streaming.delete(event.streamId);
         this.emit({ type: "toolCompleted", streamId: event.streamId });
         const raw = this.log.append({
@@ -791,11 +809,28 @@ export class LiveRuntimeSession {
             stream.isError = event.envelope.isError;
             stream.done = true;
           }
+          this.progress.toolEnded(
+            event.envelope.toolId,
+            event.envelope.isError,
+          );
           emitToolCompleted(this.sessionId);
         }
         this.emit({ type: "passthrough", envelope: event.envelope });
         return;
       }
+      case "modelActivity":
+        this.progress.modelOutput();
+        return;
+      case "providerRetry":
+        this.progress.retry({
+          attempt: event.attempt,
+          ...(event.maxAttempts !== undefined
+            ? { maxAttempts: event.maxAttempts }
+            : {}),
+          ...(event.delayMs !== undefined ? { delayMs: event.delayMs } : {}),
+          ...(event.status !== undefined ? { status: event.status } : {}),
+        });
+        return;
       case "providerNotice": {
         const raw = this.log.append({
           type: "provider.notice",
@@ -876,12 +911,19 @@ export class LiveRuntimeSession {
 
   /** Current snapshot: durable client entries + run state + in-flight streams. */
   getSnapshot(): SessionSnapshot {
+    const progress = this.progress.snapshot();
     return {
       sessionId: this.sessionId,
       runState: this.runState,
       entries: this.log.clientEntries(),
       streaming: [...this.streaming.values()],
+      ...(progress ? { progress } : {}),
     };
+  }
+
+  /** What the running run has been observed doing; undefined when idle. */
+  runProgress(): RunProgress | undefined {
+    return this.progress.snapshot();
   }
 
   /** The full client timeline (conversation + host-command cards) for the transport projection. */
@@ -985,6 +1027,7 @@ export class LiveRuntimeSession {
   dispose(): void | Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.progress.dispose();
     this.unsubscribeAdapter();
     this.subscribers.clear();
     this.streaming.clear();

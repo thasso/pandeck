@@ -39,7 +39,7 @@ import {
 } from "./Markdown.tsx";
 import { ThinkingBlock } from "./ThinkingBlock.tsx";
 import type { TranscriptViewPrefs } from "./transcriptView.ts";
-import { ProgressIndicator } from "./ProgressIndicator.tsx";
+import { RunProgressLine } from "./RunProgressLine.tsx";
 import { ServedFileCard } from "./ServedFileCard.tsx";
 import {
   renderToolBlock,
@@ -692,7 +692,9 @@ export const AssistantMessage = memo(function AssistantMessage({
           })),
         )}
 
-        {progress && <ProgressIndicator label={progress} />}
+        {progress && (
+          <RunProgressLine fallback={progress} lastBlock={last?.kind} />
+        )}
 
         {message.error && <ErrorNote message={message.error} />}
 

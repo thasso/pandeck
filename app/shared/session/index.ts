@@ -31,3 +31,10 @@ export type {
   StreamingToolEntry,
 } from "./snapshot.ts";
 export type { SessionConfig, SessionConfigModel } from "./config.ts";
+export type {
+  RunProgress,
+  RunProgressPhase,
+  RunProgressRetry,
+  RunProgressTool,
+} from "./progress.ts";
+export { runProgressAge, runProgressPhase } from "./progress.ts";

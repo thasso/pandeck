@@ -6,6 +6,7 @@
  */
 import type {
   LazyBlockKind,
+  RunProgress,
   SessionConfig,
   SessionSnapshot,
 } from "@assistant/shared/session";
@@ -186,6 +187,11 @@ export class SessionRuntime {
 
   isRunning(sessionId: string): boolean {
     return this.live.get(sessionId)?.isRunning ?? false;
+  }
+
+  /** What a running session's run has been observed doing; undefined when idle or not live. */
+  runProgress(sessionId: string): RunProgress | undefined {
+    return this.live.get(sessionId)?.runProgress();
   }
 
   /**

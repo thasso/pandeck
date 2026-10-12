@@ -177,6 +177,7 @@ import {
   peerPromptQueueField,
   peerPromptThreadsFor,
 } from "../peerPrompt.ts";
+import { backgroundUpdateQueueField } from "../backgroundUpdateQueue.ts";
 import { promptQueueField } from "../promptQueue.ts";
 import { backgroundWorkStore } from "../db/backgroundWorkStore.ts";
 import { captureTaskOutputArtifact } from "../outputPolicy.ts";
@@ -1029,6 +1030,7 @@ export class ClaudeSdkSession implements LiveSession {
       peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
+      ...backgroundUpdateQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };
@@ -3197,6 +3199,19 @@ export class ClaudeSdkSession implements LiveSession {
           this.handleBackgroundSystemMessage(message)
         )
           return;
+        if (message.type === "system" && message.subtype === "api_retry") {
+          // Only the run's observed progress hears it: the transcript gains
+          // nothing, and a retry that recovers stays invisible afterwards.
+          this.adapterEvents.providerRetry({
+            attempt: message.attempt,
+            maxAttempts: message.max_retries,
+            delayMs: message.retry_delay_ms,
+            ...(message.error_status !== null
+              ? { status: message.error_status }
+              : {}),
+          });
+          return;
+        }
         // The CLI compacted this session's context on its own (threshold/overflow)
         // in the middle of a turn. Nothing in the transcript changes on our side,
         // but the memory system and the context reading must follow it.
@@ -3429,7 +3444,13 @@ export class ClaudeSdkSession implements LiveSession {
     const toolId = streamToolBlockId(message);
     if (toolId) this.toolIdsByBlock.set(this.blockKey(message), toolId);
 
+    // Every stream event is the model producing something. Text and thinking
+    // report themselves as deltas; the rest — a response starting, a tool
+    // call's arguments streaming — would otherwise look like silence.
+    let reportedDelta = false;
     for (const delta of mapStreamEvent(message)) {
+      if (delta.type === "text" || delta.type === "thinking")
+        reportedDelta = true;
       switch (delta.type) {
         case "text":
           appendText(this.liveTurn.blocks, "text", delta.text);
@@ -3483,6 +3504,7 @@ export class ClaudeSdkSession implements LiveSession {
           break;
       }
     }
+    if (!reportedDelta) this.adapterEvents.modelActivity();
   }
 
   private blockKey(

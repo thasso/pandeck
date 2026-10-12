@@ -16,6 +16,7 @@ import {
   clampNumber,
   logAvailabilityByExistence,
   resumableState,
+  liveActivityFields,
   runtimeStateFor,
 } from "./sessionInspection.ts";
 
@@ -266,6 +267,7 @@ async function toCandidate(meta: SessionMeta, refs?: CompactRef[]) {
     messageCount: meta.messageCount,
     archived: meta.archivedAt != null,
     runtimeState: runtime,
+    ...liveActivityFields(meta.id, runtime),
     resumable: resumable.resumable,
     ...(resumable.reason ? { notResumableReason: resumable.reason } : {}),
     logAvailability: logAvailabilityByExistence(meta.id),

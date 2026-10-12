@@ -120,6 +120,7 @@ export function PromptQueueStory({
             <PromptQueueLedge
               queue={queueFor(scenario)}
               peers={peersFor(scenario)}
+              backgroundUpdates={scenario === "stopped" ? 2 : 0}
               running={running}
               canSteer
               onRemove={() => {}}

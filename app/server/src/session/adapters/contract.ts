@@ -124,6 +124,26 @@ export type AdapterEvent =
       phase?: string;
       requestBytes?: number;
     }
+  /**
+   * The model produced output that has no delta event of its own — a response
+   * starting, a tool call's arguments being written. Carries no content: it
+   * only moves the run's observed progress, so emit it per observed provider
+   * event and never on a timer.
+   */
+  | { type: "modelActivity" }
+  /**
+   * The provider is retrying a failed request, as the harness reported it.
+   * Transient: it feeds the run's observed progress only; a durable
+   * diagnostic is a separate `providerNotice`.
+   */
+  | {
+      type: "providerRetry";
+      attempt: number;
+      maxAttempts?: number;
+      delayMs?: number;
+      /** HTTP status of the failed request, when there was a response. */
+      status?: number;
+    }
   /** The run finished; `error`/`aborted` are surfaced as transport-only status. */
   | {
       type: "runCompleted";

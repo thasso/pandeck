@@ -107,6 +107,10 @@ import {
   stopSlackAssistantChat,
 } from "./slackAssistantChat.ts";
 import { hub } from "./hub.ts";
+import {
+  backgroundUpdateQueueChanged,
+  installBackgroundUpdateQueue,
+} from "./backgroundUpdateQueue.ts";
 import { backgroundWorkSupervisor } from "./backgroundWork/supervisor.ts";
 import {
   BackgroundCompletionDelivery,
@@ -293,6 +297,7 @@ function isPromptQueueDriver(
 
 const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   drainPeers: (sessionId) => drainRecipient(sessionId),
+  queueChanged: (sessionId) => backgroundUpdateQueueChanged(sessionId),
   held: (sessionId) => automaticTurnsHeld(sessionId),
   offer: async (sessionId, signal, clientRequestId) => {
     const candidate =
@@ -362,6 +367,13 @@ const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   },
   disposition: completionDisposition,
   outbox: backgroundDeliveryOutbox,
+});
+
+// What waits for each session, beside its peer queue: read only, never a turn.
+installBackgroundUpdateQueue({
+  count: (sessionId) => backgroundCompletionDelivery.queuedCount(sessionId),
+  publish: (sessionId, count) =>
+    hub.broadcastBackgroundUpdateQueue(sessionId, count),
 });
 
 // Deferred facts ride the next turn the session takes for any other reason.

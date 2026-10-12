@@ -39,6 +39,11 @@ import {
   type PromptQueueStoryProps,
 } from "./stories/cards/PromptQueue.stories.tsx";
 import {
+  AllStates as RunProgressAllStates,
+  Phone as RunProgressPhone,
+  RunProgressStory,
+} from "./stories/chat/RunProgress.stories.tsx";
+import {
   ChatActivityStory,
   Desktop as ActivityDesktop,
   Expanded as ActivityExpanded,
@@ -137,6 +142,10 @@ const storyRenderers: Record<StoryPreviewId, () => ReactElement> = {
   "prompt-queue--phone": () => (
     <PromptQueueStory {...queueArgsOf(QueuePhone)} />
   ),
+  "run-progress--all-states": () => (
+    <RunProgressStory {...RunProgressAllStates.args} />
+  ),
+  "run-progress--phone": () => <RunProgressStory {...RunProgressPhone.args} />,
   "session-inbox--attention-mix": () => (
     <SessionInboxStory {...argsOf(AttentionMix)} />
   ),
