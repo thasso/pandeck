@@ -95,6 +95,8 @@ export interface BackgroundWorkItem {
   state: BackgroundWorkState;
   intent: BackgroundWorkIntent;
   stopState: BackgroundWorkStopState;
+  /** Who wanted the Stop; set whenever `stopState` is not `none`. */
+  stopOrigin?: BackgroundWorkStopOrigin;
   stopReason?: string;
   stopRequestedAt?: number;
   stopAttempts: number;
@@ -118,6 +120,16 @@ export interface BackgroundWorkItem {
   terminalAt?: number;
   revision: number;
 }
+
+/**
+ * WHO wanted a Stop, never why or in what words. `requester` is an agent, a
+ * human or a server path acting for one, all of whom hold the answer already;
+ * `deadline` and `system` are PA's own Stops, which nobody asked for: the
+ * frozen deadline expiring and the monitor event-rate limit. A reservation
+ * records its origin and the Stop that terminalizes the row records its own,
+ * so the row names the Stop that actually won (`deliveryPolicy.ts`).
+ */
+export type BackgroundWorkStopOrigin = "requester" | "deadline" | "system";
 
 /**
  * How this row came to exist. `reserved` is the only normal path: PA admitted
@@ -200,11 +212,17 @@ interface TerminalizeBackgroundWorkInput extends BackgroundEvidenceInput {
   state: Exclude<BackgroundWorkState, "pending-launch" | "running">;
   reason?: string;
   exitCode?: number;
+  /** The Stop whose acknowledgement IS this transition; it replaces a later reservation's. */
+  stopOrigin?: BackgroundWorkStopOrigin;
 }
 
 interface RequestBackgroundStopInput {
   itemId: string;
   reason: string;
+  /** Defaults to `requester`; only the supervisor's own Stops pass another. */
+  origin?: BackgroundWorkStopOrigin;
+  /** Recorded when the Stop wins before launch; defaults to `stopped-by-owner`. */
+  preventedLaunchReason?: string;
   /** Idempotency key for the Stop itself; a repeat records no second attempt. */
   sourceRequestId: string;
   ackDeadlineMs?: number;
@@ -297,6 +315,7 @@ interface ItemRow {
   state: BackgroundWorkState;
   intent: BackgroundWorkIntent;
   stop_state: BackgroundWorkStopState;
+  stop_origin: BackgroundWorkStopOrigin | null;
   stop_reason: string | null;
   stop_requested_at_ms: number | null;
   stop_attempts: number;
@@ -429,6 +448,7 @@ function itemOf(row: ItemRow): BackgroundWorkItem {
     state: row.state,
     intent: row.intent,
     stopState: row.stop_state,
+    ...(row.stop_origin ? { stopOrigin: row.stop_origin } : {}),
     ...(row.stop_reason ? { stopReason: row.stop_reason } : {}),
     ...(row.stop_requested_at_ms !== null
       ? { stopRequestedAt: row.stop_requested_at_ms }
@@ -1303,6 +1323,7 @@ function terminalize(
          SET state = ?, terminal_at_ms = ?, terminal_reason = COALESCE(?, terminal_reason),
              exit_code = COALESCE(?, exit_code),
              stop_state = CASE WHEN stop_state = 'unconfirmed' THEN 'requested' ELSE stop_state END,
+             stop_origin = CASE WHEN stop_state = 'none' THEN stop_origin ELSE COALESCE(?, stop_origin) END,
              updated_at_ms = ?
          WHERE id = ?`,
       )
@@ -1313,6 +1334,7 @@ function terminalize(
         input.exitCode === undefined
           ? null
           : safeInteger(input.exitCode, "exitCode"),
+        input.stopOrigin ?? null,
         now,
         row.id,
       );
@@ -1370,6 +1392,7 @@ function requestStop(
     const now = input.now ?? Date.now();
     const row = requireItem(input.itemId);
     const reason = bounded(input.reason, REASON_MAX_CHARS, "reason");
+    const origin = input.origin ?? "requester";
     const sourceRequestId = bounded(
       input.sourceRequestId,
       ID_MAX_CHARS,
@@ -1392,12 +1415,25 @@ function requestStop(
       getDb()
         .prepare(
           `UPDATE background_work_items
-           SET state = 'not-started', stop_state = 'requested', stop_reason = ?,
+           SET state = 'not-started', stop_state = 'requested', stop_origin = ?, stop_reason = ?,
                stop_requested_at_ms = ?, stop_source_request_id = ?, terminal_at_ms = ?,
-               terminal_reason = 'stopped-by-owner', updated_at_ms = ?
+               terminal_reason = ?, updated_at_ms = ?
            WHERE id = ? AND state = 'pending-launch'`,
         )
-        .run(reason, now, sourceRequestId, now, now, row.id);
+        .run(
+          origin,
+          reason,
+          now,
+          sourceRequestId,
+          now,
+          bounded(
+            input.preventedLaunchReason ?? "stopped-by-owner",
+            REASON_MAX_CHARS,
+            "preventedLaunchReason",
+          ),
+          now,
+          row.id,
+        );
       touch.itemIds.add(row.id);
       // The Stop won before anything executed, so an epoch reserved for this
       // admission alone is released with it rather than holding the slot.
@@ -1414,12 +1450,13 @@ function requestStop(
     getDb()
       .prepare(
         `UPDATE background_work_items
-         SET stop_state = ?, stop_reason = ?, stop_requested_at_ms = COALESCE(stop_requested_at_ms, ?),
+         SET stop_state = ?, stop_origin = ?, stop_reason = ?, stop_requested_at_ms = COALESCE(stop_requested_at_ms, ?),
              stop_source_request_id = ?, stop_ack_deadline_at_ms = ?, updated_at_ms = ?
          WHERE id = ?`,
       )
       .run(
         stopState,
+        origin,
         reason,
         now,
         sourceRequestId,

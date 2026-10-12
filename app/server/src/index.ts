@@ -121,7 +121,7 @@ import {
   backgroundNoticeCommand,
   backgroundWorkHumanLink,
   completionDisposition,
-  completionNoticeOf,
+  enqueueCompletionNotice,
   restoreOwedBackgroundDelivery,
 } from "./backgroundCompletionNotices.ts";
 import {
@@ -300,6 +300,9 @@ const backgroundCompletionDelivery = new BackgroundCompletionDelivery({
   queueChanged: (sessionId) => backgroundUpdateQueueChanged(sessionId),
   held: (sessionId) => automaticTurnsHeld(sessionId),
   offer: async (sessionId, signal, clientRequestId) => {
+    // The drain read the hold after the peer phase; a Stop since then must not
+    // cost a cold acquisition the run door would refuse anyway.
+    if (automaticTurnsHeld(sessionId)) return "busy";
     const candidate =
       hub.getLiveById(sessionId) ?? (await hub.acquireById(sessionId));
     if (
@@ -420,11 +423,11 @@ backgroundWorkSupervisor.setCompletionRecordedHandler((item) => {
   // recorded. Asking again at drain time would always answer "idle" — the queue
   // only drains when the session is idle — and the whole question is whether a
   // turn was live to receive the provider's own notification.
-  const notice = completionNoticeOf(
+  enqueueCompletionNotice(
+    backgroundCompletionDelivery,
     item,
     Boolean(hub.getLiveById(item.ownerSessionId)?.isRunning),
   );
-  if (notice) backgroundCompletionDelivery.enqueue(item.ownerSessionId, notice);
 });
 
 const WEBSOCKET_COMPRESSION = {

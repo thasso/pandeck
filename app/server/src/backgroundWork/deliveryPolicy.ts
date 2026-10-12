@@ -30,6 +30,8 @@
  * model never learns is not.
  */
 
+import type { BackgroundWorkStopOrigin } from "../db/backgroundWorkStore.ts";
+
 /** Which provider executes the work, mirroring the durable row's `backend`. */
 export type BackgroundDeliveryBackend = "claude-query" | "host-process";
 
@@ -47,21 +49,26 @@ type BackgroundDeliveryDisposition = "wake" | "defer";
  * happen to agree today must still be distinguishable.
  */
 type BackgroundDeliveryReason =
-  "stop-requested" | "already-in-turn" | "awaited" | "unrequested-stop";
+  | "stop-requested"
+  | "already-in-turn"
+  | "awaited"
+  | "unrequested-stop"
+  | "deadline-expired";
 
 /**
- * WHO wanted the Stop — not why, and never its wording.
+ * WHO wanted the Stop — not why, and never its wording. The row records it
+ * (`backgroundWorkStore.ts`), naming the Stop that actually ended the work.
  *
- * `requester` covers every stop somebody holds the answer to already. `system`
- * is PA stopping work the owner neither asked for nor could predict, which is
- * the only case where the row alone leaves the agent believing its monitor is
- * still watching.
+ * `requester` covers every stop somebody holds the answer to already.
+ * `deadline` and `system` are PA stopping work on its own account — the frozen
+ * deadline expiring, the monitor event-rate limit — which leaves the owner
+ * believing the work is still running, often while it waits parked for it.
  */
-export type BackgroundStopOrigin = "requester" | "system";
+export type BackgroundStopOrigin = BackgroundWorkStopOrigin;
 
 export interface BackgroundDeliveryEvidence {
   backend: BackgroundDeliveryBackend;
-  /** The row carries a Stop request from ANY source: agent, human, or deadline. */
+  /** The row carries a Stop request from ANY source: agent, human, or PA itself. */
   stopRequested: boolean;
   /** Who asked. Meaningful only while `stopRequested`; defaults to `requester`. */
   stopOrigin?: BackgroundStopOrigin;
@@ -89,20 +96,26 @@ export function backgroundCompletionDisposition(
   evidence: BackgroundDeliveryEvidence,
 ): BackgroundDeliveryDecision {
   // PA stopped work nobody asked it to stop. The owner is holding the opposite
-  // belief — that its monitor is still watching — and deferring would confirm
-  // that belief by saying nothing, which is the failure this stop exists to
-  // prevent. Ordered FIRST so an unrequested stop can never fall into the
-  // requester branch below.
+  // belief — that its monitor is still watching, that its job is still running
+  // — and deferring would confirm that belief by saying nothing. Both are
+  // ordered FIRST so a Stop of PA's own can never fall into the requester
+  // branch below.
   if (evidence.stopRequested && evidence.stopOrigin === "system")
     return { disposition: "wake", reason: "unrequested-stop" };
 
+  // The frozen deadline ran out. The agent set that budget, but nothing told it
+  // the budget was spent: a session parked on a one-hour test run sat idle for
+  // over two hours after its deadline Stop, because this used to defer as if
+  // the agent had asked. It also wakes a running turn, as the event-rate Stop
+  // does: the CLI's own notification is not evidence the fact was seen.
+  if (evidence.stopRequested && evidence.stopOrigin === "deadline")
+    return { disposition: "wake", reason: "deadline-expired" };
+
   // A Stop was requested. Every requester already holds the answer: the agent
-  // got the terminal row back from its own `background_tasks` stop call, the
-  // human is looking at the UI they clicked, and a frozen-deadline Stop spends a
-  // budget the agent itself set. Note this deliberately does NOT distinguish
-  // those three — keying on the stop reason string would couple this policy to
-  // supervisor wording, which is also why the exception above is a typed origin
-  // rather than a reason match.
+  // got the terminal row back from its own `background_tasks` stop call, and
+  // the human is looking at the UI they clicked. Keying on the stop reason
+  // string would couple this policy to supervisor wording, which is why the
+  // exceptions above are a typed origin rather than a reason match.
   if (evidence.stopRequested)
     return { disposition: "defer", reason: "stop-requested" };
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "vitest";
 import type {
   BackgroundWorkStateChange,
@@ -1584,4 +1585,45 @@ test("a pinned evidence artifact is never silently repointed", () => {
     backgroundWorkStore.getItem(item.id)?.evidence?.artifactId,
     "artifact-a",
   );
+});
+
+test("the stop-origin migration describes history and leaves unstopped rows alone", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE background_work_items (
+      id TEXT PRIMARY KEY, stop_state TEXT NOT NULL, stop_source_request_id TEXT,
+      terminal_reason TEXT, deadline_at_ms INTEGER NOT NULL
+    );
+    INSERT INTO background_work_items VALUES
+      ('never', 'none', NULL, NULL, 5),
+      ('agent', 'requested', 'tool-call-1', 'stopped-by-owner', 5),
+      ('rate', 'requested', 'item:activity-rate:21', 'stopped-for-event-rate', 5),
+      ('deadline', 'requested', 'deadline:deadline:5', 'stopped-by-owner', 5),
+      ('lookalike', 'requested', 'deadline:other:5', 'stopped-by-owner', 5);
+  `);
+  db.exec(
+    readFileSync(
+      new URL(
+        "./migrations/0076_background_work_stop_origin.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      db
+        .prepare("SELECT id, stop_origin FROM background_work_items")
+        .all()
+        .map((row) => [row.id, row.stop_origin]),
+    ),
+    {
+      never: null,
+      agent: "requester",
+      rate: "system",
+      deadline: "deadline",
+      lookalike: "requester",
+    },
+  );
+  db.close();
 });

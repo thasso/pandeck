@@ -52,10 +52,9 @@ test("a pi process that settles inside a live turn still wakes", () => {
 });
 
 test("a requested Stop never wakes, whoever asked", () => {
-  // The agent holds the terminal row its own stop call returned, the human is
-  // looking at the UI they clicked, and a frozen-deadline Stop spends a budget
-  // the agent set. Deferred rather than dropped: two of the three leave nothing
-  // in the agent's transcript, and the policy does not distinguish them.
+  // The agent holds the terminal row its own stop call returned, and the human
+  // is looking at the UI they clicked. Deferred rather than dropped: a human
+  // Stop leaves nothing in the agent's transcript.
   for (const backend of ["claude-query", "host-process"] as const)
     for (const ownerTurnRunning of [false, true])
       for (const stopOrigin of [undefined, "requester"] as const)
@@ -91,6 +90,37 @@ test("a Stop nobody asked for wakes, even inside a live Claude turn", () => {
       );
 });
 
+test("a frozen-deadline Stop wakes the owner, parked or mid-turn", () => {
+  // Nobody asked: the owner set a budget, and nothing tells it the budget ran
+  // out. Deferring left a session parked on its test run idle for hours.
+  for (const backend of ["claude-query", "host-process"] as const)
+    for (const ownerTurnRunning of [false, true])
+      assert.deepEqual(
+        backgroundCompletionDisposition(
+          evidence({
+            backend,
+            ownerTurnRunning,
+            stopRequested: true,
+            stopOrigin: "deadline",
+          }),
+        ),
+        { disposition: "wake", reason: "deadline-expired" },
+      );
+  // The origin means nothing without a Stop on the row: work that ended on
+  // its own follows the ordinary rules.
+  assert.deepEqual(
+    backgroundCompletionDisposition(
+      evidence({
+        backend: "claude-query",
+        ownerTurnRunning: true,
+        stopRequested: false,
+        stopOrigin: "deadline",
+      }),
+    ),
+    { disposition: "defer", reason: "already-in-turn" },
+  );
+});
+
 test("no disposition ever discards a terminal fact", () => {
   // The policy's whole domain: every combination reaches the model somehow.
   // A `drop` outcome would need PROOF the fact is already in the transcript,
@@ -98,7 +128,7 @@ test("no disposition ever discards a terminal fact", () => {
   for (const backend of ["claude-query", "host-process"] as const)
     for (const stopRequested of [false, true])
       for (const ownerTurnRunning of [false, true])
-        for (const stopOrigin of ["requester", "system"] as const) {
+        for (const stopOrigin of ["requester", "deadline", "system"] as const) {
           const { disposition } = backgroundCompletionDisposition(
             evidence({ backend, stopRequested, ownerTurnRunning, stopOrigin }),
           );

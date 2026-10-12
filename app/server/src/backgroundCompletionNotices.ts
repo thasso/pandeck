@@ -5,9 +5,10 @@
  * A notice is rebuilt from its row rather than stored, so the outbox holds only
  * identities. That is what lets a fact owed to a session a Stop touched survive
  * a restart (`automaticTurnHold.ts`) until it is delivered — through a Resume
- * too. A fact no Stop touched keeps the old rule and is forgotten at boot: the
- * delivery queue never survived a restart, so no historical job is announced
- * again.
+ * too — and likewise a frozen-deadline Stop, which nothing else would ever
+ * tell the owner. Any other fact keeps the old rule and is forgotten at boot:
+ * the delivery queue never survived a restart, so no historical job is
+ * announced again.
  */
 import { automaticTurnsHeld } from "./automaticTurnHold.ts";
 import type {
@@ -16,7 +17,6 @@ import type {
   BackgroundDeliveryOutbox,
 } from "./backgroundWork/completionDelivery.ts";
 import { backgroundCompletionDisposition } from "./backgroundWork/deliveryPolicy.ts";
-import { BACKGROUND_EVENT_RATE_TERMINAL_REASON } from "./backgroundWork/supervisor.ts";
 import { backgroundDeliveryOutboxStore } from "./db/backgroundDeliveryOutboxStore.ts";
 import {
   backgroundWorkStore,
@@ -42,12 +42,18 @@ export function backgroundNoticeCommand(item: BackgroundWorkItem): {
   };
 }
 
+function lifetimeText(ms: number): string {
+  return ms < 60_000
+    ? `${Math.round(ms / 1000)}s`
+    : `${Math.round(ms / 60_000)} min`;
+}
+
 /**
  * The completion notice for a terminal row, or undefined for one that has not
  * ended. `ownerTurnRunning` is the caller's evidence, sampled when the fact
  * became durable (`deliveryPolicy.ts`).
  */
-export function completionNoticeOf(
+function completionNoticeOf(
   item: BackgroundWorkItem,
   ownerTurnRunning: boolean,
 ): BackgroundCompletionNotice | undefined {
@@ -83,6 +89,21 @@ export function completionNoticeOf(
           : {}),
       }
     : undefined;
+  const stopOrigin = item.stopOrigin ?? "requester";
+  // Said in words because the provider's own summary, when it has one, never
+  // says WHO stopped the work, and "stopped" alone reads as a decision of the
+  // agent's. Never a claim about what the work achieved before it ended.
+  const outcomeSummary =
+    item.state === "stopped" &&
+    item.stopState !== "none" &&
+    stopOrigin === "deadline"
+      ? [
+          `Stopped by PA at its frozen deadline (${lifetimeText(item.lifetimeMs)} lifetime): the work was ended, not completed, and nothing restarted it.`,
+          item.outcomeSummary,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : item.outcomeSummary;
   return {
     itemId: item.id,
     revision: item.revision,
@@ -91,18 +112,28 @@ export function completionNoticeOf(
     state: item.state,
     backend: item.backend,
     stopRequested: item.stopState !== "none",
-    // The supervisor's own constant, compared as a symbol, so the policy learns
-    // WHO wanted the stop without either side parsing the other's prose.
-    stopOrigin:
-      item.terminalReason === BACKGROUND_EVENT_RATE_TERMINAL_REASON
-        ? "system"
-        : "requester",
+    // The row's typed origin, so the policy learns WHO wanted the stop without
+    // parsing anybody's prose.
+    stopOrigin,
     ownerTurnRunning,
     ...(item.exitCode !== undefined ? { exitCode: item.exitCode } : {}),
-    ...(item.outcomeSummary ? { outcomeSummary: item.outcomeSummary } : {}),
+    ...(outcomeSummary ? { outcomeSummary } : {}),
     humanLink: backgroundWorkHumanLink(item.id),
     ...(output ? { output } : {}),
   };
+}
+
+/**
+ * The supervisor's `completionRecorded` handler: queue the row's notice for its
+ * owner. `ownerTurnRunning` is sampled by the caller AT durability.
+ */
+export function enqueueCompletionNotice(
+  delivery: BackgroundCompletionDelivery,
+  item: BackgroundWorkItem,
+  ownerTurnRunning: boolean,
+): void {
+  const notice = completionNoticeOf(item, ownerTurnRunning);
+  if (notice) delivery.enqueue(item.ownerSessionId, notice);
 }
 
 /** How a completion reaches the model (`deliveryPolicy.ts`). */
@@ -115,6 +146,15 @@ export function completionDisposition(
     ...(notice.stopOrigin ? { stopOrigin: notice.stopOrigin } : {}),
     ownerTurnRunning: notice.ownerTurnRunning,
   }).disposition;
+}
+
+/**
+ * A frozen-deadline Stop has no requester holding the answer, so a restart
+ * before delivery must not forget it as it forgets other pending facts. Only
+ * facts saved from now on carry this: boot replays nothing older.
+ */
+function owedAcrossRestart(notice: BackgroundCompletionNotice): boolean {
+  return notice.stopRequested && notice.stopOrigin === "deadline";
 }
 
 /**
@@ -131,7 +171,7 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
         disposition,
         // Owed to a stopped session: it must outlive a restart until it is
         // delivered, whatever the user does with the hold meanwhile.
-        retained: automaticTurnsHeld(sessionId),
+        retained: automaticTurnsHeld(sessionId) || owedAcrossRestart(notice),
       });
     } catch (err) {
       console.warn(
@@ -157,13 +197,13 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
 };
 
 /**
- * Boot: put back every fact a Stop touched that was not yet delivered, in the
- * order it was owed, as it was decided then. "Not held now" never means
+ * Boot: put back every fact a Stop touched (or a frozen deadline ended) that
+ * was not yet delivered, in the order it was owed, as it was decided then. "Not held now" never means
  * "delivered": a Resume authorizes delivery, it does not perform it, so a fact
  * released and then cut off by the restart is restored too, and offered at
  * once to a session that is no longer held (one still held waits for Resume).
- * A row no Stop touched is forgotten, as a restart always forgot pending
- * delivery, and so is one whose item is gone or changed revision or owner:
+ * Any other row is forgotten, as a restart always forgot pending delivery, and
+ * so is one whose item is gone or changed revision or owner:
  * it no longer names the fact it was saved for.
  *
  * Delivery is at-least-once across the crash windows: a fact is retired only
@@ -200,9 +240,9 @@ export function restoreOwedBackgroundDelivery(
     restored += 1;
     if (!automaticTurnsHeld(row.sessionId)) resumed.add(row.sessionId);
   }
-  // Released before the restart, so nothing else will come for these: the
-  // usual peer-first drain offers them now (a deferred fact still waits for
-  // the session's next turn).
+  // Released before the restart (or never held, for a deadline fact), so
+  // nothing else will come for these: the usual peer-first drain offers them
+  // now (a deferred fact still waits for the session's next turn).
   for (const sessionId of resumed) void delivery.requestDrain(sessionId);
   return { restored, forgotten };
 }

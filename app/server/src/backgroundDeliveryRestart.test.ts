@@ -67,7 +67,7 @@ const script = `
     }
     return backgroundWorkStore.terminalize({ itemId: item.id, state: stop ? "stopped" : "completed" });
   };
-  const owe = (owner, item) => delivery.enqueue(owner, notices.completionNoticeOf(item, false));
+  const owe = (owner, item) => notices.enqueueCompletionNotice(delivery, item, false);
   const out = { phase, items: {} };
   if (phase === "seed") {
     for (const id of owners)

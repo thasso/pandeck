@@ -5,6 +5,7 @@ import type {
 import {
   backgroundWorkStore,
   type BackgroundWorkItem,
+  type BackgroundWorkStopOrigin,
 } from "../db/backgroundWorkStore.ts";
 import { removeSessionArtifact } from "../mcp/toolGroups/packRuntime.ts";
 import type {
@@ -33,11 +34,19 @@ export const BACKGROUND_STOP_ACK_DEADLINE_MS = 10_000;
 const BACKGROUND_STOP_MAX_ATTEMPTS = 2;
 export const BACKGROUND_DEPLOYMENT_STOP_REASON = "stopped-for-deployment";
 const BACKGROUND_OWNER_TERMINAL_REASON = "stopped-by-owner";
-/**
- * The one Stop nobody asked for. Exported so `deliveryPolicy.ts` can be told
- * WHICH kind of stop this was as a typed fact rather than by matching prose.
- */
 export const BACKGROUND_EVENT_RATE_TERMINAL_REASON = "stopped-for-event-rate";
+export const BACKGROUND_DEADLINE_TERMINAL_REASON = "stopped-at-deadline";
+
+/**
+ * The terminal reason each Stop origin records when its Stop is the one that
+ * ends the row. Display only: delivery reads the typed `stopOrigin`, never
+ * these strings.
+ */
+const TERMINAL_REASON_BY_ORIGIN: Record<BackgroundWorkStopOrigin, string> = {
+  requester: BACKGROUND_OWNER_TERMINAL_REASON,
+  deadline: BACKGROUND_DEADLINE_TERMINAL_REASON,
+  system: BACKGROUND_EVENT_RATE_TERMINAL_REASON,
+};
 
 const TERMINAL_STATES = new Set<BackgroundWorkState>([
   "completed",
@@ -271,31 +280,19 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     if (this.draining) return;
     const item = backgroundWorkStore.getItem(event.itemId);
     if (!item || TERMINAL_STATES.has(item.state)) return;
-    void this.stopOne(
+    void this.reserveTargetedStop(
       {
         itemId: item.id,
         ownerSessionId: item.ownerSessionId,
         sourceRequestId: event.eventId,
         reason: `this monitor produced more than ${event.notificationCount - 1} notifications in ${Math.round(event.windowMs / 1000)}s and was stopped. Restart it with a filter that emits only the lines you would act on.`,
       },
-      BACKGROUND_EVENT_RATE_TERMINAL_REASON,
-    )
-      .then((result) => {
-        // A targeted Stop terminalizes the row ITSELF and the backend suppresses
-        // its own `completed` event once stopping, so this is the only path that
-        // can hand the fact to delivery. Every other Stop has a requester holding
-        // the answer already; this one has none, which is the whole reason the
-        // rate limit stops rather than merely muting. Only `stopped` notifies:
-        // `already-terminal` means `completed` beat us here and has notified,
-        // and `stop-unconfirmed` leaves a nonterminal row with no fact to send.
-        if (result.state !== "stopped" || !result.item || this.draining) return;
-        this.completionRecorded?.(result.item);
-      })
-      .catch((error) =>
-        this.reportAsyncFailure(
-          `event-rate Stop failed for ${item.id}: ${boundedError(error)}`,
-        ),
-      );
+      "system",
+    ).catch((error) =>
+      this.reportAsyncFailure(
+        `event-rate Stop failed for ${item.id}: ${boundedError(error)}`,
+      ),
+    );
   }
 
   outputCaptured(output: BackgroundWorkOutputCaptured): void {
@@ -324,9 +321,21 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         : completion.state === "failed"
           ? "failed"
           : "stopped";
+    // A provider reporting `stopped` while one of PA's own Stops is outstanding
+    // is that Stop landing: name it, as its acknowledgement would have.
+    const unrequestedStop =
+      state === "stopped" &&
+      before?.stopState !== "none" &&
+      before?.stopOrigin !== undefined &&
+      before.stopOrigin !== "requester"
+        ? before.stopOrigin
+        : undefined;
     const item = backgroundWorkStore.terminalize({
       itemId: completion.itemId,
       state,
+      ...(unrequestedStop
+        ? { reason: TERMINAL_REASON_BY_ORIGIN[unrequestedStop] }
+        : {}),
       ...(completion.exitCode !== undefined
         ? { exitCode: completion.exitCode }
         : {}),
@@ -348,9 +357,21 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
       this.completionRecorded?.(item);
   }
 
-  async stopOne(
+  /** A Stop somebody asked for: an agent, a human, or a path acting for one. */
+  stopOne(
     request: BackgroundWorkStopOneRequest,
-    terminalReason: string = BACKGROUND_OWNER_TERMINAL_REASON,
+  ): Promise<BackgroundWorkStopResult> {
+    return this.reserveTargetedStop(request, "requester");
+  }
+
+  /**
+   * `origin` is decided HERE, by which supervisor path is stopping the work,
+   * and never taken from a caller: only the deadline timer and the event-rate
+   * limit pass anything but `requester`.
+   */
+  private async reserveTargetedStop(
+    request: BackgroundWorkStopOneRequest,
+    origin: BackgroundWorkStopOrigin,
   ): Promise<BackgroundWorkStopResult> {
     const before = backgroundWorkStore.getItem(request.itemId);
     if (!before || before.ownerSessionId !== request.ownerSessionId)
@@ -358,6 +379,8 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     const reservation = backgroundWorkStore.requestStop({
       itemId: request.itemId,
       reason: request.reason,
+      origin,
+      preventedLaunchReason: TERMINAL_REASON_BY_ORIGIN[origin],
       sourceRequestId: request.sourceRequestId,
       ackDeadlineMs: BACKGROUND_STOP_ACK_DEADLINE_MS,
       now: this.clock.now(),
@@ -381,7 +404,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     this.pendingStopSources.set(request.itemId, request.sourceRequestId);
     if (reservation.item.stopState === "awaiting-binding")
       return { state: "awaiting-binding", item: reservation.item };
-    return this.runTargetedStop(request, terminalReason);
+    return this.runTargetedStop(request, origin);
   }
 
   async stopAllOwner(
@@ -502,6 +525,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
             itemId: item.id,
             state: "stopped",
             reason: terminalReason,
+            stopOrigin: "requester",
             now: this.clock.now(),
           });
           this.cancelDeadline(item.id);
@@ -673,6 +697,18 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
     );
   }
 
+  private notifyCompletion(item: BackgroundWorkItem): void {
+    try {
+      this.completionRecorded?.(item);
+    } catch (error) {
+      // The Stop happened and the row says so; a delivery failure must not
+      // read as a failed Stop to the timer or the rate limit that issued it.
+      this.reportAsyncFailure(
+        `completion delivery failed for ${item.id}: ${boundedError(error)}`,
+      );
+    }
+  }
+
   private reportAsyncFailure(message: string): void {
     try {
       this.reportError(message);
@@ -698,12 +734,15 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
       Math.max(0, item.deadlineAt - this.clock.now()),
       () => {
         this.deadlineTimers.delete(item.id);
-        void this.stopOne({
-          itemId: item.id,
-          ownerSessionId: item.ownerSessionId,
-          sourceRequestId: `deadline:${item.id}:${item.deadlineAt}`,
-          reason: "background work reached its frozen deadline",
-        }).catch((error) =>
+        void this.reserveTargetedStop(
+          {
+            itemId: item.id,
+            ownerSessionId: item.ownerSessionId,
+            sourceRequestId: `deadline:${item.id}:${item.deadlineAt}`,
+            reason: "background work reached its frozen deadline",
+          },
+          "deadline",
+        ).catch((error) =>
           this.reportAsyncFailure(
             `deadline Stop failed for ${item.id}: ${boundedError(error)}`,
           ),
@@ -729,7 +768,8 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         sourceRequestId,
         reason: item.stopReason ?? "background work Stop was requested",
       },
-      BACKGROUND_OWNER_TERMINAL_REASON,
+      // The reservation that parked for the binding, as the row recorded it.
+      item.stopOrigin ?? "requester",
     ).catch((error) =>
       this.reportAsyncFailure(
         `bound Stop failed for ${item.id}: ${boundedError(error)}`,
@@ -739,7 +779,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
 
   private async runTargetedStop(
     request: BackgroundWorkStopOneRequest,
-    terminalReason: string,
+    origin: BackgroundWorkStopOrigin,
   ): Promise<BackgroundWorkStopResult> {
     for (
       let attempt = 1;
@@ -783,11 +823,20 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
         const stopped = backgroundWorkStore.terminalize({
           itemId: current.id,
           state: "stopped",
-          reason: terminalReason,
+          reason: TERMINAL_REASON_BY_ORIGIN[origin],
+          stopOrigin: origin,
           now: this.clock.now(),
         });
         this.cancelDeadline(current.id);
         this.pendingStopSources.delete(current.id);
+        // A targeted Stop terminalizes the row ITSELF and a backend suppresses
+        // its own `completed` once stopping, so for a Stop nobody asked for
+        // this is the only hop that tells the owner. A requester holds the
+        // answer already. Only THIS transition notifies: when `completed` won
+        // instead, the row was terminal above and that path notified; an
+        // unacknowledged Stop leaves a nonterminal row with no fact to send.
+        if (origin !== "requester" && !this.draining)
+          this.notifyCompletion(stopped);
         return { state: "stopped", item: stopped };
       }
     }
