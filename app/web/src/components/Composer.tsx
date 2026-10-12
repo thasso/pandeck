@@ -1323,6 +1323,15 @@ export const Composer = memo(function Composer({
     ? () => chatComments?.remove(editingComment.id)
     : undefined;
 
+  // A send empties the field AND its stored copy at once: the send can move this
+  // composer (the first prompt carries it from the new-session landing into the
+  // transcript's dock), and the composer mounted there reads storage before this
+  // one's persistence effect would have cleared it.
+  const clearSentText = () => {
+    setText("");
+    clearBrowserDraft(draftStorageKey);
+  };
+
   const submit = (alternate = false) => {
     if (disabled || !canSend || sendBlocked || sendBlockedReason) return;
     const steerNow = alternate && providerCanSteer;
@@ -1347,7 +1356,7 @@ export const Composer = memo(function Composer({
       deliver(serializeChatCommentPrompt(value.slice(1), pendingComments));
       clearAttachments();
       chatComments?.clear(pendingComments.map((comment) => comment.id));
-      setText("");
+      clearSentText();
       setAttachmentError(null);
       finishSubmit();
       return;
@@ -1411,7 +1420,7 @@ export const Composer = memo(function Composer({
           command: { name: slashAction.name, rawArgs: slashAction.rawArgs },
         });
       else actions.runSlashCommand(slashAction.name, slashAction.rawArgs);
-      setText("");
+      clearSentText();
       setAttachmentError(null);
       finishSubmit();
       return;
@@ -1422,7 +1431,7 @@ export const Composer = memo(function Composer({
     // Only what this prompt carried: a comment moved in from a document while
     // it was being sent waits for the next one.
     chatComments?.clear(pendingComments.map((comment) => comment.id));
-    setText("");
+    clearSentText();
     setAttachmentError(null);
     finishSubmit();
   };

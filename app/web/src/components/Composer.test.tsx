@@ -1475,3 +1475,68 @@ describe("Composer staged drafts", () => {
     expect(textarea().value).toBe("my own prompt");
   });
 });
+
+describe("Composer send", () => {
+  const actions = {
+    runSlashCommand: () => {},
+  } as unknown as AssistantActions;
+  const NEW_KEY = composerDraftStorageKey(null, true);
+
+  /**
+   * The host's side of a first send, as `App` does it: the prompt it echoes
+   * moves the composer from the new-session landing into the transcript's
+   * dock IN THE SAME COMMIT that empties the field, so the composer that sent
+   * unmounts before its persistence effect sees the empty text, and the one
+   * that mounts in the dock reads the draft back from storage.
+   */
+  function Host() {
+    const [sent, setSent] = useState(false);
+    const composer = (
+      <Composer
+        onSend={() => setSent(true)}
+        onAbort={() => {}}
+        streaming={false}
+        disabled={false}
+        contextInfo={null}
+        session={{ agentType: "workshop", harness: "pi" } as never}
+        models={[]}
+        slashCommands={[]}
+        draftStorageKey={NEW_KEY}
+        actions={actions}
+      />
+    );
+    return sent ? <section>{composer}</section> : <div>{composer}</div>;
+  }
+
+  afterEach(() => window.localStorage.clear());
+
+  function textarea(container: HTMLElement): HTMLTextAreaElement {
+    const field = container.querySelector("textarea");
+    if (!field) throw new Error("composer textarea did not render");
+    return field;
+  }
+
+  it("leaves no sent prompt behind when the send remounts the composer", () => {
+    const { container, render } = mount();
+    render(<Host />);
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    act(() => {
+      setter?.call(textarea(container), "first prompt");
+      textarea(container).dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(window.localStorage.getItem(NEW_KEY)).toBe("first prompt");
+
+    act(() => {
+      textarea(container).dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+      );
+    });
+
+    expect(container.querySelector("section textarea")).not.toBeNull();
+    expect(textarea(container).value).toBe("");
+    expect(window.localStorage.getItem(NEW_KEY)).toBeNull();
+  });
+});
