@@ -1,4 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { toast } from "sonner";
+import { Button } from "../../../src/components/ui/button.tsx";
 import * as UI from "../../../src/components/ui/sonner.tsx";
 
 function Gallery() {
@@ -11,6 +13,12 @@ function Gallery() {
         </p>
         <UI.Toaster />
       </div>
+      <Button
+        variant="outline"
+        onClick={() => toast.loading("Merging pull request…")}
+      >
+        Show a loading toast
+      </Button>
     </main>
   );
 }

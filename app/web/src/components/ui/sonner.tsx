@@ -6,8 +6,9 @@ import {
   InfoIcon,
   TriangleAlertIcon,
   OctagonXIcon,
-  Loader2Icon,
 } from "lucide-react";
+
+import { Spinner } from "@/components/ui/spinner";
 
 const Toaster = ({ style, ...props }: Omit<ToasterProps, "theme">) => {
   // The app themes via <html class="dark">, not next-themes.
@@ -24,7 +25,9 @@ const Toaster = ({ style, ...props }: Omit<ToasterProps, "theme">) => {
         info: <InfoIcon className="size-4" />,
         warning: <TriangleAlertIcon className="size-4" />,
         error: <OctagonXIcon className="size-4" />,
-        loading: <Loader2Icon className="size-4 animate-spin" />,
+        loading: (
+          <Spinner role="presentation" aria-hidden aria-label={undefined} />
+        ),
       }}
       style={
         {

@@ -55,6 +55,14 @@ function Button({
     busy?: boolean;
   }) {
   const iconOnly = typeof size === "string" && size.startsWith("icon");
+  // The spinner stands where the button's icon would, so it takes the size
+  // the variant gives an unsized icon instead of the spinner's own 16px.
+  const spinnerSize =
+    size === "xs" || size === "icon-xs"
+      ? "size-3"
+      : size === "sm"
+        ? "size-3.5"
+        : undefined;
   return (
     <ButtonPrimitive
       data-slot="button"
@@ -67,6 +75,7 @@ function Button({
           Spinner is a `role="status"` live region (loading-states.md R6). */}
       {busy ? (
         <Spinner
+          className={spinnerSize}
           data-icon="inline-start"
           role="presentation"
           aria-hidden
