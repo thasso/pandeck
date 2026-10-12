@@ -462,6 +462,33 @@ export function readSessionTailWithin(
   ).records;
 }
 
+/**
+ * The log's first included record, read from the start and stopping at it or
+ * once `maxBytes` of lines have gone by without one — never a scan past it.
+ */
+export function readSessionFirstWithin(
+  logPath: string,
+  maxBytes: number,
+  include: IncludeOptions,
+): SessionRecord | undefined {
+  let found: SessionRecord | undefined;
+  let bytes = 0;
+  let lineIndex = 0;
+  forEachJsonlLine(logPath, 0, (line) => {
+    lineIndex++;
+    const row = parseLine(line);
+    if (row) {
+      found = recordsForRow(row, lineIndex).find((r) =>
+        passesInclude(r, include),
+      );
+      if (found) return "stop";
+    }
+    bytes += Buffer.byteLength(line) + 1;
+    return bytes >= maxBytes ? "stop" : "continue";
+  });
+  return found;
+}
+
 function scanForward(
   logPath: string,
   limit: number,

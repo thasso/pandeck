@@ -21,14 +21,16 @@ import { taskNamingReference } from "./taskNaming.ts";
 import { findOriginTask, readTask } from "./tasks.ts";
 import {
   includeOptions,
+  readSessionFirstWithin,
   readSessionTailWithin,
-  readSessionWindow,
 } from "./tools/sessions/sessionInspection.ts";
 
 /** Log records read from the end of the session (visible text only). */
 const RETITLE_RECORD_LIMIT = 40;
 /** The furthest back from the log's end the recent turns are looked for. */
 const RETITLE_TAIL_MAX_BYTES = 1024 * 1024;
+/** The furthest into the log the opening prompt is looked for. */
+const RETITLE_HEAD_MAX_BYTES = 256 * 1024;
 /** Ceiling on one prompt or reply; its opening states what it is about. */
 const RETITLE_ENTRY_MAX_CHARS = 1_200;
 /** Ceiling on the whole conversation handed to the naming agent. */
@@ -59,8 +61,9 @@ export interface NamingTranscript {
  * Bounded twice over: the tail read never scans past the log's last
  * {@link RETITLE_TAIL_MAX_BYTES}, so a tool-heavy log yields fewer turns rather
  * than a full parse on the server thread, and the opening prompt comes from a
- * scan that stops at the first visible record. Model-only `<memory>` context
- * can lead a stored prompt; it is not what the user said.
+ * forward scan that stops at the first visible record or after
+ * {@link RETITLE_HEAD_MAX_BYTES} (finishing the line it is in). Model-only
+ * `<memory>` context can lead a stored prompt; it is not what the user said.
  */
 export function namingTranscript(sessionId: string): NamingTranscript {
   const logPath = canonicalSessionLogPath(sessionId);
@@ -85,7 +88,11 @@ export function namingTranscript(sessionId: string): NamingTranscript {
     recent.push({ role: record.role, text });
   }
   recent.reverse();
-  const [first] = readSessionWindow(logPath, "start", 1, include).records;
+  const first = readSessionFirstWithin(
+    logPath,
+    RETITLE_HEAD_MAX_BYTES,
+    include,
+  );
   const opening =
     first?.role === "user" && !kept.has(first.entryId)
       ? visibleText(first.text)

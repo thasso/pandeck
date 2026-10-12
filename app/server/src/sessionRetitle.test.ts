@@ -224,6 +224,50 @@ test("no usable model is an error the user sees, and the old title stays", async
   assert.equal(isRetitlingSession(sessionId), false);
 });
 
+test("the opening prompt is looked for only near the start of the log", () => {
+  const output = "y".repeat(64 * 1024);
+  writeLog([
+    // ~320 KiB of tool traffic before any visible record, then the prompt.
+    ...Array.from({ length: 5 }, (_, i) => ({
+      type: "message",
+      id: `t${i}`,
+      role: "toolResult",
+      toolName: "Bash",
+      content: [{ type: "text", text: output }],
+    })),
+    user("u1", "late prompt"),
+    ...Array.from({ length: 32 }, (_, i) => ({
+      type: "message",
+      id: `r${i}`,
+      role: "toolResult",
+      toolName: "Bash",
+      content: [{ type: "text", text: output }],
+    })),
+  ]);
+
+  // Past the head cap and outside the tail window: nothing to name.
+  assert.deepEqual(namingTranscript(sessionId), { recent: [] });
+});
+
+test("an opening prompt followed only by tool traffic is still found", () => {
+  const output = "y".repeat(64 * 1024);
+  writeLog([
+    user("u1", "start the migration"),
+    ...Array.from({ length: 32 }, (_, i) => ({
+      type: "message",
+      id: `t${i}`,
+      role: "toolResult",
+      toolName: "Bash",
+      content: [{ type: "text", text: output }],
+    })),
+  ]);
+
+  assert.deepEqual(namingTranscript(sessionId), {
+    opening: "start the migration",
+    recent: [],
+  });
+});
+
 test("a superseded run reports nothing, even when it fails", async () => {
   writeLog([user("u1", "hello")]);
   let fail!: (err: Error) => void;
