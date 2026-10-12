@@ -384,8 +384,8 @@ function ActiveSessionCardImpl({
       } ${showActions ? "border-muted" : ""}`}
     >
       {/* One rotator, two faces: the front stays in flow so the card keeps its
-          content height, and the actions face is absolutely laid over it at
-          exactly the same box. `backface-visibility` is what hides the face
+          content height, and the actions face is absolutely laid over it,
+          reaching past the card's padding to cover the whole card. `backface-visibility` is what hides the face
           turned away; `inert` is what keeps it out of focus and hit-testing.
           Both only matter once there IS a second face, so they come and go with
           it rather than sitting on every idle card. */}
@@ -864,7 +864,7 @@ function MetaItem({
   );
 }
 
-/** One fixed-size target on the actions face; icon over label. */
+/** One fixed-height target on the actions face; icon over label. */
 function ActionTile({
   icon: Icon,
   label,
