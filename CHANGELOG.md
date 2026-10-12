@@ -3,6 +3,19 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.55.0] - 2026-10-12
+
+### Other changes
+
+- Measure worktree status against its recorded branch
+  ([PR #96](https://github.com/thasso/pandeck/pull/96))
+- Restore Claude SDK tool permission callback
+  ([PR #95](https://github.com/thasso/pandeck/pull/95))
+- Clear persisted drafts when sending prompts
+  ([PR #94](https://github.com/thasso/pandeck/pull/94))
+- Replace Task issue lists with a single ticket
+  ([PR #93](https://github.com/thasso/pandeck/pull/93))
+
 ## [0.54.0] - 2026-10-12
 
 ### Other changes
