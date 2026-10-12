@@ -111,28 +111,66 @@ Stop hold), owes nothing, and an abort asked of the turn never reaches the hook
 at all. Cancellation is classified here, live, never reconstructed later. The
 provider's wording is classified into a category in memory and dropped. Then:
 
-1. **Journal.** The safe facts — incident key, session, run, category,
+1. **Plan.** Who the failure is owed to is decided from the evidence AT the
+   failure: the spawn edge, and peer rows the child had taken in (`acceptedAt`)
+   by then — the routes, each with the coordinator's unanswered request ids, and
+   the requested replies that were in the failed turn.
+2. **Journal.** The safe facts — incident key, session, run, category,
    structured reset, failure time, whether the failed turn was a notice turn —
-   are appended to `DATA_DIR/delegation-failure-journal.jsonl`
-   (`delegationFailureJournal.ts`), a file of its own beside the database.
-2. **Database.** Eligibility is decided and the notice rows are written (and the
-   in-turn requested rows taken over) in one SQLite transaction.
-3. **Retire.** A `done` line retires the journal entry once the database holds
+   and that plan (identities only) are appended to
+   `DATA_DIR/delegation-failure-journal.jsonl` (`delegationFailureJournal.ts`),
+   a file of its own beside the database.
+3. **Database.** The plan's routes still owed (each coordinator still a live
+   user session) are written, and the plan's in-turn requests taken over, in one
+   SQLite transaction.
+4. **Retire.** A `done` line retires the journal entry once the database holds
    it.
 
 Only then is the coordinator nudged. A database that refuses leaves the entry
 pending, and the hook returns: the failure is durable. The retry sweep
-(`sweepPeerPromptRetries`, every 15 s) and every boot
-(`recoverJournaledFailuresOnBoot`, before peer recovery) replay what is still
-pending through the same eligibility, so a settled child whose coordinator still
-has a request open in it is recovered too. A replay of an incident the database
-already holds writes nothing (its incident key); an entry is never retired on a
-failed write, however many restarts the database keeps refusing. Boot then
-compacts the journal to what is still pending, atomically, and a run of
-retirements compacts it in-process too, so the file stays as small as what is
-owed. Nothing is ever read back out of a transcript, so how large or how many
-the later turns are does not matter, and no historical failure is ever
-announced: the journal starts empty.
+(`sweepPeerPromptRetries`, every 15 s, a batch of at most 50, after the queue's
+own retries) and every boot (`recoverJournaledFailuresOnBoot`, all of it, before
+peer recovery) replay what is still pending.
+
+**A replay never reinterprets an old failure as new work.** It records only the
+plan's coordinators and interrupts only the plan's in-turn requests, so a
+request any session sent the child after the failure is never touched and its
+sender is never told. An incident the database already holds — for anyone — is
+complete: a replay of it, e.g. after its `done` line was lost, writes nothing
+and only retires it. A failure whose plan could not be read at the time (the
+database refused even reads) is planned at replay from the evidence no newer
+than the failure, by the same `acceptedAt` bound, and a plan that is malformed
+on disk is ignored rather than trusted in part. A coordinator whose in-turn
+request the peer path interrupted meanwhile (the record came late) is told by
+that path instead. An entry is never retired on a failed write, however many
+restarts the database keeps refusing.
+
+**Framing.** Every record is written as a line of its own, preceded by a
+newline, so a torn tail left by a process that died mid-append invalidates only
+itself, never the record written after it. Unparseable lines are skipped. A torn
+`done` leaves its failure pending; the replay finds it recorded and only retires
+it.
+
+**Reading.** The journal is read once per process (at boot, or the first time it
+is needed), in 64 KiB chunks; a line longer than 64 KiB cannot be a record and
+is skipped without being kept. Only the pending facts stay in memory. A journal
+that cannot be read (an I/O error, not a corrupt line) is never taken for an
+empty one: the sweep and boot report it in fixed words, leave the file exactly
+as it is, and go on with everything else — the peer queue's own retries run
+first in the sweep and never wait on it; the next read tries again.
+
+**Size.** Boot compacts the journal to what is still pending, atomically; in a
+running process it compacts once the retired lines outnumber both 200 and what
+is still pending, so draining a backlog costs linear writing. While the database
+refuses, the file holds one short line per failure and grows only by failures;
+nothing pending is dropped to fit a bound. Measured on the test fixture: 10,000
+pending entries with a 1 MB garbage line and torn tails load in about 33 ms of
+CPU, one sweep batch takes about 7 ms, and a boot drains all of them in about 1
+s.
+
+Nothing is ever read back out of a transcript, so how large or how many the
+later turns are does not matter, and no historical failure is ever announced:
+the journal starts empty.
 
 Only when NEITHER the journal nor the database takes a failure does the hook
 throw. The runtime then keeps the report in memory, retries it at every turn

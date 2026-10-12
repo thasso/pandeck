@@ -1262,15 +1262,18 @@ function retryOrFail(id: string, attempts: number, reason: string): void {
  * independent interval (see index.ts) and can be invoked directly by tests.
  */
 export function sweepPeerPromptRetries(now = Date.now()): void {
-  // A failure the database refused when it happened is retried here too,
-  // from the journal that kept it (`delegationFailureJournal.ts`).
-  const replayed = replayJournaledFailures(now);
-  if (replayed.length > 0)
-    wakeForNotice(new Set(replayed.map((n) => n.coordinatorSessionId)));
+  // The queue's own retries come first and never wait on the journal.
   const requeued = peerPromptStore.requeueDueRetries(now);
   for (const m of requeued) void broadcastCardUpdateFor(m);
   const recipients = new Set(requeued.map((m) => m.recipientSessionId));
   for (const id of recipients) void drainRecipient(id).catch(() => {});
+  // A failure the database refused when it happened is retried here too, a
+  // bounded batch per sweep, from the journal that kept it
+  // (`delegationFailureJournal.ts`). It reports its own trouble and never
+  // throws, so nothing above or after it is held up.
+  const replayed = replayJournaledFailures(now);
+  if (replayed.length > 0)
+    wakeForNotice(new Set(replayed.map((n) => n.coordinatorSessionId)));
 }
 
 function peerKey(messageId: string): string {

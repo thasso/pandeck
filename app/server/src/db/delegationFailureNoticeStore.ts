@@ -139,6 +139,21 @@ function record(
   });
 }
 
+/**
+ * Whether an incident was recorded at all — for any coordinator, delivered or
+ * not. One transaction writes every notice of an incident, so a recorded one
+ * is complete: a replay must not add to it.
+ */
+function hasIncident(incidentKey: string): boolean {
+  return (
+    getDb()
+      .prepare(
+        "SELECT 1 FROM delegation_failure_notices WHERE incident_key = ? LIMIT 1",
+      )
+      .get(incidentKey) !== undefined
+  );
+}
+
 /** What a coordinator is still owed, oldest first. */
 function pendingFor(coordinatorSessionId: string): DelegationFailureNotice[] {
   return (
@@ -229,6 +244,7 @@ function pruneRetired(cutoffMs: number): number {
 
 export const delegationFailureNoticeStore = {
   record,
+  hasIncident,
   pendingFor,
   hasPendingFor,
   coordinatorsWithPending,

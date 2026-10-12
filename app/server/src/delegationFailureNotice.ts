@@ -23,7 +23,11 @@ import {
   compactJournal,
   journalDone,
   journalFailure,
+  MAX_PLAN_IDS,
+  MAX_PLAN_ROUTES,
   pendingJournaledFailures,
+  reloadJournal,
+  type FailurePlan,
   type JournaledFailure,
 } from "./delegationFailureJournal.ts";
 import {
@@ -261,41 +265,43 @@ function safeFailureOf(report: RunFailureReport): JournaledFailure | undefined {
 }
 
 /**
- * The notices one failed turn owes, recorded in ONE transaction. Returns the
- * rows written; throws when the database refuses.
+ * Who one failed turn is owed to, decided from the evidence that existed AT the
+ * failure — never from work that arrived since. Peer rows count only if the
+ * child had taken them in (`acceptedAt`) by then; the spawn edge predates every
+ * run of its child. Throws when the database cannot be read.
  *
- * Who is told, and only them:
  * - `spawn` — the session that spawned the child and still owns it. Neither
  *   may be settled (the user put that delegation down), unless the
- *   coordinator has a request open in the child right now.
- * - `request` — a session whose requested reply the child still owes: it was
- *   being answered in the failed turn, or the child holds it unanswered
+ *   coordinator has a request open in the child.
+ * - `request` — a session whose requested reply the child owed: it was being
+ *   answered in the failed turn, or the child held it unanswered
  *   (`awaiting_response`). Not from a notice turn's failure: requests can form
  *   cycles, spawn edges cannot.
- *
- * A requested reply that was being answered IN the failed turn is interrupted
- * here, in the same transaction, with a reason of our own words and marked as
- * told: this notice is what tells its sender, so the peer interruption notice
- * does not tell it a second time.
- *
- * Nothing is recorded for a child deleted, archived or outside the user's
- * scope.
  */
-function recordSafeFailure(
-  failure: JournaledFailure,
-  now = Date.now(),
-): DelegationFailureNotice[] {
+function planFailure(failure: JournaledFailure): FailurePlan {
   const childId = failure.sessionId;
   const child = liveUserSession(childId);
-  if (!child) return [];
-
-  const open = peerPromptStore.openForRecipient(childId);
-  const inTurn = open.filter(
-    (m) =>
-      m.responseRequested &&
-      (m.status === "admitted" || m.status === "acknowledged"),
-  );
-
+  if (!child) return { routes: [], inTurnIds: [] };
+  const open = peerPromptStore
+    .openForRecipient(childId)
+    .filter((m) => m.acceptedAt !== undefined && m.acceptedAt <= failure.at);
+  const inTurn = [
+    ...open.filter(
+      (m) =>
+        m.responseRequested &&
+        (m.status === "admitted" || m.status === "acknowledged"),
+    ),
+    // Planned late (no plan could be read at the failure): the peer path may
+    // already have interrupted the failed turn's requests. Still this turn's.
+    ...peerPromptStore
+      .failedForRecipientSince(childId, failure.at)
+      .filter(
+        (m) =>
+          m.responseRequested &&
+          m.acceptedAt !== undefined &&
+          m.acceptedAt <= failure.at,
+      ),
+  ];
   const routes = new Map<string, DelegationFailureRoute>();
   const spawn = sessionStore.spawnedParentsByChildIds([childId]).get(childId);
   if (spawn?.ownership === "coordinator") {
@@ -317,34 +323,84 @@ function recordSafeFailure(
       )
         routes.set(m.senderSessionId, "request");
   routes.delete(childId);
-  // A failure recorded late (its first write failed) may already have been
-  // seen by the peer path, which interrupted the failed turn's requested
-  // replies and tells their senders itself. A row this function interrupted
-  // belongs to an incident already recorded. Either way: told elsewhere.
-  for (const m of peerPromptStore.failedForRecipientSince(childId, failure.at))
-    if (m.responseRequested) routes.delete(m.senderSessionId);
-  if (routes.size === 0) return [];
-
-  const inputs: DelegationFailureNoticeInput[] = [...routes].map(
-    ([coordinatorId, route]) => {
-      const anchor = anchorBetween(coordinatorId, childId);
-      return {
-        incidentKey: failure.incidentKey,
-        childSessionId: childId,
-        coordinatorSessionId: coordinatorId,
+  return {
+    routes: [...routes]
+      .slice(0, MAX_PLAN_ROUTES)
+      .map(([coordinatorId, route]) => ({
+        coordinatorId,
         route,
-        category: failure.category,
-        ...(failure.resetAt !== undefined ? { resetAt: failure.resetAt } : {}),
         requestIds: requestIdsFrom(open, coordinatorId),
-        ...(anchor ? { anchor } : {}),
-        failedAt: failure.at,
-      };
-    },
+      })),
+    inTurnIds: inTurn.slice(0, MAX_PLAN_IDS).map((m) => m.id),
+  };
+}
+
+/**
+ * Record what one failed turn was owed, per its plan, in ONE transaction.
+ * Returns the rows written; throws when the database refuses.
+ *
+ * Replays are bounded by the original evidence: only the plan's coordinators,
+ * each still a live user session, and only the plan's in-turn requests are
+ * interrupted. An incident already recorded — for anyone — is complete, and
+ * writes nothing more. A coordinator whose in-turn request the peer path
+ * already interrupted (the failure was recorded late) is told there instead.
+ *
+ * The in-turn requested replies are interrupted here, in the same
+ * transaction, with a reason of our own words and marked as told: this notice
+ * is what tells their sender, so the peer interruption notice does not tell it
+ * a second time.
+ */
+function recordPlanned(
+  failure: JournaledFailure,
+  plan: FailurePlan,
+  now = Date.now(),
+): DelegationFailureNotice[] {
+  if (plan.routes.length === 0) return [];
+  if (delegationFailureNoticeStore.hasIncident(failure.incidentKey)) return [];
+  const childId = failure.sessionId;
+  if (!liveUserSession(childId)) return [];
+  const inTurn = plan.inTurnIds
+    .map((id) => peerPromptStore.getById(id))
+    .filter(
+      (m): m is PeerPromptRecord =>
+        m !== undefined && m.recipientSessionId === childId,
+    );
+  // The incident is not recorded, so an in-turn request already interrupted
+  // as a failure was interrupted by the peer path, which tells (or told) its
+  // sender itself.
+  const toldElsewhere = new Set(
+    inTurn
+      .filter(
+        (m) => m.status === "interrupted" && m.interruptionKind === "failure",
+      )
+      .map((m) => m.senderSessionId),
   );
+  const routes = plan.routes.filter(
+    (r) =>
+      r.coordinatorId !== childId &&
+      !toldElsewhere.has(r.coordinatorId) &&
+      liveUserSession(r.coordinatorId),
+  );
+  if (routes.length === 0) return [];
+  const inputs: DelegationFailureNoticeInput[] = routes.map((r) => {
+    const anchor = anchorBetween(r.coordinatorId, childId);
+    return {
+      incidentKey: failure.incidentKey,
+      childSessionId: childId,
+      coordinatorSessionId: r.coordinatorId,
+      route: r.route,
+      category: failure.category,
+      ...(failure.resetAt !== undefined ? { resetAt: failure.resetAt } : {}),
+      requestIds: r.requestIds,
+      ...(anchor ? { anchor } : {}),
+      failedAt: failure.at,
+    };
+  });
+  const told = new Set(routes.map((r) => r.coordinatorId));
   return inDbTransaction(() => {
     const written = delegationFailureNoticeStore.record(inputs, now);
     peerPromptStore.interruptAsTold(
-      inTurn.filter((m) => routes.has(m.senderSessionId)).map((m) => m.id),
+      inTurn.filter((m) => told.has(m.senderSessionId)).map((m) => m.id),
       PEER_FAILURE_REASONS[failure.category],
       now,
     );
@@ -352,23 +408,36 @@ function recordSafeFailure(
   });
 }
 
+/** The plan a journaled failure carries, or one bounded by its failure time. */
+function planOf(failure: JournaledFailure): FailurePlan {
+  return failure.plan ?? planFailure(failure);
+}
+
 /**
  * Record what one failed turn of `report.sessionId` owes — the runtime's
  * failure hook, called before anything else learns of the failure.
  *
- * The safe facts go to the journal FIRST (`delegationFailureJournal.ts`), then
- * to the database, and the journal entry is retired only once the database
- * holds them. A database that refuses leaves the entry pending for the retry
- * sweep and the next boot, and this returns normally: the failure is durable.
- * Only when NEITHER store took it does this throw, so the runtime keeps it in
- * memory and tries again. Returns the notices written now.
+ * The routing is planned from the evidence at hand, then the safe facts and
+ * that plan go to the journal FIRST (`delegationFailureJournal.ts`), then to
+ * the database, and the journal entry is retired only once the database holds
+ * them. A database that refuses leaves the entry pending for the retry sweep
+ * and the next boot, and this returns normally: the failure is durable. One
+ * that cannot even be read leaves a plan-less entry, which a replay plans from
+ * the evidence as it stood at the failure. Only when NEITHER store took the
+ * failure does this throw, so the runtime keeps it in memory and tries again.
  */
 export function recordRunFailureNotices(
   report: RunFailureReport,
   now = Date.now(),
 ): DelegationFailureNotice[] {
-  const failure = safeFailureOf(report);
-  if (!failure) return [];
+  const facts = safeFailureOf(report);
+  if (!facts) return [];
+  let failure: JournaledFailure = facts;
+  try {
+    failure = { ...facts, plan: planFailure(facts) };
+  } catch {
+    // planned at replay, from evidence no newer than the failure
+  }
   let journaled = false;
   try {
     journalFailure(failure);
@@ -380,7 +449,7 @@ export function recordRunFailureNotices(
   }
   let written: DelegationFailureNotice[];
   try {
-    written = recordSafeFailure(failure, now);
+    written = recordPlanned(failure, planOf(failure), now);
   } catch (err) {
     if (!journaled) throw err;
     console.error(
@@ -392,20 +461,34 @@ export function recordRunFailureNotices(
   return written;
 }
 
+/** Journaled failures one sweep replays at most; the rest wait for the next. */
+const REPLAY_BATCH = 50;
+
 /**
- * Record every journaled failure the database does not hold yet — at boot,
- * before peer recovery reclassifies the rows of runs the restart cut off, and
- * from the retry sweep. A failure already recorded is recognized by its
- * incident key and writes nothing. One the database still refuses stays
- * journaled. Returns the notices written.
+ * Record journaled failures the database does not hold yet — at boot, before
+ * peer recovery reclassifies the rows of runs the restart cut off, and a
+ * bounded batch per retry sweep. Never throws: a journal that cannot be read
+ * is reported in fixed words and left exactly as it is, so the caller's own
+ * work goes on. One the database still refuses stays journaled. Returns the
+ * notices written.
  */
 export function replayJournaledFailures(
   now = Date.now(),
+  limit = REPLAY_BATCH,
 ): DelegationFailureNotice[] {
+  let batch: JournaledFailure[];
+  try {
+    batch = pendingJournaledFailures(limit);
+  } catch {
+    console.error(
+      "[delegation-failure] the failure journal could not be read; it is left as it is and retried",
+    );
+    return [];
+  }
   const written: DelegationFailureNotice[] = [];
-  for (const failure of pendingJournaledFailures()) {
+  for (const failure of batch) {
     try {
-      written.push(...recordSafeFailure(failure, now));
+      written.push(...recordPlanned(failure, planOf(failure), now));
     } catch {
       console.error(
         `[delegation-failure] could not record the journaled failure of run ${failure.runId} in ${failure.sessionId}; it stays journaled`,
@@ -417,9 +500,24 @@ export function replayJournaledFailures(
   return written;
 }
 
-/** Boot: replay what is owed, then shrink the journal to what still is. */
+/**
+ * Boot: read the journal afresh, replay ALL of it (before peer recovery, so
+ * in-turn requests are still as the failure left them), then shrink it to what
+ * is still owed. A journal that cannot be read is left untouched.
+ */
 export function recoverJournaledFailuresOnBoot(): number {
-  const recorded = replayJournaledFailures().length;
+  try {
+    reloadJournal();
+  } catch {
+    console.error(
+      "[delegation-failure] the failure journal could not be read at boot; it is left as it is",
+    );
+    return 0;
+  }
+  const recorded = replayJournaledFailures(
+    Date.now(),
+    Number.POSITIVE_INFINITY,
+  ).length;
   try {
     compactJournal();
   } catch {

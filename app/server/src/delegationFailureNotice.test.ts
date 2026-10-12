@@ -9,10 +9,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -92,7 +94,11 @@ const {
   delegationFailureNoticeLines,
   recordRunFailureNotices,
   recoverJournaledFailuresOnBoot,
+  replayJournaledFailures,
 } = await import("./delegationFailureNotice.ts");
+const journal = await import("./delegationFailureJournal.ts");
+const { DATA_DIR } = await import("./config.ts");
+const { measureCpuMs } = await import("./test/cpuBudget.ts");
 const { PiLiveSession } = await import("./piSdk/PiLiveSession.ts");
 const { sessionControlTools, setSessionControlRuntimeForTests } =
   await import("./tools/sessions/sessionControlTool.ts");
@@ -1608,6 +1614,19 @@ for (const [key, dir] of [["HOME", "home"], ["ASSISTANT_CWD", "cwd"], ["DATA_DIR
   assert.equal(process.env[key], root + "/" + dir);
 assert.equal(process.env.ASSISTANT_CONFIG, root + "/app.json");
 globalThis.fetch = async () => { throw new Error("external fetch denied"); };
+const [mode, scenario] = process.argv.slice(1);
+const journalPath = root + "/data/delegation-failure-journal.jsonl";
+if (mode === "crash" && scenario === "done-lost") {
+  // The journal's retirement never reaches the disk; everything else does.
+  const { createRequire, syncBuiltinESMExports } = await import("node:module");
+  const fs = createRequire(import.meta.url)("node:fs");
+  const append = fs.appendFileSync;
+  fs.appendFileSync = function (path, data, ...rest) {
+    if (String(path) === journalPath && String(data).includes('"kind":"done"')) throw new Error("retirement refused");
+    return append.call(this, path, data, ...rest);
+  };
+  syncBuiltinESMExports();
+}
 const src = process.env.DFN_SRC;
 const { DATA_DIR } = await import(src + "config.ts");
 assert.equal(DATA_DIR, root + "/data");
@@ -1619,7 +1638,6 @@ const { sessionRuntime } = await import(src + "session/runtimeInstance.ts");
 const { setRunFailureHook } = await import(src + "session/runtime/liveSession.ts");
 const { NativeAdapterEventSource } = await import(src + "session/adapters/nativeEvents.ts");
 const failures = await import(src + "delegationFailureNotice.ts");
-const [mode, scenario] = process.argv.slice(1);
 const ERROR = { errorMessage: "401 Unauthorized", failure: { kind: "auth" } };
 const refuseDatabase = () => { notices.record = () => { throw new Error("SQLITE_FULL"); }; };
 function nativeChild(prompt) {
@@ -1630,9 +1648,10 @@ function nativeChild(prompt) {
 const dieAtAssistantEntry = () => sessionRuntime.openSessionStream("Child", (e) => { if (e.type === "entryAppended" && e.entry.role === "assistant") process.exit(73); });
 setRunFailureHook(failures.recordRunFailureNotices);
 if (mode === "crash") {
-  for (const id of ["Coordinator", "Child"])
+  for (const id of ["Coordinator", "Child", "FutureRequester"])
     sessionStore.upsert({ id, harness: "pi", agentType: "assistant", scope: "user", title: id });
   sessionStore.linkSpawned("Coordinator", "Child");
+  if (scenario === "torn") { const { mkdirSync, writeFileSync } = await import("node:fs"); mkdirSync(root + "/data", { recursive: true }); writeFileSync(journalPath, '{"kind":"failed","incidentKey":"trunc'); }
   if (scenario === "requested" || scenario === "settled") {
     const chainId = peerPromptStore.createChain();
     const m = peerPromptStore.enqueue({ conversationId: "c", chainId, hop: peerPromptStore.reserveHop(chainId), senderSessionId: "Coordinator", recipientSessionId: "Child", prompt: "answer me", responseRequested: true });
@@ -1641,7 +1660,7 @@ if (mode === "crash") {
     peerPromptStore.markAcknowledged(m.id);
     if (scenario === "settled") { peerPromptStore.markCompleted(m.id); sessionStore.setSettled("Child", true); }
   }
-  if (!["recorded", "before", "pi-fanout", "claude-fanout", "standdown"].includes(scenario)) refuseDatabase();
+  if (!["recorded", "before", "pi-fanout", "claude-fanout", "standdown", "done-lost"].includes(scenario)) refuseDatabase();
   if (scenario === "pi-fanout" || scenario === "pi-fanout-refused") {
     const { PiLiveSession } = await import(src + "piSdk/PiLiveSession.ts");
     let listener;
@@ -1670,12 +1689,22 @@ if (mode === "crash") {
   } else {
     const events = nativeChild();
     if (scenario === "before") sessionRuntime.openSessionStream("Child", (e) => { if (e.type === "messageStarted") process.exit(73); });
-    if (scenario !== "large") dieAtAssistantEntry();
+    if (!["large", "future-work", "done-lost", "torn"].includes(scenario)) dieAtAssistantEntry();
     events.messageStarted("m");
     if (scenario === "standdown") { failures.noteDelegationStandDown("Child"); await sessionRuntime.abort("Child"); }
     if (scenario === "provider-abort") { events.runFailing("Request was aborted", { kind: "auth" }); events.messageCompleted("m", { ...ERROR, aborted: true }); }
     else events.messageCompleted("m", ERROR);
     if (scenario === "large") { events.messageStarted("n"); events.messageDelta("n", "text", "x".repeat(9 * 1024 * 1024)); events.messageCompleted("n"); process.exit(73); }
+    if (scenario === "future-work" || scenario === "done-lost" || scenario === "torn") {
+      // Unrelated work the child takes in AFTER the failure.
+      const t = Date.now() + 1000;
+      const chainId = peerPromptStore.createChain();
+      const m = peerPromptStore.enqueue({ conversationId: "later", chainId, hop: peerPromptStore.reserveHop(chainId), senderSessionId: "FutureRequester", recipientSessionId: "Child", prompt: "new work", responseRequested: true }, t);
+      peerPromptStore.claimNext("Child", "d", 60000, t);
+      peerPromptStore.markAdmitted(m.id, t);
+      peerPromptStore.markAcknowledged(m.id, t);
+      process.exit(73);
+    }
   }
   throw new Error("the crash point was not reached");
 } else if (mode === "boot-refused") {
@@ -1690,14 +1719,15 @@ if (mode === "crash") {
   const recovered = failures.recoverJournaledFailuresOnBoot();
   const again = failures.recoverJournaledFailuresOnBoot();
   const after = notices.pendingFor("Coordinator").map((n) => n.category);
-  const rows = peerPromptStore.listByParticipant("Child", 10).map((m) => ({ status: m.status, told: m.senderNotifiedAt !== undefined }));
+  const rows = peerPromptStore.listByParticipant("Child", 10).filter((m) => m.senderSessionId === "Coordinator").map((m) => ({ status: m.status, told: m.senderNotifiedAt !== undefined }));
+  const future = peerPromptStore.listByParticipant("FutureRequester", 10).map((m) => ({ status: m.status, told: m.senderNotifiedAt !== undefined, notices: notices.pendingFor("FutureRequester").length }));
   let next;
   if (scenario === "standdown") {
     const events = nativeChild();
     events.messageStarted("next"); events.messageCompleted("next", ERROR);
     next = notices.pendingFor("Coordinator").length;
   }
-  console.log(JSON.stringify({ before, recovered, again, after, rows, next }));
+  console.log(JSON.stringify({ before, recovered, again, after, rows, future, next }));
   closeDb();
 }
 `;
@@ -1732,6 +1762,7 @@ if (mode === "crash") {
     again: number;
     after: string[];
     rows: Array<{ status: string; told: boolean }>;
+    future: Array<{ status: string; told: boolean; notices: number }>;
     next?: number;
   }
 
@@ -1800,6 +1831,24 @@ if (mode === "crash") {
     assert.equal(settled.recovered, 1);
     const rebooted = scenario("refused", true);
     assert.equal(rebooted.recovered, 1);
+  }, 240_000);
+
+  it("later work, a lost retirement and a torn journal tail across real restarts: only the original coordinator, exactly once", () => {
+    for (const [name, recovered] of [
+      ["future-work", 1],
+      ["done-lost", 0],
+      ["torn", 1],
+    ] as const) {
+      const out = scenario(name);
+      assert.equal(out.recovered, recovered, name);
+      assert.equal(out.again, 0, name);
+      assert.deepEqual(out.after, ["auth"], `${name}: the parent, once`);
+      assert.deepEqual(
+        out.future,
+        [{ status: "acknowledged", told: false, notices: 0 }],
+        `${name}: later work untouched`,
+      );
+    }
   }, 240_000);
 
   it("dying before any failure, or in a run its coordinator stood down, announces nothing; the next run still does", () => {
@@ -2147,4 +2196,394 @@ describe("nothing the provider said reaches a log line", () => {
       for (const s of spies) s.mockRestore();
     }
   });
+});
+
+/* ------------------------- the journal, causally ---------------------------- */
+
+describe("a journaled failure replays only what it was owed when it happened", () => {
+  const journalFile = () => join(DATA_DIR, "delegation-failure-journal.jsonl");
+
+  /** Start from an empty journal, as a fresh data directory would. */
+  function freshJournal(): void {
+    rmSync(journalFile(), { recursive: true, force: true });
+    journal.reloadJournal();
+  }
+
+  /** A request from `sender` the child took in at `t` — work after the failure. */
+  function laterRequest(sender: string, child: string, t: number) {
+    const chainId = peerPromptStore.createChain();
+    const m = peerPromptStore.enqueue(
+      {
+        conversationId: `later-${n++}`,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: sender,
+        recipientSessionId: child,
+        prompt: "unrelated new work",
+        responseRequested: true,
+      },
+      t,
+    );
+    peerPromptStore.claimNext(child, "d", 60_000, t);
+    peerPromptStore.markAdmitted(m.id, t);
+    peerPromptStore.markAcknowledged(m.id, t);
+    return m;
+  }
+
+  function refusingDatabase(): () => void {
+    const refuse = vi
+      .spyOn(delegationFailureNoticeStore, "record")
+      .mockImplementation(() => {
+        throw new Error("SQLITE_BUSY");
+      });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    return () => {
+      refuse.mockRestore();
+      quiet.mockRestore();
+    };
+  }
+
+  function failureOf(child: string, runId: string, at: number) {
+    return {
+      sessionId: child,
+      runId,
+      origin: BACKGROUND,
+      errorMessage: "401 Unauthorized",
+      failure: { kind: "auth" as const },
+      at,
+    };
+  }
+
+  it("a refused failure replayed after later work reaches only its original coordinator — in the sweep and after a restart", async () => {
+    for (const via of ["sweep", "restart"] as const) {
+      freshJournal();
+      const { id: parent } = coordinator(`Parent (${via})`);
+      const { id: later } = coordinator(`Later sender (${via})`);
+      const child = piChild(parent, `Child (${via})`);
+      const t = Date.now();
+      const restore = refusingDatabase();
+      try {
+        recordRunFailureNotices(failureOf(child.sessionId, `old-${via}`, t));
+      } finally {
+        restore();
+      }
+      const future = laterRequest(later, child.sessionId, t + 1_000);
+      if (via === "sweep") sweepPeerPromptRetries(t + 2_000);
+      else {
+        closeDb();
+        getDb();
+        assert.equal(recoverJournaledFailuresOnBoot(), 1);
+      }
+      assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 1);
+      assert.equal(delegationFailureNoticeStore.pendingFor(later).length, 0);
+      const row = peerPromptStore.getById(future.id)!;
+      assert.equal(row.status, "acknowledged", "the later work is untouched");
+      assert.equal(row.senderNotifiedAt, undefined);
+    }
+  });
+
+  it("a recorded failure whose retirement was lost grows no new route on replay", async () => {
+    for (const planned of [true, false]) {
+      freshJournal();
+      const { id: parent } = coordinator("Parent");
+      const { id: later } = coordinator("Later sender");
+      const child = piChild(parent);
+      const t = Date.now();
+      const runId = `recorded-${planned}`;
+      const incidentKey = `run:${child.sessionId}:${runId}`;
+      if (planned) {
+        recordRunFailureNotices(failureOf(child.sessionId, runId, t));
+        // The `done` line never reached the disk.
+        writeFileSync(
+          journalFile(),
+          readFileSync(journalFile(), "utf8")
+            .split("\n")
+            .filter((line) => !line.includes('"kind":"done"'))
+            .join("\n"),
+        );
+        journal.reloadJournal();
+      } else {
+        // Recorded, but journaled with no plan (it could not be read then).
+        journal.journalFailure({
+          incidentKey,
+          sessionId: child.sessionId,
+          runId,
+          category: "auth",
+          at: t,
+          noticeTurn: false,
+        });
+        delegationFailureNoticeStore.record([
+          {
+            incidentKey,
+            childSessionId: child.sessionId,
+            coordinatorSessionId: parent,
+            route: "spawn",
+            category: "auth",
+            requestIds: [],
+            failedAt: t,
+          },
+        ]);
+      }
+      assert.equal(journal.pendingJournaledFailures().length, 1);
+      const future = laterRequest(later, child.sessionId, t + 1_000);
+      assert.deepEqual(replayJournaledFailures(t + 2_000), []);
+      closeDb();
+      getDb();
+      assert.equal(recoverJournaledFailuresOnBoot(), 0);
+      assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 1);
+      assert.equal(delegationFailureNoticeStore.pendingFor(later).length, 0);
+      assert.equal(peerPromptStore.getById(future.id)!.status, "acknowledged");
+      assert.deepEqual(journal.pendingJournaledFailures(), [], "retired now");
+    }
+  });
+
+  it("a recorded incident never gains a route its record skipped", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const { id: asker } = coordinator("Asker");
+    const child = piChild(parent);
+    awaitingRow(asker, child.sessionId);
+    const t = Date.now() + 5;
+    const restore = refusingDatabase();
+    try {
+      recordRunFailureNotices(failureOf(child.sessionId, "skipped-route", t));
+    } finally {
+      restore();
+    }
+    const [entry] = readFileSync(journalFile(), "utf8")
+      .split("\n")
+      .filter((line) => line.includes('"kind":"failed"'));
+    assert.ok(entry?.includes(asker), "the plan names both coordinators");
+    // Replayed while the asker was archived: only the parent is recorded.
+    sessionStore.setArchived(asker, true);
+    assert.deepEqual(
+      replayJournaledFailures().map((w) => w.coordinatorSessionId),
+      [parent],
+    );
+    // Its retirement was lost, and the asker is restored since.
+    writeFileSync(journalFile(), `\n${entry}\n`);
+    journal.reloadJournal();
+    sessionStore.setArchived(asker, false);
+    assert.deepEqual(replayJournaledFailures(), []);
+    assert.equal(delegationFailureNoticeStore.pendingFor(asker).length, 0);
+  });
+
+  it("a plan-less failure is planned from evidence no newer than the failure", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const { id: later } = coordinator("Later sender");
+    const child = piChild(parent);
+    const t = Date.now();
+    journal.journalFailure({
+      incidentKey: `run:${child.sessionId}:planless`,
+      sessionId: child.sessionId,
+      runId: "planless",
+      category: "auth",
+      at: t,
+      noticeTurn: false,
+    });
+    const future = laterRequest(later, child.sessionId, t + 1_000);
+    const written = replayJournaledFailures(t + 2_000);
+    assert.deepEqual(
+      written.map((w) => w.coordinatorSessionId),
+      [parent],
+    );
+    assert.equal(peerPromptStore.getById(future.id)!.status, "acknowledged");
+  });
+
+  it("a torn tail cannot swallow the next record, a torn retirement only replays once, and compaction keeps every pending fact", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const child = piChild(parent);
+    // What a process that died mid-append leaves behind.
+    writeFileSync(journalFile(), '{"kind":"failed","incidentKey":"torn');
+    const restore = refusingDatabase();
+    try {
+      recordRunFailureNotices(
+        failureOf(child.sessionId, "after-torn", Date.now()),
+      );
+      // Another torn record, then a second real one.
+      appendFileSync(journalFile(), '{"kind":"done","incidentKey":"run:');
+      recordRunFailureNotices(
+        failureOf(child.sessionId, "after-torn-2", Date.now()),
+      );
+      // A boot while the database still refuses compacts, but keeps both.
+      assert.equal(recoverJournaledFailuresOnBoot(), 0);
+    } finally {
+      restore();
+    }
+    journal.reloadJournal();
+    assert.deepEqual(
+      journal
+        .pendingJournaledFailures()
+        .map((f) => f.runId)
+        .sort(),
+      ["after-torn", "after-torn-2"],
+    );
+    // A retirement torn mid-write leaves its failure pending; replay sees the
+    // incident recorded and only retires it.
+    assert.equal(
+      recoverJournaledFailuresOnBoot(),
+      2,
+      "one notice per incident",
+    );
+    const incident = `run:${child.sessionId}:after-torn`;
+    journal.journalFailure({
+      incidentKey: incident,
+      sessionId: child.sessionId,
+      runId: "after-torn",
+      category: "auth",
+      at: Date.now(),
+      noticeTurn: false,
+    });
+    appendFileSync(journalFile(), `{"kind":"done","incidentKey":"${incident}`);
+    journal.reloadJournal();
+    assert.equal(journal.pendingJournaledFailures().length, 1);
+    assert.equal(recoverJournaledFailuresOnBoot(), 0);
+    journal.reloadJournal();
+    assert.deepEqual(journal.pendingJournaledFailures(), []);
+    assert.equal(delegationFailureNoticeStore.pendingFor(parent).length, 2);
+  });
+
+  it("an unreadable journal holds up nothing else, is never overwritten, and is recovered once it reads again", () => {
+    freshJournal();
+    const { id: parent } = coordinator("Parent");
+    const child = piChild(parent);
+    const { id: sender } = coordinator("Retrying sender");
+    // An ordinary peer prompt waiting out its retry backoff.
+    const t = Date.now();
+    const chainId = peerPromptStore.createChain();
+    const retrying = peerPromptStore.enqueue(
+      {
+        conversationId: `retry-${n++}`,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: sender,
+        recipientSessionId: child.sessionId,
+        prompt: "ordinary work",
+        responseRequested: false,
+      },
+      t,
+    );
+    peerPromptStore.claimNext(child.sessionId, "d", 60_000, t);
+    peerPromptStore.markRetryable(retrying.id, "busy", 0, t);
+    // The journal path cannot be read (a directory stands there).
+    rmSync(journalFile(), { force: true });
+    mkdirSync(journalFile());
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      assert.equal(recoverJournaledFailuresOnBoot(), 0);
+      sweepPeerPromptRetries(t + 1_000);
+      assert.notEqual(
+        peerPromptStore.getById(retrying.id)!.status,
+        "retryable_failed",
+        "the queue's own retry went ahead",
+      );
+      assert.match(
+        errors.mock.calls.flat().map(String).join(" "),
+        /failure journal could not be read/,
+      );
+      assert.ok(statSync(journalFile()).isDirectory(), "left as it was");
+    } finally {
+      errors.mockRestore();
+    }
+    // It reads again, holding a failure that was pending all along.
+    rmSync(journalFile(), { recursive: true });
+    writeFileSync(
+      journalFile(),
+      `\n${JSON.stringify({
+        kind: "failed",
+        incidentKey: `run:${child.sessionId}:waited`,
+        sessionId: child.sessionId,
+        runId: "waited",
+        category: "auth",
+        at: t,
+        noticeTurn: false,
+      })}\n`,
+    );
+    assert.equal(recoverJournaledFailuresOnBoot(), 1);
+    assert.equal(recoverJournaledFailuresOnBoot(), 0);
+  });
+
+  it("a large backlog is read in bounded chunks, replayed a bounded batch per sweep, and never holds up the queue", () => {
+    freshJournal();
+    const { id: sender } = coordinator("Retrying sender");
+    const child = piChild(sender);
+    const BACKLOG = 10_000;
+    const lines: string[] = [];
+    for (let i = 0; i < BACKLOG; i++)
+      lines.push(
+        JSON.stringify({
+          kind: "failed",
+          incidentKey: `run:gone-${i}:r`,
+          sessionId: `gone-${i}`,
+          runId: "r",
+          category: "auth",
+          at: 1,
+          noticeTurn: false,
+        }),
+      );
+    // An overlong line and a torn tail in the middle must not cost the rest.
+    lines.splice(5_000, 0, "x".repeat(1_000_000));
+    writeFileSync(journalFile(), `${lines.join("\n")}\n{"kind":"fail`);
+    appendFileSync(
+      journalFile(),
+      `\n${JSON.stringify({
+        kind: "failed",
+        incidentKey: "run:gone-last:r",
+        sessionId: "gone-last",
+        runId: "r",
+        category: "auth",
+        at: 1,
+        noticeTurn: false,
+      })}\n`,
+    );
+    const { cpuMs: loadMs } = measureCpuMs(() => journal.reloadJournal());
+    assert.equal(
+      journal.pendingJournaledFailures().length,
+      BACKLOG + 1,
+      "nothing valid is dropped",
+    );
+    // A sweep replays one bounded batch, and the queue's own retry still runs.
+    const t = Date.now();
+    const chainId = peerPromptStore.createChain();
+    const retrying = peerPromptStore.enqueue(
+      {
+        conversationId: `backlog-${n++}`,
+        chainId,
+        hop: peerPromptStore.reserveHop(chainId),
+        senderSessionId: sender,
+        recipientSessionId: child.sessionId,
+        prompt: "ordinary work",
+        responseRequested: false,
+      },
+      t,
+    );
+    peerPromptStore.claimNext(child.sessionId, "d", 60_000, t);
+    peerPromptStore.markRetryable(retrying.id, "busy", 0, t);
+    const { cpuMs: sweepMs } = measureCpuMs(() =>
+      sweepPeerPromptRetries(t + 1_000),
+    );
+    assert.notEqual(
+      peerPromptStore.getById(retrying.id)!.status,
+      "retryable_failed",
+    );
+    assert.equal(journal.pendingJournaledFailures().length, BACKLOG + 1 - 50);
+    // Boot drains the rest, compaction keeping the writing linear.
+    const { cpuMs: bootMs } = measureCpuMs(() =>
+      recoverJournaledFailuresOnBoot(),
+    );
+    assert.deepEqual(journal.pendingJournaledFailures(), []);
+    assert.ok(
+      statSync(journalFile()).size < 1_000,
+      "compacted to nothing owed",
+    );
+    console.info(
+      `[journal backlog] load ${loadMs.toFixed(0)}ms, sweep ${sweepMs.toFixed(0)}ms, boot ${bootMs.toFixed(0)}ms CPU for ${BACKLOG} entries`,
+    );
+    // Generous ceilings: they catch a quadratic regression, not a busy box.
+    assert.ok(loadMs < 5_000, `load ${loadMs}ms`);
+    assert.ok(sweepMs < 2_000, `sweep ${sweepMs}ms`);
+    assert.ok(bootMs < 20_000, `boot ${bootMs}ms`);
+  }, 120_000);
 });
