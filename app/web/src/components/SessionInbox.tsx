@@ -7,7 +7,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
 import { Archive, Check, ChevronRight } from "lucide-react";
 import { isShelvedSession } from "@assistant/shared";
 import type {
@@ -24,6 +23,7 @@ import { ClusterChildRow } from "./ClusterChildRow.tsx";
 import { WorkflowRunInboxCard } from "./WorkflowRunInboxCard.tsx";
 import { InboxShelfRow } from "./InboxShelfRow.tsx";
 import { SessionInboxBar } from "./SessionInboxBar.tsx";
+import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 import { EXIT_STAGE_MS, ExitStage } from "./common/ExitStage.tsx";
 import { usePrefersReducedMotion } from "./shell/usePrefersReducedMotion.ts";
 import { useShortcuts, type ShortcutGroup } from "./common/shortcuts.tsx";
@@ -112,11 +112,11 @@ const NO_RELATIONS: SessionCardRelations = {};
 
 interface Props {
   /**
-   * Where the counts bar goes: the host's slot ABOVE its scroll container, so
-   * the bar stays put without being a sticky row the scrollbar runs through.
-   * Absent, the bar is the list's first row.
+   * Where the counts bar's facts go when the HOST draws the bar, above its
+   * scroll container, so it stays put without being a sticky row the scrollbar
+   * runs through (`Sidebar.tsx`). Absent, the bar is the list's first row.
    */
-  headerSlot?: HTMLElement | null;
+  barStore?: SessionInboxBarStore | undefined;
   sessions: SessionListItem[];
   archivedSessionCount: number;
   archivedSessionsLoaded: boolean;
@@ -187,7 +187,7 @@ interface Props {
  * @related ActiveSessionCard, InboxShelfRow, sessionInbox (lib), Sidebar
  */
 export function SessionInbox({
-  headerSlot,
+  barStore,
   sessions,
   archivedSessionCount,
   archivedSessionsLoaded,
@@ -646,6 +646,32 @@ export function SessionInbox({
       ?.focus({ preventScroll: false });
   }, []);
 
+  // A host-drawn bar hears the counts before paint, so it never shows the
+  // previous list's numbers; it hears nothing once this list is gone. Only a
+  // changed count reaches it (the store drops an equal answer).
+  const needsYouCount = view.needsYou.length;
+  const { activeCount: backgroundCount, ownerCount: backgroundOwners } =
+    backgroundActive;
+  useLayoutEffect(() => {
+    barStore?.set({
+      needsYou: needsYouCount,
+      working: workingCount,
+      background: {
+        activeCount: backgroundCount,
+        ownerCount: backgroundOwners,
+      },
+      onNeedsYou: focusNeedsYou,
+    });
+  }, [
+    barStore,
+    needsYouCount,
+    workingCount,
+    backgroundCount,
+    backgroundOwners,
+    focusNeedsYou,
+  ]);
+  useLayoutEffect(() => () => barStore?.set(null), [barStore]);
+
   const archivedSessions = useMemo(
     () =>
       sessions
@@ -902,24 +928,21 @@ export function SessionInbox({
   return (
     <div
       ref={containerRef}
-      className={`flex flex-col ${headerSlot ? "pt-1" : ""}`}
+      className={`flex flex-col ${barStore ? "pt-1" : ""}`}
     >
       {/* Background work runs outside any turn and often outside the session you
           are looking at, so the browser states the global count where every
           session list is read, and links to the registry. Derived from the
           session summaries alone — this surface holds no registry subscription. */}
-      {(() => {
-        const bar = (
-          <SessionInboxBar
-            needsYou={view.needsYou.length}
-            working={workingCount}
-            background={backgroundActive}
-            onNeedsYou={focusNeedsYou}
-            onOpenBackgroundTasks={onOpenBackgroundTasks}
-          />
-        );
-        return headerSlot ? createPortal(bar, headerSlot) : bar;
-      })()}
+      {barStore ? null : (
+        <SessionInboxBar
+          needsYou={view.needsYou.length}
+          working={workingCount}
+          background={backgroundActive}
+          onNeedsYou={focusNeedsYou}
+          onOpenBackgroundTasks={onOpenBackgroundTasks}
+        />
+      )}
 
       {coldStart ? (
         <EmptyBox>No sessions yet. Use “New Session” to start one.</EmptyBox>

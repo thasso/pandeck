@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { Activity, CircleDashed, CircleHelp } from "lucide-react";
 import { Spinner } from "./common/load.tsx";
 import { Badge } from "@/components/ui/badge";
+import type { SessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
 
 interface Props {
   /** Items in the `needs-you` tier — the same count the block used to state. */
@@ -150,5 +151,30 @@ function Chip({
       {children}
       {number}
     </Badge>
+  );
+}
+
+/**
+ * The bar where its host draws it, above the scroll container
+ * (`Sidebar.tsx`): it reads the counts the inbox publishes into `store`, so a
+ * changed count redraws this bar alone. Nothing until the inbox has spoken.
+ */
+export function SessionInboxBarSlot({
+  store,
+  onOpenBackgroundTasks,
+}: {
+  store: SessionInboxBarStore;
+  onOpenBackgroundTasks: () => void;
+}) {
+  const facts = useSyncExternalStore(store.subscribe, store.get);
+  if (!facts) return null;
+  return (
+    <SessionInboxBar
+      needsYou={facts.needsYou}
+      working={facts.working}
+      background={facts.background}
+      onNeedsYou={facts.onNeedsYou}
+      onOpenBackgroundTasks={onOpenBackgroundTasks}
+    />
   );
 }

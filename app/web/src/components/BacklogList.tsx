@@ -1,5 +1,4 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Plus } from "lucide-react";
 import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
@@ -17,13 +16,13 @@ import {
   type BacklogDensity,
   type BacklogProjectFilter,
 } from "../lib/backlogTreeModel.ts";
-import { FOCUS_STATUS_OPTIONS, BacklogToolbar } from "./BacklogToolbar.tsx";
+import { FOCUS_STATUS_OPTIONS } from "./BacklogToolbar.tsx";
+import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import { todayIso } from "../lib/taskDates.ts";
 import { useUserTimeZone } from "../hooks/useUserTimeZone.ts";
 import { BacklogTreePane } from "./BacklogTreePane.tsx";
 import { BacklogFocusList } from "./BacklogFocusList.tsx";
 import { BacklogInboxList } from "./BacklogInboxList.tsx";
-import { hasInboxWork } from "../lib/backlogInbox.ts";
 import { ErrorNote, Skeleton } from "./common/load.tsx";
 import { errorOf, idle, isPending } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
@@ -71,7 +70,7 @@ function BacklogListImpl({
   toolbarDensity,
   showAddTask = false,
   flush = false,
-  headerSlot,
+  externalToolbar = false,
 }: {
   state: BacklogState;
   actions: AssistantActions;
@@ -131,11 +130,11 @@ function BacklogListImpl({
    */
   flush?: boolean;
   /**
-   * Where the toolbar goes instead of above the rows: a slot the host keeps
-   * above its scroll container, so the filters stay put and the scrollbar does
-   * not run through them (the sidebar, as its Sessions bar).
+   * The host draws the toolbar (`BacklogListToolbar`) itself, above its scroll
+   * container, so the filters stay put and the scrollbar does not run through
+   * them (the sidebar, as its Sessions bar); the list then starts at its rows.
    */
-  headerSlot?: HTMLElement | null;
+  externalToolbar?: boolean;
 }) {
   usePerfRenderCount("BacklogList");
   const c = useBacklog(state, actions, prefs, onUpdatePrefs);
@@ -216,9 +215,6 @@ function BacklogListImpl({
   // enough for a list you read, not a clock you watch.
   const timeZone = useUserTimeZone();
   const today = todayIso(timeZone);
-  // The dot on the Inbox chip reads the WHOLE list, not the filtered one: work
-  // waiting under a project filter you happen to have on is still waiting.
-  const inboxWaiting = useMemo(() => hasInboxWork(c.ordered), [c.ordered]);
 
   const addTask = () => {
     const title = newTitle.trim();
@@ -271,28 +267,15 @@ function BacklogListImpl({
         </div>
       ) : null}
 
-      {(() => {
-        const toolbar = (
-          <BacklogToolbar
-            density={toolbarDensity ?? density}
-            view={view}
-            onViewChange={c.setView}
-            viewMode={viewMode}
-            onViewModeChange={c.setViewMode}
-            projectFilter={projectFilter}
-            projectFilterOptions={c.projectFilterOptions}
-            projectsById={c.projectsById}
-            projectsLoaded={c.projectsLoaded}
-            onProjectFilterChange={c.setProjectFilter}
-            statuses={c.statuses}
-            onStatusFilterChange={c.setStatusFilter}
-            inboxWaiting={inboxWaiting}
-            hideProjectControls={Boolean(fixedFilter)}
-            bar={Boolean(headerSlot)}
-          />
-        );
-        return headerSlot ? createPortal(toolbar, headerSlot) : toolbar;
-      })()}
+      {externalToolbar ? null : (
+        <BacklogListToolbar
+          state={state}
+          prefs={prefs}
+          onUpdatePrefs={onUpdatePrefs}
+          density={toolbarDensity ?? density}
+          fixedProjectId={fixedProjectId}
+        />
+      )}
 
       {/* The list could not be read: a condition on the COLLECTION, so it is
           here whenever the user is, and the retained rows stay readable below

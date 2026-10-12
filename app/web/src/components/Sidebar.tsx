@@ -45,7 +45,10 @@ import {
 import type { Task, TaskPlacement } from "../lib/backlogTree.ts";
 import type { AssistantActions } from "../hooks/useAssistant.ts";
 import type { BacklogState } from "../hooks/useBacklog.ts";
-import { SIDEBAR_BACKLOG_DENSITY } from "../lib/backlogTreeModel.ts";
+import {
+  SIDEBAR_BACKLOG_DENSITY,
+  type BacklogDensity,
+} from "../lib/backlogTreeModel.ts";
 import type { LoadState } from "../lib/loadState.ts";
 import type { WorktreeHostingMap } from "../lib/worktreeHosting.ts";
 import type { DirtyWorktrees } from "../lib/worktreeDirty.ts";
@@ -57,6 +60,9 @@ import type { WorkflowIndicators } from "../lib/workflowIndicator.ts";
 import { useListScroll } from "../hooks/useListScroll.ts";
 import { useWorktreeWatches } from "../hooks/useWorktreeWatches.ts";
 import { usePerfRenderCount } from "../lib/perfStats.ts";
+import { createSessionInboxBarStore } from "../lib/sessionInboxBarStore.ts";
+import { SessionInboxBarSlot } from "./SessionInboxBar.tsx";
+import { BacklogListToolbar } from "./BacklogListToolbar.tsx";
 import type { Prefs } from "../hooks/usePrefs.ts";
 import type { SettingsSection } from "../hooks/useSessionRouting.ts";
 import {
@@ -485,10 +491,16 @@ function SidebarImpl({
   // at the offset the last one was left at, and on a phone the whole sidebar is
   // unmounted the moment an object screen opens.
   const browserScrollRef = useListScroll({ listKey: `sidebar:${section}` });
-  // Where the attention list portals its counts bar (`SessionInbox`).
-  const [inboxHeaderSlot, setInboxHeaderSlot] = useState<HTMLElement | null>(
-    null,
-  );
+  // The counts the attention list publishes for its bar, which this column
+  // draws above the scroll container (`SessionInboxBarSlot`). One store for the
+  // sidebar's life, so the prop the list gets never changes.
+  const [inboxBarStore] = useState(createSessionInboxBarStore);
+  // The Backlog's filters are a row of chips, so what they are short of is
+  // WIDTH: on the rail they wrap into four lines at page sizing and two at the
+  // rail's own, above rows that are two-line either way.
+  const backlogToolbarDensity: BacklogDensity = mobile
+    ? "comfortable"
+    : "tight";
 
   // Fetch Backlog Tasks, Projects, or Worktrees the first time the matching
   // section is shown. The Projects browser also embeds worktrees, so it needs
@@ -684,8 +696,23 @@ function SidebarImpl({
       {/* The attention list's counts bar (or the Tasks toolbar), above the
           scroll container: it stays put without the scrollbar running through
           it. */}
-      {section === "sessions" || section === "tasks" ? (
-        <div ref={setInboxHeaderSlot} className="shrink-0" />
+      {section === "sessions" ? (
+        <div className="shrink-0">
+          <SessionInboxBarSlot
+            store={inboxBarStore}
+            onOpenBackgroundTasks={onOpenBackgroundTasks}
+          />
+        </div>
+      ) : section === "tasks" ? (
+        <div className="shrink-0">
+          <BacklogListToolbar
+            state={state}
+            prefs={prefs}
+            onUpdatePrefs={onUpdatePrefs}
+            density={backlogToolbarDensity}
+            bar
+          />
+        </div>
       ) : null}
       <div
         ref={browserScrollRef}
@@ -729,12 +756,8 @@ function SidebarImpl({
             // same predicate (`taskRowsHaveMeta`) before polling or watching
             // for what those rows state.
             density={SIDEBAR_BACKLOG_DENSITY}
-            // The filters are a row of chips, so what they are short of is
-            // WIDTH: on the rail they wrap into four lines at page sizing and
-            // two at the rail's own, above rows that are two-line either way.
-            toolbarDensity={mobile ? "comfortable" : "tight"}
             flush
-            headerSlot={inboxHeaderSlot}
+            externalToolbar
           />
         ) : section === "projects" ? (
           <ProjectTreePane
@@ -784,7 +807,7 @@ function SidebarImpl({
           />
         ) : (
           <SessionInbox
-            headerSlot={inboxHeaderSlot}
+            barStore={inboxBarStore}
             sessions={sessions}
             archivedSessionCount={archivedSessionCount}
             archivedSessionsLoaded={archivedSessionsLoaded}
