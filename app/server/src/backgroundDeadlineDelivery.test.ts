@@ -33,6 +33,7 @@ const hold = await import("./automaticTurnHold.ts");
 const { backgroundDeliveryOutboxStore } =
   await import("./db/backgroundDeliveryOutboxStore.ts");
 const { backgroundWorkStore } = await import("./db/backgroundWorkStore.ts");
+const { getDb } = await import("./db/index.ts");
 const { sessionStore } = await import("./db/sessionStore.ts");
 const { updateSettings } = await import("./settings.ts");
 const { setBackgroundWorkAdmissionsOpenForTests } =
@@ -388,4 +389,42 @@ test("a busy owner keeps the deadline fact until its next idle edge", async () =
     session,
     0,
   ]);
+});
+
+test("a later metadata revision on the terminal row neither orphans nor duplicates the owed fact", async () => {
+  const h = harness();
+  const session = owner();
+  const item = await launch(h, session);
+  hold.holdAutomaticTurns(session);
+  await h.clock.advanceTo(item.deadlineAt);
+  await settle();
+  const owedAt = backgroundWorkStore.getItem(item.id)!.revision;
+  assert.deepEqual(
+    owed(session).map((row) => row.revision),
+    [owedAt],
+  );
+  // What a retained host closing does to its terminal children: re-stamp.
+  getDb()
+    .prepare(
+      "UPDATE background_work_items SET revision = revision + 7 WHERE id = ?",
+    )
+    .run(item.id);
+
+  // A restart: a fresh queue restores from the outbox alone.
+  const after = harness();
+  assert.deepEqual(notices.restoreOwedBackgroundDelivery(after.delivery), {
+    restored: 1,
+    forgotten: 0,
+  });
+  hold.resumeAutomaticTurns(session);
+  await after.delivery.requestDrain(session);
+  assert.deepEqual(
+    after.offers.map((offer) => completionOf(offer.offer)[0]!.taskId),
+    [item.id],
+  );
+  assert.deepEqual(owed(session), [], "retired under the identity it was owed");
+  assert.deepEqual(notices.restoreOwedBackgroundDelivery(harness().delivery), {
+    restored: 0,
+    forgotten: 0,
+  });
 });

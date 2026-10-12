@@ -235,12 +235,21 @@ the global rules already forbid those packages outside their own folders.
   until a human or coordinator prompted them, because a deadline Stop deferred
   as if requested. A deadline notice now carries an outcome sentence saying PA
   stopped the work at its frozen deadline and nothing restarted it; it never
-  claims what the work achieved. Its outbox row is `retained` whether or not the
-  session is held, so a restart before delivery restores it and offers it to an
-  unheld owner at boot (`docs/steering-and-queueing.md`). Natural exit that wins
-  the race keeps its real outcome; with a deadline Stop outstanding it still
-  wakes. Boot does not announce work left nonterminal by a crash, deadline Stop
-  in flight or not: it ends `lost` and restart resumes nothing.
+  claims what the work achieved. Its outbox receipt is written by the store
+  INSIDE the transaction that terminalizes the row (`mutation` records it after
+  the revision stamp, before COMMIT and the state-change notifier), for every
+  terminal path a deadline Stop can end in: the Stop's own acknowledgement, the
+  provider reporting first, and a lost host. The supervisor passes `oweNotice`
+  only while delivery is open, so drain stays silent. The receipt is `retained`
+  held or not, so a crash anywhere after that commit restores it and offers it
+  to an unheld owner at boot (`docs/steering-and-queueing.md`); if the receipt
+  cannot be written, the terminal transition rolls back with it. Boot restores a
+  retained row under the revision it was owed, accepting a terminal row whose
+  revision moved on (a host closing re-stamps its children), since a terminal
+  row's outcome never changes. Natural exit that wins the race keeps its real
+  outcome; with a deadline Stop outstanding it still wakes. Boot does not
+  announce work left nonterminal by a crash, deadline Stop in flight or not: it
+  ends `lost` and restart resumes nothing.
 
   An earlier revision DROPPED that second case outright, on the reasoning that
   the CLI's `<task-notification>` had already put the fact in the transcript.

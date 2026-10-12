@@ -167,19 +167,22 @@ facade.
   terminalizing Stop's origin replacing the reservation's; a Stop that wins the
   pre-execution race terminalizes as `not-started` with `stopped-by-owner` (or
   `stopped-at-deadline` for the deadline's), and a host close writes the
-  distinct `stopped-by-host-close`. `background_hosts` is the OPTIONAL Claude
-  retained query epoch, created lazily on the first admitted or observed
-  background item (an ordinary transient query writes no row), unique per
-  `epoch_key` and limited to one live epoch per owner session. Owner-slot
-  capacity is DERIVED rather than a second bookkeeping table: a session holds a
-  slot exactly while it has admitted nonterminal work or a live epoch, the
-  caller supplies the effective limit (no policy default is imported here), and
-  `claimOwnerSlot` decides the last free slot inside the same `BEGIN IMMEDIATE`
-  transaction as the insert, and reuse by the same owner's later children is
-  free. `observed-adopted` and `observed-over-cap` are the degraded provenances
-  for work already executing without a reservation; the over-cap row is durable
-  and counted in occupancy but is never a held slot, so one unreserved
-  observation cannot license more admissions.
+  distinct `stopped-by-host-close`. A terminal transition that ends work under a
+  deadline Stop, when its caller passes `oweNotice`, also writes the retained
+  `background_delivery_outbox` receipt in the same `mutation`, after the
+  revision stamp and before COMMIT, so the row and the owed fact are one write.
+  `background_hosts` is the OPTIONAL Claude retained query epoch, created lazily
+  on the first admitted or observed background item (an ordinary transient query
+  writes no row), unique per `epoch_key` and limited to one live epoch per owner
+  session. Owner-slot capacity is DERIVED rather than a second bookkeeping
+  table: a session holds a slot exactly while it has admitted nonterminal work
+  or a live epoch, the caller supplies the effective limit (no policy default is
+  imported here), and `claimOwnerSlot` decides the last free slot inside the
+  same `BEGIN IMMEDIATE` transaction as the insert, and reuse by the same
+  owner's later children is free. `observed-adopted` and `observed-over-cap` are
+  the degraded provenances for work already executing without a reservation; the
+  over-cap row is durable and counted in occupancy but is never a held slot, so
+  one unreserved observation cannot license more admissions.
   `(owner_session_id, source_request_id)` makes admission idempotent — and
   `getItemBySource` is the READ half of that, so an admission path can recognise
   its own retry before it re-applies mutable policy instead of judging an

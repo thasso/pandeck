@@ -177,21 +177,28 @@ unheld.
   rebuilt from its background-work row) and leave it once delivered or dropped
   by the bounded queue, never on a failed offer or a shutdown. A row a Stop
   touched — saved while its session was held, or owed when a Stop landed — is
-  `retained`, as is every frozen-deadline Stop (nothing else would tell the
-  owner its work ended), and boot restores every retained row with its original
-  wake or defer decision until it is delivered, held or not: a Resume authorizes
-  delivery, it does not perform it, so a fact released and then cut off by the
-  restart, refused as busy or unavailable, or carried by a prompt that never
-  committed comes back. A session no longer held is offered its restored wake
-  facts at boot through the usual peer-first drain; one still held waits for
-  Resume; a deferred fact rides the next turn. Any other row is forgotten at
-  boot, as pending delivery always was, so no past job is announced again; a
-  deadline Stop still unacknowledged at the crash ends `lost` at boot and
-  announces nothing. Delivery is at-least-once: a fact is retired only after its
-  turn resolved (a deferred fact, after its carrying prompt was appended and
-  resolved), so a restart inside an admitted turn delivers it again; nothing is
-  lost before admission. Monitor activity stays the lossy in-memory stream it
-  always was.
+  `retained`, and so is every frozen-deadline Stop's fact, whose receipt the
+  store writes in the same transaction as the terminal row (nothing else would
+  tell the owner its work ended, so no crash after that commit may lose it).
+  Boot restores every retained row with its original wake or defer decision
+  until it is delivered, held or not: a Resume authorizes delivery, it does not
+  perform it, so a fact released and then cut off by the restart, refused as
+  busy or unavailable, or carried by a prompt that never committed comes back. A
+  session no longer held is offered its restored wake facts at boot through the
+  usual peer-first drain; one still held waits for Resume; a deferred fact rides
+  the next turn. Any other row is forgotten at boot, as pending delivery always
+  was, so no past job is announced again. Delivery is at-least-once: a fact is
+  retired only after its turn resolved (a deferred fact, after its carrying
+  prompt was appended and resolved), so a restart inside an admitted turn
+  delivers it again. What is guaranteed not to be lost before admission is a
+  retained row: a deadline fact from its terminal commit on, any other fact from
+  the moment its session is held. Not covered: an unretained fact, which boot
+  forgets by design; a deadline Stop still unacknowledged at the crash, which
+  never reached a terminal row, ends `lost` at boot and announces nothing; and a
+  deadline receipt the database refuses, which rolls back the terminal
+  transition with it, so the row stays running until the work's real end is
+  reported or boot marks it `lost`. Monitor activity stays the lossy in-memory
+  stream it always was.
 - **What lifts it.** The user, and only under the Stop that stood when they
   acted. Every Stop starts a new generation, also on a held session; the
   authority a message captures as it is sent names that generation, so a newer

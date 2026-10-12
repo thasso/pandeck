@@ -336,6 +336,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
       ...(unrequestedStop
         ? { reason: TERMINAL_REASON_BY_ORIGIN[unrequestedStop] }
         : {}),
+      oweNotice: !this.draining,
       ...(completion.exitCode !== undefined
         ? { exitCode: completion.exitCode }
         : {}),
@@ -637,6 +638,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
       hostId: host.id,
       state: "lost",
       reason,
+      oweNotices: !this.draining,
       now: this.clock.now(),
     });
     for (const previous of before) {
@@ -825,6 +827,7 @@ export class BackgroundWorkSupervisor implements BackgroundWorkBackendEvents {
           state: "stopped",
           reason: TERMINAL_REASON_BY_ORIGIN[origin],
           stopOrigin: origin,
+          oweNotice: !this.draining,
           now: this.clock.now(),
         });
         this.cancelDeadline(current.id);

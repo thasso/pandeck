@@ -5,10 +5,11 @@
  * A notice is rebuilt from its row rather than stored, so the outbox holds only
  * identities. That is what lets a fact owed to a session a Stop touched survive
  * a restart (`automaticTurnHold.ts`) until it is delivered — through a Resume
- * too — and likewise a frozen-deadline Stop, which nothing else would ever
- * tell the owner. Any other fact keeps the old rule and is forgotten at boot:
- * the delivery queue never survived a restart, so no historical job is
- * announced again.
+ * too — and likewise a frozen-deadline Stop, whose receipt the store writes in
+ * the very transaction that ends the work (`backgroundWorkStore.ts`), since
+ * nothing else would ever tell the owner. Any other fact keeps the old rule and
+ * is forgotten at boot: the delivery queue never survived a restart, so no
+ * historical job is announced again.
  */
 import { automaticTurnsHeld } from "./automaticTurnHold.ts";
 import type {
@@ -149,15 +150,6 @@ export function completionDisposition(
 }
 
 /**
- * A frozen-deadline Stop has no requester holding the answer, so a restart
- * before delivery must not forget it as it forgets other pending facts. Only
- * facts saved from now on carry this: boot replays nothing older.
- */
-function owedAcrossRestart(notice: BackgroundCompletionNotice): boolean {
-  return notice.stopRequested && notice.stopOrigin === "deadline";
-}
-
-/**
  * The delivery queue's durable side. A write that fails is reported, never
  * thrown: delivery itself goes on in memory, as it did before the outbox.
  */
@@ -170,8 +162,9 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
         revision: notice.revision,
         disposition,
         // Owed to a stopped session: it must outlive a restart until it is
-        // delivered, whatever the user does with the hold meanwhile.
-        retained: automaticTurnsHeld(sessionId) || owedAcrossRestart(notice),
+        // delivered, whatever the user does with the hold meanwhile. A
+        // deadline fact's receipt is already retained; saving never unretains.
+        retained: automaticTurnsHeld(sessionId),
       });
     } catch (err) {
       console.warn(
@@ -203,13 +196,15 @@ export const backgroundDeliveryOutbox: BackgroundDeliveryOutbox = {
  * released and then cut off by the restart is restored too, and offered at
  * once to a session that is no longer held (one still held waits for Resume).
  * Any other row is forgotten, as a restart always forgot pending delivery, and
- * so is one whose item is gone or changed revision or owner:
+ * so is one whose item is gone, not terminal, older than the row, or owned by
+ * someone else:
  * it no longer names the fact it was saved for.
  *
  * Delivery is at-least-once across the crash windows: a fact is retired only
  * once its turn resolved (a wake) or its carrying prompt was appended and
  * resolved (a deferred fact), so a restart inside an admitted turn delivers it
- * again; one before admission delivers it the first time.
+ * again; a retained row cut off before admission delivers it the first time.
+ * A deadline fact is retained from its terminal commit (`backgroundWorkStore.ts`).
  */
 export function restoreOwedBackgroundDelivery(
   delivery: BackgroundCompletionDelivery,
@@ -221,12 +216,17 @@ export function restoreOwedBackgroundDelivery(
     const item = row.retained
       ? backgroundWorkStore.getItem(row.itemId)
       : undefined;
-    const notice =
+    // A terminal row keeps its first outcome, so a later revision is metadata
+    // (a retained host closing re-stamps its children), never another fact.
+    // The saved revision stays the fact's identity: delivery retires exactly
+    // this row, and its request key matches the one offered before.
+    const current =
       item &&
-      item.revision === row.revision &&
+      item.revision >= row.revision &&
       item.ownerSessionId === row.sessionId
         ? completionNoticeOf(item, false)
         : undefined;
+    const notice = current ? { ...current, revision: row.revision } : undefined;
     if (!notice) {
       backgroundDeliveryOutboxStore.remove(
         row.sessionId,

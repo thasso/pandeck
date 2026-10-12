@@ -10,6 +10,7 @@ import type {
   SessionBackgroundActivity,
 } from "@assistant/shared";
 import { BACKGROUND_WORK_COMMAND_MAX_CHARS } from "@assistant/shared";
+import { backgroundDeliveryOutboxStore } from "./backgroundDeliveryOutboxStore.ts";
 import { getDb, withDbTransaction } from "./index.ts";
 import { nextId } from "./sequences.ts";
 import { sessionStore } from "./sessionStore.ts";
@@ -214,6 +215,11 @@ interface TerminalizeBackgroundWorkInput extends BackgroundEvidenceInput {
   exitCode?: number;
   /** The Stop whose acknowledgement IS this transition; it replaces a later reservation's. */
   stopOrigin?: BackgroundWorkStopOrigin;
+  /**
+   * Delivery is open: if this transition ends work under a deadline Stop, owe
+   * the owner its notice in the same transaction. False while draining.
+   */
+  oweNotice?: boolean;
 }
 
 interface RequestBackgroundStopInput {
@@ -537,6 +543,8 @@ function requireHost(id: string): HostRow {
 interface PendingTouches {
   itemIds: Set<string>;
   hostIds: Set<string>;
+  /** Items whose terminal transition here owes their owner a deadline notice. */
+  owedNotices: Set<string>;
 }
 
 let stateChangeNotifier:
@@ -632,13 +640,46 @@ function markStateChanged(
  */
 function mutation<T>(fn: (touch: PendingTouches) => () => T): T {
   const committed = withDbTransaction(() => {
-    const touch: PendingTouches = { itemIds: new Set(), hostIds: new Set() };
+    const touch: PendingTouches = {
+      itemIds: new Set(),
+      hostIds: new Set(),
+      owedNotices: new Set(),
+    };
     const project = fn(touch);
     const change = markStateChanged(getDb(), touch);
+    recordOwedNotices(touch);
     return { value: project(), change };
   });
   if (committed.change) stateChangeNotifier?.(committed.change);
   return committed.value;
+}
+
+/**
+ * A frozen-deadline Stop's fact is owed from the moment its terminal row
+ * exists. Nobody asked for that Stop, so a crash between this COMMIT and the
+ * delivery queue's own save would otherwise leave a stopped row nothing ever
+ * announces. Writing the receipt in the SAME transaction, after the revision
+ * stamp, makes the row and the debt one fact. `wake` is what the delivery
+ * policy answers for every deadline Stop (`deliveryPolicy.ts`); a later save of
+ * the same identity by the queue keeps it retained.
+ */
+function oweDeadlineNotice(touch: PendingTouches, itemId: string): void {
+  const row = requireItem(itemId);
+  if (row.stop_state !== "none" && row.stop_origin === "deadline")
+    touch.owedNotices.add(itemId);
+}
+
+function recordOwedNotices(touch: PendingTouches): void {
+  for (const id of touch.owedNotices) {
+    const row = requireItem(id);
+    backgroundDeliveryOutboxStore.save({
+      sessionId: row.owner_session_id,
+      itemId: row.id,
+      revision: row.revision,
+      disposition: "wake",
+      retained: true,
+    });
+  }
 }
 
 /**
@@ -1340,6 +1381,7 @@ function terminalize(
       );
     recordEventIdentity(row, input.eventId, input.sequence);
     touch.itemIds.add(row.id);
+    if (input.oweNotice) oweDeadlineNotice(touch, row.id);
     return () => itemOf(requireItem(row.id));
   });
 }
@@ -1594,6 +1636,8 @@ function setHostState(input: {
   hostId: string;
   state: BackgroundHostState;
   reason?: string;
+  /** As `terminalize`'s: a child ended under a deadline Stop is owed its notice. */
+  oweNotices?: boolean;
   now?: number;
 }): BackgroundHost {
   return mutation((touch) => {
@@ -1659,6 +1703,7 @@ function setHostState(input: {
           : (item.drain_reason ?? "stopped-by-host-close");
         close.run(childState, now, now, childReason, item.id);
         touch.itemIds.add(item.id);
+        if (input.oweNotices) oweDeadlineNotice(touch, item.id);
       }
     }
     return () => hostOf(requireHost(row.id));

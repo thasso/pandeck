@@ -34,13 +34,14 @@
   model, and stays pure. It never discards: a requested Stop and a
   `claude-query` item settling in a live turn DEFER, everything else WAKES. A
   Stop nobody requested wakes: the row's typed `stopOrigin` (`deadline`,
-  `system`) from the Stop that WON, never a reason match; a deadline fact
-  outlives restart until delivered. `backend` + turn-running is NOT evidence the
-  provider transcribed the fact — the Stop snapshot terminalizes when the
-  notification is missing. A deferred fact rides the next turn's model-only
-  context, never reads as that turn's instruction, and is consumed only once
-  that prompt appended AND resolved. Sample turn-running at durability. A `wake`
-  may join a running turn with `steerOnly`; a refusal is busy, never delivered.
+  `system`) from the Stop that WON, never a reason match; a deadline fact's
+  outbox receipt commits WITH its terminal row. `backend` + turn-running is NOT
+  evidence the provider transcribed the fact — the Stop snapshot terminalizes
+  when the notification is missing. A deferred fact rides the next turn's
+  model-only context, never reads as that turn's instruction, and is consumed
+  only once that prompt appended AND resolved. Sample turn-running at
+  durability. A `wake` may join a running turn with `steerOnly`; a refusal is
+  busy, never delivered.
 - Deployment drain uses the hub lifecycle authority: close admission before
   sampling, wait for prompted turns, allow bounded natural completion, record
   `stopped-for-deployment`, then Stop through ports. Restart resumes nothing.
