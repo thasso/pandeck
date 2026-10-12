@@ -375,9 +375,13 @@ function ActiveSessionCardImpl({
       // Less above than below: the top row's small text sits centred in its
       // line box, with air over it, while the bottom row's pills and buttons
       // fill theirs to the edge — equal padding read as a taller top.
+      // The actions face bleeds over this padding (see below): keep its
+      // offsets in step with `px-2.5` from `size="xs"` and `pt-1.5 pb-2.5`.
+      // Its transparent border would still frame the face, so it takes the
+      // face's tone while the actions show.
       className={`cursor-pointer select-none overflow-hidden rounded-none pt-1.5 pb-2.5 text-left hover:bg-muted ${
         flipped ? "[perspective:900px]" : ""
-      }`}
+      } ${showActions ? "border-muted" : ""}`}
     >
       {/* One rotator, two faces: the front stays in flow so the card keeps its
           content height, and the actions face is absolutely laid over it at
@@ -692,14 +696,18 @@ function ActiveSessionCardImpl({
 
         {flipped ? (
           <div
-            className="absolute inset-0 flex bg-muted [backface-visibility:hidden] [transform:rotateY(180deg)]"
+            className="absolute -inset-x-2.5 -top-1.5 -bottom-2.5 flex bg-muted [backface-visibility:hidden] [transform:rotateY(180deg)]"
             inert={!showActions}
             aria-label={`Actions for ${title}`}
           >
-            {/* The face spans the card's whole height, but the tiles keep ONE
-                fixed size and sit centred in it: a hover tone that changes
-                shape with the card it is on reads as a different control. */}
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-2">
+            {/* The face covers the card's padding too, so its tone fills the
+                card edge to edge instead of sitting in a frame. The tiles keep
+                ONE fixed height and sit centred in it: a hover tone that
+                changes shape with the card it is on reads as a different
+                control. They share one width and shrink together when a narrow
+                card cannot fit them all, rather than scrolling one out of
+                sight. */}
+            <div className="flex min-w-0 flex-1 items-center gap-0.5 px-1.5">
               {/* Object jumps live only on this action face. The front keeps
                   their names in context without spending width on controls. */}
               {session.worktreeId && onOpenWorktree ? (
@@ -751,7 +759,7 @@ function ActiveSessionCardImpl({
             <IconButton
               label="Close session actions"
               size={INLINE_ACTION_SIZE[density]}
-              className="mr-1 self-center"
+              className="mr-1.5 self-center"
               onClick={(e) => {
                 e.stopPropagation();
                 closeActions();
@@ -882,7 +890,7 @@ function ActionTile({
       }}
       aria-label={accessibleLabel}
       title={accessibleLabel}
-      className="h-14 w-16 flex-col"
+      className="h-14 w-16 min-w-0 shrink flex-col px-0.5"
     >
       <span className="relative">
         <Icon className="size-5" />
@@ -890,7 +898,7 @@ function ActionTile({
           <UnreadDot title="Uncommitted changes" placement="avatar" />
         ) : null}
       </span>
-      <span>{label}</span>
+      <span className="max-w-full truncate">{label}</span>
     </Button>
   );
 }
