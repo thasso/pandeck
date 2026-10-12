@@ -3,6 +3,33 @@
 All notable changes to Pandeck are recorded here. Releases use Semantic
 Versioning and tags add a leading `v` to the declared version.
 
+## [0.54.0] - 2026-10-12
+
+### Other changes
+
+- Port the web UI to shadcn components, with Storybook and a unified card system
+  ([PR #91](https://github.com/thasso/pandeck/pull/91))
+- Remove ineffective Claude session permission callback
+  ([PR #90](https://github.com/thasso/pandeck/pull/90))
+- Upgrade pi SDK to 1.1.0 and switch proxied MCP clients to pi-mcp
+  ([PR #89](https://github.com/thasso/pandeck/pull/89))
+- Update Claude Agent SDK to 0.3.296 and Anthropic SDK to 0.133.0
+  ([PR #88](https://github.com/thasso/pandeck/pull/88))
+- Show queued peer prompts in the composer with steer and remove actions
+  ([PR #85](https://github.com/thasso/pandeck/pull/85))
+- Remove Task comments across server, tools, protocol, and web
+  ([PR #86](https://github.com/thasso/pandeck/pull/86))
+- Restore saved chat image previews from session attachments
+  ([PR #87](https://github.com/thasso/pandeck/pull/87))
+- Allow Claude SDK Plan-to-Build switches during background work
+  ([PR #84](https://github.com/thasso/pandeck/pull/84))
+- Remove the Calendar UI while retaining agent tools
+  ([PR #82](https://github.com/thasso/pandeck/pull/82))
+- Remove the Slack Huddles integration
+  ([PR #81](https://github.com/thasso/pandeck/pull/81))
+- Port the web UI to shadcn/ui
+  ([PR #80](https://github.com/thasso/pandeck/pull/80))
+
 ## [0.53.0] - 2026-10-07
 
 The Knowledge Base is now a folder of files with path-based links, file history
