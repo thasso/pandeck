@@ -909,6 +909,15 @@ class SessionHub {
     });
   }
 
+  /** How many background-work updates wait for this session, told to its viewers. */
+  broadcastBackgroundUpdateQueue(sessionId: string, count: number): void {
+    this.sendToSessionViewers(sessionId, {
+      type: "backgroundUpdateQueue",
+      sessionId,
+      count,
+    });
+  }
+
   broadcastPeerPromptQueue(
     sessionId: string,
     items: import("@assistant/shared").QueuedPeerPrompt[],

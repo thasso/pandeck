@@ -15,6 +15,7 @@ import type {
   SnapshotRunState,
   PromptDelivery,
   PromptOrigin,
+  RunProgress,
   StreamingEntry,
   StreamingMessageEntry,
   StreamingToolEntry,
@@ -25,6 +26,7 @@ import type {
   AgentRunResult,
   PromptableAdapter,
   PromptOptions,
+  ProviderRunId,
 } from "../adapters/contract.ts";
 import { isDetachedAdapter } from "../adapters/detached.ts";
 import { contextInfoFromSnapshot, type StatsOptions } from "./stats.ts";
@@ -51,6 +53,7 @@ import {
   SteerWithdrawnError,
 } from "./errors.ts";
 import type { RuntimeEvent, RuntimeEventListener } from "./events.ts";
+import { RunProgressTracker } from "./progress.ts";
 
 export interface RuntimePromptOptions extends PromptOptions {
   /** Provenance of the prompt, recorded on the durable user entry. Defaults to human. */
@@ -235,6 +238,23 @@ export class LiveRuntimeSession {
   private turnOrigin: PromptOrigin | undefined;
   /** Provenance waiting for the next provider-initiated assistant entry. */
   private pendingAssistantOrigin: PromptOrigin | undefined;
+  /**
+   * What the running run has been observed doing. Lives and dies with the
+   * running state: started by {@link setRunning}, never by an adapter event on
+   * its own, so nothing that arrives while idle can bring it back.
+   */
+  private readonly progress = new RunProgressTracker((progress) =>
+    this.emit({ type: "runProgress", progress }),
+  );
+  /**
+   * The provider run (the adapter event's `run`) the current running state
+   * belongs to: the run its first message announced. Progress credits events
+   * of this run ONLY, so a late callback of an earlier run — which carries
+   * that run's id, or none once its harness closed it — moves nothing.
+   */
+  private progressRun: ProviderRunId | undefined;
+  /** Runs are numbered upward per adapter; one already credited is never rebound. */
+  private lastProgressRun: ProviderRunId = 0;
 
   constructor(
     readonly sessionId: string,
@@ -263,6 +283,8 @@ export class LiveRuntimeSession {
       );
     this.unsubscribeAdapter();
     this.adapter = adapter;
+    // A new adapter numbers its runs afresh.
+    this.lastProgressRun = 0;
     // The turn boundary follows the live log, not the old adapter: whatever the
     // detached view rendered predates anything this harness will run.
     this.turnStartSeq = this.log.seqCursor;
@@ -333,7 +355,10 @@ export class LiveRuntimeSession {
     const next: SnapshotRunState = running ? "running" : "idle";
     if (this.runState === next) return;
     this.runState = next;
+    this.progressRun = undefined;
+    if (!running) this.progress.stop();
     this.emit({ type: "runStateChanged", runState: next });
+    if (running) this.progress.start();
     // A running→idle transition is the browser-independent trigger to drain any
     // peer prompts queued behind this turn, whatever drove it.
     if (next === "idle") {
@@ -632,6 +657,16 @@ export class LiveRuntimeSession {
           content: [],
         };
         this.streaming.set(event.streamId, stream);
+        // The run this message opens (or continues: a retry, a follow-up)
+        // is what the running state's progress credits from here on. A run an
+        // EARLIER running state credited stays theirs.
+        if (
+          event.run !== undefined &&
+          (event.run > this.lastProgressRun || event.run === this.progressRun)
+        ) {
+          this.progressRun = event.run;
+          this.lastProgressRun = event.run;
+        }
         this.emit({ type: "messageStarted", streamId: event.streamId });
         return;
       }
@@ -639,6 +674,8 @@ export class LiveRuntimeSession {
         const stream = this.streaming.get(event.streamId);
         if (stream && stream.kind === "message")
           appendDelta(stream.content, event.delta.kind, event.delta.text);
+        if (this.creditsProgress(event.run) && event.delta.text.length > 0)
+          this.progress.modelOutput();
         this.emit({
           type: "messageDelta",
           streamId: event.streamId,
@@ -688,6 +725,8 @@ export class LiveRuntimeSession {
           ...(event.input !== undefined ? { input: event.input } : {}),
         };
         this.streaming.set(event.streamId, stream);
+        if (this.creditsProgress(event.run))
+          this.progress.toolStarted(event.toolCallId, event.name);
         // Record the tool call in the active message stream's content IN ORDER, so
         // a mid-turn reconnect overlay renders it at its true position (the tool
         // stream above supplies live output, merged by id in the projection).
@@ -713,6 +752,8 @@ export class LiveRuntimeSession {
       case "toolUpdated": {
         const stream = this.streaming.get(event.streamId);
         if (stream && stream.kind === "tool") stream.output = event.output;
+        if (this.creditsProgress(event.run))
+          this.progress.toolActivity(event.streamId);
         this.emit({
           type: "toolUpdated",
           streamId: event.streamId,
@@ -721,6 +762,10 @@ export class LiveRuntimeSession {
         return;
       }
       case "toolCompleted": {
+        // Usually reported live already (the `toolEnd` passthrough below);
+        // the tracker ignores a tool that is no longer running.
+        if (this.creditsProgress(event.run))
+          this.progress.toolEnded(event.toolCallId, event.isError === true);
         this.streaming.delete(event.streamId);
         this.emit({ type: "toolCompleted", streamId: event.streamId });
         const raw = this.log.append({
@@ -791,11 +836,33 @@ export class LiveRuntimeSession {
             stream.isError = event.envelope.isError;
             stream.done = true;
           }
+          if (this.creditsProgress(event.run))
+            this.progress.toolEnded(
+              event.envelope.toolId,
+              event.envelope.isError,
+            );
           emitToolCompleted(this.sessionId);
         }
         this.emit({ type: "passthrough", envelope: event.envelope });
         return;
       }
+      case "providerActivity":
+        if (!this.creditsProgress(event.run)) return;
+        if (event.kind === "output") this.progress.modelOutput();
+        else if (event.kind === "response") this.progress.responseStarted();
+        else this.progress.activity();
+        return;
+      case "providerRetry":
+        if (!this.creditsProgress(event.run)) return;
+        this.progress.retry({
+          attempt: event.attempt,
+          ...(event.maxAttempts !== undefined
+            ? { maxAttempts: event.maxAttempts }
+            : {}),
+          ...(event.delayMs !== undefined ? { delayMs: event.delayMs } : {}),
+          ...(event.status !== undefined ? { status: event.status } : {}),
+        });
+        return;
       case "providerNotice": {
         const raw = this.log.append({
           type: "provider.notice",
@@ -868,6 +935,11 @@ export class LiveRuntimeSession {
 
   /* --------------------------- outward feed ------------------------------ */
 
+  /** Whether an event of provider run `run` may move the current progress. */
+  private creditsProgress(run: ProviderRunId | undefined): boolean {
+    return run !== undefined && run === this.progressRun;
+  }
+
   /** Add a subscriber. Returns an unsubscribe fn. Pair with {@link getSnapshot} via the runtime. */
   subscribe(listener: RuntimeEventListener): () => void {
     this.subscribers.add(listener);
@@ -876,12 +948,19 @@ export class LiveRuntimeSession {
 
   /** Current snapshot: durable client entries + run state + in-flight streams. */
   getSnapshot(): SessionSnapshot {
+    const progress = this.progress.snapshot();
     return {
       sessionId: this.sessionId,
       runState: this.runState,
       entries: this.log.clientEntries(),
       streaming: [...this.streaming.values()],
+      ...(progress ? { progress } : {}),
     };
+  }
+
+  /** What the running run has been observed doing; undefined when idle. */
+  runProgress(): RunProgress | undefined {
+    return this.progress.snapshot();
   }
 
   /** The full client timeline (conversation + host-command cards) for the transport projection. */
@@ -985,6 +1064,7 @@ export class LiveRuntimeSession {
   dispose(): void | Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.progress.dispose();
     this.unsubscribeAdapter();
     this.subscribers.clear();
     this.streaming.clear();

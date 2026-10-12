@@ -139,7 +139,10 @@ import {
   createClaudeSdkAdapter,
   type ClaudeSdkAdapterDriver,
 } from "../session/adapters/claudeSdk.ts";
-import type { PromptableAdapter } from "../session/adapters/contract.ts";
+import type {
+  PromptableAdapter,
+  ProviderActivityKind,
+} from "../session/adapters/contract.ts";
 import {
   appendText,
   estimateTokens,
@@ -177,6 +180,7 @@ import {
   peerPromptQueueField,
   peerPromptThreadsFor,
 } from "../peerPrompt.ts";
+import { backgroundUpdateQueueField } from "../backgroundUpdateQueue.ts";
 import { promptQueueField } from "../promptQueue.ts";
 import { backgroundWorkStore } from "../db/backgroundWorkStore.ts";
 import { captureTaskOutputArtifact } from "../outputPolicy.ts";
@@ -1029,6 +1033,7 @@ export class ClaudeSdkSession implements LiveSession {
       peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
+      ...backgroundUpdateQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };
@@ -1857,7 +1862,19 @@ export class ClaudeSdkSession implements LiveSession {
           const admitted = await this.beginProviderInitiatedTurn(epochKey);
           if (!admitted) continue;
         }
-        this.handleSdkMessage(message);
+        // Only the epoch that owns the open turn may write to it. A turn's
+        // content arriving from any other epoch while a turn is open — a
+        // closing process still delivering after the next turn started —
+        // belongs to a turn that already settled and was committed then, so it
+        // is DROPPED before it can touch the open turn's live message, tools,
+        // native anchor, model or error. Never re-homed into the open turn.
+        // Everything else from that epoch (background task lifecycle,
+        // compaction, its process closing below) is still handled, unattributed
+        // to any run.
+        if (this.activeTurnEpochKey === epochKey)
+          this.handleSdkMessage(message);
+        else if (!(this.running && isTurnTranscriptMessage(message)))
+          this.adapterEvents.unattributed(() => this.handleSdkMessage(message));
         if (message.type !== "result") continue;
         await this.refreshToolLoadState(query);
         const ownsTurn =
@@ -3197,6 +3214,19 @@ export class ClaudeSdkSession implements LiveSession {
           this.handleBackgroundSystemMessage(message)
         )
           return;
+        if (message.type === "system" && message.subtype === "api_retry") {
+          // Only the run's observed progress hears it: the transcript gains
+          // nothing, and a retry that recovers stays invisible afterwards.
+          this.adapterEvents.providerRetry({
+            attempt: message.attempt,
+            maxAttempts: message.max_retries,
+            delayMs: message.retry_delay_ms,
+            ...(message.error_status !== null
+              ? { status: message.error_status }
+              : {}),
+          });
+          return;
+        }
         // The CLI compacted this session's context on its own (threshold/overflow)
         // in the middle of a turn. Nothing in the transcript changes on our side,
         // but the memory system and the context reading must follow it.
@@ -3429,6 +3459,12 @@ export class ClaudeSdkSession implements LiveSession {
     const toolId = streamToolBlockId(message);
     if (toolId) this.toolIdsByBlock.set(this.blockKey(message), toolId);
 
+    // Text and thinking report themselves as deltas below. Every other stream
+    // event is classified for the run's progress, so a tool call's arguments
+    // count as output while an empty response's usage and stop metadata only
+    // prove the provider is alive.
+    const activity = streamActivityKind(message);
+    if (activity) this.adapterEvents.providerActivity(activity);
     for (const delta of mapStreamEvent(message)) {
       switch (delta.type) {
         case "text":
@@ -3984,5 +4020,65 @@ function terminalStateFromProviderStatus(
       return "stopped";
     default:
       return undefined;
+  }
+}
+
+/**
+ * A message that writes a turn's transcript or outcome: its stream, its
+ * assistant and tool-result messages, its result, and a retry of its request.
+ */
+function isTurnTranscriptMessage(
+  message: import("./sdkSeam.ts").ClaudeSdkMessage,
+): boolean {
+  return (
+    message.type === "stream_event" ||
+    message.type === "assistant" ||
+    message.type === "user" ||
+    message.type === "result" ||
+    (message.type === "system" && message.subtype === "api_retry")
+  );
+}
+
+/**
+ * What a Claude stream event says about the run, for live progress only; text
+ * and thinking deltas are reported as deltas and answer undefined here.
+ */
+function streamActivityKind(
+  message: Extract<
+    import("./sdkSeam.ts").ClaudeSdkMessage,
+    { type: "stream_event" }
+  >,
+): ProviderActivityKind | undefined {
+  const event = (
+    message as {
+      event?: {
+        type?: string;
+        delta?: { type?: string; partial_json?: string };
+        content_block?: { type?: string };
+      };
+    }
+  ).event;
+  switch (event?.type) {
+    case "message_start":
+      return "response";
+    case "content_block_start":
+      return event.content_block?.type === "tool_use" ||
+        event.content_block?.type === "server_tool_use"
+        ? "output"
+        : "lifecycle";
+    case "content_block_delta":
+      switch (event.delta?.type) {
+        case "text_delta":
+        case "thinking_delta":
+          return undefined;
+        case "input_json_delta":
+          return event.delta.partial_json ? "output" : "lifecycle";
+        default:
+          return "lifecycle";
+      }
+    default:
+      // message_delta (stop reason, usage), message_stop, content_block_stop,
+      // ping: the provider is alive, and nothing was produced.
+      return "lifecycle";
   }
 }

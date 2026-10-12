@@ -49,6 +49,7 @@ import {
   peerPromptQueueField,
   peerPromptThreadsFor,
 } from "./peerPrompt.ts";
+import { backgroundUpdateQueueField } from "./backgroundUpdateQueue.ts";
 import { promptQueueField } from "./promptQueue.ts";
 import { DetachedSessionError } from "./session/adapters/detached.ts";
 import { sessionRuntime } from "./session/runtimeInstance.ts";
@@ -196,6 +197,7 @@ export class ViewSession implements HarnessDriver {
       peerPromptPeers: peerPromptPeersFor(this.id),
       ...promptQueueField(this.id),
       ...peerPromptQueueField(this.id),
+      ...backgroundUpdateQueueField(this.id),
       ...(worktreeIdValue !== undefined ? { worktreeId: worktreeIdValue } : {}),
       ...(this.safeWorktreeMissing() ? { worktreeMissing: true } : {}),
     };

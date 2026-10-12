@@ -1,7 +1,11 @@
 import type { ServerMessage } from "@assistant/shared";
 import type { AgentContentBlock, AgentUsage } from "@assistant/shared/session";
 import type { HostCommandCard } from "../log/rawEntry.ts";
-import type { AdapterEvent } from "./contract.ts";
+import type {
+  AdapterEvent,
+  ProviderActivityKind,
+  ProviderRunId,
+} from "./contract.ts";
 
 export type AdapterEventListener = (event: AdapterEvent) => void;
 
@@ -18,6 +22,16 @@ export class NativeAdapterEventSource {
     { name: string; card: HostCommandCard } | undefined;
   /** Wall-clock start of the in-flight message, for the durable startedAt/completedAt span. */
   private currentStartedAt: string | undefined;
+  /**
+   * The provider run open right now, if any (the contract's `run`). Opened by
+   * the first message of a turn and closed by the turn's end, so it follows the
+   * harness's OWN turn brackets: an event the harness emits after its turn
+   * closed carries no run, whenever the runtime happens to receive it.
+   */
+  private openRun: ProviderRunId | undefined;
+  private lastRun: ProviderRunId = 0;
+  /** Inside {@link unattributed}: what is emitted belongs to no run. */
+  private attributionSuspended = 0;
 
   subscribe(listener: AdapterEventListener): () => void {
     this.listeners.add(listener);
@@ -28,12 +42,39 @@ export class NativeAdapterEventSource {
     this.listeners.clear();
   }
 
+  /**
+   * Run `handle` for a provider event that does not belong to the open turn —
+   * one the harness knows came from somewhere else (an earlier query epoch).
+   * Its transcript events still flow; they simply carry no run.
+   */
+  unattributed<T>(handle: () => T): T {
+    this.attributionSuspended += 1;
+    try {
+      return handle();
+    } finally {
+      this.attributionSuspended -= 1;
+    }
+  }
+
+  /** The run an event emitted now belongs to, if any. */
+  private currentRun(): ProviderRunId | undefined {
+    return this.attributionSuspended > 0 ? undefined : this.openRun;
+  }
+
+  private withRun<E extends AdapterEvent>(event: E): E {
+    const run = this.currentRun();
+    return run === undefined ? event : { ...event, run };
+  }
+
+  /** A turn's message starts, opening the turn's provider run unless one is open. */
   messageStarted(streamId: string): void {
     this.currentContent = [];
     this.bufferedToolCompletions = [];
     this.pendingHostCommand = undefined;
     this.currentStartedAt = new Date().toISOString();
-    this.emit({ type: "messageStarted", streamId });
+    if (this.openRun === undefined && this.attributionSuspended === 0)
+      this.openRun = ++this.lastRun;
+    this.emit(this.withRun({ type: "messageStarted", streamId }));
   }
 
   messageDelta(
@@ -42,25 +83,32 @@ export class NativeAdapterEventSource {
     text: string,
   ): void {
     appendDelta(this.currentContent, kind, text);
-    this.emit({ type: "messageDelta", streamId, delta: { kind, text } });
+    this.emit(
+      this.withRun({ type: "messageDelta", streamId, delta: { kind, text } }),
+    );
   }
 
   toolStarted(toolCallId: string, name: string, input: unknown): void {
     this.currentContent.push({ type: "toolCall", toolCallId, name, input });
-    this.emit({
-      type: "toolStarted",
-      streamId: toolCallId,
-      toolCallId,
-      name,
-      input,
-    });
+    this.emit(
+      this.withRun({
+        type: "toolStarted",
+        streamId: toolCallId,
+        toolCallId,
+        name,
+        input,
+      }),
+    );
   }
 
   toolUpdated(toolCallId: string, output: string): void {
-    this.emit({ type: "toolUpdated", streamId: toolCallId, output });
+    this.emit(
+      this.withRun({ type: "toolUpdated", streamId: toolCallId, output }),
+    );
   }
 
   toolCompleted(envelope: Extract<ServerMessage, { type: "toolEnd" }>): void {
+    const run = this.currentRun();
     this.bufferedToolCompletions.push({
       type: "toolCompleted",
       streamId: envelope.toolId,
@@ -70,8 +118,13 @@ export class NativeAdapterEventSource {
       ...(envelope.resultDiff !== undefined
         ? { resultDiff: envelope.resultDiff }
         : {}),
+      ...(run !== undefined ? { run } : {}),
     });
-    this.emit({ type: "passthrough", envelope });
+    this.emit({
+      type: "passthrough",
+      envelope,
+      ...(run !== undefined ? { run } : {}),
+    });
   }
 
   hostCommandCard(
@@ -85,6 +138,7 @@ export class NativeAdapterEventSource {
 
   hostCommandDiscarded(): void {
     this.resetTurn();
+    this.closeRun();
     this.emit({ type: "hostCommandDiscarded" });
   }
 
@@ -92,6 +146,28 @@ export class NativeAdapterEventSource {
     notice: Extract<AdapterEvent, { type: "providerNotice" }>,
   ): void {
     this.emit(notice);
+  }
+
+  /**
+   * Provider activity with no delta of its own (the contract's
+   * `providerActivity`). Dropped outside an open run: nothing to credit it to.
+   */
+  providerActivity(kind: ProviderActivityKind): void {
+    const run = this.currentRun();
+    if (run === undefined) return;
+    this.emit({ type: "providerActivity", kind, run });
+  }
+
+  /** A provider retry report, for the open run only. */
+  providerRetry(
+    retry: Omit<
+      Extract<AdapterEvent, { type: "providerRetry" }>,
+      "type" | "run"
+    >,
+  ): void {
+    const run = this.currentRun();
+    if (run === undefined) return;
+    this.emit({ type: "providerRetry", ...retry, run });
   }
 
   /**
@@ -118,6 +194,7 @@ export class NativeAdapterEventSource {
     errorMessage?: string,
   ): void {
     this.flushToolCompletions();
+    this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason,
@@ -143,6 +220,7 @@ export class NativeAdapterEventSource {
         stopReason: "aborted",
       });
       this.flushToolCompletions();
+      this.closeRun();
       this.emit({
         type: "runCompleted",
         stopReason: options.errorMessage ? "error" : "aborted",
@@ -155,6 +233,7 @@ export class NativeAdapterEventSource {
     if (this.pendingHostCommand) {
       const { name, card } = this.pendingHostCommand;
       this.resetTurn();
+      this.closeRun();
       this.emit({ type: "hostCommandResult", name, card });
       return;
     }
@@ -165,6 +244,7 @@ export class NativeAdapterEventSource {
       ...(stopReason ? { stopReason } : {}),
     });
     this.flushToolCompletions();
+    this.closeRun();
     this.emit({
       type: "runCompleted",
       stopReason: options.errorMessage ? "error" : "end",
@@ -204,6 +284,11 @@ export class NativeAdapterEventSource {
       // (not only as a transient banner that a later broadcast can clear).
       ...(options.errorMessage ? { error: options.errorMessage } : {}),
     });
+  }
+
+  /** The turn is over: nothing the harness emits from here belongs to its run. */
+  private closeRun(): void {
+    this.openRun = undefined;
   }
 
   private flushToolCompletions(): void {

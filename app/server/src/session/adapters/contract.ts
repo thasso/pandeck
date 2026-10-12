@@ -30,10 +30,20 @@ export type { MessageDelta };
  * these into log appends + outward `RuntimeEvent`s (see `../runtime/events.ts`).
  * `streamId` is the adapter's transient id for an in-flight message/tool; durable
  * entries are keyed separately by the log's `id`/`seq`.
+ *
+ * `run` is the PROVIDER RUN that produced an event, numbered by the harness and
+ * increasing for the adapter's lifetime ({@link ProviderRunId}). The runtime
+ * reads it for live progress only, which it credits to the run its current
+ * turn opened and to no other; transcript handling never looks at it.
  */
 export type AdapterEvent =
-  | { type: "messageStarted"; streamId: string }
-  | { type: "messageDelta"; streamId: string; delta: MessageDelta }
+  | { type: "messageStarted"; streamId: string; run?: ProviderRunId }
+  | {
+      type: "messageDelta";
+      streamId: string;
+      delta: MessageDelta;
+      run?: ProviderRunId;
+    }
   | {
       type: "messageCompleted";
       streamId: string;
@@ -53,8 +63,14 @@ export type AdapterEvent =
       toolCallId: string;
       name: string;
       input?: unknown;
+      run?: ProviderRunId;
     }
-  | { type: "toolUpdated"; streamId: string; output: string }
+  | {
+      type: "toolUpdated";
+      streamId: string;
+      output: string;
+      run?: ProviderRunId;
+    }
   | {
       type: "toolCompleted";
       streamId: string;
@@ -65,6 +81,7 @@ export type AdapterEvent =
       providerMessageId?: string;
       /** Rendering-only provider display diff with real file line numbers (pi edit tools). */
       resultDiff?: string;
+      run?: ProviderRunId;
     }
   /** The provider accepted the pending prompt and assigned it a native id. */
   | { type: "promptAccepted"; providerMessageId: string }
@@ -100,7 +117,7 @@ export type AdapterEvent =
    * cards that must survive reconnect/history are also emitted as
    * `hostCommandResult` so the runtime can append a durable `command.result`.
    */
-  | { type: "passthrough"; envelope: ServerMessage }
+  | { type: "passthrough"; envelope: ServerMessage; run?: ProviderRunId }
   /**
    * A host command (`/commit`, `/compact`) produced its DURABLE result card. The
    * runtime persists it as a `command.result` log entry and re-shows it on
@@ -124,6 +141,36 @@ export type AdapterEvent =
       phase?: string;
       requestBytes?: number;
     }
+  /**
+   * The provider did something with no delta event of its own. Carries no
+   * content: it only moves the run's observed progress, so emit it per
+   * observed provider event and never on a timer.
+   * - `output`: the model produced content — a tool call chosen, its
+   *   arguments being written. The kind that ends a wait.
+   * - `response`: a response started (headers, `message_start`), with no
+   *   content yet. Ends a reported retry, not the wait for output.
+   * - `lifecycle`: anything else — block and message ends, usage and stop
+   *   metadata, signatures. Proof the provider is alive, never output.
+   */
+  | {
+      type: "providerActivity";
+      kind: ProviderActivityKind;
+      run: ProviderRunId;
+    }
+  /**
+   * The provider is retrying a failed request, as the harness reported it.
+   * Transient: it feeds the run's observed progress only; a durable
+   * diagnostic is a separate `providerNotice`.
+   */
+  | {
+      type: "providerRetry";
+      attempt: number;
+      maxAttempts?: number;
+      delayMs?: number;
+      /** HTTP status of the failed request, when there was a response. */
+      status?: number;
+      run: ProviderRunId;
+    }
   /** The run finished; `error`/`aborted` are surfaced as transport-only status. */
   | {
       type: "runCompleted";
@@ -136,6 +183,15 @@ export type AdapterEvent =
       model?: SessionConfigModel;
       reasoning?: string;
     };
+
+/**
+ * A provider run as its harness numbers it: opened when the harness starts
+ * driving the provider for a turn, closed when that turn is over, and never
+ * reused by the same adapter. An event outside any open run carries none.
+ */
+export type ProviderRunId = number;
+
+export type ProviderActivityKind = "output" | "response" | "lifecycle";
 
 /** The result of one `prompt()` run. A failed run RESOLVES with `error` (the runtime throws it). */
 export interface AgentRunResult {

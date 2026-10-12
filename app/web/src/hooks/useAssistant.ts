@@ -141,6 +141,7 @@ import {
   type PaObjectLinkResolution,
 } from "@assistant/shared/objectLinks";
 import type { UsageIndicator } from "@assistant/shared/usage";
+import type { LiveRunProgress } from "../lib/runProgress.ts";
 import type {
   AgentContentBlock,
   LazyBlockKind,
@@ -692,6 +693,13 @@ export interface UIState {
   runState: SnapshotRunState;
   /** Session-level "is a turn running" — derived from {@link runState}. */
   streaming: boolean;
+  /**
+   * What the viewed session's running run has been observed doing, from its
+   * runtime snapshot and `runProgress` events, with the local time it arrived
+   * (ages are read against the server's `observedAt` plus time since then).
+   * Null whenever {@link runState} is idle.
+   */
+  runProgress: LiveRunProgress | null;
   /** Id of the one message currently streaming, or null. Derived from the projection. */
   streamingMessageId: string | null;
   /**
@@ -871,6 +879,7 @@ const emptyInitial: UIState = {
   approvalGrants: null,
   runState: "idle",
   streaming: false,
+  runProgress: null,
   streamingMessageId: null,
   sessionFailures: {},
   unopenableSessions: {},
@@ -1071,6 +1080,7 @@ function normalizeCachedSessions(
     .map((session) => {
       const {
         runStartedAt: _runStartedAt,
+        providerRetry: _providerRetry,
         awaitingInput: _awaitingInput,
         attention: _attention,
         queuedWork: _queuedWork,
@@ -2004,6 +2014,8 @@ function withChat(
   const streamingMessageId = messages.find((m) => m.streaming)?.id ?? null;
   return {
     ...state,
+    // Progress belongs to a running run and ends with it, however it ends.
+    runProgress: runState === "idle" ? null : state.runProgress,
     timeline,
     liveStreams,
     optimistic,
@@ -2584,6 +2596,13 @@ function applyRuntimeEvent(state: UIState, event: ClientRuntimeEvent): UIState {
         ),
         liveStreams: [],
       });
+    case "runProgress":
+      // Not through `withChat`: progress moves no transcript row.
+      if (state.runState !== "running") return state;
+      return {
+        ...state,
+        runProgress: { progress: event.progress, receivedAt: Date.now() },
+      };
     case "runStateChanged":
       return withChat(state, {
         runState: event.runState,
@@ -5048,6 +5067,9 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
       return withChat(
         {
           ...state,
+          runProgress: snap.progress
+            ? { progress: snap.progress, receivedAt: Date.now() }
+            : null,
           session: msg.state,
           contextInfo: msg.contextInfo,
           historySessionId: msg.state.sessionId,
@@ -5870,6 +5892,20 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
         session:
           msg.items.length > 0
             ? { ...rest, queuedPeerPrompts: msg.items }
+            : rest,
+      };
+    }
+    case "backgroundUpdateQueue": {
+      // Like `promptQueue`: the next `state` frame carries the same count.
+      const viewed = state.session;
+      if (!viewed || viewed.sessionId !== msg.sessionId) return state;
+      if ((viewed.queuedBackgroundUpdates ?? 0) === msg.count) return state;
+      const { queuedBackgroundUpdates: _previous, ...rest } = viewed;
+      return {
+        ...state,
+        session:
+          msg.count > 0
+            ? { ...rest, queuedBackgroundUpdates: msg.count }
             : rest,
       };
     }

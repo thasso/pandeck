@@ -11,7 +11,7 @@
  *   pnpm --filter @assistant/server test src/sessionActivity.test.ts
  */
 import assert from "node:assert/strict";
-import { afterAll, test } from "vitest";
+import { afterAll, test, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ process.env.DATA_DIR = join(tmp, "data");
 const {
   installSessionActivityTracking,
   markInterruptedRunsOnBoot,
+  sessionProviderRetry,
   sessionRunStartedAt,
 } = await import("./sessionActivity.ts");
 const { sessionRuntime } = await import("./session/runtimeInstance.ts");
@@ -152,6 +153,111 @@ test("a run start is timed, and a failed run is recorded as the session's last e
     "Provider error: 529 overloaded",
     "the failure is persisted for the card",
   );
+});
+
+test("a provider retry is on the row while it holds, and moves the list only when it changes", async () => {
+  const { hub } = await import("./hub.ts");
+  const broadcasts = vi
+    .spyOn(hub, "broadcastSessions")
+    .mockImplementation(() => Promise.resolve());
+  try {
+    const { id, adapter } = await liveSession();
+    adapter.emit({ type: "messageStarted", streamId: "m1", run: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    broadcasts.mockClear();
+    assert.equal(sessionProviderRetry(id), undefined);
+
+    adapter.emit({
+      type: "providerRetry",
+      attempt: 1,
+      maxAttempts: 10,
+      run: 1,
+    });
+    const first = sessionProviderRetry(id);
+    assert.deepEqual(
+      { attempt: first?.attempt, max: first?.maxAttempts },
+      { attempt: 1, max: 10 },
+    );
+    adapter.emit({
+      type: "providerRetry",
+      attempt: 2,
+      maxAttempts: 10,
+      run: 1,
+    });
+    assert.equal(sessionProviderRetry(id)?.attempt, 2);
+    assert.equal(
+      sessionProviderRetry(id)?.since,
+      first?.since,
+      "the streak keeps its start",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(broadcasts.mock.calls.length, 2, "one per attempt");
+
+    // Tool transitions move progress constantly; they never move the list.
+    adapter.emit({
+      type: "toolStarted",
+      streamId: "t",
+      toolCallId: "t",
+      name: "bash",
+      run: 1,
+    });
+    assert.equal(sessionProviderRetry(id), undefined, "the model answered");
+    for (let i = 0; i < 10; i++) {
+      adapter.emit({
+        type: "toolStarted",
+        streamId: `t${i}`,
+        toolCallId: `t${i}`,
+        name: "bash",
+        run: 1,
+      });
+      adapter.emit({
+        type: "passthrough",
+        envelope: {
+          type: "toolEnd",
+          sessionId: id,
+          id: "m1",
+          toolId: `t${i}`,
+          output: "",
+          isError: false,
+        } as import("@assistant/shared").ServerMessage,
+        run: 1,
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(
+      broadcasts.mock.calls.length,
+      3,
+      "only the retry ending asked for a refresh",
+    );
+
+    adapter.emit({ type: "providerRetry", attempt: 1, run: 1 });
+    // The row states it while the run is live, and only then.
+    const { listSessions } = await import("./sessions.ts");
+    const liveInfo = (isStreaming: boolean) => ({
+      kind: "assistant" as const,
+      sessionId: id,
+      file: undefined,
+      title: id,
+      messageCount: 1,
+      isStreaming,
+      awaitingInput: false,
+      updatedAt: Date.now(),
+    });
+    const rowOf = async (isStreaming: boolean) =>
+      (await listSessions([liveInfo(isStreaming)], () => 0)).find(
+        (row) => row.id === id,
+      );
+    assert.equal((await rowOf(true))?.providerRetry?.attempt, 1);
+    assert.equal((await rowOf(false))?.providerRetry, undefined);
+    adapter.emit({ type: "runCompleted", stopReason: "error" });
+    assert.equal(
+      sessionProviderRetry(id),
+      undefined,
+      "the run's end clears it",
+    );
+  } finally {
+    broadcasts.mockRestore();
+  }
 });
 
 test("an aborted run is not a failure", async () => {

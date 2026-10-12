@@ -124,6 +124,11 @@ export interface BackgroundCompletionDeliveryOptions {
    * shutdown leaves it for boot to restore (`automaticTurnHold.ts`).
    */
   outbox?: BackgroundDeliveryOutbox;
+  /**
+   * What {@link BackgroundCompletionDelivery.queuedCount} answers for this
+   * session may have changed. Called synchronously; must not throw.
+   */
+  queueChanged?(sessionId: string): void;
   maxNoticesPerSession?: number;
   maxPromptChars?: number;
 }
@@ -201,6 +206,18 @@ export class BackgroundCompletionDelivery {
     this.maxPromptChars = Math.max(160, options.maxPromptChars ?? 8_000);
   }
 
+  /**
+   * Updates waiting to reach this session: those that will start a turn of
+   * their own and those riding its next one. A map lookup, never a store read;
+   * a batch being offered right now is no longer counted.
+   */
+  queuedCount(sessionId: string): number {
+    return (
+      (this.pending.get(sessionId)?.notices.length ?? 0) +
+      (this.deferred.get(sessionId)?.notices.length ?? 0)
+    );
+  }
+
   stop(): void {
     this.stopped = true;
     for (const batch of [...this.pending.values(), ...this.deferred.values()])
@@ -274,6 +291,7 @@ export class BackgroundCompletionDelivery {
     }
     batch.notices.push(entry);
     this.deferred.set(sessionId, batch);
+    this.options.queueChanged?.(sessionId);
   }
 
   /**
@@ -305,6 +323,7 @@ export class BackgroundCompletionDelivery {
           if (delivered.has(notice)) this.consume(sessionId, notice);
         if (remaining.length === 0) this.deferred.delete(sessionId);
         else this.deferred.set(sessionId, { notices: remaining, dropped: 0 });
+        this.options.queueChanged?.(sessionId);
       },
     };
   }
@@ -329,6 +348,7 @@ export class BackgroundCompletionDelivery {
       this.consume(sessionId, notice);
     } else batch.notices.push(notice);
     this.pending.set(sessionId, batch);
+    this.options.queueChanged?.(sessionId);
     if (drain) void this.drain(sessionId);
   }
 
@@ -371,6 +391,7 @@ export class BackgroundCompletionDelivery {
       dropped: liveBatch.dropped,
     };
     liveBatch.dropped = 0;
+    this.options.queueChanged?.(sessionId);
     const requestKey = offered.notices
       .map(({ kind, notice }) =>
         kind === "completion"
@@ -387,6 +408,7 @@ export class BackgroundCompletionDelivery {
       if (result === "busy") {
         liveBatch.notices.unshift(...offered.notices);
         liveBatch.dropped += offered.dropped;
+        this.options.queueChanged?.(sessionId);
         return;
       }
       // Only a delivery retires the owed fact. `unavailable` gives up this

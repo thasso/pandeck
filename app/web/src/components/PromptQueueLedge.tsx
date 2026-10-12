@@ -27,6 +27,12 @@ export interface PromptQueueLedgeProps {
   queuing?: readonly { key: string; text: string }[];
   /** What other sessions sent this one, waiting behind the user's own rows. */
   peers?: readonly QueuedPeerPrompt[] | undefined;
+  /**
+   * Background-work updates waiting for the session
+   * (`SessionState.queuedBackgroundUpdates`). Counted, never listed: their
+   * content is model context. Said only while a Stop holds them.
+   */
+  backgroundUpdates?: number;
   /** A turn is running, so a queued message can be steered into it. */
   running: boolean;
   /** The provider takes a steer at all. */
@@ -64,10 +70,26 @@ export interface PromptQueueLedgeProps {
  * the session and background-work strips.
  * @related ComposerLedge, Composer, BackgroundWorkLedge, PendingCommentsLedge
  */
+/** What a Stop is holding, as the strip's closing sentence. */
+function heldSentence(rows: number, backgroundUpdates: number): string {
+  const background =
+    backgroundUpdates === 1
+      ? "1 background update"
+      : `${backgroundUpdates} background updates`;
+  if (rows > 0)
+    return backgroundUpdates > 0
+      ? `Nothing is sent until you resume, including ${background}.`
+      : "Nothing is sent until you resume.";
+  if (backgroundUpdates > 0)
+    return `${background} ${backgroundUpdates === 1 ? "waits" : "wait"} until you resume.`;
+  return "Agent messages and background updates wait until you resume.";
+}
+
 export function PromptQueueLedge({
   queue,
   queuing = [],
   peers = [],
+  backgroundUpdates = 0,
   running,
   canSteer,
   onRemove,
@@ -187,11 +209,7 @@ export function PromptQueueLedge({
           </ul>
           {held ? (
             <div className="flex h-7 items-center justify-end gap-1.5 pr-1.5 pl-2.5">
-              <span>
-                {count === 0
-                  ? "Agent messages and background updates wait until you resume."
-                  : "Nothing is sent until you resume."}
-              </span>
+              <span>{heldSentence(count, backgroundUpdates)}</span>
               <Button variant="secondary" size="xs" onClick={onResume}>
                 Resume
               </Button>

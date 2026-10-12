@@ -221,6 +221,7 @@ export class RuntimeTransport {
             : describeTimelineRange(fullTimeline, renderStart),
         ...(seed ? { turnStatsSeed: seed } : {}),
         streaming: snap.streaming.map((stream) => this.projectStream(stream)),
+        ...(snap.progress ? { progress: snap.progress } : {}),
       },
       contextInfo: this.deps.buildContextInfo(),
     });
@@ -543,6 +544,9 @@ export class RuntimeTransport {
         return;
       case "messageStarted":
       case "hostCommandAppended":
+      // Already coalesced by the runtime (`runtime/progress.ts`): a few
+      // hundred bytes at most every couple of seconds, so it is not batched.
+      case "runProgress":
         this.flush();
         this.sendEvent(event);
         return;

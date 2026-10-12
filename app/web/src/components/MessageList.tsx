@@ -66,7 +66,12 @@ import { BackgroundWorkPromptCard } from "./BackgroundWorkPromptCard.tsx";
 import { Spinner } from "./common/load.tsx";
 import { ChatActivityRow } from "./ChatActivityRow.tsx";
 import { activityPreview } from "../lib/activityPreview.ts";
-import { ProgressIndicator } from "./ProgressIndicator.tsx";
+import {
+  RunProgressContext,
+  RunProgressLine,
+  type RunProgressContextValue,
+} from "./RunProgressLine.tsx";
+import type { LiveRunProgress } from "../lib/runProgress.ts";
 import {
   Markdown,
   type MarkdownFileReference,
@@ -964,6 +969,15 @@ interface Props {
   turnStatsSeed?: TurnStatsSeed | undefined;
   /** The server holds entries older than `messages[0]`, fetchable on demand. */
   hasOlderMessages?: boolean;
+  /**
+   * What the running run has been observed doing (`UIState.runProgress`).
+   * The progress lines read it through context, so it re-renders no row.
+   */
+  runProgress?: LiveRunProgress | null;
+  /** Peer messages waiting for this session (`SessionState.queuedPeerPrompts`). */
+  queuedPeerCount?: number;
+  /** Background updates waiting for it (`SessionState.queuedBackgroundUpdates`). */
+  queuedBackgroundCount?: number;
   loadingOlderMessages?: boolean;
   onLoadOlderMessages?: () => void;
   /**
@@ -1301,8 +1315,18 @@ export function MessageList({
   loadingOlderMessages = false,
   onLoadOlderMessages,
   forkBoundary,
+  runProgress = null,
+  queuedPeerCount = 0,
+  queuedBackgroundCount = 0,
 }: Props) {
   usePerfRenderCount("MessageList");
+  const runProgressValue = useMemo<RunProgressContextValue>(
+    () => ({
+      live: runProgress,
+      queues: { peers: queuedPeerCount, background: queuedBackgroundCount },
+    }),
+    [runProgress, queuedPeerCount, queuedBackgroundCount],
+  );
   const messageRefs = useRef(new Map<string, HTMLDivElement>());
   // Filter out completed assistant turns that only contain hidden thinking/tool
   // blocks. Rendering empty wrappers for those turns still participates in the
@@ -1883,177 +1907,179 @@ export function MessageList({
   // `preservePreviewMessages`). Scroll events are NOT that signal: they also
   // fire for the scroll controller's own scrolling.
   return (
-    <div
-      ref={containerRef}
-      className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-      onPointerDown={() => {
-        if (loadingPreview) onPreviewInteraction?.();
-      }}
-      onTouchMove={() => {
-        if (loadingPreview) onPreviewInteraction?.();
-      }}
-      onWheel={() => {
-        if (loadingPreview) onPreviewInteraction?.();
-      }}
-    >
-      {commentEnabled ? (
-        <style>{chatCommentHighlightStyle(anchorHighlight)}</style>
-      ) : null}
-      {/* Rows are spaced with margins, not a flat `gap`, so consecutive
+    <RunProgressContext.Provider value={runProgressValue}>
+      <div
+        ref={containerRef}
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        onPointerDown={() => {
+          if (loadingPreview) onPreviewInteraction?.();
+        }}
+        onTouchMove={() => {
+          if (loadingPreview) onPreviewInteraction?.();
+        }}
+        onWheel={() => {
+          if (loadingPreview) onPreviewInteraction?.();
+        }}
+      >
+        {commentEnabled ? (
+          <style>{chatCommentHighlightStyle(anchorHighlight)}</style>
+        ) : null}
+        {/* Rows are spaced with margins, not a flat `gap`, so consecutive
           assistant rows can be tightened: a turn that streams as ONE assistant
           message (blocks at gap-3) splits into SEVERAL assistant rows once
           committed, so assistant→assistant uses the same 12px (mt-3) as the
           intra-message block gap — keeping spacing stable across that
           transition — while turn boundaries (→user / user→assistant) keep the
           airier 20px (mt-5). */}
-      <div
-        ref={contentRef}
-        onClick={openCommentAtPoint}
-        className="mx-auto flex w-full max-w-3xl flex-col px-4 py-6 [&>*]:mt-5 [&>*:first-child]:mt-0 [&>[data-role=assistant]+[data-role=assistant]]:mt-3"
-      >
-        {hiddenRowCount > 0 ? (
-          <div className="flex justify-center">
-            <Button variant="outline" size="sm" onClick={showEarlierRows}>
-              Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
-              {hiddenRowCount === 1 ? "message" : "messages"}
-              {hiddenRowCount > WINDOW_STEP_ROWS
-                ? ` (${hiddenRowCount} older)`
-                : ""}
-            </Button>
-          </div>
-        ) : hasOlderMessages ? (
-          <div className="flex justify-center">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={loadOlderMessages}
-              busy={loadingOlderMessages}
-            >
-              {loadingOlderMessages
-                ? "Loading earlier messages…"
-                : "Load earlier messages"}
-            </Button>
-          </div>
-        ) : null}
-        {visibleRows.map(({ message: m, key }) => {
-          const focusKey =
-            focusEntry && messageHasEntry(m, focusEntry.entryId)
-              ? focusEntry.entryId
-              : undefined;
-          const turnEnd = turnEndByMessageId.get(m.id);
-          const rowCanComment = Boolean(
-            m.createdAt && !isTransientMessageId(m.id),
-          );
-          const toolCommentTargets =
-            commentEnabled && rowCanComment
-              ? commentProjection.targetsByMessage.get(m.id)
-              : undefined;
-          const chatCommentable = Boolean(
-            commentEnabled &&
-            rowCanComment &&
-            m.blocks.some((block) => block.kind === "text"),
-          );
-          const hasCommentTarget =
-            chatCommentable || Boolean(toolCommentTargets?.size);
-          return (
-            <Fragment key={key}>
-              <MessageRow
-                message={m}
-                sessionId={sessionId}
-                focusKey={focusKey}
-                finalResponseSeparatorBeforeBlock={finalBoundaryByMessageId.get(
-                  m.id,
-                )}
-                sessionReferences={sessionReferences}
-                changedFiles={changedFiles}
-                paObjectReferences={paObjectReferences}
-                view={view}
-                onAcceptCommitDryRun={onAcceptCommitDryRun}
-                onCreateDraftSession={onCreateDraftSession}
-                models={models}
-                defaultModel={defaultModel}
-                defaultThinkingLevel={defaultThinkingLevel}
-                onForkMessage={onForkMessage}
-                onResendPrompt={onResendPrompt}
-                onOpenSession={onOpenSession}
-                onOpenChangedFile={onOpenChangedFile}
-                onOpenPaObject={onOpenPaObject}
-                onOpenTask={onOpenTask}
-                onOpenBackgroundWork={onOpenBackgroundWork}
-                onOpenWorktree={onOpenWorktree}
-                onRetryWorktreeProvision={onRetryWorktreeProvision}
-                onApplyTaskStatusSuggestion={onApplyTaskStatusSuggestion}
-                onResolveApproval={onResolveApproval}
-                approvalGrants={approvalGrants}
-                onRevokeApprovalGrant={onRevokeApprovalGrant}
-                accountModels={accountModels}
-                onChoosePullRequestTask={onChoosePullRequestTask}
-                onPullRequestCardAction={onPullRequestCardAction}
-                pendingQuestion={pendingQuestion}
-                answeredQuestions={answeredQuestions}
-                onRespondToQuestion={onRespondToQuestion}
-                sessionCanSteer={sessionCanSteer}
-                sessionStreaming={sessionStreaming}
-                promptQueueState={promptQueueStates?.[m.id]}
-                sessionWorktreeId={sessionWorktreeId}
-                worktreeLiveSiblings={worktreeLiveSiblings}
-                onLoadTimelineBlock={onLoadTimelineBlock}
-                onLiveBodyDemand={onLiveBodyDemand}
-                registerMessageElement={registerMessageElement}
-                chatCommentable={chatCommentable}
-                toolCommentTargets={toolCommentTargets}
-                onCommentMessage={
-                  hasCommentTarget ? commentOnMessage : undefined
-                }
-              />
-              {forkBoundary && m.id === forkBoundaryMessageId && (
-                <ForkBoundaryMarker
-                  parentTitle={forkBoundary.parentTitle}
-                  onOpen={forkBoundary.onOpen}
+        <div
+          ref={contentRef}
+          onClick={openCommentAtPoint}
+          className="mx-auto flex w-full max-w-3xl flex-col px-4 py-6 [&>*]:mt-5 [&>*:first-child]:mt-0 [&>[data-role=assistant]+[data-role=assistant]]:mt-3"
+        >
+          {hiddenRowCount > 0 ? (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" onClick={showEarlierRows}>
+                Load {Math.min(hiddenRowCount, WINDOW_STEP_ROWS)} earlier{" "}
+                {hiddenRowCount === 1 ? "message" : "messages"}
+                {hiddenRowCount > WINDOW_STEP_ROWS
+                  ? ` (${hiddenRowCount} older)`
+                  : ""}
+              </Button>
+            </div>
+          ) : hasOlderMessages ? (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={loadOlderMessages}
+                busy={loadingOlderMessages}
+              >
+                {loadingOlderMessages
+                  ? "Loading earlier messages…"
+                  : "Load earlier messages"}
+              </Button>
+            </div>
+          ) : null}
+          {visibleRows.map(({ message: m, key }) => {
+            const focusKey =
+              focusEntry && messageHasEntry(m, focusEntry.entryId)
+                ? focusEntry.entryId
+                : undefined;
+            const turnEnd = turnEndByMessageId.get(m.id);
+            const rowCanComment = Boolean(
+              m.createdAt && !isTransientMessageId(m.id),
+            );
+            const toolCommentTargets =
+              commentEnabled && rowCanComment
+                ? commentProjection.targetsByMessage.get(m.id)
+                : undefined;
+            const chatCommentable = Boolean(
+              commentEnabled &&
+              rowCanComment &&
+              m.blocks.some((block) => block.kind === "text"),
+            );
+            const hasCommentTarget =
+              chatCommentable || Boolean(toolCommentTargets?.size);
+            return (
+              <Fragment key={key}>
+                <MessageRow
+                  message={m}
+                  sessionId={sessionId}
+                  focusKey={focusKey}
+                  finalResponseSeparatorBeforeBlock={finalBoundaryByMessageId.get(
+                    m.id,
+                  )}
+                  sessionReferences={sessionReferences}
+                  changedFiles={changedFiles}
+                  paObjectReferences={paObjectReferences}
+                  view={view}
+                  onAcceptCommitDryRun={onAcceptCommitDryRun}
+                  onCreateDraftSession={onCreateDraftSession}
+                  models={models}
+                  defaultModel={defaultModel}
+                  defaultThinkingLevel={defaultThinkingLevel}
+                  onForkMessage={onForkMessage}
+                  onResendPrompt={onResendPrompt}
+                  onOpenSession={onOpenSession}
+                  onOpenChangedFile={onOpenChangedFile}
+                  onOpenPaObject={onOpenPaObject}
+                  onOpenTask={onOpenTask}
+                  onOpenBackgroundWork={onOpenBackgroundWork}
+                  onOpenWorktree={onOpenWorktree}
+                  onRetryWorktreeProvision={onRetryWorktreeProvision}
+                  onApplyTaskStatusSuggestion={onApplyTaskStatusSuggestion}
+                  onResolveApproval={onResolveApproval}
+                  approvalGrants={approvalGrants}
+                  onRevokeApprovalGrant={onRevokeApprovalGrant}
+                  accountModels={accountModels}
+                  onChoosePullRequestTask={onChoosePullRequestTask}
+                  onPullRequestCardAction={onPullRequestCardAction}
+                  pendingQuestion={pendingQuestion}
+                  answeredQuestions={answeredQuestions}
+                  onRespondToQuestion={onRespondToQuestion}
+                  sessionCanSteer={sessionCanSteer}
+                  sessionStreaming={sessionStreaming}
+                  promptQueueState={promptQueueStates?.[m.id]}
+                  sessionWorktreeId={sessionWorktreeId}
+                  worktreeLiveSiblings={worktreeLiveSiblings}
+                  onLoadTimelineBlock={onLoadTimelineBlock}
+                  onLiveBodyDemand={onLiveBodyDemand}
+                  registerMessageElement={registerMessageElement}
+                  chatCommentable={chatCommentable}
+                  toolCommentTargets={toolCommentTargets}
+                  onCommentMessage={
+                    hasCommentTarget ? commentOnMessage : undefined
+                  }
                 />
-              )}
-              {turnEnd && (
-                <div data-turn-end className="flex flex-col gap-1.5">
-                  {appearance?.separatorAtTurnEnd && (
-                    <hr className="border-border/60" />
-                  )}
-                  {appearance?.turnStatsRow && (
-                    <TurnStatsRow
-                      turn={turnEnd.turn}
-                      sessionCumulative={turnEnd.cumulative}
-                      contextDelta={turnEnd.contextDelta}
-                      showSessionCumulative={turnEnd.showSessionCumulative}
-                      perRun={Boolean(appearance?.turnStatsPerRequest)}
-                    />
-                  )}
-                </div>
-              )}
-            </Fragment>
-          );
-        })}
-        {/* When a turn is running but no message is the live streaming one yet
+                {forkBoundary && m.id === forkBoundaryMessageId && (
+                  <ForkBoundaryMarker
+                    parentTitle={forkBoundary.parentTitle}
+                    onOpen={forkBoundary.onOpen}
+                  />
+                )}
+                {turnEnd && (
+                  <div data-turn-end className="flex flex-col gap-1.5">
+                    {appearance?.separatorAtTurnEnd && (
+                      <hr className="border-border/60" />
+                    )}
+                    {appearance?.turnStatsRow && (
+                      <TurnStatsRow
+                        turn={turnEnd.turn}
+                        sessionCumulative={turnEnd.cumulative}
+                        contextDelta={turnEnd.contextDelta}
+                        showSessionCumulative={turnEnd.showSessionCumulative}
+                        perRun={Boolean(appearance?.turnStatsPerRequest)}
+                      />
+                    )}
+                  </div>
+                )}
+              </Fragment>
+            );
+          })}
+          {/* When a turn is running but no message is the live streaming one yet
             (e.g. the user prompt was just submitted and the assistant entry
             hasn't opened), show a standalone activity indicator. Once the live
             assistant message exists it renders its own indicator instead. */}
-        {sessionStreaming && !messages.some((m) => m.streaming) && (
-          <div data-role="assistant">
-            <ProgressIndicator label="Thinking" />
-          </div>
-        )}
-        {/* Room for the composer floating over the transcript's foot
+          {sessionStreaming && !messages.some((m) => m.streaming) && (
+            <div data-role="assistant">
+              <RunProgressLine fallback="Thinking" />
+            </div>
+          )}
+          {/* Room for the composer floating over the transcript's foot
             (`FloatingComposerDock`), so the last row scrolls clear of it — and,
             on a phone, of the keyboard the dock is lifted above too. Inside the
             content so the scroll controller's ResizeObserver sees it grow with
             the dock and keeps a pinned reader at the bottom. */}
-        <div
-          aria-hidden
-          className="mt-0! shrink-0"
-          style={{
-            height:
-              "calc(var(--chat-dock-height, 0px) + var(--app-keyboard-inset-bottom, 0px))",
-          }}
-        />
+          <div
+            aria-hidden
+            className="mt-0! shrink-0"
+            style={{
+              height:
+                "calc(var(--chat-dock-height, 0px) + var(--app-keyboard-inset-bottom, 0px))",
+            }}
+          />
+        </div>
       </div>
-    </div>
+    </RunProgressContext.Provider>
   );
 }

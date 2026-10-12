@@ -116,6 +116,12 @@ only binding rules; everything else lives here.
   unreadable one fails closed), what a live file-level backup restores, the
   one-writer backstop that refuses rather than clobbers, lazy migration of
   legacy single-file records, and the measured cost per persist.
+- `live-progress.md` — what a running session's runtime observes of its run
+  (model output, tool starts and ends, provider retries) and the queued work
+  behind it: the honesty rules (silence is not a stall, no inferred retries),
+  the tracker lifecycle and stale-event guard, coalesced publication and
+  snapshot restore, server-clock aging, and where the conversation, the Sessions
+  inbox and the session tools show it.
 - `session-retention.md` — automatic archival of settled sessions: the seven-day
   policy on the latest settlement, the projected and durable eligibility halves
   (shared `settleBlockedReason`, Workflow Run ownership, viewed sessions), the

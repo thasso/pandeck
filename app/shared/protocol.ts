@@ -1617,6 +1617,14 @@ export interface SessionListItem {
   /** When the currently active run started, so elapsed labels stay honest. */
   runStartedAt?: number;
   /**
+   * The running run's provider is retrying a failed request, as its harness
+   * reported it: the attempt, its cap when known, and when this streak of
+   * retries began. Present only while it holds; the row moves when a retry
+   * starts, reaches another attempt or ends — the rest of a run's live
+   * progress belongs to the viewed session's runtime snapshot, not this row.
+   */
+  providerRetry?: { attempt: number; maxAttempts?: number; since: number };
+  /**
    * Activity delegated to immediate child runs. Independent of this session's
    * own provider turn (`isStreaming`/`runStartedAt`). Omitted when dormant.
    */
@@ -4243,6 +4251,12 @@ export interface SessionState {
    * queue unless the user steers one in or withdraws it.
    */
   queuedPeerPrompts?: QueuedPeerPrompt[];
+  /**
+   * Background-work updates (completions, monitor activity) waiting to reach
+   * this session — to start a turn of their own, or to ride its next one;
+   * absent when there are none. A count only: their content is model context.
+   */
+  queuedBackgroundUpdates?: number;
   /**
    * Why the session is idle, when it's idle for a specific reason the UI should
    * surface (rather than just "done"). Currently only a pending question; modeled
@@ -7511,6 +7525,8 @@ export type ServerMessage =
   | { type: "promptQueue"; sessionId: string; queue: PromptQueueState }
   /** The peer prompts waiting for a session changed; `items` is the complete new list. */
   | { type: "peerPromptQueue"; sessionId: string; items: QueuedPeerPrompt[] }
+  /** The count of background-work updates waiting for a session changed. */
+  | { type: "backgroundUpdateQueue"; sessionId: string; count: number }
   | StateEventsMessage<"tasks", TaskSummary>
   | StateEventsMessage<"projects", ProjectSummary>
   | StateEventsMessage<"subagents", SubagentThreadSummary>

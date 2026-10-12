@@ -5239,11 +5239,13 @@ function AppContent() {
     displaySession?.promptQueue?.automaticTurnsHeld
       ? displaySession.sessionId
       : undefined;
+  const shownBackgroundUpdates = displaySession?.queuedBackgroundUpdates ?? 0;
   const promptQueueLedge = useMemo(
     () =>
       heldAssistantSessionId ? (
         <PromptQueueLedge
           queue={HELD_ASSISTANT_QUEUE}
+          backgroundUpdates={shownBackgroundUpdates}
           running={displayStreaming}
           canSteer={false}
           onRemove={noop}
@@ -5263,6 +5265,7 @@ function AppContent() {
           queue={shownPromptQueue ?? EMPTY_PROMPT_QUEUE}
           queuing={shownQueuingLocally}
           peers={shownQueuedPeers}
+          backgroundUpdates={shownBackgroundUpdates}
           running={displayStreaming}
           canSteer={sessionCanSteer}
           onRemove={(id) =>
@@ -5307,6 +5310,7 @@ function AppContent() {
       shownPromptQueue,
       shownQueuingLocally,
       shownQueuedPeers,
+      shownBackgroundUpdates,
       openSession,
       queueSessionId,
       displayStreaming,
@@ -6112,6 +6116,15 @@ function AppContent() {
                   onCommentDraftChange={setChatCommentDraft}
                   onCommentSelectionChange={onChatCommentSelectionChange}
                   sessionStreaming={displayStreaming}
+                  runProgress={
+                    shownOptimisticSession ? null : state.runProgress
+                  }
+                  queuedPeerCount={
+                    displaySession?.queuedPeerPrompts?.length ?? 0
+                  }
+                  queuedBackgroundCount={
+                    displaySession?.queuedBackgroundUpdates ?? 0
+                  }
                   promptQueueStates={state.promptQueueStates}
                   appearance={state.settings.appearance}
                   sessionCanSteer={Boolean(displaySession?.canSteer)}

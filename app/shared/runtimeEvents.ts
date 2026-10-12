@@ -25,6 +25,7 @@ import type {
 import type {
   LiveBodyKey,
   LiveBodyRef,
+  RunProgress,
   SessionConfig,
   SessionEntry,
   SessionEntryEnvelope,
@@ -441,6 +442,8 @@ export interface ClientSessionSnapshot {
    */
   turnStatsSeed?: TurnStatsSeed;
   streaming: StreamingEntry[];
+  /** What the run in flight has been observed doing; absent when idle. */
+  progress?: RunProgress;
 }
 
 export type RuntimeEvent =
@@ -471,6 +474,12 @@ export type RuntimeEvent =
    */
   | { type: "hostCommandAppended"; entry: HostCommandClientEntry }
   | { type: "runStateChanged"; runState: SnapshotRunState }
+  /**
+   * The running run's observed progress moved. Transitions (a tool starting or
+   * finishing, a retry, the first output after a wait) publish at once; model
+   * output alone is coalesced. An idle `runStateChanged` ends it.
+   */
+  | { type: "runProgress"; progress: RunProgress }
   | { type: "sessionConfigChanged"; config: SessionConfig }
   /** Transport-only failed/aborted run status (the durable recovery markers are separate). */
   | { type: "runStatus"; status: "error" | "aborted"; message?: string }
@@ -552,6 +561,7 @@ export type ClientRuntimeEvent =
     }
   | { type: "hostCommandAppended"; entry: HostCommandClientEntry }
   | { type: "runStateChanged"; runState: SnapshotRunState }
+  | { type: "runProgress"; progress: RunProgress }
   | { type: "sessionConfigChanged"; config: SessionConfig }
   | { type: "runStatus"; status: "error" | "aborted"; message?: string }
   /** Verbatim host-command result cards only; `toolEnd` never passes through. */

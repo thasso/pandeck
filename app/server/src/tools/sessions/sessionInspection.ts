@@ -14,6 +14,10 @@ import { sessionStore, type SessionMeta } from "../../db/sessionStore.ts";
 import { canonicalSessionLogPath } from "../../sessionStorage.ts";
 import { splitAttachmentManifest } from "../../serialize.ts";
 import { errorText } from "../../errors.ts";
+import { runProgressPhase } from "@assistant/shared/session";
+import { sessionRuntime } from "../../session/runtimeInstance.ts";
+import { peerPromptStore } from "../../db/peerPromptStore.ts";
+import { backgroundUpdateQueueField } from "../../backgroundUpdateQueue.ts";
 
 /* ------------------------------ budgets ---------------------------------- */
 
@@ -187,6 +191,95 @@ export async function runtimeStateFor(id: string): Promise<RuntimeState> {
   }
 }
 
+const secondsSince = (at: number, now: number) =>
+  Math.max(0, Math.round((now - at) / 1000));
+
+/**
+ * What a running session's run has been OBSERVED doing, and what waits for
+ * it — so a caller can tell work in progress from a quiet run without reading
+ * the transcript, whose assistant turn lands only when it completes. Ages are
+ * whole seconds at the time of this read. Silence is reported as silence: a
+ * long `waitingForModelSec` is a provider not answering yet, not a stall.
+ * Never content, tool arguments or output.
+ */
+export function liveActivityFields(
+  id: string,
+  runtime: RuntimeState,
+): {
+  liveActivity?: Record<string, unknown>;
+  queuedWork?: { peerMessages?: number; backgroundUpdates?: number };
+} {
+  const fields: ReturnType<typeof liveActivityFields> = {};
+  const progress =
+    runtime === "running" ? sessionRuntime.runProgress(id) : undefined;
+  if (progress) {
+    const now = progress.observedAt;
+    fields.liveActivity = {
+      phase: runProgressPhase(progress),
+      runningForSec: secondsSince(progress.startedAt, now),
+      lastActivitySecAgo: secondsSince(progress.lastActivityAt, now),
+      ...(progress.lastModelOutputAt !== undefined
+        ? {
+            lastModelOutputSecAgo: secondsSince(
+              progress.lastModelOutputAt,
+              now,
+            ),
+          }
+        : {}),
+      ...(progress.awaitingModelSince !== undefined
+        ? {
+            waitingForModelSec: secondsSince(progress.awaitingModelSince, now),
+          }
+        : {}),
+      ...(progress.runningTools.length > 0
+        ? {
+            runningTools: progress.runningTools.map((tool) => ({
+              name: tool.name,
+              forSec: secondsSince(tool.startedAt, now),
+            })),
+          }
+        : {}),
+      ...(progress.lastTool
+        ? {
+            lastTool: {
+              name: progress.lastTool.name,
+              state: progress.lastTool.state,
+              secAgo: secondsSince(progress.lastTool.at, now),
+            },
+          }
+        : {}),
+      ...(progress.retry
+        ? {
+            providerRetry: {
+              attempt: progress.retry.attempt,
+              ...(progress.retry.maxAttempts !== undefined
+                ? { maxAttempts: progress.retry.maxAttempts }
+                : {}),
+              ...(progress.retry.status !== undefined
+                ? { status: progress.retry.status }
+                : {}),
+              secAgo: secondsSince(progress.retry.at, now),
+            },
+          }
+        : {}),
+    };
+  }
+  let peerMessages = 0;
+  try {
+    peerMessages = peerPromptStore.listUndeliveredForRecipient(id).length;
+  } catch {
+    // Best-effort, like the runtime overlay: the read itself still answers.
+  }
+  const backgroundUpdates =
+    backgroundUpdateQueueField(id).queuedBackgroundUpdates ?? 0;
+  if (peerMessages > 0 || backgroundUpdates > 0)
+    fields.queuedWork = {
+      ...(peerMessages > 0 ? { peerMessages } : {}),
+      ...(backgroundUpdates > 0 ? { backgroundUpdates } : {}),
+    };
+  return fields;
+}
+
 /** Whether the session can be resumed/prompted from its id alone. */
 export function resumableState(
   meta: SessionMeta,
@@ -224,6 +317,7 @@ export async function sessionMetaProjection(resolved: ResolvedSession) {
     messageCount: meta.messageCount,
     archived: meta.archivedAt != null,
     runtimeState: runtime,
+    ...liveActivityFields(meta.id, runtime),
     resumable: resumable.resumable,
     ...(resumable.reason ? { notResumableReason: resumable.reason } : {}),
     logAvailability,

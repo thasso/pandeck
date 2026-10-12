@@ -455,6 +455,36 @@ describe("labels", () => {
     expect(sessionStatusDetail(session({ id: "b" }), "quiet")).toBeUndefined();
   });
 
+  it("says a running session's provider is retrying, and nothing about quiet runs", () => {
+    expect(
+      sessionStatusDetail(
+        session({
+          id: "a",
+          isStreaming: true,
+          providerRetry: { attempt: 3, maxAttempts: 10, since: NOW - 60_000 },
+        }),
+        "running",
+      ),
+    ).toBe("Provider is retrying a failed request (attempt 3 of 10)");
+    expect(
+      sessionStatusDetail(
+        session({
+          id: "a",
+          isStreaming: true,
+          providerRetry: { attempt: 2, since: NOW },
+        }),
+        "running",
+      ),
+    ).toBe("Provider is retrying a failed request (attempt 2)");
+    // A long run with no retry reported has no detail: duration is no alarm.
+    expect(
+      sessionStatusDetail(
+        session({ id: "a", isStreaming: true, runStartedAt: NOW - 3_600_000 }),
+        "running",
+      ),
+    ).toBeUndefined();
+  });
+
   it("still states the whole status in words for assistive technology", () => {
     expect(
       sessionStatusText(

@@ -653,3 +653,41 @@ test("an offer that fails or finds the session unavailable never retires the owe
     assert.deepEqual(discarded, [`failed-${outcome}`], "its file is released");
   }
 });
+
+test("the queued count follows real queued work and announces every change", async () => {
+  const changes: number[] = [];
+  let held = true;
+  let answer: "delivered" | "busy" = "busy";
+  const delivery: BackgroundCompletionDelivery =
+    new BackgroundCompletionDelivery({
+      drainPeers: () => Promise.resolve(),
+      held: () => held,
+      disposition: (n) => (n.itemId === "later" ? "defer" : "wake"),
+      offer: () => Promise.resolve(answer),
+      queueChanged: (sessionId) =>
+        changes.push(delivery.queuedCount(sessionId)),
+    });
+
+  assert.equal(delivery.queuedCount("owner-count"), 0);
+  // Held by a Stop: both wait, and the count says so without any offer.
+  delivery.enqueue("owner-count", notice("now"));
+  delivery.enqueue("owner-count", notice("later"));
+  await flush();
+  assert.equal(delivery.queuedCount("owner-count"), 2);
+  assert.deepEqual(changes, [1, 2]);
+
+  // Resumed, but the session is busy: the batch is put back, still counted.
+  held = false;
+  await delivery.drain("owner-count");
+  assert.equal(delivery.queuedCount("owner-count"), 2);
+  assert.deepEqual(changes.slice(2), [1, 2], "offered, then put back");
+
+  // Delivered: only the deferred update remains, riding the next turn.
+  answer = "delivered";
+  await delivery.drain("owner-count");
+  assert.equal(delivery.queuedCount("owner-count"), 1);
+  delivery.peekDeferredContext("owner-count")!.commit();
+  assert.equal(delivery.queuedCount("owner-count"), 0);
+  assert.equal(changes.at(-1), 0);
+  assert.equal(delivery.queuedCount("another-session"), 0);
+});

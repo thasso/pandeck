@@ -105,6 +105,16 @@ that only asked a sibling something on their shared chain is cleared by that
 sibling's own report — the same rows as a real forward. Measured on a copy of
 the production database (7,539 peer prompts, 16 senders owed): 0.24 ms median.
 
+## Provider retries
+
+A running row carries `providerRetry` while its provider reports it is retrying
+a failed request (`docs/live-progress.md`). It is read from an in-memory map in
+`sessionActivity.ts`, so the build pays nothing for it. That map asks for a
+rebuild only when a retry starts, reaches another attempt or ends. The rest of a
+run's live progress moves on every tool transition and deliberately never
+rebuilds the list: it reaches the viewed session through its runtime snapshot
+and events.
+
 ## What was not done, and why
 
 - **No new `links` index.** An index on `(from_type, relation, from_id, …)`
