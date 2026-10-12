@@ -18,6 +18,8 @@ import {
   claudeSdkModelId,
   reasoningToThinking,
 } from "./modelSettings.ts";
+import { planModeToolUnavailableMessage } from "../mcp/tool.ts";
+import { isPlanModeToolAllowed } from "../tools/toolPolicy.ts";
 import { AGENT_TYPES } from "../agentTypes.ts";
 import type { PromptAssetOptions } from "../promptAssets.ts";
 import type { PromptConditions } from "../promptConditions.ts";
@@ -110,7 +112,7 @@ export interface BuildClaudeSdkQueryOptionsInput {
   /**
    * The session's LIVE Build/Plan mode, read per tool call. It never shapes
    * `tools:`/`disallowedTools` — a retained process outlives a mode switch —
-   * only the `PreToolUse` gate, so a switch applies to the
+   * only the `PreToolUse` gate and `canUseTool`, so a switch applies to the
    * running process too. Requires `outputPolicySessionId`, whose hooks carry
    * the gate. Omitted means Build.
    */
@@ -161,6 +163,46 @@ export interface BuildClaudeSdkQueryOptionsInput {
   lifecycleHooks?: ClaudeQueryLifecycleHooks;
 }
 
+/**
+ * Permission callback: allow the configured native tools and the mounted `pa` MCP
+ * server's tools; deny everything else (other MCP servers, other natives).
+ *
+ * Bypass mode below normally approves before this runs, but bypass is not
+ * guaranteed: an account whose org-managed settings carry
+ * `permissions.disableBypassPermissionsMode: "disable"` silently starts the CLI
+ * in `default` mode. This callback is then the only approver; without it every
+ * prompting call (each `mcp__pa__*` tool, any out-of-cwd read) is denied with
+ * "you haven't granted it yet" and no prompt ever reaches the user.
+ */
+function buildCanUseTool(
+  allowed: ReadonlySet<string>,
+  allowPaMcp: boolean,
+  mode: () => SessionMode,
+  planRestrictedAppTools: ReadonlySet<string>,
+): NonNullable<ClaudeSdkOptions["canUseTool"]> {
+  // External-name prefix the SDK gives tools served by our in-process `pa` server.
+  const mcpPrefix = `mcp__${MCP_SERVER_NAME}__`;
+  return async (toolName, input) => {
+    const appToolName = toolName.startsWith(mcpPrefix)
+      ? toolName.slice(mcpPrefix.length)
+      : undefined;
+    const planned = mode() === "plan";
+    if (planned && appToolName && planRestrictedAppTools.has(appToolName))
+      return {
+        behavior: "deny",
+        message: planModeToolUnavailableMessage(appToolName),
+      };
+    const nativeRefusal = planModeNativeRefusal(mode(), toolName);
+    if (nativeRefusal) return { behavior: "deny", message: nativeRefusal };
+    if (allowed.has(toolName) || (allowPaMcp && appToolName !== undefined))
+      return { behavior: "allow", updatedInput: input };
+    return {
+      behavior: "deny",
+      message: `Tool ${toolName} is not enabled for this session.`,
+    };
+  };
+}
+
 export function buildClaudeSdkQueryOptions(
   input: BuildClaudeSdkQueryOptionsInput,
 ): ClaudeSdkOptions {
@@ -190,15 +232,22 @@ export function buildClaudeSdkQueryOptions(
       "A Claude query with a session mode needs outputPolicySessionId: its PreToolUse hook enforces Plan.",
     );
   const mode = input.mode ?? (() => "build" as const);
+  const planRestrictedAppTools = new Set(
+    AGENT_TYPES[agentType]
+      .tools()
+      .filter((tool) => !isPlanModeToolAllowed(tool))
+      .map((tool) => tool.name),
+  );
   const disallowedTools = KNOWN_CLAUDE_NATIVE_TOOLS.filter(
     (name) => !allowed.has(name),
   );
   // ToolSearch is the CLI's own built-in deferred-tool search (loads
-  // mcp__pa__* tool definitions on demand). The CLI's own
-  // isToolSearchToolAvailable gate requires "ToolSearch" to be a member of the
-  // `tools` allowlist array itself (verified live: without this, the CLI
-  // silently loads every mcp__pa__ tool definition upfront regardless of
-  // alwaysLoad, for every persona/model).
+  // mcp__pa__* tool definitions on demand); it is NOT covered by allowing
+  // "mcp__pa__*" through canUseTool. The CLI's own isToolSearchToolAvailable
+  // gate requires "ToolSearch" to be a member of the `tools` allowlist array
+  // itself (verified live: without this, the CLI silently loads every mcp__pa__
+  // tool definition upfront regardless of alwaysLoad, for every persona/model).
+  // This must ride the `tools:` array, not just canUseTool.
   //
   // Skill has the same literal-membership gate: project skills are discovered
   // without it, but the model cannot invoke the context-injecting Skill tool.
@@ -221,12 +270,10 @@ export function buildClaudeSdkQueryOptions(
     frozenSkillNames.length > 0
       ? join(SKILLS_RUNTIME_DIR, skillSetHash(frozenSkillNames))
       : undefined;
-  // No `allowedTools` and no `canUseTool`: bypass mode below approves before
-  // either is consulted, and the SDK warns that such a callback never runs.
-  // The policy lives where it is enforced: `tools`/`disallowedTools` bound the
-  // natives, the PreToolUse hook refuses Plan's mutating natives, and the
-  // mounted session MCP server (`strictMcpConfig`, our server only) lists and
-  // refuses `mcp__pa__*` tools per mode (`toolServer.ts`).
+  // Do not set `allowedTools`: bare entries auto-approve before `canUseTool` is
+  // consulted, which both logs SDK shadowing warnings and bypasses this policy.
+  // The mounted session MCP server owns which `mcp__pa__*` tools are listed; the
+  // callback below permits that namespace and denies everything else.
   return {
     cwd,
     abortController: input.abortController,
@@ -247,6 +294,8 @@ export function buildClaudeSdkQueryOptions(
     // auto-approves ordinary coding Bash commands (no per-command prompt), so
     // most shell use behaves like pi. The native tool allowlist above still
     // prevents assistant personas from receiving Bash (or any file tool) at all.
+    // Org-managed settings can silently downgrade this to `default`; the
+    // `canUseTool` callback below then approves the same policy.
     //
     // CAVEAT: bypass is NOT total. The bundled Claude Code CLI has a git-safety
     // gate that denies `git push` (and file deletes outside the cwd) BEFORE the
@@ -280,6 +329,12 @@ export function buildClaudeSdkQueryOptions(
       : {}),
     // Deliberately omit the SDK `skills` filter: coding sessions retain the
     // CLI-default discovery of repository `.claude/skills` alongside the plugin.
+    canUseTool: buildCanUseTool(
+      new Set(toolsAllowlist),
+      Boolean(input.mcpServer),
+      mode,
+      planRestrictedAppTools,
+    ),
     model: claudeSdkModelId(input.modelId),
     systemPrompt: claudeSdkSystemPrompt(
       agentType,

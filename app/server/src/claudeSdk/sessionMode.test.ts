@@ -105,10 +105,47 @@ async function main(): Promise<void> {
       "deny",
       `a session switched to Plan cannot call ${t}`,
     );
+    const verdict = await planOptions!.canUseTool!(t, {}, {} as never);
+    assert.ok(verdict, `Plan's canUseTool returns a verdict for ${t}`);
+    assert.equal(verdict.behavior, "deny", `Plan's canUseTool denies ${t}`);
   }
   assert.notEqual(await gate("Bash"), "deny", "a Plan turn still runs Bash");
-  // mcp__pa__* tools are gated by the session tool server against the same
-  // live mode (mcp/sessionToolServer.test.ts), not by the SDK options.
+  const mcpVerdict = await planOptions!.canUseTool!(
+    "mcp__pa__task_read",
+    {},
+    {} as never,
+  );
+  assert.ok(
+    mcpVerdict,
+    "Plan's canUseTool returns a verdict for an mcp__pa__ tool",
+  );
+  assert.equal(
+    mcpVerdict.behavior,
+    "allow",
+    "a Plan turn still reaches read-only mcp__pa__* tools",
+  );
+  const taskManageVerdict = await planOptions!.canUseTool!(
+    "mcp__pa__task_manage",
+    {},
+    {} as never,
+  );
+  assert.ok(taskManageVerdict);
+  assert.equal(
+    taskManageVerdict.behavior,
+    "allow",
+    "a Plan turn permits durable Task mutations",
+  );
+  const mutatingMcpVerdict = await planOptions!.canUseTool!(
+    "mcp__pa__kb_write",
+    {},
+    {} as never,
+  );
+  assert.ok(mutatingMcpVerdict);
+  assert.equal(mutatingMcpVerdict.behavior, "deny");
+  assert.match(
+    "message" in mutatingMcpVerdict ? (mutatingMcpVerdict.message ?? "") : "",
+    /not available in Plan mode because it can make changes/,
+  );
 
   // The gate reads the live mode, so even the query Plan started on — the one
   // a retained process keeps running — gets Edit back ([Task-756](pa://task/756)).

@@ -1,4 +1,4 @@
-<!-- instruction-budget: bytes=3712 reason="Fourteen bullets, each a distinct silent-failure mode. The newest is the append-only timeline: the store persists only entries past its log's extent, so editing a committed entry in place diverges from disk without any error. The steer rule: a queued message the turn did not fold in still runs as the next CLI turn, and an unconfirmed withdrawal may already have been read." task=claude-session-records date=2026-09-29 -->
+<!-- instruction-budget: bytes=4096 reason="Fifteen bullets, each a distinct silent-failure mode. The newest is the kept canUseTool: org-managed settings silently downgrade bypass to default, and without the callback every pa tool call is denied with no prompt. The append-only timeline: editing a committed entry in place diverges from disk without any error. The steer rule: a queued message the turn did not fold in still runs as the next CLI turn." task=restore-claude-can-use-tool date=2026-10-12 -->
 
 # Claude SDK harness
 
@@ -9,6 +9,9 @@
   assistant messages carry metadata and tool openings. A synthetic assistant
   `error` is never streamed, so its text — the only wording a provider failure
   has — becomes the turn's error, not turn text.
+- Keep `canUseTool` beside `bypassPermissions`: org-managed settings silently
+  downgrade bypass to `default`, where only the callback approves; without it
+  every `mcp__pa__*` call is denied with no prompt.
 - A session keeps its initial persona. Plan refuses file-mutating natives in
   `PreToolUse` against the LIVE mode, never via `tools:`/`disallowedTools` (a
   retained process must leave Plan unrestarted) or CLI `permissionMode: "plan"`;
