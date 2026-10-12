@@ -36,8 +36,10 @@ export type NodeType =
  *  - `context`    task → session (legacy task membership), and session →
  *                  first-class object (structured context relation surfaced as
  *                  inspector related-object rows)
- *  - `jira`       task → jira key, and project → jira key (role/notes in metadata)
- *  - `github`     task → canonical GitHub issue ref (`owner/repo#123`)
+ *  - `jira`       task → jira key (its ticket), and project → jira key
+ *                  (role/notes in metadata)
+ *  - `github`     task → canonical GitHub issue ref (`owner/repo#123`, its
+ *                  ticket). A task holds at most one `jira` or `github` edge.
  *  - `link`       task → url (source/related distinction in metadata)
  *  - `in_worktree` session → worktree (the session executes in that worktree),
  *                  and task → worktree (the task is implemented there)

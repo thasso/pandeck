@@ -164,12 +164,12 @@ function candidatesOf(
   }));
 }
 
-function makeTask(projectId?: string, jiraIssueKeys?: string[]): string {
+function makeTask(projectId?: string, jiraKey?: string): string {
   return createTask({
     title: "Add the widget",
     description: "The widget needs adding.",
     ...(projectId ? { projectId } : {}),
-    ...(jiraIssueKeys ? { jiraIssueKeys } : {}),
+    ...(jiraKey ? { ticket: { source: "jira" as const, ref: jiraKey } } : {}),
     source: { createdBy: "user" },
   }).id;
 }
@@ -200,7 +200,7 @@ beforeEach(() => {
 });
 
 test("a start provisions the worktree, records the config, and hands over to the engine", async () => {
-  const taskId = makeTask("wf-proj", ["NEB-1234"]);
+  const taskId = makeTask("wf-proj", "NEB-1234");
   const phases: WorkflowRunStartPhase[] = [];
   const run = await startCodeDeliveryRun({
     taskId,

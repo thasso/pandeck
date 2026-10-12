@@ -384,7 +384,7 @@ test("the PR agent title remains the default with a linked Jira Task", async () 
     });
     const task = createTask({
       title: "Implement NEB-1407 — pull-request title overrides",
-      jiraIssueKeys: ["NEB-1407"],
+      ticket: { source: "jira", ref: "NEB-1407" },
       source: { createdBy: "user" },
     });
     const generatedTitle = "NEB-1407: Fix pull-request title overrides";

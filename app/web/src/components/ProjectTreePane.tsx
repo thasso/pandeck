@@ -711,7 +711,6 @@ function projectsToTasks(
       ...(project.description !== undefined
         ? { descriptionPreview: project.description }
         : {}),
-      jiraIssueKeys: [],
       externalLinks: [],
       priority: "normal",
       sessionRefs: [],

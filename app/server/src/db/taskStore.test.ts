@@ -125,12 +125,20 @@ test("SQLite task foundation: tasks, links, sequences", async () => {
     "session context edge",
   );
 
-  taskStore.setJira(t1.id, ["APP-7", "OPS-3"]);
+  const ticketEdges = () =>
+    outgoing(taskStore.taskNode(t1.id))
+      .filter((e) => e.relation === "jira" || e.relation === "github")
+      .map((e) => `${e.relation}:${e.toId}`);
+  taskStore.setTicket(t1.id, { source: "jira", ref: "APP-7" });
+  assert.deepEqual(ticketEdges(), ["jira:APP-7"], "jira ticket");
+  taskStore.setTicket(t1.id, { source: "github", ref: "acme/app#3" });
   assert.deepEqual(
-    taskStore.jiraFor(t1.id).sort(),
-    ["APP-7", "OPS-3"],
-    "jira links",
+    ticketEdges(),
+    ["github:acme/app#3"],
+    "a github ticket replaces the jira one",
   );
+  taskStore.setTicket(t1.id, null);
+  assert.deepEqual(ticketEdges(), [], "ticket cleared");
 
   taskStore.addUrl(t1.id, "https://example.com/x", "related");
   assert.deepEqual(

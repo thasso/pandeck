@@ -260,11 +260,10 @@ describe("tool catalog", () => {
    * assistant/personal-assistant 10,160, workshop 12,288, developer 11,759.
    * Each ceiling sits a few dozen chars above its measurement on purpose.
    *
-   * The second argued raise is `task_manage.githubIssues` (58 chars, no
-   * description: its refusal names the ref format). Linking a GitHub issue is
-   * a Task field an agent sets in the same write as the rest, so it cannot
-   * live in a deferred tool, and every schema line it would displace records a
-   * silent wrong write it prevents. Measured after it: assistant/personal-
+   * The second argued raise was `task_manage.githubIssues` (58 chars). It is
+   * now `task_manage.ticket`, which also replaced `jiraIssueKeys`: one Jira or
+   * GitHub ticket per Task. Linking it is a Task field an agent sets in the
+   * same write as the rest, so it cannot live in a deferred tool. Measured after it: assistant/personal-
    * assistant 10,227, workshop 12,355, developer 11,826.
    */
   const EAGER_BLOCK_CHAR_CEILING: Record<AgentType, number> = {

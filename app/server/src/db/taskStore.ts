@@ -2,7 +2,7 @@
  * The `tasks` store (see docs/tasks/PLAN.md).
  *
  * One `Task` concept. The row holds only intrinsic attributes; every relationship
- * (hierarchy, project, session, jira, url) is an edge in the generic
+ * (hierarchy, project, session, ticket, url) is an edge in the generic
  * {@link ./links.ts} graph. Integer ids are allocated per type from
  * {@link ./sequences.ts} and surface as `Task-<n>`.
  *
@@ -548,26 +548,23 @@ function sessionTaskStatuses(): Array<{
     .all() as Array<{ sessionId: string; status: TaskStatus }>;
 }
 
-/** Replace the task's Jira issue links. */
-function setJira(taskId: number, issueKeys: string[]): void {
-  setOutgoing(
-    taskNode(taskId),
-    "jira",
-    issueKeys.map((key) => ({ to: { type: "jira", id: key } })),
-  );
-}
-
-function jiraFor(taskId: number): string[] {
-  return outgoing(taskNode(taskId), "jira").map((e) => e.toId);
-}
-
-/** Replace the task's GitHub issue links (canonical `owner/repo#123` refs). */
-function setGithubIssues(taskId: number, refs: string[]): void {
-  setOutgoing(
-    taskNode(taskId),
-    "github",
-    refs.map((ref) => ({ to: { type: "github", id: ref } })),
-  );
+/**
+ * Replace the task's ticket — the one Jira key or canonical GitHub
+ * `owner/repo#123` ref it is about — or remove it with null. It is a single
+ * `jira` or `github` edge; writing one clears the other relation.
+ */
+function setTicket(
+  taskId: number,
+  ticket: { source: "jira" | "github"; ref: string } | null,
+): void {
+  for (const relation of ["jira", "github"] as const)
+    setOutgoing(
+      taskNode(taskId),
+      relation,
+      ticket?.source === relation
+        ? [{ to: { type: relation, id: ticket.ref } }]
+        : [],
+    );
 }
 
 /** Add an external URL link (source/related in metadata). */
@@ -698,9 +695,7 @@ export const taskStore = {
   linkSession,
   sessionsFor,
   sessionTaskStatuses,
-  setJira,
-  setGithubIssues,
-  jiraFor,
+  setTicket,
   addUrl,
   urlsFor,
   links,

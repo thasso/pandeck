@@ -15,7 +15,6 @@
 import type { PromptAttachment, TaskItem } from "@assistant/shared";
 import { buildProjectContext } from "./sessionProjectContext.ts";
 import { readTask } from "./tasks.ts";
-import { taskNamingReference } from "./taskNaming.ts";
 import { clipText } from "./textBudget.ts";
 
 /**
@@ -61,7 +60,6 @@ function buildTaskContextBody(task: TaskItem): string {
   const parent = task.parentId ? readTask(task.parentId) : null;
   const grandparent = parent?.parentId ? readTask(parent.parentId) : null;
   const projectText = task.projectId ? buildProjectContext(task.projectId) : "";
-  const namingReference = taskNamingReference(task);
 
   // Ancestor TITLES ride in the header rather than competing for the budget:
   // they are the breadcrumb that says where this Task sits, they cost a line
@@ -70,8 +68,10 @@ function buildTaskContextBody(task: TaskItem): string {
     "# Working on a Backlog Task",
     "",
     `- Task id: ${task.id}`,
-    ...(namingReference.kind === "jira"
-      ? [`- Primary Jira issue: ${namingReference.display}`]
+    ...(task.ticket
+      ? [
+          `- ${task.ticket.source === "jira" ? "Jira" : "GitHub"} ticket: ${task.ticket.ref}`,
+        ]
       : []),
     `- Title: ${task.title}`,
     `- Status: ${task.status}`,

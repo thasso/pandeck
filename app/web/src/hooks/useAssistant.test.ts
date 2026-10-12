@@ -1757,7 +1757,7 @@ describe("useAssistant task reducer", () => {
       request: {
         title: "New task",
         status: "todo",
-        jiraIssueKeys: ["APP-42"],
+        ticket: { source: "jira", ref: "APP-42" },
         dueDate: "2026-07-10",
       },
       tempId: "optimistic-1",
@@ -1766,9 +1766,9 @@ describe("useAssistant task reducer", () => {
 
     const task = next.taskList?.items[0] as Record<string, unknown> | undefined;
     expect(task?.title).toBe("New task");
-    expect(task?.jiraIssueKeys).toEqual(["APP-42"]);
+    expect(task?.ticket).toEqual({ source: "jira", ref: "APP-42" });
     expect(task).not.toHaveProperty("scope");
-    expect(task).not.toHaveProperty("jiraIssueKey");
+    expect(task).not.toHaveProperty("jiraIssueKeys");
     expect(task).not.toHaveProperty("reminderAt");
     expect(task).not.toHaveProperty("dependsOnIds");
   });

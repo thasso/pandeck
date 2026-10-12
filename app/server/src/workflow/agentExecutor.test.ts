@@ -175,14 +175,16 @@ function createRun(
     useVerdict?: boolean;
     attachWorktree?: boolean;
     taskTitle?: string;
-    jiraIssueKeys?: string[];
+    jiraKey?: string;
   } = {},
 ) {
   const task = createTask({
     title: options.taskTitle ?? `Workflow task ${Date.now()}-${Math.random()}`,
     description: "Implement and review the feature.",
     projectId: "workflow-project",
-    ...(options.jiraIssueKeys ? { jiraIssueKeys: options.jiraIssueKeys } : {}),
+    ...(options.jiraKey
+      ? { ticket: { source: "jira" as const, ref: options.jiraKey } }
+      : {}),
     source: { createdBy: "user" },
   });
   const provider = options.provider ?? "pi";
@@ -601,7 +603,7 @@ test("fresh dispatch creates and binds a deterministically named session with wo
 test("workflow session naming uses Jira and truncates only the Task title", async () => {
   const { run } = createRun({
     taskTitle: "A".repeat(200),
-    jiraIssueKeys: ["NEB-1234"],
+    jiraKey: "NEB-1234",
   });
   const step = appendAgent(run.id, {
     role: "reviewer",

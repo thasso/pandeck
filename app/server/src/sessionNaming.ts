@@ -122,12 +122,12 @@ function attachmentNamingContext(
     const header = descriptionAt === -1 ? body : body.slice(0, descriptionAt);
     const title = matchLine(header, "- Title:") ?? task.name?.trim();
     const id = matchLine(header, "- Task id:");
-    const jiraKey = matchLine(header, "- Primary Jira issue:");
+    const jiraKey = matchLine(header, "- Jira ticket:");
     const status = matchLine(header, "- Status:");
     if (id)
       reference = taskNamingReference({
         id,
-        ...(jiraKey ? { jiraIssueKeys: [jiraKey] } : {}),
+        ...(jiraKey ? { ticket: { source: "jira", ref: jiraKey } } : {}),
       });
     if (title) {
       const label = reference?.display ?? "Task";

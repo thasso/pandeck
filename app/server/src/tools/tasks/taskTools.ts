@@ -8,11 +8,11 @@ import type {
   TaskSessionRef,
   TaskStatus,
   TaskSummary,
+  TaskTicket,
 } from "@assistant/shared";
 import {
   isTaskExternalLinkSource,
-  normalizeGithubIssueRef,
-  normalizeGithubIssueRefs,
+  normalizeTaskTicket,
 } from "@assistant/shared";
 import {
   defineAgentTool,
@@ -164,8 +164,10 @@ const taskManageSchema = {
             type: "string",
             description: "Inherited from parentId.",
           },
-          jiraIssueKeys: { type: "array", items: { type: "string" } },
-          githubIssues: { type: "array", items: { type: "string" } },
+          ticket: {
+            type: "string",
+            description: "Jira key, GitHub owner/repo#123, or its URL.",
+          },
           externalLinks: {
             type: "array",
             items: {
@@ -240,10 +242,8 @@ const coordinatorTaskCreateSchema = {
           title: { type: "string" },
           description: { type: "string", description: "Markdown body." },
           projectId: { type: "string" },
-          jiraIssueKeys: { type: "array", items: { type: "string" } },
-          githubIssues:
-            taskManageSchema.properties.operations.items.properties
-              .githubIssues,
+          ticket:
+            taskManageSchema.properties.operations.items.properties.ticket,
           externalLinks:
             taskManageSchema.properties.operations.items.properties
               .externalLinks,
@@ -308,8 +308,7 @@ interface ManageOperation {
   statusReason?: string;
   userRequestedStatus?: boolean;
   projectId?: string;
-  jiraIssueKeys?: string[];
-  githubIssues?: string[];
+  ticket?: string;
   externalLinks?: TaskExternalLink[];
   dueDate?: string;
   scheduledFor?: string;
@@ -413,7 +412,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
     label: coordinatorCreateOnly ? "Tasks: Create Follow-ups" : "Tasks: Manage",
     description: coordinatorCreateOnly
       ? "Create durable follow-up Tasks only when the user's current message explicitly asks. This coordinator-only variant cannot update, archive, or delete Tasks. Every created Task lands untriaged, is linked under this Workflow Run's Task, and carries its pull request as a source link when present."
-      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Set dates, priority, project and issue links only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, dueDate or scheduledFor and resets priority.",
+      : "Batch-create, update, archive, unarchive, or delete Tasks; delete only when the user explicitly asks. Create only for durable work that will NOT happen in this session: a new Task lands in the user's Inbox untriaged. Status writes are SUGGESTIONS the user answers. Set dates, priority, project and ticket only from explicit or strong evidence, and ask before an ambiguous bulk change. On update, an empty string clears projectId, parentId, ticket, dueDate or scheduledFor and resets priority.",
     parameters: coordinatorCreateOnly
       ? coordinatorTaskCreateSchema
       : taskManageSchema,
@@ -454,15 +453,14 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
         } else if (op.operation === "create") {
           const title = cleanTitle(op.title);
           if (!title) throw new Error("Create operation requires a title.");
-          const jiraIssueKeys = normalizeJiraIssueKeys(op.jiraIssueKeys);
-          const githubIssues = githubIssueRefsForTool(op.githubIssues);
+          const ticket = ticketForTool(op.ticket) ?? undefined;
           const projectIdValue = cleanOptional(op.projectId);
           const links = resolveTaskLinks({
             ...(projectIdValue !== undefined
               ? { projectId: projectIdValue }
               : {}),
-            ...(jiraIssueKeys[0] !== undefined
-              ? { primaryJiraKey: jiraIssueKeys[0] }
+            ...(ticket?.source === "jira"
+              ? { primaryJiraKey: ticket.ref }
               : {}),
             warnings,
           });
@@ -502,8 +500,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
               ...(links.projectId != null
                 ? { projectId: links.projectId }
                 : {}),
-              jiraIssueKeys,
-              ...(githubIssues !== undefined ? { githubIssues } : {}),
+              ...(ticket ? { ticket } : {}),
               ...(externalLinks !== undefined ? { externalLinks } : {}),
               ...taskSchedulingForCreate(op),
               ...(createParentId !== undefined
@@ -544,18 +541,15 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
           const editedDescription = descriptionEdits
             ? applyDescriptionEdits(current, op.id, descriptionEdits)
             : undefined;
-          const jiraIssueKeys = op.jiraIssueKeys
-            ? normalizeJiraIssueKeys(op.jiraIssueKeys)
-            : undefined;
-          const githubIssues = githubIssueRefsForTool(op.githubIssues);
+          const ticket = ticketForTool(op.ticket);
           const projectIdValue =
             op.projectId === "" ? null : cleanOptional(op.projectId);
           const links = resolveTaskLinks({
             ...(projectIdValue !== undefined
               ? { projectId: projectIdValue }
               : {}),
-            ...(jiraIssueKeys?.[0] !== undefined
-              ? { primaryJiraKey: jiraIssueKeys?.[0] }
+            ...(ticket?.source === "jira"
+              ? { primaryJiraKey: ticket.ref }
               : {}),
             ...(current?.projectId !== undefined
               ? { currentProjectId: current?.projectId }
@@ -596,8 +590,7 @@ function makeTaskManageTool(coordinatorCreateOnly = false) {
             ...(links.projectId !== undefined
               ? { projectId: links.projectId }
               : {}),
-            ...(jiraIssueKeys !== undefined ? { jiraIssueKeys } : {}),
-            ...(githubIssues !== undefined ? { githubIssues } : {}),
+            ...(ticket !== undefined ? { ticket } : {}),
             ...(op.externalLinks
               ? {
                   ...(externalLinksValue !== undefined
@@ -665,8 +658,7 @@ const COORDINATOR_CREATE_FIELDS = new Set<keyof ManageOperation>([
   "title",
   "description",
   "projectId",
-  "jiraIssueKeys",
-  "githubIssues",
+  "ticket",
   "externalLinks",
   "dueDate",
   "scheduledFor",
@@ -1125,12 +1117,7 @@ function taskForTool(
       ? { sortOrder: summary.sortOrder }
       : {}),
     ...(summary.projectId ? { projectId: summary.projectId } : {}),
-    ...(summary.jiraIssueKeys?.length
-      ? { jiraIssueKeys: summary.jiraIssueKeys }
-      : {}),
-    ...(summary.githubIssues?.length
-      ? { githubIssues: summary.githubIssues }
-      : {}),
+    ...(summary.ticket ? { ticket: summary.ticket } : {}),
     ...(summary.externalLinks?.length
       ? { externalLinks: summary.externalLinks }
       : {}),
@@ -1161,30 +1148,21 @@ function cleanOptional(value: unknown): string | undefined {
   return text || undefined;
 }
 
-function normalizeJiraIssueKeys(values: unknown): string[] {
-  const candidates = Array.isArray(values) ? values : [];
-  const keys = candidates
-    .map((value) => cleanOptional(value)?.toUpperCase())
-    .filter((value): value is string =>
-      Boolean(value && /^[A-Z][A-Z0-9]+-\d+$/.test(value)),
-    );
-  return [...new Set(keys)];
-}
-
 /**
- * Canonical refs, or undefined when the operation names none. Unlike Jira keys
- * a malformed ref THROWS: `#123` without its repository is the likely slip, and
- * silently dropping it would read as a link that landed.
+ * The ticket an operation names: undefined when it names none, null for `""`
+ * (remove it). A value naming no ticket THROWS: `#123` without its repository
+ * is the likely slip, and silently dropping it would read as a link that
+ * landed.
  */
-function githubIssueRefsForTool(values: unknown): string[] | undefined {
-  if (values === undefined) return undefined;
-  const list = Array.isArray(values) ? values : [values];
-  const invalid = list.filter((value) => !normalizeGithubIssueRef(value));
-  if (invalid.length)
+function ticketForTool(value: unknown): TaskTicket | null | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const ticket = normalizeTaskTicket(value);
+  if (!ticket)
     throw new Error(
-      `Not a GitHub issue reference: ${invalid.map((value) => JSON.stringify(value)).join(", ")}. Use 'owner/repo#123' or the issue's github.com URL.`,
+      `Not a ticket: ${JSON.stringify(value)}. Use a Jira key such as 'ABC-123', a GitHub 'owner/repo#123', or the issue's URL.`,
     );
-  return normalizeGithubIssueRefs(list);
+  return ticket;
 }
 
 function normalizeExternalLinksForTool(

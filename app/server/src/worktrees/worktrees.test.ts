@@ -204,7 +204,7 @@ test("sanitizeWorktreeSuffix clamps to branch-safe kebab-case", () => {
 test("Task worktree names prefer Jira and preserve the reference", () => {
   assert.equal(
     taskWorktreeName(
-      { id: "42", jiraIssueKeys: ["NEB-1234", "VIDEO-9"] },
+      { id: "42", ticket: { source: "jira", ref: "NEB-1234" } },
       "Fix Playback Retry",
     ),
     "neb-1234-fix-playback-retry",
@@ -215,7 +215,7 @@ test("Task worktree names prefer Jira and preserve the reference", () => {
   );
   assert.equal(
     taskWorktreeName(
-      { id: "42", jiraIssueKeys: ["NEB-1234"] },
+      { id: "42", ticket: { source: "jira", ref: "NEB-1234" } },
       "neb-1234-fix-playback",
     ),
     "neb-1234-fix-playback",
@@ -227,11 +227,22 @@ test("Task worktree names prefer Jira and preserve the reference", () => {
     "an untrusted fallback id cannot escape the branch/path slug",
   );
   assert.equal(
-    taskWorktreeName({ id: "42", jiraIssueKeys: ["not-a-key"] }, "Fix"),
+    taskWorktreeName(
+      { id: "42", ticket: { source: "jira", ref: "not-a-key" } },
+      "Fix",
+    ),
     "t42-fix",
   );
+  assert.equal(
+    taskWorktreeName(
+      { id: "42", ticket: { source: "github", ref: "acme/app#7" } },
+      "Fix",
+    ),
+    "t42-fix",
+    "only a Jira ticket names the worktree",
+  );
   const long = taskWorktreeName(
-    { id: "42", jiraIssueKeys: ["VERYLONGPROJECTKEY12-12"] },
+    { id: "42", ticket: { source: "jira", ref: "VERYLONGPROJECTKEY12-12" } },
     "x".repeat(100),
   );
   assert.equal(long.length, 48);
@@ -433,7 +444,7 @@ test("managed worktree tools create, inspect and force-remove through their exec
   const task = createTask({
     title: "Tool worktree task",
     projectId: "wt-proj",
-    jiraIssueKeys: ["TOOLS-42"],
+    ticket: { source: "jira", ref: "TOOLS-42" },
     source: { createdBy: "user" },
   });
   try {

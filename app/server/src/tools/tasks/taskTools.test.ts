@@ -251,46 +251,34 @@ test("task_manage closes a Task out in ONE call: edit and suggestion", async () 
   }
 });
 
-test("task_manage links GitHub issues canonically and refuses a ref without its repository", async () => {
+test("task_manage sets one ticket canonically, refuses a ref without its repository, and clears it", async () => {
   const task = createTask({
-    title: "GitHub link probe",
+    title: "Ticket probe",
     source: { createdBy: "user" },
   });
-  try {
-    await manageTool().execute(
-      {
-        operations: [
-          {
-            operation: "update",
-            id: task.id,
-            githubIssues: [
-              "https://github.com/nodejs/.github/issues/1",
-              "acme/app#12",
-            ],
-          },
-        ],
-      },
+  const update = (ticket: string) =>
+    manageTool().execute(
+      { operations: [{ operation: "update", id: task.id, ticket }] },
       ctx,
     );
-    assert.deepEqual(readTask(task.id)?.githubIssues, [
-      "nodejs/.github#1",
-      "acme/app#12",
-    ]);
-    await assert.rejects(
-      manageTool().execute(
-        {
-          operations: [
-            { operation: "update", id: task.id, githubIssues: ["#12"] },
-          ],
-        },
-        ctx,
-      ),
-      /Not a GitHub issue reference: "#12"/,
-    );
-    assert.deepEqual(readTask(task.id)?.githubIssues, [
-      "nodejs/.github#1",
-      "acme/app#12",
-    ]);
+  try {
+    await update("https://github.com/nodejs/.github/issues/1");
+    assert.deepEqual(readTask(task.id)?.ticket, {
+      source: "github",
+      ref: "nodejs/.github#1",
+    });
+    await assert.rejects(update("#12"), /Not a ticket: "#12"/);
+    assert.deepEqual(readTask(task.id)?.ticket, {
+      source: "github",
+      ref: "nodejs/.github#1",
+    });
+    await update("https://acme.atlassian.net/browse/app-12");
+    assert.deepEqual(readTask(task.id)?.ticket, {
+      source: "jira",
+      ref: "APP-12",
+    });
+    await update("");
+    assert.equal(readTask(task.id)?.ticket, undefined);
   } finally {
     deleteTask(task.id);
   }
