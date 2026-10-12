@@ -41,17 +41,26 @@ The tree OWNS a worktree when one of its sessions created it or runs in it. The
 project's synthetic main checkout is never owned: it is neither a delivery
 target nor a cleanup candidate.
 
-That rule is one pure module, `app/shared/sessionTreeWorktrees.ts`
-(`spawnTreeSessionIds`, `sessionTreeWorktrees`), so every surface that lists a
-tree's worktrees lists the same ones. Each owned worktree carries its owners in
-a fixed order: the creator first, then the tree sessions running in it in record
-order; a session holding both roles is listed once per role.
+Membership has ONE authority, the server. Every spawned worktree record carries
+`treeSessionIds` — its holders (creator and the sessions running in it) and
+every coordinator above any of them along `spawned` edges, archived, settled and
+deleted ones included — and a session's tree owns the worktree exactly when the
+session is listed there (`ownedBySessionTree` in
+`app/shared/sessionTreeWorktrees.ts`). A list build reads all spawn edges once
+(`sessionStore.spawnedParentByChild`) rather than once per row. The browser
+never walks its own session list for this: that list leaves out archived
+sessions, and retention archives every settled peer within a week, which would
+drop exactly the leftover checkouts this exists to find.
 
 Agents read it with `worktree_status` and `sessionTree: true`: the worktrees
 owned by the CALLER's tree, each record with its `owners`, plus the tree's root
-and size. A peer asking sees its own subtree, not its coordinator's. The server
-walks the tree in one recursive read over `session_links_parent_idx`
-(`sessionStore.spawnedDescendantIds`).
+and size. A peer asking sees its own subtree, not its coordinator's. Each owned
+worktree's `owners` (`sessionTreeWorktrees`) name the tree sessions holding it,
+the creator first, then those running in it in record order — a session holding
+both roles is listed once per role. The tree's members come from one recursive
+read that searches the parent-leading primary key at both steps
+(`sessionStore.spawnedDescendantIds`); it walks the same edges `treeSessionIds`
+walks upward, so the two agree.
 
 ## A tree's pull requests
 
@@ -63,9 +72,14 @@ of the tree see delivery without a provider call of their own:
   summary included — a coordinator's one read for which of its peers' pull
   requests are open, red, conflicted or merged, and which checkouts are left.
 - The session inspector's **Worktrees from this session** group draws the owned
-  worktrees as worktree rows with that mark (`app/web/docs/ui-shell.md`). The
-  browser walks the spawn edges of the sessions it holds, so a peer the user
-  archived is outside the tree there while the server's read still counts it.
+  worktrees — a checkout shared with its peers included; only a tree that owns
+  nothing but the worktree the session runs in, which Details names, draws no
+  group — as worktree rows with that mark (`app/web/docs/ui-shell.md`). The
+  panel holds the Worktrees topic only for a session that has a tree to show: a
+  spawned peer in the session list, or worktrees the list it already holds says
+  the tree owns (an old coordinator whose peers were archived). Rows state what
+  the record says; live dirt arrives only for worktrees another surface is
+  watching.
 
 Nothing here removes a worktree. A merged pull request leaves its checkout where
 it is; whether to keep working in it or retire it stays the user's call.
@@ -110,19 +124,27 @@ dialog. Nothing is ever removed automatically.
 Worktrees created before `worktree_create` recorded its caller get their creator
 from a one-time boot backfill (`worktrees/worktreeCreatorBackfill.ts`), run off
 the boot path and recorded in `worktree_creator_backfill` (migration 0078) with
-its summary. A failure records nothing and is retried on the next start; a
-creator already recorded is never replaced.
+its summary. A log that cannot be read is counted (`unreadable`) and skipped;
+any other failure records nothing and is retried on the next start. A creator
+already recorded is never replaced, and every edge the backfill writes carries
+`{ source: "backfill" }` metadata, so exactly those edges can be found again.
 
 The evidence is the creating session's own app log: a `worktree_create` call
 (pi's bare name or Claude's `mcp__pa__worktree_create`) and the result paired
 with it by `toolCallId`, whose JSON must name the row's id, path and project. A
 worktree id merely mentioned — a `worktree_status` listing, a pasted path — is
-not a claim. A fork copies its parent's history, so the same call and result
-appear in every fork made after it; the creator is the claimant that EXISTED
-when the worktree was created, and more than one such claimant links nothing.
+not a claim. A fork copies its parent's history and stamps every copied entry
+`inheritedFrom`; those entries are skipped. As a second guard, the creator must
+have EXISTED when the worktree was created, and more than one such claimant
+links nothing.
 
-Only sessions whose lifetime overlaps the candidates' creation times are read,
-streamed line by line, and only lines that can carry a call or its result are
-parsed. On the deployment it was written for it read about 3,000 logs in under a
+Every session created before the newest candidate is read — `updatedAt` is not a
+lifetime bound, since metadata writes are best-effort and a log can hold a turn
+its row never recorded — streamed line by line, and only lines that can carry a
+call or its result are parsed, the entry's role deciding which. The reader
+(`worktreeCreateLogScan.ts`) imports nothing but `node:fs` and `node:readline`,
+so it runs as-is under Bun; on the real logs Node and Bun 1.4 return the same
+claims. On the deployment it was written for it read about 3,000 logs in under a
 minute and named a creator for 559 of 1,047 creator-less rows, with no ambiguous
-claim; the rest were made by a person, a first send or a Workflow Run.
+claim. The rest carry no such evidence: a person, a first send or a Workflow Run
+made them, or the log that would say otherwise is gone.

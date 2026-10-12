@@ -1,37 +1,23 @@
 import { describe, expect, test } from "vitest";
 import {
+  ownedBySessionTree,
   sessionTreeWorktrees,
-  spawnTreeSessionIds,
 } from "./sessionTreeWorktrees.ts";
 
-describe("spawnTreeSessionIds", () => {
-  test("walks every depth below the root and nothing above or beside it", () => {
-    const sessions = [
-      { id: "top" },
-      { id: "root", spawnedBySessionId: "top" },
-      { id: "a", spawnedBySessionId: "root" },
-      { id: "b", spawnedBySessionId: "root" },
-      { id: "a1", spawnedBySessionId: "a" },
-      { id: "sibling", spawnedBySessionId: "top" },
-      { id: "loose" },
-    ];
-    expect([...spawnTreeSessionIds("root", sessions)].sort()).toEqual([
-      "a",
-      "a1",
-      "b",
-      "root",
-    ]);
-  });
-
-  test("includes an unknown root and survives a cycle and a self edge", () => {
-    expect([...spawnTreeSessionIds("ghost", [])]).toEqual(["ghost"]);
-    const cyclic = [
-      { id: "x", spawnedBySessionId: "y" },
-      { id: "y", spawnedBySessionId: "x" },
-      { id: "z", spawnedBySessionId: "z" },
-    ];
-    expect([...spawnTreeSessionIds("x", cyclic)].sort()).toEqual(["x", "y"]);
-    expect([...spawnTreeSessionIds("z", cyclic)]).toEqual(["z"]);
+describe("ownedBySessionTree", () => {
+  test("reads the server's membership, and never owns the main checkout", () => {
+    const worktree = {
+      id: "w",
+      sessionIds: ["peer"],
+      treeSessionIds: ["peer", "coord", "root"],
+    };
+    expect(ownedBySessionTree(worktree, "root")).toBe(true);
+    expect(ownedBySessionTree(worktree, "peer")).toBe(true);
+    expect(ownedBySessionTree(worktree, "stranger")).toBe(false);
+    expect(ownedBySessionTree({ id: "x", sessionIds: [] }, "root")).toBe(false);
+    expect(
+      ownedBySessionTree({ ...worktree, id: "main:p", isMain: true }, "root"),
+    ).toBe(false);
   });
 });
 

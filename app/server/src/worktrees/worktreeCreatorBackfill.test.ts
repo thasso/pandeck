@@ -12,15 +12,19 @@ const tmp = mkdtempSync(join(tmpdir(), "worktree-creator-backfill-"));
 process.env.ASSISTANT_CWD = tmp;
 process.env.ASSISTANT_BACKGROUND_FETCH = "0";
 
-const { backfillWorktreeCreators, scanLogForCreatedWorktrees } =
+const { backfillWorktreeCreators } =
   await import("./worktreeCreatorBackfill.ts");
+const { scanLogForCreatedWorktrees } =
+  await import("./worktreeCreateLogScan.ts");
 const { sessionStore } = await import("../db/sessionStore.ts");
 const {
   creatorSessionIdForWorktree,
   insertWorktree,
+  markWorktreeRemovedForTests,
   recordWorktreeCreator,
   worktreeCreatorBackfillDone,
 } = await import("../db/worktreeStore.ts");
+const { incoming } = await import("../db/links.ts");
 
 const logs = join(tmp, "logs");
 mkdirSync(logs, { recursive: true });
@@ -119,10 +123,34 @@ test("scanLogForCreatedWorktrees pairs worktree_create calls with their results 
     result("call-b", b),
     // A result repeated after its call was paired is not a second claim.
     result("call-a", a),
+    // Real result entries may name their tool, and a path may contain the
+    // tool's name: both are still results, decided by role.
+    createCall("call-named"),
+    {
+      ...result("call-named", { id: "scan-named", path: "/w/named" }),
+      toolName: "mcp__pa__worktree_create",
+    },
+    createCall("call-path"),
+    result("call-path", { id: "scan-path", path: "/w/fix-worktree_create" }),
+    // A fork's copies of its parent's entries are the parent's evidence.
+    {
+      ...createCall("call-copied"),
+      inheritedFrom: { sessionId: "parent", entryId: "e1" },
+    },
+    {
+      ...result("call-copied", { id: "scan-copied", path: "/w/copied" }),
+      inheritedFrom: { sessionId: "parent", entryId: "e2" },
+    },
   ]);
   assert.deepEqual(await scanLogForCreatedWorktrees(logPath("scan")), [
     { worktreeId: "scan-a", path: "/w/a", projectId: "proj" },
     { worktreeId: "scan-b", path: "/w/b", projectId: "proj" },
+    { worktreeId: "scan-named", path: "/w/named", projectId: "proj" },
+    {
+      worktreeId: "scan-path",
+      path: "/w/fix-worktree_create",
+      projectId: "proj",
+    },
   ]);
 });
 
@@ -133,8 +161,13 @@ test("backfillWorktreeCreators links the session that existed at creation, once"
   const kept = row("kept", 4_000);
   row("orphan", 5_000);
   const twin = row("twin", 6_000);
+  // A retired worktree is history worth naming too.
+  const gone = row("gone", 1_500);
+  markWorktreeRemovedForTests(gone.id);
 
-  session("coord", 500);
+  // Its metadata stopped before the worktree existed (a best-effort write
+  // that never landed); its log still holds the call and result.
+  session("coord", 500, 900);
   // Forked from the coordinator after `forked` existed: its log copies the
   // call and result, but it is not the creator.
   session("fork", 2_500);
@@ -145,14 +178,29 @@ test("backfillWorktreeCreators links the session that existed at creation, once"
   // Two sessions that both existed before `twin` both claim it: no answer.
   session("twin-a", 5_500);
   session("twin-b", 5_600);
+  // A log that cannot be read is counted and skipped, not a reason to rerun
+  // the whole backfill on every start.
+  session("broken", 400);
+  mkdirSync(logPath("broken"), { recursive: true });
 
   writeLog("coord", [
     createCall("c1"),
     result("c1", plain),
     createCall("c2"),
     result("c2", forked),
+    createCall("c3"),
+    result("c3", gone),
   ]);
-  writeLog("fork", [createCall("c2"), result("c2", forked)]);
+  writeLog("fork", [
+    {
+      ...createCall("c2"),
+      inheritedFrom: { sessionId: "coord", entryId: "a" },
+    },
+    {
+      ...result("c2", forked),
+      inheritedFrom: { sessionId: "coord", entryId: "b" },
+    },
+  ]);
   // Names a candidate's id with another path: not that worktree.
   writeLog("liar", [
     createCall("l1"),
@@ -164,9 +212,24 @@ test("backfillWorktreeCreators links the session that existed at creation, once"
 
   const summary = await backfillWorktreeCreators({ logPath });
   assert.ok(summary);
-  assert.equal(summary.candidates, 5, "every creator-less row, not `kept`");
-  assert.equal(summary.linked, 2);
+  assert.equal(summary.candidates, 6, "every creator-less row, not `kept`");
+  assert.equal(summary.linked, 3);
   assert.equal(summary.ambiguous, 1);
+  assert.equal(summary.unreadable, 1);
+  assert.equal(creatorSessionIdForWorktree(gone.id), "coord");
+  // Every backfilled edge says so; a live creation carries nothing.
+  assert.deepEqual(
+    incoming({ type: "worktree", id: plain.id }, "created_worktree").map(
+      (link) => link.metadata,
+    ),
+    [{ source: "backfill" }],
+  );
+  assert.deepEqual(
+    incoming({ type: "worktree", id: kept.id }, "created_worktree").map(
+      (link) => link.metadata ?? null,
+    ),
+    [null],
+  );
   assert.equal(creatorSessionIdForWorktree(twin.id), undefined);
   assert.equal(creatorSessionIdForWorktree(plain.id), "coord");
   assert.equal(creatorSessionIdForWorktree(forked.id), "coord");

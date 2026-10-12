@@ -265,6 +265,7 @@ import {
   ProjectInspector,
   PullRequestInspector,
   SessionInspector,
+  sessionTreeWorktreeRecords,
   sessionInspectorActions,
   TaskInspector,
   WorktreeInspector,
@@ -1318,14 +1319,22 @@ function AppContent() {
           state.session?.sessionId === route.id &&
           state.session.activeSkills !== undefined,
         // The inspector lists the worktrees the session's spawn tree owns,
-        // with their pull requests, and keeps them current while it shows.
+        // with their pull requests, and keeps them current while it shows —
+        // but only for a session that HAS a tree: a peer in the list, or
+        // worktrees the held list already says it owns (an old coordinator
+        // whose peers retention archived). Every other conversation stays
+        // off the full worktree broadcasts.
         sessionTreeWorktreesVisible:
           inspectorOpen &&
           (mobileLayout
             ? !composerVisible && !commentActuation?.composerOpen
             : inspectorTabVisible) &&
           route.name === "session" &&
-          state.session?.sessionId === route.id,
+          state.session?.sessionId === route.id &&
+          (state.sessions.some(
+            (item) => item.spawnedBySessionId === route.id,
+          ) ||
+            sessionTreeWorktreeRecords(route.id, state.worktrees).length > 0),
         // The ledge only exists on a session screen whose session owns work,
         // so an open flag left over from another session subscribes nothing.
         backgroundLedgeOpen:
@@ -1369,6 +1378,7 @@ function AppContent() {
       commentActuation?.composerOpen,
       state.session,
       state.sessions,
+      state.worktrees,
       backgroundLedgeOpen,
     ],
   );
@@ -2199,9 +2209,12 @@ function AppContent() {
   // is fresh. A visible topic subscription owns that answer when present;
   // otherwise this session surface performs one canonical read per slot. Keep
   // the effects separate so one list answering cannot re-request the other.
+  // Any shown session reads it once, not only one that runs in a worktree:
+  // the inspector's tree group, and whether to hold the topic for it, are
+  // answered from this list, and a coordinator usually runs in none of those.
   useEffect(() => {
     if (
-      !displayWorktreeId ||
+      !displayCurrentId ||
       !state.connected ||
       worktreesSubscribed ||
       state.worktreesFresh
@@ -2209,7 +2222,7 @@ function AppContent() {
       return;
     actions.listWorktrees();
   }, [
-    displayWorktreeId,
+    displayCurrentId,
     state.connected,
     worktreesSubscribed,
     state.worktreesFresh,
@@ -6727,7 +6740,6 @@ function AppContent() {
         })()}
         worktreeStatus={displayWorktreeStatus}
         worktrees={state.worktrees}
-        worktreeStatuses={state.worktreeStatuses}
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}

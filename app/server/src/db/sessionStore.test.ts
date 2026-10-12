@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-const { sessionStore } = await import("./sessionStore.ts");
+const { sessionStore, SPAWNED_DESCENDANTS_SQL } =
+  await import("./sessionStore.ts");
 const { getDb } = await import("./index.ts");
 
 test("SQLite session store persists developer persona sessions", () => {
@@ -430,4 +431,54 @@ test("the default store read excludes archived rows; the archive view asks for t
     includeArchived: true,
   });
   assert.equal(archiveGate(shelved), true);
+});
+
+test("spawnedDescendantIds walks every depth once, survives a cycle and follows only spawn edges", () => {
+  const tag = `${Date.now()}-${Math.random()}`;
+  const id = (name: string) => `desc-${name}-${tag}`;
+  for (const name of ["root", "a", "b", "a1", "forked", "internal"])
+    sessionStore.upsert({
+      id: id(name),
+      harness: "pi",
+      agentType: "developer",
+    });
+  sessionStore.linkSpawned(id("root"), id("a"));
+  sessionStore.linkSpawned(id("root"), id("b"));
+  sessionStore.linkSpawned(id("a"), id("a1"));
+  // A cycle back to the root, which no real spawn makes.
+  sessionStore.linkSpawned(id("a1"), id("root"));
+  sessionStore.remove(id("b"));
+  // Other relations are not spawn edges.
+  const insert = getDb().prepare(
+    "INSERT INTO session_links (parent_session_id, child_session_id, relation_type, created_at_ms) VALUES (?, ?, ?, 0)",
+  );
+  insert.run(id("a"), id("forked"), "forked");
+  insert.run(id("a"), id("internal"), "internal");
+
+  assert.deepEqual(
+    sessionStore.spawnedDescendantIds(id("root")).sort(),
+    [id("a"), id("a1"), id("b")].sort(),
+    "every depth, a soft-deleted peer included, the root excluded",
+  );
+  assert.deepEqual(
+    sessionStore.spawnedDescendantIds(id("a1")).sort(),
+    [id("a"), id("b"), id("root")].sort(),
+  );
+  assert.deepEqual(sessionStore.spawnedDescendantIds(id("forked")), []);
+});
+
+test("spawnedDescendantIds searches by parent at both steps of its recursion", () => {
+  const plan = (
+    getDb()
+      .prepare(`EXPLAIN QUERY PLAN ${SPAWNED_DESCENDANTS_SQL}`)
+      .all("x", "x") as Array<{ detail: string }>
+  )
+    .map((row) => row.detail)
+    .join("\n");
+  const searches =
+    plan.match(
+      /SEARCH \S+ USING (?:COVERING )?INDEX \S+ \(parent_session_id=\?/g,
+    ) ?? [];
+  assert.equal(searches.length, 2, plan);
+  assert.doesNotMatch(plan, /SCAN (?:session_links|l)\b/, plan);
 });

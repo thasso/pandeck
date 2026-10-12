@@ -1385,24 +1385,43 @@ function spawnedParentsByChildIds(
 }
 
 /**
- * Every session spawned below `rootId`, at any depth, along `spawned` edges —
- * whatever their ownership, archive or settlement — in one recursive read over
- * `session_links_parent_idx`. `UNION` (not `UNION ALL`) visits a node once,
- * so a cycle terminates. The root itself is not included.
+ * Every session spawned below a root, at any depth, along `spawned` edges —
+ * whatever their ownership, scope, archive, settlement or soft deletion — in
+ * one recursive read whose both steps search the parent-leading primary key.
+ * `UNION` (not
+ * `UNION ALL`) visits a node once, so a cycle terminates; the root is excluded
+ * even when a cycle reaches it. Exported so the query-plan test explains the
+ * exact statement.
  */
-function spawnedDescendantIds(rootId: string): string[] {
+export const SPAWNED_DESCENDANTS_SQL = `WITH RECURSIVE tree(id) AS (
+    SELECT child_session_id FROM session_links
+     WHERE parent_session_id = ? AND relation_type = 'spawned'
+    UNION
+    SELECT l.child_session_id FROM session_links l
+      JOIN tree ON l.parent_session_id = tree.id
+     WHERE l.relation_type = 'spawned'
+  )
+  SELECT id FROM tree WHERE id != ?`;
+
+/**
+ * Every spawn edge as child → coordinator, in one read: a worktree list build
+ * walks each holder's coordinators up from here instead of one read per level
+ * per row. Ownership, scope, archive and deletion are not filtered.
+ */
+function spawnedParentByChild(): Map<string, string> {
   const rows = getDb()
     .prepare(
-      `WITH RECURSIVE tree(id) AS (
-         SELECT child_session_id FROM session_links
-          WHERE parent_session_id = ? AND relation_type = 'spawned'
-         UNION
-         SELECT l.child_session_id FROM session_links l
-           JOIN tree ON l.parent_session_id = tree.id
-          WHERE l.relation_type = 'spawned'
-       )
-       SELECT id FROM tree WHERE id != ?`,
+      "SELECT parent_session_id, child_session_id FROM session_links WHERE relation_type = 'spawned'",
     )
+    .all() as Array<{ parent_session_id: string; child_session_id: string }>;
+  return new Map(
+    rows.map((row) => [row.child_session_id, row.parent_session_id]),
+  );
+}
+
+function spawnedDescendantIds(rootId: string): string[] {
+  const rows = getDb()
+    .prepare(SPAWNED_DESCENDANTS_SQL)
     .all(rootId, rootId) as Array<{ id: string }>;
   return rows.map((row) => row.id);
 }
@@ -1684,6 +1703,7 @@ export const sessionStore = {
   setSpawnedOwnership,
   spawnedParentsByChildIds,
   spawnedDescendantIds,
+  spawnedParentByChild,
   recordUsageTurn,
   replaceUsage,
   createInternalUsageSession,

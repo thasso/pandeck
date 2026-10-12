@@ -43,32 +43,6 @@ const defaultOperations: IdleWorktreeOperations = {
 };
 
 /**
- * Every session that holds a worktree, plus every coordinator above each, in
- * one batched read per spawn level. A cycle (no real spawn makes one) stops.
- */
-function withCoordinators(sessionIds: Iterable<string>): Set<string> {
-  const all = new Set(sessionIds);
-  let frontier = [...all];
-  while (frontier.length > 0) {
-    const parents = sessionStore.spawnedParentsByChildIds(frontier);
-    frontier = [];
-    for (const { parentSessionId } of parents.values())
-      if (!all.has(parentSessionId)) {
-        all.add(parentSessionId);
-        frontier.push(parentSessionId);
-      }
-  }
-  return all;
-}
-
-function holders(record: WorktreeRecord): string[] {
-  return [
-    ...(record.createdBySessionId ? [record.createdBySessionId] : []),
-    ...record.sessionIds,
-  ];
-}
-
-/**
  * Classify what retiring would lose. Status failures are `unknown`, never
  * clean. A clean tree whose pull request MERGED is `delivered` even when the
  * local base has not caught up: a squash merge lands upstream, and this read
@@ -115,7 +89,8 @@ export async function idleWorktrees(
       continue;
     let lastActivityAt = row.updatedAt;
     let live = false;
-    for (const sessionId of withCoordinators(holders(record))) {
+    // The holders and every coordinator above them, from the server's record.
+    for (const sessionId of record.treeSessionIds ?? []) {
       const meta = sessionStore.get(sessionId);
       if (!meta) continue;
       lastActivityAt = Math.max(lastActivityAt, meta.updatedAt);

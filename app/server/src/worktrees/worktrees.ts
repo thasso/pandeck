@@ -23,6 +23,7 @@ import {
   type GitResult,
 } from "../gitExec.ts";
 import { errorText } from "../errors.ts";
+import { sessionStore } from "../db/sessionStore.ts";
 import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
 import {
   removeManagedTree,
@@ -40,7 +41,7 @@ import {
 import {
   assertWorktreeCommentsDeletable,
   clearWorktreeBranchCleanup,
-  creatorSessionIdForWorktree,
+  creatorSessionIdByWorktree,
   finalizeWorktreeRemoval,
   getWorktree,
   insertWorktree,
@@ -1518,9 +1519,11 @@ export async function hasUnmergedCommits(
 export async function listWorktreeRecords(
   projectId?: string,
 ): Promise<WorktreeRecord[]> {
+  // One read of the spawn edges for the whole build, not one per row.
+  const parents = sessionStore.spawnedParentByChild();
   const spawned = listWorktrees({
     ...(projectId !== undefined ? { projectId } : {}),
-  }).map((row) => toRecord(row));
+  }).map((row) => toRecord(row, false, parents));
   const projectIds = projectId
     ? [projectId]
     : listProjects().map((project) => project.id);
@@ -1598,7 +1601,13 @@ export async function broadcastWorktreeList(): Promise<void> {
   }
 }
 
-function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
+function toRecord(
+  row: WorktreeRow,
+  isMain = false,
+  parents?: ReadonlyMap<string, string>,
+): WorktreeRecord {
+  const sessionIds = sessionIdsForWorktree(row.id);
+  const creator = isMain ? undefined : creatorSessionIdByWorktree().get(row.id);
   return {
     id: row.id,
     projectId: row.projectId,
@@ -1609,9 +1618,17 @@ function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
     baseBranch: row.baseBranch,
     baseCommit: row.baseCommit,
     status: row.status,
-    sessionIds: sessionIdsForWorktree(row.id),
+    sessionIds,
     taskIds: taskIdsForWorktree(row.id),
-    ...creatorProjection(row.id),
+    ...(creator ? { createdBySessionId: creator } : {}),
+    ...(isMain
+      ? {}
+      : {
+          treeSessionIds: withCoordinators(
+            [...(creator ? [creator] : []), ...sessionIds],
+            parents ?? sessionStore.spawnedParentByChild(),
+          ),
+        }),
     ...pullRequestProjection(row.id),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -1620,11 +1637,23 @@ function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
   };
 }
 
-function creatorProjection(worktreeId: string): {
-  createdBySessionId?: string;
-} {
-  const sessionId = creatorSessionIdForWorktree(worktreeId);
-  return sessionId ? { createdBySessionId: sessionId } : {};
+/**
+ * The holders and every coordinator above each, walked up the spawn edges; a
+ * cycle (no real spawn makes one) stops. Holders first, in their order.
+ */
+function withCoordinators(
+  holders: readonly string[],
+  parents: ReadonlyMap<string, string>,
+): string[] {
+  const tree = new Set(holders);
+  for (const holder of holders)
+    for (
+      let parent = parents.get(holder);
+      parent !== undefined && !tree.has(parent);
+      parent = parents.get(parent)
+    )
+      tree.add(parent);
+  return [...tree];
 }
 
 function pullRequestProjection(worktreeId: string): {

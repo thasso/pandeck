@@ -13,45 +13,15 @@
  * synthetic main checkout is never owned: it is no delivery target and no
  * cleanup candidate.
  *
- * ONE rule for both sides: the server answers `worktree_status`'s tree read
- * with it and the browser derives the coordinator's panel from it, so the two
- * cannot list different worktrees for the same tree.
+ * MEMBERSHIP has one authority, the server: every worktree record carries
+ * `treeSessionIds` — its holders and every coordinator above them, archived,
+ * settled and deleted ones included — and a session's tree owns the worktree
+ * exactly when it is listed there ({@link ownedBySessionTree}). The browser
+ * never walks its own session list for this: that list leaves out archived
+ * sessions, and retention archives every settled peer within a week.
+ * {@link sessionTreeWorktrees} adds who holds each owned worktree and how, for
+ * a reader that knows the tree's members (`worktree_status`).
  */
-
-/** A session as the spawn walk needs it: its id and the edge to its spawner. */
-export interface SpawnEdgeSource {
-  id: string;
-  spawnedBySessionId?: string | undefined;
-}
-
-/**
- * The root and every session spawned below it, at any depth. A cycle (no real
- * spawn produces one) is walked once; the root is included even when it is not
- * in `sessions`.
- */
-export function spawnTreeSessionIds(
-  rootId: string,
-  sessions: Iterable<SpawnEdgeSource>,
-): Set<string> {
-  const children = new Map<string, string[]>();
-  for (const session of sessions) {
-    const parentId = session.spawnedBySessionId;
-    if (!parentId || parentId === session.id) continue;
-    const siblings = children.get(parentId);
-    if (siblings) siblings.push(session.id);
-    else children.set(parentId, [session.id]);
-  }
-  const tree = new Set([rootId]);
-  const queue = [rootId];
-  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
-    for (const childId of children.get(next) ?? []) {
-      if (tree.has(childId)) continue;
-      tree.add(childId);
-      queue.push(childId);
-    }
-  }
-  return tree;
-}
 
 /** How one session of the tree holds a worktree. */
 export type SessionTreeWorktreeRole = "created" | "runs-in";
@@ -67,6 +37,17 @@ export interface WorktreeOwnershipSource {
   isMain?: boolean;
   sessionIds: readonly string[];
   createdBySessionId?: string;
+  treeSessionIds?: readonly string[];
+}
+
+/** Whether `sessionId`'s spawn tree owns this worktree, by the server's answer. */
+export function ownedBySessionTree(
+  worktree: WorktreeOwnershipSource,
+  sessionId: string,
+): boolean {
+  return (
+    !worktree.isMain && (worktree.treeSessionIds ?? []).includes(sessionId)
+  );
 }
 
 export interface SessionTreeWorktree<W extends WorktreeOwnershipSource> {

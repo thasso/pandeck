@@ -49,10 +49,7 @@ import {
   type WorktreeRecord,
   type WorktreeReviewSet,
 } from "@assistant/shared";
-import {
-  sessionTreeWorktrees,
-  spawnTreeSessionIds,
-} from "@assistant/shared/sessionTreeWorktrees";
+import { ownedBySessionTree } from "@assistant/shared/sessionTreeWorktrees";
 import { useCommentActuation } from "./review/CommentActuation.tsx";
 import type { Task } from "../lib/backlogTree.ts";
 import {
@@ -627,32 +624,24 @@ export function projectRelationGroups(
 }
 
 /**
- * The worktrees this session's spawn tree owns (`docs/worktree-ownership.md`):
- * what it and every peer under it created or run in. The worktree the session
- * itself runs in is left out while no other session of the tree holds it —
- * Details already names it — so a peer working alone shows no group, and a
- * coordinator sees its whole fan-out.
+ * The worktrees this session's spawn tree owns (`docs/worktree-ownership.md`),
+ * by the server's membership on each record (`treeSessionIds`) — never by a
+ * walk of this browser's session list, which leaves out the archived peers
+ * retention puts away. A checkout the session shares with its peers is listed
+ * like any other; only when the one worktree the session runs in is ALL its
+ * tree owns is there nothing to add to Details, which already names it.
  */
-function sessionTreeWorktreeRefs(
+export function sessionTreeWorktreeRecords(
   sessionId: string | undefined,
-  sessions: readonly SessionListItem[],
   worktrees: readonly WorktreeRecord[] | null | undefined,
-  statuses: Record<string, WorktreeGitStatus> | undefined,
-  projects: ProjectRecord[],
-): ObjectRef[] {
+): WorktreeRecord[] {
   if (!sessionId || !worktrees) return [];
-  const tree = spawnTreeSessionIds(sessionId, sessions);
-  return sessionTreeWorktrees(tree, worktrees)
-    .filter(
-      ({ worktree, owners }) =>
-        !(
-          worktree.sessionIds.includes(sessionId) &&
-          owners.every((owner) => owner.sessionId === sessionId)
-        ),
-    )
-    .map(({ worktree }) =>
-      worktreeObjectRef(worktree, projects, statuses?.[worktree.id]),
-    );
+  const owned = worktrees.filter((worktree) =>
+    ownedBySessionTree(worktree, sessionId),
+  );
+  const onlyItsOwn =
+    owned.length === 1 && owned[0]!.sessionIds.includes(sessionId);
+  return onlyItsOwn ? [] : owned;
 }
 
 /** Task rows the session inspector shows before its "Show more". */
@@ -683,8 +672,6 @@ export function sessionRelationGroups(args: {
    * group rather than claiming the tree owns none.
    */
   worktrees?: readonly WorktreeRecord[] | null;
-  /** Live git status by worktree id, for those rows. */
-  worktreeStatuses?: Record<string, WorktreeGitStatus>;
 }): ObjectRefGroup[] {
   const {
     sessionId,
@@ -694,13 +681,10 @@ export function sessionRelationGroups(args: {
     forkOrigin,
     sessions,
   } = args;
-  const treeWorktrees = sessionTreeWorktreeRefs(
+  const treeWorktrees = sessionTreeWorktreeRecords(
     sessionId,
-    sessions,
     args.worktrees,
-    args.worktreeStatuses,
-    args.projects ?? [],
-  );
+  ).map((worktree) => worktreeObjectRef(worktree, args.projects ?? []));
   const current = sessionId
     ? sessions.find((session) => session.id === sessionId)
     : undefined;
@@ -1248,7 +1232,6 @@ export function SessionInspector({
   worktree,
   worktreeStatus,
   worktrees,
-  worktreeStatuses,
   peerPromptPeers,
   stagedRefs = [],
   openers,
@@ -1277,7 +1260,6 @@ export function SessionInspector({
   worktreeStatus?: WorktreeGitStatus | undefined;
   /** Every worktree record held, for the spawn tree's worktrees; `null` = not answered. */
   worktrees?: readonly WorktreeRecord[] | null | undefined;
-  worktreeStatuses?: Record<string, WorktreeGitStatus> | undefined;
   /**
    * The peer prompts this session sent and received, summed up per peer over
    * the whole history: facts on that peer's session row (`peerPromptFacts`).
@@ -1315,7 +1297,6 @@ export function SessionInspector({
       ...(worktree !== undefined ? { worktree } : {}),
       ...(worktreeStatus !== undefined ? { worktreeStatus } : {}),
       ...(worktrees !== undefined ? { worktrees } : {}),
-      ...(worktreeStatuses !== undefined ? { worktreeStatuses } : {}),
     }),
   ];
   const groups = withPeerPrompts(relationGroups, peerPromptPeers, sessions);

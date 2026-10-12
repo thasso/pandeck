@@ -4526,6 +4526,15 @@ export interface WorktreeRecord {
    */
   createdBySessionId?: string;
   /**
+   * Every session whose spawn TREE owns this worktree: its creator, the
+   * sessions running in it, and every coordinator above any of them along
+   * `spawned` edges — archived, settled and deleted ones included. A session's
+   * tree owns the worktree exactly when it is listed here, so the server is the
+   * one authority on tree membership (`docs/worktree-ownership.md`). Absent on
+   * the synthetic main record.
+   */
+  treeSessionIds?: string[];
+  /**
    * The live `/pr` card that speaks for this worktree, by the session row's
    * rule: the newest card still moving, else the newest terminal one, from
    * whichever session created it. Absent when no card names this worktree —

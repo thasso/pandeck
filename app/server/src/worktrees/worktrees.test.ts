@@ -503,6 +503,23 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
     (candidate) => candidate.id === handed.id,
   );
   assert.equal(record?.createdBySessionId, "tree-coord");
+  // The server's membership: holders, then every coordinator above them —
+  // an archived one too, which a browser's session list no longer holds.
+  sessionStore.setArchived("tree-coord", true);
+  const grand = (await listWorktreeRecords("wt-proj")).find(
+    (candidate) => candidate.id === own.id,
+  );
+  assert.deepEqual(grand?.treeSessionIds, [
+    "tree-grandpeer",
+    "tree-peer",
+    "tree-coord",
+  ]);
+  assert.equal(
+    (await listWorktreeRecords("wt-proj")).find((w) => w.isMain)
+      ?.treeSessionIds,
+    undefined,
+  );
+  sessionStore.setArchived("tree-coord", false);
 
   // The peer's pull request rides on the record the tree read returns.
   createPullRequestCard(
