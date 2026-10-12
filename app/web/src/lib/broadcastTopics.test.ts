@@ -362,6 +362,17 @@ describe("topicsForSurface", () => {
     ).toEqual(["projects", "skills"]);
   });
 
+  it("holds Worktrees while the session inspector lists the spawn tree's worktrees", () => {
+    expect(
+      topicsForSurface({
+        sidebarVisible: false,
+        sidebarSection: "sessions",
+        routeName: "session",
+        sessionTreeWorktreesVisible: true,
+      }),
+    ).toEqual(["worktrees", "projects"]);
+  });
+
   it("holds Workflow Runs alone for a visible Sessions browser", () => {
     // The run items are made of the run summaries and their cards; the Task
     // titles beside them stay a best-effort join, so the large Backlog

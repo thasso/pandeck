@@ -10,6 +10,7 @@ import { basename, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   boundMergeMessage,
+  type SessionPullRequestSummary,
   type WorktreeMergePhase,
   type WorktreeRecord,
 } from "@assistant/shared";
@@ -22,6 +23,7 @@ import {
   type GitResult,
 } from "../gitExec.ts";
 import { errorText } from "../errors.ts";
+import { pullRequestSummaryForWorktree } from "../pullRequestCards.ts";
 import {
   removeManagedTree,
   restoreOwnerAccess,
@@ -1610,6 +1612,7 @@ function toRecord(row: WorktreeRow, isMain = false): WorktreeRecord {
     sessionIds: sessionIdsForWorktree(row.id),
     taskIds: taskIdsForWorktree(row.id),
     ...creatorProjection(row.id),
+    ...pullRequestProjection(row.id),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     ...(row.removedAt !== null ? { removedAt: row.removedAt } : {}),
@@ -1622,6 +1625,13 @@ function creatorProjection(worktreeId: string): {
 } {
   const sessionId = creatorSessionIdForWorktree(worktreeId);
   return sessionId ? { createdBySessionId: sessionId } : {};
+}
+
+function pullRequestProjection(worktreeId: string): {
+  pullRequest?: SessionPullRequestSummary;
+} {
+  const summary = pullRequestSummaryForWorktree(worktreeId);
+  return summary ? { pullRequest: summary } : {};
 }
 
 /**

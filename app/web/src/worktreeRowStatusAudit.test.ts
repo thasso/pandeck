@@ -140,6 +140,8 @@ const SANCTIONED_SINKS: readonly string[] = [
   "App.tsx: Sidebar.worktreeStatuses={state.worktreeStatuses}",
   // The pull request inspector's checkout row states its dirt and drift too.
   "App.tsx: PullRequestInspector.worktreeStatuses={state.worktreeStatuses}",
+  // The session inspector's spawn-tree worktree rows state live dirt too.
+  "App.tsx: SessionInspector.worktreeStatuses={state.worktreeStatuses}",
   "App.tsx: PullRequestDetailPage.status={pullRequestWorktreeId ? state.worktreeStatuses[pullRequestWorktreeId] : undefined}",
   "App.tsx: WorktreeInspector.status={state.worktreeStatuses[route.id]}",
   "App.tsx: WorktreeDetailPage.status={state.worktreeStatuses[worktree.id]}",

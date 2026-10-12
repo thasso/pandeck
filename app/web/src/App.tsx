@@ -1316,6 +1316,15 @@ function AppContent() {
           route.name === "session" &&
           state.session?.sessionId === route.id &&
           state.session.activeSkills !== undefined,
+        // The inspector lists the worktrees the session's spawn tree owns,
+        // with their pull requests, and keeps them current while it shows.
+        sessionTreeWorktreesVisible:
+          inspectorOpen &&
+          (mobileLayout
+            ? !composerVisible && !commentActuation?.composerOpen
+            : inspectorTabVisible) &&
+          route.name === "session" &&
+          state.session?.sessionId === route.id,
         // The ledge only exists on a session screen whose session owns work,
         // so an open flag left over from another session subscribes nothing.
         backgroundLedgeOpen:
@@ -6692,6 +6701,8 @@ function AppContent() {
           );
         })()}
         worktreeStatus={displayWorktreeStatus}
+        worktrees={state.worktrees}
+        worktreeStatuses={state.worktreeStatuses}
         peerPromptPeers={displaySession?.peerPromptPeers}
         stagedRefs={stagedContextRefs}
         openers={inspectorOpeners}

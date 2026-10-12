@@ -37,6 +37,34 @@ type InspectedObject = "session" | "task" | "worktree";
 function ObjectInspectorStory({ object }: { object: InspectedObject }) {
   const [fixture] = useState(() => attentionFixture(Date.now()));
   const worktree = fixture.worktrees[0]!;
+  // What the coordinator's spawn tree made beyond the shared checkout: one the
+  // coordinator created and handed over, now merged, and one a peer runs in
+  // whose pull request has red checks. The inspector lists all three.
+  const [treeWorktrees] = useState(() => [
+    ...fixture.worktrees,
+    {
+      ...worktree,
+      id: "pa-row-density",
+      path: "/work/pa-row-density",
+      branch: "pa-row-density",
+      sessionIds: [],
+      createdBySessionId: "coordinator",
+      pullRequest: { status: "merged" as const, number: 312 },
+    },
+    {
+      ...worktree,
+      id: "pa-row-spacing",
+      path: "/work/pa-row-spacing",
+      branch: "pa-row-spacing",
+      sessionIds: ["implementer"],
+      createdBySessionId: "coordinator",
+      pullRequest: {
+        status: "open" as const,
+        number: 315,
+        ci: { state: "failure" as const, total: 6 },
+      },
+    },
+  ]);
   const task = fixture.tasks[0]!;
   const session = fixture.sessions[0]!;
   return (
@@ -55,6 +83,8 @@ function ObjectInspectorStory({ object }: { object: InspectedObject }) {
           projects={fixture.projects}
           worktree={worktree}
           worktreeStatus={fixture.worktreeStatuses[worktree.id]}
+          worktrees={treeWorktrees}
+          worktreeStatuses={fixture.worktreeStatuses}
           openers={openers}
         />
       ) : object === "task" ? (

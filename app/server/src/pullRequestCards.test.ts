@@ -19,6 +19,7 @@ import {
   pullRequestCardLinksByPullRequest,
   pullRequestCardRecord,
   pullRequestSummariesBySession,
+  pullRequestSummaryForWorktree,
   resetPullRequestCardsStoreForTests,
   setPullRequestCardBroadcastForTests,
   subscribeChoosingTaskCardChanges,
@@ -641,6 +642,71 @@ test("the incrementally refreshed session index equals a full rebuild after ever
     status: "closed",
     number: 5,
     conflicts: true,
+  });
+});
+
+// A worktree's row answers for every card that names it, whichever session
+// opened it: a peer's `/pr` and its coordinator's managed PR on the same
+// checkout are one row, by the session row's own rule.
+test("a worktree states its newest moving card, from any session, and rebuilds the list only when that moves", () => {
+  const worktreeRows: boolean[] = [];
+  setPullRequestCardBroadcastForTests((_card, _row, _delivery, worktree) =>
+    worktreeRows.push(worktree),
+  );
+  const make = (sessionId: string, number: number, worktreeId?: string) =>
+    createPullRequestCard(
+      {
+        sessionId,
+        status: "open",
+        title: "x",
+        headBranch: "f",
+        baseBranch: "main",
+        number,
+        ...(worktreeId ? { worktreeId } : {}),
+      },
+      { ...context, sessionId },
+    );
+  assert.equal(pullRequestSummaryForWorktree("wt-row"), undefined);
+
+  const peer = make("wt-peer", 1, "wt-row");
+  assert.deepEqual(worktreeRows, [true]);
+  assert.deepEqual(pullRequestSummaryForWorktree("wt-row"), {
+    status: "open",
+    number: 1,
+  });
+
+  // A card naming no worktree moves no worktree row.
+  make("wt-peer", 9);
+  assert.deepEqual(worktreeRows, [true, false]);
+
+  // The peer's PR merges; the coordinator's later card on the same checkout
+  // is still moving, so it speaks for the row.
+  patchPullRequestCard(peer.id, { status: "merged" });
+  assert.deepEqual(pullRequestSummaryForWorktree("wt-row"), {
+    status: "merged",
+    number: 1,
+  });
+  const coordinator = make("wt-coord", 2, "wt-row");
+  assert.deepEqual(pullRequestSummaryForWorktree("wt-row"), {
+    status: "open",
+    number: 2,
+  });
+  worktreeRows.length = 0;
+
+  // A watcher poll that learns nothing rebuilds nothing; red CI does.
+  const token = beginPullRequestCardObservation(coordinator.id);
+  patchPullRequestCardObservation(coordinator.id, token, { status: "open" });
+  patchPullRequestCard(coordinator.id, {
+    ci: { state: "failure", total: 1 },
+  });
+  assert.deepEqual(worktreeRows, [false, true]);
+
+  // Moving a card to another worktree changes both rows.
+  patchPullRequestCard(coordinator.id, { worktreeId: "wt-other" });
+  assert.equal(worktreeRows.at(-1), true);
+  assert.deepEqual(pullRequestSummaryForWorktree("wt-row"), {
+    status: "merged",
+    number: 1,
   });
 });
 

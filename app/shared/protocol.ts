@@ -4525,6 +4525,13 @@ export interface WorktreeRecord {
    * Workflow Run created. It may name a session since archived or deleted.
    */
   createdBySessionId?: string;
+  /**
+   * The live `/pr` card that speaks for this worktree, by the session row's
+   * rule: the newest card still moving, else the newest terminal one, from
+   * whichever session created it. Absent when no card names this worktree —
+   * which says nothing about pull requests opened some other way.
+   */
+  pullRequest?: SessionPullRequestSummary;
   createdAt: number;
   updatedAt: number;
   removedAt?: number;

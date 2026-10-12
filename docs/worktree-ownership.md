@@ -53,6 +53,23 @@ and size. A peer asking sees its own subtree, not its coordinator's. The server
 walks the tree in one recursive read over `session_links_parent_idx`
 (`sessionStore.spawnedDescendantIds`).
 
+## A tree's pull requests
+
+Every owned worktree carries its pull request as the card summary its record
+holds (`WorktreeRecord.pullRequest`, `docs/pull-requests.md`), so both readers
+of the tree see delivery without a provider call of their own:
+
+- `worktree_status` with `sessionTree: true` returns each record whole, card
+  summary included — a coordinator's one read for which of its peers' pull
+  requests are open, red, conflicted or merged, and which checkouts are left.
+- The session inspector's **Worktrees from this session** group draws the owned
+  worktrees as worktree rows with that mark (`app/web/docs/ui-shell.md`). The
+  browser walks the spawn edges of the sessions it holds, so a peer the user
+  archived is outside the tree there while the server's read still counts it.
+
+Nothing here removes a worktree. A merged pull request leaves its checkout where
+it is; whether to keep working in it or retire it stays the user's call.
+
 ## The creator backfill
 
 Worktrees created before `worktree_create` recorded its caller get their creator

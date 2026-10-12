@@ -58,6 +58,7 @@ export const PULL_REQUEST_CARD_SQL = {
   sessionHasStatus:
     "SELECT 1 FROM pull_request_cards WHERE session_id = ? AND status = ? LIMIT 1",
   summariesForSession: `${SUMMARY} WHERE session_id = ? ORDER BY seq`,
+  summariesForWorktree: `${SUMMARY} WHERE worktree_id = ? ORDER BY seq`,
   insert: `INSERT OR IGNORE INTO pull_request_cards
     (id, session_id, status, worktree_id, created_at_ms, updated_at_ms, card_json, context_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -221,6 +222,15 @@ export const pullRequestCardStore = {
       getDb()
         .prepare(PULL_REQUEST_CARD_SQL.summariesForSession)
         .all(sessionId) as unknown as SummaryRow[]
+    ).map(summaryRow);
+  },
+
+  /** One worktree's cards' summary fields, oldest first. */
+  summariesForWorktree(worktreeId: string): PullRequestCardSummaryRow[] {
+    return (
+      getDb()
+        .prepare(PULL_REQUEST_CARD_SQL.summariesForWorktree)
+        .all(worktreeId) as unknown as SummaryRow[]
     ).map(summaryRow);
   },
 

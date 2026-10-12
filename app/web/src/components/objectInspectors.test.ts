@@ -265,11 +265,77 @@ describe("sessionRelationGroups", () => {
       "tasks",
       "spawned-by",
       "spawned-sessions",
+      "tree-worktrees",
       "forked-from",
       "forks",
     ]);
     expect(
       groups.flatMap((g) => g.refs).filter((ref) => ref.kind !== "session"),
+    ).toEqual([]);
+  });
+
+  it("lists the worktrees the session's spawn tree created or runs in, not its own", () => {
+    const record = (
+      id: string,
+      sessionIds: string[],
+      createdBySessionId?: string,
+    ): WorktreeRecord => ({
+      id,
+      projectId: "p1",
+      mainRepoRoot: "/repo",
+      path: `/repo/${id}`,
+      branch: id,
+      baseBranch: "main",
+      baseCommit: "abc",
+      status: "active",
+      sessionIds,
+      taskIds: [],
+      ...(createdBySessionId ? { createdBySessionId } : {}),
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    const sessions = [
+      session({ id: "coord", title: "Coordinator" }),
+      session({
+        id: "peer",
+        title: "Peer",
+        spawnedBySessionId: "coord",
+        spawnOwnership: "taken-over",
+      }),
+      session({ id: "other", title: "Other" }),
+    ];
+    const worktrees = [
+      record("own", ["coord"]),
+      record("handed", ["peer"], "coord"),
+      record("peer-made", [], "peer"),
+      record("foreign", ["other"], "other"),
+    ];
+    const treeGroup = (sessionId: string, list = worktrees) =>
+      sessionRelationGroups({
+        sessionId,
+        relatedTasks: [],
+        sessions,
+        worktrees: list,
+      }).find((group) => group.id === "tree-worktrees");
+
+    const coordinator = treeGroup("coord");
+    expect(coordinator?.summary).toBe("2");
+    expect(coordinator?.refs.map((ref) => ref.id)).toEqual([
+      "handed",
+      "peer-made",
+    ]);
+    expect(coordinator?.refs[0]?.worktree?.record.id).toBe("handed");
+    // A peer working alone in the worktree it was handed shows no group.
+    expect(treeGroup("peer")?.refs.map((ref) => ref.id)).toEqual(["peer-made"]);
+    expect(treeGroup("other")?.refs).toEqual([]);
+    // An unanswered list draws nothing rather than "none".
+    expect(
+      sessionRelationGroups({
+        sessionId: "coord",
+        relatedTasks: [],
+        sessions,
+        worktrees: null,
+      }).find((group) => group.id === "tree-worktrees")?.refs,
     ).toEqual([]);
   });
 

@@ -296,6 +296,28 @@ function sessionSummary(
   );
 }
 
+/**
+ * The ONE card a worktree's rows state, by the same rule as a session's row:
+ * the newest card still moving, else the newest terminal one. A worktree's
+ * cards may come from several sessions — a peer's `/pr`, its coordinator's
+ * `worktree_create_pull_request` — and the row answers for all of them.
+ */
+export function pullRequestSummaryForWorktree(
+  worktreeId: string,
+): SessionPullRequestSummary | undefined {
+  let chosen: PullRequestCardSummaryRow | undefined;
+  for (const row of pullRequestCardStore.summariesForWorktree(worktreeId))
+    if (!chosen || supersedes(row, chosen)) chosen = row;
+  return chosen ? summarize(chosen) : undefined;
+}
+
+/** What a worktree's rows say about its cards; the worktree-list gate. */
+function worktreeRowState(worktreeId: string | undefined): string {
+  return worktreeId
+    ? JSON.stringify(pullRequestSummaryForWorktree(worktreeId) ?? null)
+    : "";
+}
+
 /* ----------------------------- attention seam ----------------------------- */
 
 type ChangeListener = (sessionId: string) => void;
@@ -507,6 +529,7 @@ export function createPullRequestCard(
     ...(input.worktreeId ? { worktreeId: input.worktreeId } : {}),
   };
   const rowBefore = sessionRowState(input.sessionId);
+  const worktreeBefore = worktreeRowState(card.worktreeId);
   const choosingBefore = hasChoosingTaskCard(input.sessionId);
   pullRequestCardStore.insert({ card, context });
   staleSessions.add(input.sessionId);
@@ -515,7 +538,12 @@ export function createPullRequestCard(
   // No delivery broadcast: a Workflow card names its pull-request card from the
   // run's own publication step, which is appended after this and broadcasts the
   // run list itself. A card that exists before that step names no run.
-  void broadcast(card, rowBefore !== sessionRowState(input.sessionId), false);
+  void broadcast(
+    card,
+    rowBefore !== sessionRowState(input.sessionId),
+    false,
+    worktreeBefore !== worktreeRowState(card.worktreeId),
+  );
   return card;
 }
 
@@ -552,6 +580,7 @@ export function patchPullRequestCardObservation(
   if (!before) throw new Error("Pull request card not found.");
   const rowBefore = sessionRowState(before.card.sessionId);
   const deliveryBefore = workflowDeliveryState(before.card);
+  const worktreeBefore = worktreeRowState(before.card.worktreeId);
   const updated = inDbTransaction(() => {
     const current = pullRequestCardRecord(id);
     if (current?.context.observationToken !== observationToken)
@@ -568,6 +597,7 @@ export function patchPullRequestCardObservation(
     updated.card,
     rowBefore !== sessionRowState(updated.card.sessionId),
     deliveryBefore !== workflowDeliveryState(updated.card),
+    worktreeChanged(before.card, worktreeBefore, updated.card),
   );
   return updated.card;
 }
@@ -587,6 +617,7 @@ export function patchPullRequestCard(
   const sessionId = cardBefore.sessionId;
   const rowBefore = sessionRowState(sessionId);
   const deliveryBefore = workflowDeliveryState(cardBefore);
+  const worktreeBefore = worktreeRowState(cardBefore.worktreeId);
   const choosingBefore = hasChoosingTaskCard(sessionId);
   const updated = inDbTransaction(() => {
     const current = pullRequestCardRecord(id);
@@ -606,8 +637,22 @@ export function patchPullRequestCard(
     updated.card,
     rowBefore !== sessionRowState(updated.card.sessionId),
     deliveryBefore !== workflowDeliveryState(updated.card),
+    worktreeChanged(cardBefore, worktreeBefore, updated.card),
   );
   return updated.card;
+}
+
+/**
+ * Whether a write moved what a worktree row states. A card moved to another
+ * worktree changes both rows, so the list is rebuilt whatever the summaries say.
+ */
+function worktreeChanged(
+  before: PullRequestCard,
+  stateBefore: string,
+  after: PullRequestCard,
+): boolean {
+  if (before.worktreeId !== after.worktreeId) return true;
+  return stateBefore !== worktreeRowState(after.worktreeId);
 }
 
 /** Test seam: wipe the store. */
@@ -623,6 +668,7 @@ type BroadcastFn = (
   card: PullRequestCard,
   rowChanged: boolean,
   deliveryChanged: boolean,
+  worktreeChanged: boolean,
 ) => void;
 let broadcastImpl: BroadcastFn | null = null;
 
@@ -641,6 +687,9 @@ export function setPullRequestCardBroadcastForTests(
  * somewhere else — so the list is rebuilt too, but only when it would say
  * something. The watcher patches an open card on every poll regardless.
  *
+ * `worktreeChanged` is the same gate for the worktree list, whose records
+ * carry their worktree's card summary (`WorktreeRecord.pullRequest`).
+ *
  * `deliveryChanged` is the same gate for the `workflow` topic
  * ({@link workflowDeliveryState}): a Task's Workflow card offers this card's
  * merge and cleanup, so those two controls have to follow the card wherever it
@@ -652,9 +701,10 @@ async function broadcast(
   card: PullRequestCard,
   rowChanged: boolean,
   deliveryChanged: boolean,
+  worktreeChanged: boolean,
 ): Promise<void> {
   if (broadcastImpl) {
-    broadcastImpl(card, rowChanged, deliveryChanged);
+    broadcastImpl(card, rowChanged, deliveryChanged, worktreeChanged);
     return;
   }
   try {
@@ -664,6 +714,10 @@ async function broadcast(
   } catch {
     // best-effort; the card still resolves from the store on the next snapshot.
   }
+  if (worktreeChanged)
+    void import("./worktrees/worktrees.ts")
+      .then((m) => m.broadcastWorktreeList())
+      .catch(() => undefined);
   if (!deliveryChanged) return;
   try {
     const { broadcastWorkflowRuns } = await import("./workflowRuns.ts");

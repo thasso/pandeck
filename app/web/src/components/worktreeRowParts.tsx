@@ -12,6 +12,7 @@ import { usePerfRenderCount } from "../lib/perfStats.ts";
 import { Badge } from "./ui/badge.tsx";
 import { IconButton } from "./common/IconButton.tsx";
 import { Tree } from "./common/Tree.tsx";
+import { SessionDeliveryMark } from "./SessionDeliveryMark.tsx";
 
 /**
  * A row's action shows on hover or focus where there is a pointer to hover
@@ -67,6 +68,14 @@ function WorktreeRowSummary({
           </span>
           <WorktreeLineDelta status={status} />
           <WorktreeMergedBadge status={status} />
+          {/* The live `/pr` card that speaks for this checkout, from whichever
+              session opened it — the session rows' own mark. */}
+          {worktree.pullRequest ? (
+            <SessionDeliveryMark
+              session={{ pullRequest: worktree.pullRequest }}
+              variant="glyph"
+            />
+          ) : null}
         </span>
         {/* Always a second line, so every worktree row is the same height:
             the axes when one has something to say, else the calm fact. */}

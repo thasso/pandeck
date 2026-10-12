@@ -642,6 +642,21 @@ the provider said anything new. What a row says about this store is TWO answers,
 not one: the summary card AND the Task-pick block below, because the second is
 not a function of the first.
 
+### The indicator on worktree rows
+
+A checkout carries the same answer. `WorktreeRecord.pullRequest` is the card
+that speaks for that worktree, chosen by the session row's rule over every card
+whose `worktreeId` names it — whichever session made the card, because a peer's
+`/pr` and its coordinator's `worktree_create_pull_request` on one checkout are
+one delivery (`pullRequestSummaryForWorktree`, over the worktree index). Every
+worktree row draws it with `SessionDeliveryMark` as a glyph, which is what lets
+a coordinator's inspector, the Project page and the Projects browser state its
+peers' pull requests without opening a session. A card write that changes that
+answer — not the watcher's every-poll patch — rebuilds the worktree list, the
+same gate as the session list's. A pull request opened without a card (a generic
+provider tool, or by hand) is not stated here; the hosting projection and the
+Pull Requests view still see it.
+
 ### A Task pick is human-blocking work
 
 A `choosing-task` card is not merely a state to render: the `/pr` command

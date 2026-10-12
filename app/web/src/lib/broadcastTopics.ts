@@ -20,6 +20,11 @@ export interface TopicSurface {
   sessionInspectorVisible?: boolean;
   /** The session inspector is on screen for a persisted session. */
   backgroundInspectorVisible?: boolean;
+  /**
+   * The session inspector is on screen for the routed session, listing the
+   * worktrees its spawn tree owns.
+   */
+  sessionTreeWorktreesVisible?: boolean;
   /** The composer's background ledge is expanded and listing rows. */
   backgroundLedgeOpen?: boolean;
   /**
@@ -52,7 +57,8 @@ export interface TopicSurface {
  * deliberate exception: `/sessions/create` needs projects/worktrees for its
  * visible quick start, while either it or `/sessions` adds Tasks only while the
  * staged-context Task picker is expanded. Session inspector surfaces also
- * subscribe to the skills library while they render its loaded/unloaded list.
+ * subscribe to the skills library while they render its loaded/unloaded list,
+ * and to Worktrees while they list the worktrees the session's spawn tree owns.
  */
 export function topicsForSurface({
   sidebarVisible,
@@ -63,6 +69,7 @@ export function topicsForSurface({
   projectSelected = false,
   sessionInspectorVisible = false,
   backgroundInspectorVisible = false,
+  sessionTreeWorktreesVisible = false,
   backgroundLedgeOpen = false,
   settingsSection,
 }: TopicSurface): BroadcastTopic[] {
@@ -98,7 +105,8 @@ export function topicsForSurface({
     projectIndexSurface ||
     worktreeSurface ||
     selectedProjectSurface ||
-    workflowStartOpen
+    workflowStartOpen ||
+    sessionTreeWorktreesVisible
   )
     topics.add("worktrees");
   // A session's title bar names its project (and links to it).

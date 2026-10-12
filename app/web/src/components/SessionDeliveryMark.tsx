@@ -65,7 +65,9 @@ const STATE_ICON: Record<
  * @purpose The ONE indicator that a session owns a `/pr` card, and what that
  * pull request is asking for (`lib/sessionDelivery.ts`).
  * @useWhen Rendering a session in any list — the Sessions inbox's cards and
- * shelf rows, and the compact rows nested under a Project or a Worktree.
+ * shelf rows, and the compact rows nested under a Project or a Worktree — and
+ * a worktree row, from the card summary its record carries
+ * (`WorktreeRecord.pullRequest`), whichever session opened that card.
  * @avoidWhen Inside a session; the transcript carries the live card itself,
  * which says all of this and acts on it.
  * @intent One component at two widths so a phone and a desktop cannot state

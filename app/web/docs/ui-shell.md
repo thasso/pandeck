@@ -808,8 +808,14 @@ there offers its route alone. Top to bottom, for the current main-pane object:
    **Take over** — the ONE way ownership moves, since messaging a peer is a poke
    that leaves its coordinator in charge — and, once taken, **Hand back**,
    naming the coordinator it returns to. The inspector LISTS this relation; the
-   Sessions inbox is what folds it into one card (above). A group may bound its
-   first page (a session's Tasks shows five) and reveal the rest on demand.
+   Sessions inbox is what folds it into one card (above). Beside it, **Worktrees
+   from this session** lists every worktree the session's spawn tree owns —
+   created by it or a peer below it, or run in by one of them
+   (`docs/worktree-ownership.md`) — as worktree rows, each with its pull
+   request's mark; the one the session itself runs in is left out while nobody
+   else in the tree holds it, since Details names it. The panel holds the
+   Worktrees topic while it lists them. A group may bound its first page (a
+   session's Tasks shows five) and reveal the rest on demand.
 
 On wide layouts, object-aware secondary actions (archive, delete, rename, and
 similar) live in the `…` menu on every main-page header; the primary action

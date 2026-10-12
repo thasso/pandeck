@@ -166,7 +166,7 @@ const statusSchema = {
     sessionTree: {
       type: "boolean",
       description:
-        "List only the worktrees your spawn tree owns — this session and every peer it spawned, at any depth — because one of those sessions created the worktree or runs in it, each with its owners and their role. Combines with projectId and limit.",
+        "List only the worktrees your spawn tree owns — this session and every peer it spawned, at any depth — because one of those sessions created the worktree or runs in it, each with its owners and their role and the state of its newest pull-request card. Combines with projectId and limit.",
     },
     projectId: {
       type: "string",

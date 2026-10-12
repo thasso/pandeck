@@ -504,7 +504,36 @@ test("worktree_create records its caller and worktree_status lists the spawn tre
   );
   assert.equal(record?.createdBySessionId, "tree-coord");
 
+  // The peer's pull request rides on the record the tree read returns.
+  createPullRequestCard(
+    {
+      sessionId: "tree-peer",
+      status: "open",
+      title: "peer work",
+      headBranch: "tree-handed",
+      baseBranch: "main",
+      number: 41,
+      worktreeId: handed.id,
+    },
+    {
+      repoRoot: tmp,
+      sessionKind: "developer",
+      sessionId: "tree-peer",
+      headBranch: "tree-handed",
+      baseBranch: "main",
+      draft: false,
+    },
+  );
+
   const fromRoot = await treeOf("tree-coord");
+  assert.deepEqual(
+    (
+      fromRoot.worktrees.find((w) => w.id === handed.id) as {
+        pullRequest?: unknown;
+      }
+    ).pullRequest,
+    { status: "open", number: 41 },
+  );
   assert.deepEqual(fromRoot.sessionTree, {
     rootSessionId: "tree-coord",
     sessionCount: 3,
