@@ -1,13 +1,10 @@
 import type { ReactNode } from "react";
-import { MoreHorizontal, SlidersHorizontal } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { SlidersHorizontal } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { OverflowMenu } from "../common/OverflowMenu.tsx";
 import {
   Item,
   ItemContent,
@@ -118,40 +115,26 @@ export function SectionOverflow<Id extends string>({
   onCustomize,
 }: Props<Id>) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            aria-label="More sections"
-            title="More sections"
-          />
-        }
-      >
-        <MoreHorizontal />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end" className="w-56">
-        {items.map((item) => (
-          <DropdownMenuItem
-            key={item.id}
-            aria-current={item.id === activeId ? "true" : undefined}
-            onClick={() => onSelect(item.id)}
-          >
-            {item.icon}
-            {item.label}
+    <OverflowMenu label="More sections" size="icon-lg" side="top">
+      {items.map((item) => (
+        <DropdownMenuItem
+          key={item.id}
+          aria-current={item.id === activeId ? "true" : undefined}
+          onClick={() => onSelect(item.id)}
+        >
+          {item.icon}
+          {item.label}
+        </DropdownMenuItem>
+      ))}
+      {onCustomize ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onCustomize}>
+            <SlidersHorizontal />
+            Customize order…
           </DropdownMenuItem>
-        ))}
-        {onCustomize ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={onCustomize}>
-              <SlidersHorizontal />
-              Customize order…
-            </DropdownMenuItem>
-          </>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </>
+      ) : null}
+    </OverflowMenu>
   );
 }

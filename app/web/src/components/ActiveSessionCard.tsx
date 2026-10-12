@@ -8,10 +8,10 @@ import {
   Check,
   ChevronRight,
   ClipboardList,
+  Ellipsis,
   FolderKanban,
   GitBranch,
   Hourglass,
-  MoreVertical,
   Pencil,
   Play,
   Trash2,
@@ -659,6 +659,19 @@ function ActiveSessionCardImpl({
                 </div>
               </div>
               <IconButton
+                label={settleLabel}
+                size={INLINE_ACTION_SIZE[density]}
+                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
+                disabled={Boolean(card.settleBlocked)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSettle(session.id);
+                }}
+              >
+                <Check />
+              </IconButton>
+              {/* Last, as every overflow is (`common/OverflowMenu`). */}
+              <IconButton
                 label="Session actions"
                 size={INLINE_ACTION_SIZE[density]}
                 // With a mouse the row's buttons wait for a hover or focus
@@ -671,19 +684,7 @@ function ActiveSessionCardImpl({
                   turnTo(true);
                 }}
               >
-                <MoreVertical />
-              </IconButton>
-              <IconButton
-                label={settleLabel}
-                size={INLINE_ACTION_SIZE[density]}
-                className={`-my-0.5 ${active ? "" : CARD_ACTION_REVEAL}`}
-                disabled={Boolean(card.settleBlocked)}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSettle(session.id);
-                }}
-              >
-                <Check />
+                <Ellipsis />
               </IconButton>
             </div>
           </div>

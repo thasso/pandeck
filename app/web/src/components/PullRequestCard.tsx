@@ -38,7 +38,6 @@ import type { ClientPullRequestCard } from "../hooks/useAssistant.ts";
 import { Markdown } from "./Markdown.tsx";
 import { ErrorNote, Spinner } from "./common/load.tsx";
 import { NoticeList } from "./tools/NoticeList.tsx";
-import { LinkButton } from "./common/LinkButton.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,6 +50,8 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/ui/select";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { OverflowMenu } from "./common/OverflowMenu.tsx";
 
 /**
  * The wire card plus the reducer's browser-local click overlay — one type, so
@@ -213,7 +214,8 @@ const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
 /**
  * The per-merge choices: the method, among those the repository allows, and
  * whether the remote branch goes with it. Shared by every surface that merges a
- * pull request, so a merge looks the same wherever it is offered.
+ * pull request, so a merge looks the same wherever it is offered: in the card
+ * footer's `options`, beside the Merge button they configure.
  */
 export function MergeMethodPicker({
   offered,
@@ -233,10 +235,10 @@ export function MergeMethodPicker({
   onDeleteBranchChange: (value: boolean) => void;
   disabled: boolean;
 }) {
-  // One compact row: a dropdown rather than a button per method, so the
-  // method and the branch choice sit side by side even on a phone.
+  // A dropdown rather than a button per method, so the method and the branch
+  // choice fit the footer row beside Merge even on a phone.
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+    <>
       {offered.length > 0 ? (
         <Select
           value={selected ?? null}
@@ -246,7 +248,7 @@ export function MergeMethodPicker({
             if (method) onSelect(method);
           }}
         >
-          <SelectTrigger size="sm" aria-label="Merge method">
+          <SelectTrigger size="xs" aria-label="Merge method">
             <span className="truncate">
               {selected ? MERGE_METHOD_LABELS[selected] : "Merge method"}
             </span>
@@ -262,21 +264,25 @@ export function MergeMethodPicker({
           </SelectContent>
         </Select>
       ) : (
-        <span className="text-muted-foreground">
+        <span className="text-xs text-muted-foreground">
           {known
             ? "This repository allows no merge method"
             : "Merge methods are not known yet"}
         </span>
       )}
-      <Label>
-        <Checkbox
-          checked={deleteBranch}
-          disabled={disabled}
-          onCheckedChange={onDeleteBranchChange}
-        />
-        Delete remote branch
-      </Label>
-    </div>
+      {/* `Label` dims itself inside a disabled `group`, as the select beside
+          it does: a live-looking checkbox reads as a merge still on offer. */}
+      <div className="group" data-disabled={disabled}>
+        <Label>
+          <Checkbox
+            checked={deleteBranch}
+            disabled={disabled}
+            onCheckedChange={onDeleteBranchChange}
+          />
+          <span className="text-xs">Delete branch</span>
+        </Label>
+      </div>
+    </>
   );
 }
 
@@ -352,7 +358,7 @@ function usePullRequestCardActions({
         options?: PullRequestCardActionOptions,
       ) => void)
     | undefined;
-}): { form: ReactNode; buttons: ReactNode; notes: ReactNode } | null {
+}): { options: ReactNode; buttons: ReactNode; notes: ReactNode } | null {
   // Only what the repository CURRENTLY allows may be offered. Unknown
   // capabilities offer nothing rather than a method the backend would refuse,
   // and a set that changes under a pending choice invalidates it below.
@@ -396,6 +402,11 @@ function usePullRequestCardActions({
   // gave up (or a card whose flag outlived its turn) hands the button back
   // instead of leaving the user with nothing to press.
   const handedOff = open && card.rebaseHandedOff === true && sessionBusy;
+  // Updating is routine upkeep, so it waits in the overflow menu — unless it
+  // is what stands between the branch and a merge, or it is the thing running
+  // (its busy state must stay on screen after the menu closes).
+  const updateInFooter =
+    conflicted || handedOff || running === "update-with-main";
   // Nothing to offer and nothing to say — a merged card whose worktree is gone
   // and whose Task is answered — renders no section at all, rather than an
   // empty bordered box under the header.
@@ -407,7 +418,7 @@ function usePullRequestCardActions({
   if ((!open && !merged) || (!hasButton && !hasNote)) return null;
 
   return {
-    form: open ? (
+    options: open ? (
       <MergeMethodPicker
         offered={offeredMethods}
         known={Boolean(supportedMethods)}
@@ -420,6 +431,21 @@ function usePullRequestCardActions({
     ) : null,
     buttons: (
       <>
+        {open && local && updateInFooter && (
+          <ActionButton
+            icon={<RefreshCw />}
+            label={handedOff ? "Agent is rebasing" : "Update with main"}
+            title={
+              handedOff
+                ? `The rebase conflicted and was handed to this session's agent; it is working on ${card.headBranch} now.`
+                : `Rebase ${card.headBranch} onto an up-to-date ${card.baseBranch} and force-push it with lease`
+            }
+            busy={running === "update-with-main" || handedOff}
+            disabled={Boolean(running) || handedOff}
+            primary={conflicted && !handedOff}
+            onRun={() => onAction(card.id, "update-with-main")}
+          />
+        )}
         {open && (
           <>
             <ActionButton
@@ -444,20 +470,22 @@ function usePullRequestCardActions({
             />
           </>
         )}
-        {open && local && (
-          <ActionButton
-            icon={<RefreshCw />}
-            label={handedOff ? "Agent is rebasing" : "Update with main"}
-            title={
-              handedOff
-                ? `The rebase conflicted and was handed to this session's agent; it is working on ${card.headBranch} now.`
-                : `Rebase ${card.headBranch} onto an up-to-date ${card.baseBranch} and force-push it with lease`
-            }
-            busy={running === "update-with-main" || handedOff}
-            disabled={Boolean(running) || handedOff}
-            primary={conflicted && !handedOff}
-            onRun={() => onAction(card.id, "update-with-main")}
-          />
+        {/* Last in the row, as every overflow is (`common/OverflowMenu`). */}
+        {open && local && !updateInFooter && (
+          <OverflowMenu
+            label="More pull request actions"
+            size="icon-xs"
+            disabled={Boolean(running)}
+            contentClassName="w-48"
+          >
+            <DropdownMenuItem
+              title={`Rebase ${card.headBranch} onto an up-to-date ${card.baseBranch} and force-push it with lease`}
+              onClick={() => onAction(card.id, "update-with-main")}
+            >
+              <RefreshCw />
+              Update with main
+            </DropdownMenuItem>
+          </OverflowMenu>
         )}
         {canCleanup && (
           <ActionButton
@@ -586,27 +614,27 @@ export function PullRequestCard({
       icon={header.icon}
       label={header.label}
       status={
-        card.provider && card.number !== undefined
-          ? `${card.provider} #${card.number}`
-          : null
-      }
-      actions={
-        <>
-          {card.url ? (
-            <LinkButton
-              variant="ghost"
-              size="xs"
+        card.provider && card.number !== undefined ? (
+          card.url ? (
+            // The number IS the way to the pull request: one link where the
+            // reader already looks for which pull request this is.
+            <a
               href={card.url}
               target="_blank"
               rel="noreferrer"
+              title={`Open #${card.number} on ${card.provider}`}
+              className="flex items-center gap-1 underline-offset-2 hover:underline focus-visible:underline"
             >
+              {card.provider} #{card.number}
               <ExternalLink />
-              Open
-            </LinkButton>
-          ) : null}
-          {actions?.buttons}
-        </>
+            </a>
+          ) : (
+            `${card.provider} #${card.number}`
+          )
+        ) : null
       }
+      options={actions?.options}
+      actions={actions?.buttons}
       contentClassName="gap-3"
     >
       {/* The pull request itself: its title, where it goes, and its checks. */}
@@ -650,7 +678,6 @@ export function PullRequestCard({
         </div>
       )}
       <NoticeList title="Warnings" items={card.warnings} />
-      {actions?.form}
       {actions?.notes}
     </AppCard>
   );

@@ -13,6 +13,8 @@ import {
   type AppCardTone,
 } from "../../../src/components/common/AppCard.tsx";
 import { Button } from "../../../src/components/ui/button.tsx";
+import { Checkbox } from "../../../src/components/ui/checkbox.tsx";
+import { Label } from "../../../src/components/ui/label.tsx";
 
 export interface AppCardStoryProps {
   frameWidth: number;
@@ -98,6 +100,23 @@ export function AppCardStory({ frameWidth }: AppCardStoryProps) {
           <p className="text-muted-foreground">{example.detail}</p>
         </AppCard>
       ))}
+      <AppCard
+        tone="info"
+        icon={<GitCommitHorizontal />}
+        label="Footer options"
+        status="settings that configure the footer's button"
+        options={
+          <Label>
+            <Checkbox defaultChecked />
+            <span className="text-xs">Delete branch</span>
+          </Label>
+        }
+        actions={<Button size="xs">Merge</Button>}
+      >
+        <p className="text-muted-foreground">
+          On a phone the options wrap above the buttons.
+        </p>
+      </AppCard>
       <AppCard
         icon={<GitCommitHorizontal />}
         label="Header only"

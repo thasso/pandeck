@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { ToastViewport } from "../../../src/components/ToastViewport.tsx";
 import { Button } from "../../../src/components/ui/button.tsx";
@@ -7,12 +7,8 @@ import {
   ConfirmDialog,
   useDialogs,
 } from "../../../src/components/common/dialogs.tsx";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../../../src/components/ui/dropdown-menu.tsx";
+import { DropdownMenuItem } from "../../../src/components/ui/dropdown-menu.tsx";
+import { OverflowMenu } from "../../../src/components/common/OverflowMenu.tsx";
 import { EdgeSheet } from "../../../src/components/common/EdgeSheet.tsx";
 import { IconButton } from "../../../src/components/common/IconButton.tsx";
 import {
@@ -73,23 +69,16 @@ function OverlaysStory() {
         </Button>
       </div>
       <div className="flex items-center gap-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={<Button variant="outline" size="icon" aria-label="Menu" />}
-          >
-            <MoreHorizontal />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem>
-              <Pencil />
-              Rename
-            </DropdownMenuItem>
-            <DropdownMenuItem variant="destructive">
-              <Trash2 />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <OverflowMenu label="More actions" align="start">
+          <DropdownMenuItem>
+            <Pencil />
+            Rename
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive">
+            <Trash2 />
+            Delete
+          </DropdownMenuItem>
+        </OverflowMenu>
         <Popover>
           <PopoverTrigger render={<Button variant="outline" />}>
             Popover

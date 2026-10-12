@@ -5,7 +5,6 @@ import {
   Eraser,
   GitMerge,
   MessageSquare,
-  MoreHorizontal,
   TriangleAlert,
   Workflow,
 } from "lucide-react";
@@ -49,12 +48,10 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { OverflowMenu } from "./common/OverflowMenu.tsx";
 import { useStoredOpen } from "../hooks/useStoredOpen.ts";
 
 const LIFECYCLE_TONE: Record<WorkflowRunSummary["lifecycle"], AppCardTone> = {
@@ -943,10 +940,15 @@ export function WorkflowRunCard({
       </Button>,
     );
 
-  const footerStart = canMerge
+  // While Merge is offered, its picker takes the footer's left and this line
+  // moves into the content above it.
+  const mergeOutcome = canMerge
     ? deleteBranch
       ? "Completes the run and deletes the remote branch."
       : "Completes the run and keeps the remote branch."
+    : null;
+  const footerStart = canMerge
+    ? null
     : canCleanUp
       ? "Removes the worktree and local branch, and settles the run."
       : run.lifecycle === "cancelled" && expanded
@@ -973,29 +975,33 @@ export function WorkflowRunCard({
       label="Workflow run"
       status={status}
       footerStart={expanded ? footerStart : null}
+      options={
+        expanded && canMerge && delivery ? (
+          <MergeMethodPicker
+            offered={offeredMethods}
+            known={Boolean(delivery.mergeMethods)}
+            selected={selectedMethod}
+            onSelect={setMergeMethod}
+            deleteBranch={deleteBranch}
+            onDeleteBranchChange={setDeleteBranch}
+            disabled={deliveryBusy}
+          />
+        ) : null
+      }
       actions={
         expanded ? (
           primary.length || menuItems.length ? (
             <>
-              {menuItems.length ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="More run actions"
-                      />
-                    }
-                  >
-                    <MoreHorizontal />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-48">
-                    {menuItems}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : null}
               {primary}
+              {menuItems.length ? (
+                <OverflowMenu
+                  label="More run actions"
+                  size="icon-xs"
+                  contentClassName="w-48"
+                >
+                  {menuItems}
+                </OverflowMenu>
+              ) : null}
             </>
           ) : null
         ) : (
@@ -1019,18 +1025,6 @@ export function WorkflowRunCard({
       {expanded ? (
         <>
           {attention}
-
-          {canMerge && delivery ? (
-            <MergeMethodPicker
-              offered={offeredMethods}
-              known={Boolean(delivery.mergeMethods)}
-              selected={selectedMethod}
-              onSelect={setMergeMethod}
-              deleteBranch={deleteBranch}
-              onDeleteBranchChange={setDeleteBranch}
-              disabled={deliveryBusy}
-            />
-          ) : null}
 
           {/* A present-tense CONDITION from the run's attention cursor: it goes
               away by itself the moment the run is settled anywhere. */}
@@ -1230,6 +1224,11 @@ export function WorkflowRunCard({
                 ))}
               </ul>
             </RunSection>
+          ) : null}
+
+          {/* Last, so it sits right above the picker it describes. */}
+          {mergeOutcome ? (
+            <p className="text-xs text-muted-foreground">{mergeOutcome}</p>
           ) : null}
         </>
       ) : null}
