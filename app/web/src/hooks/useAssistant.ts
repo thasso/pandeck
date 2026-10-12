@@ -1771,16 +1771,6 @@ type Action =
    * half-applied order.
    */
   | { kind: "optimisticInboxPositions"; positions: InboxPositionEntry[] }
-  /**
-   * Undo a refused `optimisticInboxPositions`: each item it placed goes back
-   * to `previous` (absent: never dragged), but only while it still holds the
-   * position the drop wrote — an authoritative list that has replaced it since
-   * is newer than this undo.
-   */
-  | {
-      kind: "revertInboxPositions";
-      reverts: Array<InboxPositionEntry & { previous: number | undefined }>;
-    }
   | { kind: "optimisticSessionDelete"; sessionId: string }
   /** A human Stop left this browser; the server's answer retires it. */
   | { kind: "backgroundStopSent"; itemId?: string; ownerSessionId?: string }
@@ -4551,39 +4541,6 @@ function reduceAssistantStateInner(state: UIState, action: Action): UIState {
             : run,
         ) ?? null,
       error: null,
-    };
-  }
-  if (action.kind === "revertInboxPositions") {
-    const revert = <T extends { inboxPosition?: number }>(
-      item: T,
-      entry: { position: number; previous: number | undefined } | undefined,
-    ): T => {
-      if (!entry || item.inboxPosition !== entry.position) return item;
-      const { inboxPosition: _dropped, ...rest } = item;
-      return (
-        entry.previous === undefined
-          ? rest
-          : { ...rest, inboxPosition: entry.previous }
-      ) as T;
-    };
-    const sessionReverts = new Map(
-      action.reverts.flatMap((entry) =>
-        entry.kind === "session" ? [[entry.id, entry] as const] : [],
-      ),
-    );
-    const runReverts = new Map(
-      action.reverts.flatMap((entry) =>
-        entry.kind === "run" ? [[entry.runId, entry] as const] : [],
-      ),
-    );
-    return {
-      ...state,
-      sessions: state.sessions.map((session) =>
-        revert(session, sessionReverts.get(session.id)),
-      ),
-      workflowRuns:
-        state.workflowRuns?.map((run) => revert(run, runReverts.get(run.id))) ??
-        null,
     };
   }
   if (action.kind === "optimisticInboxPositions") {
@@ -7786,6 +7743,20 @@ export function useAssistant({
         send({ type: "loadArchivedSessions" });
       else send({ type: "listSessions" });
     };
+    // There is no list command for runs: a resubscribe answers with the run
+    // list as the stores hold it (the same resync a delivery settle uses). A
+    // surface not holding the topic holds no run list to correct.
+    const refetchWorkflowRuns = () => {
+      if (!topicsRef.current.has("workflow")) return;
+      send({ type: "unsubscribe", topics: ["workflow"] });
+      send(
+        taskSubscribeMessage(
+          ["workflow"],
+          stateRef.current,
+          pendingMutationsRef.current,
+        ),
+      );
+    };
     const refetchTasks = () => send({ type: "listTasks", request: {} });
     const recoverTasks = (mutation: PendingMutation) => {
       const ids = [...new Set(mutation.objectIds)];
@@ -8162,19 +8133,6 @@ export function useAssistant({
         });
       },
       setInboxPositions: (positions) => {
-        // What each placed item held before, for the undo: a refusal the
-        // server answers before the handler runs (the wire validator) never
-        // re-sends the run list, and there is no command that re-reads it.
-        const { sessions, workflowRuns } = stateRef.current;
-        const reverts = positions.map((entry) => ({
-          ...entry,
-          previous:
-            entry.kind === "session"
-              ? sessions.find((session) => session.id === entry.id)
-                  ?.inboxPosition
-              : workflowRuns?.find((run) => run.id === entry.runId)
-                  ?.inboxPosition,
-        }));
         // Both domains, because one renumbering can place sessions and runs.
         const requestId = trackMutation(
           {
@@ -8191,9 +8149,14 @@ export function useAssistant({
               },
             ],
           },
+          // A refusal re-reads BOTH lists rather than undoing the drop
+          // locally: an undo cannot tell its own guess from an authoritative
+          // list that has since confirmed the same number (a success whose
+          // settle was lost to a reconnect), and the server's lists are right
+          // either way.
           () => {
-            dispatch({ kind: "revertInboxPositions", reverts });
             refetchSessions();
+            refetchWorkflowRuns();
           },
         );
         dispatch({ kind: "optimisticInboxPositions", positions });
