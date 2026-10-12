@@ -200,6 +200,27 @@ export function creatorSessionIdForWorktree(
   )?.fromId;
 }
 
+/** Whether the one-time creator backfill has completed in this data directory. */
+export function worktreeCreatorBackfillDone(): boolean {
+  return (
+    getDb()
+      .prepare("SELECT 1 FROM worktree_creator_backfill WHERE id = 1")
+      .get() !== undefined
+  );
+}
+
+/** Mark the creator backfill complete, keeping what it found. */
+export function recordWorktreeCreatorBackfill(
+  summary: unknown,
+  at = Date.now(),
+): void {
+  getDb()
+    .prepare(
+      "INSERT OR REPLACE INTO worktree_creator_backfill (id, completed_at_ms, summary_json) VALUES (1, ?, ?)",
+    )
+    .run(at, JSON.stringify(summary));
+}
+
 export function linkTaskToWorktree(taskId: string, worktreeId: string): void {
   addLink(taskNode(taskId), "in_worktree", worktreeNode(worktreeId));
 }

@@ -182,7 +182,8 @@ only binding rules; everything else lives here.
   one-time JSON import, states, observer, actions, and CI-conclusion push).
 - `worktree-ownership.md` — which sessions a managed worktree belongs to: the
   `in_worktree` and `created_worktree` edges, the spawn-tree ownership rule
-  shared by server and browser, and the `worktree_status` tree read.
+  shared by server and browser, the `worktree_status` tree read, and the
+  one-time creator backfill from session logs.
 - `approvals.md` — the approval cards every agent-proposed mutation goes
   through, which tool raises which card, and "Approve for session" grants:
   operation-level keys, full-coverage rule, idle-edge execution, revocation,
