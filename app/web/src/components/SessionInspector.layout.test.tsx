@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * What the session Details panel puts where: actions first, the runtime facts
- * the panel is asked for most (account/model/thinking) under a Profile section,
+ * What the session Details panel puts where: where it runs and the runtime
+ * facts it is asked for most (account/model/thinking) in one Details section,
  * and a Tasks group that cannot grow past its first page.
  *   pnpm --filter @assistant/web test src/components/SessionInspector.layout.test.tsx
  */
@@ -88,17 +88,27 @@ describe("SessionInspector layout", () => {
     expect(labels).toEqual(["Bring back"]);
   });
 
-  it("states the account, model and thinking level in one Profile section", () => {
+  it("states where it runs, the account, model and thinking level in one Details section", () => {
     const html = render({
       ...base,
       credentialProfile: { name: "Work", provider: "claude" },
       model: { id: "claude-opus-5", name: "Opus 5", provider: "claude-sdk" },
       thinkingLevel: "high",
     });
-    expect(html).toContain("Profile");
-    // Collapsed by default, so the summary carries the three facts; the account
-    // is its NAME only, without the provider.
-    expect(html).toContain("Work · Opus 5 · High");
+    expect(html).toContain(">Details<");
+    expect(html).not.toContain("Profile");
+    // One labelled row per fact; the account is its NAME only, without the
+    // provider.
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const fact = (label: string) =>
+      [...doc.querySelectorAll("span")].find(
+        (span) => span.textContent === label,
+      )?.nextElementSibling?.textContent;
+    expect(fact("Project")).toBe("None");
+    expect(fact("Worktree")).toBe("None");
+    expect(fact("Account")).toBe("Work");
+    expect(fact("Model")).toBe("Opus 5");
+    expect(fact("Thinking")).toBe("High");
     expect(html).not.toContain("Work · Claude");
     expect(html).not.toContain("Bound when this session started");
   });
@@ -147,24 +157,30 @@ describe("SessionInspector layout", () => {
       openers: { ...openers, onOpenSession: (id: string) => opened.push(id) },
     };
 
+    const open = (title: string) =>
+      host.querySelector<HTMLButtonElement>(
+        `button[aria-label="Open ${title}"]`,
+      );
+
     act(() => root.render(<SessionInspector {...props} sessionId="child" />));
-    const coordinator = [...host.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Coordinator"),
-    );
-    expect(coordinator).toBeDefined();
-    act(() => coordinator!.click());
+    expect(open("Coordinator")).not.toBeNull();
+    act(() => open("Coordinator")!.click());
 
     act(() =>
       root.render(<SessionInspector {...props} sessionId="coordinator" />),
     );
-    const child = [...host.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Implementer"),
+    const row = host.querySelector<HTMLElement>('[data-list-row-id="child"]');
+    expect(row?.textContent).toContain("Implementer");
+    // The coordinator's row states that the user owns this child now, in the
+    // details the row unfolds, without changing what it opens.
+    expect(row?.textContent).not.toContain("Taken over");
+    act(() =>
+      row!
+        .querySelector<HTMLButtonElement>('button[title="Show details"]')!
+        .click(),
     );
-    expect(child).toBeDefined();
-    // The coordinator's row states that the user owns this child now, without
-    // changing what the row opens.
-    expect(child!.textContent).toContain("Taken over");
-    act(() => child!.click());
+    expect(row?.textContent).toContain("Taken over");
+    act(() => open("Implementer")!.click());
     expect(opened).toEqual(["coordinator", "child"]);
   });
 

@@ -43,15 +43,26 @@ export function AttachmentThumbnail({
   onRemove?: (() => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
+  // The picture the server could not answer (a saved prompt's image whose
+  // bytes are gone): that tile falls back to the named file glyph and offers
+  // no lightbox, rather than a broken image that opens an empty one. Keyed by
+  // the URL, so a new source tries again.
+  const [failedSrc, setFailedSrc] = useState<string>();
   const isImage = mimeType.startsWith("image/");
+  const picture = isImage && src && failedSrc !== src ? src : undefined;
   const label = `${name} · ${formatAttachmentBytes(size)}`;
   const extension = name.includes(".")
     ? name.slice(name.lastIndexOf(".") + 1).slice(0, 5)
     : "";
   const tile = (
     <>
-      {isImage && src ? (
-        <img src={src} alt="" className="size-full object-cover" />
+      {picture ? (
+        <img
+          src={picture}
+          alt=""
+          className="size-full object-cover"
+          onError={() => setFailedSrc(picture)}
+        />
       ) : (
         <span className="flex size-full flex-col items-center justify-center gap-1 text-muted-foreground">
           {isImage ? <ImageIcon size={18} /> : <FileText size={18} />}
@@ -73,12 +84,13 @@ export function AttachmentThumbnail({
     "relative block size-16 shrink-0 overflow-hidden rounded-lg border bg-muted";
   return (
     <div className="relative shrink-0" title={label}>
-      {isImage && src ? (
+      {picture ? (
         <Button
           variant="ghost"
-          // The tile IS the button: no padding or height of its own, and the
-          // muted frame stays put on hover.
-          className={`${frame} h-auto cursor-zoom-in p-0 hover:bg-muted`}
+          // The tile IS the button: the frame's fixed 64px square (a portrait
+          // image must not stretch it), no padding, and the muted frame stays
+          // put on hover.
+          className={`${frame} h-16 cursor-zoom-in p-0 hover:bg-muted`}
           aria-label={`Open ${label}`}
           onClick={() => setOpen(true)}
         >
@@ -100,8 +112,12 @@ export function AttachmentThumbnail({
           <X />
         </IconButton>
       ) : null}
-      {open && src ? (
-        <ImageLightbox src={src} alt={name} onClose={() => setOpen(false)} />
+      {open && picture ? (
+        <ImageLightbox
+          src={picture}
+          alt={name}
+          onClose={() => setOpen(false)}
+        />
       ) : null}
     </div>
   );

@@ -637,16 +637,18 @@ export function Inspector({
               collapsible={group.collapsible ?? true}
               defaultOpen={group.defaultOpen ?? true}
             >
-              {group.content ?? (
-                <RelationRows
-                  key={sectionStorageScope ?? "unscoped"}
-                  // Remount per inspected object: the section itself is keyed by
-                  // the group id, which is the SAME across objects, so without
-                  // this an expanded group stays expanded for the next session.
-                  items={group.items}
-                  maxVisible={group.maxVisibleItems}
-                />
-              )}
+              {/* Remount per inspected object: the section itself is keyed by
+                  the group id, which is the SAME across objects, so without
+                  this an expanded group ("Show N more") — the generic rows or
+                  a group's own content — stays expanded for the next one. */}
+              <Fragment key={sectionStorageScope ?? "unscoped"}>
+                {group.content ?? (
+                  <RelationRows
+                    items={group.items}
+                    maxVisible={group.maxVisibleItems}
+                  />
+                )}
+              </Fragment>
             </InspectorSection>
           ))}
 
