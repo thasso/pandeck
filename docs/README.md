@@ -39,6 +39,9 @@ only binding rules; everything else lives here.
   distinction, temporal semantics, selection and sticky-snapshot delivery,
   cadence/settings/safety ceilings, tool and prompt rules, observability, known
   limitations, and the reset boundary.
+- `session-naming.md` — how a session gets its title: automatic first naming and
+  `/rename`, which reruns the naming agent over the recent conversation with the
+  user's guidance first, mid-turn and without a harness.
 - `settings.md` — the settings registry (one descriptor per setting the Settings
   page shows, with value/readonly/secret/oauth access), the tests that keep it
   complete, and the one write path: `saveSettings`, its per-section side

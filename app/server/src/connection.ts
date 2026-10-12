@@ -182,6 +182,8 @@ import {
 import { publishSkillLibrary } from "./skills/skillLibrary.ts";
 import { projectStore } from "./db/projectStore.ts";
 import { findSlashCommand, slashCommands } from "./slashCommands.ts";
+import { retitleSession } from "./sessionRetitle.ts";
+import { cancelSessionRetitle } from "./sessionRetitlePending.ts";
 import { SteerWithdrawnError } from "./session/runtime/index.ts";
 
 /** A held message whose provider never confirmed it was dropped unread. */
@@ -959,6 +961,8 @@ export class Connection implements Viewer {
         return this.onSettleWorkflowRun(msg.runId, msg.throughRevision);
       case "renameSession":
         return this.onRenameSession(msg.id, msg.title);
+      case "regenerateSessionTitle":
+        return this.onRegenerateSessionTitle(msg.id, msg.guidance);
       case "setSpawnOwnership":
         return this.onSetSpawnOwnership(msg.id, msg.ownership);
       case "acknowledgeMissingWorktree":
@@ -4915,12 +4919,50 @@ export class Connection implements Viewer {
       return;
     }
     if (!this.guardSessionRef(ref)) return;
+    // The user's own title beats a `/rename` still generating one.
+    const retitleCancelled = cancelSessionRetitle(id);
     try {
       await harnessRegistry.rename(
         { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
         title,
       );
       await hub.broadcastSessions();
+    } catch (err) {
+      if (retitleCancelled) await hub.broadcastSessions();
+      this.send({
+        type: "error",
+        message: `Failed to rename session: ${errorText(err)}`,
+        target: { type: "session", id },
+      });
+    }
+  }
+
+  /** `/rename`: let the naming agent retitle the session from its recent turns. */
+  private async onRegenerateSessionTitle(
+    id: string,
+    guidance: string | undefined,
+  ): Promise<void> {
+    const ref = this.resolveSessionRef(id);
+    if (!ref) {
+      this.send({
+        type: "error",
+        message: "Failed to rename session: session not found.",
+        target: { type: "session", id },
+      });
+      return;
+    }
+    if (!this.guardSessionRef(ref)) return;
+    try {
+      await retitleSession({
+        sessionId: id,
+        ...(guidance !== undefined ? { guidance } : {}),
+        rename: (title) =>
+          harnessRegistry.rename(
+            { harness: ref.harness, id, agentType: ref.kind, file: ref.file },
+            title,
+          ),
+        changed: () => hub.broadcastSessions(),
+      });
     } catch (err) {
       this.send({
         type: "error",

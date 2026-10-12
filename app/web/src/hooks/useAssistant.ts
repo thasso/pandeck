@@ -6079,6 +6079,8 @@ export interface AssistantActions {
    */
   settleWorkflowRun: (runId: string, throughRevision: number) => void;
   renameSession: (id: string, title: string) => void;
+  /** `/rename`: the naming agent retitles the session from its recent turns. */
+  regenerateSessionTitle: (id: string, guidance: string) => void;
   /**
    * Take a spawned peer over, or hand it back to the coordinator that spawned
    * it — the user's explicit word on ownership; messaging a peer never moves
@@ -8121,6 +8123,12 @@ export function useAssistant({
         });
         send({ type: "renameSession", id, title, requestId });
       },
+      regenerateSessionTitle: (id, guidance) =>
+        send({
+          type: "regenerateSessionTitle",
+          id,
+          ...(guidance.trim() ? { guidance: guidance.trim() } : {}),
+        }),
       acknowledgeMissingWorktree: (id) =>
         send({ type: "acknowledgeMissingWorktree", id }),
       forkSession: (id, entryId, position) =>

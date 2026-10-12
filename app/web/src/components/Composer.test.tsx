@@ -136,6 +136,28 @@ describe("resolveSlashSubmit", () => {
       message: "Slash commands do not support attached comments yet.",
     });
   });
+
+  it("runs a metadata-only client command mid-turn", () => {
+    const rename: SlashCommandInfo = {
+      name: "rename",
+      description: "Rename this session",
+      usage: "/rename [hint]",
+      agentTypes: ["workshop", "developer"],
+      execution: "client",
+      runsWhileStreaming: true,
+    };
+    expect(
+      resolveSlashSubmit("/rename stress the API", [...commands, rename], {
+        ...workshopSession,
+        streaming: true,
+      }),
+    ).toEqual({
+      kind: "client",
+      name: "rename",
+      rawArgs: "stress the API",
+      runsWhileStreaming: true,
+    });
+  });
 });
 
 /**
@@ -151,6 +173,14 @@ describe("Composer busy mode", () => {
       usage: "/compact",
       agentTypes: ["developer"],
       execution: "host",
+    },
+    {
+      name: "rename",
+      description: "Rename this session",
+      usage: "/rename [hint]",
+      agentTypes: ["developer"],
+      execution: "client",
+      runsWhileStreaming: true,
     },
   ];
 
@@ -168,6 +198,7 @@ describe("Composer busy mode", () => {
     const onSend = vi.fn();
     const onQueue = vi.fn();
     const runSlashCommand = vi.fn();
+    const onClientSlashCommand = vi.fn(() => null);
     ({ container, root } = mount());
     act(() =>
       root!.render(
@@ -181,12 +212,13 @@ describe("Composer busy mode", () => {
           session={{ agentType: "developer", harness: "pi", canSteer } as never}
           models={[]}
           slashCommands={commands}
+          onClientSlashCommand={onClientSlashCommand}
           actions={{ runSlashCommand } as unknown as AssistantActions}
         />,
       ),
     );
     const textarea = container.querySelector("textarea")!;
-    return { textarea, onSend, onQueue, runSlashCommand };
+    return { textarea, onSend, onQueue, runSlashCommand, onClientSlashCommand };
   }
 
   function type(textarea: HTMLTextAreaElement, value: string) {
@@ -222,6 +254,20 @@ describe("Composer busy mode", () => {
       steerNow: true,
     });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("runs /rename at once mid-turn instead of queueing it", () => {
+    const { textarea, onSend, onQueue, onClientSlashCommand } =
+      renderComposer(true);
+    type(textarea, "/rename stress the API");
+    press(textarea);
+    expect(onClientSlashCommand).toHaveBeenCalledWith(
+      "rename",
+      "stress the API",
+    );
+    expect(onQueue).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
   });
 
   it("steers directly on a surface with no queue", () => {

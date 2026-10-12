@@ -59,6 +59,17 @@ export const slashCommands: SlashCommandInfo[] = [
     // its session leaf, the Claude harness drops the CLI resume id), driven by
     // the shared host-command path in `hostSlashCommands.ts`.
   },
+  {
+    name: "rename",
+    description:
+      "Rename this session from its recent conversation, steered by your hint",
+    usage: "/rename [what the title should say or stress]",
+    agentTypes: ["workshop", "developer", "personal-assistant"],
+    // Runs from the web app as `regenerateSessionTitle`: a title is metadata,
+    // so it needs no harness and no synthetic turn, and may run mid-turn.
+    execution: "client",
+    runsWhileStreaming: true,
+  },
 ];
 
 export function findSlashCommand(name: string): SlashCommandInfo | undefined {
