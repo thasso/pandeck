@@ -28,10 +28,14 @@ test("curated model ids map aliases to concrete --model strings", () => {
   );
   assert.equal(
     claudeSdkModelId("sonnet"),
-    "claude-sonnet-5",
+    "claude-sonnet-5-5",
     "sonnet points at the current generation",
   );
-  assert.equal(claudeSdkModelId("haiku"), "claude-haiku-4-5");
+  assert.equal(
+    claudeSdkModelId("haiku"),
+    "claude-haiku-5-5",
+    "haiku points at the current generation",
+  );
   assert.equal(claudeSdkModelId("fable"), "claude-fable-5-1");
 });
 
@@ -48,6 +52,8 @@ test("alias normalization distinguishes recognized models from configuration fal
   assert.equal(knownClaudeSdkModelAlias("claude-fable-5"), "fable");
   assert.equal(knownClaudeSdkModelAlias("fable"), "fable");
   assert.equal(knownClaudeSdkModelAlias("claude-sonnet-5"), "sonnet");
+  assert.equal(knownClaudeSdkModelAlias("claude-sonnet-5-5"), "sonnet");
+  assert.equal(knownClaudeSdkModelAlias("claude-haiku-5-5"), "haiku");
   // The wire id the CLI reports back is normalized to the curated alias, so
   // reconciliation recognizes a session that ran on Opus 5.5 or on the 1M
   // variant, not just the plain id.
@@ -82,7 +88,7 @@ test("fable omits the off thinking level and has a 1M window", () => {
 });
 
 test("adaptive models stream summarized thinking, never budget tokens", () => {
-  for (const model of ["opus", "sonnet", "fable"] as const) {
+  for (const model of ["opus", "sonnet", "haiku", "fable"] as const) {
     const high = reasoningToThinking("high", model);
     assert.deepEqual(
       high,
@@ -97,32 +103,20 @@ test("adaptive models stream summarized thinking, never budget tokens", () => {
   }
 });
 
-test("opus/sonnet honor off as disabled; fable can never disable", () => {
-  assert.deepEqual(reasoningToThinking("off", "opus"), {
-    thinking: { type: "disabled" },
-  });
-  assert.deepEqual(reasoningToThinking("off", "sonnet"), {
-    thinking: { type: "disabled" },
-  });
+test("opus/sonnet/haiku honor off as disabled; fable can never disable", () => {
+  // The API rejects `disabled` on Sonnet 5.5 and Opus 5.5, but the CLI maps
+  // `--thinking=disabled` to each model's lowest setting, so it stays the shape.
+  for (const model of ["opus", "sonnet", "haiku"] as const) {
+    assert.deepEqual(
+      reasoningToThinking("off", model),
+      { thinking: { type: "disabled" } },
+      `${model} off`,
+    );
+  }
   // Fable's off falls back to lowest-effort adaptive (disabled is a 400 there).
   assert.deepEqual(reasoningToThinking("off", "fable"), {
     thinking: { type: "adaptive", display: "summarized" },
     effort: "low",
-  });
-});
-
-test("haiku 4.5 stays on manual budget tokens with no effort", () => {
-  // Haiku predates adaptive and rejects `effort`; it must use enabled+budget.
-  assert.deepEqual(reasoningToThinking("high", "haiku"), {
-    thinking: { type: "enabled", budgetTokens: 16_384, display: "summarized" },
-  });
-  assert.equal(
-    reasoningToThinking("high", "haiku").effort,
-    undefined,
-    "no effort param for haiku",
-  );
-  assert.deepEqual(reasoningToThinking("off", "haiku"), {
-    thinking: { type: "disabled" },
   });
 });
 
